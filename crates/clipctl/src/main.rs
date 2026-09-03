@@ -42,11 +42,18 @@ enum Commands {
         #[command(subcommand)]
         action: RecipeAction,
     },
+    /// Re-run the last executed operation or recipe
+    Last {
+        /// Optional prompt text to pass if the recipe or action requests input
+        #[arg(short, long)]
+        prompt: Option<String>,
+    },
     /// Force screen redraw
     Refresh,
     /// Reload configuration file and re-render screen
     Reload,
 }
+
 
 #[derive(Subcommand)]
 enum RecipeAction {
@@ -118,6 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             RecipeAction::List => IpcRequest::ListRecipes,
             RecipeAction::Run { name } => IpcRequest::ExecuteRecipe { recipe_name: name },
         },
+        Commands::Last { prompt } => IpcRequest::ExecuteLastAction { prompt_text: prompt },
         Commands::Refresh => IpcRequest::ForceRefreshDisplay,
         Commands::Reload => IpcRequest::ReloadConfig,
     };
@@ -150,6 +158,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
+            IpcResponse::LastAction(action) => match action {
+                Some(little_clip_core::ipc::LastAction::Op { op_name, .. }) => {
+                    println!("Last action was operation: {}", op_name.bold());
+                }
+                Some(little_clip_core::ipc::LastAction::Recipe { recipe_name }) => {
+                    println!("Last action was recipe: {}", recipe_name.bold());
+                }
+                None => {
+                    println!("No prior action recorded.");
+                }
+            },
+            IpcResponse::NeedsPrompt { message, .. } => {
+                println!("{}: {}", "Prompt Required".yellow().bold(), message);
+            }
             IpcResponse::Success { message } => {
                 println!("{}: {}", "Success".green().bold(), message);
             }
@@ -163,6 +185,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
 
 
     Ok(())

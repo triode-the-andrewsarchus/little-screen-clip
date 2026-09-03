@@ -30,12 +30,33 @@ pub enum IpcRequest {
     ExecuteRecipe {
         recipe_name: String,
     },
+    ExecuteRecipeWithPrompt {
+        recipe_name: String,
+        prompt_text: Option<String>,
+    },
     ExecuteGraphYaml {
         yaml: String,
     },
     ListRecipes,
+    GetLastAction,
+    ExecuteLastAction {
+        prompt_text: Option<String>,
+    },
     ForceRefreshDisplay,
     ReloadConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum LastAction {
+    Op {
+        op_name: String,
+        selected_slots: Option<Vec<SlotId>>,
+        secondary_slot: Option<SlotId>,
+        separator: Option<String>,
+    },
+    Recipe {
+        recipe_name: String,
+    },
 }
 
 fn default_left_hand() -> HandSide {
@@ -48,6 +69,9 @@ pub enum IpcResponse {
     Success { message: String },
     OpResult { item: ClipItem },
     RecipeList(Vec<String>),
+    LastAction(Option<LastAction>),
+    NeedsPrompt { message: String, default_text: String },
     Error { error: String },
 }
+
 

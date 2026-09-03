@@ -1,8 +1,8 @@
 use eframe::egui;
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::{AppConfig, ClipItem, SlotId, SlotManager};
-use little_clip_ops::pipeline::recipes::load_all_recipes;
-use little_clip_ops::pipeline::types::Recipe;
+use little_clip_ops::pipeline::recipes::{find_recipe_by_name, load_all_recipes};
+use little_clip_ops::pipeline::types::{NodeKind, Recipe};
 use little_clip_ops::{get_applicable_ops, OpDescriptor};
 use little_clip_render::{ScreenRenderer, SCREEN_HEIGHT, SCREEN_WIDTH};
 use std::io::{BufRead, BufReader, Write};
@@ -49,6 +49,13 @@ impl PaletteAction {
     }
 }
 
+struct InAppPromptState {
+    recipe_name: String,
+    message: String,
+    input_text: String,
+    first_frame: bool,
+}
+
 struct WorkbenchApp {
     state: SlotManager,
     state_rx: Receiver<SlotManager>,
@@ -62,6 +69,7 @@ struct WorkbenchApp {
     renderer: ScreenRenderer,
     mirror_texture: Option<egui::TextureHandle>,
     dirty_mirror: bool,
+    in_app_prompt: Option<InAppPromptState>,
 }
 
 impl WorkbenchApp {
@@ -102,8 +110,10 @@ impl WorkbenchApp {
             renderer,
             mirror_texture: None,
             dirty_mirror: true,
+            in_app_prompt: None,
         }
     }
+
 
     fn get_selected_items(&self) -> Vec<&ClipItem> {
         self.selected_slots
@@ -132,6 +142,9 @@ impl WorkbenchApp {
 
         // 2. Discovered Recipes
         for r in &self.recipes {
+            if !r.is_applicable(&items) {
+                continue;
+            }
             if q.is_empty()
                 || r.name.to_lowercase().contains(&q)
                 || r.description.to_lowercase().contains(&q)
@@ -148,33 +161,59 @@ impl WorkbenchApp {
     fn execute_current_action(&mut self, ctx: &egui::Context) {
         let actions = self.filtered_actions();
         if let Some(act) = actions.get(self.selected_action_index) {
-            let req = match act {
-                PaletteAction::Op(op) => IpcRequest::ExecuteOp {
-                    op_name: op.name.to_string(),
-                    secondary_slot: None,
-                    selected_slots: Some(self.selected_slots.clone()),
-                    separator: None,
-                },
-                PaletteAction::Recipe(r) => IpcRequest::ExecuteRecipe {
-                    recipe_name: r.name.clone(),
-                },
-            };
-
-            if let Ok(resp) = send_ipc_request(&req) {
-                match resp {
-                    IpcResponse::OpResult { .. } => {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            match act {
+                PaletteAction::Op(op) => {
+                    let req = IpcRequest::ExecuteOp {
+                        op_name: op.name.to_string(),
+                        secondary_slot: None,
+                        selected_slots: Some(self.selected_slots.clone()),
+                        separator: None,
+                    };
+                    if let Ok(resp) = send_ipc_request(&req) {
+                        match resp {
+                            IpcResponse::OpResult { .. } => {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                            IpcResponse::Error { error } => {
+                                self.status_msg = Some(format!("Error: {}", error));
+                            }
+                            _ => {
+                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                            }
+                        }
                     }
-                    IpcResponse::Error { error } => {
-                        self.status_msg = Some(format!("Error: {}", error));
-                    }
-                    _ => {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+                PaletteAction::Recipe(r) => {
+                    if let Some((msg, def)) = recipe_needs_prompt(r, &self.state) {
+                        self.in_app_prompt = Some(InAppPromptState {
+                            recipe_name: r.name.clone(),
+                            message: msg,
+                            input_text: def,
+                            first_frame: true,
+                        });
+                    } else {
+                        let req = IpcRequest::ExecuteRecipe {
+                            recipe_name: r.name.clone(),
+                        };
+                        if let Ok(resp) = send_ipc_request(&req) {
+                            match resp {
+                                IpcResponse::OpResult { .. } | IpcResponse::Success { .. } => {
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                }
+                                IpcResponse::Error { error } => {
+                                    self.status_msg = Some(format!("Error: {}", error));
+                                }
+                                _ => {
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
+
 
     fn update_mirror_texture(&mut self, ctx: &egui::Context) {
         let mut render_state = self.state.clone();
@@ -202,8 +241,128 @@ impl WorkbenchApp {
     }
 }
 
+fn recipe_needs_prompt(recipe: &Recipe, state: &SlotManager) -> Option<(String, String)> {
+    for node in &recipe.graph.nodes {
+        if let NodeKind::PromptOrHandText = node.kind {
+            let hand_prop = node.props.get("hand").map(|s| s.as_str()).unwrap_or("right");
+            let item = if hand_prop.eq_ignore_ascii_case("left") {
+                state.left_hand()
+            } else {
+                state.right_hand()
+            };
+            let has_text = item.map_or(false, |it| match &it.payload {
+                little_clip_core::ClipPayload::Text(t) | little_clip_core::ClipPayload::Markdown(t) => !t.trim().is_empty(),
+                little_clip_core::ClipPayload::Url(_) => true,
+                _ => false,
+            });
+            if !has_text {
+                let msg = node.props.get("prompt_message").cloned().unwrap_or_else(|| format!("Enter text for {}:", recipe.name));
+                let def = node.props.get("default_text").cloned().unwrap_or_default();
+                return Some((msg, def));
+            }
+        }
+    }
+    None
+}
+
 impl eframe::App for WorkbenchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // If an in-app prompt modal is active, render it over the workbench
+        if let Some(prompt) = &mut self.in_app_prompt {
+            let mut close_prompt = false;
+            let mut submit_text: Option<String> = None;
+
+            egui::Window::new(format!("✦ Input Required — {}", prompt.recipe_name))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .fixed_size([500.0, 180.0])
+                .frame(
+                    egui::Frame::window(&ctx.style())
+                        .fill(egui::Color32::from_rgb(20, 24, 34))
+                        .stroke(egui::Stroke::new(1.5, egui::Color32::from_rgb(99, 102, 241)))
+                        .rounding(8.0)
+                        .inner_margin(egui::Margin::symmetric(22.0, 18.0)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("✦")
+                                .color(egui::Color32::from_rgb(168, 85, 247))
+                                .strong()
+                                .size(18.0),
+                        );
+                        ui.heading(
+                            egui::RichText::new(&prompt.recipe_name)
+                                .color(egui::Color32::from_rgb(241, 245, 249))
+                                .strong(),
+                        );
+                    });
+
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(&prompt.message)
+                            .color(egui::Color32::from_rgb(148, 163, 184))
+                            .size(13.0),
+                    );
+
+                    ui.add_space(10.0);
+                    let edit_resp = ui.add(
+                        egui::TextEdit::singleline(&mut prompt.input_text)
+                            .desired_width(ui.available_width())
+                            .hint_text("Type input text here..."),
+                    );
+
+                    if prompt.first_frame {
+                        edit_resp.request_focus();
+                        prompt.first_frame = false;
+                    }
+
+                    let enter = edit_resp.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter));
+
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        let submit_btn = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new("Execute & Run [Enter]")
+                                    .color(egui::Color32::WHITE)
+                                    .strong(),
+                            )
+                            .fill(egui::Color32::from_rgb(79, 70, 229)),
+                        );
+
+                        let cancel_btn = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new("Cancel [Esc]")
+                                    .color(egui::Color32::from_rgb(148, 163, 184)),
+                            )
+                            .fill(egui::Color32::from_rgb(30, 41, 59)),
+                        );
+
+                        if submit_btn.clicked() || enter {
+                            submit_text = Some(prompt.input_text.clone());
+                        }
+
+                        if cancel_btn.clicked() || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            close_prompt = true;
+                        }
+                    });
+                });
+
+            if let Some(text) = submit_text {
+                let req = IpcRequest::ExecuteRecipeWithPrompt {
+                    recipe_name: prompt.recipe_name.clone(),
+                    prompt_text: Some(text),
+                };
+                let _ = send_ipc_request(&req);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else if close_prompt {
+                self.in_app_prompt = None;
+            }
+
+            return; // Don't process background shortcuts while prompt modal is active
+        }
+
         // Live state update from background daemon poller
         let mut state_changed = false;
         while let Ok(new_state) = self.state_rx.try_recv() {
@@ -228,6 +387,7 @@ impl eframe::App for WorkbenchApp {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
+
 
         // F2 or Tab toggles view between Palette and Node Machine
         if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
@@ -587,7 +747,181 @@ fn get_socket_path() -> PathBuf {
     }
 }
 
+struct PromptApp {
+    title: String,
+    message: String,
+    input_text: String,
+    recipe_name: Option<String>,
+    first_frame: bool,
+}
+
+impl PromptApp {
+    pub fn new(title: String, message: String, default_text: String, recipe_name: Option<String>) -> Self {
+        Self {
+            title,
+            message,
+            input_text: default_text,
+            recipe_name,
+            first_frame: true,
+        }
+    }
+}
+
+impl eframe::App for PromptApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgb(15, 17, 23))
+                    .inner_margin(egui::Margin::symmetric(24.0, 20.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("✦")
+                            .color(egui::Color32::from_rgb(168, 85, 247))
+                            .strong()
+                            .size(18.0),
+                    );
+                    ui.heading(
+                        egui::RichText::new(&self.title)
+                            .color(egui::Color32::from_rgb(241, 245, 249))
+                            .strong(),
+                    );
+                });
+
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(&self.message)
+                        .color(egui::Color32::from_rgb(148, 163, 184))
+                        .size(13.0),
+                );
+
+                ui.add_space(12.0);
+                let edit_resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.input_text)
+                        .font(egui::TextStyle::Body)
+                        .desired_width(ui.available_width())
+                        .hint_text("Enter input text..."),
+                );
+
+                if self.first_frame {
+                    edit_resp.request_focus();
+                    self.first_frame = false;
+                }
+
+                let enter = edit_resp.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter));
+
+                ui.add_space(16.0);
+                ui.horizontal(|ui| {
+                    let submit_btn = ui.add(
+                        egui::Button::new(
+                            egui::RichText::new("Execute & Run [Enter]")
+                                .color(egui::Color32::WHITE)
+                                .strong(),
+                        )
+                        .fill(egui::Color32::from_rgb(79, 70, 229))
+                        .min_size(egui::vec2(140.0, 32.0)),
+                    );
+
+                    let cancel_btn = ui.add(
+                        egui::Button::new(
+                            egui::RichText::new("Cancel [Esc]")
+                                .color(egui::Color32::from_rgb(148, 163, 184)),
+                        )
+                        .fill(egui::Color32::from_rgb(30, 41, 59))
+                        .min_size(egui::vec2(80.0, 32.0)),
+                    );
+
+                    if submit_btn.clicked() || enter {
+                        let text = self.input_text.clone();
+                        if let Some(ref r_name) = self.recipe_name {
+                            let _ = send_ipc_request(&IpcRequest::ExecuteRecipeWithPrompt {
+                                recipe_name: r_name.clone(),
+                                prompt_text: Some(text),
+                            });
+                        } else {
+                            let _ = send_ipc_request(&IpcRequest::ExecuteLastAction {
+                                prompt_text: Some(text),
+                            });
+                        }
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+
+                    if cancel_btn.clicked() {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                });
+            });
+    }
+}
+
+fn run_prompt_modal(
+    title: String,
+    message: String,
+    default_text: String,
+    recipe_name: Option<String>,
+) -> Result<(), eframe::Error> {
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([480.0, 180.0])
+            .with_resizable(false)
+            .with_decorations(true)
+            .with_app_id("little-clip-prompt")
+            .with_window_type(egui::viewport::X11WindowType::Dialog)
+            .with_title(format!("Little Screen Clip — {}", title)),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "clip-prompt",
+        options,
+        Box::new(move |_cc| Box::new(PromptApp::new(title, message, default_text, recipe_name))),
+    )
+}
+
 fn main() -> Result<(), eframe::Error> {
+    let args: Vec<String> = std::env::args().collect();
+    let is_last = args.iter().any(|a| a == "--last" || a == "-l");
+
+    if is_last {
+        let state = match send_ipc_request(&IpcRequest::GetState) {
+            Ok(IpcResponse::State(s)) => s,
+            _ => SlotManager::default(),
+        };
+
+        if let Ok(IpcResponse::LastAction(Some(action))) = send_ipc_request(&IpcRequest::GetLastAction) {
+            match action {
+                little_clip_core::ipc::LastAction::Recipe { recipe_name } => {
+                    if let Some(recipe) = find_recipe_by_name(&recipe_name) {
+                        if let Some((msg, def)) = recipe_needs_prompt(&recipe, &state) {
+                            return run_prompt_modal(
+                                recipe.name.clone(),
+                                msg,
+                                def,
+                                Some(recipe.name),
+                            );
+                        }
+                    }
+                    // No prompt needed, execute immediately
+                    let _ = send_ipc_request(&IpcRequest::ExecuteLastAction { prompt_text: None });
+                    return Ok(());
+                }
+                little_clip_core::ipc::LastAction::Op { .. } => {
+                    let _ = send_ipc_request(&IpcRequest::ExecuteLastAction { prompt_text: None });
+                    return Ok(());
+                }
+            }
+        } else {
+            eprintln!("No last action available to run.");
+            return Ok(());
+        }
+    }
+
     let state = match send_ipc_request(&IpcRequest::GetState) {
         Ok(IpcResponse::State(s)) => s,
         _ => SlotManager::default(),
@@ -610,3 +944,4 @@ fn main() -> Result<(), eframe::Error> {
         Box::new(|_cc| Box::new(WorkbenchApp::new(state))),
     )
 }
+

@@ -1,6 +1,6 @@
 use super::types::{NodeGraph, NodeInstance, NodeKind, PortValue};
 use base64::Engine;
-use little_clip_core::item::ClipItem;
+use little_clip_core::item::{ClipItem, ClipPayload};
 use little_clip_core::slot::SlotManager;
 use std::collections::{HashMap, VecDeque};
 use std::io::Write;
@@ -35,6 +35,8 @@ pub struct PipelineExecutor<'a> {
     graph: &'a NodeGraph,
     slot_mgr: &'a SlotManager,
     temp_dir: PathBuf,
+    pub prompt_overrides: HashMap<Uuid, String>,
+    pub single_prompt_override: Option<String>,
 }
 
 impl<'a> PipelineExecutor<'a> {
@@ -49,7 +51,19 @@ impl<'a> PipelineExecutor<'a> {
             graph,
             slot_mgr,
             temp_dir,
+            prompt_overrides: HashMap::new(),
+            single_prompt_override: None,
         }
+    }
+
+    pub fn with_prompts(mut self, prompts: HashMap<Uuid, String>) -> Self {
+        self.prompt_overrides = prompts;
+        self
+    }
+
+    pub fn with_single_prompt(mut self, prompt: Option<String>) -> Self {
+        self.single_prompt_override = prompt;
+        self
     }
 
     pub fn execute(&self) -> Result<PipelineExecutionResult, PipelineError> {
@@ -187,6 +201,43 @@ impl<'a> PipelineExecutor<'a> {
                 preview = Some(val.clone());
                 out.push(("Value".to_string(), PortValue::Text(val)));
             }
+            NodeKind::PromptOrHandText => {
+                let hand_prop = node.props.get("hand").map(|s| s.as_str()).unwrap_or("right");
+                let msg = node.props.get("prompt_message").map(|s| s.as_str()).unwrap_or("Enter text:");
+                let def = node.props.get("default_text").map(|s| s.as_str()).unwrap_or("");
+
+                let text = if let Some(t) = self.prompt_overrides.get(&node.id) {
+                    t.clone()
+                } else if let Some(t) = &self.single_prompt_override {
+                    t.clone()
+                } else if let Some(t) = node.props.get("provided_text") {
+                    t.clone()
+                } else {
+                    let hand_item = if hand_prop.eq_ignore_ascii_case("left") {
+                        self.slot_mgr.left_hand()
+                    } else {
+                        self.slot_mgr.right_hand()
+                    };
+
+                    let hand_text = hand_item.and_then(|item| match &item.payload {
+                        ClipPayload::Text(t) | ClipPayload::Markdown(t) if !t.trim().is_empty() => Some(t.clone()),
+                        ClipPayload::Url(u) => Some(u.to_string()),
+                        _ => None,
+                    });
+
+
+                    if let Some(t) = hand_text {
+                        t
+                    } else {
+                        prompt_desktop_entry(&node.title, msg, def)
+                            .unwrap_or_else(|| def.to_string())
+                    }
+                };
+
+                preview = Some(text.clone());
+                out.push(("Text".to_string(), PortValue::Text(text)));
+            }
+
 
             // --- Text Operators ---
             NodeKind::TextTrim => {
@@ -871,6 +922,39 @@ fn shellexpand(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+fn prompt_desktop_entry(title: &str, message: &str, default_val: &str) -> Option<String> {
+    if let Ok(out) = Command::new("zenity")
+        .args([
+            "--entry",
+            &format!("--title={}", title),
+            &format!("--text={}", message),
+            &format!("--entry-text={}", default_val),
+        ])
+        .output()
+    {
+        if out.status.success() {
+            return Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
+        }
+    }
+
+    if let Ok(out) = Command::new("yad")
+        .args([
+            "--entry",
+            &format!("--title={}", title),
+            &format!("--text={}", message),
+            &format!("--entry-text={}", default_val),
+        ])
+        .output()
+    {
+        if out.status.success() {
+            return Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
+        }
+    }
+
+    None
+}
+
+
 fn run_command(cmd: &str, args: &[&str]) -> Result<String, String> {
     let output = Command::new(cmd)
         .args(args)
@@ -1053,5 +1137,45 @@ mod tests {
         let item = res.left_hand_item.unwrap();
         assert_eq!(item.title, "rust-edition-2024-little-screen-clip");
     }
+
+    #[test]
+    fn test_prompt_or_hand_text_with_override_leaves_slot_empty() {
+        use crate::pipeline::catalog::find_template;
+
+        let t_prompt = find_template("source_prompt_or_hand").unwrap();
+        let t_sink = find_template("sink_lh").unwrap();
+
+        let node_src = instantiate_template(t_prompt, [0.0, 0.0]);
+        let node_sink = instantiate_template(t_sink, [200.0, 0.0]);
+
+        let graph = NodeGraph {
+            nodes: vec![node_src.clone(), node_sink.clone()],
+            connections: vec![Connection {
+                from_node: node_src.id,
+                from_pin: "Text".to_string(),
+                to_node: node_sink.id,
+                to_pin: "In".to_string(),
+            }],
+            pan: [0.0, 0.0],
+            zoom: 1.0,
+        };
+
+        let mgr = SlotManager::default();
+        // Right hand is EMPTY
+        assert!(mgr.right_hand().is_none());
+
+        let executor = PipelineExecutor::new(&graph, &mgr)
+            .with_single_prompt(Some("Prompted Caption Text".to_string()));
+
+        let res = executor.execute().expect("Pipeline execution failed");
+
+        // The pipeline produced an item with the prompted text
+        assert!(res.left_hand_item.is_some());
+        assert_eq!(res.left_hand_item.unwrap().title, "Prompted Caption Text");
+
+        // CRUCIAL: The slot manager's right hand remains completely empty!
+        assert!(mgr.right_hand().is_none());
+    }
 }
+
 

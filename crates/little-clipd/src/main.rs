@@ -17,6 +17,38 @@ pub struct DaemonContext {
     pub renderer: RwLock<ScreenRenderer>,
     pub display_tx: mpsc::Sender<Vec<u8>>,
     pub self_copied_text: RwLock<String>,
+    pub last_action: RwLock<Option<little_clip_core::ipc::LastAction>>,
+}
+
+fn get_last_action_path() -> PathBuf {
+    if let Ok(config_home) = std::env::var("XDG_CONFIG_HOME") {
+        PathBuf::from(config_home).join("little-screen-clip").join("last_action.json")
+    } else if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join(".config").join("little-screen-clip").join("last_action.json")
+    } else {
+        PathBuf::from("/tmp/little-clip-last-action.json")
+    }
+}
+
+async fn save_last_action(action: &little_clip_core::ipc::LastAction, ctx: &DaemonContext) {
+    let mut lock = ctx.last_action.write().await;
+    *lock = Some(action.clone());
+    let path = get_last_action_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string_pretty(action) {
+        let _ = std::fs::write(path, json);
+    }
+}
+
+fn load_last_action_from_disk() -> Option<little_clip_core::ipc::LastAction> {
+    let path = get_last_action_path();
+    if let Ok(data) = std::fs::read_to_string(path) {
+        serde_json::from_str(&data).ok()
+    } else {
+        None
+    }
 }
 
 impl DaemonContext {
@@ -37,6 +69,7 @@ impl DaemonContext {
         let _ = self.display_tx.send(frame).await;
     }
 }
+
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -81,6 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         renderer: RwLock::new(renderer),
         display_tx,
         self_copied_text: RwLock::new(String::new()),
+        last_action: RwLock::new(load_last_action_from_disk()),
     });
 
     // Push initial blank state to screen
@@ -289,7 +323,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
             }) => {
                 let result = {
                     let mgr = ctx.manager.read().await;
-                    if let Some(slots) = selected_slots {
+                    if let Some(ref slots) = selected_slots {
                         let items: Vec<&ClipItem> = slots.iter().filter_map(|s| mgr.get(*s)).collect();
                         if items.is_empty() {
                             Err(little_clip_ops::OpError::ExecutionFailed(
@@ -327,6 +361,17 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
 
                 match result {
                     Ok(new_item) => {
+                        save_last_action(
+                            &little_clip_core::ipc::LastAction::Op {
+                                op_name: op_name.clone(),
+                                selected_slots: selected_slots.clone(),
+                                secondary_slot,
+                                separator: separator.clone(),
+                            },
+                            &ctx,
+                        )
+                        .await;
+
                         schedule_async_previews(&new_item, Arc::clone(&ctx));
                         let text_opt = extract_clipboard_text(&new_item);
                         if let Some(ref t) = text_opt {
@@ -351,7 +396,16 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     let mgr_snapshot = { ctx.manager.read().await.clone() };
                     let executor = little_clip_ops::PipelineExecutor::new(&recipe.graph, &mgr_snapshot);
                     match executor.execute() {
-                        Ok(pipe_res) => apply_pipeline_result(pipe_res, &ctx).await,
+                        Ok(pipe_res) => {
+                            save_last_action(
+                                &little_clip_core::ipc::LastAction::Recipe {
+                                    recipe_name: recipe_name.clone(),
+                                },
+                                &ctx,
+                            )
+                            .await;
+                            apply_pipeline_result(pipe_res, &ctx).await
+                        }
                         Err(e) => IpcResponse::Error {
                             error: format!("Recipe execution failed: {}", e),
                         },
@@ -362,6 +416,117 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     }
                 }
             }
+            Ok(IpcRequest::ExecuteRecipeWithPrompt { recipe_name, prompt_text }) => {
+                if let Some(recipe) = little_clip_ops::find_recipe_by_name(&recipe_name) {
+                    let mgr_snapshot = { ctx.manager.read().await.clone() };
+                    let executor = little_clip_ops::PipelineExecutor::new(&recipe.graph, &mgr_snapshot)
+                        .with_single_prompt(prompt_text);
+                    match executor.execute() {
+                        Ok(pipe_res) => {
+                            save_last_action(
+                                &little_clip_core::ipc::LastAction::Recipe {
+                                    recipe_name: recipe_name.clone(),
+                                },
+                                &ctx,
+                            )
+                            .await;
+                            apply_pipeline_result(pipe_res, &ctx).await
+                        }
+                        Err(e) => IpcResponse::Error {
+                            error: format!("Recipe execution failed: {}", e),
+                        },
+                    }
+                } else {
+                    IpcResponse::Error {
+                        error: format!("Recipe not found: {}", recipe_name),
+                    }
+                }
+            }
+            Ok(IpcRequest::GetLastAction) => {
+                let act = ctx.last_action.read().await.clone();
+                IpcResponse::LastAction(act)
+            }
+            Ok(IpcRequest::ExecuteLastAction { prompt_text }) => {
+                let action = ctx.last_action.read().await.clone();
+                match action {
+                    Some(little_clip_core::ipc::LastAction::Recipe { recipe_name }) => {
+                        if let Some(recipe) = little_clip_ops::find_recipe_by_name(&recipe_name) {
+                            let mgr_snapshot = { ctx.manager.read().await.clone() };
+                            let executor = little_clip_ops::PipelineExecutor::new(&recipe.graph, &mgr_snapshot)
+                                .with_single_prompt(prompt_text);
+                            match executor.execute() {
+                                Ok(pipe_res) => apply_pipeline_result(pipe_res, &ctx).await,
+                                Err(e) => IpcResponse::Error {
+                                    error: format!("Recipe execution failed: {}", e),
+                                },
+                            }
+                        } else {
+                            IpcResponse::Error {
+                                error: format!("Recipe not found: {}", recipe_name),
+                            }
+                        }
+                    }
+                    Some(little_clip_core::ipc::LastAction::Op { op_name, selected_slots, secondary_slot, separator }) => {
+                        let mgr = ctx.manager.read().await;
+                        let result: Result<little_clip_core::ClipItem, little_clip_ops::OpError> = {
+                            if let Some(slots) = selected_slots {
+                                let items: Vec<&little_clip_core::ClipItem> = slots.iter().filter_map(|s| mgr.get(*s)).collect();
+                                if items.is_empty() {
+                                    Err(little_clip_ops::OpError::ExecutionFailed("Selected slots are empty".to_string()))
+                                } else {
+                                    little_clip_ops::execute_multi_op(&op_name, &items, separator.as_deref())
+                                }
+                            } else {
+                                let left_item = mgr.left_hand().cloned();
+                                if let Some(left) = left_item {
+                                    if let Some(sec_slot) = secondary_slot {
+                                        if let Some(sec_item) = mgr.get(sec_slot) {
+                                            little_clip_ops::execute_binary_op(&op_name, &left, sec_item, separator.as_deref())
+                                        } else {
+                                            Err(little_clip_ops::OpError::ExecutionFailed(format!(
+                                                "Slot {} is empty",
+                                                sec_slot.label()
+                                            )))
+                                        }
+                                    } else if let Some(right) = mgr.right_hand() {
+                                        little_clip_ops::execute_binary_op(&op_name, &left, right, separator.as_deref())
+                                            .or_else(|_| little_clip_ops::execute_unary_op(&op_name, &left))
+                                    } else {
+                                        little_clip_ops::execute_unary_op(&op_name, &left)
+                                    }
+                                } else {
+                                    Err(little_clip_ops::OpError::ExecutionFailed("Left Hand is empty".to_string()))
+                                }
+                            }
+                        };
+
+                        match result {
+                            Ok(new_item) => {
+                                schedule_async_previews(&new_item, Arc::clone(&ctx));
+                                let text_opt = extract_clipboard_text(&new_item);
+                                if let Some(ref t) = text_opt {
+                                    let mut self_text = ctx.self_copied_text.write().await;
+                                    *self_text = t.clone();
+                                }
+                                copy_to_os_clipboard(&new_item);
+                                {
+                                    let mut mgr_mut = ctx.manager.write().await;
+                                    mgr_mut.apply_op_result(new_item.clone());
+                                }
+                                ctx.refresh_display().await;
+                                IpcResponse::OpResult { item: new_item }
+                            }
+                            Err(e) => IpcResponse::Error {
+                                error: e.to_string(),
+                            },
+                        }
+                    }
+                    None => IpcResponse::Error {
+                        error: "No prior action has been executed yet".to_string(),
+                    },
+                }
+            }
+
             Ok(IpcRequest::ExecuteGraphYaml { yaml }) => {
                 match serde_yaml::from_str::<little_clip_ops::NodeGraph>(&yaml) {
                     Ok(graph) => {

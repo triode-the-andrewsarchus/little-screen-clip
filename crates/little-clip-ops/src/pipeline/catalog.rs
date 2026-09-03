@@ -108,6 +108,22 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         outputs: &[("Value", PortType::Text)],
         default_props: &[("value", "24")],
     },
+    NodeTemplate {
+        id: "source_prompt_or_hand",
+        name: "Prompt or Hand Text",
+        category: "Source",
+        description: "Emits text from Hand if present; otherwise prompts via popup input when executed",
+        tags: &["source", "hand", "prompt", "text", "input", "interactive"],
+        kind: NodeKind::PromptOrHandText,
+        inputs: &[],
+        outputs: &[("Text", PortType::Text)],
+        default_props: &[
+            ("hand", "right"),
+            ("prompt_message", "Enter text:"),
+            ("default_text", ""),
+        ],
+    },
+
 
     // -------------------------------------------------------------
     // Text Operators (CLI / External Python / jq)

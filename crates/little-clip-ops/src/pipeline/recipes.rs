@@ -126,13 +126,13 @@ fn init_default_recipes(dir: &Path) -> Result<(), std::io::Error> {
 /// Left Hand (Picture) + Right Hand (Text) -> Pad with frame -> Add caption -> Set in Left Hand
 pub fn make_pad_and_caption_recipe() -> Recipe {
     let t_lh = find_template("source_lh").unwrap();
-    let t_rh = find_template("source_rh").unwrap();
+    let t_caption_source = find_template("source_prompt_or_hand").unwrap_or_else(|| find_template("source_rh").unwrap());
     let t_pad = find_template("img_pad_frame").unwrap();
     let t_caption = find_template("img_add_title").unwrap();
     let t_sink = find_template("sink_lh").unwrap();
 
     let node_lh = instantiate_template(t_lh, [60.0, 100.0]);
-    let node_rh = instantiate_template(t_rh, [60.0, 300.0]);
+    let node_caption_src = instantiate_template(t_caption_source, [60.0, 300.0]);
     let node_pad = instantiate_template(t_pad, [320.0, 100.0]);
     let node_caption = instantiate_template(t_caption, [580.0, 180.0]);
     let node_sink = instantiate_template(t_sink, [860.0, 180.0]);
@@ -152,10 +152,10 @@ pub fn make_pad_and_caption_recipe() -> Recipe {
             to_node: node_caption.id,
             to_pin: "Image In".to_string(),
         },
-        // RH Out -> Caption Caption
+        // Caption Source Text -> Caption Caption
         Connection {
-            from_node: node_rh.id,
-            from_pin: "Out".to_string(),
+            from_node: node_caption_src.id,
+            from_pin: "Text".to_string(),
             to_node: node_caption.id,
             to_pin: "Caption".to_string(),
         },
@@ -170,8 +170,9 @@ pub fn make_pad_and_caption_recipe() -> Recipe {
 
     Recipe {
         name: "Pad and Caption".to_string(),
-        description: "Add stylish border padding and embed Right Hand text caption at bottom (ImageMagick)"
+        description: "Add stylish border padding and embed caption text at bottom (ImageMagick)"
             .to_string(),
+        input_type: crate::pipeline::types::RecipeInputType::Image,
         tags: vec![
             "image".to_string(),
             "frame".to_string(),
@@ -179,7 +180,7 @@ pub fn make_pad_and_caption_recipe() -> Recipe {
             "dual-wield".to_string(),
         ],
         graph: NodeGraph {
-            nodes: vec![node_lh, node_rh, node_pad, node_caption, node_sink],
+            nodes: vec![node_lh, node_caption_src, node_pad, node_caption, node_sink],
             connections,
             pan: [0.0, 0.0],
             zoom: 1.0,
@@ -215,6 +216,7 @@ pub fn make_normalize_audio_recipe() -> Recipe {
         name: "Normalize Audio (14 LUFS)".to_string(),
         description: "Broadcast-standard loudness normalization for audio in Left Hand (FFmpeg)"
             .to_string(),
+        input_type: crate::pipeline::types::RecipeInputType::Audio,
         tags: vec![
             "audio".to_string(),
             "normalize".to_string(),
@@ -270,6 +272,7 @@ pub fn make_clean_and_slugify_recipe() -> Recipe {
         name: "Clean and Slugify".to_string(),
         description: "Normalize separators and transform Left Hand string into URL-safe kebab slug"
             .to_string(),
+        input_type: crate::pipeline::types::RecipeInputType::TextOrPrompt,
         tags: vec![
             "text".to_string(),
             "slug".to_string(),
@@ -284,3 +287,35 @@ pub fn make_clean_and_slugify_recipe() -> Recipe {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pipeline::types::RecipeInputType;
+    use little_clip_core::item::ClipItem;
+
+    #[test]
+    fn test_recipe_applicability() {
+        let pad_recipe = make_pad_and_caption_recipe();
+        assert_eq!(pad_recipe.input_type, RecipeInputType::Image);
+
+        let slug_recipe = make_clean_and_slugify_recipe();
+        assert_eq!(slug_recipe.input_type, RecipeInputType::TextOrPrompt);
+
+        let text_item = ClipItem::from_text("Hello world".to_string());
+        let img_item = ClipItem::from_image(vec![0; 16], 100, 100, "image/png");
+
+        // Pad and caption expects image
+        assert!(pad_recipe.is_applicable(&[&img_item]));
+        assert!(!pad_recipe.is_applicable(&[&text_item]));
+        assert!(!pad_recipe.is_applicable(&[]));
+
+        // Clean & slugify allows text or prompt (empty or non-text)
+        assert!(slug_recipe.is_applicable(&[&text_item]));
+        assert!(slug_recipe.is_applicable(&[]));
+        assert!(slug_recipe.is_applicable(&[&img_item]));
+    }
+
+}
+
+

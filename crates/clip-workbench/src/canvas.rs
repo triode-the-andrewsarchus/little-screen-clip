@@ -524,9 +524,11 @@ impl NodeCanvasState {
                         let recipe = Recipe {
                             name: self.save_name.trim().to_string(),
                             description: "Custom user recipe".to_string(),
+                            input_type: little_clip_ops::pipeline::types::RecipeInputType::Any,
                             tags: vec!["custom".to_string()],
                             graph: self.graph.clone(),
                         };
+
                         if let Ok(path) = save_recipe(&recipe) {
                             self.status_message = Some((
                                 format!("Saved recipe to {}", path.display()),
@@ -847,7 +849,9 @@ fn get_node_category_color(kind: &NodeKind) -> Color32 {
         | NodeKind::RightHandSource
         | NodeKind::SlotSource(_)
         | NodeKind::ConstantText
-        | NodeKind::ConstantNumber => Color32::from_rgb(59, 130, 246), // Blue
+        | NodeKind::ConstantNumber
+        | NodeKind::PromptOrHandText => Color32::from_rgb(59, 130, 246), // Blue
+
 
         NodeKind::TextTrim
         | NodeKind::TextSlugify

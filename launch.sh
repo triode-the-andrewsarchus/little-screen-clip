@@ -155,7 +155,7 @@ function run_workbench() {
         start_daemon
     fi
     echo -e "${GREEN}Launching Crafting Workbench modal...${NC}"
-    "$WORKBENCH_BIN"
+    "$WORKBENCH_BIN" "$@"
 }
 
 function run_test() {
@@ -198,7 +198,12 @@ case "${1:-}" in
         status_daemon
         ;;
     ui|workbench)
-        run_workbench
+        shift
+        run_workbench "$@"
+        ;;
+    last)
+        shift
+        run_workbench --last "$@"
         ;;
     logs)
         show_logs
@@ -222,9 +227,11 @@ case "${1:-}" in
         echo "  restart   - Stop and restart little-clipd"
         echo "  reload    - Hot reload configuration file and refresh screen"
         echo "  status    - Show daemon status and current clipboard slots"
-        echo "  ui        - Open the main monitor Crafting Workbench modal"
+        echo "  ui        - Open the main monitor Crafting Workbench modal (supports --last)"
+        echo "  last      - Re-run last operation or recipe directly"
         echo "  logs      - Tail daemon output logs"
         echo "  test      - Run direct USB display hardware test"
         echo "  build     - Recompile all Rust workspace crates"
         ;;
 esac
+

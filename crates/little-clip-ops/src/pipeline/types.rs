@@ -141,6 +141,36 @@ impl PortValue {
 
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RecipeInputType {
+    #[default]
+    Any,
+    Text,
+    #[serde(rename = "text | prompt", alias = "text_or_prompt", alias = "text_prompt")]
+    TextOrPrompt,
+    Image,
+    Audio,
+    MultiText,
+    MultiImage,
+    None,
+}
+
+impl RecipeInputType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            RecipeInputType::Any => "Any",
+            RecipeInputType::Text => "Text",
+            RecipeInputType::TextOrPrompt => "Text | Prompt",
+            RecipeInputType::Image => "Image",
+            RecipeInputType::Audio => "Audio",
+            RecipeInputType::MultiText => "Multi-Text",
+            RecipeInputType::MultiImage => "Multi-Image",
+            RecipeInputType::None => "None",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeKind {
     // Sources
@@ -149,6 +179,7 @@ pub enum NodeKind {
     SlotSource(SlotId),
     ConstantText,
     ConstantNumber,
+    PromptOrHandText,
 
     // Text transforms
     TextTrim,
@@ -256,6 +287,56 @@ pub struct Recipe {
     pub name: String,
     pub description: String,
     #[serde(default)]
+    pub input_type: RecipeInputType,
+    #[serde(default)]
     pub tags: Vec<String>,
     pub graph: NodeGraph,
 }
+
+impl Recipe {
+    pub fn is_applicable(&self, items: &[&ClipItem]) -> bool {
+        match self.input_type {
+            RecipeInputType::Any => !items.is_empty(),
+            RecipeInputType::None => true,
+            RecipeInputType::Text => {
+                items.len() == 1 && is_text_like(items[0])
+            }
+            RecipeInputType::TextOrPrompt => {
+                // Applicable if single text item, or if slot is empty / non-text (which triggers popup prompt)
+                items.len() <= 1
+            }
+            RecipeInputType::Image => {
+                items.len() == 1 && is_image_like(items[0])
+            }
+            RecipeInputType::Audio => {
+                items.len() == 1 && is_audio_like(items[0])
+            }
+            RecipeInputType::MultiText => {
+                items.len() >= 2 && items.iter().all(|it| is_text_like(it))
+            }
+            RecipeInputType::MultiImage => {
+                items.len() >= 2 && items.iter().all(|it| is_image_like(it))
+            }
+        }
+    }
+}
+
+fn is_text_like(item: &ClipItem) -> bool {
+    matches!(
+        item.payload,
+        ClipPayload::Text(_) | ClipPayload::Markdown(_) | ClipPayload::Url(_)
+    )
+}
+
+fn is_image_like(item: &ClipItem) -> bool {
+    matches!(
+        item.payload,
+        ClipPayload::Image { .. } | ClipPayload::MultiImage { .. }
+    )
+}
+
+fn is_audio_like(item: &ClipItem) -> bool {
+    matches!(item.payload, ClipPayload::AudioRef { .. })
+}
+
+
