@@ -1,0 +1,15 @@
+[package]
+name = "clipctl"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+little-clip-core = { path = "../little-clip-core" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+clap = { version = "4.5", features = ["derive"] }
+colored = "2.1"

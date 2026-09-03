@@ -1,0 +1,14 @@
+[package]
+name = "little-clip-driver"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+rusb.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+little-clip-core = { path = "../little-clip-core" }
+little-clip-render = { path = "../little-clip-render" }
+tracing-subscriber.workspace = true

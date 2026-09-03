@@ -1,0 +1,14 @@
+[package]
+name = "little-clip-render"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+little-clip-core = { path = "../little-clip-core" }
+tiny-skia.workspace = true
+fontdue.workspace = true
+image.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

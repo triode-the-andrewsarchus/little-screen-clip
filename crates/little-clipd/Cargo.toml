@@ -1,0 +1,20 @@
+[package]
+name = "little-clipd"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+little-clip-core = { path = "../little-clip-core" }
+little-clip-driver = { path = "../little-clip-driver" }
+little-clip-render = { path = "../little-clip-render" }
+little-clip-ops = { path = "../little-clip-ops" }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = { workspace = true }
+thiserror.workspace = true
+

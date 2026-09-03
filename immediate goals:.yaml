@@ -1,0 +1,30 @@
+immediate goals:
+
+- More format preview support
+    x - txt, md, .ini, .json, .yaml preview
+    - code highlight preview
+        - C, Rust, Python, Java, -- all the big ones. This will probably dep on the library we can find
+    x - multi-picture preview
+    - multi-audio preview
+    - MIDI preview
+    - csv, .xls preview
+    - .raw preview
+    - .stl preview
+    x - .svg
+- Screen-saver on lock/sleep
+- Actually tying in with keybinds
+- x - why is edition 2021? (evaluated & upgraded to Rust 2024)
+
+medium-term goals:
+
+x - The big node machine (Phase 4: Visual Canvas, External CLI execution, Recipes)
+
+
+future goals:
+
+- More format preview support
+    - PDF preview
+    - font file preview
+- replace app launcher with per-task system with stupid fast nav
+- Unfortunately, we probably need to re-invet the wheel and eat the file manager for this too
+- Meta, we might be able to make MCP/AI stuff for integration

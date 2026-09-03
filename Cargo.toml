@@ -1,0 +1,40 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/little-clip-core",
+    "crates/little-clip-driver",
+    "crates/little-clip-render",
+    "crates/little-clip-ops",
+    "crates/little-clipd",
+    "crates/clip-workbench",
+    "crates/clipctl",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Vega"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "1.0"
+tokio = { version = "1.38", features = ["full"] }
+rusb = "0.9"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
+tiny-skia = "0.11"
+fontdue = "0.9"
+url = { version = "2.5", features = ["serde"] }
+uuid = { version = "1.9", features = ["v4", "serde"] }
+percent-encoding = "2.3"
+toml = "0.8"
+symphonia = { version = "0.5.4", default-features = false, features = ["mp3", "wav", "flac", "ogg", "vorbis", "isomp4", "alac", "aac", "pcm"] }
+serde_yaml = "0.9"
+
+
+[profile.dev.package."*"]
+opt-level = 3
+

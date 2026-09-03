@@ -1,0 +1,80 @@
+# ==============================================================================
+# Little Screen Clip Configuration
+# ==============================================================================
+# This configuration file controls display orientation, debug elements,
+# and complete UI color theming for the ambient screen.
+#
+# Changes can be applied live without restarting the daemon:
+#   ./launch.sh reload
+# or:
+#   ./target/debug/clipctl reload
+# ==============================================================================
+
+[display]
+# Invert the screen 180 degrees (true for standard Trofeo Vision bottom-cable mounting).
+# Set to false if mounted right-side up.
+rotate_180 = true
+
+# Toggle the debug handler badge in the bottom-left corner (e.g. "LH: [TEXT] | RH: [IMAGE]").
+# Set to false to hide the badge and have a cleaner ambient display.
+show_debug_handler = true
+
+# Minimum interval between animation frame updates to the small USB display in milliseconds.
+# The Trofeo embedded MCU hardware requires time to decompress each JPEG frame (~200-350ms).
+# Sending frames faster than this upper limit can overwhelm the MCU and cause hardware watchdogs/resets.
+# Recommended: 300 - 450 ms (default: 350ms = ~2.8 fps).
+animation_interval_ms = 100
+
+# Character used to indicate elision / truncated middle in long filenames (e.g. "▸", "…", "~")
+elision_char = "▸"
+
+# Color for the elision character.
+# Set to "border" (default) to dynamically match each slot box's border color,
+# or specify any hex color code (e.g. "#f59e0b", "#a855f7", "#38bdf8").
+elision_color = "border"
+
+[colors]
+# Canvas background color
+background = "#0f1117"
+
+# Card background fills
+hero_card_bg  = "#181b26"   # Left Hand and Right Hand card background
+prior_card_bg = "#13151d"   # Prior history stack card background
+undo_card_bg  = "#14161e"   # Undo card background
+
+# Card Borders & Accent Headers
+undo_border         = "#f59e0b"   # Warm Amber for Undo
+left_hand_border    = "#6366f1"   # Electric Indigo for Left Hand
+left_prior1_border  = "#0ea5e9"   # Sky Blue for Left Prior 1
+left_prior2_border  = "#475569"   # Muted Slate for Left Prior 2
+right_prior2_border = "#475569"   # Muted Slate for Right Prior 2
+right_prior1_border = "#a855f7"   # Vivid Purple for Right Prior 1
+right_hand_border   = "#10b981"   # Emerald Green for Right Hand
+
+# Interactive highlights
+cursor_border   = "#ec4899"   # Hot pink cursor outline
+selected_border = "#8b5cf6"   # Purple multi-select outline
+
+# Text & Preview Typography Colors
+title_color    = "#f1f5f9"    # Main card title (e.g. file name, snippet headline)
+subtitle_color = "#94a3b8"    # Metadata subtitle (e.g. dimensions, line counts)
+body_color     = "#cbd5e1"    # Text payload preview lines
+url_color      = "#38bdf8"    # URL links
+
+# Debug Handler Badge (Bottom-Left)
+debug_badge_bg   = "#0f172a"  # Badge pill background
+debug_badge_text = "#38bdf8"  # Badge text & border accent
+
+[audio]
+# Maximum length (in seconds) of an audio file to render a full complete waveform (default: 300 = 5 minutes).
+# Files longer than this threshold will display a high-resolution snippet preview instead of refusing.
+max_full_waveform_sec = 300
+
+# Length (in seconds) of the snippet to preview for long audio files (default: 30 seconds).
+snippet_duration_sec = 30
+
+# Where to sample the snippet from:
+#   "middle" (default) -> Extracts a 30s representative sample from the middle of the audio file
+#   "start"            -> Extracts a 30s sample from the very beginning (00:00) of the audio file
+sample_position = "middle"
+
