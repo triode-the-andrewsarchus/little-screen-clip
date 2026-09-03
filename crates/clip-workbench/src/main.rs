@@ -595,12 +595,12 @@ fn main() -> Result<(), eframe::Error> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1240.0, 740.0])
-            .with_resizable(true)
+            .with_inner_size([1180.0, 680.0])
+            .with_resizable(false)
             .with_decorations(true)
             .with_app_id("little-clip-workbench")
             .with_window_type(egui::viewport::X11WindowType::Dialog)
-            .with_title("Little Screen Clip — Crafting Workbench & Node Machine"),
+            .with_title("Little Screen Clip — Crafting Workbench"),
         ..Default::default()
     };
 
