@@ -17,8 +17,10 @@ pub struct DaemonContext {
     pub renderer: RwLock<ScreenRenderer>,
     pub display_tx: mpsc::Sender<Vec<u8>>,
     pub self_copied_text: RwLock<String>,
+    pub self_copied_image_hash: RwLock<Option<u64>>,
     pub last_action: RwLock<Option<little_clip_core::ipc::LastAction>>,
 }
+
 
 fn get_last_action_path() -> PathBuf {
     if let Ok(config_home) = std::env::var("XDG_CONFIG_HOME") {
@@ -114,8 +116,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         renderer: RwLock::new(renderer),
         display_tx,
         self_copied_text: RwLock::new(String::new()),
+        self_copied_image_hash: RwLock::new(None),
         last_action: RwLock::new(load_last_action_from_disk()),
     });
+
 
     // Push initial blank state to screen
     ctx.refresh_display().await;
@@ -378,11 +382,12 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                             let mut self_text = ctx.self_copied_text.write().await;
                             *self_text = t.clone();
                         }
-                        copy_to_os_clipboard(&new_item);
+                        copy_to_os_clipboard(&new_item, &ctx).await;
                         {
                             let mut mgr = ctx.manager.write().await;
                             mgr.apply_op_result(new_item.clone());
                         }
+
                         ctx.refresh_display().await;
                         IpcResponse::OpResult { item: new_item }
                     }
@@ -508,11 +513,12 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                                     let mut self_text = ctx.self_copied_text.write().await;
                                     *self_text = t.clone();
                                 }
-                                copy_to_os_clipboard(&new_item);
+                                copy_to_os_clipboard(&new_item, &ctx).await;
                                 {
                                     let mut mgr_mut = ctx.manager.write().await;
                                     mgr_mut.apply_op_result(new_item.clone());
                                 }
+
                                 ctx.refresh_display().await;
                                 IpcResponse::OpResult { item: new_item }
                             }
@@ -602,11 +608,12 @@ async fn apply_pipeline_result(
             let mut self_text = ctx.self_copied_text.write().await;
             *self_text = t.clone();
         }
-        copy_to_os_clipboard(&left_item);
+        copy_to_os_clipboard(&left_item, ctx).await;
         {
             let mut mgr = ctx.manager.write().await;
             mgr.apply_op_result(left_item.clone());
         }
+
         last_item = Some(left_item);
     }
 
@@ -863,6 +870,12 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                     img_out.stdout.hash(&mut hasher);
                     let hash = hasher.finish();
 
+                    let self_img_hash = *ctx.self_copied_image_hash.read().await;
+                    if self_img_hash == Some(hash) {
+                        last_image_hash = Some(hash);
+                        continue;
+                    }
+
                     if Some(hash) != last_image_hash {
                         last_image_hash = Some(hash);
                         last_clipboard_text.clear();
@@ -943,29 +956,110 @@ fn extract_clipboard_text(item: &ClipItem) -> Option<String> {
     }
 }
 
-fn copy_to_os_clipboard(item: &ClipItem) {
-    let text = match &item.payload {
-        little_clip_core::ClipPayload::Text(t) => t.clone(),
-        little_clip_core::ClipPayload::Markdown(m) => m.clone(),
-        little_clip_core::ClipPayload::Url(u) => u.to_string(),
-        little_clip_core::ClipPayload::Color { hex, .. } => hex.clone(),
-        little_clip_core::ClipPayload::MultiImage { paths, .. } => paths
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        little_clip_core::ClipPayload::FileBatch(files) => files
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => return,
-    };
-
-    let _ = std::process::Command::new("wl-copy")
-        .arg(&text)
-        .spawn();
+fn is_image_file_path(p: &std::path::Path) -> bool {
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "svg" | "gif" | "bmp")
 }
+
+async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
+    use std::hash::{Hash, Hasher};
+
+    match &item.payload {
+        little_clip_core::ClipPayload::Image { bytes, mime, .. } => {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            bytes.hash(&mut hasher);
+            let hash = hasher.finish();
+            {
+                let mut guard = ctx.self_copied_image_hash.write().await;
+                *guard = Some(hash);
+            }
+
+            if let Ok(mut child) = std::process::Command::new("wl-copy")
+                .arg("-t")
+                .arg(mime)
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+            {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = std::io::Write::write_all(&mut stdin, bytes);
+                }
+                let _ = child.wait();
+            }
+        }
+        little_clip_core::ClipPayload::FileBatch(files) if files.len() == 1 && is_image_file_path(&files[0]) => {
+            let path = &files[0];
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("png")
+                .to_lowercase();
+            let mime = if ext == "jpg" || ext == "jpeg" {
+                "image/jpeg"
+            } else if ext == "webp" {
+                "image/webp"
+            } else if ext == "svg" {
+                "image/svg+xml"
+            } else {
+                "image/png"
+            };
+            if let Ok(bytes) = std::fs::read(path) {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                bytes.hash(&mut hasher);
+                let hash = hasher.finish();
+                {
+                    let mut guard = ctx.self_copied_image_hash.write().await;
+                    *guard = Some(hash);
+                }
+
+                if let Ok(mut child) = std::process::Command::new("wl-copy")
+                    .arg("-t")
+                    .arg(mime)
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+                {
+                    if let Some(mut stdin) = child.stdin.take() {
+                        let _ = std::io::Write::write_all(&mut stdin, &bytes);
+                    }
+                    let _ = child.wait();
+                }
+            }
+        }
+        little_clip_core::ClipPayload::Text(t) => {
+            let _ = std::process::Command::new("wl-copy").arg(t).spawn();
+        }
+        little_clip_core::ClipPayload::Markdown(m) => {
+            let _ = std::process::Command::new("wl-copy").arg(m).spawn();
+        }
+        little_clip_core::ClipPayload::Url(u) => {
+            let _ = std::process::Command::new("wl-copy").arg(u.as_str()).spawn();
+        }
+        little_clip_core::ClipPayload::Color { hex, .. } => {
+            let _ = std::process::Command::new("wl-copy").arg(hex).spawn();
+        }
+        little_clip_core::ClipPayload::MultiImage { paths, .. } => {
+            let text = paths
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let _ = std::process::Command::new("wl-copy").arg(&text).spawn();
+        }
+        little_clip_core::ClipPayload::FileBatch(files) => {
+            let text = files
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let _ = std::process::Command::new("wl-copy").arg(&text).spawn();
+        }
+        _ => {}
+    }
+}
+
 
 pub fn get_socket_path() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {

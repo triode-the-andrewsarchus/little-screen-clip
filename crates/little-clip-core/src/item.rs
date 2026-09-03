@@ -753,6 +753,33 @@ impl ClipItem {
     }
 
     pub fn from_single_file(p: &Path) -> Self {
+        if is_image_path(p) {
+            if let Ok(bytes) = std::fs::read(p) {
+                let ext = p
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("png")
+                    .to_lowercase();
+                let mime = if ext == "jpg" || ext == "jpeg" {
+                    "image/jpeg"
+                } else if ext == "webp" {
+                    "image/webp"
+                } else if ext == "svg" {
+                    "image/svg+xml"
+                } else {
+                    "image/png"
+                };
+                if let Some(mut item) = Self::from_image_bytes(bytes, mime) {
+                    let name = p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_else(|| p.to_string_lossy().to_string());
+                    item.title = name;
+                    return item;
+                }
+            }
+        }
+
         let name = p
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -774,6 +801,7 @@ impl ClipItem {
             handler_tag: "BINARY (FILE)".to_string(),
         }
     }
+
 
     pub fn from_files(paths: Vec<PathBuf>) -> Self {
         let count = paths.len();

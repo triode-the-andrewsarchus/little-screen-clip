@@ -132,10 +132,11 @@ impl NodeCanvasState {
         let mut node_screen_rects: HashMap<Uuid, Rect> = HashMap::new();
         for node in &self.graph.nodes {
             let screen_pos = world_to_screen(canvas_rect, self.graph.pan, self.graph.zoom, Pos2::new(node.pos[0], node.pos[1]));
-            let width = 230.0 * self.graph.zoom;
+            let width = 250.0 * self.graph.zoom;
             let height = estimate_node_height(node) * self.graph.zoom;
             node_screen_rects.insert(node.id, Rect::from_min_size(screen_pos, Vec2::new(width, height)));
         }
+
 
         // 3. Draw Existing Connection Cables
         for conn in &self.graph.connections {
@@ -678,16 +679,20 @@ fn render_node_card(
         close_col,
     );
 
+    // Pins Section
+    let pin_row_h = 24.0 * zoom;
+    let max_pins = node.inputs.len().max(node.outputs.len());
+
     // Render Input Pins on Left Edge
     for (idx, pin) in node.inputs.iter().enumerate() {
         let pin_pos = get_pin_pos_by_idx(rect, node.inputs.len(), idx, false, zoom);
         render_socket(ui, painter, pin_pos, node.id, &pin.name, pin.port_type, false, zoom, dragging_from);
 
         painter.text(
-            pin_pos + Vec2::new(10.0 * zoom, 0.0),
+            pin_pos + Vec2::new(12.0 * zoom, 0.0),
             egui::Align2::LEFT_CENTER,
             &pin.name,
-            egui::FontId::proportional(10.5 * zoom),
+            egui::FontId::proportional(11.0 * zoom),
             Color32::from_rgb(203, 213, 225),
         );
     }
@@ -698,18 +703,37 @@ fn render_node_card(
         render_socket(ui, painter, pin_pos, node.id, &pin.name, pin.port_type, true, zoom, dragging_from);
 
         painter.text(
-            pin_pos + Vec2::new(-10.0 * zoom, 0.0),
+            pin_pos + Vec2::new(-12.0 * zoom, 0.0),
             egui::Align2::RIGHT_CENTER,
             &pin.name,
-            egui::FontId::proportional(10.5 * zoom),
+            egui::FontId::proportional(11.0 * zoom),
             Color32::from_rgb(203, 213, 225),
         );
     }
 
-    // Inline editable properties inside card
+    // Calculate vertical offset where properties section begins (below all pins)
+    let pins_total_h = if max_pins > 0 {
+        8.0 * zoom + (max_pins as f32 * pin_row_h) + 6.0 * zoom
+    } else {
+        6.0 * zoom
+    };
+    let props_top = rect.min.y + header_h + pins_total_h;
+
+    // Subtle divider between pins and properties
+    if !node.props.is_empty() && max_pins > 0 {
+        painter.line_segment(
+            [
+                Pos2::new(rect.min.x + 8.0 * zoom, props_top - 4.0 * zoom),
+                Pos2::new(rect.max.x - 8.0 * zoom, props_top - 4.0 * zoom),
+            ],
+            Stroke::new(1.0, Color32::from_rgb(51, 65, 85)),
+        );
+    }
+
+    // Inline editable properties inside card (strictly placed below pins, no overlap!)
     if !node.props.is_empty() {
-        let content_min = rect.min + Vec2::new(12.0, header_h + 8.0);
-        let content_max = rect.max - Vec2::new(12.0, 10.0);
+        let content_min = Pos2::new(rect.min.x + 12.0 * zoom, props_top);
+        let content_max = Pos2::new(rect.max.x - 12.0 * zoom, rect.max.y - 8.0 * zoom);
         let content_rect = Rect::from_min_max(content_min, content_max);
 
         let mut child_ui = ui.child_ui(content_rect, egui::Layout::top_down(egui::Align::Min));
@@ -727,12 +751,12 @@ fn render_node_card(
                         egui::TextEdit::multiline(val)
                             .font(egui::TextStyle::Monospace)
                             .desired_rows(2)
-                            .desired_width(120.0 * zoom),
+                            .desired_width(130.0 * zoom),
                     );
                 } else {
                     ui.add(
                         egui::TextEdit::singleline(val)
-                            .desired_width(90.0 * zoom),
+                            .desired_width(ui.available_width() * 0.95),
                     );
                 }
             });
@@ -769,9 +793,11 @@ fn render_socket(
     dragging_from: &mut Option<(Uuid, String, bool)>,
 ) {
     let radius = 5.5 * zoom;
-    let socket_rect = Rect::from_center_size(pos, Vec2::splat(radius * 2.5));
+    let base_col = port_type.color_rgba();
+    let base_col = Color32::from_rgba_unmultiplied(base_col[0], base_col[1], base_col[2], base_col[3]);
+
     let resp = ui.interact(
-        socket_rect,
+        Rect::from_center_size(pos, Vec2::splat(radius * 2.8)),
         ui.make_persistent_id((node_id, pin_name, is_output)),
         egui::Sense::click_and_drag(),
     );
@@ -780,12 +806,13 @@ fn render_socket(
         *dragging_from = Some((node_id, pin_name.to_string(), is_output));
     }
 
-    let rgba = port_type.color_rgba();
-    let base_col = Color32::from_rgba_unmultiplied(rgba[0], rgba[1], rgba[2], rgba[3]);
-
     if resp.hovered() {
-        painter.circle_filled(pos, radius * 1.3, Color32::WHITE);
-        painter.circle_stroke(pos, radius * 1.5, Stroke::new(2.0, base_col));
+        painter.circle_filled(pos, radius * 1.35, Color32::WHITE);
+        painter.circle_stroke(
+            pos,
+            radius * 1.35,
+            Stroke::new(2.0, base_col),
+        );
     } else {
         painter.circle_filled(pos, radius, base_col);
         painter.circle_stroke(
@@ -801,10 +828,20 @@ fn world_to_screen(canvas_rect: Rect, pan: [f32; 2], zoom: f32, pt: Pos2) -> Pos
 }
 
 fn estimate_node_height(node: &NodeInstance) -> f32 {
+    let header_h = 28.0;
+    let pin_row_h = 24.0;
     let max_pins = node.inputs.len().max(node.outputs.len());
-    let pin_h = max_pins as f32 * 24.0;
-    let props_h = node.props.len() as f32 * 32.0;
-    (40.0 + pin_h + props_h).max(75.0)
+    let pins_h = if max_pins > 0 {
+        8.0 + (max_pins as f32 * pin_row_h) + 6.0
+    } else {
+        6.0
+    };
+    let props_h = if !node.props.is_empty() {
+        node.props.len() as f32 * 30.0 + 8.0
+    } else {
+        0.0
+    };
+    (header_h + pins_h + props_h + 10.0).max(65.0)
 }
 
 fn get_pin_pos(
@@ -830,15 +867,14 @@ fn get_pin_pos(
 
 fn get_pin_pos_by_idx(
     node_rect: Rect,
-    total_pins: usize,
+    _total_pins: usize,
     idx: usize,
     is_output: bool,
     zoom: f32,
 ) -> Pos2 {
-    let header_h = 26.0 * zoom;
-    let available_h = (node_rect.height() - header_h).max(30.0);
-    let step = available_h / (total_pins as f32 + 1.0);
-    let y = node_rect.min.y + header_h + step * (idx as f32 + 1.0);
+    let header_h = 28.0 * zoom;
+    let pin_row_h = 24.0 * zoom;
+    let y = node_rect.min.y + header_h + 8.0 * zoom + (idx as f32 * pin_row_h) + (pin_row_h * 0.5);
     let x = if is_output { node_rect.max.x } else { node_rect.min.x };
     Pos2::new(x, y)
 }

@@ -122,22 +122,77 @@ impl PortValue {
     pub fn into_clip_item(self, title_hint: &str) -> ClipItem {
         match self {
             PortValue::Text(text) => ClipItem::from_text(text),
-            PortValue::ImagePath(path) => ClipItem::from_single_file(&path),
+            PortValue::ImagePath(path) => {
+                if let Ok(bytes) = std::fs::read(&path) {
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("png")
+                        .to_lowercase();
+                    let mime = if ext == "jpg" || ext == "jpeg" {
+                        "image/jpeg"
+                    } else if ext == "webp" {
+                        "image/webp"
+                    } else if ext == "svg" {
+                        "image/svg+xml"
+                    } else {
+                        "image/png"
+                    };
+                    if let Some(mut item) = ClipItem::from_image_bytes(bytes, mime) {
+                        let file_name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| title_hint.to_string());
+                        item.title = file_name;
+                        return item;
+                    }
+                }
+                ClipItem::from_single_file(&path)
+            }
             PortValue::AudioPath(path) => {
                 ClipItem::from_audio(path.clone()).unwrap_or_else(|| ClipItem::from_single_file(&path))
             }
-            PortValue::FilePath(path) => ClipItem::from_single_file(&path),
+            PortValue::FilePath(path) => {
+                if let Ok(bytes) = std::fs::read(&path) {
+                    let ext = path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "webp" || ext == "svg" {
+                        let mime = if ext == "jpg" || ext == "jpeg" {
+                            "image/jpeg"
+                        } else if ext == "webp" {
+                            "image/webp"
+                        } else if ext == "svg" {
+                            "image/svg+xml"
+                        } else {
+                            "image/png"
+                        };
+                        if let Some(mut item) = ClipItem::from_image_bytes(bytes, mime) {
+                            let file_name = path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| title_hint.to_string());
+                            item.title = file_name;
+                            return item;
+                        }
+                    }
+                }
+                ClipItem::from_single_file(&path)
+            }
             PortValue::FileBatch(paths) => {
                 if paths.is_empty() {
                     ClipItem::from_text(title_hint.to_string())
                 } else if paths.len() == 1 {
-                    ClipItem::from_single_file(&paths[0])
+                    PortValue::FilePath(paths[0].clone()).into_clip_item(title_hint)
                 } else {
                     ClipItem::from_files(paths)
                 }
             }
         }
     }
+
 
 }
 
