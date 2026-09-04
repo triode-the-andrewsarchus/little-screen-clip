@@ -12,3 +12,5 @@ fontdue.workspace = true
 image.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+syntect.workspace = true
+

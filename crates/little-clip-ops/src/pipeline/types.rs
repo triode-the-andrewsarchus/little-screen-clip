@@ -255,6 +255,7 @@ pub enum NodeKind {
     ImageRotate,
     ImageStitch,
     ImageStripExif,
+    ImageDiff,
 
     // Audio transforms
     AudioNormalize,

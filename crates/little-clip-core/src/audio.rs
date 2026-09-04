@@ -279,6 +279,138 @@ pub fn compute_plain_waveform(
     })
 }
 
+/// Decodes the entire audio file from start to finish without snippet truncation,
+/// generating a full-duration peak waveform suitable for high-res waveform inspection and editing.
+pub fn compute_full_waveform(path: &Path, num_bars: usize) -> Option<AudioWaveform> {
+    let meta = read_audio_metadata(path)?;
+    if num_bars == 0 {
+        return None;
+    }
+
+    let file = std::fs::File::open(path).ok()?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .ok()?;
+
+    let mut format = probed.format;
+    let track = format
+        .default_track()
+        .or_else(|| format.tracks().first())?
+        .clone();
+
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .ok()?;
+
+    let channels = track
+        .codec_params
+        .channels
+        .map(|c| c.count() as u16)
+        .unwrap_or(2);
+    let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
+
+    let mut ch1_chunk_peaks: Vec<f32> = Vec::new();
+    let mut ch2_chunk_peaks: Vec<f32> = Vec::new();
+    let is_stereo = channels >= 2;
+
+    let chunk_size = 512;
+    let mut current_chunk1 = 0.0f32;
+    let mut current_chunk2 = 0.0f32;
+    let mut chunk_count = 0;
+
+    let mut sample_buf: Option<SampleBuffer<f32>> = None;
+
+    while let Ok(packet) = format.next_packet() {
+        if packet.track_id() != track.id {
+            continue;
+        }
+
+        if let Ok(decoded) = decoder.decode(&packet) {
+            if sample_buf.is_none() {
+                let spec = *decoded.spec();
+                let duration = decoded.capacity() as u64;
+                sample_buf = Some(SampleBuffer::<f32>::new(duration, spec));
+            }
+
+            if let Some(ref mut sb) = sample_buf {
+                sb.copy_interleaved_ref(decoded);
+                let samples = sb.samples();
+                let n_ch = channels as usize;
+                if n_ch == 0 {
+                    continue;
+                }
+                let frames = samples.len() / n_ch;
+
+                for f in 0..frames {
+                    let s1 = samples[f * n_ch].abs();
+                    if s1 > current_chunk1 {
+                        current_chunk1 = s1;
+                    }
+                    if is_stereo && n_ch > 1 {
+                        let s2 = samples[f * n_ch + 1].abs();
+                        if s2 > current_chunk2 {
+                            current_chunk2 = s2;
+                        }
+                    }
+
+                    chunk_count += 1;
+                    if chunk_count >= chunk_size {
+                        ch1_chunk_peaks.push(current_chunk1);
+                        if is_stereo {
+                            ch2_chunk_peaks.push(current_chunk2);
+                        }
+                        current_chunk1 = 0.0;
+                        current_chunk2 = 0.0;
+                        chunk_count = 0;
+                    }
+                }
+            }
+        }
+    }
+
+    if chunk_count > 0 {
+        ch1_chunk_peaks.push(current_chunk1);
+        if is_stereo {
+            ch2_chunk_peaks.push(current_chunk2);
+        }
+    }
+
+    if ch1_chunk_peaks.is_empty() {
+        return None;
+    }
+
+    let ch1_peaks = resample_peaks(&ch1_chunk_peaks, num_bars);
+    let ch2_peaks = if is_stereo {
+        Some(resample_peaks(&ch2_chunk_peaks, num_bars))
+    } else {
+        None
+    };
+
+    Some(AudioWaveform {
+        channels,
+        sample_rate,
+        duration_ms: meta.duration_ms,
+        ch1_peaks,
+        ch2_peaks,
+        spectral_colors: None,
+        is_snippet: false,
+        snippet_start_ms: 0,
+        snippet_duration_ms: meta.duration_ms,
+    })
+}
+
 /// Analyzes spectral frequency distribution (Bass / Mids / Highs) using 3-band filtering
 /// For files exceeding audio_config.max_full_waveform_sec, analyzes the snippet window.
 pub fn compute_spectral_colors(
@@ -664,6 +796,27 @@ mod tests {
         if noise_path.exists() {
             let colors = compute_spectral_colors(noise_path, 100, &cfg).expect("failed on noise");
             println!("First 5 spectral colors of TAPE NOISE: {:?}", &colors[..5]);
+        }
+    }
+
+    #[test]
+    fn test_compute_full_waveform() {
+        let wav_path = generate_test_wav();
+        let wf = compute_full_waveform(&wav_path, 80).expect("failed to compute full waveform");
+        assert_eq!(wf.channels, 2);
+        assert_eq!(wf.ch1_peaks.len(), 80);
+        assert!(wf.ch2_peaks.is_some());
+        assert_eq!(wf.ch2_peaks.as_ref().unwrap().len(), 80);
+        assert!(!wf.is_snippet);
+        assert_eq!(wf.snippet_start_ms, 0);
+        let _ = std::fs::remove_file(&wav_path);
+
+        let mp3_path = std::path::Path::new("/home/vega/Documents/type_testing/Computer Error Song.mp3");
+        if mp3_path.is_file() {
+            let full_wf = compute_full_waveform(mp3_path, 200).expect("failed to decode mp3 full waveform");
+            assert!(!full_wf.is_snippet);
+            assert!(full_wf.duration_ms > 350_000);
+            assert_eq!(full_wf.ch1_peaks.len(), 200);
         }
     }
 }

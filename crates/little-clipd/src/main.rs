@@ -272,6 +272,18 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     }
                 }
             }
+            Ok(IpcRequest::PushFile { path, hand }) => {
+                let item = ClipItem::from_single_file(&path);
+                schedule_async_previews(&item, Arc::clone(&ctx));
+                {
+                    let mut mgr = ctx.manager.write().await;
+                    mgr.push_to_hand(item, hand);
+                }
+                ctx.refresh_display().await;
+                IpcResponse::Success {
+                    message: format!("Pushed file {:?} to {:?}", path, hand),
+                }
+            }
             Ok(IpcRequest::SwapSlots(a, b)) => {
                 {
                     let mut mgr = ctx.manager.write().await;

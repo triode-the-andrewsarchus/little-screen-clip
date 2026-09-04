@@ -33,6 +33,7 @@ percent-encoding = "2.3"
 toml = "0.8"
 symphonia = { version = "0.5.4", default-features = false, features = ["mp3", "wav", "flac", "ogg", "vorbis", "isomp4", "alac", "aac", "pcm"] }
 serde_yaml = "0.9"
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
 
 
 [profile.dev.package."*"]

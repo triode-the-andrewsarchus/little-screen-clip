@@ -1,5 +1,5 @@
 use super::catalog::{find_template, instantiate_template};
-use super::types::{Connection, NodeGraph, Recipe};
+use super::types::{Connection, NodeGraph, NodeKind, Recipe, RecipeInputType};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -288,6 +288,215 @@ pub fn make_clean_and_slugify_recipe() -> Recipe {
     }
 }
 
+/// Basic starting template for new custom recipes:
+/// Left Hand Source [LH] -> Set in Left Hand [LH]
+pub fn make_basic_template_recipe() -> Recipe {
+    let t_lh = find_template("source_lh").expect("source_lh template not found");
+    let t_sink = find_template("sink_lh").expect("sink_lh template not found");
+
+    let node_lh = instantiate_template(t_lh, [80.0, 180.0]);
+    let node_sink = instantiate_template(t_sink, [480.0, 180.0]);
+
+    let connections = vec![Connection {
+        from_node: node_lh.id,
+        from_pin: "Out".to_string(),
+        to_node: node_sink.id,
+        to_pin: "In".to_string(),
+    }];
+
+    Recipe {
+        name: "Untitled Recipe".to_string(),
+        description: "Pass-through template for new custom workflows".to_string(),
+        input_type: RecipeInputType::Any,
+        tags: vec!["template".to_string(), "custom".to_string()],
+        graph: NodeGraph {
+            nodes: vec![node_lh, node_sink],
+            connections,
+            pan: [0.0, 0.0],
+            zoom: 1.0,
+        },
+    }
+}
+
+/// Generates a unique script file in the recipes directory pre-populated with
+/// scaffolding to receive input from STDIN and emit output to STDOUT.
+pub fn create_script_file_scaffold(recipe_name: &str, is_python: bool) -> Result<String, std::io::Error> {
+    let dir = ensure_recipes_dir_and_defaults()?;
+    let safe_recipe: String = recipe_name
+        .chars()
+        .filter_map(|c| {
+            if c.is_alphanumeric() {
+                Some(c.to_ascii_lowercase())
+            } else if c == ' ' || c == '-' || c == '_' {
+                Some('_')
+            } else {
+                None
+            }
+        })
+        .collect();
+    let safe_recipe = if safe_recipe.trim_matches('_').is_empty() {
+        "recipe".to_string()
+    } else {
+        safe_recipe.trim_matches('_').to_string()
+    };
+
+    let short_id = &uuid::Uuid::new_v4().to_string()[..8];
+    let (filename, content) = if is_python {
+        let name = format!("{}_python_{}.py", safe_recipe, short_id);
+        let scaffold = format!(
+            r#"# Recipe: {}
+# Script Node: Python
+#
+# Inputs: Passed via standard input (sys.stdin).
+# Outputs: Write results to standard output (sys.stdout).
+
+import sys
+
+def main():
+    # Read input from preceding node (text string, file path, or empty)
+    input_data = sys.stdin.read()
+
+    # Transform data here (e.g. process text or JSON)
+    output_data = input_data
+
+    # Emit output to downstream nodes
+    sys.stdout.write(output_data)
+
+if __name__ == "__main__":
+    main()
+"#,
+            recipe_name
+        );
+        (name, scaffold)
+    } else {
+        let name = format!("{}_bash_{}.sh", safe_recipe, short_id);
+        let scaffold = format!(
+            r#"#!/usr/bin/env bash
+# Recipe: {}
+# Script Node: Bash Command
+#
+# Inputs: Passed via standard input (STDIN).
+# Outputs: Write results to standard output (STDOUT).
+
+set -euo pipefail
+
+# Read input from preceding node
+input_data=$(cat)
+
+# Transform data here (e.g. jq, sed, awk, or shell commands)
+output_data="$input_data"
+
+# Emit output to downstream nodes
+printf "%s" "$output_data"
+"#,
+            recipe_name
+        );
+        (name, scaffold)
+    };
+
+    let path = dir.join(&filename);
+    fs::write(&path, content)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o755));
+    }
+    info!("Created script scaffolding at {}", path.display());
+    Ok(filename)
+}
+
+/// Updates the `# Recipe: <new_recipe_name>` comment on line 1 of script files
+/// referenced by script nodes in the graph. If `duplicate_files` is true (e.g. Save As),
+/// copies the script file to a new unique filename and updates `node.props["script_file"]`.
+pub fn sync_recipe_script_headers(
+    graph: &mut NodeGraph,
+    new_recipe_name: &str,
+    duplicate_files: bool,
+) -> Result<(), std::io::Error> {
+    let dir = ensure_recipes_dir_and_defaults()?;
+
+    for node in &mut graph.nodes {
+        let is_py = matches!(node.kind, NodeKind::PythonScript);
+        let is_sh = matches!(node.kind, NodeKind::BashCommand);
+        if !is_py && !is_sh {
+            continue;
+        }
+
+        if let Some(filename) = node.props.get("script_file").cloned() {
+            let src_path = dir.join(&filename);
+            if !src_path.exists() {
+                // If the script file doesn't exist, generate a fresh scaffolded file
+                if let Ok(new_fname) = create_script_file_scaffold(new_recipe_name, is_py) {
+                    node.props.insert("script_file".to_string(), new_fname);
+                }
+                continue;
+            }
+
+            let mut target_path = src_path.clone();
+
+            if duplicate_files {
+                let safe_recipe: String = new_recipe_name
+                    .chars()
+                    .filter_map(|c| {
+                        if c.is_alphanumeric() {
+                            Some(c.to_ascii_lowercase())
+                        } else if c == ' ' || c == '-' || c == '_' {
+                            Some('_')
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let safe_recipe = if safe_recipe.trim_matches('_').is_empty() {
+                    "recipe".to_string()
+                } else {
+                    safe_recipe.trim_matches('_').to_string()
+                };
+
+                let short_id = &uuid::Uuid::new_v4().to_string()[..8];
+                let ext = if is_py { "py" } else { "sh" };
+                let kind_tag = if is_py { "python" } else { "bash" };
+                let target_filename = format!("{}_{}_{}.{}", safe_recipe, kind_tag, short_id, ext);
+                target_path = dir.join(&target_filename);
+                let _ = fs::copy(&src_path, &target_path);
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = fs::set_permissions(&target_path, fs::Permissions::from_mode(0o755));
+                }
+                node.props.insert("script_file".to_string(), target_filename);
+            }
+
+            // Update the `# Recipe:` header comment in target_path
+            if let Ok(content) = fs::read_to_string(&target_path) {
+                let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+                let recipe_line = format!("# Recipe: {}", new_recipe_name);
+
+                let mut updated = false;
+                for (idx, line) in lines.iter_mut().enumerate() {
+                    if idx <= 2 && line.starts_with("# Recipe:") {
+                        *line = recipe_line.clone();
+                        updated = true;
+                        break;
+                    }
+                }
+
+                if !updated {
+                    if !lines.is_empty() && lines[0].starts_with("#!") {
+                        lines.insert(1, recipe_line);
+                    } else {
+                        lines.insert(0, recipe_line);
+                    }
+                }
+
+                let new_content = lines.join("\n") + "\n";
+                let _ = fs::write(&target_path, new_content);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +525,48 @@ mod tests {
         assert!(slug_recipe.is_applicable(&[&img_item]));
     }
 
+    #[test]
+    fn test_basic_template_recipe() {
+        let recipe = make_basic_template_recipe();
+        assert_eq!(recipe.name, "Untitled Recipe");
+        assert_eq!(recipe.graph.nodes.len(), 2);
+        assert_eq!(recipe.graph.connections.len(), 1);
+    }
+
+    #[test]
+    fn test_script_scaffold_and_sync() {
+        let py_file = create_script_file_scaffold("My Cool Recipe", true).unwrap();
+        let sh_file = create_script_file_scaffold("My Cool Recipe", false).unwrap();
+
+        let dir = get_recipes_dir();
+        let py_path = dir.join(&py_file);
+        let sh_path = dir.join(&sh_file);
+
+        let py_content = fs::read_to_string(&py_path).unwrap();
+        assert!(py_content.contains("# Recipe: My Cool Recipe"));
+        assert!(py_content.contains("import sys"));
+
+        let sh_content = fs::read_to_string(&sh_path).unwrap();
+        assert!(sh_content.contains("# Recipe: My Cool Recipe"));
+
+        // Test sync headers without duplicating
+        let mut node = instantiate_template(find_template("script_python").unwrap(), [0.0, 0.0]);
+        node.props.insert("script_file".to_string(), py_file.clone());
+        let mut graph = NodeGraph {
+            nodes: vec![node],
+            connections: vec![],
+            pan: [0.0, 0.0],
+            zoom: 1.0,
+        };
+
+        sync_recipe_script_headers(&mut graph, "Renamed Recipe", false).unwrap();
+        let updated_py = fs::read_to_string(&py_path).unwrap();
+        assert!(updated_py.starts_with("# Recipe: Renamed Recipe"));
+
+        // Clean up test files
+        let _ = fs::remove_file(py_path);
+        let _ = fs::remove_file(sh_path);
+    }
 }
 
 

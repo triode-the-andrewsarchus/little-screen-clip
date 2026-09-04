@@ -6,6 +6,12 @@ use thiserror::Error;
 pub mod pipeline;
 pub use pipeline::*;
 
+pub mod diff;
+pub use diff::*;
+
+pub mod image_diff;
+pub use image_diff::*;
+
 
 #[derive(Debug, Error)]
 pub enum OpError {
@@ -147,10 +153,10 @@ pub const AVAILABLE_OPS: &[OpDescriptor] = &[
     },
     OpDescriptor {
         name: "diff",
-        label: "Diff Comparison",
-        description: "Generate unified diff between Hand and selected Slot",
+        label: "Diff Comparison (Text & Image)",
+        description: "Interactive visual text & picture diffing between slots, clipboard & files",
         is_binary: true,
-        category: "Multi-Slot",
+        category: "Compare",
     },
     // Multi-item operations (3+ slots)
     OpDescriptor {
@@ -306,6 +312,14 @@ pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
                 category: "Text",
             });
 
+            ops.push(OpDescriptor {
+                name: "diff",
+                label: "Diff Comparison (Difftastic)",
+                description: "Interactive structural syntax diff against Right Hand or Prior slot",
+                is_binary: true,
+                category: "Compare",
+            });
+
             if base64::engine::general_purpose::STANDARD.decode(trimmed).is_ok() && trimmed.len() > 3 {
                 ops.push(OpDescriptor {
                     name: "base64-decode",
@@ -317,10 +331,36 @@ pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
             }
         }
 
+        if resolve_diff_target(item).map(|t| t.is_image()).unwrap_or(false) {
+            ops.push(OpDescriptor {
+                name: "diff",
+                label: "Diff Comparison (Picture Diff)",
+                description: "Interactive visual image diff against Right Hand or Prior slot",
+                is_binary: true,
+                category: "Compare",
+            });
+        }
+
         return ops;
     }
 
     if items.len() == 2 {
+        let t0 = resolve_diff_target(items[0]);
+        let t1 = resolve_diff_target(items[1]);
+        if let (Some(t0), Some(t1)) = (t0, t1) {
+            if t0.is_image() && t1.is_image() {
+                return vec![
+                    OpDescriptor {
+                        name: "diff",
+                        label: "Picture Diff Comparison",
+                        description: "ODiff-style perceptual visual diff highlighting changed pixels",
+                        is_binary: true,
+                        category: "Compare",
+                    },
+                ];
+            }
+        }
+
         let all_text = items.iter().all(|i| get_item_text(i).is_ok());
         if all_text {
             return vec![
@@ -726,23 +766,31 @@ fn op_concat(hand: &ClipItem, slot: &ClipItem, sep: &str) -> Result<ClipItem, Op
 }
 
 fn op_diff(hand: &ClipItem, slot: &ClipItem) -> Result<ClipItem, OpError> {
-    let text_a = get_item_text(hand)?;
-    let text_b = get_item_text(slot)?;
+    let lhs = resolve_diff_target(slot).ok_or_else(|| {
+        OpError::IncompatiblePayload("Secondary slot payload is not readable text, file, or image".to_string())
+    })?;
+    let rhs = resolve_diff_target(hand).ok_or_else(|| {
+        OpError::IncompatiblePayload("Left Hand payload is not readable text, file, or image".to_string())
+    })?;
 
-    let diff = similar::TextDiff::from_lines(&text_b, &text_a);
-    let mut output = String::new();
-
-    for change in diff.iter_all_changes() {
-        let sign = match change.tag() {
-            similar::ChangeTag::Delete => "-",
-            similar::ChangeTag::Insert => "+",
-            similar::ChangeTag::Equal => " ",
-        };
-        output.push_str(sign);
-        output.push_str(change.value());
+    if lhs.is_image() && rhs.is_image() {
+        let options = ImageDiffOptions::default();
+        let b1 = lhs.image_bytes().unwrap();
+        let b2 = rhs.image_bytes().unwrap();
+        let res = compare_image_bytes(b1, b2, &options)
+            .map_err(|e| OpError::ExecutionFailed(format!("Picture diff failed: {}", e)))?;
+        let mask_png = res.encode_mask_png()
+            .map_err(|e| OpError::ExecutionFailed(format!("Encoding diff mask PNG failed: {}", e)))?;
+        return ClipItem::from_image_bytes(mask_png, "image/png")
+            .ok_or_else(|| OpError::ExecutionFailed("Failed to create ClipItem from diff mask PNG".to_string()));
     }
 
-    Ok(ClipItem::from_text(output))
+    if lhs.is_image() != rhs.is_image() {
+        return Err(OpError::IncompatiblePayload("Both operands must be the same type (either both text/code or both images)".to_string()));
+    }
+
+    let res = compute_diff(&lhs, &rhs, DiffDisplayMode::Inline, 120);
+    Ok(ClipItem::from_text(res.raw_ansi))
 }
 
 #[cfg(test)]
@@ -786,6 +834,49 @@ mod tests {
         let item2 = ClipItem::from_text("Second");
         let res = execute_binary_op("concat", &item1, &item2, Some(" + ")).unwrap();
         assert_eq!(get_item_text(&res).unwrap(), "First + Second");
+    }
+
+    #[test]
+    fn test_op_diff_images() {
+        use image::{Rgba, RgbaImage};
+        let mut img1 = RgbaImage::new(20, 20);
+        for p in img1.pixels_mut() {
+            *p = Rgba([255u8, 255, 255, 255]);
+        }
+        let mut b1 = std::io::Cursor::new(Vec::new());
+        img1.write_to(&mut b1, image::ImageFormat::Png).unwrap();
+        let bytes1 = b1.into_inner();
+
+        let mut img2 = RgbaImage::new(20, 20);
+        for (x, y, p) in img2.enumerate_pixels_mut() {
+            if x < 10 && y < 10 {
+                *p = Rgba([0u8, 0, 0, 255]); // 100 altered pixels
+            } else {
+                *p = Rgba([255u8, 255, 255, 255]);
+            }
+        }
+        let mut b2 = std::io::Cursor::new(Vec::new());
+        img2.write_to(&mut b2, image::ImageFormat::Png).unwrap();
+        let bytes2 = b2.into_inner();
+
+        let item1 = ClipItem::from_image_bytes(bytes1, "image/png").unwrap();
+        let item2 = ClipItem::from_image_bytes(bytes2, "image/png").unwrap();
+
+        // Check applicable ops
+        let ops = get_applicable_ops(&[&item1, &item2]);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].name, "diff");
+
+        // Execute diff operation
+        let diff_item = execute_binary_op("diff", &item2, &item1, None).unwrap();
+        match diff_item.payload {
+            ClipPayload::Image { width, height, mime, .. } => {
+                assert_eq!(width, 20);
+                assert_eq!(height, 20);
+                assert_eq!(mime, "image/png");
+            }
+            _ => panic!("Expected Image payload from diff operation"),
+        }
     }
 }
 

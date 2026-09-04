@@ -2,8 +2,8 @@ immediate goals:
 
 - More format preview support
     x - txt, md, .ini, .json, .yaml preview
-    - code highlight preview
-        - C, Rust, Python, Java, -- all the big ones. This will probably dep on the library we can find
+    x - code highlight preview
+        x - C, Rust, Python, Java, -- all the big ones. This will probably dep on the library we can find
     x - multi-picture preview
     - multi-audio preview
     - MIDI preview
@@ -14,6 +14,10 @@ immediate goals:
 - Screen-saver on lock/sleep
 - Actually tying in with keybinds
 - x - why is edition 2021? (evaluated & upgraded to Rust 2024)
+
+- Audio waveform zoom in/out
+- audio waveform dual view (Spectrum and Waveform)
+- Audio waveform preview colorization using ColorChord, inc. a native tool to export a "color strip song" picture ID.
 
 medium-term goals:
 

@@ -11,8 +11,14 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::Duration;
 
+mod ansi;
+mod audio_preview;
 mod canvas;
+mod diff_view;
+use audio_preview::AudioPreviewState;
 use canvas::*;
+use diff_view::DiffViewerState;
+use little_clip_ops::diff::{resolve_diff_pair, resolve_diff_target, DiffDisplayMode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkbenchView {
@@ -70,10 +76,12 @@ struct WorkbenchApp {
     mirror_texture: Option<egui::TextureHandle>,
     dirty_mirror: bool,
     in_app_prompt: Option<InAppPromptState>,
+    diff_viewer: Option<DiffViewerState>,
+    audio_preview: Option<AudioPreviewState>,
 }
 
 impl WorkbenchApp {
-    fn new(state: SlotManager) -> Self {
+    fn new(state: SlotManager, start_with_diff: bool, initial_audio: Option<PathBuf>) -> Self {
         let mut config = AppConfig::load();
         // Desktop monitor mirror is always upright (no 180 flip)
         config.display.rotate_180 = false;
@@ -97,7 +105,15 @@ impl WorkbenchApp {
         let canvas_state = NodeCanvasState::new();
         let recipes = load_all_recipes();
 
-        Self {
+        let audio_preview = initial_audio.map(|p| {
+            let title = p
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "Audio file".to_string());
+            AudioPreviewState::new(p, title)
+        });
+
+        let mut app = Self {
             state,
             state_rx,
             view: WorkbenchView::Palette,
@@ -111,6 +127,83 @@ impl WorkbenchApp {
             mirror_texture: None,
             dirty_mirror: true,
             in_app_prompt: None,
+            diff_viewer: None,
+            audio_preview,
+        };
+
+        if start_with_diff {
+            app.open_diff_viewer();
+        }
+
+        app
+    }
+
+    fn open_diff_viewer(&mut self) {
+        let (lhs_target, rhs_target) = if self.selected_slots.len() >= 2 {
+            let items: Vec<&ClipItem> = self.selected_slots.iter().filter_map(|s| self.state.get(*s)).collect();
+            let img_items: Vec<&ClipItem> = items.iter().filter(|i| resolve_diff_target(i).map(|t| t.is_image()).unwrap_or(false)).copied().collect();
+            if img_items.len() >= 2 {
+                (resolve_diff_target(img_items[0]), resolve_diff_target(img_items[1]))
+            } else if items.len() >= 2 {
+                (resolve_diff_target(items[0]), resolve_diff_target(items[1]))
+            } else {
+                (None, None)
+            }
+        } else if self.selected_slots.len() == 1 {
+            let selected_item = self.state.get(self.selected_slots[0]);
+            if let Some(item) = selected_item {
+                if let Some((t1, t2)) = resolve_diff_pair(item) {
+                    (Some(t1), Some(t2))
+                } else {
+                    let other = if self.selected_slots[0] == SlotId::LeftHand {
+                        self.state.right_hand()
+                            .or_else(|| self.state.get(SlotId::LeftPrior1))
+                            .or_else(|| self.state.get(SlotId::Undo))
+                    } else {
+                        self.state.left_hand()
+                    };
+                    (resolve_diff_target(item), other.and_then(resolve_diff_target))
+                }
+            } else {
+                (None, None)
+            }
+        } else {
+            let left = self.state.left_hand();
+            let right = self.state.right_hand();
+            if let (Some(l), Some(r)) = (left, right) {
+                (resolve_diff_target(l), resolve_diff_target(r))
+            } else if let Some(l) = left {
+                if let Some((t1, t2)) = resolve_diff_pair(l) {
+                    (Some(t1), Some(t2))
+                } else {
+                    let prior = self
+                        .state
+                        .get(SlotId::LeftPrior1)
+                        .or_else(|| self.state.get(SlotId::Undo))
+                        .or_else(|| self.state.get(SlotId::LeftPrior2));
+                    (resolve_diff_target(l), prior.and_then(resolve_diff_target))
+                }
+            } else {
+                (None, None)
+            }
+        };
+
+        match (lhs_target, rhs_target) {
+            (Some(lhs), Some(rhs)) => {
+                if lhs.is_image() && !rhs.is_image() {
+                    self.status_msg = Some("Comparison target is not an image (both targets must be images or text)".to_string());
+                } else if !lhs.is_image() && rhs.is_image() {
+                    self.status_msg = Some("Left target is not an image (both targets must be images or text)".to_string());
+                } else {
+                    self.diff_viewer = Some(DiffViewerState::new(lhs, rhs, DiffDisplayMode::SideBySide));
+                }
+            }
+            (Some(_), None) => {
+                self.status_msg = Some("Diff requires two items. Copy a second item to Right Hand or select 2 slots.".to_string());
+            }
+            (None, _) => {
+                self.status_msg = Some("No item selected or slot is empty. Push or copy content first.".to_string());
+            }
         }
     }
 
@@ -163,6 +256,11 @@ impl WorkbenchApp {
         if let Some(act) = actions.get(self.selected_action_index) {
             match act {
                 PaletteAction::Op(op) => {
+                    if op.name == "diff" {
+                        self.open_diff_viewer();
+                        return;
+                    }
+
                     let req = IpcRequest::ExecuteOp {
                         op_name: op.name.to_string(),
                         secondary_slot: None,
@@ -267,6 +365,19 @@ fn recipe_needs_prompt(recipe: &Recipe, state: &SlotManager) -> Option<(String, 
 
 impl eframe::App for WorkbenchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Live state update from background daemon poller
+        let mut state_changed = false;
+        while let Ok(new_state) = self.state_rx.try_recv() {
+            if new_state != self.state {
+                self.state = new_state;
+                state_changed = true;
+            }
+        }
+        if state_changed {
+            self.dirty_mirror = true;
+            ctx.request_repaint();
+        }
+
         // If an in-app prompt modal is active, render it over the workbench
         if let Some(prompt) = &mut self.in_app_prompt {
             let mut close_prompt = false;
@@ -363,18 +474,47 @@ impl eframe::App for WorkbenchApp {
             return; // Don't process background shortcuts while prompt modal is active
         }
 
-        // Live state update from background daemon poller
-        let mut state_changed = false;
-        while let Ok(new_state) = self.state_rx.try_recv() {
-            if new_state != self.state {
-                self.state = new_state;
-                state_changed = true;
+        // If diff viewer is active, render it over the workbench
+        if let Some(diff_state) = &mut self.diff_viewer {
+            let mut close_diff = false;
+            ctx.memory_mut(|m| {
+                if let Some(id) = m.focused() {
+                    m.surrender_focus(id);
+                }
+            });
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    diff_state.render_ui(ui, ctx, &mut close_diff);
+                });
+
+            if close_diff {
+                self.diff_viewer = None;
             }
+            return; // Don't process background shortcuts while diff viewer is active
         }
-        if state_changed {
-            self.dirty_mirror = true;
-            ctx.request_repaint();
+
+        // If audio preview is active, render it over the workbench
+        if let Some(audio_state) = &mut self.audio_preview {
+            let mut close_audio = false;
+            ctx.memory_mut(|m| {
+                if let Some(id) = m.focused() {
+                    m.surrender_focus(id);
+                }
+            });
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    audio_state.render_ui(ui, ctx, &mut close_audio);
+                });
+
+            if close_audio {
+                audio_state.stop();
+                self.audio_preview = None;
+            }
+            return; // Don't process background shortcuts while audio preview is active
         }
+
 
         if self.state.has_active_animation() {
             self.dirty_mirror = true;
@@ -579,6 +719,32 @@ impl eframe::App for WorkbenchApp {
                                 self.selected_action_index = 0;
                             }
                         }
+                    } else if response.secondary_clicked() {
+                        if let Some(pos) = response.interact_pointer_pos() {
+                            let rect = response.rect;
+                            let rel_x = (pos.x - rect.min.x) / rect.width() * SCREEN_WIDTH as f32;
+                            let clicked_slot = if rel_x < 240.0 {
+                                SlotId::Undo
+                            } else if rel_x < 600.0 {
+                                SlotId::LeftHand
+                            } else if rel_x < 840.0 {
+                                SlotId::LeftPrior1
+                            } else if rel_x < 1080.0 {
+                                SlotId::LeftPrior2
+                            } else if rel_x < 1320.0 {
+                                SlotId::RightPrior2
+                            } else if rel_x < 1560.0 {
+                                SlotId::RightPrior1
+                            } else {
+                                SlotId::RightHand
+                            };
+
+                            if let Some(item) = self.state.get(clicked_slot) {
+                                if let Some(audio_path) = item.audio_path() {
+                                    self.audio_preview = Some(AudioPreviewState::new(audio_path, item.title.clone()));
+                                }
+                            }
+                        }
                     }
                 }
             });
@@ -592,6 +758,10 @@ impl eframe::App for WorkbenchApp {
 
                     // Selected slots banner & shortcuts
                     let slot_labels: Vec<&str> = self.selected_slots.iter().map(|s| s.label()).collect();
+                    let first_audio_item = self.selected_slots.iter().find_map(|s| {
+                        self.state.get(*s).and_then(|it| it.audio_path().map(|p| (p, it.title.clone())))
+                    });
+
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(format!("Selected ({}): {}", self.selected_slots.len(), slot_labels.join(" + ")))
@@ -603,6 +773,21 @@ impl eframe::App for WorkbenchApp {
                                 .color(egui::Color32::from_rgb(148, 163, 184))
                                 .small(),
                         );
+
+                        if let Some((path, title)) = first_audio_item {
+                            ui.add_space(8.0);
+                            let audio_btn = egui::Button::new(
+                                egui::RichText::new("🎵 Preview & Slice Audio")
+                                    .small()
+                                    .strong()
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(egui::Color32::from_rgb(16, 185, 129))
+                            .rounding(4.0);
+                            if ui.add(audio_btn).clicked() {
+                                self.audio_preview = Some(AudioPreviewState::new(path, title));
+                            }
+                        }
                     });
 
                     ui.add_space(6.0);
@@ -723,7 +908,7 @@ impl eframe::App for WorkbenchApp {
     }
 }
 
-fn send_ipc_request(req: &IpcRequest) -> Result<IpcResponse, Box<dyn std::error::Error>> {
+pub(crate) fn send_ipc_request(req: &IpcRequest) -> Result<IpcResponse, Box<dyn std::error::Error>> {
     let sock_path = get_socket_path();
     let mut stream = UnixStream::connect(&sock_path)?;
 
@@ -886,7 +1071,24 @@ fn run_prompt_modal(
 
 fn main() -> Result<(), eframe::Error> {
     let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("Little Screen Clip — Crafting Workbench");
+        println!("\nUsage: clip-workbench [OPTIONS]");
+        println!("\nOptions:");
+        println!("  -d, --diff           Open diff comparison viewer directly");
+        println!("  -a, --audio <PATH>   Open audio waveform preview & slicer directly");
+        println!("  -l, --last           Re-execute last action (with modal prompt if needed)");
+        println!("  -h, --help           Print help");
+        return Ok(());
+    }
+
     let is_last = args.iter().any(|a| a == "--last" || a == "-l");
+    let is_diff = args.iter().any(|a| a == "--diff" || a == "-d");
+    let initial_audio = args
+        .iter()
+        .position(|a| a == "--audio" || a == "-a")
+        .and_then(|idx| args.get(idx + 1))
+        .map(PathBuf::from);
 
     if is_last {
         let state = match send_ipc_request(&IpcRequest::GetState) {
@@ -941,7 +1143,7 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "clip-workbench",
         options,
-        Box::new(|_cc| Box::new(WorkbenchApp::new(state))),
+        Box::new(move |_cc| Box::new(WorkbenchApp::new(state, is_diff, initial_audio))),
     )
 }
 

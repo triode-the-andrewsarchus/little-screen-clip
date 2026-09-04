@@ -10,7 +10,48 @@ pub struct AppConfig {
     pub colors: ColorConfig,
     #[serde(default)]
     pub audio: AudioConfig,
+    #[serde(default)]
+    pub workbench: WorkbenchConfig,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkbenchConfig {
+    /// Preferred text editor command (e.g. "code", "subl", "gedit", "kate", "nano", "nvim")
+    /// Defaults to None, which falls back to $VISUAL, $EDITOR, or "xdg-open".
+    #[serde(default)]
+    pub editor: Option<String>,
+}
+
+impl Default for WorkbenchConfig {
+    fn default() -> Self {
+        Self { editor: None }
+    }
+}
+
+impl WorkbenchConfig {
+    pub fn resolve_editor(&self) -> String {
+        if let Some(ref ed) = self.editor {
+            let trimmed = ed.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        if let Ok(vis) = std::env::var("VISUAL") {
+            let trimmed = vis.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        if let Ok(ed) = std::env::var("EDITOR") {
+            let trimmed = ed.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        "xdg-open".to_string()
+    }
+}
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -163,6 +204,7 @@ impl Default for AppConfig {
             display: DisplayConfig::default(),
             colors: ColorConfig::default(),
             audio: AudioConfig::default(),
+            workbench: WorkbenchConfig::default(),
         }
     }
 }

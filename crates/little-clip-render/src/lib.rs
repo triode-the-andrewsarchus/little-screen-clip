@@ -2,9 +2,17 @@ use fontdue::{Font, FontSettings};
 use image::{codecs::jpeg::JpegEncoder, ExtendedColorType};
 use little_clip_core::config::{parse_hex_color, AppConfig};
 use little_clip_core::{ClipItem, ClipPayload, SlotId, SlotManager};
+use std::path::Path;
+use std::sync::LazyLock;
+use syntect::easy::HighlightLines;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
 use thiserror::Error;
 use tiny_skia::*;
 use tracing::debug;
+
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_nonewlines);
+static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 pub const SCREEN_WIDTH: u32 = 1920;
 pub const SCREEN_HEIGHT: u32 = 462;
@@ -411,9 +419,37 @@ impl ScreenRenderer {
         // Payload-specific preview starting around y = 124.0
         match &item.payload {
             ClipPayload::Text(text) => {
+                let ext_hint = Path::new(&item.title)
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .or_else(|| {
+                        let trimmed = text.trim();
+                        let p = Path::new(trimmed);
+                        if p.is_file() {
+                            p.extension().and_then(|s| s.to_str())
+                        } else {
+                            None
+                        }
+                    });
+
+                let (preview_text, effective_hint) = {
+                    let trimmed = text.trim();
+                    let p = Path::new(trimmed);
+                    if p.is_file() && little_clip_core::syntax::is_code_file(p) {
+                        if let Ok(file_content) = std::fs::read_to_string(p) {
+                            (file_content, p.extension().and_then(|s| s.to_str()))
+                        } else {
+                            (text.clone(), ext_hint)
+                        }
+                    } else {
+                        (text.clone(), ext_hint)
+                    }
+                };
+
                 self.draw_text_preview(
                     pixmap,
-                    text,
+                    &preview_text,
+                    effective_hint,
                     rx,
                     ry,
                     rw,
@@ -549,15 +585,43 @@ impl ScreenRenderer {
                 );
             }
             ClipPayload::FileBatch(files) => {
-                self.draw_text(
-                    pixmap,
-                    &format!("FILES: {}", files.len()),
-                    rx + 16.0,
-                    ry + 130.0,
-                    26.0,
-                    Color::from_rgba8(250, 204, 21, 255),
-                    true,
-                );
+                if files.len() == 1 && little_clip_core::syntax::is_code_file(&files[0]) {
+                    let p = &files[0];
+                    if let Ok(file_content) = std::fs::read_to_string(p) {
+                        let ext = p.extension().and_then(|s| s.to_str());
+                        self.draw_text_preview(
+                            pixmap,
+                            &file_content,
+                            ext,
+                            rx,
+                            ry,
+                            rw,
+                            rh,
+                            is_hero,
+                            elision_color,
+                        );
+                    } else {
+                        self.draw_text(
+                            pixmap,
+                            &format!("FILES: {}", files.len()),
+                            rx + 16.0,
+                            ry + 130.0,
+                            26.0,
+                            Color::from_rgba8(250, 204, 21, 255),
+                            true,
+                        );
+                    }
+                } else {
+                    self.draw_text(
+                        pixmap,
+                        &format!("FILES: {}", files.len()),
+                        rx + 16.0,
+                        ry + 130.0,
+                        26.0,
+                        Color::from_rgba8(250, 204, 21, 255),
+                        true,
+                    );
+                }
             }
             ClipPayload::Directory(_) => {
                 self.draw_text(
@@ -1742,17 +1806,15 @@ impl ScreenRenderer {
         &self,
         pixmap: &mut Pixmap,
         text: &str,
+        ext_hint: Option<&str>,
         rx: f32,
         ry: f32,
         rw: f32,
         rh: f32,
         is_hero: bool,
-        elision_color: Color,
+        _elision_color: Color,
     ) {
-        let (b_r, b_g, b_b, b_a) = parse_hex_color(&self.config.colors.body_color);
-        let body_color = Color::from_rgba8(b_r, b_g, b_b, b_a);
         let content_x = rx + 14.0;
-        let max_content_w = (rw - 28.0).max(10.0);
         let clip_right = rx + rw - 10.0;
         let text_font_size = if is_hero { 18.0 } else { 15.0 };
         let line_height = if is_hero { 24.0 } else { 20.0 };
@@ -1762,13 +1824,27 @@ impl ScreenRenderer {
         let max_y = ry + rh - 22.0;
         let mut line_y = ry + 124.0;
 
+        let lang_id = little_clip_core::syntax::detect_language(text, ext_hint);
+        let syntax = SYNTAX_SET
+            .find_syntax_by_extension(lang_id)
+            .or_else(|| SYNTAX_SET.find_syntax_by_token(lang_id))
+            .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
+
+        let theme = THEME_SET
+            .themes
+            .get("base16-ocean.dark")
+            .or_else(|| THEME_SET.themes.values().next())
+            .expect("default theme");
+
+        let mut highlighter = HighlightLines::new(syntax, theme);
+
         for (idx, line) in lines.iter().enumerate() {
             let is_near_bottom = line_y + line_height > max_y;
             let has_more = idx + 1 < total_lines;
 
             if is_near_bottom && has_more {
                 let remaining = total_lines - idx;
-                let badge = format!("▼ +{} more lines", remaining);
+                let badge = format!("▼ +{} more lines ({})", remaining, little_clip_core::syntax::language_display_name(lang_id));
                 self.draw_footer_badge(pixmap, &badge, content_x, line_y, text_font_size, clip_right);
                 break;
             }
@@ -1777,21 +1853,37 @@ impl ScreenRenderer {
                 break;
             }
 
-            let elided_line = self.truncate_filename_elided(line, max_content_w, text_font_size, false);
-            self.draw_elided_text_clipped(
-                pixmap,
-                &elided_line,
-                content_x,
-                line_y,
-                text_font_size,
-                body_color,
-                elision_color,
-                false,
-                clip_right,
-            );
+            let ranges = highlighter
+                .highlight_line(line, &SYNTAX_SET)
+                .unwrap_or_default();
+
+            let mut cx = content_x;
+            for (style, token_str) in ranges {
+                if cx >= clip_right {
+                    break;
+                }
+                let fg = Color::from_rgba8(style.foreground.r, style.foreground.g, style.foreground.b, 255);
+                let font_style = if style.font_style.contains(syntect::highlighting::FontStyle::BOLD) {
+                    FontStyle::Bold
+                } else {
+                    FontStyle::Mono
+                };
+                cx = self.draw_text_styled_clipped(
+                    pixmap,
+                    token_str,
+                    cx,
+                    line_y,
+                    text_font_size,
+                    fg,
+                    font_style,
+                    clip_right,
+                );
+            }
+
             line_y += line_height;
         }
     }
+
 
     fn draw_text(
         &self,

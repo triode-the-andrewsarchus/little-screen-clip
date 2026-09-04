@@ -162,6 +162,8 @@ pub enum ClipPayload {
     Image {
         #[serde(skip)]
         bytes: Vec<u8>,
+        #[serde(default)]
+        path: Option<PathBuf>,
         width: u32,
         height: u32,
         mime: String,
@@ -232,11 +234,28 @@ impl ClipItem {
         };
         let subtitle = format!("{:.1} KB • {}", size_kb, mime.replace("image/", "").to_uppercase());
 
+        let ext = if mime.contains("png") {
+            "png"
+        } else if mime.contains("jpeg") || mime.contains("jpg") {
+            "jpg"
+        } else if mime.contains("webp") {
+            "webp"
+        } else if mime.contains("svg") {
+            "svg"
+        } else {
+            "png"
+        };
+        let staging_dir = std::env::temp_dir().join("little_clip_staging");
+        let _ = std::fs::create_dir_all(&staging_dir);
+        let staging_path = staging_dir.join(format!("{}.{}", Uuid::new_v4(), ext));
+        let _ = std::fs::write(&staging_path, &bytes);
+
         Some(Self {
             id: Uuid::new_v4(),
             created_at: current_unix_timestamp(),
             payload: ClipPayload::Image {
                 bytes,
+                path: Some(staging_path),
                 width,
                 height,
                 mime: mime.clone(),
@@ -321,6 +340,7 @@ impl ClipItem {
                             created_at: current_unix_timestamp(),
                             payload: ClipPayload::Image {
                                 bytes,
+                                path: Some(path.to_path_buf()),
                                 width: w,
                                 height: h,
                                 mime,
@@ -437,11 +457,16 @@ impl ClipItem {
             let (w, h) = read_image_dimensions(&bytes).unwrap_or((0, 0));
             let size_kb = bytes.len() as f64 / 1024.0;
             let thumbnail = ImageThumbnail::generate(&bytes, 320, 220);
+            let staging_dir = std::env::temp_dir().join("little_clip_staging");
+            let _ = std::fs::create_dir_all(&staging_dir);
+            let staging_path = staging_dir.join(format!("{}.svg", Uuid::new_v4()));
+            let _ = std::fs::write(&staging_path, &bytes);
             return Self {
                 id: Uuid::new_v4(),
                 created_at: current_unix_timestamp(),
                 payload: ClipPayload::Image {
                     bytes,
+                    path: Some(staging_path),
                     width: w,
                     height: h,
                     mime: "image/svg+xml".to_string(),
@@ -581,11 +606,28 @@ impl ClipItem {
         let title = format!("{}×{}", width, height);
         let subtitle = format!("{:.1} KB • {}", size_kb, mime);
 
+        let ext = if mime.contains("png") {
+            "png"
+        } else if mime.contains("jpeg") || mime.contains("jpg") {
+            "jpg"
+        } else if mime.contains("webp") {
+            "webp"
+        } else if mime.contains("svg") {
+            "svg"
+        } else {
+            "png"
+        };
+        let staging_dir = std::env::temp_dir().join("little_clip_staging");
+        let _ = std::fs::create_dir_all(&staging_dir);
+        let staging_path = staging_dir.join(format!("{}.{}", Uuid::new_v4(), ext));
+        let _ = std::fs::write(&staging_path, &bytes);
+
         Self {
             id: Uuid::new_v4(),
             created_at: current_unix_timestamp(),
             payload: ClipPayload::Image {
                 bytes,
+                path: Some(staging_path),
                 width,
                 height,
                 mime: mime.clone(),
@@ -775,8 +817,17 @@ impl ClipItem {
                         .map(|n| n.to_string_lossy().to_string())
                         .unwrap_or_else(|| p.to_string_lossy().to_string());
                     item.title = name;
+                    if let ClipPayload::Image { ref mut path, .. } = item.payload {
+                        *path = Some(p.to_path_buf());
+                    }
                     return item;
                 }
+            }
+        }
+
+        if crate::audio::is_audio_path(p) {
+            if let Some(item) = Self::from_audio(p.to_path_buf()) {
+                return item;
             }
         }
 
@@ -881,6 +932,25 @@ impl ClipItem {
             ClipPayload::FileBatch(_) => PayloadKind::FileBatch,
             ClipPayload::Directory(_) => PayloadKind::Directory,
             ClipPayload::Color { .. } => PayloadKind::Color,
+        }
+    }
+
+    pub fn audio_path(&self) -> Option<PathBuf> {
+        match &self.payload {
+            ClipPayload::AudioRef { path, .. } => Some(path.clone()),
+            ClipPayload::FileBatch(files) if files.len() == 1 && crate::audio::is_audio_path(&files[0]) => {
+                Some(files[0].clone())
+            }
+            ClipPayload::Text(text) => {
+                let trimmed = text.trim();
+                let path = Path::new(trimmed);
+                if path.is_file() && crate::audio::is_audio_path(path) {
+                    Some(path.to_path_buf())
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 }

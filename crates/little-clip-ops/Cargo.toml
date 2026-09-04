@@ -16,5 +16,7 @@ serde_yaml = { workspace = true }
 uuid = { workspace = true }
 regex = "1.10"
 base64 = "0.22"
-similar = "2.6"
+similar = { version = "2.6", features = ["inline"] }
+syntect.workspace = true
+image = { workspace = true }
 

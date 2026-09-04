@@ -16,6 +16,11 @@ pub enum IpcRequest {
         #[serde(default = "default_left_hand")]
         hand: HandSide,
     },
+    PushFile {
+        path: std::path::PathBuf,
+        #[serde(default = "default_left_hand")]
+        hand: HandSide,
+    },
     SwapSlots(SlotId, SlotId),
     Undo,
     Clear(SlotId),

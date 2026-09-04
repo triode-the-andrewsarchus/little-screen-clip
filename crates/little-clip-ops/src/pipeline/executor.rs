@@ -566,6 +566,36 @@ else:
                 preview = Some("EXIF stripped".to_string());
                 out.push(("Image Out".to_string(), PortValue::ImagePath(out_path)));
             }
+            NodeKind::ImageDiff => {
+                let left_path = self.get_input_file(inputs, &["Base Image", "Left", "In 1", "In"])?;
+                let right_path = self.get_input_file(inputs, &["Compare Image", "Right", "In 2"])?;
+                let threshold: f32 = node.props.get("threshold").and_then(|s| s.parse().ok()).unwrap_or(0.10);
+                let b1 = std::fs::read(&left_path)
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
+                let b2 = std::fs::read(&right_path)
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
+                let opts = crate::image_diff::ImageDiffOptions {
+                    threshold,
+                    ..Default::default()
+                };
+                let res = crate::image_diff::compare_image_bytes(&b1, &b2, &opts)
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
+                let mask_png = res.encode_mask_png()
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
+                let out_mask = self.temp_dir.join(format!("diff_mask_{}.png", Uuid::new_v4()));
+                std::fs::write(&out_mask, mask_png)
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
+
+                let overlay_png = res.encode_overlay_png()
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
+                let out_overlay = self.temp_dir.join(format!("diff_overlay_{}.png", Uuid::new_v4()));
+                std::fs::write(&out_overlay, overlay_png)
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
+
+                preview = Some(format!("Diff: {} altered pixels ({:.2}%)", res.diff_count, res.diff_percentage));
+                out.push(("Mask".to_string(), PortValue::ImagePath(out_mask)));
+                out.push(("Overlay".to_string(), PortValue::ImagePath(out_overlay)));
+            }
 
             // --- Audio Transforms (FFmpeg) ---
             NodeKind::AudioNormalize => {
@@ -760,14 +790,31 @@ else:
                     None => String::new(),
                 };
 
-                let script = node
-                    .props
-                    .get("script")
-                    .map(|s| s.as_str())
-                    .unwrap_or("import sys\nsys.stdout.write(sys.stdin.read())");
-
-                let stdout = run_python_snippet(script, &stdin_data)
-                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                let script_file = node.props.get("script_file");
+                let stdout = if let Some(fname) = script_file {
+                    let recipes_dir = super::recipes::get_recipes_dir();
+                    let fpath = if std::path::Path::new(fname).is_absolute() {
+                        std::path::PathBuf::from(fname)
+                    } else {
+                        recipes_dir.join(fname)
+                    };
+                    if !fpath.exists() {
+                        return Err(PipelineError::NodeFailed(
+                            node.title.clone(),
+                            format!("Script file not found: {}", fpath.display()),
+                        ));
+                    }
+                    run_command_with_stdin("python3", &[fpath.to_str().unwrap()], &stdin_data)
+                        .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?
+                } else {
+                    let script = node
+                        .props
+                        .get("script")
+                        .map(|s| s.as_str())
+                        .unwrap_or("import sys\nsys.stdout.write(sys.stdin.read())");
+                    run_python_snippet(script, &stdin_data)
+                        .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?
+                };
 
                 preview = Some(stdout.clone());
                 out.push(("Output".to_string(), PortValue::Text(stdout)));
@@ -787,14 +834,31 @@ else:
                     None => String::new(),
                 };
 
-                let cmd = node
-                    .props
-                    .get("command")
-                    .map(|s| s.as_str())
-                    .unwrap_or("cat");
-
-                let stdout = run_command_with_stdin("bash", &["-c", cmd], &stdin_data)
-                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                let script_file = node.props.get("script_file");
+                let stdout = if let Some(fname) = script_file {
+                    let recipes_dir = super::recipes::get_recipes_dir();
+                    let fpath = if std::path::Path::new(fname).is_absolute() {
+                        std::path::PathBuf::from(fname)
+                    } else {
+                        recipes_dir.join(fname)
+                    };
+                    if !fpath.exists() {
+                        return Err(PipelineError::NodeFailed(
+                            node.title.clone(),
+                            format!("Script file not found: {}", fpath.display()),
+                        ));
+                    }
+                    run_command_with_stdin("bash", &[fpath.to_str().unwrap()], &stdin_data)
+                        .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?
+                } else {
+                    let cmd = node
+                        .props
+                        .get("command")
+                        .map(|s| s.as_str())
+                        .unwrap_or("cat");
+                    run_command_with_stdin("bash", &["-c", cmd], &stdin_data)
+                        .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?
+                };
 
                 preview = Some(stdout.clone());
                 out.push(("Output".to_string(), PortValue::Text(stdout)));
@@ -902,11 +966,23 @@ else:
                 if let Some(p) = v.as_path() {
                     return Ok(p.to_path_buf());
                 }
+                if let Some(t) = v.as_text() {
+                    let p = PathBuf::from(t.trim());
+                    if p.is_file() {
+                        return Ok(p);
+                    }
+                }
             }
         }
         if let Some(v) = inputs.values().next() {
             if let Some(p) = v.as_path() {
                 return Ok(p.to_path_buf());
+            }
+            if let Some(t) = v.as_text() {
+                let p = PathBuf::from(t.trim());
+                if p.is_file() {
+                    return Ok(p);
+                }
             }
         }
         Err(PipelineError::MissingInput(preferred_names.join(" or ")))
@@ -1175,6 +1251,177 @@ mod tests {
 
         // CRUCIAL: The slot manager's right hand remains completely empty!
         assert!(mgr.right_hand().is_none());
+    }
+
+    #[test]
+    fn test_script_file_execution() {
+        use crate::pipeline::recipes::{create_script_file_scaffold, get_recipes_dir};
+        use std::fs;
+
+        let py_fname = create_script_file_scaffold("Test Exec Recipe", true).unwrap();
+        let sh_fname = create_script_file_scaffold("Test Exec Recipe", false).unwrap();
+
+        let recipes_dir = get_recipes_dir();
+        let py_path = recipes_dir.join(&py_fname);
+        let sh_path = recipes_dir.join(&sh_fname);
+
+        // Customize python script to reverse the string
+        let py_custom = r#"# Recipe: Test Exec Recipe
+import sys
+data = sys.stdin.read().strip()
+sys.stdout.write(data[::-1])
+"#;
+        fs::write(&py_path, py_custom).unwrap();
+
+        // Customize bash script to append "!BASH!"
+        let sh_custom = r#"#!/usr/bin/env bash
+# Recipe: Test Exec Recipe
+data=$(cat)
+printf "%s!BASH!" "$data"
+"#;
+        fs::write(&sh_path, sh_custom).unwrap();
+
+        let t_const = find_template("source_const_text").unwrap();
+        let t_py = find_template("script_python").unwrap();
+        let t_sh = find_template("script_bash").unwrap();
+        let t_sink = find_template("sink_lh").unwrap();
+
+        let mut n_const = instantiate_template(t_const, [0.0, 0.0]);
+        n_const.props.insert("text".to_string(), "hello".to_string());
+
+        let mut n_py = instantiate_template(t_py, [150.0, 0.0]);
+        n_py.props.insert("script_file".to_string(), py_fname.clone());
+
+        let mut n_sh = instantiate_template(t_sh, [300.0, 0.0]);
+        n_sh.props.insert("script_file".to_string(), sh_fname.clone());
+
+        let n_sink = instantiate_template(t_sink, [450.0, 0.0]);
+
+        // n_const -> n_py -> n_sh -> n_sink
+        let graph = NodeGraph {
+            nodes: vec![n_const.clone(), n_py.clone(), n_sh.clone(), n_sink.clone()],
+            connections: vec![
+                Connection {
+                    from_node: n_const.id,
+                    from_pin: "Text".to_string(),
+                    to_node: n_py.id,
+                    to_pin: "Input".to_string(),
+                },
+                Connection {
+                    from_node: n_py.id,
+                    from_pin: "Output".to_string(),
+                    to_node: n_sh.id,
+                    to_pin: "Input".to_string(),
+                },
+                Connection {
+                    from_node: n_sh.id,
+                    from_pin: "Output".to_string(),
+                    to_node: n_sink.id,
+                    to_pin: "In".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mgr = SlotManager::default();
+        let executor = PipelineExecutor::new(&graph, &mgr);
+        let res = executor.execute().expect("Script file execution pipeline failed");
+
+        assert!(res.left_hand_item.is_some());
+        let item = res.left_hand_item.unwrap();
+        // "hello" reversed is "olleh", then appended "!BASH!" => "olleh!BASH!"
+        assert_eq!(item.title, "olleh!BASH!");
+
+        // Clean up
+        let _ = fs::remove_file(py_path);
+        let _ = fs::remove_file(sh_path);
+    }
+
+    #[test]
+    fn test_image_diff_node_execution() {
+        use image::{Rgba, RgbaImage};
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir().join(format!("test_img_diff_{}", Uuid::new_v4()));
+        let _ = fs::create_dir_all(&temp_dir);
+
+        let img1_path = temp_dir.join("img1.png");
+        let img2_path = temp_dir.join("img2.png");
+
+        let mut img1 = RgbaImage::new(16, 16);
+        for p in img1.pixels_mut() {
+            *p = Rgba([200u8, 200, 200, 255]);
+        }
+        img1.save(&img1_path).unwrap();
+
+        let mut img2 = RgbaImage::new(16, 16);
+        for (x, _y, p) in img2.enumerate_pixels_mut() {
+            if x < 8 {
+                *p = Rgba([10u8, 10, 10, 255]);
+            } else {
+                *p = Rgba([200u8, 200, 200, 255]);
+            }
+        }
+        img2.save(&img2_path).unwrap();
+
+        let t_const = find_template("source_const_text").unwrap();
+        let t_diff = find_template("img_diff").unwrap();
+        let t_sink = find_template("sink_lh").unwrap();
+
+        let mut n_src1 = instantiate_template(t_const, [0.0, 0.0]);
+        n_src1.props.insert("text".to_string(), img1_path.to_str().unwrap().to_string());
+
+        let mut n_src2 = instantiate_template(t_const, [0.0, 100.0]);
+        n_src2.props.insert("text".to_string(), img2_path.to_str().unwrap().to_string());
+
+        let mut n_diff = instantiate_template(t_diff, [200.0, 50.0]);
+        n_diff.props.insert("threshold".to_string(), "0.10".to_string());
+
+        let n_sink = instantiate_template(t_sink, [400.0, 50.0]);
+
+        let graph = NodeGraph {
+            nodes: vec![n_src1.clone(), n_src2.clone(), n_diff.clone(), n_sink.clone()],
+            connections: vec![
+                Connection {
+                    from_node: n_src1.id,
+                    from_pin: "Text".to_string(),
+                    to_node: n_diff.id,
+                    to_pin: "Base Image".to_string(),
+                },
+                Connection {
+                    from_node: n_src2.id,
+                    from_pin: "Text".to_string(),
+                    to_node: n_diff.id,
+                    to_pin: "Compare Image".to_string(),
+                },
+                Connection {
+                    from_node: n_diff.id,
+                    from_pin: "Mask".to_string(),
+                    to_node: n_sink.id,
+                    to_pin: "In".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+
+        let mgr = SlotManager::default();
+        let executor = PipelineExecutor::new(&graph, &mgr);
+        let res = executor.execute().expect("ImageDiff pipeline execution failed");
+
+        assert!(res.left_hand_item.is_some());
+        let item = res.left_hand_item.unwrap();
+        match item.payload {
+            ClipPayload::Image { width, height, mime, .. } => {
+                assert_eq!(width, 16);
+                assert_eq!(height, 16);
+                assert_eq!(mime, "image/png");
+            }
+            _ => panic!("Expected image payload from ImageDiff node output"),
+        }
+
+        let _ = fs::remove_file(img1_path);
+        let _ = fs::remove_file(img2_path);
+        let _ = fs::remove_dir_all(temp_dir);
     }
 }
 

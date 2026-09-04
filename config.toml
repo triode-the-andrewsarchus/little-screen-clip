@@ -78,3 +78,10 @@ snippet_duration_sec = 30
 #   "start"            -> Extracts a 30s sample from the very beginning (00:00) of the audio file
 sample_position = "middle"
 
+[workbench]
+# Preferred text editor command for editing Python and Bash script nodes
+# (e.g. "code", "subl", "gedit", "kate", "nano", "nvim").
+# If left commented or empty, automatically falls back to $VISUAL, $EDITOR, or system default "xdg-open".
+# editor = "code"
+
+

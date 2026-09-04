@@ -313,6 +313,17 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         outputs: &[("Image Out", PortType::Image)],
         default_props: &[],
     },
+    NodeTemplate {
+        id: "img_diff",
+        name: "Picture Diff (ODiff)",
+        category: "Image",
+        description: "Perceptual pixel comparison highlighting differences (ODiff-style)",
+        tags: &["image", "diff", "compare", "odiff", "mask", "visual"],
+        kind: NodeKind::ImageDiff,
+        inputs: &[("Base Image", PortType::Image), ("Compare Image", PortType::Image)],
+        outputs: &[("Mask", PortType::Image), ("Overlay", PortType::Image)],
+        default_props: &[("threshold", "0.10")],
+    },
 
     // -------------------------------------------------------------
     // Audio Operators (FFmpeg CLI)
