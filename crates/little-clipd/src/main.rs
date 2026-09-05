@@ -26,6 +26,7 @@ pub struct DaemonContext {
     pub last_action: RwLock<Option<little_clip_core::ipc::LastAction>>,
     pub is_locked: AtomicBool,
     pub rolling_audio: Arc<std::sync::RwLock<RollingAudioBuffer>>,
+    pub route_next_clipboard: RwLock<Option<(little_clip_core::HandSide, tokio::time::Instant, bool)>>,
 }
 
 impl DaemonContext {
@@ -199,6 +200,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         last_action: RwLock::new(load_last_action_from_disk()),
         is_locked: AtomicBool::new(false),
         rolling_audio: Arc::clone(&rolling_audio),
+        route_next_clipboard: RwLock::new(None),
     });
 
     // Start background rolling audio capture thread
@@ -756,6 +758,21 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     }
                 }
             }
+            Ok(IpcRequest::RouteNextClipboard { hand, timeout_ms, restore_os_clipboard }) => {
+                let expires = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+                {
+                    let mut route = ctx.route_next_clipboard.write().await;
+                    *route = Some((hand, expires, restore_os_clipboard));
+                }
+                IpcResponse::Success {
+                    message: format!("Next clipboard event routed to {:?} (timeout {}ms)", hand, timeout_ms),
+                }
+            }
+            Ok(IpcRequest::GetSlotItem(slot)) => {
+                let mgr = ctx.manager.read().await;
+                let item = mgr.get(slot).cloned();
+                IpcResponse::SlotItem(item)
+            }
             Err(e) => IpcResponse::Error {
                 error: format!("Invalid request: {}", e),
             },
@@ -1062,14 +1079,41 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                         last_image_hash = Some(hash);
                         last_clipboard_text.clear();
 
-                        if let Some(item) = ClipItem::from_image_bytes(img_out.stdout, "image/png") {
-                            info!("Captured clipboard image to Left Hand: {} ({})", item.title, item.subtitle);
-                            schedule_async_previews(&item, Arc::clone(&ctx));
-                            {
-                                let mut mgr = ctx.manager.write().await;
-                                mgr.push_left(item);
+                        let (target_hand, restore_os) = {
+                            let mut route_guard = ctx.route_next_clipboard.write().await;
+                            if let Some((hand, expires, restore)) = *route_guard {
+                                if tokio::time::Instant::now() < expires {
+                                    *route_guard = None;
+                                    (hand, restore)
+                                } else {
+                                    *route_guard = None;
+                                    (little_clip_core::HandSide::Left, false)
+                                }
+                            } else {
+                                (little_clip_core::HandSide::Left, false)
                             }
+                        };
+
+                        if let Some(item) = ClipItem::from_image_bytes(img_out.stdout, "image/png") {
+                            info!("Captured clipboard image to {:?}: {} ({})", target_hand, item.title, item.subtitle);
+                            schedule_async_previews(&item, Arc::clone(&ctx));
+                            let prior_left = {
+                                let mut mgr = ctx.manager.write().await;
+                                let old_left = mgr.left_hand().cloned();
+                                mgr.push_to_hand(item, target_hand);
+                                old_left
+                            };
                             ctx.refresh_display().await;
+
+                            if restore_os && target_hand == little_clip_core::HandSide::Right {
+                                if let Some(left_item) = prior_left {
+                                    let restore_ctx = Arc::clone(&ctx);
+                                    tokio::spawn(async move {
+                                        tokio::time::sleep(Duration::from_millis(80)).await;
+                                        copy_to_os_clipboard(&left_item, &restore_ctx).await;
+                                    });
+                                }
+                            }
                             continue;
                         }
                     } else {
@@ -1092,6 +1136,16 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                         last_clipboard_text = text;
                         continue;
                     }
+
+                    // Check if there is an active override routing to Right Hand
+                    let has_active_right_route = {
+                        let route_guard = ctx.route_next_clipboard.read().await;
+                        if let Some((hand, expires, _)) = *route_guard {
+                            hand == little_clip_core::HandSide::Right && tokio::time::Instant::now() < expires
+                        } else {
+                            false
+                        }
+                    };
 
                     // Check if clipboard content matches what is already in Left Hand
                     let is_already_in_left = {
@@ -1116,23 +1170,50 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                         }
                     };
 
-                    if is_already_in_left {
+                    if !has_active_right_route && is_already_in_left {
                         last_clipboard_text = text;
                         continue;
                     }
 
-                    if !text.is_empty() && text != last_clipboard_text {
+                    if !text.is_empty() && (text != last_clipboard_text || has_active_right_route) {
                         last_clipboard_text = text.clone();
                         last_image_hash = None;
 
+                        let (target_hand, restore_os) = {
+                            let mut route_guard = ctx.route_next_clipboard.write().await;
+                            if let Some((hand, expires, restore)) = *route_guard {
+                                if tokio::time::Instant::now() < expires {
+                                    *route_guard = None;
+                                    (hand, restore)
+                                } else {
+                                    *route_guard = None;
+                                    (little_clip_core::HandSide::Left, false)
+                                }
+                            } else {
+                                (little_clip_core::HandSide::Left, false)
+                            }
+                        };
+
                         let item = ClipItem::from_text(text);
-                        info!("Captured clipboard item to Left Hand: [{}] {}", item.handler_tag, item.title);
+                        info!("Captured clipboard item to {:?}: [{}] {}", target_hand, item.handler_tag, item.title);
                         schedule_async_previews(&item, Arc::clone(&ctx));
-                        {
+                        let prior_left = {
                             let mut mgr = ctx.manager.write().await;
-                            mgr.push_left(item);
-                        }
+                            let old_left = mgr.left_hand().cloned();
+                            mgr.push_to_hand(item, target_hand);
+                            old_left
+                        };
                         ctx.refresh_display().await;
+
+                        if restore_os && target_hand == little_clip_core::HandSide::Right {
+                            if let Some(left_item) = prior_left {
+                                let restore_ctx = Arc::clone(&ctx);
+                                tokio::spawn(async move {
+                                    tokio::time::sleep(Duration::from_millis(80)).await;
+                                    copy_to_os_clipboard(&left_item, &restore_ctx).await;
+                                });
+                            }
+                        }
                     }
                 }
             }

@@ -59,6 +59,12 @@ pub enum IpcRequest {
     SetLocked(bool),
     GetLockStatus,
     GetRollingAudio,
+    RouteNextClipboard {
+        hand: HandSide,
+        timeout_ms: u64,
+        restore_os_clipboard: bool,
+    },
+    GetSlotItem(SlotId),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,6 +87,7 @@ fn default_left_hand() -> HandSide {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpcResponse {
     State(SlotManager),
+    SlotItem(Option<ClipItem>),
     Success { message: String },
     OpResult { item: ClipItem },
     RecipeList(Vec<String>),

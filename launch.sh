@@ -21,6 +21,7 @@ WORKBENCH_BIN="$BIN_DIR/clip-workbench"
 TEST_BIN="$BIN_DIR/test_screen"
 
 SOCKET_PATH="${XDG_RUNTIME_DIR:-/tmp}/little-screen-clip.sock"
+SYSTEMD_SERVICE_NAME="little-screen-clip.service"
 
 # Colors
 GREEN='\033[0;32m'
@@ -30,6 +31,20 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
 NC='\033[0m'
+
+function is_systemd_run() {
+    [ -n "$LITTLE_SCREEN_CLIP_SYSTEMD" ]
+}
+
+function stop_systemd_service_if_active() {
+    if ! is_systemd_run && command -v systemctl >/dev/null 2>&1; then
+        if systemctl --user is-active --quiet "$SYSTEMD_SERVICE_NAME" 2>/dev/null; then
+            echo -e "${YELLOW}Detected active systemd service '$SYSTEMD_SERVICE_NAME'. Stopping it for development session...${NC}"
+            systemctl --user stop "$SYSTEMD_SERVICE_NAME" 2>/dev/null || true
+            sleep 0.5
+        fi
+    fi
+}
 
 function is_running() {
     if [ -f "$PID_FILE" ]; then
@@ -67,6 +82,13 @@ function build_if_needed() {
 }
 
 function start_daemon() {
+    stop_systemd_service_if_active
+
+    if is_systemd_run && is_running; then
+        echo -e "${YELLOW}Stopping manual little-clipd instance before systemd takeover...${NC}"
+        stop_daemon
+    fi
+
     if is_running; then
         echo -e "${YELLOW}little-clipd is already running${NC} (PID: $(get_pid))"
         return 0
@@ -103,6 +125,13 @@ function start_daemon() {
 }
 
 function stop_daemon() {
+    if ! is_systemd_run && command -v systemctl >/dev/null 2>&1; then
+        if systemctl --user is-active --quiet "$SYSTEMD_SERVICE_NAME" 2>/dev/null; then
+            echo -e "${YELLOW}Stopping systemd service '$SYSTEMD_SERVICE_NAME'...${NC}"
+            systemctl --user stop "$SYSTEMD_SERVICE_NAME" 2>/dev/null || true
+        fi
+    fi
+
     if ! is_running; then
         echo -e "${YELLOW}little-clipd is not running.${NC}"
         rm -f "$PID_FILE"
@@ -184,6 +213,48 @@ function run_test() {
     fi
 }
 
+function copy_right() {
+    build_if_needed
+    "$CLIPCTL_BIN" copy --hand right "$@"
+}
+
+function paste_right() {
+    build_if_needed
+    "$CLIPCTL_BIN" paste --hand right "$@"
+}
+
+function install_service() {
+    local service_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+    mkdir -p "$service_dir"
+    local target_unit="$service_dir/$SYSTEMD_SERVICE_NAME"
+    local src_unit="$SCRIPT_DIR/little-screen-clip.service"
+
+    echo -e "${BLUE}Installing systemd service to $target_unit...${NC}"
+    cp "$src_unit" "$target_unit"
+
+    systemctl --user daemon-reload
+    systemctl --user enable "$SYSTEMD_SERVICE_NAME"
+    echo -e "${GREEN}✓ Systemd service installed and enabled!${NC}"
+    echo -e "  To start:  ${CYAN}systemctl --user start $SYSTEMD_SERVICE_NAME${NC} or ${CYAN}./launch.sh service start${NC}"
+    echo -e "  To status: ${CYAN}systemctl --user status $SYSTEMD_SERVICE_NAME${NC} or ${CYAN}./launch.sh service status${NC}"
+}
+
+function manage_service() {
+    local cmd="${1:-status}"
+    shift || true
+    case "$cmd" in
+        start|stop|restart|status|enable|disable)
+            systemctl --user "$cmd" "$SYSTEMD_SERVICE_NAME" "$@"
+            ;;
+        logs)
+            journalctl --user -u "$SYSTEMD_SERVICE_NAME" -f "$@"
+            ;;
+        *)
+            echo "Usage: ./launch.sh service [start|stop|restart|status|enable|disable|logs]"
+            ;;
+    esac
+}
+
 # Subcommand routing
 case "${1:-}" in
     start)
@@ -210,6 +281,21 @@ case "${1:-}" in
     ui|workbench)
         shift
         run_workbench "$@"
+        ;;
+    copy-right|copy_right)
+        shift
+        copy_right "$@"
+        ;;
+    paste-right|paste_right)
+        shift
+        paste_right "$@"
+        ;;
+    install-service)
+        install_service
+        ;;
+    service)
+        shift
+        manage_service "$@"
         ;;
     diff)
         shift
@@ -245,19 +331,23 @@ case "${1:-}" in
         echo -e "${BOLD}Usage:${NC} ./launch.sh [command]"
         echo ""
         echo "Commands:"
-        echo "  start     - Start little-clipd in the background"
-        echo "  stop      - Stop running little-clipd daemon"
-        echo "  restart   - Stop and restart little-clipd"
-        echo "  reload    - Hot reload configuration file and refresh screen"
-        echo "  status    - Show daemon status and current clipboard slots"
-        echo "  ui        - Open the main monitor Crafting Workbench modal (supports --last)"
-        echo "  diff      - Open the interactive Diff Viewer modal"
-        echo "  bdiff     - Open the interactive Biodiff-style Binary Diff Viewer modal"
-        echo "  audio <f> - Open audio file in full waveform preview & slicer"
-        echo "  last      - Re-run last operation or recipe directly"
-        echo "  logs      - Tail daemon output logs"
-        echo "  test      - Run direct USB display hardware test"
-        echo "  build     - Recompile all Rust workspace crates in release mode"
+        echo "  start           - Start little-clipd in the background (auto-stops systemd service)"
+        echo "  stop            - Stop running little-clipd daemon (also stops systemd if active)"
+        echo "  restart         - Stop and restart little-clipd"
+        echo "  reload          - Hot reload configuration file and refresh screen"
+        echo "  status          - Show daemon status and current clipboard slots"
+        echo "  ui              - Open the main monitor Crafting Workbench modal (supports --last)"
+        echo "  copy-right      - Capture active window selection to the Right-Hand buffer"
+        echo "  paste-right     - Paste content from the Right-Hand buffer into active window"
+        echo "  install-service - Install and enable systemd user service ($SYSTEMD_SERVICE_NAME)"
+        echo "  service <cmd>   - Control systemd service (start, stop, status, restart, logs)"
+        echo "  diff            - Open the interactive Diff Viewer modal"
+        echo "  bdiff           - Open the interactive Biodiff-style Binary Diff Viewer modal"
+        echo "  audio <f>       - Open audio file in full waveform preview & slicer"
+        echo "  last            - Re-run last operation or recipe directly"
+        echo "  logs            - Tail daemon output logs"
+        echo "  test            - Run direct USB display hardware test"
+        echo "  build           - Recompile all Rust workspace crates in release mode"
         ;;
 esac
 

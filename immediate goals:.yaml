@@ -1,46 +1,34 @@
-immediate goals:
+Goals:
 
 - More format preview support
-    x - txt, md, .ini, .json, .yaml preview
-    x - code highlight preview
-        x - C, Rust, Python, Java, -- all the big ones. This will probably dep on the library we can find
-    x - multi-picture preview
-    - multi-audio preview
     - MIDI preview
     - csv, .xls preview
     - .raw preview
     - .stl preview
-    x - .svg
-x - Screen-saver on lock/sleep
+    - .pdf (first page)
 - Actually tying in with keybinds
-- x - why is edition 2021? (evaluated & upgraded to Rust 2024)
-
-- Audio waveform copy-and-replace-current-preview with ctrl+shift+C
-    - This should support undo
-- Audio waveform zoom in/out
-- audio waveform dual view (Spectrum and Waveform)
-- Audio waveform preview colorization using ColorChord, inc. a native tool to export a "color strip song" picture ID.
-- x - Save to file instead of copy. Promp for name.
-- Multi-region selection, number keys to play.
-    - Used to extract multiple samples
-- Big picture preview
-- big text previews
+- Big picture preview (right click image, similar to audio)
+    - Cropping support
+    - Color picker (with magnification)
+    - Basic transforms (scale, rotate, flip)
+    - Resize to file-size (request target max size in Kb or Mb and format)
+    - format conversion (.png, .jpg, .webp)
+- big text previews (right click, very simple editor)
 - Text to image
-- Image to text
+- Image to text (OCR)
 - Background removal
-x - Binary diffing
+- "Escape hatches"
+    - Button to open audio in Audacity
+    - Images in Nomacs
+    - PDF to Sioyek
+    - Etc. ; configurable per type, with extension overrides (ie, set image, but able to add exception for webp or svg)
+- Background pre-process audio file, image diffing, etc. with high nice-ness
 
 
-medium-term goals:
-
-x - The big node machine (Phase 4: Visual Canvas, External CLI execution, Recipes)
 
 
 future goals:
 
-- More format preview support
-    - PDF preview
-    - font file preview
 - replace app launcher with per-task system with stupid fast nav
 - Unfortunately, we probably need to re-invet the wheel and eat the file manager for this too
 - Meta, we might be able to make MCP/AI stuff for integration

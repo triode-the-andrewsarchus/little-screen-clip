@@ -1,0 +1,18 @@
+[Unit]
+Description=Little Screen Clip Ambient Hardware Clipboard Daemon
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=forking
+Environment=LITTLE_SCREEN_CLIP_SYSTEMD=1
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
+ExecStart=%h/Documents/git/local/little-screen-clip/launch.sh start
+ExecStop=%h/Documents/git/local/little-screen-clip/launch.sh stop
+PIDFile=%h/Documents/git/local/little-screen-clip/.little-clipd.pid
+Restart=on-failure
+RestartSec=3
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin
+
+[Install]
+WantedBy=graphical-session.target default.target

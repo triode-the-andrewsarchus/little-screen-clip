@@ -17,7 +17,7 @@ rotate_180 = true
 
 # Toggle the debug handler badge in the bottom-left corner (e.g. "LH: [TEXT] | RH: [IMAGE]").
 # Set to false to hide the badge and have a cleaner ambient display.
-show_debug_handler = true
+show_debug_handler = false
 
 # Minimum interval between animation frame updates to the small USB display in milliseconds.
 # The Trofeo embedded MCU hardware requires time to decompress each JPEG frame (~200-350ms).

@@ -217,6 +217,33 @@ pub struct ClipItem {
 }
 
 impl ClipItem {
+    pub fn to_clipboard_text(&self) -> Option<String> {
+        match &self.payload {
+            ClipPayload::Text(t) => Some(t.clone()),
+            ClipPayload::Markdown(m) => Some(m.clone()),
+            ClipPayload::Url(u) => Some(u.to_string()),
+            ClipPayload::Color { hex, .. } => Some(hex.clone()),
+            ClipPayload::MultiImage { paths, .. } => Some(
+                paths
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            ClipPayload::FileBatch(files) => Some(
+                files
+                    .iter()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            ),
+            ClipPayload::AudioRef { path, .. } => {
+                Some(path.to_string_lossy().to_string())
+            }
+            _ => None,
+        }
+    }
+
     pub fn with_handler(mut self, handler: impl Into<String>) -> Self {
         self.handler_tag = handler.into();
         self
