@@ -13,8 +13,10 @@ pub use animation::{
     is_animated_image_path, is_video_path, read_video_metadata, AnimationThumbnail,
 };
 pub use audio::{
-    compute_full_waveform, compute_plain_waveform, compute_spectral_colors, is_audio_path,
-    read_audio_metadata, AudioMetadata, AudioWaveform,
+    compute_full_audio_analysis, compute_full_waveform, compute_plain_waveform,
+    compute_spectral_colors, detect_pitch_yin, detect_transients, freq_to_note, is_audio_path,
+    read_audio_metadata, AudioMetadata, AudioWaveform, ColorChordNoteInfo, FullAudioAnalysis,
+    PeakBlock, CHROMATIC_NOTE_NAMES,
 };
 pub use config::{AppConfig, AudioConfig, AudioSamplePosition, ColorConfig, DisplayConfig};
 pub use ipc::{IpcRequest, IpcResponse};

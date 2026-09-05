@@ -9,7 +9,12 @@ cd "$SCRIPT_DIR"
 
 PID_FILE="$SCRIPT_DIR/.little-clipd.pid"
 LOG_FILE="$SCRIPT_DIR/little-clipd.log"
-BIN_DIR="$SCRIPT_DIR/target/debug"
+# Prefer release build if available, otherwise fallback to debug
+if [ -x "$SCRIPT_DIR/target/release/little-clipd" ] || [ -x "$SCRIPT_DIR/target/release/clip-workbench" ]; then
+    BIN_DIR="$SCRIPT_DIR/target/release"
+else
+    BIN_DIR="$SCRIPT_DIR/target/debug"
+fi
 DAEMON_BIN="$BIN_DIR/little-clipd"
 CLIPCTL_BIN="$BIN_DIR/clipctl"
 WORKBENCH_BIN="$BIN_DIR/clip-workbench"
@@ -51,8 +56,13 @@ function get_pid() {
 
 function build_if_needed() {
     if [ ! -x "$DAEMON_BIN" ] || [ ! -x "$WORKBENCH_BIN" ] || [ ! -x "$CLIPCTL_BIN" ]; then
-        echo -e "${BLUE}Building workspace binaries...${NC}"
-        cargo build --quiet
+        echo -e "${BLUE}Building workspace binaries (release mode)...${NC}"
+        cargo build --release
+        BIN_DIR="$SCRIPT_DIR/target/release"
+        DAEMON_BIN="$BIN_DIR/little-clipd"
+        CLIPCTL_BIN="$BIN_DIR/clipctl"
+        WORKBENCH_BIN="$BIN_DIR/clip-workbench"
+        TEST_BIN="$BIN_DIR/test_screen"
     fi
 }
 
@@ -220,9 +230,10 @@ case "${1:-}" in
         run_test
         ;;
     build)
-        echo -e "${BLUE}Building workspace...${NC}"
-        cargo build
-        echo -e "${GREEN}Build complete!${NC}"
+        shift || true
+        echo -e "${BLUE}Building workspace (release mode)...${NC}"
+        cargo build --release "$@"
+        echo -e "${GREEN}Build complete! (target/release)${NC}"
         ;;
     *)
         status_daemon
@@ -241,7 +252,7 @@ case "${1:-}" in
         echo "  last      - Re-run last operation or recipe directly"
         echo "  logs      - Tail daemon output logs"
         echo "  test      - Run direct USB display hardware test"
-        echo "  build     - Recompile all Rust workspace crates"
+        echo "  build     - Recompile all Rust workspace crates in release mode"
         ;;
 esac
 

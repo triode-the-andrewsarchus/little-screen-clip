@@ -189,8 +189,9 @@ impl NodeCanvasState {
         }
 
         let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
-        if scroll_delta != 0.0 && response.hovered() {
-            let zoom_factor = if scroll_delta > 0.0 { 1.08 } else { 0.92 };
+        if scroll_delta.abs() > 0.1 && response.hovered() {
+            let steps = (scroll_delta / 50.0).clamp(-4.0, 4.0);
+            let zoom_factor = (1.055f32).powf(steps);
             self.graph.zoom = (self.graph.zoom * zoom_factor).clamp(0.4, 2.2);
         }
 

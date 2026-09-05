@@ -16,9 +16,33 @@ pub struct DaemonContext {
     pub manager: RwLock<SlotManager>,
     pub renderer: RwLock<ScreenRenderer>,
     pub display_tx: mpsc::Sender<Vec<u8>>,
-    pub self_copied_text: RwLock<String>,
+    pub self_copied_text: RwLock<Vec<String>>,
     pub self_copied_image_hash: RwLock<Option<u64>>,
     pub last_action: RwLock<Option<little_clip_core::ipc::LastAction>>,
+}
+
+impl DaemonContext {
+    pub async fn add_self_copied_text(&self, text: String) {
+        if text.trim().is_empty() {
+            return;
+        }
+        let mut guard = self.self_copied_text.write().await;
+        if guard.len() >= 20 {
+            guard.remove(0);
+        }
+        guard.push(text);
+    }
+
+    pub async fn is_self_copied_text(&self, text: &str) -> bool {
+        let guard = self.self_copied_text.read().await;
+        let t_norm = text.trim().replace("\r\n", "\n");
+        for st in guard.iter() {
+            if st == text || st.trim() == text.trim() || st.trim().replace("\r\n", "\n") == t_norm {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 
@@ -115,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         manager: RwLock::new(SlotManager::default()),
         renderer: RwLock::new(renderer),
         display_tx,
-        self_copied_text: RwLock::new(String::new()),
+        self_copied_text: RwLock::new(Vec::new()),
         self_copied_image_hash: RwLock::new(None),
         last_action: RwLock::new(load_last_action_from_disk()),
     });
@@ -277,11 +301,35 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 schedule_async_previews(&item, Arc::clone(&ctx));
                 {
                     let mut mgr = ctx.manager.write().await;
-                    mgr.push_to_hand(item, hand);
+                    mgr.push_to_hand(item.clone(), hand);
                 }
+                copy_to_os_clipboard(&item, &ctx).await;
                 ctx.refresh_display().await;
                 IpcResponse::Success {
                     message: format!("Pushed file {:?} to {:?}", path, hand),
+                }
+            }
+            Ok(IpcRequest::PushFiles { paths, hand }) => {
+                if paths.is_empty() {
+                    IpcResponse::Error {
+                        error: "No files provided".to_string(),
+                    }
+                } else {
+                    let item = if paths.len() == 1 {
+                        ClipItem::from_single_file(&paths[0])
+                    } else {
+                        ClipItem::from_files(paths.clone())
+                    };
+                    schedule_async_previews(&item, Arc::clone(&ctx));
+                    {
+                        let mut mgr = ctx.manager.write().await;
+                        mgr.push_to_hand(item.clone(), hand);
+                    }
+                    copy_to_os_clipboard(&item, &ctx).await;
+                    ctx.refresh_display().await;
+                    IpcResponse::Success {
+                        message: format!("Pushed {} file(s) to {:?}", paths.len(), hand),
+                    }
                 }
             }
             Ok(IpcRequest::SwapSlots(a, b)) => {
@@ -391,8 +439,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                         schedule_async_previews(&new_item, Arc::clone(&ctx));
                         let text_opt = extract_clipboard_text(&new_item);
                         if let Some(ref t) = text_opt {
-                            let mut self_text = ctx.self_copied_text.write().await;
-                            *self_text = t.clone();
+                            ctx.add_self_copied_text(t.clone()).await;
                         }
                         copy_to_os_clipboard(&new_item, &ctx).await;
                         {
@@ -522,8 +569,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                                 schedule_async_previews(&new_item, Arc::clone(&ctx));
                                 let text_opt = extract_clipboard_text(&new_item);
                                 if let Some(ref t) = text_opt {
-                                    let mut self_text = ctx.self_copied_text.write().await;
-                                    *self_text = t.clone();
+                                    ctx.add_self_copied_text(t.clone()).await;
                                 }
                                 copy_to_os_clipboard(&new_item, &ctx).await;
                                 {
@@ -617,8 +663,7 @@ async fn apply_pipeline_result(
         schedule_async_previews(&left_item, Arc::clone(ctx));
         let text_opt = extract_clipboard_text(&left_item);
         if let Some(ref t) = text_opt {
-            let mut self_text = ctx.self_copied_text.write().await;
-            *self_text = t.clone();
+            ctx.add_self_copied_text(t.clone()).await;
         }
         copy_to_os_clipboard(&left_item, ctx).await;
         {
@@ -918,12 +963,38 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
         {
             if output.status.success() {
                 if let Ok(text) = String::from_utf8(output.stdout) {
-                    let self_text = ctx.self_copied_text.read().await;
-                    if *self_text == text {
+                    if ctx.is_self_copied_text(&text).await {
                         last_clipboard_text = text;
                         continue;
                     }
-                    drop(self_text);
+
+                    // Check if clipboard content matches what is already in Left Hand
+                    let is_already_in_left = {
+                        let mgr = ctx.manager.read().await;
+                        if let Some(left_item) = mgr.left_hand() {
+                            match &left_item.payload {
+                                little_clip_core::ClipPayload::FileBatch(files) => {
+                                    let cand = little_clip_core::item::extract_local_file_paths(&text);
+                                    !cand.is_empty() && cand == *files
+                                }
+                                little_clip_core::ClipPayload::AudioRef { path, .. } => {
+                                    let cand = little_clip_core::item::extract_local_file_paths(&text);
+                                    cand.len() == 1 && cand[0] == *path
+                                }
+                                little_clip_core::ClipPayload::Text(t) => {
+                                    t.trim() == text.trim()
+                                }
+                                _ => false,
+                            }
+                        } else {
+                            false
+                        }
+                    };
+
+                    if is_already_in_left {
+                        last_clipboard_text = text;
+                        continue;
+                    }
 
                     if !text.is_empty() && text != last_clipboard_text {
                         last_clipboard_text = text.clone();
@@ -964,6 +1035,9 @@ fn extract_clipboard_text(item: &ClipItem) -> Option<String> {
                 .collect::<Vec<_>>()
                 .join("\n"),
         ),
+        little_clip_core::ClipPayload::AudioRef { path, .. } => {
+            Some(path.to_string_lossy().to_string())
+        }
         _ => None,
     }
 }
@@ -1041,15 +1115,19 @@ async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
             }
         }
         little_clip_core::ClipPayload::Text(t) => {
+            ctx.add_self_copied_text(t.clone()).await;
             let _ = std::process::Command::new("wl-copy").arg(t).spawn();
         }
         little_clip_core::ClipPayload::Markdown(m) => {
+            ctx.add_self_copied_text(m.clone()).await;
             let _ = std::process::Command::new("wl-copy").arg(m).spawn();
         }
         little_clip_core::ClipPayload::Url(u) => {
+            ctx.add_self_copied_text(u.to_string()).await;
             let _ = std::process::Command::new("wl-copy").arg(u.as_str()).spawn();
         }
         little_clip_core::ClipPayload::Color { hex, .. } => {
+            ctx.add_self_copied_text(hex.clone()).await;
             let _ = std::process::Command::new("wl-copy").arg(hex).spawn();
         }
         little_clip_core::ClipPayload::MultiImage { paths, .. } => {
@@ -1058,15 +1136,37 @@ async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
                 .map(|p| p.to_string_lossy().to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
+            ctx.add_self_copied_text(text.clone()).await;
             let _ = std::process::Command::new("wl-copy").arg(&text).spawn();
         }
         little_clip_core::ClipPayload::FileBatch(files) => {
+            let mut uri_list = String::new();
+            for p in files {
+                uri_list.push_str(&format!("file://{}\n", p.to_string_lossy()));
+            }
             let text = files
                 .iter()
                 .map(|p| p.to_string_lossy().to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
-            let _ = std::process::Command::new("wl-copy").arg(&text).spawn();
+            ctx.add_self_copied_text(uri_list.clone()).await;
+            ctx.add_self_copied_text(text.clone()).await;
+            let _ = std::process::Command::new("wl-copy")
+                .arg("-t")
+                .arg("text/uri-list")
+                .arg(&uri_list)
+                .spawn();
+        }
+        little_clip_core::ClipPayload::AudioRef { path, .. } => {
+            let uri = format!("file://{}\n", path.to_string_lossy());
+            let path_str = path.to_string_lossy().to_string();
+            ctx.add_self_copied_text(uri.clone()).await;
+            ctx.add_self_copied_text(path_str.clone()).await;
+            let _ = std::process::Command::new("wl-copy")
+                .arg("-t")
+                .arg("text/uri-list")
+                .arg(&uri)
+                .spawn();
         }
         _ => {}
     }

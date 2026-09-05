@@ -856,24 +856,46 @@ impl ClipItem {
 
     pub fn from_files(paths: Vec<PathBuf>) -> Self {
         let count = paths.len();
-        let first_name = paths[0]
-            .file_name()
+        let first_name = paths
+            .first()
+            .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
+            .unwrap_or_else(|| "Batch".to_string());
 
         let total_size: u64 = paths
             .iter()
             .map(|p| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
             .sum();
 
+        let all_audio = !paths.is_empty() && paths.iter().all(|p| crate::audio::is_audio_path(p));
+        let (title, handler_tag) = if all_audio {
+            (
+                if count > 1 {
+                    format!("{} (+{} clips)", first_name, count - 1)
+                } else {
+                    first_name
+                },
+                format!("AUDIO BATCH ({})", count),
+            )
+        } else {
+            (
+                if count > 1 {
+                    format!("{} (+{} files)", first_name, count - 1)
+                } else {
+                    first_name
+                },
+                "FILE BATCH".to_string(),
+            )
+        };
+
         Self {
             id: Uuid::new_v4(),
             created_at: current_unix_timestamp(),
             payload: ClipPayload::FileBatch(paths),
-            title: format!("{} (+{} files)", first_name, count - 1),
+            title,
             subtitle: format!("{} items • {}", count, format_bytes(total_size)),
             details: vec![format!("{} items", count), format_bytes(total_size)],
-            handler_tag: "FILE BATCH".to_string(),
+            handler_tag,
         }
     }
 
@@ -1066,6 +1088,24 @@ mod tests {
             assert!(thumb.width > 0 && thumb.height > 0);
         } else {
             panic!("Expected Image payload with SVG");
+        }
+    }
+
+    #[test]
+    fn test_from_files_audio_batch() {
+        let paths = vec![
+            PathBuf::from("/tmp/sample_01.wav"),
+            PathBuf::from("/tmp/sample_02.wav"),
+            PathBuf::from("/tmp/sample_03.wav"),
+        ];
+        let item = ClipItem::from_files(paths.clone());
+        assert_eq!(item.handler_tag, "AUDIO BATCH (3)");
+        assert_eq!(item.title, "sample_01.wav (+2 clips)");
+        if let ClipPayload::FileBatch(files) = item.payload {
+            assert_eq!(files.len(), 3);
+            assert_eq!(files, paths);
+        } else {
+            panic!("Expected FileBatch payload");
         }
     }
 }

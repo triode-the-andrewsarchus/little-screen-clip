@@ -15,9 +15,21 @@ immediate goals:
 - Actually tying in with keybinds
 - x - why is edition 2021? (evaluated & upgraded to Rust 2024)
 
+- Audio waveform copy-and-replace-current-preview with ctrl+shift+C
+    - This should support undo
 - Audio waveform zoom in/out
 - audio waveform dual view (Spectrum and Waveform)
 - Audio waveform preview colorization using ColorChord, inc. a native tool to export a "color strip song" picture ID.
+- x - Save to file instead of copy. Promp for name.
+- Multi-region selection, number keys to play.
+    - Used to extract multiple samples
+- Big picture preview
+- big text previews
+- Text to image
+- Image to text
+- Background removal
+- Binary diffing
+
 
 medium-term goals:
 
