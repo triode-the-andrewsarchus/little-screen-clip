@@ -1,0 +1,143 @@
+use little_clip_core::config::AudioConfig;
+use little_clip_core::rolling_audio::RollingAudioBuffer;
+use std::io::Read;
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, RwLock};
+use std::time::Duration;
+use tracing::{info, warn};
+
+pub fn start_rolling_capture_thread(
+    buffer: Arc<RwLock<RollingAudioBuffer>>,
+    config: AudioConfig,
+) -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("rolling-audio-capture".into())
+        .spawn(move || {
+            run_capture_loop(buffer, config);
+        })
+        .expect("Failed to spawn rolling audio capture thread")
+}
+
+fn spawn_capture_child(target_device: Option<&str>) -> Option<Child> {
+    let target = target_device.unwrap_or("@DEFAULT_SINK@");
+    // Try pw-record first (PipeWire native)
+    let pw_res = Command::new("pw-record")
+        .args([
+            "--raw",
+            "--target",
+            target,
+            "-P",
+            "stream.capture.sink=true",
+            "--rate",
+            "48000",
+            "--channels",
+            "2",
+            "--format",
+            "s16",
+            "-",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+
+    match pw_res {
+        Ok(child) => {
+            info!("Spawned pw-record for system audio capture on target '{}'", target);
+            return Some(child);
+        }
+        Err(e) => {
+            warn!("Failed to spawn pw-record: {}. Trying parec fallback...", e);
+        }
+    }
+
+    // Fallback: parec (PulseAudio compatibility)
+    let pa_dev = if let Some(d) = target_device {
+        if d.ends_with(".monitor") {
+            d.to_string()
+        } else {
+            format!("{}.monitor", d)
+        }
+    } else {
+        "@DEFAULT_SINK@.monitor".to_string()
+    };
+    let pa_res = Command::new("parec")
+        .args([
+            "-d",
+            &pa_dev,
+            "--rate",
+            "48000",
+            "--channels",
+            "2",
+            "--format",
+            "s16le",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn();
+
+    match pa_res {
+        Ok(child) => {
+            info!("Spawned parec for system audio capture on '{}'", pa_dev);
+            Some(child)
+        }
+        Err(e) => {
+            warn!("Failed to spawn parec: {}", e);
+            None
+        }
+    }
+}
+
+fn run_capture_loop(buffer: Arc<RwLock<RollingAudioBuffer>>, config: AudioConfig) {
+    if !config.rolling_capture_enabled {
+        info!("Rolling audio capture is disabled in configuration");
+        return;
+    }
+
+    let dev_str = config.rolling_capture_device.as_deref().unwrap_or("@DEFAULT_SINK@");
+    info!(
+        "Starting background rolling audio capture ({}s buffer on '{}')",
+        config.rolling_capture_duration_sec,
+        dev_str
+    );
+
+    let mut buf = [0u8; 4096];
+
+    loop {
+        let mut child = match spawn_capture_child(config.rolling_capture_device.as_deref()) {
+            Some(c) => c,
+            None => {
+                warn!("Unable to start audio capture process. Retrying in 5 seconds...");
+                std::thread::sleep(Duration::from_secs(5));
+                continue;
+            }
+        };
+
+        if let Some(mut stdout) = child.stdout.take() {
+            loop {
+                match stdout.read(&mut buf) {
+                    Ok(0) => {
+                        warn!("Audio capture process reached EOF (process exited)");
+                        break;
+                    }
+                    Ok(n) => {
+                        if let Ok(mut lock) = buffer.write() {
+                            lock.push_pcm_s16le(&buf[..n]);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Error reading from audio capture stdout: {}", e);
+                        break;
+                    }
+                }
+            }
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+
+        info!("Restarting audio capture worker in 2 seconds...");
+        std::thread::sleep(Duration::from_secs(2));
+    }
+}

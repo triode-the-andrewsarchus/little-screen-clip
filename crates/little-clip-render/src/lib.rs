@@ -223,6 +223,15 @@ impl ScreenRenderer {
         self.encode_jpeg(&pixmap)
     }
 
+    /// Renders a completely black 1920x462 frame (all pixels turned off/dark)
+    /// into a compressed JPEG for screen-saver / lock mode.
+    pub fn render_blank_frame(&self) -> Result<Vec<u8>, RenderError> {
+        let mut pixmap = Pixmap::new(SCREEN_WIDTH, SCREEN_HEIGHT)
+            .ok_or_else(|| RenderError::ImageEncode("Failed to allocate blank pixmap".to_string()))?;
+        pixmap.fill(Color::from_rgba8(0, 0, 0, 255));
+        self.encode_jpeg(&pixmap)
+    }
+
     fn draw_slot_card(
         &self,
         pixmap: &mut Pixmap,
@@ -2046,5 +2055,17 @@ mod tests {
         let pixmap = pixmap.unwrap();
         assert_eq!(pixmap.width(), SCREEN_WIDTH);
         assert_eq!(pixmap.height(), SCREEN_HEIGHT);
+    }
+
+    #[test]
+    fn test_render_blank_frame() {
+        let renderer = ScreenRenderer::fallback(AppConfig::default());
+        let blank_jpeg = renderer.render_blank_frame().expect("render_blank_frame should succeed");
+        assert!(!blank_jpeg.is_empty(), "Blank JPEG frame should not be empty");
+        // Verify JPEG magic bytes FF D8
+        assert_eq!(blank_jpeg[0], 0xFF);
+        assert_eq!(blank_jpeg[1], 0xD8);
+        // Verify well under the hardware 450 KB limit
+        assert!(blank_jpeg.len() < 100_000);
     }
 }

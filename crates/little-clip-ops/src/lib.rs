@@ -12,6 +12,9 @@ pub use diff::*;
 pub mod image_diff;
 pub use image_diff::*;
 
+pub mod binary_diff;
+pub use binary_diff::*;
+
 
 #[derive(Debug, Error)]
 pub enum OpError {
@@ -155,6 +158,13 @@ pub const AVAILABLE_OPS: &[OpDescriptor] = &[
         name: "diff",
         label: "Diff Comparison (Text & Image)",
         description: "Interactive visual text & picture diffing between slots, clipboard & files",
+        is_binary: true,
+        category: "Compare",
+    },
+    OpDescriptor {
+        name: "binary-diff",
+        label: "Binary Diff (Hex Alignment)",
+        description: "Side-by-side hex and ASCII sequence alignment diff between any two items or files",
         is_binary: true,
         category: "Compare",
     },
@@ -341,29 +351,38 @@ pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
             });
         }
 
+        // Binary diff is always applicable for any item against secondary slot or paired files
+        ops.push(OpDescriptor {
+            name: "binary-diff",
+            label: "Binary Diff (Hex Alignment)",
+            description: "Interactive side-by-side hex & ASCII alignment diff against secondary slot or files",
+            is_binary: true,
+            category: "Compare",
+        });
+
         return ops;
     }
 
     if items.len() == 2 {
+        let mut ops = Vec::new();
+
         let t0 = resolve_diff_target(items[0]);
         let t1 = resolve_diff_target(items[1]);
         if let (Some(t0), Some(t1)) = (t0, t1) {
             if t0.is_image() && t1.is_image() {
-                return vec![
-                    OpDescriptor {
-                        name: "diff",
-                        label: "Picture Diff Comparison",
-                        description: "ODiff-style perceptual visual diff highlighting changed pixels",
-                        is_binary: true,
-                        category: "Compare",
-                    },
-                ];
+                ops.push(OpDescriptor {
+                    name: "diff",
+                    label: "Picture Diff Comparison",
+                    description: "ODiff-style perceptual visual diff highlighting changed pixels",
+                    is_binary: true,
+                    category: "Compare",
+                });
             }
         }
 
         let all_text = items.iter().all(|i| get_item_text(i).is_ok());
         if all_text {
-            return vec![
+            ops.extend_from_slice(&[
                 OpDescriptor {
                     name: "concat",
                     label: "Concatenate Items",
@@ -399,8 +418,19 @@ pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
                     is_binary: true,
                     category: "Compare",
                 },
-            ];
+            ]);
         }
+
+        // Any 2 items can be binary diffed!
+        ops.push(OpDescriptor {
+            name: "binary-diff",
+            label: "Binary Diff (Hex Alignment)",
+            description: "Side-by-side hex and ASCII sequence alignment diff comparing raw bytes",
+            is_binary: true,
+            category: "Compare",
+        });
+
+        return ops;
     }
 
     if items.len() >= 3 {
@@ -471,7 +501,30 @@ pub fn execute_unary_op(op_name: &str, item: &ClipItem) -> Result<ClipItem, OpEr
         "slugify" => op_slugify(item),
         "base64-encode" => op_base64_encode(item),
         "base64-decode" => op_base64_decode(item),
+        "binary-diff" => op_binary_diff_unary(item),
         _ => Err(OpError::ExecutionFailed(format!("Unknown unary operation: {}", op_name))),
+    }
+}
+
+fn op_binary_diff_unary(item: &ClipItem) -> Result<ClipItem, OpError> {
+    if let Some(((l_lbl, l_bytes), (r_lbl, r_bytes))) = resolve_two_files_from_single_item(item) {
+        let res = compute_binary_diff(&l_lbl, &l_bytes, &r_lbl, &r_bytes, BinaryDiffMode::Aligned, 16);
+        let summary = format!(
+            "Binary Diff: {} ({} B) vs {} ({} B)\nSimilarity: {:.1}%\nMatches: {} B | Mismatches: {} B | Insertions: {} B | Deletions: {} B",
+            l_lbl, l_bytes.len(), r_lbl, r_bytes.len(),
+            res.stats.similarity_pct,
+            res.stats.match_count,
+            res.stats.mismatch_count,
+            res.stats.right_only_count,
+            res.stats.left_only_count,
+        );
+        let mut out = ClipItem::from_text(summary);
+        out.title = format!("Binary Diff: {} vs {}", l_lbl, r_lbl);
+        out.subtitle = format!("{:.1}% match • {} diff rows", res.stats.similarity_pct, res.diff_row_indices.len());
+        out.handler_tag = "BINARY-DIFF".to_string();
+        Ok(out)
+    } else {
+        Err(OpError::ExecutionFailed("Item does not contain two files or paths to diff".to_string()))
     }
 }
 
@@ -487,8 +540,29 @@ pub fn execute_binary_op(
         "concat-comma" => op_concat(hand, slot, ", "),
         "concat-reversed" => op_concat(slot, hand, separator.unwrap_or("\n")),
         "diff" => op_diff(hand, slot),
+        "binary-diff" => op_binary_diff(hand, slot),
         _ => Err(OpError::ExecutionFailed(format!("Unknown binary operation: {}", op_name))),
     }
+}
+
+fn op_binary_diff(a: &ClipItem, b: &ClipItem) -> Result<ClipItem, OpError> {
+    let (l_lbl, l_bytes) = get_item_binary_bytes(a);
+    let (r_lbl, r_bytes) = get_item_binary_bytes(b);
+    let res = compute_binary_diff(&l_lbl, &l_bytes, &r_lbl, &r_bytes, BinaryDiffMode::Aligned, 16);
+    let summary = format!(
+        "Binary Diff: {} ({} B) vs {} ({} B)\nSimilarity: {:.1}%\nMatches: {} B | Mismatches: {} B | Insertions: {} B | Deletions: {} B",
+        l_lbl, l_bytes.len(), r_lbl, r_bytes.len(),
+        res.stats.similarity_pct,
+        res.stats.match_count,
+        res.stats.mismatch_count,
+        res.stats.right_only_count,
+        res.stats.left_only_count,
+    );
+    let mut item = ClipItem::from_text(summary);
+    item.title = format!("Binary Diff: {} vs {}", l_lbl, r_lbl);
+    item.subtitle = format!("{:.1}% match • {} diff rows", res.stats.similarity_pct, res.diff_row_indices.len());
+    item.handler_tag = "BINARY-DIFF".to_string();
+    Ok(item)
 }
 
 pub fn execute_multi_op(
@@ -502,7 +576,7 @@ pub fn execute_multi_op(
     if items.len() == 1 {
         return execute_unary_op(op_name, items[0]);
     }
-    if items.len() == 2 && (op_name == "concat" || op_name == "concat-space" || op_name == "concat-comma" || op_name == "concat-reversed" || op_name == "diff") {
+    if items.len() == 2 && (op_name == "concat" || op_name == "concat-space" || op_name == "concat-comma" || op_name == "concat-reversed" || op_name == "diff" || op_name == "binary-diff") {
         return execute_binary_op(op_name, items[0], items[1], separator);
     }
 
@@ -862,10 +936,11 @@ mod tests {
         let item1 = ClipItem::from_image_bytes(bytes1, "image/png").unwrap();
         let item2 = ClipItem::from_image_bytes(bytes2, "image/png").unwrap();
 
-        // Check applicable ops
+        // Check applicable ops (both visual image diff and binary hex diff are available)
         let ops = get_applicable_ops(&[&item1, &item2]);
-        assert_eq!(ops.len(), 1);
-        assert_eq!(ops[0].name, "diff");
+        assert_eq!(ops.len(), 2);
+        assert!(ops.iter().any(|op| op.name == "diff"));
+        assert!(ops.iter().any(|op| op.name == "binary-diff"));
 
         // Execute diff operation
         let diff_item = execute_binary_op("diff", &item2, &item1, None).unwrap();

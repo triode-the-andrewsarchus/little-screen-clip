@@ -11,7 +11,7 @@ immediate goals:
     - .raw preview
     - .stl preview
     x - .svg
-- Screen-saver on lock/sleep
+x - Screen-saver on lock/sleep
 - Actually tying in with keybinds
 - x - why is edition 2021? (evaluated & upgraded to Rust 2024)
 
@@ -28,7 +28,7 @@ immediate goals:
 - Text to image
 - Image to text
 - Background removal
-- Binary diffing
+x - Binary diffing
 
 
 medium-term goals:

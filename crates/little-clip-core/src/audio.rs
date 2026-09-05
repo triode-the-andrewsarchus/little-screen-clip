@@ -1980,6 +1980,7 @@ mod tests {
             max_full_waveform_sec: 0, // Force snippet preview
             snippet_duration_sec: 1,
             sample_position: AudioSamplePosition::Middle,
+            ..Default::default()
         };
         let snip_wf = compute_plain_waveform(&wav_path, 40, &snippet_cfg)
             .expect("Failed to compute snippet waveform");

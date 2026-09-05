@@ -77,6 +77,15 @@ pub struct AudioConfig {
     /// Where to sample the snippet from for long audio files: "middle" (default) or "start"
     #[serde(default)]
     pub sample_position: AudioSamplePosition,
+    /// Continuous rolling capture duration in seconds (default: 30)
+    #[serde(default = "default_rolling_capture_duration_sec")]
+    pub rolling_capture_duration_sec: u64,
+    /// Whether background rolling audio capture is enabled (default: true)
+    #[serde(default = "default_rolling_capture_enabled")]
+    pub rolling_capture_enabled: bool,
+    /// Optional specific capture device/sink name (default: None, captures @DEFAULT_SINK@)
+    #[serde(default)]
+    pub rolling_capture_device: Option<String>,
 }
 
 fn default_max_full_waveform_sec() -> u64 {
@@ -87,12 +96,23 @@ fn default_snippet_duration_sec() -> u64 {
     30
 }
 
+fn default_rolling_capture_duration_sec() -> u64 {
+    30
+}
+
+fn default_rolling_capture_enabled() -> bool {
+    true
+}
+
 impl Default for AudioConfig {
     fn default() -> Self {
         Self {
             max_full_waveform_sec: 300,
             snippet_duration_sec: 30,
             sample_position: AudioSamplePosition::Middle,
+            rolling_capture_duration_sec: 30,
+            rolling_capture_enabled: true,
+            rolling_capture_device: None,
         }
     }
 }

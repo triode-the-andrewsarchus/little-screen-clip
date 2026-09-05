@@ -1,16 +1,21 @@
 use little_clip_core::{
     ipc::{IpcRequest, IpcResponse},
+    rolling_audio::RollingAudioBuffer,
     ClipItem, SlotManager,
 };
 use little_clip_driver::TrofeoDriver;
 use little_clip_render::ScreenRenderer;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, RwLock};
 use tracing::{error, info, warn};
+
+mod lock_monitor;
+mod rolling_capture;
 
 pub struct DaemonContext {
     pub manager: RwLock<SlotManager>,
@@ -19,6 +24,8 @@ pub struct DaemonContext {
     pub self_copied_text: RwLock<Vec<String>>,
     pub self_copied_image_hash: RwLock<Option<u64>>,
     pub last_action: RwLock<Option<little_clip_core::ipc::LastAction>>,
+    pub is_locked: AtomicBool,
+    pub rolling_audio: Arc<std::sync::RwLock<RollingAudioBuffer>>,
 }
 
 impl DaemonContext {
@@ -78,7 +85,51 @@ fn load_last_action_from_disk() -> Option<little_clip_core::ipc::LastAction> {
 }
 
 impl DaemonContext {
+    pub async fn is_locked(&self) -> bool {
+        self.is_locked.load(Ordering::SeqCst)
+    }
+
+    pub async fn set_locked(&self, locked: bool) {
+        let old = self.is_locked.swap(locked, Ordering::SeqCst);
+        if old == locked {
+            return;
+        }
+
+        if locked {
+            info!("Lock state engaged -> Blanking hardware display");
+            let frame = {
+                let renderer = self.renderer.read().await;
+                match renderer.render_blank_frame() {
+                    Ok(f) => f,
+                    Err(e) => {
+                        error!("Render blank error: {}", e);
+                        return;
+                    }
+                }
+            };
+            let _ = self.display_tx.send(frame).await;
+        } else {
+            info!("Lock state cleared -> Restoring display contents");
+            self.refresh_display().await;
+        }
+    }
+
     pub async fn refresh_display(&self) {
+        if self.is_locked.load(Ordering::SeqCst) {
+            let frame = {
+                let renderer = self.renderer.read().await;
+                match renderer.render_blank_frame() {
+                    Ok(f) => f,
+                    Err(e) => {
+                        error!("Render blank error: {}", e);
+                        return;
+                    }
+                }
+            };
+            let _ = self.display_tx.send(frame).await;
+            return;
+        }
+
         let frame = {
             let mgr = self.manager.read().await;
             let renderer = self.renderer.read().await;
@@ -111,7 +162,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = little_clip_core::config::AppConfig::load();
     let renderer = ScreenRenderer::new(config.clone()).unwrap_or_else(|e| {
         warn!("Font loading issue: {}. Continuing with fallback...", e);
-        ScreenRenderer::fallback(config)
+        ScreenRenderer::fallback(config.clone())
     });
 
     let driver = match TrofeoDriver::open() {
@@ -135,6 +186,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         run_display_worker(driver, display_rx).await;
     });
 
+    let rolling_audio = Arc::new(std::sync::RwLock::new(
+        RollingAudioBuffer::new(config.audio.rolling_capture_duration_sec, 48000, 2),
+    ));
+
     let ctx = Arc::new(DaemonContext {
         manager: RwLock::new(SlotManager::default()),
         renderer: RwLock::new(renderer),
@@ -142,11 +197,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         self_copied_text: RwLock::new(Vec::new()),
         self_copied_image_hash: RwLock::new(None),
         last_action: RwLock::new(load_last_action_from_disk()),
+        is_locked: AtomicBool::new(false),
+        rolling_audio: Arc::clone(&rolling_audio),
     });
 
+    // Start background rolling audio capture thread
+    let capture_audio = Arc::clone(&rolling_audio);
+    let capture_cfg = config.audio.clone();
+    rolling_capture::start_rolling_capture_thread(capture_audio, capture_cfg);
 
     // Push initial blank state to screen
     ctx.refresh_display().await;
+
+    // Spawn background lock and sleep monitor
+    let lock_ctx = Arc::clone(&ctx);
+    tokio::spawn(async move {
+        lock_monitor::run_lock_monitor(lock_ctx).await;
+    });
 
     let clipboard_ctx = Arc::clone(&ctx);
     tokio::spawn(async move {
@@ -157,6 +224,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let anim_ctx = Arc::clone(&ctx);
     tokio::spawn(async move {
         loop {
+            if anim_ctx.is_locked.load(Ordering::SeqCst) {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                continue;
+            }
             let (interval_ms, has_anim) = {
                 let r = anim_ctx.renderer.read().await;
                 let mgr = anim_ctx.manager.read().await;
@@ -409,9 +480,13 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                                     )))
                                 }
                             } else if let Some(right) = mgr.right_hand() {
-                                // Try binary with RightHand as natural default operand, or fallback to unary
-                                little_clip_ops::execute_binary_op(&op_name, &left, right, separator.as_deref())
-                                    .or_else(|_| little_clip_ops::execute_unary_op(&op_name, &left))
+                                if op_name == "binary-diff" && little_clip_ops::binary_diff::resolve_two_files_from_single_item(&left).is_some() {
+                                    little_clip_ops::execute_unary_op(&op_name, &left)
+                                } else {
+                                    // Try binary with RightHand as natural default operand, or fallback to unary
+                                    little_clip_ops::execute_binary_op(&op_name, &left, right, separator.as_deref())
+                                        .or_else(|_| little_clip_ops::execute_unary_op(&op_name, &left))
+                                }
                             } else {
                                 little_clip_ops::execute_unary_op(&op_name, &left)
                             }
@@ -629,6 +704,56 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 ctx.refresh_display().await;
                 IpcResponse::Success {
                     message: "Configuration reloaded and applied".to_string(),
+                }
+            }
+            Ok(IpcRequest::Lock) => {
+                ctx.set_locked(true).await;
+                IpcResponse::Success {
+                    message: "Screen locked (blanked)".to_string(),
+                }
+            }
+            Ok(IpcRequest::Unlock) => {
+                ctx.set_locked(false).await;
+                IpcResponse::Success {
+                    message: "Screen unlocked".to_string(),
+                }
+            }
+            Ok(IpcRequest::SetLocked(locked)) => {
+                ctx.set_locked(locked).await;
+                IpcResponse::Success {
+                    message: if locked {
+                        "Screen locked (blanked)".to_string()
+                    } else {
+                        "Screen unlocked".to_string()
+                    },
+                }
+            }
+            Ok(IpcRequest::GetLockStatus) => {
+                IpcResponse::LockStatus(ctx.is_locked().await)
+            }
+            Ok(IpcRequest::GetRollingAudio) => {
+                let snapshot_dir = get_rolling_snapshot_dir();
+                let snapshot_path = snapshot_dir.join("current_snapshot.wav");
+                let res = {
+                    let guard = ctx.rolling_audio.read().unwrap();
+                    guard.write_wav(&snapshot_path).map(|dur| (dur, guard.sample_rate(), guard.channels()))
+                };
+                match res {
+                    Ok((dur, sr, ch)) => {
+                        info!("Captured rolling audio snapshot: {:.2}s -> {:?}", dur, snapshot_path);
+                        IpcResponse::RollingAudio {
+                            path: snapshot_path,
+                            duration_secs: dur,
+                            sample_rate: sr,
+                            channels: ch,
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to write rolling audio snapshot: {}", e);
+                        IpcResponse::Error {
+                            error: format!("Failed to capture rolling audio: {}", e),
+                        }
+                    }
                 }
             }
             Err(e) => IpcResponse::Error {
@@ -1178,5 +1303,13 @@ pub fn get_socket_path() -> PathBuf {
         PathBuf::from(runtime_dir).join("little-screen-clip.sock")
     } else {
         PathBuf::from("/tmp/little-screen-clip.sock")
+    }
+}
+
+pub fn get_rolling_snapshot_dir() -> PathBuf {
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        PathBuf::from(runtime_dir).join("little-screen-clip").join("rolling_snapshots")
+    } else {
+        PathBuf::from("/tmp/little-screen-clip/rolling_snapshots")
     }
 }

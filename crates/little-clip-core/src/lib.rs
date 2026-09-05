@@ -3,6 +3,7 @@ pub mod audio;
 pub mod config;
 pub mod ipc;
 pub mod item;
+pub mod rolling_audio;
 pub mod slot;
 pub mod staging;
 pub mod syntax;
@@ -21,5 +22,6 @@ pub use audio::{
 pub use config::{AppConfig, AudioConfig, AudioSamplePosition, ColorConfig, DisplayConfig};
 pub use ipc::{IpcRequest, IpcResponse};
 pub use item::{ClipItem, ClipPayload, ImageThumbnail, PayloadKind};
+pub use rolling_audio::{slice_wav, RollingAudioBuffer};
 pub use slot::{HandSide, SlotId, SlotManager};
 pub use staging::StagingManager;

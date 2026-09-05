@@ -13,11 +13,16 @@ use std::time::Duration;
 
 mod ansi;
 mod audio_preview;
+mod binary_diff_view;
 mod canvas;
 mod diff_view;
+mod rolling_audio_strip;
 use audio_preview::AudioPreviewState;
+use binary_diff_view::BinaryDiffViewState;
 use canvas::*;
 use diff_view::DiffViewerState;
+use rolling_audio_strip::RollingAudioStripState;
+use little_clip_ops::binary_diff::resolve_binary_diff_pair;
 use little_clip_ops::diff::{resolve_diff_pair, resolve_diff_target, DiffDisplayMode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,11 +82,18 @@ struct WorkbenchApp {
     dirty_mirror: bool,
     in_app_prompt: Option<InAppPromptState>,
     diff_viewer: Option<DiffViewerState>,
+    binary_diff_viewer: Option<BinaryDiffViewState>,
     audio_preview: Option<AudioPreviewState>,
+    rolling_audio_strip: Option<RollingAudioStripState>,
 }
 
 impl WorkbenchApp {
-    fn new(state: SlotManager, start_with_diff: bool, initial_audio: Option<PathBuf>) -> Self {
+    fn new(
+        state: SlotManager,
+        start_with_diff: bool,
+        start_with_binary_diff: bool,
+        initial_audio: Option<PathBuf>,
+    ) -> Self {
         let mut config = AppConfig::load();
         // Desktop monitor mirror is always upright (no 180 flip)
         config.display.rotate_180 = false;
@@ -113,6 +125,8 @@ impl WorkbenchApp {
             AudioPreviewState::new(p, title)
         });
 
+        let rolling_audio_strip = Some(RollingAudioStripState::new());
+
         let mut app = Self {
             state,
             state_rx,
@@ -128,10 +142,14 @@ impl WorkbenchApp {
             dirty_mirror: true,
             in_app_prompt: None,
             diff_viewer: None,
+            binary_diff_viewer: None,
             audio_preview,
+            rolling_audio_strip,
         };
 
-        if start_with_diff {
+        if start_with_binary_diff {
+            app.open_binary_diff_viewer();
+        } else if start_with_diff {
             app.open_diff_viewer();
         }
 
@@ -207,6 +225,20 @@ impl WorkbenchApp {
         }
     }
 
+    fn open_binary_diff_viewer(&mut self) {
+        let selected_items = self.get_selected_items();
+        if let Some(((l_lbl, l_bytes), (r_lbl, r_bytes))) =
+            resolve_binary_diff_pair(&selected_items, &self.state)
+        {
+            self.binary_diff_viewer =
+                Some(BinaryDiffViewState::new(l_lbl, l_bytes, r_lbl, r_bytes));
+        } else {
+            self.status_msg = Some(
+                "Binary diff requires 2 slots or 1 slot with 2 files/paths.".to_string(),
+            );
+        }
+    }
+
 
     fn get_selected_items(&self) -> Vec<&ClipItem> {
         self.selected_slots
@@ -258,6 +290,10 @@ impl WorkbenchApp {
                 PaletteAction::Op(op) => {
                     if op.name == "diff" {
                         self.open_diff_viewer();
+                        return;
+                    }
+                    if op.name == "binary-diff" {
+                        self.open_binary_diff_viewer();
                         return;
                     }
 
@@ -494,6 +530,26 @@ impl eframe::App for WorkbenchApp {
             return; // Don't process background shortcuts while diff viewer is active
         }
 
+        // If binary diff viewer is active, render it over the workbench
+        if let Some(binary_diff_state) = &mut self.binary_diff_viewer {
+            let mut close_binary_diff = false;
+            ctx.memory_mut(|m| {
+                if let Some(id) = m.focused() {
+                    m.surrender_focus(id);
+                }
+            });
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    binary_diff_state.render_ui(ui, ctx, &mut close_binary_diff);
+                });
+
+            if close_binary_diff {
+                self.binary_diff_viewer = None;
+            }
+            return; // Don't process background shortcuts while binary diff viewer is active
+        }
+
         // If audio preview is active, render it over the workbench
         if let Some(audio_state) = &mut self.audio_preview {
             let mut close_audio = false;
@@ -523,11 +579,58 @@ impl eframe::App for WorkbenchApp {
             ctx.request_repaint_after(Duration::from_millis(120));
         }
 
+        let audio_region_active = self
+            .rolling_audio_strip
+            .as_ref()
+            .map_or(false, |s| s.selected_region.is_some());
+
         // Global keybindings
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            if audio_region_active {
+                if let Some(strip) = &mut self.rolling_audio_strip {
+                    strip.selected_region = None;
+                    strip.stop();
+                }
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
         }
 
+        // Space plays/pauses selected audio region if active
+        if audio_region_active && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+            if let Some(strip) = &mut self.rolling_audio_strip {
+                strip.toggle_playback();
+            }
+        }
+
+        // Ctrl+C copies selected audio region slice if active
+        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C)) {
+            if audio_region_active {
+                if let Some(strip) = &mut self.rolling_audio_strip {
+                    let now = ctx.input(|i| i.time);
+                    if strip.copy_selection(now) {
+                        if let Ok(IpcResponse::State(s)) = send_ipc_request(&IpcRequest::GetState) {
+                            self.state = s;
+                        }
+                        self.dirty_mirror = true;
+                    }
+                }
+            }
+        }
+
+        // F5 or Ctrl+R refreshes rolling audio snapshot
+        if ctx.input(|i| i.key_pressed(egui::Key::F5) || (i.modifiers.command && i.key_pressed(egui::Key::R))) {
+            if let Some(strip) = &mut self.rolling_audio_strip {
+                strip.load_snapshot();
+                let now = ctx.input(|i| i.time);
+                let peak = strip.max_amplitude();
+                if peak < 0.001 {
+                    strip.status_toast = Some(("⟳ Snapshot refreshed: buffer is currently silence".to_string(), now));
+                } else {
+                    strip.status_toast = Some((format!("⟳ Snapshot refreshed ({:.1}s, peak: {:.0}%)", strip.duration_sec, peak * 100.0), now));
+                }
+            }
+        }
 
         // F2 or Tab toggles view between Palette and Node Machine
         if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
@@ -543,9 +646,11 @@ impl eframe::App for WorkbenchApp {
                 if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
                     self.view = WorkbenchView::NodeMachine;
                 } else if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
-                    self.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
-                    self.dirty_mirror = true;
-                    self.selected_action_index = 0;
+                    if !audio_region_active {
+                        self.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
+                        self.dirty_mirror = true;
+                        self.selected_action_index = 0;
+                    }
                 } else if ctx.input(|i| i.key_pressed(egui::Key::Num1)) {
                     self.selected_slots = vec![SlotId::LeftHand, SlotId::LeftPrior1];
                     self.dirty_mirror = true;
@@ -567,10 +672,14 @@ impl eframe::App for WorkbenchApp {
 
             // Intercept first-character shortcuts from search input
             if self.search_query.starts_with(' ') {
-                self.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
-                self.search_query = self.search_query.trim_start().to_string();
-                self.dirty_mirror = true;
-                self.selected_action_index = 0;
+                if !audio_region_active {
+                    self.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
+                    self.search_query = self.search_query.trim_start().to_string();
+                    self.dirty_mirror = true;
+                    self.selected_action_index = 0;
+                } else {
+                    self.search_query = self.search_query.trim_start().to_string();
+                }
             } else if self.search_query == "1" {
                 self.selected_slots = vec![SlotId::LeftHand, SlotId::LeftPrior1];
                 self.search_query.clear();
@@ -749,6 +858,29 @@ impl eframe::App for WorkbenchApp {
                 }
             });
 
+        let mut open_full_editor: Option<(PathBuf, Option<(f32, f32)>)> = None;
+
+        if let Some(strip) = &mut self.rolling_audio_strip {
+            egui::TopBottomPanel::bottom("rolling_audio_strip_panel")
+                .frame(
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_rgb(18, 22, 32))
+                        .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 55, 75))),
+                )
+                .show(ctx, |ui| {
+                    strip.render_ui(ui, ctx, &mut open_full_editor);
+                });
+        }
+
+        if let Some((path, sel)) = open_full_editor {
+            let mut editor = AudioPreviewState::new(path, "Rolling Audio Snapshot".to_string());
+            if let Some(region) = sel {
+                editor.selection = Some(region);
+            }
+            self.audio_preview = Some(editor);
+        }
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(egui::Color32::from_rgb(241, 245, 249));
 
@@ -799,12 +931,29 @@ impl eframe::App for WorkbenchApp {
                                 .color(egui::Color32::from_rgb(99, 102, 241))
                                 .strong(),
                         );
+                        let mut text_edit = egui::TextEdit::singleline(&mut self.search_query)
+                            .hint_text("Type action or /recipe to execute...");
+                        if audio_region_active {
+                            text_edit = text_edit.interactive(false);
+                        }
                         let response = ui.add_sized(
                             [ui.available_width() - 20.0, 32.0],
-                            egui::TextEdit::singleline(&mut self.search_query)
-                                .hint_text("Type action or /recipe to execute..."),
+                            text_edit,
                         );
-                        response.request_focus();
+                        if !audio_region_active {
+                            response.request_focus();
+                        } else {
+                            if response.has_focus() {
+                                ctx.memory_mut(|m| m.surrender_focus(response.id));
+                            }
+                            if response.clicked() || (response.hovered() && ctx.input(|i| i.pointer.primary_clicked())) {
+                                if let Some(strip) = &mut self.rolling_audio_strip {
+                                    strip.selected_region = None;
+                                    strip.stop();
+                                }
+                                response.request_focus();
+                            }
+                        }
                     });
 
                     ui.add_space(8.0);
@@ -1076,6 +1225,7 @@ fn main() -> Result<(), eframe::Error> {
         println!("\nUsage: clip-workbench [OPTIONS]");
         println!("\nOptions:");
         println!("  -d, --diff           Open diff comparison viewer directly");
+        println!("  -b, --binary         Open interactive binary diff viewer directly");
         println!("  -a, --audio <PATH>   Open audio waveform preview & slicer directly");
         println!("  -l, --last           Re-execute last action (with modal prompt if needed)");
         println!("  -h, --help           Print help");
@@ -1084,6 +1234,7 @@ fn main() -> Result<(), eframe::Error> {
 
     let is_last = args.iter().any(|a| a == "--last" || a == "-l");
     let is_diff = args.iter().any(|a| a == "--diff" || a == "-d");
+    let is_binary_diff = args.iter().any(|a| a == "--binary-diff" || a == "--binary" || a == "-b");
     let initial_audio = args
         .iter()
         .position(|a| a == "--audio" || a == "-a")
@@ -1143,7 +1294,7 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "clip-workbench",
         options,
-        Box::new(move |_cc| Box::new(WorkbenchApp::new(state, is_diff, initial_audio))),
+        Box::new(move |_cc| Box::new(WorkbenchApp::new(state, is_diff, is_binary_diff, initial_audio))),
     )
 }
 

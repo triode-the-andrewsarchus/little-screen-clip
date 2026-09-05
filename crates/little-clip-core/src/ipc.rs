@@ -54,6 +54,11 @@ pub enum IpcRequest {
     },
     ForceRefreshDisplay,
     ReloadConfig,
+    Lock,
+    Unlock,
+    SetLocked(bool),
+    GetLockStatus,
+    GetRollingAudio,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,7 +86,80 @@ pub enum IpcResponse {
     RecipeList(Vec<String>),
     LastAction(Option<LastAction>),
     NeedsPrompt { message: String, default_text: String },
+    LockStatus(bool),
+    RollingAudio {
+        path: std::path::PathBuf,
+        duration_secs: f32,
+        sample_rate: u32,
+        channels: u16,
+    },
     Error { error: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lock_ipc_serde() {
+        let req = IpcRequest::Lock;
+        let json = serde_json::to_string(&req).unwrap();
+        let de: IpcRequest = serde_json::from_str(&json).unwrap();
+        match de {
+            IpcRequest::Lock => (),
+            _ => panic!("Expected Lock"),
+        }
+
+        let req = IpcRequest::SetLocked(true);
+        let json = serde_json::to_string(&req).unwrap();
+        let de: IpcRequest = serde_json::from_str(&json).unwrap();
+        match de {
+            IpcRequest::SetLocked(true) => (),
+            _ => panic!("Expected SetLocked(true)"),
+        }
+
+        let resp = IpcResponse::LockStatus(true);
+        let json = serde_json::to_string(&resp).unwrap();
+        let de: IpcResponse = serde_json::from_str(&json).unwrap();
+        match de {
+            IpcResponse::LockStatus(true) => (),
+            _ => panic!("Expected LockStatus(true)"),
+        }
+    }
+
+    #[test]
+    fn test_rolling_audio_ipc_serde() {
+        let req = IpcRequest::GetRollingAudio;
+        let json = serde_json::to_string(&req).unwrap();
+        let de: IpcRequest = serde_json::from_str(&json).unwrap();
+        match de {
+            IpcRequest::GetRollingAudio => (),
+            _ => panic!("Expected GetRollingAudio"),
+        }
+
+        let resp = IpcResponse::RollingAudio {
+            path: std::path::PathBuf::from("/tmp/snapshot.wav"),
+            duration_secs: 30.0,
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let de: IpcResponse = serde_json::from_str(&json).unwrap();
+        match de {
+            IpcResponse::RollingAudio {
+                path,
+                duration_secs,
+                sample_rate,
+                channels,
+            } => {
+                assert_eq!(path, std::path::PathBuf::from("/tmp/snapshot.wav"));
+                assert_eq!(duration_secs, 30.0);
+                assert_eq!(sample_rate, 44100);
+                assert_eq!(channels, 2);
+            }
+            _ => panic!("Expected RollingAudio"),
+        }
+    }
 }
 
 

@@ -52,6 +52,14 @@ enum Commands {
     Refresh,
     /// Reload configuration file and re-render screen
     Reload,
+    /// Blank/turn off the screen display for screen-saver or lock
+    Lock,
+    /// Restore the screen display upon unlock
+    Unlock,
+    /// Check whether the screen display is currently blanked/locked
+    IsLocked,
+    /// Capture a snapshot of the rolling system audio buffer
+    RollingAudio,
 }
 
 
@@ -128,6 +136,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Last { prompt } => IpcRequest::ExecuteLastAction { prompt_text: prompt },
         Commands::Refresh => IpcRequest::ForceRefreshDisplay,
         Commands::Reload => IpcRequest::ReloadConfig,
+        Commands::Lock => IpcRequest::Lock,
+        Commands::Unlock => IpcRequest::Unlock,
+        Commands::IsLocked => IpcRequest::GetLockStatus,
+        Commands::RollingAudio => IpcRequest::GetRollingAudio,
     };
 
     let req_json = serde_json::to_string(&request)?;
@@ -178,6 +190,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             IpcResponse::OpResult { item } => {
                 println!("{}: Transformed -> {}", "Result".green().bold(), item.title);
                 println!("  Subtitle: {}", item.subtitle.dimmed());
+            }
+            IpcResponse::LockStatus(locked) => {
+                if locked {
+                    println!("{}", "LOCKED (Screen blanked)".yellow().bold());
+                } else {
+                    println!("{}", "UNLOCKED (Screen active)".green().bold());
+                }
+            }
+            IpcResponse::RollingAudio { path, duration_secs, sample_rate, channels } => {
+                println!("{}: {:.2}s ({}Hz, {}ch) -> {}", "Rolling Audio Snapshot".cyan().bold(), duration_secs, sample_rate, channels, path.display());
             }
             IpcResponse::Error { error } => {
                 eprintln!("{}: {}", "Error".red().bold(), error);

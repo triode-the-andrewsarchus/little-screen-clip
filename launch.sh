@@ -215,6 +215,10 @@ case "${1:-}" in
         shift
         run_workbench --diff "$@"
         ;;
+    bdiff|binary-diff)
+        shift
+        run_workbench --binary "$@"
+        ;;
     audio)
         shift
         run_workbench --audio "$@"
@@ -248,6 +252,7 @@ case "${1:-}" in
         echo "  status    - Show daemon status and current clipboard slots"
         echo "  ui        - Open the main monitor Crafting Workbench modal (supports --last)"
         echo "  diff      - Open the interactive Diff Viewer modal"
+        echo "  bdiff     - Open the interactive Biodiff-style Binary Diff Viewer modal"
         echo "  audio <f> - Open audio file in full waveform preview & slicer"
         echo "  last      - Re-run last operation or recipe directly"
         echo "  logs      - Tail daemon output logs"
