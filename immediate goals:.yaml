@@ -32,3 +32,13 @@ future goals:
 - replace app launcher with per-task system with stupid fast nav
 - Unfortunately, we probably need to re-invet the wheel and eat the file manager for this too
 - Meta, we might be able to make MCP/AI stuff for integration
+- Impliment some of the https://mahlet-inc.github.io/#displays visualizers
+
+very-future goals:
+
+- Replace file manager
+    - Filemanager: Conflict between computer using the FS and the user. Lean into that, make user pinning and organizing on top of it a thing.
+- The calculator to end all calculators
+    - Always saved history
+    - Unit conversion
+    - Computer algebra system

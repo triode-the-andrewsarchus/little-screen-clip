@@ -357,8 +357,9 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     schedule_async_previews(&item, Arc::clone(&ctx));
                     {
                         let mut mgr = ctx.manager.write().await;
-                        mgr.push_to_hand(item, hand);
+                        mgr.push_to_hand(item.clone(), hand);
                     }
+                    copy_to_os_clipboard(&item, &ctx).await;
                     ctx.refresh_display().await;
                     IpcResponse::Success {
                         message: format!("Pushed image to {:?}", hand),

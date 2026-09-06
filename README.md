@@ -29,6 +29,7 @@ Standard clipboard managers flatten everything into a single chronological list.
   - **The Big Node Machine**: Visual node canvas to build and execute multi-step pipelines (Python, Bash, ImageMagick, FFmpeg).
   - **Diff Viewers**: Interactive text/code diffs and Biodiff-style aligned binary hex comparisons.
   - **Rolling Audio Strip**: Ambient 30s background audio buffer snapshot, waveform visualizer, and slicer.
+  - **Picture Studio (`Right-Click Image Slot` / `Palette`)**: Interactive visual editor with lossless cropping (1:1, 16:9, 9:16), rotations/flips, privacy black-bar redaction, magnifying color loupe eyedropper, target pixel & file size optimizer, palette extraction, one-click escape hatches (Krita, Inkscape, Nomacs), and AI background removal (`nobg`).
 
 ---
 
@@ -46,11 +47,14 @@ Standard clipboard managers flatten everything into a single chronological list.
   - `wl-clipboard` (`wl-copy`, `wl-paste`) — Wayland clipboard protocol tools.
   - `pipewire` / `pipewire-pulse` — for rolling system audio buffer capture (`pw-record`).
 - **Rust Toolchain**: Rust edition 2021 (`cargo`, `rustc`).
-- **Optional Tools for Pipeline Recipes**:
+- **Optional Tools for Pipeline Recipes & Picture Studio**:
   - `difftastic` (`difft`) — Structural semantic code diffing.
   - `ffmpeg` & `sox` — Advanced audio normalization and transcoding.
   - `imagemagick` (`magick` / `convert`) — Image framing, resizing, and composition.
   - `python3`, `bash`, `jq` — Custom node scripting.
+  - `rsvg-convert` (`librsvg`) — Vector SVG thumbnailing and rasterization.
+  - `krita`, `inkscape`, `nomacs` — External full-editor escape hatches.
+  - `nobg` (`feyninc/FeyNobg`) — AI background removal (CUDA GPU-accelerated).
 
 ---
 
@@ -104,7 +108,25 @@ This installs `little-screen-clip.service` to `~/.config/systemd/user/` and enab
 
 ---
 
-### 3. Configure Compositor Keybindings (Niri)
+### 3. Optional: Set Up AI Background Removal (`FeyNoBg`)
+
+The Picture Studio integrates `feyninc/FeyNobg` (a 0.3B parameter BiRefNet vision model) for instantaneous cutout generation. On NVIDIA GPUs with CUDA, inference completes in ~280ms.
+
+If running on a fresh system, configure the dedicated environment:
+
+```bash
+# Create isolated venv sharing system PyTorch & CUDA packages
+uv venv --python /usr/bin/python3 --system-site-packages ~/.local/share/little-screen-clip/nobg-venv
+
+# Install nobg package
+uv pip install --python ~/.local/share/little-screen-clip/nobg-venv/bin/python nobg
+```
+
+*(Note: If `nobg` is not installed, the workbench UI detects it gracefully and offers a 1-click `[📋 Copy Install Cmd]` button).*
+
+---
+
+### 4. Configure Compositor Keybindings (Niri)
 
 Add the following binds to your `~/.config/niri/cfg/keybinds.kdl`:
 

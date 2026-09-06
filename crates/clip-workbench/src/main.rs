@@ -16,11 +16,13 @@ mod audio_preview;
 mod binary_diff_view;
 mod canvas;
 mod diff_view;
+mod image_preview;
 mod rolling_audio_strip;
 use audio_preview::AudioPreviewState;
 use binary_diff_view::BinaryDiffViewState;
 use canvas::*;
 use diff_view::DiffViewerState;
+use image_preview::ImagePreviewState;
 use rolling_audio_strip::RollingAudioStripState;
 use little_clip_ops::binary_diff::resolve_binary_diff_pair;
 use little_clip_ops::diff::{resolve_diff_pair, resolve_diff_target, DiffDisplayMode};
@@ -84,7 +86,9 @@ struct WorkbenchApp {
     diff_viewer: Option<DiffViewerState>,
     binary_diff_viewer: Option<BinaryDiffViewState>,
     audio_preview: Option<AudioPreviewState>,
+    image_preview: Option<ImagePreviewState>,
     rolling_audio_strip: Option<RollingAudioStripState>,
+    config: AppConfig,
 }
 
 impl WorkbenchApp {
@@ -93,12 +97,13 @@ impl WorkbenchApp {
         start_with_diff: bool,
         start_with_binary_diff: bool,
         initial_audio: Option<PathBuf>,
+        initial_image: Option<PathBuf>,
     ) -> Self {
         let mut config = AppConfig::load();
         // Desktop monitor mirror is always upright (no 180 flip)
         config.display.rotate_180 = false;
         let renderer = ScreenRenderer::new(config.clone())
-            .unwrap_or_else(|_| ScreenRenderer::fallback(config));
+            .unwrap_or_else(|_| ScreenRenderer::fallback(config.clone()));
 
         let (state_tx, state_rx) = channel::<SlotManager>();
 
@@ -125,6 +130,10 @@ impl WorkbenchApp {
             AudioPreviewState::new(p, title)
         });
 
+        let image_preview = initial_image.and_then(|p| {
+            ImagePreviewState::from_path(p, &config).ok()
+        });
+
         let rolling_audio_strip = Some(RollingAudioStripState::new());
 
         let mut app = Self {
@@ -144,7 +153,9 @@ impl WorkbenchApp {
             diff_viewer: None,
             binary_diff_viewer: None,
             audio_preview,
+            image_preview,
             rolling_audio_strip,
+            config,
         };
 
         if start_with_binary_diff {
@@ -571,6 +582,26 @@ impl eframe::App for WorkbenchApp {
             return; // Don't process background shortcuts while audio preview is active
         }
 
+        // If image preview is active, render it over the workbench
+        if let Some(image_state) = &mut self.image_preview {
+            let mut close_image = false;
+            ctx.memory_mut(|m| {
+                if let Some(id) = m.focused() {
+                    m.surrender_focus(id);
+                }
+            });
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    image_state.render_ui(ui, ctx, &mut close_image);
+                });
+
+            if close_image {
+                self.image_preview = None;
+            }
+            return; // Don't process background shortcuts while image preview is active
+        }
+
 
         if self.state.has_active_animation() {
             self.dirty_mirror = true;
@@ -851,6 +882,10 @@ impl eframe::App for WorkbenchApp {
                             if let Some(item) = self.state.get(clicked_slot) {
                                 if let Some(audio_path) = item.audio_path() {
                                     self.audio_preview = Some(AudioPreviewState::new(audio_path, item.title.clone()));
+                                } else if item.is_image() {
+                                    if let Ok(editor) = ImagePreviewState::from_item(item, &self.config) {
+                                        self.image_preview = Some(editor);
+                                    }
                                 }
                             }
                         }
@@ -893,6 +928,9 @@ impl eframe::App for WorkbenchApp {
                     let first_audio_item = self.selected_slots.iter().find_map(|s| {
                         self.state.get(*s).and_then(|it| it.audio_path().map(|p| (p, it.title.clone())))
                     });
+                    let first_image_item = self.selected_slots.iter().find_map(|s| {
+                        self.state.get(*s).filter(|it| it.is_image())
+                    });
 
                     ui.horizontal(|ui| {
                         ui.label(
@@ -918,6 +956,23 @@ impl eframe::App for WorkbenchApp {
                             .rounding(4.0);
                             if ui.add(audio_btn).clicked() {
                                 self.audio_preview = Some(AudioPreviewState::new(path, title));
+                            }
+                        }
+
+                        if let Some(img_item) = first_image_item {
+                            ui.add_space(8.0);
+                            let img_btn = egui::Button::new(
+                                egui::RichText::new("🖼 Preview & Edit Image")
+                                    .small()
+                                    .strong()
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(egui::Color32::from_rgb(168, 85, 247))
+                            .rounding(4.0);
+                            if ui.add(img_btn).clicked() {
+                                if let Ok(state) = ImagePreviewState::from_item(img_item, &self.config) {
+                                    self.image_preview = Some(state);
+                                }
                             }
                         }
                     });
@@ -1227,6 +1282,7 @@ fn main() -> Result<(), eframe::Error> {
         println!("  -d, --diff           Open diff comparison viewer directly");
         println!("  -b, --binary         Open interactive binary diff viewer directly");
         println!("  -a, --audio <PATH>   Open audio waveform preview & slicer directly");
+        println!("  -i, --image <PATH>   Open image preview & editor directly");
         println!("  -l, --last           Re-execute last action (with modal prompt if needed)");
         println!("  -h, --help           Print help");
         return Ok(());
@@ -1238,6 +1294,11 @@ fn main() -> Result<(), eframe::Error> {
     let initial_audio = args
         .iter()
         .position(|a| a == "--audio" || a == "-a")
+        .and_then(|idx| args.get(idx + 1))
+        .map(PathBuf::from);
+    let initial_image = args
+        .iter()
+        .position(|a| a == "--image" || a == "-i")
         .and_then(|idx| args.get(idx + 1))
         .map(PathBuf::from);
 
@@ -1294,7 +1355,7 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "clip-workbench",
         options,
-        Box::new(move |_cc| Box::new(WorkbenchApp::new(state, is_diff, is_binary_diff, initial_audio))),
+        Box::new(move |_cc| Box::new(WorkbenchApp::new(state, is_diff, is_binary_diff, initial_audio, initial_image))),
     )
 }
 

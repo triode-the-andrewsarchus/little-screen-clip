@@ -12,6 +12,72 @@ pub struct AppConfig {
     pub audio: AudioConfig,
     #[serde(default)]
     pub workbench: WorkbenchConfig,
+    #[serde(default)]
+    pub image: ImageConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageConfig {
+    /// Preferred raster image editor (e.g. "krita", "gimp"). Defaults to "krita".
+    #[serde(default = "default_image_editor")]
+    pub external_editor: String,
+    /// Preferred vector / SVG editor (e.g. "inkscape"). Defaults to "inkscape".
+    #[serde(default = "default_svg_editor")]
+    pub svg_editor: String,
+    /// Preferred image viewer (e.g. "nomacs", "eog", "feh"). Defaults to "nomacs".
+    #[serde(default = "default_image_viewer")]
+    pub viewer: String,
+    /// Background removal executable or script (e.g. "scripts/remove_bg.py" or custom command).
+    /// If left None, automatically checks for local script or system Python with nobg.
+    #[serde(default)]
+    pub bg_removal_cmd: Option<String>,
+}
+
+fn default_image_editor() -> String {
+    "krita".to_string()
+}
+
+fn default_svg_editor() -> String {
+    "inkscape".to_string()
+}
+
+fn default_image_viewer() -> String {
+    "nomacs".to_string()
+}
+
+impl Default for ImageConfig {
+    fn default() -> Self {
+        Self {
+            external_editor: default_image_editor(),
+            svg_editor: default_svg_editor(),
+            viewer: default_image_viewer(),
+            bg_removal_cmd: None,
+        }
+    }
+}
+
+impl ImageConfig {
+    /// Resolves the command and initial arguments for background removal.
+    pub fn resolve_bg_removal_cmd(&self) -> (String, Vec<String>) {
+        if let Some(ref cmd) = self.bg_removal_cmd {
+            let parts: Vec<String> = cmd.split_whitespace().map(|s| s.to_string()).collect();
+            if !parts.is_empty() {
+                return (parts[0].clone(), parts[1..].to_vec());
+            }
+        }
+        // Check relative project script
+        let candidates = [
+            "scripts/remove_bg.py",
+            "./scripts/remove_bg.py",
+        ];
+        for path in &candidates {
+            if std::path::Path::new(path).exists() {
+                return (path.to_string(), Vec::new());
+            }
+        }
+        // Fall back to python3 scripts/remove_bg.py
+        ("python3".to_string(), vec!["scripts/remove_bg.py".to_string()])
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -225,6 +291,7 @@ impl Default for AppConfig {
             colors: ColorConfig::default(),
             audio: AudioConfig::default(),
             workbench: WorkbenchConfig::default(),
+            image: ImageConfig::default(),
         }
     }
 }

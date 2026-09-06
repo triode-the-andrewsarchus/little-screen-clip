@@ -19,4 +19,5 @@ tokio = { workspace = true, features = ["net", "io-util", "sync"] }
 thiserror.workspace = true
 tracing.workspace = true
 rodio = "0.22.2"
+image = { workspace = true }
 

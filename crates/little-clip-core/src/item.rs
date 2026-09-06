@@ -1002,6 +1002,61 @@ impl ClipItem {
             _ => None,
         }
     }
+
+    pub fn image_path(&self) -> Option<PathBuf> {
+        match &self.payload {
+            ClipPayload::Image { path: Some(p), .. } if p.is_file() => Some(p.clone()),
+            ClipPayload::FileBatch(files) if files.len() == 1 && is_image_path(&files[0]) && files[0].is_file() => {
+                Some(files[0].clone())
+            }
+            ClipPayload::Text(text) => {
+                let trimmed = text.trim();
+                let path = Path::new(trimmed);
+                if path.is_file() && is_image_path(path) {
+                    Some(path.to_path_buf())
+                } else {
+                    let extracted = extract_local_file_paths(trimmed);
+                    if extracted.len() == 1 && is_image_path(&extracted[0]) {
+                        Some(extracted[0].clone())
+                    } else {
+                        None
+                    }
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn is_image(&self) -> bool {
+        match &self.payload {
+            ClipPayload::Image { .. } => true,
+            _ => self.image_path().is_some(),
+        }
+    }
+
+    pub fn resolve_image_data(&self) -> Option<(Vec<u8>, String, Option<PathBuf>)> {
+        match &self.payload {
+            ClipPayload::Image { bytes, path, mime, .. } => {
+                let actual_bytes = if !bytes.is_empty() {
+                    bytes.clone()
+                } else if let Some(p) = path {
+                    std::fs::read(p).ok()?
+                } else {
+                    return None;
+                };
+                Some((actual_bytes, mime.clone(), path.clone()))
+            }
+            _ => {
+                if let Some(p) = self.image_path() {
+                    if let Ok(bytes) = std::fs::read(&p) {
+                        let mime = guess_image_mime(&p);
+                        return Some((bytes, mime, Some(p)));
+                    }
+                }
+                None
+            }
+        }
+    }
 }
 
 pub fn is_image_path(p: &Path) -> bool {
@@ -1012,6 +1067,25 @@ pub fn is_image_path(p: &Path) -> bool {
         )
     } else {
         false
+    }
+}
+
+pub fn guess_image_mime(p: &Path) -> String {
+    if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
+        match ext.to_lowercase().as_str() {
+            "png" => "image/png".to_string(),
+            "jpg" | "jpeg" => "image/jpeg".to_string(),
+            "webp" => "image/webp".to_string(),
+            "bmp" => "image/bmp".to_string(),
+            "svg" => "image/svg+xml".to_string(),
+            "gif" => "image/gif".to_string(),
+            "tiff" | "tif" => "image/tiff".to_string(),
+            "ico" => "image/x-icon".to_string(),
+            "avif" => "image/avif".to_string(),
+            _ => "image/png".to_string(),
+        }
+    } else {
+        "image/png".to_string()
     }
 }
 
@@ -1134,6 +1208,19 @@ mod tests {
         } else {
             panic!("Expected FileBatch payload");
         }
+    }
+
+    #[test]
+    fn test_image_detection_and_resolve() {
+        let fake_png_bytes = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+        let item = ClipItem::from_image(fake_png_bytes.clone(), 100, 200, "image/png");
+        assert!(item.is_image());
+        let resolved = item.resolve_image_data();
+        assert!(resolved.is_some());
+        let (bytes, mime, path) = resolved.unwrap();
+        assert_eq!(bytes, fake_png_bytes);
+        assert_eq!(mime, "image/png");
+        assert!(path.is_some());
     }
 }
 
