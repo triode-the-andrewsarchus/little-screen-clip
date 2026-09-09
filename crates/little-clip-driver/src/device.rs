@@ -48,6 +48,7 @@ pub struct DeviceInfo {
 pub struct TrofeoDriver {
     handle: DeviceHandle<GlobalContext>,
     pub info: DeviceInfo,
+    serial: String,
 }
 
 impl TrofeoDriver {
@@ -71,6 +72,11 @@ impl TrofeoDriver {
         debug!("Claiming interface {}...", USB_INTERFACE);
         handle.claim_interface(USB_INTERFACE)?;
 
+        // Read serial number now so we can detect stale handles later.
+        let serial = handle
+            .read_serial_number_string_ascii(&handle.device().device_descriptor()?)
+            .unwrap_or_default();
+
         let mut driver = Self {
             handle,
             info: DeviceInfo {
@@ -82,6 +88,7 @@ impl TrofeoDriver {
                 width: 1920,
                 height: 462,
             },
+            serial,
         };
 
         driver.do_handshake()?;
@@ -136,6 +143,39 @@ impl TrofeoDriver {
         self.info.pm = pm;
         self.info.sub = sub;
         self.info.chunk_cmd = chunk_cmd;
+        Ok(())
+    }
+
+    /// Check that the underlying USB handle still points to the same
+    /// live device by querying its descriptor and matching the serial number.
+    /// Returns an error immediately if the device has reset and re-enumerated
+    /// (stale fd case) or if it has fully disconnected.
+    pub fn check_alive(&self) -> Result<(), DriverError> {
+        let timeout = Duration::from_millis(500);
+        let desc = self.handle.device().device_descriptor()?;
+        let current_serial = self
+            .handle
+            .read_serial_number_string_ascii(&desc)
+            .unwrap_or_default();
+        if current_serial != self.serial {
+            return Err(DriverError::Usb(rusb::Error::NoDevice));
+        }
+        // Also do a harmless control read (get device descriptor) to probe the bus.
+        let mut buf = [0u8; 18];
+        self.handle
+            .read_control(
+                rusb::request_type(
+                    rusb::Direction::In,
+                    rusb::RequestType::Standard,
+                    rusb::Recipient::Device,
+                ),
+                0x06, // GET_DESCRIPTOR
+                0x0100, // Device descriptor
+                0,
+                &mut buf,
+                timeout,
+            )
+            .map_err(DriverError::Usb)?;
         Ok(())
     }
 
@@ -201,9 +241,12 @@ impl TrofeoDriver {
             pos += USB_BURST_WRITE_SIZE;
         }
 
-        // Read 512-byte ACK
+        // Read 512-byte ACK and propagate errors — a failure here means
+        // the device is gone/stale and the caller should trigger a reconnect.
         let mut ack = vec![0u8; 512];
-        let _ = self.handle.read_bulk(EP_IN, &mut ack, TIMEOUT_READ);
+        self.handle
+            .read_bulk(EP_IN, &mut ack, TIMEOUT_READ)
+            .map_err(|e| DriverError::WriteFailed(format!("ACK read failed: {e}")))?;
 
         debug!("Frame sent successfully ({} bytes, {} chunks)", total_size, num_chunks);
         Ok(())

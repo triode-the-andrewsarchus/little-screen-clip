@@ -293,7 +293,15 @@ async fn run_display_worker(mut driver: Option<TrofeoDriver>, mut rx: mpsc::Rece
                         }
 
                         if let Some(drv) = driver.as_mut() {
-                            if let Err(e) = drv.send_frame(&new_frame) {
+                            // Verify the USB handle still points to the
+                            // correct live device before attempting a write. If the
+                            // device reset between frames the fd can be stale and
+                            // writes may silently succeed against a zombie handle.
+                            let send_result = drv
+                                .check_alive()
+                                .and_then(|_| drv.send_frame(&new_frame));
+
+                            if let Err(e) = send_result {
                                 warn!("USB send_frame error: {}. Attempting reconnect in 1s...", e);
                                 tokio::time::sleep(Duration::from_millis(1000)).await;
                                 match TrofeoDriver::open() {
@@ -315,9 +323,35 @@ async fn run_display_worker(mut driver: Option<TrofeoDriver>, mut rx: mpsc::Rece
             }
             _ = tokio::time::sleep(keepalive_interval) => {
                 if last_send.elapsed() >= keepalive_interval {
-                    if let (Some(drv), Some(ref frame)) = (driver.as_mut(), last_frame.as_ref()) {
-                        let _ = drv.send_frame(frame);
-                        last_send = tokio::time::Instant::now();
+                    // Handle keepalive send errors and reconnect — this is
+                    // the path that catches silent stale-fd cases where the device
+                    // reset between clipboard events, so no prior send_frame ever
+                    // errored out but the display went dark.
+                    if let Some(drv) = driver.as_mut() {
+                        if last_frame.is_some() {
+                            let send_result = drv
+                                .check_alive()
+                                .and_then(|_| drv.send_frame(last_frame.as_ref().unwrap()));
+
+                            match send_result {
+                                Ok(_) => {
+                                    last_send = tokio::time::Instant::now();
+                                }
+                                Err(e) => {
+                                    warn!("USB keepalive error: {}. Attempting reconnect in 1s...", e);
+                                    tokio::time::sleep(Duration::from_millis(1000)).await;
+                                    match TrofeoDriver::open() {
+                                        Ok(new_drv) => {
+                                            info!("Successfully reconnected to Trofeo USB display (keepalive)");
+                                            *drv = new_drv;
+                                        }
+                                        Err(re_err) => {
+                                            warn!("USB Reconnect failed (keepalive): {}", re_err);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
