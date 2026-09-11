@@ -65,6 +65,11 @@ pub enum IpcRequest {
         restore_os_clipboard: bool,
     },
     GetSlotItem(SlotId),
+    GetAutoActions,
+    SetAutoAction {
+        key: String,
+        enabled: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -88,6 +93,7 @@ fn default_left_hand() -> HandSide {
 pub enum IpcResponse {
     State(SlotManager),
     SlotItem(Option<ClipItem>),
+    AutoActions(std::collections::HashMap<String, bool>),
     Success { message: String },
     OpResult { item: ClipItem },
     RecipeList(Vec<String>),

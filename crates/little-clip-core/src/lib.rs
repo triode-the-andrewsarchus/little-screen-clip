@@ -7,6 +7,10 @@ pub mod rolling_audio;
 pub mod slot;
 pub mod staging;
 pub mod syntax;
+pub mod raw_image;
+pub use raw_image::*;
+pub mod pdf;
+pub use pdf::*;
 
 
 pub use animation::{

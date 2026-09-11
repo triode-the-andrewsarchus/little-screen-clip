@@ -18,12 +18,20 @@ mod canvas;
 mod diff_view;
 mod image_preview;
 mod rolling_audio_strip;
+mod spreadsheet_view;
+mod pdf_view;
+mod midi_view;
+mod stl_view;
 use audio_preview::AudioPreviewState;
 use binary_diff_view::BinaryDiffViewState;
 use canvas::*;
 use diff_view::DiffViewerState;
 use image_preview::ImagePreviewState;
 use rolling_audio_strip::RollingAudioStripState;
+use spreadsheet_view::SpreadsheetViewerState;
+use pdf_view::PdfEditorState;
+use midi_view::MidiViewerState;
+use stl_view::StlViewerState;
 use little_clip_ops::binary_diff::resolve_binary_diff_pair;
 use little_clip_ops::diff::{resolve_diff_pair, resolve_diff_target, DiffDisplayMode};
 
@@ -31,6 +39,7 @@ use little_clip_ops::diff::{resolve_diff_pair, resolve_diff_target, DiffDisplayM
 enum WorkbenchView {
     Palette,
     NodeMachine,
+    AutoActions,
 }
 
 #[derive(Clone)]
@@ -87,7 +96,12 @@ struct WorkbenchApp {
     binary_diff_viewer: Option<BinaryDiffViewState>,
     audio_preview: Option<AudioPreviewState>,
     image_preview: Option<ImagePreviewState>,
+    spreadsheet_viewer: Option<SpreadsheetViewerState>,
+    pdf_viewer: Option<PdfEditorState>,
+    midi_viewer: Option<MidiViewerState>,
+    stl_viewer: Option<StlViewerState>,
     rolling_audio_strip: Option<RollingAudioStripState>,
+    dragging_slot: Option<SlotId>,
     config: AppConfig,
 }
 
@@ -127,7 +141,7 @@ impl WorkbenchApp {
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "Audio file".to_string());
-            AudioPreviewState::new(p, title)
+            AudioPreviewState::new(p, title).with_editor(config.audio.editor.clone())
         });
 
         let image_preview = initial_image.and_then(|p| {
@@ -154,7 +168,12 @@ impl WorkbenchApp {
             binary_diff_viewer: None,
             audio_preview,
             image_preview,
+            spreadsheet_viewer: None,
+            pdf_viewer: None,
+            midi_viewer: None,
+            stl_viewer: None,
             rolling_audio_strip,
+            dragging_slot: None,
             config,
         };
 
@@ -173,8 +192,16 @@ impl WorkbenchApp {
             let img_items: Vec<&ClipItem> = items.iter().filter(|i| resolve_diff_target(i).map(|t| t.is_image()).unwrap_or(false)).copied().collect();
             if img_items.len() >= 2 {
                 (resolve_diff_target(img_items[0]), resolve_diff_target(img_items[1]))
+            } else if let Some((t1, t2)) = items.iter().find_map(|i| resolve_diff_pair(i).filter(|(a, b)| a.is_image() && b.is_image())) {
+                (Some(t1), Some(t2))
             } else if items.len() >= 2 {
                 (resolve_diff_target(items[0]), resolve_diff_target(items[1]))
+            } else if items.len() == 1 {
+                if let Some((t1, t2)) = resolve_diff_pair(items[0]) {
+                    (Some(t1), Some(t2))
+                } else {
+                    (None, None)
+                }
             } else {
                 (None, None)
             }
@@ -200,7 +227,15 @@ impl WorkbenchApp {
             let left = self.state.left_hand();
             let right = self.state.right_hand();
             if let (Some(l), Some(r)) = (left, right) {
-                (resolve_diff_target(l), resolve_diff_target(r))
+                if let Some((t1, t2)) = resolve_diff_pair(l).filter(|(a, b)| a.is_image() && b.is_image()) {
+                    if !resolve_diff_target(r).map(|t| t.is_image()).unwrap_or(false) {
+                        (Some(t1), Some(t2))
+                    } else {
+                        (resolve_diff_target(l), resolve_diff_target(r))
+                    }
+                } else {
+                    (resolve_diff_target(l), resolve_diff_target(r))
+                }
             } else if let Some(l) = left {
                 if let Some((t1, t2)) = resolve_diff_pair(l) {
                     (Some(t1), Some(t2))
@@ -524,11 +559,6 @@ impl eframe::App for WorkbenchApp {
         // If diff viewer is active, render it over the workbench
         if let Some(diff_state) = &mut self.diff_viewer {
             let mut close_diff = false;
-            ctx.memory_mut(|m| {
-                if let Some(id) = m.focused() {
-                    m.surrender_focus(id);
-                }
-            });
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
@@ -544,11 +574,6 @@ impl eframe::App for WorkbenchApp {
         // If binary diff viewer is active, render it over the workbench
         if let Some(binary_diff_state) = &mut self.binary_diff_viewer {
             let mut close_binary_diff = false;
-            ctx.memory_mut(|m| {
-                if let Some(id) = m.focused() {
-                    m.surrender_focus(id);
-                }
-            });
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
@@ -564,11 +589,6 @@ impl eframe::App for WorkbenchApp {
         // If audio preview is active, render it over the workbench
         if let Some(audio_state) = &mut self.audio_preview {
             let mut close_audio = false;
-            ctx.memory_mut(|m| {
-                if let Some(id) = m.focused() {
-                    m.surrender_focus(id);
-                }
-            });
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
@@ -585,11 +605,6 @@ impl eframe::App for WorkbenchApp {
         // If image preview is active, render it over the workbench
         if let Some(image_state) = &mut self.image_preview {
             let mut close_image = false;
-            ctx.memory_mut(|m| {
-                if let Some(id) = m.focused() {
-                    m.surrender_focus(id);
-                }
-            });
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
@@ -600,6 +615,75 @@ impl eframe::App for WorkbenchApp {
                 self.image_preview = None;
             }
             return; // Don't process background shortcuts while image preview is active
+        }
+
+        // If spreadsheet viewer is active, render it over the workbench
+        if let Some(sheet_state) = &mut self.spreadsheet_viewer {
+            let mut close_sheet = false;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    sheet_state.render_ui(ui, ctx, &mut close_sheet);
+                });
+
+            if close_sheet {
+                self.spreadsheet_viewer = None;
+            }
+            return;
+        }
+
+        // If PDF editor is active, render it over the workbench
+        if let Some(pdf_state) = &mut self.pdf_viewer {
+            let mut close_pdf = false;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    pdf_state.render_ui(ui, ctx, &mut close_pdf);
+                });
+
+            if close_pdf {
+                if pdf_state.dirty {
+                    self.dirty_mirror = true;
+                }
+                self.pdf_viewer = None;
+            }
+            return;
+        }
+
+        // If MIDI viewer is active, render it over the workbench
+        if let Some(midi_state) = &mut self.midi_viewer {
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                midi_state.stop();
+                self.midi_viewer = None;
+                return;
+            }
+            let mut close_midi = false;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    midi_state.render_ui(ui, &mut close_midi);
+                });
+
+            if close_midi {
+                midi_state.stop();
+                self.midi_viewer = None;
+            }
+            return;
+        }
+
+        // If STL viewer is active, render it over the workbench
+        if let Some(stl_state) = &mut self.stl_viewer {
+            let mut close_stl = false;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    stl_state.render_ui(ui, &mut close_stl);
+                });
+
+            if close_stl {
+                self.stl_viewer = None;
+            }
+            return;
         }
 
 
@@ -622,6 +706,8 @@ impl eframe::App for WorkbenchApp {
                     strip.selected_region = None;
                     strip.stop();
                 }
+            } else if self.view == WorkbenchView::AutoActions {
+                self.view = WorkbenchView::Palette;
             } else {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
@@ -663,11 +749,20 @@ impl eframe::App for WorkbenchApp {
             }
         }
 
-        // F2 or Tab toggles view between Palette and Node Machine
+        // F1, F2, F3 view switching
+        if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
+            self.view = WorkbenchView::NodeMachine;
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
             self.view = match self.view {
                 WorkbenchView::Palette => WorkbenchView::NodeMachine,
-                WorkbenchView::NodeMachine => WorkbenchView::Palette,
+                WorkbenchView::NodeMachine | WorkbenchView::AutoActions => WorkbenchView::Palette,
+            };
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::F3)) {
+            self.view = match self.view {
+                WorkbenchView::AutoActions => WorkbenchView::Palette,
+                _ => WorkbenchView::AutoActions,
             };
         }
 
@@ -698,6 +793,13 @@ impl eframe::App for WorkbenchApp {
                     self.selected_slots = vec![SlotId::LeftHand];
                     self.dirty_mirror = true;
                     self.selected_action_index = 0;
+                } else if (ctx.input(|i| i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::X))) && self.selected_slots.len() == 2 {
+                    let a = self.selected_slots[0];
+                    let b = self.selected_slots[1];
+                    let _ = send_ipc_request(&IpcRequest::SwapSlots(a, b));
+                    self.state.swap_slots(a, b);
+                    self.dirty_mirror = true;
+                    self.status_msg = Some(format!("Swapped {} and {}", a.label(), b.label()));
                 }
             }
 
@@ -731,6 +833,14 @@ impl eframe::App for WorkbenchApp {
                 self.search_query.clear();
                 self.dirty_mirror = true;
                 self.selected_action_index = 0;
+            } else if (self.search_query.trim() == "swap" || ((self.search_query == "s" || self.search_query == "x") && self.selected_slots.len() == 2)) && self.selected_slots.len() == 2 {
+                let a = self.selected_slots[0];
+                let b = self.selected_slots[1];
+                let _ = send_ipc_request(&IpcRequest::SwapSlots(a, b));
+                self.state.swap_slots(a, b);
+                self.search_query.clear();
+                self.dirty_mirror = true;
+                self.status_msg = Some(format!("Swapped {} and {}", a.label(), b.label()));
             }
 
             let filtered = self.filtered_actions();
@@ -743,19 +853,19 @@ impl eframe::App for WorkbenchApp {
                 self.selected_action_index = (self.selected_action_index + 1) % filtered.len();
             }
             if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) && !filtered.is_empty() {
-                if self.selected_action_index == 0 {
-                    self.selected_action_index = filtered.len() - 1;
+                self.selected_action_index = if self.selected_action_index == 0 {
+                    filtered.len() - 1
                 } else {
-                    self.selected_action_index -= 1;
-                }
+                    self.selected_action_index - 1
+                };
             }
             if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
                 self.execute_current_action(ctx);
             }
         }
 
-        // Top Panel: Title Row + View Tabs + Live Ambient Mirror
-        egui::TopBottomPanel::top("top_mirror_panel")
+        // Top Header Panel: Mirror of Trofeo Screen + Tabs
+        egui::TopBottomPanel::top("header_panel")
             .frame(
                 egui::Frame::none()
                     .fill(egui::Color32::from_rgb(15, 17, 23))
@@ -778,7 +888,7 @@ impl eframe::App for WorkbenchApp {
                         let is_node = self.view == WorkbenchView::NodeMachine;
                         let node_tab = ui.selectable_label(
                             is_node,
-                            egui::RichText::new("★ Big Node Machine [F2]")
+                            egui::RichText::new("★ Big Node Machine [F1]")
                                 .strong()
                                 .color(if is_node {
                                     egui::Color32::WHITE
@@ -804,6 +914,26 @@ impl eframe::App for WorkbenchApp {
                         if pal_tab.clicked() {
                             self.view = WorkbenchView::Palette;
                         }
+
+                        // Auto-Actions Settings Tab Button
+                        let is_auto = self.view == WorkbenchView::AutoActions;
+                        let auto_btn = ui.selectable_label(
+                            is_auto,
+                            egui::RichText::new("⚙ Auto-Actions [F3]")
+                                .strong()
+                                .color(if is_auto {
+                                    egui::Color32::WHITE
+                                } else {
+                                    egui::Color32::from_rgb(56, 189, 248)
+                                }),
+                        );
+                        if auto_btn.clicked() {
+                            self.view = if is_auto {
+                                WorkbenchView::Palette
+                            } else {
+                                WorkbenchView::AutoActions
+                            };
+                        }
                     });
                 });
 
@@ -814,6 +944,29 @@ impl eframe::App for WorkbenchApp {
                     self.update_mirror_texture(ctx);
                 }
 
+                let left_priors = self.config.slots.left_priors;
+                let get_slot_from_rel_x = |rel_x: f32| -> SlotId {
+                    if rel_x < 240.0 {
+                        SlotId::Undo
+                    } else if rel_x < 600.0 {
+                        SlotId::LeftHand
+                    } else if rel_x < 840.0 {
+                        SlotId::LeftPrior1
+                    } else if rel_x < 1080.0 {
+                        SlotId::LeftPrior2
+                    } else if rel_x < 1320.0 {
+                        if left_priors >= 3 {
+                            SlotId::LeftPrior3
+                        } else {
+                            SlotId::RightPrior2
+                        }
+                    } else if rel_x < 1560.0 {
+                        SlotId::RightPrior1
+                    } else {
+                        SlotId::RightHand
+                    }
+                };
+
                 // Draw Full-Width Pixel-Perfect Mirror Texture
                 if let Some(ref texture) = self.mirror_texture {
                     let avail_w = ui.available_width();
@@ -823,29 +976,54 @@ impl eframe::App for WorkbenchApp {
                     let response = ui.add(
                         egui::Image::new(texture)
                             .fit_to_exact_size(egui::vec2(avail_w, target_h))
-                            .sense(egui::Sense::click()),
+                            .sense(egui::Sense::click_and_drag()),
                     );
+
+                    // Drag-and-drop slot swapping
+                    if response.drag_started() {
+                        if let Some(pos) = response.interact_pointer_pos() {
+                            let rect = response.rect;
+                            let rel_x = (pos.x - rect.min.x) / rect.width() * SCREEN_WIDTH as f32;
+                            let source = get_slot_from_rel_x(rel_x);
+                            if source != SlotId::Undo {
+                                self.dragging_slot = Some(source);
+                            }
+                        }
+                    }
+
+                    if response.dragged() {
+                        if let Some(source) = self.dragging_slot {
+                            ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
+                            egui::show_tooltip_at_pointer(ctx, egui::Id::new("slot_drag_tip"), |ui| {
+                                ui.label(format!("Dragging {} (drop on another slot to swap)", source.label()));
+                            });
+                        }
+                    }
+
+                    if response.drag_stopped() {
+                        if let Some(source) = self.dragging_slot.take() {
+                            if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
+                                let rect = response.rect;
+                                if rect.contains(pos) {
+                                    let rel_x = (pos.x - rect.min.x) / rect.width() * SCREEN_WIDTH as f32;
+                                    let target = get_slot_from_rel_x(rel_x);
+                                    if target != source && target != SlotId::Undo {
+                                        let _ = send_ipc_request(&IpcRequest::SwapSlots(source, target));
+                                        self.state.swap_slots(source, target);
+                                        self.dirty_mirror = true;
+                                        self.status_msg = Some(format!("Swapped {} and {}", source.label(), target.label()));
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     // Allow clicking directly on the mirror slots to toggle selection
                     if response.clicked() {
                         if let Some(pos) = response.interact_pointer_pos() {
                             let rect = response.rect;
                             let rel_x = (pos.x - rect.min.x) / rect.width() * SCREEN_WIDTH as f32;
-                            let clicked_slot = if rel_x < 240.0 {
-                                SlotId::Undo
-                            } else if rel_x < 600.0 {
-                                SlotId::LeftHand
-                            } else if rel_x < 840.0 {
-                                SlotId::LeftPrior1
-                            } else if rel_x < 1080.0 {
-                                SlotId::LeftPrior2
-                            } else if rel_x < 1320.0 {
-                                SlotId::RightPrior2
-                            } else if rel_x < 1560.0 {
-                                SlotId::RightPrior1
-                            } else {
-                                SlotId::RightHand
-                            };
+                            let clicked_slot = get_slot_from_rel_x(rel_x);
 
                             if clicked_slot != SlotId::Undo {
                                 if let Some(p) = self.selected_slots.iter().position(|&s| s == clicked_slot) {
@@ -863,28 +1041,53 @@ impl eframe::App for WorkbenchApp {
                         if let Some(pos) = response.interact_pointer_pos() {
                             let rect = response.rect;
                             let rel_x = (pos.x - rect.min.x) / rect.width() * SCREEN_WIDTH as f32;
-                            let clicked_slot = if rel_x < 240.0 {
-                                SlotId::Undo
-                            } else if rel_x < 600.0 {
-                                SlotId::LeftHand
-                            } else if rel_x < 840.0 {
-                                SlotId::LeftPrior1
-                            } else if rel_x < 1080.0 {
-                                SlotId::LeftPrior2
-                            } else if rel_x < 1320.0 {
-                                SlotId::RightPrior2
-                            } else if rel_x < 1560.0 {
-                                SlotId::RightPrior1
-                            } else {
-                                SlotId::RightHand
-                            };
+                            let clicked_slot = get_slot_from_rel_x(rel_x);
 
                             if let Some(item) = self.state.get(clicked_slot) {
                                 if let Some(audio_path) = item.audio_path() {
-                                    self.audio_preview = Some(AudioPreviewState::new(audio_path, item.title.clone()));
+                                    self.audio_preview = Some(AudioPreviewState::new(audio_path, item.title.clone()).with_editor(self.config.audio.editor.clone()));
+                                } else if let Some(fp) = item.file_path() {
+                                    if fp.extension().and_then(|s| s.to_str()).map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")).unwrap_or(false) {
+                                        if let Ok(st) = MidiViewerState::from_file(fp) {
+                                            self.midi_viewer = Some(st);
+                                        }
+                                    } else if little_clip_ops::is_stl_file(&fp) {
+                                        if let Ok(st) = StlViewerState::from_file(fp) {
+                                            self.stl_viewer = Some(st);
+                                        }
+                                    } else if little_clip_core::pdf::is_pdf_path(&fp) {
+                                        self.pdf_viewer = Some(PdfEditorState::new(fp));
+                                    } else if little_clip_ops::is_spreadsheet_file(&fp) {
+                                        if let Ok(data) = little_clip_ops::load_spreadsheet(&fp) {
+                                            self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, Some(fp)));
+                                        }
+                                    } else if item.is_image() {
+                                        if let Ok(editor) = ImagePreviewState::from_item(item, &self.config) {
+                                            self.image_preview = Some(editor);
+                                        }
+                                    }
                                 } else if item.is_image() {
                                     if let Ok(editor) = ImagePreviewState::from_item(item, &self.config) {
                                         self.image_preview = Some(editor);
+                                    }
+                                } else if let Some(text) = item.to_clipboard_text() {
+                                    let p = std::path::Path::new(text.trim());
+                                    if p.is_file() && (p.extension().and_then(|s| s.to_str()).map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")).unwrap_or(false)) {
+                                        if let Ok(st) = MidiViewerState::from_file(p.to_path_buf()) {
+                                            self.midi_viewer = Some(st);
+                                        }
+                                    } else if p.is_file() && little_clip_ops::is_stl_file(p) {
+                                        if let Ok(st) = StlViewerState::from_file(p.to_path_buf()) {
+                                            self.stl_viewer = Some(st);
+                                        }
+                                    } else if p.is_file() && little_clip_core::pdf::is_pdf_path(p) {
+                                        self.pdf_viewer = Some(PdfEditorState::new(p.to_path_buf()));
+                                    } else if p.is_file() && little_clip_ops::is_spreadsheet_file(p) {
+                                        if let Ok(data) = little_clip_ops::load_spreadsheet(p) {
+                                            self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, Some(p.to_path_buf())));
+                                        }
+                                    } else if let Some(data) = little_clip_ops::detect_csv_text(text.trim()) {
+                                        self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, None));
                                     }
                                 }
                             }
@@ -909,7 +1112,7 @@ impl eframe::App for WorkbenchApp {
         }
 
         if let Some((path, sel)) = open_full_editor {
-            let mut editor = AudioPreviewState::new(path, "Rolling Audio Snapshot".to_string());
+            let mut editor = AudioPreviewState::new(path, "Rolling Audio Snapshot".to_string()).with_editor(self.config.audio.editor.clone());
             if let Some(region) = sel {
                 editor.selection = Some(region);
             }
@@ -931,6 +1134,8 @@ impl eframe::App for WorkbenchApp {
                     let first_image_item = self.selected_slots.iter().find_map(|s| {
                         self.state.get(*s).filter(|it| it.is_image())
                     });
+
+                    let mut open_diff_requested = false;
 
                     ui.horizontal(|ui| {
                         ui.label(
@@ -955,7 +1160,7 @@ impl eframe::App for WorkbenchApp {
                             .fill(egui::Color32::from_rgb(16, 185, 129))
                             .rounding(4.0);
                             if ui.add(audio_btn).clicked() {
-                                self.audio_preview = Some(AudioPreviewState::new(path, title));
+                                self.audio_preview = Some(AudioPreviewState::new(path, title).with_editor(self.config.audio.editor.clone()));
                             }
                         }
 
@@ -975,7 +1180,218 @@ impl eframe::App for WorkbenchApp {
                                 }
                             }
                         }
+
+                        let has_two_images = if self.selected_slots.len() >= 2 {
+                            let img_count = self
+                                .selected_slots
+                                .iter()
+                                .filter_map(|s| self.state.get(*s))
+                                .filter(|it| resolve_diff_target(it).map(|t| t.is_image()).unwrap_or(false))
+                                .count();
+                            img_count >= 2
+                                || self.selected_slots.iter().any(|s| {
+                                    self.state
+                                        .get(*s)
+                                        .and_then(|it| resolve_diff_pair(it))
+                                        .map(|(t1, t2)| t1.is_image() && t2.is_image())
+                                        .unwrap_or(false)
+                                })
+                        } else if self.selected_slots.len() == 1 {
+                            self.state
+                                .get(self.selected_slots[0])
+                                .and_then(|it| resolve_diff_pair(it))
+                                .map(|(t1, t2)| t1.is_image() && t2.is_image())
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        };
+                        if has_two_images {
+                            ui.add_space(8.0);
+                            let diff_btn = egui::Button::new(
+                                egui::RichText::new("🔍 Compare Images")
+                                    .small()
+                                    .strong()
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(egui::Color32::from_rgb(234, 88, 12))
+                            .rounding(4.0);
+                            if ui.add(diff_btn).on_hover_text("Open interactive visual diff comparing the 2 images").clicked() {
+                                open_diff_requested = true;
+                            }
+                        }
+
+                        let first_pdf_item = self.selected_slots.iter().find_map(|s| {
+                            self.state.get(*s).and_then(|it| it.file_path()).filter(|p| little_clip_core::pdf::is_pdf_path(p))
+                        });
+                        let first_spreadsheet_item = self.selected_slots.iter().find_map(|s| {
+                            let it = self.state.get(*s)?;
+                            if let Some(p) = it.file_path().filter(|p| little_clip_ops::is_spreadsheet_file(p)) {
+                                little_clip_ops::load_spreadsheet(&p).ok().map(|data| (data, Some(p)))
+                            } else if let Some(txt) = it.to_clipboard_text() {
+                                little_clip_ops::detect_csv_text(txt.trim()).map(|data| (data, None))
+                            } else {
+                                None
+                            }
+                        });
+                        let first_midi_item = self.selected_slots.iter().find_map(|s| {
+                            let it = self.state.get(*s)?;
+                            if let Some(p) = it.file_path().filter(|p| {
+                                p.extension().and_then(|e| e.to_str()).map(|ext| ext.eq_ignore_ascii_case("mid") || ext.eq_ignore_ascii_case("midi")).unwrap_or(false)
+                            }) {
+                                Some(p)
+                            } else if let Some(txt) = it.to_clipboard_text() {
+                                let p = std::path::Path::new(txt.trim());
+                                if p.is_file() && p.extension().and_then(|e| e.to_str()).map(|ext| ext.eq_ignore_ascii_case("mid") || ext.eq_ignore_ascii_case("midi")).unwrap_or(false) {
+                                    Some(p.to_path_buf())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        });
+                        let first_stl_item = self.selected_slots.iter().find_map(|s| {
+                            let it = self.state.get(*s)?;
+                            if let Some(p) = it.file_path().filter(|p| little_clip_ops::is_stl_file(p)) {
+                                Some(p)
+                            } else if let Some(txt) = it.to_clipboard_text() {
+                                let p = std::path::Path::new(txt.trim());
+                                if p.is_file() && little_clip_ops::is_stl_file(p) {
+                                    Some(p.to_path_buf())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        });
+
+                        if let Some(pdf_path) = first_pdf_item {
+                            ui.add_space(8.0);
+                            let pdf_btn = egui::Button::new(
+                                egui::RichText::new("📑 Edit PDF")
+                                    .small()
+                                    .strong()
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(egui::Color32::from_rgb(220, 38, 38))
+                            .rounding(4.0);
+                            if ui.add(pdf_btn).on_hover_text("Open PDF Page Editor (Delete / Rotate pages)").clicked() {
+                                self.pdf_viewer = Some(PdfEditorState::new(pdf_path));
+                            }
+                        }
+
+                        if let Some((data, path)) = first_spreadsheet_item {
+                            ui.add_space(8.0);
+                            let sheet_btn = egui::Button::new(
+                                egui::RichText::new("📊 View Spreadsheet")
+                                    .small()
+                                    .strong()
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(egui::Color32::from_rgb(13, 148, 136))
+                            .rounding(4.0);
+                            if ui.add(sheet_btn).on_hover_text("Open full multi-sheet X/Y scrollable table").clicked() {
+                                self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, path));
+                            }
+                        }
+
+                        if let Some(midi_path) = first_midi_item {
+                            ui.add_space(8.0);
+                            let midi_btn = egui::Button::new(
+                                egui::RichText::new("🎹 MIDI Piano Roll")
+                                    .small()
+                                    .strong()
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(egui::Color32::from_rgb(37, 99, 235)) // Blue
+                            .rounding(4.0);
+                            if ui.add(midi_btn).on_hover_text("Open interactive MIDI piano roll visualizer & synth audio").clicked() {
+                                if let Ok(st) = MidiViewerState::from_file(midi_path) {
+                                    self.midi_viewer = Some(st);
+                                }
+                            }
+                        }
+
+                        if let Some(stl_path) = first_stl_item {
+                            ui.add_space(8.0);
+                            let stl_btn = egui::Button::new(
+                                egui::RichText::new("🧊 3D STL Model")
+                                    .small()
+                                    .strong()
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(egui::Color32::from_rgb(217, 119, 6)) // Amber
+                            .rounding(4.0);
+                            if ui.add(stl_btn).on_hover_text("Open interactive 3D orbit viewer (pan, zoom, rotate)").clicked() {
+                                if let Ok(st) = StlViewerState::from_file(stl_path) {
+                                    self.stl_viewer = Some(st);
+                                }
+                            }
+                        }
+
+                        // Smart text previews: Unit conversions, Network (IP/MAC), and Timestamps
+                        let first_text_item = self.selected_slots.iter().find_map(|s| {
+                            self.state.get(*s).and_then(|it| it.to_clipboard_text())
+                        });
+                        if let Some(ref text) = first_text_item {
+                            let trimmed = text.trim();
+                            if let Some(conv) = little_clip_ops::detect_unit_conversion(trimmed) {
+                                ui.add_space(8.0);
+                                let label = format!("⚖ {}", conv.summary_line());
+                                let btn = egui::Button::new(
+                                    egui::RichText::new(label)
+                                        .small()
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(167, 243, 208)),
+                                )
+                                .fill(egui::Color32::from_rgb(6, 78, 59))
+                                .rounding(4.0);
+                                if ui.add(btn).on_hover_text("Click to copy converted unit").clicked() {
+                                    ui.output_mut(|o| o.copied_text = conv.primary_conversion.clone());
+                                    self.status_msg = Some(format!("Copied: {}", conv.primary_conversion));
+                                }
+                            } else if let Some(net) = little_clip_ops::detect_network_preview(trimmed) {
+                                ui.add_space(8.0);
+                                let label = match &net {
+                                    little_clip_ops::NetworkPreview::Ip { ip, rfc_class, .. } => format!("🌐 {} ({})", ip, rfc_class),
+                                    little_clip_ops::NetworkPreview::Mac { formatted, vendor, .. } => format!("🔌 {} ({})", formatted, vendor),
+                                };
+                                let btn = egui::Button::new(
+                                    egui::RichText::new(label)
+                                        .small()
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(186, 230, 253)),
+                                )
+                                .fill(egui::Color32::from_rgb(12, 74, 110))
+                                .rounding(4.0);
+                                if ui.add(btn).on_hover_text("Network address info (Click to copy summary)").clicked() {
+                                    let lines = net.summary_lines().join("\n");
+                                    ui.output_mut(|o| o.copied_text = lines.clone());
+                                    self.status_msg = Some("Copied network info".to_string());
+                                }
+                            } else if let Some(ts) = little_clip_ops::detect_timestamp(trimmed) {
+                                ui.add_space(8.0);
+                                let label = format!("⏱ {} ({})", ts.human_readable, ts.relative);
+                                let btn = egui::Button::new(
+                                    egui::RichText::new(label)
+                                        .small()
+                                        .strong()
+                                        .color(egui::Color32::from_rgb(253, 230, 138)),
+                                )
+                                .fill(egui::Color32::from_rgb(120, 53, 15))
+                                .rounding(4.0);
+                                if ui.add(btn).on_hover_text(format!("UTC: {}\nEpoch: {}\nClick to copy ISO 8601", ts.utc_iso, ts.epoch_sec)).clicked() {
+                                    ui.output_mut(|o| o.copied_text = ts.utc_iso.clone());
+                                    self.status_msg = Some(format!("Copied ISO 8601: {}", ts.utc_iso));
+                                }
+                            }
+                        }
                     });
+
+                    if open_diff_requested {
+                        self.open_diff_viewer();
+                    }
 
                     ui.add_space(6.0);
 
@@ -1102,6 +1518,91 @@ impl eframe::App for WorkbenchApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("[Right/Mid Drag] Pan Canvas  |  [Scroll] Zoom  |  [F2] Quick Palette  |  [Esc] Dismiss")
+                                .color(egui::Color32::from_rgb(100, 116, 139))
+                                .small(),
+                        );
+                    });
+                }
+                WorkbenchView::AutoActions => {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.heading(
+                            egui::RichText::new("⚙ Matched Auto-Actions")
+                                .color(egui::Color32::from_rgb(56, 189, 248))
+                                .strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new("— Actions trigger automatically on clipboard match")
+                                .color(egui::Color32::from_rgb(148, 163, 184)),
+                        );
+                    });
+                    ui.add_space(8.0);
+
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        // Card 1: URL Tracking Cleaner
+                        egui::Frame::none()
+                            .fill(egui::Color32::from_rgb(24, 28, 38))
+                            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(56, 189, 248)))
+                            .rounding(egui::Rounding::same(8.0))
+                            .inner_margin(egui::Margin::symmetric(16.0, 14.0))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let mut trim = self.config.auto_actions.trim_link_tracking;
+                                    let cb = ui.checkbox(
+                                        &mut trim,
+                                        egui::RichText::new("Clean Tracking from Links")
+                                            .strong()
+                                            .size(15.0)
+                                            .color(egui::Color32::WHITE),
+                                    );
+                                    if cb.changed() {
+                                        self.config.auto_actions.trim_link_tracking = trim;
+                                        let _ = send_ipc_request(&IpcRequest::SetAutoAction {
+                                            key: "trim_link_tracking".to_string(),
+                                            enabled: trim,
+                                        });
+                                    }
+
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        let (status_text, status_color) = if trim {
+                                            ("ENABLED", egui::Color32::from_rgb(34, 197, 94))
+                                        } else {
+                                            ("DISABLED", egui::Color32::from_rgb(148, 163, 184))
+                                        };
+                                        egui::Frame::none()
+                                            .fill(if trim { egui::Color32::from_rgb(20, 83, 45) } else { egui::Color32::from_rgb(51, 65, 85) })
+                                            .rounding(egui::Rounding::same(4.0))
+                                            .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+                                            .show(ui, |ui| {
+                                                ui.label(egui::RichText::new(status_text).size(11.0).strong().color(status_color));
+                                            });
+                                    });
+                                });
+
+                                ui.add_space(6.0);
+                                ui.label(
+                                    egui::RichText::new(
+                                        "Automatically strips tracking queries (utm_source, utm_medium, fbclid, gclid, twclid, si, etc.) when any HTTP or HTTPS URL is copied to the clipboard.",
+                                    )
+                                    .color(egui::Color32::from_rgb(203, 213, 225)),
+                                );
+                                ui.add_space(4.0);
+                                ui.label(
+                                    egui::RichText::new(
+                                        "↳ Behavior: Cleaned link is placed directly into the active hand; original untracked URL is preserved in Undo [Z] for instant bypass.",
+                                    )
+                                    .small()
+                                    .color(egui::Color32::from_rgb(148, 163, 184)),
+                                );
+                            });
+
+                        ui.add_space(14.0);
+                    });
+
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("[Esc / F2] Back to Quick Palette  |  [F1] Big Node Machine")
                                 .color(egui::Color32::from_rgb(100, 116, 139))
                                 .small(),
                         );

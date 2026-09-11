@@ -398,10 +398,17 @@ impl DiffViewerState {
 
                 ui.add_space(8.0);
 
-                // Threshold Selector Pill
-                ui.label(egui::RichText::new("Threshold:").small().color(Color32::from_rgb(148, 163, 184)));
+                // Allowable Difference Threshold Slider & Quick Presets
+                ui.label(egui::RichText::new("Tolerance:").small().color(Color32::from_rgb(148, 163, 184)));
+                let slider = egui::Slider::new(&mut self.image_options.threshold, 0.00..=0.50)
+                    .step_by(0.01)
+                    .show_value(true);
+                if ui.add(slider).on_hover_text("Allowable perceptual difference threshold (0.00 = strict, 0.50 = loose)").changed() {
+                    self.recompute();
+                }
+
                 for (val, label) in &[(0.05f32, "0.05"), (0.10f32, "0.10"), (0.20f32, "0.20")] {
-                    let is_cur = (self.image_options.threshold - val).abs() < 0.001;
+                    let is_cur = (self.image_options.threshold - val).abs() < 0.005;
                     let t_btn = egui::Button::new(
                         egui::RichText::new(*label)
                             .small()

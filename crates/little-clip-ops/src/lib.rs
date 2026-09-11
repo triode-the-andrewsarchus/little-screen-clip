@@ -15,6 +15,27 @@ pub use image_diff::*;
 pub mod binary_diff;
 pub use binary_diff::*;
 
+pub mod auto_actions;
+pub use auto_actions::*;
+
+pub mod units;
+pub use units::*;
+
+pub mod network_preview;
+pub use network_preview::*;
+
+pub mod timestamps;
+pub use timestamps::*;
+
+pub mod spreadsheet;
+pub use spreadsheet::*;
+
+pub mod midi;
+pub use midi::*;
+
+pub mod stl;
+pub use stl::*;
+
 
 #[derive(Debug, Error)]
 pub enum OpError {
@@ -341,7 +362,25 @@ pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
             }
         }
 
-        if resolve_diff_target(item).map(|t| t.is_image()).unwrap_or(false) {
+        if let Some((t1, t2)) = resolve_diff_pair(item) {
+            if t1.is_image() && t2.is_image() {
+                ops.push(OpDescriptor {
+                    name: "diff",
+                    label: "Compare Images (Picture Diff)",
+                    description: "Interactive visual image diff comparing the 2 images in this slot",
+                    is_binary: false,
+                    category: "Compare",
+                });
+            } else {
+                ops.push(OpDescriptor {
+                    name: "diff",
+                    label: "Diff Comparison (Difftastic)",
+                    description: "Interactive structural syntax diff comparing the 2 files in this slot",
+                    is_binary: false,
+                    category: "Compare",
+                });
+            }
+        } else if resolve_diff_target(item).map(|t| t.is_image()).unwrap_or(false) {
             ops.push(OpDescriptor {
                 name: "diff",
                 label: "Diff Comparison (Picture Diff)",
@@ -352,11 +391,12 @@ pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
         }
 
         // Binary diff is always applicable for any item against secondary slot or paired files
+        let is_binary_pair = resolve_two_files_from_single_item(item).is_some();
         ops.push(OpDescriptor {
             name: "binary-diff",
-            label: "Binary Diff (Hex Alignment)",
-            description: "Interactive side-by-side hex & ASCII alignment diff against secondary slot or files",
-            is_binary: true,
+            label: if is_binary_pair { "Binary Diff (Compare Paired Files)" } else { "Binary Diff (Hex Alignment)" },
+            description: if is_binary_pair { "Interactive side-by-side hex & ASCII alignment diff of the 2 files in this slot" } else { "Interactive side-by-side hex & ASCII alignment diff against secondary slot or files" },
+            is_binary: !is_binary_pair,
             category: "Compare",
         });
 
@@ -501,8 +541,30 @@ pub fn execute_unary_op(op_name: &str, item: &ClipItem) -> Result<ClipItem, OpEr
         "slugify" => op_slugify(item),
         "base64-encode" => op_base64_encode(item),
         "base64-decode" => op_base64_decode(item),
+        "diff" => op_diff_unary(item),
         "binary-diff" => op_binary_diff_unary(item),
         _ => Err(OpError::ExecutionFailed(format!("Unknown unary operation: {}", op_name))),
+    }
+}
+
+fn op_diff_unary(item: &ClipItem) -> Result<ClipItem, OpError> {
+    if let Some((lhs, rhs)) = resolve_diff_pair(item) {
+        if lhs.is_image() && rhs.is_image() {
+            let options = ImageDiffOptions::default();
+            let b1 = lhs.image_bytes().ok_or_else(|| OpError::ExecutionFailed("Left image bytes missing".to_string()))?;
+            let b2 = rhs.image_bytes().ok_or_else(|| OpError::ExecutionFailed("Right image bytes missing".to_string()))?;
+            let res = compare_image_bytes(b1, b2, &options)
+                .map_err(|e| OpError::ExecutionFailed(format!("Picture diff failed: {}", e)))?;
+            let mask_png = res.encode_mask_png()
+                .map_err(|e| OpError::ExecutionFailed(format!("Encoding diff mask PNG failed: {}", e)))?;
+            ClipItem::from_image_bytes(mask_png, "image/png")
+                .ok_or_else(|| OpError::ExecutionFailed("Failed to create ClipItem from diff mask PNG".to_string()))
+        } else {
+            let res = compute_diff(&lhs, &rhs, DiffDisplayMode::Inline, 120);
+            Ok(ClipItem::from_text(res.raw_ansi))
+        }
+    } else {
+        Err(OpError::ExecutionFailed("Item does not contain two files or images to diff".to_string()))
     }
 }
 

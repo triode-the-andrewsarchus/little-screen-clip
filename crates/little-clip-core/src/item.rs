@@ -244,6 +244,22 @@ impl ClipItem {
         }
     }
 
+    pub fn file_path(&self) -> Option<PathBuf> {
+        match &self.payload {
+            ClipPayload::Image { path: Some(p), .. } => Some(p.clone()),
+            ClipPayload::AudioRef { path, .. } => Some(path.clone()),
+            ClipPayload::Text(t) | ClipPayload::Markdown(t) => {
+                let p = Path::new(t.trim());
+                if p.is_file() {
+                    Some(p.to_path_buf())
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn with_handler(mut self, handler: impl Into<String>) -> Self {
         self.handler_tag = handler.into();
         self
@@ -377,6 +393,69 @@ impl ClipItem {
                             subtitle,
                             details: vec![format!("{}×{}", w, h), ext],
                             handler_tag,
+                        };
+                    }
+                }
+
+                // Check if camera RAW image
+                if crate::raw_image::is_raw_image_path(path) {
+                    if let Ok((preview_bytes, w, h)) = crate::raw_image::extract_raw_image_preview(path) {
+                        let file_name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "RAW Image".to_string());
+                        let ext = path
+                            .extension()
+                            .map(|e| e.to_string_lossy().to_uppercase())
+                            .unwrap_or_else(|| "RAW".to_string());
+                        let file_size_mb = std::fs::metadata(path).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+                        let subtitle = format!("Camera RAW ({}×{}) • {:.1} MB • {}", w, h, file_size_mb, ext);
+                        let thumbnail = ImageThumbnail::generate(&preview_bytes, 320, 220);
+                        return Self {
+                            id: Uuid::new_v4(),
+                            created_at: current_unix_timestamp(),
+                            payload: ClipPayload::Image {
+                                bytes: preview_bytes,
+                                path: Some(path.to_path_buf()),
+                                width: w,
+                                height: h,
+                                mime: "image/x-camera-raw".to_string(),
+                                thumbnail,
+                            },
+                            title: file_name,
+                            subtitle,
+                            details: vec![format!("{}×{}", w, h), ext, "CAMERA RAW".to_string()],
+                            handler_tag: "RAW (CAMERA)".to_string(),
+                        };
+                    }
+                }
+
+                // Check if PDF document
+                if crate::pdf::is_pdf_path(path) {
+                    if let Ok((page1_bytes, w, h)) = crate::pdf::render_pdf_page_preview(path, 1, 800) {
+                        let file_name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "document.pdf".to_string());
+                        let page_count = crate::pdf::get_pdf_info(path).map(|i| i.page_count).unwrap_or(1);
+                        let file_size_kb = std::fs::metadata(path).map(|m| m.len() as f64 / 1024.0).unwrap_or(0.0);
+                        let subtitle = format!("PDF ({} pg) • {:.1} KB", page_count, file_size_kb);
+                        let thumbnail = ImageThumbnail::generate(&page1_bytes, 320, 220);
+                        return Self {
+                            id: Uuid::new_v4(),
+                            created_at: current_unix_timestamp(),
+                            payload: ClipPayload::Image {
+                                bytes: page1_bytes,
+                                path: Some(path.to_path_buf()),
+                                width: w,
+                                height: h,
+                                mime: "application/pdf".to_string(),
+                                thumbnail,
+                            },
+                            title: file_name,
+                            subtitle,
+                            details: vec![format!("{} pages", page_count), "PDF".to_string()],
+                            handler_tag: "PDF (DOCUMENT)".to_string(),
                         };
                     }
                 }
@@ -1091,30 +1170,57 @@ pub fn guess_image_mime(p: &Path) -> String {
 
 pub fn extract_local_file_paths(text: &str) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
+    let home = std::env::var("HOME").ok();
 
-        let decoded = if let Some(stripped) = line.strip_prefix("file://") {
+    let resolve_str = |s: &str| -> Option<PathBuf> {
+        let clean = s.trim().trim_matches('"').trim_matches('\'');
+        if clean.is_empty() || clean.starts_with('#') {
+            return None;
+        }
+        let raw = if let Some(stripped) = clean.strip_prefix("file://") {
             percent_encoding::percent_decode_str(stripped)
                 .decode_utf8()
                 .ok()
                 .map(|s| s.into_owned())
-        } else if line.starts_with('/') {
-            Some(line.to_string())
+        } else if clean.starts_with('/') {
+            Some(clean.to_string())
+        } else if let Some(ref h) = home {
+            if let Some(rest) = clean.strip_prefix("~/") {
+                Some(format!("{}/{}", h, rest))
+            } else {
+                None
+            }
         } else {
             None
         };
 
-        if let Some(path_str) = decoded {
+        if let Some(path_str) = raw {
             let p = PathBuf::from(path_str);
             if p.exists() {
+                return Some(p);
+            }
+        }
+        None
+    };
+
+    for line in text.lines() {
+        if let Some(p) = resolve_str(line) {
+            if !paths.contains(&p) {
                 paths.push(p);
             }
         }
     }
+
+    if paths.is_empty() {
+        for token in text.split_whitespace() {
+            if let Some(p) = resolve_str(token) {
+                if !paths.contains(&p) {
+                    paths.push(p);
+                }
+            }
+        }
+    }
+
     paths
 }
 

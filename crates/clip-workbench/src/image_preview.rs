@@ -15,6 +15,7 @@ pub enum ImageToolMode {
     Transform,
     Palette,
     RemoveBg,
+    DepthMap,
 }
 
 impl ImageToolMode {
@@ -28,6 +29,7 @@ impl ImageToolMode {
             ImageToolMode::Transform => "🔄 Rotate & Flip",
             ImageToolMode::Palette => "🎨 Palette",
             ImageToolMode::RemoveBg => "✨ Remove BG",
+            ImageToolMode::DepthMap => "🌊 Depth Map",
         }
     }
 }
@@ -606,6 +608,7 @@ pub struct ImagePreviewState {
     pub bg_removal_status: Option<String>,
     pub bg_removal_error: Option<String>,
     pub bg_removal_cmd: Option<String>,
+    pub multimatte_prompt: String,
 }
 
 #[derive(Debug)]
@@ -726,6 +729,7 @@ impl ImagePreviewState {
             bg_removal_status: None,
             bg_removal_error: None,
             bg_removal_cmd: config.image.bg_removal_cmd.clone(),
+            multimatte_prompt: String::new(),
         })
     }
 
@@ -1169,21 +1173,42 @@ impl ImagePreviewState {
             found.unwrap_or_else(|| ("python3".to_string(), vec!["scripts/remove_bg.py".to_string()]))
         };
 
+        let prompt_opt = if !self.multimatte_prompt.trim().is_empty() {
+            Some(self.multimatte_prompt.trim().to_string())
+        } else {
+            None
+        };
+        let status_desc = if let Some(ref p) = prompt_opt {
+            format!("Segmenting '{}' with MultiMatte...", p)
+        } else {
+            "Starting FeyNoBg AI model...".to_string()
+        };
+
         let (tx, rx) = std::sync::mpsc::channel::<BgRemovalMsg>();
         self.bg_removal_rx = Some(rx);
         self.bg_removal_in_progress = true;
-        self.bg_removal_status = Some("Starting FeyNoBg AI model...".to_string());
+        self.bg_removal_status = Some(status_desc);
         self.bg_removal_error = None;
 
+        let thread_prompt = prompt_opt.clone();
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
             let tx_prog = tx.clone();
-            let _ = tx_prog.send(BgRemovalMsg::Progress("Invoking FeyNoBg neural network...".to_string()));
+            let init_msg = if let Some(ref p) = thread_prompt {
+                format!("Invoking MultiMatte for '{}'...", p)
+            } else {
+                "Invoking FeyNoBg neural network...".to_string()
+            };
+            let _ = tx_prog.send(BgRemovalMsg::Progress(init_msg));
 
-            let mut child = match Command::new(&cmd_bin)
-                .args(&cmd_args)
-                .arg("-")
-                .arg("-")
+            let mut cmd = Command::new(&cmd_bin);
+            cmd.args(&cmd_args);
+            if let Some(ref p) = thread_prompt {
+                cmd.arg("--prompt").arg(p);
+            }
+            cmd.arg("-").arg("-");
+
+            let mut child = match cmd
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
@@ -1220,6 +1245,101 @@ impl ImagePreviewState {
                 let _ = tx.send(BgRemovalMsg::Error(format!(
                     "Background removal failed (exit code {:?}):\n{}",
                     output.status.code(),
+                    err_str.trim()
+                )));
+                return;
+            }
+
+            let res_img = match image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png) {
+                Ok(dyn_img) => dyn_img.to_rgba8(),
+                Err(e) => {
+                    let _ = tx.send(BgRemovalMsg::Error(format!("Failed to decode output PNG: {}", e)));
+                    return;
+                }
+            };
+
+            let duration_ms = start.elapsed().as_millis();
+            let _ = tx.send(BgRemovalMsg::Success {
+                result_rgba: res_img,
+                duration_ms,
+            });
+        });
+    }
+
+    /// Runs AI depth estimation asynchronously using Depth-Anything / MiDaS.
+    pub fn run_depth_estimation(&mut self) {
+        if self.bg_removal_in_progress {
+            return;
+        }
+
+        if !self.redaction_state.boxes.is_empty() {
+            self.apply_redactions();
+        }
+
+        let base_img = self.current_display_image();
+        let mut png_bytes = Vec::new();
+        if let Err(e) = base_img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png) {
+            self.bg_removal_error = Some(format!("Failed to encode image to PNG: {}", e));
+            return;
+        }
+
+        let depth_script = "scripts/depth_estimation.py";
+        let (cmd_bin, cmd_args) = if std::path::Path::new(depth_script).exists() {
+            (depth_script.to_string(), Vec::new())
+        } else {
+            ("python3".to_string(), vec![depth_script.to_string()])
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel::<BgRemovalMsg>();
+        self.bg_removal_rx = Some(rx);
+        self.bg_removal_in_progress = true;
+        self.bg_removal_status = Some("Estimating depth map with Depth-Anything...".to_string());
+        self.bg_removal_error = None;
+
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let tx_prog = tx.clone();
+            let _ = tx_prog.send(BgRemovalMsg::Progress("Invoking depth estimation neural network...".to_string()));
+
+            let mut cmd = Command::new(&cmd_bin);
+            cmd.args(&cmd_args).arg("-").arg("-");
+
+            let mut child = match cmd
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(BgRemovalMsg::Error(format!(
+                        "Failed to launch depth estimation '{}': {}. Ensure Python environment is setup.",
+                        cmd_bin, e
+                    )));
+                    return;
+                }
+            };
+
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                if let Err(e) = stdin.write_all(&png_bytes) {
+                    let _ = tx.send(BgRemovalMsg::Error(format!("Failed to write image data to worker: {}", e)));
+                    return;
+                }
+            }
+
+            let output = match child.wait_with_output() {
+                Ok(o) => o,
+                Err(e) => {
+                    let _ = tx.send(BgRemovalMsg::Error(format!("Depth estimation process failed: {}", e)));
+                    return;
+                }
+            };
+
+            if !output.status.success() {
+                let err_str = String::from_utf8_lossy(&output.stderr);
+                let _ = tx.send(BgRemovalMsg::Error(format!(
+                    "Depth estimation failed:\n{}",
                     err_str.trim()
                 )));
                 return;
@@ -1684,25 +1804,30 @@ impl ImagePreviewState {
         if self.active_mode == ImageToolMode::RemoveBg && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             self.run_background_removal();
         }
-        if self.active_mode == ImageToolMode::Redact && !ctx.wants_keyboard_input() {
-            let del_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
-                || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace));
-            if del_pressed {
-                self.delete_selected_redaction();
+        if self.active_mode == ImageToolMode::DepthMap && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            self.run_depth_estimation();
+        }
+        if !ctx.wants_keyboard_input() {
+            if self.active_mode == ImageToolMode::Redact {
+                let del_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+                    || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace));
+                if del_pressed {
+                    self.delete_selected_redaction();
+                }
             }
-        }
-        if ui.input(|i| i.key_pressed(egui::Key::Num0) || i.key_pressed(egui::Key::F)) {
-            self.fit_to_view(ui.available_size());
-        }
-        if ui.input(|i| i.key_pressed(egui::Key::Num1)) {
-            self.zoom = 1.0;
-            self.pan = Vec2::ZERO;
-        }
-        if ui.input(|i| i.key_pressed(egui::Key::Equals) || i.key_pressed(egui::Key::Plus)) {
-            self.zoom = (self.zoom * 1.25).clamp(0.05, 50.0);
-        }
-        if ui.input(|i| i.key_pressed(egui::Key::Minus)) {
-            self.zoom = (self.zoom / 1.25).clamp(0.05, 50.0);
+            if ui.input(|i| i.key_pressed(egui::Key::Num0) || i.key_pressed(egui::Key::F)) {
+                self.fit_to_view(ui.available_size());
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Num1)) {
+                self.zoom = 1.0;
+                self.pan = Vec2::ZERO;
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Equals) || i.key_pressed(egui::Key::Plus)) {
+                self.zoom = (self.zoom * 1.25).clamp(0.05, 50.0);
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Minus)) {
+                self.zoom = (self.zoom / 1.25).clamp(0.05, 50.0);
+            }
         }
 
         // Poll background file size optimizer if running
@@ -1755,7 +1880,7 @@ impl ImagePreviewState {
                 // 2. TOOLBAR (Mode selection & Viewport controls)
                 self.render_toolbar(ui);
 
-                // 2b. Secondary tool-specific strip (Crop / Transforms / Redact / PickColor / Resize / Palette / RemoveBg)
+                // 2b. Secondary tool-specific strip (Crop / Transforms / Redact / PickColor / Resize / Palette / RemoveBg / DepthMap)
                 if self.active_mode == ImageToolMode::Crop {
                     ui.add_space(2.0);
                     self.render_crop_toolbar(ui);
@@ -1777,6 +1902,9 @@ impl ImagePreviewState {
                 } else if self.active_mode == ImageToolMode::RemoveBg {
                     ui.add_space(2.0);
                     self.render_remove_bg_toolbar(ui, ctx);
+                } else if self.active_mode == ImageToolMode::DepthMap {
+                    ui.add_space(2.0);
+                    self.render_depth_map_toolbar(ui, ctx);
                 }
 
                 ui.add_space(4.0);
@@ -1953,6 +2081,7 @@ impl ImagePreviewState {
                         ImageToolMode::Resize,
                         ImageToolMode::Palette,
                         ImageToolMode::RemoveBg,
+                        ImageToolMode::DepthMap,
                     ];
 
                     for mode in modes {
@@ -1974,7 +2103,13 @@ impl ImagePreviewState {
                         if resp.clicked() {
                             self.active_mode = mode;
                             match mode {
-                                ImageToolMode::View | ImageToolMode::Crop | ImageToolMode::Transform | ImageToolMode::Redact | ImageToolMode::PickColor => {}
+                                ImageToolMode::View
+                                | ImageToolMode::Crop
+                                | ImageToolMode::Transform
+                                | ImageToolMode::Redact
+                                | ImageToolMode::PickColor
+                                | ImageToolMode::RemoveBg
+                                | ImageToolMode::DepthMap => {}
                                 ImageToolMode::Resize => {
                                     self.resize_state.sync_from_image(&self.current_rgba);
                                 }
@@ -1982,9 +2117,6 @@ impl ImagePreviewState {
                                     if !self.palette_state.is_extracted || self.palette_state.extracted_colors.is_empty() {
                                         self.run_palette_extraction();
                                     }
-                                }
-                                _ => {
-                                    self.show_toast(format!("{} mode selected (active in upcoming phase)", mode.label()));
                                 }
                             }
                         }
@@ -2865,23 +2997,43 @@ impl ImagePreviewState {
                                 .color(Color32::from_rgb(192, 132, 252)),
                         );
                     } else {
+                        let has_prompt = !self.multimatte_prompt.trim().is_empty();
+                        let btn_text = if has_prompt {
+                            format!("✨ MultiMatte ('{}')", self.multimatte_prompt.trim())
+                        } else {
+                            "✨ Cut Out BG (Enter)".to_string()
+                        };
+
                         let cut_btn = egui::Button::new(
-                            egui::RichText::new("✨ Cut Out Background (Enter)")
+                            egui::RichText::new(btn_text)
                                 .small()
                                 .strong()
                                 .color(Color32::WHITE),
                         )
-                        .fill(Color32::from_rgb(126, 34, 206))
+                        .fill(if has_prompt { Color32::from_rgb(147, 51, 234) } else { Color32::from_rgb(126, 34, 206) })
                         .stroke(Stroke::new(1.0, Color32::from_rgb(192, 132, 252)))
                         .rounding(Rounding::same(4.0));
 
-                        if ui.add(cut_btn).on_hover_text("Execute AI background removal with FeyNoBg model (Enter)").clicked() {
+                        let tooltip = if has_prompt {
+                            "Execute prompt-guided concept segmentation with feyninc/multimatte (Enter)"
+                        } else {
+                            "Execute AI background removal with feyninc/FeyNobg model (Enter)"
+                        };
+
+                        if ui.add(cut_btn).on_hover_text(tooltip).clicked() {
                             self.run_background_removal();
                         }
 
+                        ui.add_space(4.0);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.multimatte_prompt)
+                                .hint_text("MultiMatte prompt (e.g. 'cat', 'person')...")
+                                .desired_width(180.0),
+                        );
+
                         ui.add_space(6.0);
                         ui.label(
-                            egui::RichText::new("feyninc/FeyNobg • 0.3B BiRefNet • CUDA Accelerated")
+                            egui::RichText::new("feyninc/FeyNoBg / MultiMatte • CUDA")
                                 .small()
                                 .color(Color32::from_rgb(148, 163, 184)),
                         );
@@ -2947,6 +3099,99 @@ impl ImagePreviewState {
             });
     }
 
+    fn render_depth_map_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.poll_bg_removal();
+        if self.bg_removal_in_progress {
+            ctx.request_repaint();
+        }
+
+        egui::Frame::none()
+            .fill(Color32::from_rgb(17, 24, 39))
+            .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(30, 58, 138)))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if self.bg_removal_in_progress {
+                        ui.add(egui::Spinner::new().size(16.0).color(Color32::from_rgb(96, 165, 250)));
+                        ui.add_space(6.0);
+                        let st = self.bg_removal_status.as_deref().unwrap_or("Estimating depth map with Depth-Anything...");
+                        ui.label(
+                            egui::RichText::new(st)
+                                .small()
+                                .monospace()
+                                .strong()
+                                .color(Color32::from_rgb(147, 197, 253)),
+                        );
+                    } else {
+                        let depth_btn = egui::Button::new(
+                            egui::RichText::new("🌊 Generate Depth Map (Enter)")
+                                .small()
+                                .strong()
+                                .color(Color32::from_rgb(238, 242, 255)),
+                        )
+                        .fill(Color32::from_rgb(30, 58, 138)) // Deep blue
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(96, 165, 250)))
+                        .rounding(Rounding::same(4.0));
+
+                        if ui.add(depth_btn).on_hover_text("Generate AI metric depth map with Depth-Anything V2 neural network (Enter)").clicked() {
+                            self.run_depth_estimation();
+                        }
+
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("Depth-Anything V2 • Metric Monocular Depth Estimation • CUDA")
+                                .small()
+                                .color(Color32::from_rgb(148, 163, 184)),
+                        );
+                    }
+
+                    if let Some(err) = &self.bg_removal_error {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(format!("⚠ {}", err))
+                                .small()
+                                .strong()
+                                .color(Color32::from_rgb(248, 113, 113)),
+                        );
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !self.undo_stack.is_empty() {
+                            let undo_btn = egui::Button::new(
+                                egui::RichText::new("⟲ Undo (Ctrl+Z)").small().strong().color(Color32::from_rgb(245, 158, 11)),
+                            )
+                            .fill(Color32::from_rgb(30, 41, 59))
+                            .rounding(Rounding::same(4.0));
+                            if ui.add(undo_btn).clicked() {
+                                self.undo();
+                            }
+                        }
+
+                        // Direct Slot Push buttons
+                        let push_rh = egui::Button::new(
+                            egui::RichText::new("📋 Slot: Right Hand").small().color(Color32::from_rgb(52, 211, 153)),
+                        )
+                        .fill(Color32::from_rgb(15, 23, 42))
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(16, 185, 129)))
+                        .rounding(Rounding::same(3.0));
+                        if ui.add(push_rh).on_hover_text("Push current depth map directly to Right Hand slot").clicked() {
+                            self.copy_to_hand_slot(HandSide::Right);
+                        }
+
+                        let push_lh = egui::Button::new(
+                            egui::RichText::new("📋 Slot: Left Hand").small().color(Color32::from_rgb(129, 140, 248)),
+                        )
+                        .fill(Color32::from_rgb(15, 23, 42))
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(99, 102, 241)))
+                        .rounding(Rounding::same(3.0));
+                        if ui.add(push_lh).on_hover_text("Push current depth map directly to Left Hand slot").clicked() {
+                            self.copy_to_hand_slot(HandSide::Left);
+                        }
+                    });
+                });
+            });
+    }
+
     fn render_viewport(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context) {
         let avail_size = ui.available_size() - Vec2::new(0.0, 32.0);
         if !self.auto_fitted && avail_size.x > 50.0 && avail_size.y > 50.0 {
@@ -2960,12 +3205,13 @@ impl ImagePreviewState {
         // Background canvas fill
         painter.rect_filled(canvas_rect, Rounding::same(6.0), Color32::from_rgb(12, 14, 20));
 
-        // Panning interaction (drag) when in View, Resize, Palette, or RemoveBg mode or middle-click dragged
+        // Panning interaction (drag) when in View, Resize, Palette, RemoveBg, or DepthMap mode or middle-click dragged
         let middle_drag = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
         let can_drag_pan = self.active_mode == ImageToolMode::View
             || self.active_mode == ImageToolMode::Resize
             || self.active_mode == ImageToolMode::Palette
-            || self.active_mode == ImageToolMode::RemoveBg;
+            || self.active_mode == ImageToolMode::RemoveBg
+            || self.active_mode == ImageToolMode::DepthMap;
         if (can_drag_pan && response.dragged()) || middle_drag {
             self.pan += response.drag_delta();
         }

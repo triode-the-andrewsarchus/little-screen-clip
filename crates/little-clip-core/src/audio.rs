@@ -140,6 +140,71 @@ impl FullAudioAnalysis {
         best_t
     }
 
+    /// Recompute transient detection points using an adjustable sensitivity factor (default: 1.0)
+    pub fn recompute_transients(&mut self, sensitivity: f32) {
+        if self.ch1_samples.is_empty() || self.sample_rate == 0 {
+            return;
+        }
+        let mixed: Vec<f32> = match &self.ch2_samples {
+            Some(ch2) => self
+                .ch1_samples
+                .iter()
+                .zip(ch2.iter())
+                .map(|(&a, &b)| (a + b) * 0.5)
+                .collect(),
+            None => self.ch1_samples.clone(),
+        };
+        self.transients = detect_transients_with_sensitivity(&mixed, self.sample_rate as f32, sensitivity);
+        self.is_transients_ready = true;
+    }
+
+    /// Finds the non-silent start and end boundary times (in seconds) based on threshold dB (e.g. -45.0 dB).
+    /// Returns Option<(start_sec, end_sec)>.
+    pub fn detect_silence_bounds(&self, threshold_db: f32) -> Option<(f32, f32)> {
+        if self.ch1_samples.is_empty() || self.sample_rate == 0 {
+            return None;
+        }
+        // Convert threshold_db to linear amplitude: 10^(threshold_db / 20)
+        let lin_thresh = 10.0f32.powf(threshold_db / 20.0);
+        let n = self.ch1_samples.len();
+        let mut first_frame = None;
+        let mut last_frame = None;
+
+        for i in 0..n {
+            let s1 = self.ch1_samples[i].abs();
+            let s2 = self.ch2_samples.as_ref().map(|ch2| ch2[i].abs()).unwrap_or(0.0);
+            if s1 >= lin_thresh || s2 >= lin_thresh {
+                first_frame = Some(i);
+                break;
+            }
+        }
+
+        let first = match first_frame {
+            Some(f) => f,
+            None => return None, // completely silent
+        };
+
+        for i in (first..n).rev() {
+            let s1 = self.ch1_samples[i].abs();
+            let s2 = self.ch2_samples.as_ref().map(|ch2| ch2[i].abs()).unwrap_or(0.0);
+            if s1 >= lin_thresh || s2 >= lin_thresh {
+                last_frame = Some(i);
+                break;
+            }
+        }
+
+        let last = last_frame.unwrap_or(first);
+        let sr = self.sample_rate as f32;
+        // Small 15ms padding so we don't chop abruptly into transients/release
+        let pad_frames = (0.015 * sr) as usize;
+        let start_frame = first.saturating_sub(pad_frames);
+        let end_frame = (last + pad_frames).min(n);
+
+        let start_sec = start_frame as f32 / sr;
+        let end_sec = end_frame as f32 / sr;
+        Some((start_sec, end_sec))
+    }
+
     #[inline]
     pub fn query_peaks(&self, ch: usize, start_frame: usize, end_frame: usize) -> (f32, f32, [u8; 3]) {
         if start_frame >= end_frame || start_frame >= self.total_frames {
@@ -844,6 +909,11 @@ pub fn detect_pitch_yin(samples: &[f32], sample_rate: f32) -> Option<(f32, f32)>
 /// Logarithmic spectral flux transient onset detector.
 /// Detects drum hits, attacks, and percussive transients across loud and quiet passages.
 pub fn detect_transients(samples: &[f32], sample_rate: f32) -> Vec<f32> {
+    detect_transients_with_sensitivity(samples, sample_rate, 1.0)
+}
+
+/// Logarithmic spectral flux transient onset detector with sensitivity control (0.1 .. 5.0, default 1.0).
+pub fn detect_transients_with_sensitivity(samples: &[f32], sample_rate: f32, sensitivity: f32) -> Vec<f32> {
     if samples.is_empty() || sample_rate <= 0.0 {
         return Vec::new();
     }
@@ -890,6 +960,7 @@ pub fn detect_transients(samples: &[f32], sample_rate: f32) -> Vec<f32> {
     let window_radius = 8;
     let mut transients = Vec::new();
     let mut last_transient_hop = 0usize;
+    let sens = sensitivity.clamp(0.05, 5.0);
 
     for k in 1..num_hops.saturating_sub(1) {
         let w_start = k.saturating_sub(window_radius);
@@ -899,7 +970,7 @@ pub fn detect_transients(samples: &[f32], sample_rate: f32) -> Vec<f32> {
         let median = local_vals[local_vals.len() / 2];
         let mean: f32 = local_vals.iter().sum::<f32>() / local_vals.len() as f32;
 
-        let threshold = median * 1.5 + mean * 0.4 + 0.15;
+        let threshold = (median * 1.5 + mean * 0.4 + 0.15) / sens;
 
         if odf[k] > threshold && odf[k] > odf[k - 1] && odf[k] >= odf[k + 1] {
             if transients.is_empty() || k.saturating_sub(last_transient_hop) >= min_interval_hops {
@@ -2273,5 +2344,78 @@ mod tests {
         println!("Overview peaks: {}", analysis.overview_peaks1.len());
         println!("Spectrogram RGBA bytes: {}", analysis.spectrogram_rgba.len());
         println!("Note strip info count: {}", analysis.note_strip_info.len());
+    }
+
+    #[test]
+    fn test_detect_silence_bounds() {
+        let sample_rate = 1000u32;
+        let mut samples = vec![0.0f32; 3000]; // 3 seconds total
+        // Add signal from 1.0s to 2.0s (frames 1000 to 2000)
+        for i in 1000..2000 {
+            samples[i] = 0.5;
+        }
+
+        let mut analysis = FullAudioAnalysis {
+            channels: 1,
+            sample_rate,
+            duration_ms: 3000,
+            total_frames: 3000,
+            ch1_samples: samples,
+            ch2_samples: None,
+            overview_peaks1: Vec::new(),
+            overview_peaks2: None,
+            peaks_lvl0_ch1: Vec::new(),
+            peaks_lvl0_ch2: None,
+            peaks_lvl1_ch1: Vec::new(),
+            peaks_lvl1_ch2: None,
+            peaks_lvl2_ch1: Vec::new(),
+            peaks_lvl2_ch2: None,
+            spectrogram_width: 10,
+            spectrogram_height: 10,
+            spectrogram_rgba: Vec::new(),
+            note_strip_width: 10,
+            note_strip_height: 10,
+            note_strip_rgba: Vec::new(),
+            note_strip_info: Vec::new(),
+            spectral_colors: Vec::new(),
+            transients: Vec::new(),
+            is_transients_ready: false,
+            is_spectrogram_ready: false,
+        };
+
+        let bounds = analysis.detect_silence_bounds(-45.0);
+        assert!(bounds.is_some());
+        let (start, end) = bounds.unwrap();
+        // Should detect start around 1.0s (accounting for 15ms padding = ~0.985s) and end around 2.0s (~2.015s)
+        assert!(start <= 1.0 && start >= 0.95);
+        assert!(end >= 1.99 && end <= 2.05);
+
+        // Entirely silent track should return None
+        analysis.ch1_samples = vec![0.0; 1000];
+        assert_eq!(analysis.detect_silence_bounds(-45.0), None);
+    }
+
+    #[test]
+    fn test_transient_sensitivity_scaling() {
+        let sample_rate = 44100.0;
+        let mut samples = vec![0.0f32; 44100 * 2]; // 2 seconds
+        // Create 4 distinct burst impulses
+        for idx in &[5000, 15000, 25000, 35000] {
+            for offset in 0..100 {
+                samples[idx + offset] = 0.9 * (1.0 - offset as f32 / 100.0);
+            }
+        }
+        // Create a minor subtle attack
+        for offset in 0..100 {
+            samples[45000 + offset] = 0.15 * (1.0 - offset as f32 / 100.0);
+        }
+
+        let normal = detect_transients_with_sensitivity(&samples, sample_rate, 1.0);
+        let highly_sensitive = detect_transients_with_sensitivity(&samples, sample_rate, 3.0);
+        let low_sensitive = detect_transients_with_sensitivity(&samples, sample_rate, 0.2);
+
+        // More sensitive should detect at least as many or more transients than lower sensitivity
+        assert!(highly_sensitive.len() >= normal.len());
+        assert!(normal.len() >= low_sensitive.len());
     }
 }

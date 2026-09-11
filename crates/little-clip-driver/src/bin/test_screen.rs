@@ -20,10 +20,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let frame = renderer.render_frame(&mgr)?;
     println!("Rendered frame ({} bytes) in {:?}", frame.len(), start_render.elapsed());
 
-    let start_send = Instant::now();
-    driver.send_frame(&frame)?;
-    println!("Sent frame over USB in {:?}", start_send.elapsed());
+    println!("Running 5 iterations at 500ms interval...");
+    for i in 0..5 {
+        let start_send = Instant::now();
+        match driver.send_frame(&frame) {
+            Ok(_) => println!("Sent frame {} in {:?}", i, start_send.elapsed()),
+            Err(e) => {
+                eprintln!("send_frame {} FAILED: {}", i, e);
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
 
-    println!("SUCCESS! Check the screen to verify image display!");
+    println!("Hardware test completed successfully!");
     Ok(())
 }

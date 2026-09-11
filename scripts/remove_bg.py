@@ -33,13 +33,20 @@ from PIL import Image
 from nobg import AutoModel
 
 
-def main():
-    if len(sys.argv) < 3:
-        sys.stderr.write("Usage: remove_bg.py <input_path|-> <output_path|->\n")
-        sys.exit(2)
+import argparse
 
-    input_arg = sys.argv[1]
-    output_arg = sys.argv[2]
+def main():
+    parser = argparse.ArgumentParser(description="AI Background Removal & MultiMatte Segmentation")
+    parser.add_argument("input", help="Path to input image, or '-' for stdin")
+    parser.add_argument("output", help="Path to output image, or '-' for stdout")
+    parser.add_argument("--prompt", "-p", default=None, help="Text concept prompt for MultiMatte segmentation (e.g. 'person', 'car', 'flower')")
+    parser.add_argument("--model", "-m", default=None, help="Specific model checkpoint (defaults to feyninc/multimatte if prompt given, else feyninc/FeyNobg)")
+
+    args = parser.parse_args()
+
+    input_arg = args.input
+    output_arg = args.output
+    prompt = args.prompt.strip() if args.prompt and args.prompt.strip() else None
 
     # 1. Read input image
     t_start = time.perf_counter()
@@ -65,22 +72,35 @@ def main():
     # Suppress verbose HF hub warnings
     os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 
-    model = AutoModel.from_pretrained("feyninc/FeyNobg")
+    if args.model:
+        model_name = args.model
+    elif prompt:
+        model_name = "feyninc/multimatte"
+    else:
+        model_name = "feyninc/FeyNobg"
+
+    model = AutoModel.from_pretrained(model_name)
     if use_cuda:
         model = model.to(device)
     model.eval()
 
     t_load = time.perf_counter() - t_load_start
 
-    # 3. Process image with FeyNoBg
+    # 3. Process image with FeyNoBg or MultiMatte
     t_infer_start = time.perf_counter()
     with torch.inference_mode():
-        cutout = model.process(image)
+        if prompt:
+            cutout = model.process(image, prompt=prompt, return_type="cutout")
+        else:
+            cutout = model.process(image)
         if use_cuda:
             torch.cuda.synchronize()
 
     t_infer = time.perf_counter() - t_infer_start
     t_total = time.perf_counter() - t_start
+
+    if isinstance(cutout, list):
+        cutout = cutout[0]
 
     # Ensure cutout matches original resolution
     if cutout.size != (orig_w, orig_h):
@@ -98,8 +118,9 @@ def main():
             os.makedirs(out_dir, exist_ok=True)
         cutout.save(output_arg, format="PNG")
 
+    tag = f"multimatte('{prompt}')" if prompt else "nobg"
     sys.stderr.write(
-        f"[nobg] Success: {orig_w}x{orig_h} on {device.upper()} (Load: {t_load*1000:.0f}ms, Infer: {t_infer*1000:.0f}ms, Total: {t_total*1000:.0f}ms)\n"
+        f"[{tag}] Success: {orig_w}x{orig_h} on {device.upper()} (Load: {t_load*1000:.0f}ms, Infer: {t_infer*1000:.0f}ms, Total: {t_total*1000:.0f}ms)\n"
     )
 
 

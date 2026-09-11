@@ -1,3 +1,10 @@
+IMMEDIATE:
+
+- Reduce number of R prior slots by 1, increase L prior by 1
+- Add ability to swap any two slots easily (drag and drop? Shortcut?)
+- Add matched auto-actions - trimming tracking from links as first option
+    - This needs to be easy to bypass, probably just automatically going to the undo slot.
+
 Goals:
 
 - More format preview support
@@ -7,29 +14,21 @@ Goals:
     - .stl preview
     - .pdf (first page)
 - Actually tying in with keybinds
-- Big picture preview (right click image, similar to audio)
-    - Cropping support
-    - Color picker (with magnification)
-    - Basic transforms (scale, rotate, flip)
-    - Resize to file-size (request target max size in Kb or Mb and format)
-    - format conversion (.png, .jpg, .webp)
+- format conversion (.png, .jpg, .webp) in big picture preview
 - big text previews (right click, very simple editor)
 - Text to image
 - Image to text (OCR)
 - Background removal
 - "Escape hatches"
     - Button to open audio in Audacity
-    - Images in Nomacs
     - PDF to Sioyek
     - Etc. ; configurable per type, with extension overrides (ie, set image, but able to add exception for webp or svg)
 - Background pre-process audio file, image diffing, etc. with high nice-ness
 
-
-
-
 future goals:
 
-- replace app launcher with per-task system with stupid fast nav
+- replace app launcher with per-task system with stupid fast navigation
+    - could type app name, but the point here is you can type what you want to do instead, and then get a easy, normal, and power-user tool list
 - Unfortunately, we probably need to re-invet the wheel and eat the file manager for this too
 - Meta, we might be able to make MCP/AI stuff for integration
 - Impliment some of the https://mahlet-inc.github.io/#displays visualizers

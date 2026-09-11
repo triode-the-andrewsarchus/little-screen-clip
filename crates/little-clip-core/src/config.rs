@@ -14,6 +14,56 @@ pub struct AppConfig {
     pub workbench: WorkbenchConfig,
     #[serde(default)]
     pub image: ImageConfig,
+    #[serde(default)]
+    pub slots: SlotsConfig,
+    #[serde(default)]
+    pub auto_actions: AutoActionsConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlotsConfig {
+    /// Number of prior history slots for Left Hand (default: 3)
+    #[serde(default = "default_left_priors")]
+    pub left_priors: usize,
+    /// Number of prior history slots for Right Hand (default: 1)
+    #[serde(default = "default_right_priors")]
+    pub right_priors: usize,
+}
+
+fn default_left_priors() -> usize {
+    3
+}
+
+fn default_right_priors() -> usize {
+    1
+}
+
+impl Default for SlotsConfig {
+    fn default() -> Self {
+        Self {
+            left_priors: default_left_priors(),
+            right_priors: default_right_priors(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoActionsConfig {
+    /// Automatically strip tracking query parameters (utm_*, fbclid, etc.) from copied URLs
+    #[serde(default = "default_true")]
+    pub trim_link_tracking: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for AutoActionsConfig {
+    fn default() -> Self {
+        Self {
+            trim_link_tracking: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +202,9 @@ pub struct AudioConfig {
     /// Optional specific capture device/sink name (default: None, captures @DEFAULT_SINK@)
     #[serde(default)]
     pub rolling_capture_device: Option<String>,
+    /// Preferred external audio editor escape hatch (e.g. "audacity"). Defaults to "audacity".
+    #[serde(default = "default_audio_editor")]
+    pub editor: String,
 }
 
 fn default_max_full_waveform_sec() -> u64 {
@@ -170,6 +223,10 @@ fn default_rolling_capture_enabled() -> bool {
     true
 }
 
+fn default_audio_editor() -> String {
+    "audacity".to_string()
+}
+
 impl Default for AudioConfig {
     fn default() -> Self {
         Self {
@@ -179,6 +236,7 @@ impl Default for AudioConfig {
             rolling_capture_duration_sec: 30,
             rolling_capture_enabled: true,
             rolling_capture_device: None,
+            editor: default_audio_editor(),
         }
     }
 }
@@ -241,6 +299,8 @@ pub struct ColorConfig {
     pub left_hand_border: String,
     pub left_prior1_border: String,
     pub left_prior2_border: String,
+    #[serde(default = "default_left_prior3_border")]
+    pub left_prior3_border: String,
     pub right_prior2_border: String,
     pub right_prior1_border: String,
     pub right_hand_border: String,
@@ -256,6 +316,10 @@ pub struct ColorConfig {
     pub debug_badge_text: String,
 }
 
+fn default_left_prior3_border() -> String {
+    "#38bdf8".to_string()
+}
+
 impl Default for ColorConfig {
     fn default() -> Self {
         Self {
@@ -268,6 +332,7 @@ impl Default for ColorConfig {
             left_hand_border: "#6366f1".to_string(),
             left_prior1_border: "#0ea5e9".to_string(),
             left_prior2_border: "#475569".to_string(),
+            left_prior3_border: default_left_prior3_border(),
             right_prior2_border: "#475569".to_string(),
             right_prior1_border: "#a855f7".to_string(),
             right_hand_border: "#10b981".to_string(),
@@ -292,6 +357,8 @@ impl Default for AppConfig {
             audio: AudioConfig::default(),
             workbench: WorkbenchConfig::default(),
             image: ImageConfig::default(),
+            slots: SlotsConfig::default(),
+            auto_actions: AutoActionsConfig::default(),
         }
     }
 }

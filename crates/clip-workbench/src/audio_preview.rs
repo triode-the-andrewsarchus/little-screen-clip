@@ -134,6 +134,8 @@ pub struct AudioPreviewState {
     pub active_multi_index: Option<usize>,
     pub snap_zero_crossings: bool,
     pub show_transients: bool,
+    pub transient_sensitivity: f32,
+    pub audio_editor: String,
     active_drag: Option<DragAction>,
     pub loop_selection: bool,
     last_seek_reload: Option<Instant>,
@@ -211,6 +213,8 @@ impl AudioPreviewState {
             active_multi_index: None,
             snap_zero_crossings: false,
             show_transients: false,
+            transient_sensitivity: 1.0,
+            audio_editor: "audacity".to_string(),
             active_drag: None,
             loop_selection: false,
             last_seek_reload: None,
@@ -221,6 +225,67 @@ impl AudioPreviewState {
             open_folder_after_save: true,
             browse_rx: None,
             preview_stop_time: None,
+        }
+    }
+
+    /// Trims leading and trailing silence on both sides by detecting signal boundaries and setting the active selection.
+    pub fn trim_silence(&mut self, threshold_db: f32, now: f64) {
+        let Some(ref analysis) = self.analysis else {
+            self.status_toast = Some(("⚠️ Audio analysis still loading...".to_string(), now));
+            return;
+        };
+        if let Some((start_sec, end_sec)) = analysis.detect_silence_bounds(threshold_db) {
+            let dur = end_sec - start_sec;
+            self.selection_mode = SelectionMode::Single;
+            self.selection = Some((start_sec, end_sec));
+            self.current_time_sec = start_sec;
+            self.status_toast = Some((
+                format!("✂ Trimmed silence: {:.2}s - {:.2}s ({:.2}s duration)", start_sec, end_sec, dur),
+                now,
+            ));
+        } else {
+            self.status_toast = Some((
+                format!("⚠️ No audio signal detected above silence threshold ({:.0}dB)", threshold_db),
+                now,
+            ));
+        }
+    }
+
+    pub fn with_editor(mut self, editor: String) -> Self {
+        if !editor.is_empty() {
+            self.audio_editor = editor;
+        }
+        self
+    }
+
+    /// Launches an external audio editor (e.g. Audacity) for the current file.
+    pub fn launch_external_audio_editor(&mut self, ctx: &egui::Context, close_requested: &mut bool) {
+        let editor = if self.audio_editor.is_empty() {
+            "audacity"
+        } else {
+            &self.audio_editor
+        };
+        let mut cmd = std::process::Command::new(editor);
+        cmd.arg(&self.path);
+        match cmd.spawn() {
+            Ok(_) => {
+                let filename = self.path.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "file".to_string());
+                self.status_toast = Some((
+                    format!("🚀 Opened {} in {}", filename, editor),
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64(),
+                ));
+                self.stop();
+                *close_requested = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Err(e) => {
+                self.status_toast = Some((
+                    format!("⚠️ Failed to launch '{}': {}", editor, e),
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64(),
+                ));
+            }
         }
     }
 
@@ -1390,6 +1455,25 @@ impl AudioPreviewState {
                         *close_requested = true;
                     }
 
+                    ui.add_space(6.0);
+
+                    let audacity_label = format!("🔊 {}", if self.audio_editor.is_empty() { "Audacity" } else { &self.audio_editor });
+                    let audacity_btn = egui::Button::new(
+                        egui::RichText::new(audacity_label)
+                            .small()
+                            .strong()
+                            .color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(30, 58, 138))
+                    .stroke(Stroke::new(1.0, Color32::from_rgb(96, 165, 250)))
+                    .rounding(Rounding::same(6.0));
+
+                    if ui.add(audacity_btn).on_hover_text(format!("Open audio file in external editor ({})", self.audio_editor)).clicked() {
+                        self.launch_external_audio_editor(ctx, close_requested);
+                    }
+
+                    ui.add_space(8.0);
+
                     if let Some((msg, ts)) = &self.status_toast {
                         if now - ts < 4.5 {
                             ui.label(
@@ -1585,8 +1669,42 @@ impl AudioPreviewState {
                             now,
                         ));
                     }
+
+                    // Transient sensitivity slider
+                    if self.show_transients {
+                        ui.add_space(4.0);
+                        let sens_slider = egui::Slider::new(&mut self.transient_sensitivity, 0.1..=3.0)
+                            .step_by(0.1)
+                            .text("Sens")
+                            .show_value(true);
+                        if ui.add(sens_slider).on_hover_text("Adjust transient onset sensitivity (0.1 = sharp beats only, 3.0 = all soft attacks)").changed() {
+                            if let Some(ref mut analysis) = self.analysis {
+                                analysis.recompute_transients(self.transient_sensitivity);
+                                self.status_toast = Some((
+                                    format!("⚡ Sensitivity {:.1}x ({} transients detected)", self.transient_sensitivity, analysis.transients.len()),
+                                    now,
+                                ));
+                            }
+                        }
+                    }
                 } else {
                     ui.add_enabled(false, trans_btn).on_hover_text("Audio transients are currently being analyzed in background...");
+                }
+
+                ui.add_space(8.0);
+
+                // Trim Silence Button
+                let trim_btn = egui::Button::new(
+                    egui::RichText::new("✂ Trim Silence")
+                        .small()
+                        .strong()
+                        .color(Color32::from_rgb(203, 213, 225)),
+                )
+                .fill(Color32::from_rgb(30, 41, 59))
+                .stroke(Stroke::new(1.0, Color32::from_rgb(71, 85, 105)))
+                .rounding(Rounding::same(4.0));
+                if ui.add(trim_btn).on_hover_text("Trim silence (< -45 dB) from both leading and trailing sides").clicked() {
+                    self.trim_silence(-45.0, now);
                 }
 
                 ui.add_space(10.0);

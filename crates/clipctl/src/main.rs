@@ -311,6 +311,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 print_slot(SlotId::LeftHand, mgr.get(SlotId::LeftHand));
                 print_slot(SlotId::LeftPrior1, mgr.get(SlotId::LeftPrior1));
                 print_slot(SlotId::LeftPrior2, mgr.get(SlotId::LeftPrior2));
+                print_slot(SlotId::LeftPrior3, mgr.get(SlotId::LeftPrior3));
                 print_slot(SlotId::RightPrior2, mgr.get(SlotId::RightPrior2));
                 print_slot(SlotId::RightPrior1, mgr.get(SlotId::RightPrior1));
                 print_slot(SlotId::RightHand, mgr.get(SlotId::RightHand));
@@ -363,6 +364,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("<EMPTY>");
                 }
             }
+            IpcResponse::AutoActions(actions) => {
+                println!("{}", "=== AUTO-ACTIONS ===".cyan().bold());
+                for (k, v) in actions {
+                    let st = if v { "ENABLED".green().bold() } else { "DISABLED".yellow() };
+                    println!("  {} : {}", k.bold(), st);
+                }
+            }
             IpcResponse::Error { error } => {
                 eprintln!("{}: {}", "Error".red().bold(), error);
                 std::process::exit(1);
@@ -379,7 +387,7 @@ fn print_slot(slot: SlotId, item: Option<&little_clip_core::ClipItem>) {
     let lbl_str = match slot {
         SlotId::Undo => format!("[{:^10}]", slot.label()).bold().yellow(),
         SlotId::LeftHand => format!("[{:^10}]", slot.label()).bold().bright_magenta(),
-        SlotId::LeftPrior1 | SlotId::LeftPrior2 => format!("[{:^10}]", slot.label()).bold().bright_cyan(),
+        SlotId::LeftPrior1 | SlotId::LeftPrior2 | SlotId::LeftPrior3 => format!("[{:^10}]", slot.label()).bold().bright_cyan(),
         SlotId::RightPrior2 | SlotId::RightPrior1 => format!("[{:^10}]", slot.label()).bold().bright_blue(),
         SlotId::RightHand => format!("[{:^10}]", slot.label()).bold().bright_green(),
     };

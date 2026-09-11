@@ -7,18 +7,20 @@ pub enum SlotId {
     LeftHand,
     LeftPrior1,
     LeftPrior2,
+    LeftPrior3,
     RightPrior2,
     RightPrior1,
     RightHand,
 }
 
 impl SlotId {
-    pub fn all() -> [SlotId; 7] {
+    pub fn all() -> [SlotId; 8] {
         [
             SlotId::Undo,
             SlotId::LeftHand,
             SlotId::LeftPrior1,
             SlotId::LeftPrior2,
+            SlotId::LeftPrior3,
             SlotId::RightPrior2,
             SlotId::RightPrior1,
             SlotId::RightHand,
@@ -31,6 +33,7 @@ impl SlotId {
             SlotId::LeftHand => "LEFT HAND",
             SlotId::LeftPrior1 => "L PRIOR(1)",
             SlotId::LeftPrior2 => "L PRIOR(2)",
+            SlotId::LeftPrior3 => "L PRIOR(3)",
             SlotId::RightPrior2 => "R PRIOR(2)",
             SlotId::RightPrior1 => "R PRIOR(1)",
             SlotId::RightHand => "RIGHT HAND",
@@ -43,6 +46,7 @@ impl SlotId {
             SlotId::LeftHand => "LH",
             SlotId::LeftPrior1 => "LP1",
             SlotId::LeftPrior2 => "LP2",
+            SlotId::LeftPrior3 => "LP3",
             SlotId::RightPrior2 => "RP2",
             SlotId::RightPrior1 => "RP1",
             SlotId::RightHand => "RH",
@@ -55,6 +59,7 @@ impl SlotId {
             "left" | "lh" | "lefthand" | "l" => Some(SlotId::LeftHand),
             "lp1" | "l1" | "leftprior1" | "left1" => Some(SlotId::LeftPrior1),
             "lp2" | "l2" | "leftprior2" | "left2" => Some(SlotId::LeftPrior2),
+            "lp3" | "l3" | "leftprior3" | "left3" => Some(SlotId::LeftPrior3),
             "rp2" | "r2" | "rightprior2" | "right2" => Some(SlotId::RightPrior2),
             "rp1" | "r1" | "rightprior1" | "right1" => Some(SlotId::RightPrior1),
             "right" | "rh" | "righthand" | "r" => Some(SlotId::RightHand),
@@ -81,6 +86,7 @@ pub struct SlotManager {
     pub left_hand: Option<ClipItem>,
     pub left_prior1: Option<ClipItem>,
     pub left_prior2: Option<ClipItem>,
+    pub left_prior3: Option<ClipItem>,
     pub right_prior2: Option<ClipItem>,
     pub right_prior1: Option<ClipItem>,
     pub right_hand: Option<ClipItem>,
@@ -95,6 +101,7 @@ impl Default for SlotManager {
             left_hand: None,
             left_prior1: None,
             left_prior2: None,
+            left_prior3: None,
             right_prior2: None,
             right_prior1: None,
             right_hand: None,
@@ -115,6 +122,7 @@ impl SlotManager {
             SlotId::LeftHand => self.left_hand.as_ref(),
             SlotId::LeftPrior1 => self.left_prior1.as_ref(),
             SlotId::LeftPrior2 => self.left_prior2.as_ref(),
+            SlotId::LeftPrior3 => self.left_prior3.as_ref(),
             SlotId::RightPrior2 => self.right_prior2.as_ref(),
             SlotId::RightPrior1 => self.right_prior1.as_ref(),
             SlotId::RightHand => self.right_hand.as_ref(),
@@ -127,6 +135,7 @@ impl SlotManager {
             SlotId::LeftHand => Some(&mut self.left_hand),
             SlotId::LeftPrior1 => Some(&mut self.left_prior1),
             SlotId::LeftPrior2 => Some(&mut self.left_prior2),
+            SlotId::LeftPrior3 => Some(&mut self.left_prior3),
             SlotId::RightPrior2 => Some(&mut self.right_prior2),
             SlotId::RightPrior1 => Some(&mut self.right_prior1),
             SlotId::RightHand => Some(&mut self.right_hand),
@@ -150,11 +159,13 @@ impl SlotManager {
     }
 
     /// Pushes a new item into Left Hand.
-    /// Moves current left_prior1 to left_prior2,
+    /// Moves current left_prior2 to left_prior3,
+    /// moves current left_prior1 to left_prior2,
     /// moves current left_hand to left_prior1,
     /// and places item into left_hand.
     /// Note: UNDO is NOT modified during normal copying/pushing.
     pub fn push_left(&mut self, item: ClipItem) {
+        self.left_prior3 = self.left_prior2.take();
         self.left_prior2 = self.left_prior1.take();
         self.left_prior1 = self.left_hand.take();
         self.left_hand = Some(item);
@@ -245,6 +256,7 @@ impl SlotManager {
             &mut self.left_hand,
             &mut self.left_prior1,
             &mut self.left_prior2,
+            &mut self.left_prior3,
             &mut self.right_prior2,
             &mut self.right_prior1,
             &mut self.right_hand,

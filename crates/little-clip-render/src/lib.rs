@@ -168,11 +168,19 @@ impl ScreenRenderer {
         // 4. [L prior(2)] (x: 840, w: 240)
         self.draw_slot_card(&mut pixmap, manager, SlotId::LeftPrior2, 840, 0, 240, SCREEN_HEIGHT, false);
 
-        // 5. [R prior(2)] (x: 1080, w: 240)
-        self.draw_slot_card(&mut pixmap, manager, SlotId::RightPrior2, 1080, 0, 240, SCREEN_HEIGHT, false);
+        if self.config.slots.left_priors >= 3 {
+            // 5. [L prior(3)] (x: 1080, w: 240)
+            self.draw_slot_card(&mut pixmap, manager, SlotId::LeftPrior3, 1080, 0, 240, SCREEN_HEIGHT, false);
 
-        // 6. [R prior(1)] (x: 1320, w: 240)
-        self.draw_slot_card(&mut pixmap, manager, SlotId::RightPrior1, 1320, 0, 240, SCREEN_HEIGHT, false);
+            // 6. [R prior(1)] (x: 1320, w: 240)
+            self.draw_slot_card(&mut pixmap, manager, SlotId::RightPrior1, 1320, 0, 240, SCREEN_HEIGHT, false);
+        } else {
+            // 5. [R prior(2)] (x: 1080, w: 240)
+            self.draw_slot_card(&mut pixmap, manager, SlotId::RightPrior2, 1080, 0, 240, SCREEN_HEIGHT, false);
+
+            // 6. [R prior(1)] (x: 1320, w: 240)
+            self.draw_slot_card(&mut pixmap, manager, SlotId::RightPrior1, 1320, 0, 240, SCREEN_HEIGHT, false);
+        }
 
         // 7. [Right hand] (x: 1560, w: 360) - Hero Right
         self.draw_slot_card(&mut pixmap, manager, SlotId::RightHand, 1560, 0, 360, SCREEN_HEIGHT, true);
@@ -200,18 +208,17 @@ impl ScreenRenderer {
                 stroke.width = 1.5;
                 let path = PathBuilder::from_rect(br);
                 pixmap.stroke_path(&path, &stroke_paint, &stroke, Transform::identity(), None);
-            }
 
-            let (txt_r, txt_g, txt_b, txt_a) = parse_hex_color(&self.config.colors.debug_badge_text);
-            self.draw_text(
-                &mut pixmap,
-                &handler_text,
-                badge_x + 12.0,
-                badge_y + 4.0,
-                18.0,
-                Color::from_rgba8(txt_r, txt_g, txt_b, txt_a),
-                true,
-            );
+                self.draw_text(
+                    &mut pixmap,
+                    &handler_text,
+                    badge_x + 14.0,
+                    badge_y + 22.0,
+                    14.0,
+                    Color::from_rgba8(str_r, str_g, str_b, str_a),
+                    true,
+                );
+            }
         }
 
         Ok(pixmap)
@@ -232,6 +239,7 @@ impl ScreenRenderer {
         self.encode_jpeg(&pixmap)
     }
 
+    /// Draws a single slot card on the canvas with rounded header, status badges, and content previews.
     fn draw_slot_card(
         &self,
         pixmap: &mut Pixmap,
@@ -243,30 +251,27 @@ impl ScreenRenderer {
         h: u32,
         is_hero: bool,
     ) {
-        let pad = 6.0;
-        let rect_x = x as f32 + pad;
-        let rect_y = y as f32 + pad;
-        let rect_w = w as f32 - pad * 2.0;
-        let rect_h = h as f32 - pad * 2.0;
-
-        let is_selected = manager.selected.contains(&slot_id);
         let is_cursor = manager.cursor == slot_id;
+        let is_selected = manager.selected.contains(&slot_id);
 
-        // Card background fill
-        let bg_hex = if is_hero {
-            &self.config.colors.hero_card_bg
-        } else if slot_id == SlotId::Undo {
-            &self.config.colors.undo_card_bg
-        } else {
-            &self.config.colors.prior_card_bg
-        };
-        let (bg_r, bg_g, bg_b, bg_a) = parse_hex_color(bg_hex);
-        let bg_color = Color::from_rgba8(bg_r, bg_g, bg_b, bg_a);
+        let margin = 4.0;
+        let rect_x = x as f32 + margin;
+        let rect_y = y as f32 + margin;
+        let rect_w = w as f32 - (margin * 2.0);
+        let rect_h = h as f32 - (margin * 2.0);
 
-        let card_rect = Rect::from_xywh(rect_x, rect_y, rect_w, rect_h);
-        if let Some(cr) = card_rect {
+        // Fill background
+        if let Some(cr) = Rect::from_xywh(rect_x, rect_y, rect_w, rect_h) {
+            let bg_hex = match slot_id {
+                SlotId::Undo => &self.config.colors.undo_card_bg,
+                SlotId::LeftHand | SlotId::RightHand => &self.config.colors.hero_card_bg,
+                SlotId::LeftPrior1 | SlotId::LeftPrior2 | SlotId::LeftPrior3 | SlotId::RightPrior2 | SlotId::RightPrior1 => {
+                    &self.config.colors.prior_card_bg
+                }
+            };
+            let (bg_r, bg_g, bg_b, bg_a) = parse_hex_color(bg_hex);
             let mut paint = Paint::default();
-            paint.set_color(bg_color);
+            paint.set_color(Color::from_rgba8(bg_r, bg_g, bg_b, bg_a));
             pixmap.fill_rect(cr, &paint, Transform::identity(), None);
 
             // Card Border
@@ -280,6 +285,7 @@ impl ScreenRenderer {
                     SlotId::LeftHand => &self.config.colors.left_hand_border,
                     SlotId::LeftPrior1 => &self.config.colors.left_prior1_border,
                     SlotId::LeftPrior2 => &self.config.colors.left_prior2_border,
+                    SlotId::LeftPrior3 => &self.config.colors.left_prior3_border,
                     SlotId::RightPrior2 => &self.config.colors.right_prior2_border,
                     SlotId::RightPrior1 => &self.config.colors.right_prior1_border,
                     SlotId::RightHand => &self.config.colors.right_hand_border,
@@ -312,6 +318,7 @@ impl ScreenRenderer {
                 SlotId::LeftHand => &self.config.colors.left_hand_border,
                 SlotId::LeftPrior1 => &self.config.colors.left_prior1_border,
                 SlotId::LeftPrior2 => &self.config.colors.left_prior2_border,
+                SlotId::LeftPrior3 => &self.config.colors.left_prior3_border,
                 SlotId::RightPrior2 => &self.config.colors.right_prior2_border,
                 SlotId::RightPrior1 => &self.config.colors.right_prior1_border,
                 SlotId::RightHand => &self.config.colors.right_hand_border,
@@ -327,6 +334,7 @@ impl ScreenRenderer {
             SlotId::LeftHand => &self.config.colors.left_hand_border,
             SlotId::LeftPrior1 => &self.config.colors.left_prior1_border,
             SlotId::LeftPrior2 => &self.config.colors.left_prior2_border,
+            SlotId::LeftPrior3 => &self.config.colors.left_prior3_border,
             SlotId::RightPrior2 => &self.config.colors.right_prior2_border,
             SlotId::RightPrior1 => &self.config.colors.right_prior1_border,
             SlotId::RightHand => &self.config.colors.right_hand_border,
@@ -594,43 +602,55 @@ impl ScreenRenderer {
                 );
             }
             ClipPayload::FileBatch(files) => {
-                if files.len() == 1 && little_clip_core::syntax::is_code_file(&files[0]) {
+                if files.len() == 1 {
                     let p = &files[0];
-                    if let Ok(file_content) = std::fs::read_to_string(p) {
-                        let ext = p.extension().and_then(|s| s.to_str());
-                        self.draw_text_preview(
-                            pixmap,
-                            &file_content,
-                            ext,
-                            rx,
-                            ry,
-                            rw,
-                            rh,
-                            is_hero,
-                            elision_color,
-                        );
-                    } else {
-                        self.draw_text(
-                            pixmap,
-                            &format!("FILES: {}", files.len()),
-                            rx + 16.0,
-                            ry + 130.0,
-                            26.0,
-                            Color::from_rgba8(250, 204, 21, 255),
-                            true,
-                        );
+                    if p.is_file() && little_clip_ops::is_spreadsheet_file(p) {
+                        if let Ok(sheet_data) = little_clip_ops::load_spreadsheet(p) {
+                            if let Some(first_sheet) = sheet_data.sheets.first() {
+                                self.draw_spreadsheet_card(pixmap, &sheet_data.title, first_sheet, rx, ry, rw, rh, is_hero);
+                                return;
+                            }
+                        }
                     }
-                } else {
-                    self.draw_text(
-                        pixmap,
-                        &format!("FILES: {}", files.len()),
-                        rx + 16.0,
-                        ry + 130.0,
-                        26.0,
-                        Color::from_rgba8(250, 204, 21, 255),
-                        true,
-                    );
+                    if p.is_file() && (p.extension().and_then(|s| s.to_str()).map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")).unwrap_or(false)) {
+                        if let Ok(midi_data) = little_clip_ops::MidiData::parse_file(p) {
+                            self.draw_midi_card(pixmap, &midi_data, rx, ry, rw, rh, is_hero);
+                            return;
+                        }
+                    }
+                    if p.is_file() && little_clip_ops::is_stl_file(p) {
+                        if let Ok(stl_mesh) = little_clip_ops::StlMesh::parse_file(p) {
+                            self.draw_stl_card(pixmap, &stl_mesh, rx, ry, rw, rh, is_hero);
+                            return;
+                        }
+                    }
+                    if little_clip_core::syntax::is_code_file(p) {
+                        if let Ok(file_content) = std::fs::read_to_string(p) {
+                            let ext = p.extension().and_then(|s| s.to_str());
+                            self.draw_text_preview(
+                                pixmap,
+                                &file_content,
+                                ext,
+                                rx,
+                                ry,
+                                rw,
+                                rh,
+                                is_hero,
+                                elision_color,
+                            );
+                            return;
+                        }
+                    }
                 }
+                self.draw_text(
+                    pixmap,
+                    &format!("FILES: {}", files.len()),
+                    rx + 16.0,
+                    ry + 130.0,
+                    26.0,
+                    Color::from_rgba8(250, 204, 21, 255),
+                    true,
+                );
             }
             ClipPayload::Directory(_) => {
                 self.draw_text(
@@ -1811,6 +1831,739 @@ impl ScreenRenderer {
         }
     }
 
+    fn draw_pill_badge(
+        &self,
+        pixmap: &mut Pixmap,
+        badge_text: &str,
+        x: f32,
+        y: f32,
+        size: f32,
+        text_color: Color,
+        bg_color: Color,
+        clip_right: f32,
+    ) {
+        // Strip emojis that lack font glyphs to prevent missing glyph open boxes (▯)
+        let clean_text = badge_text
+            .trim_start_matches(|c: char| !c.is_ascii_alphanumeric() && c != '[' && c != '(' && c != '#')
+            .trim();
+        let font_size = size;
+        let pad_x = 8.0;
+        let pad_y = 3.0;
+        let text_w = self.measure_text_width(clean_text, font_size, true);
+        let badge_w = text_w + pad_x * 2.0;
+        let badge_h = font_size + pad_y * 2.0 + 2.0;
+
+        if let Some(rect) = Rect::from_xywh(x, y, badge_w.min(clip_right - x), badge_h) {
+            let mut paint = Paint::default();
+            paint.set_color(bg_color);
+            pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+        }
+
+        self.draw_text_clipped(
+            pixmap,
+            clean_text,
+            x + pad_x,
+            y + pad_y - 1.0,
+            font_size,
+            text_color,
+            true,
+            clip_right,
+        );
+    }
+
+    fn draw_unit_conversion_card(
+        &self,
+        pixmap: &mut Pixmap,
+        conv: &little_clip_ops::UnitConversion,
+        rx: f32,
+        ry: f32,
+        rw: f32,
+        _rh: f32,
+        is_hero: bool,
+    ) {
+        let content_x = rx + 14.0;
+        let clip_right = rx + rw - 10.0;
+        let mut y = ry + 124.0;
+
+        self.draw_pill_badge(
+            pixmap,
+            "UNIT CONVERSION",
+            content_x,
+            y,
+            14.0,
+            Color::from_rgba8(52, 211, 153, 255),
+            Color::from_rgba8(6, 78, 59, 230),
+            clip_right,
+        );
+        y += 28.0;
+
+        self.draw_text_clipped(
+            pixmap,
+            &format!("Input: {}", conv.original),
+            content_x,
+            y,
+            if is_hero { 18.0 } else { 15.0 },
+            Color::from_rgba8(148, 163, 184, 255),
+            false,
+            clip_right,
+        );
+        y += 24.0;
+
+        self.draw_text_clipped(
+            pixmap,
+            &conv.primary_conversion,
+            content_x,
+            y,
+            if is_hero { 24.0 } else { 20.0 },
+            Color::from_rgba8(255, 255, 255, 255),
+            true,
+            clip_right,
+        );
+        y += if is_hero { 32.0 } else { 28.0 };
+
+        if let Some(ref sec) = conv.secondary_conversion {
+            self.draw_text_clipped(
+                pixmap,
+                &format!("≈ {}", sec),
+                content_x,
+                y,
+                if is_hero { 18.0 } else { 15.0 },
+                Color::from_rgba8(56, 189, 248, 255),
+                false,
+                clip_right,
+            );
+            y += 26.0;
+        }
+
+        if let Some(ref rot) = conv.rule_of_thumb {
+            self.draw_text_clipped(
+                pixmap,
+                &format!("* {}", rot),
+                content_x,
+                y,
+                if is_hero { 16.0 } else { 13.0 },
+                Color::from_rgba8(251, 191, 36, 255),
+                false,
+                clip_right,
+            );
+        }
+    }
+
+    fn draw_network_preview_card(
+        &self,
+        pixmap: &mut Pixmap,
+        net: &little_clip_ops::NetworkPreview,
+        rx: f32,
+        ry: f32,
+        rw: f32,
+        _rh: f32,
+        is_hero: bool,
+    ) {
+        let content_x = rx + 14.0;
+        let clip_right = rx + rw - 10.0;
+        let mut y = ry + 124.0;
+
+        match net {
+            little_clip_ops::NetworkPreview::Ip { ip, rfc_class, description, ping_status } => {
+                self.draw_pill_badge(
+                    pixmap,
+                    "IP ADDRESS",
+                    content_x,
+                    y,
+                    14.0,
+                    Color::from_rgba8(56, 189, 248, 255),
+                    Color::from_rgba8(12, 74, 110, 230),
+                    clip_right,
+                );
+                y += 28.0;
+
+                self.draw_text_clipped(
+                    pixmap,
+                    &ip.to_string(),
+                    content_x,
+                    y,
+                    if is_hero { 24.0 } else { 20.0 },
+                    Color::from_rgba8(255, 255, 255, 255),
+                    true,
+                    clip_right,
+                );
+                y += if is_hero { 32.0 } else { 28.0 };
+
+                self.draw_text_clipped(
+                    pixmap,
+                    rfc_class,
+                    content_x,
+                    y,
+                    if is_hero { 17.0 } else { 14.0 },
+                    Color::from_rgba8(167, 139, 250, 255),
+                    true,
+                    clip_right,
+                );
+                y += 24.0;
+
+                if let Some(desc) = description {
+                    self.draw_text_clipped(
+                        pixmap,
+                        desc,
+                        content_x,
+                        y,
+                        if is_hero { 15.0 } else { 13.0 },
+                        Color::from_rgba8(148, 163, 184, 255),
+                        false,
+                        clip_right,
+                    );
+                    y += 24.0;
+                }
+
+                if let Some(ping) = ping_status {
+                    let is_online = ping.starts_with("Online");
+                    let ping_col = if is_online {
+                        Color::from_rgba8(52, 211, 153, 255)
+                    } else {
+                        Color::from_rgba8(248, 113, 113, 255)
+                    };
+                    self.draw_text_clipped(
+                        pixmap,
+                        &format!("Ping: {}", ping),
+                        content_x,
+                        y,
+                        if is_hero { 16.0 } else { 14.0 },
+                        ping_col,
+                        true,
+                        clip_right,
+                    );
+                }
+            }
+            little_clip_ops::NetworkPreview::Mac { formatted, vendor, mac_type } => {
+                self.draw_pill_badge(
+                    pixmap,
+                    "MAC ADDRESS",
+                    content_x,
+                    y,
+                    14.0,
+                    Color::from_rgba8(129, 140, 248, 255),
+                    Color::from_rgba8(30, 27, 75, 230),
+                    clip_right,
+                );
+                y += 28.0;
+
+                self.draw_text_clipped(
+                    pixmap,
+                    formatted,
+                    content_x,
+                    y,
+                    if is_hero { 22.0 } else { 18.0 },
+                    Color::from_rgba8(255, 255, 255, 255),
+                    true,
+                    clip_right,
+                );
+                y += if is_hero { 32.0 } else { 28.0 };
+
+                self.draw_text_clipped(
+                    pixmap,
+                    &format!("Vendor: {}", vendor),
+                    content_x,
+                    y,
+                    if is_hero { 17.0 } else { 14.0 },
+                    Color::from_rgba8(56, 189, 248, 255),
+                    true,
+                    clip_right,
+                );
+                y += 24.0;
+
+                self.draw_text_clipped(
+                    pixmap,
+                    mac_type,
+                    content_x,
+                    y,
+                    if is_hero { 15.0 } else { 13.0 },
+                    Color::from_rgba8(148, 163, 184, 255),
+                    false,
+                    clip_right,
+                );
+            }
+        }
+    }
+
+    fn draw_timestamp_card(
+        &self,
+        pixmap: &mut Pixmap,
+        ts: &little_clip_ops::TimestampPreview,
+        rx: f32,
+        ry: f32,
+        rw: f32,
+        _rh: f32,
+        is_hero: bool,
+    ) {
+        let content_x = rx + 14.0;
+        let clip_right = rx + rw - 10.0;
+        let mut y = ry + 124.0;
+
+        self.draw_pill_badge(
+            pixmap,
+            "TIMESTAMP",
+            content_x,
+            y,
+            14.0,
+            Color::from_rgba8(251, 191, 36, 255),
+            Color::from_rgba8(120, 53, 15, 230),
+            clip_right,
+        );
+        y += 28.0;
+
+        self.draw_text_clipped(
+            pixmap,
+            &ts.human_readable,
+            content_x,
+            y,
+            if is_hero { 20.0 } else { 16.0 },
+            Color::from_rgba8(255, 255, 255, 255),
+            true,
+            clip_right,
+        );
+        y += if is_hero { 28.0 } else { 24.0 };
+
+        self.draw_text_clipped(
+            pixmap,
+            &format!("Relative: {}", ts.relative),
+            content_x,
+            y,
+            if is_hero { 17.0 } else { 14.0 },
+            Color::from_rgba8(52, 211, 153, 255),
+            true,
+            clip_right,
+        );
+        y += 24.0;
+
+        self.draw_text_clipped(
+            pixmap,
+            &format!("UTC: {}", ts.utc_iso),
+            content_x,
+            y,
+            if is_hero { 15.0 } else { 13.0 },
+            Color::from_rgba8(148, 163, 184, 255),
+            false,
+            clip_right,
+        );
+        y += 24.0;
+
+        self.draw_text_clipped(
+            pixmap,
+            &format!("Epoch: {} ({})", ts.epoch_sec, ts.day_info),
+            content_x,
+            y,
+            if is_hero { 15.0 } else { 13.0 },
+            Color::from_rgba8(148, 163, 184, 255),
+            false,
+            clip_right,
+        );
+    }
+
+    fn draw_spreadsheet_card(
+        &self,
+        pixmap: &mut Pixmap,
+        _title: &str,
+        sheet: &little_clip_ops::SpreadsheetSheet,
+        rx: f32,
+        ry: f32,
+        rw: f32,
+        rh: f32,
+        is_hero: bool,
+    ) {
+        let content_x = rx + 14.0;
+        let clip_right = rx + rw - 10.0;
+        let mut y = ry + 124.0;
+
+        self.draw_pill_badge(
+            pixmap,
+            "SPREADSHEET",
+            content_x,
+            y,
+            14.0,
+            Color::from_rgba8(52, 211, 153, 255),
+            Color::from_rgba8(6, 78, 59, 230),
+            clip_right,
+        );
+        y += 28.0;
+
+        let sheet_info = format!("{} ({}r × {}c)", sheet.name, sheet.total_rows, sheet.total_cols);
+        self.draw_text_clipped(
+            pixmap,
+            &sheet_info,
+            content_x,
+            y,
+            if is_hero { 16.0 } else { 13.0 },
+            Color::from_rgba8(148, 163, 184, 255),
+            false,
+            clip_right,
+        );
+        y += 22.0;
+
+        let max_rows = if is_hero { 9 } else { 7 };
+        let max_cols = if is_hero { 4 } else { 3 };
+        let slice = sheet.upper_left_slice(max_rows, max_cols);
+        if slice.is_empty() {
+            return;
+        }
+
+        let num_cols = slice[0].len().max(1);
+        let avail_w = clip_right - content_x;
+        let col_w = avail_w / num_cols as f32;
+        let row_h = if is_hero { 26.0 } else { 22.0 };
+        let font_size = if is_hero { 14.0 } else { 12.0 };
+
+        for (r_idx, row) in slice.iter().enumerate() {
+            let row_y = y + (r_idx as f32 * row_h);
+            if row_y + row_h > ry + rh - 30.0 {
+                break;
+            }
+
+            let is_header = r_idx == 0;
+            if let Some(rect) = Rect::from_xywh(content_x, row_y, avail_w, row_h) {
+                let mut paint = Paint::default();
+                if is_header {
+                    paint.set_color(Color::from_rgba8(30, 41, 59, 240));
+                } else if r_idx % 2 == 1 {
+                    paint.set_color(Color::from_rgba8(18, 26, 46, 180));
+                } else {
+                    paint.set_color(Color::from_rgba8(15, 23, 42, 100));
+                }
+                pixmap.fill_rect(rect, &paint, Transform::identity(), None);
+
+                let mut stroke = Stroke::default();
+                stroke.width = 0.5;
+                let mut stroke_paint = Paint::default();
+                stroke_paint.set_color(Color::from_rgba8(51, 65, 85, 150));
+                let path = PathBuilder::from_rect(rect);
+                pixmap.stroke_path(&path, &stroke_paint, &stroke, Transform::identity(), None);
+            }
+
+            for (c_idx, cell_val) in row.iter().enumerate() {
+                let cell_x = content_x + (c_idx as f32 * col_w) + 4.0;
+                let cell_clip = content_x + ((c_idx + 1) as f32 * col_w) - 2.0;
+                let cell_color = if is_header {
+                    Color::from_rgba8(56, 189, 248, 255)
+                } else {
+                    Color::from_rgba8(226, 232, 240, 255)
+                };
+
+                let cell_y = row_y + (row_h - font_size) / 2.0 - 1.0;
+                self.draw_text_clipped(
+                    pixmap,
+                    cell_val,
+                    cell_x,
+                    cell_y,
+                    font_size,
+                    cell_color,
+                    is_header,
+                    cell_clip,
+                );
+            }
+        }
+
+        let footer_y = ry + rh - 22.0;
+        self.draw_text_clipped(
+            pixmap,
+            "> Open in Workbench for full table",
+            content_x,
+            footer_y,
+            12.0,
+            Color::from_rgba8(100, 116, 139, 255),
+            false,
+            clip_right,
+        );
+    }
+
+    fn draw_midi_card(
+        &self,
+        pixmap: &mut Pixmap,
+        midi: &little_clip_ops::MidiData,
+        rx: f32,
+        ry: f32,
+        rw: f32,
+        rh: f32,
+        is_hero: bool,
+    ) {
+        let content_x = rx + 14.0;
+        let clip_right = rx + rw - 10.0;
+        let mut y = ry + 124.0;
+
+        self.draw_pill_badge(
+            pixmap,
+            "MIDI PIANO ROLL",
+            content_x,
+            y,
+            14.0,
+            Color::from_rgba8(96, 165, 250, 255),
+            Color::from_rgba8(30, 58, 138, 230),
+            clip_right,
+        );
+        y += 28.0;
+
+        let info = format!("{} • {} notes • {:.1}s • {:.0} BPM", midi.title, midi.total_notes, midi.duration_sec, midi.bpm);
+        self.draw_text_clipped(
+            pixmap,
+            &info,
+            content_x,
+            y,
+            if is_hero { 16.0 } else { 13.0 },
+            Color::from_rgba8(148, 163, 184, 255),
+            false,
+            clip_right,
+        );
+        y += 22.0;
+
+        let roll_x = content_x;
+        let roll_y = y;
+        let roll_w = clip_right - content_x;
+        let roll_h = (ry + rh - 30.0 - roll_y).max(40.0);
+
+        if let Some(rect) = Rect::from_xywh(roll_x, roll_y, roll_w, roll_h) {
+            let mut bg_paint = Paint::default();
+            bg_paint.set_color(Color::from_rgba8(15, 23, 42, 220));
+            pixmap.fill_rect(rect, &bg_paint, Transform::identity(), None);
+
+            let mut border_stroke = Stroke::default();
+            border_stroke.width = 1.0;
+            let mut border_paint = Paint::default();
+            border_paint.set_color(Color::from_rgba8(51, 65, 85, 180));
+            let path = PathBuilder::from_rect(rect);
+            pixmap.stroke_path(&path, &border_paint, &border_stroke, Transform::identity(), None);
+
+            let kb_w = 16.0f32;
+            if let Some(kb_rect) = Rect::from_xywh(roll_x, roll_y, kb_w, roll_h) {
+                let mut kb_paint = Paint::default();
+                kb_paint.set_color(Color::from_rgba8(30, 41, 59, 240));
+                pixmap.fill_rect(kb_rect, &kb_paint, Transform::identity(), None);
+            }
+
+            let min_k = midi.min_key.min(midi.max_key) as f32;
+            let max_k = midi.max_key.max(midi.min_key + 1) as f32;
+            let key_span = (max_k - min_k + 1.0).max(1.0);
+            let dur_span = midi.duration_sec.max(0.1);
+
+            let grid_x = roll_x + kb_w + 2.0;
+            let grid_w = roll_w - kb_w - 4.0;
+
+            for note in &midi.notes {
+                let norm_start = (note.start_sec / dur_span).clamp(0.0, 1.0);
+                let norm_dur = (note.duration_sec / dur_span).clamp(0.005, 1.0);
+                let norm_pitch = ((note.key as f32 - min_k) / key_span).clamp(0.0, 1.0);
+
+                let nx = grid_x + norm_start * grid_w;
+                let nw = (norm_dur * grid_w).max(3.0).min(grid_x + grid_w - nx);
+                let note_h = (roll_h / key_span).clamp(3.0, 12.0);
+                let ny = roll_y + (1.0 - norm_pitch) * (roll_h - note_h);
+
+                if let Some(n_rect) = Rect::from_xywh(nx, ny, nw, note_h) {
+                    let mut n_paint = Paint::default();
+                    let (r, g, b) = if midi.track_count <= 1 {
+                        if note.channel == 9 {
+                            (251, 146, 60)
+                        } else {
+                            (56, 189, 248)
+                        }
+                    } else if note.channel == 9 {
+                        (249, 115, 22)
+                    } else {
+                        match note.track % 8 {
+                            0 => (6, 182, 212),   // Cyan
+                            1 => (245, 158, 11),  // Amber
+                            2 => (168, 85, 247),  // Purple
+                            3 => (244, 63, 94),   // Rose
+                            4 => (34, 197, 94),   // Green
+                            5 => (59, 130, 246),  // Blue
+                            6 => (234, 88, 12),   // Orange
+                            _ => (236, 72, 153),  // Pink
+                        }
+                    };
+                    n_paint.set_color(Color::from_rgba8(r, g, b, 240));
+                    pixmap.fill_rect(n_rect, &n_paint, Transform::identity(), None);
+                }
+            }
+        }
+
+        let footer_y = ry + rh - 22.0;
+        self.draw_text_clipped(
+            pixmap,
+            "> Space in Workbench to play audio & visualize",
+            content_x,
+            footer_y,
+            12.0,
+            Color::from_rgba8(100, 116, 139, 255),
+            false,
+            clip_right,
+        );
+    }
+
+    fn draw_stl_card(
+        &self,
+        pixmap: &mut Pixmap,
+        mesh: &little_clip_ops::StlMesh,
+        rx: f32,
+        ry: f32,
+        rw: f32,
+        rh: f32,
+        is_hero: bool,
+    ) {
+        let content_x = rx + 14.0;
+        let clip_right = rx + rw - 10.0;
+        let mut y = ry + 124.0;
+
+        self.draw_pill_badge(
+            pixmap,
+            "3D STL MODEL",
+            content_x,
+            y,
+            14.0,
+            Color::from_rgba8(251, 146, 60, 255),
+            Color::from_rgba8(124, 45, 18, 230),
+            clip_right,
+        );
+        y += 28.0;
+
+        let info = format!("{} • {} facets • {:.1}×{:.1}×{:.1}mm", mesh.name, mesh.triangles.len(), mesh.size.x, mesh.size.y, mesh.size.z);
+        self.draw_text_clipped(
+            pixmap,
+            &info,
+            content_x,
+            y,
+            if is_hero { 16.0 } else { 13.0 },
+            Color::from_rgba8(148, 163, 184, 255),
+            false,
+            clip_right,
+        );
+        y += 22.0;
+
+        let vp_x = content_x;
+        let vp_y = y;
+        let vp_w = clip_right - content_x;
+        let vp_h = (ry + rh - 30.0 - vp_y).max(40.0);
+
+        if let Some(rect) = Rect::from_xywh(vp_x, vp_y, vp_w, vp_h) {
+            let mut bg_paint = Paint::default();
+            bg_paint.set_color(Color::from_rgba8(15, 23, 42, 220));
+            pixmap.fill_rect(rect, &bg_paint, Transform::identity(), None);
+
+            let mut border_stroke = Stroke::default();
+            border_stroke.width = 1.0;
+            let mut border_paint = Paint::default();
+            border_paint.set_color(Color::from_rgba8(51, 65, 85, 180));
+            let path = PathBuilder::from_rect(rect);
+            pixmap.stroke_path(&path, &border_paint, &border_stroke, Transform::identity(), None);
+
+            let now_millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let angle_y = (now_millis as f32 / 1000.0) * 0.75;
+            let tilt_x = 0.35f32;
+
+            let sin_y = angle_y.sin();
+            let cos_y = angle_y.cos();
+            let sin_x = tilt_x.sin();
+            let cos_x = tilt_x.cos();
+
+            let center = mesh.center;
+            let max_dim = mesh.max_dimension.max(0.001);
+            let scale = (vp_w.min(vp_h) * 0.42) / (max_dim * 0.5);
+
+            let cx = vp_x + vp_w * 0.5;
+            let cy = vp_y + vp_h * 0.5;
+
+            let light_dir = little_clip_ops::Vec3::new(0.4, 0.6, 0.7).normalize();
+            let step = (mesh.triangles.len() / 8000).max(1);
+
+            let mut projected = Vec::new();
+            for (idx, tri) in mesh.triangles.iter().enumerate() {
+                if idx % step != 0 {
+                    continue;
+                }
+
+                let normal = tri.normal;
+                let rotated_normal = little_clip_ops::Vec3::new(
+                    normal.x * cos_y + normal.z * sin_y,
+                    normal.y * cos_x - (-normal.x * sin_y + normal.z * cos_y) * sin_x,
+                    normal.y * sin_x + (-normal.x * sin_y + normal.z * cos_y) * cos_x,
+                ).normalize();
+
+                if rotated_normal.z <= 0.02 {
+                    continue;
+                }
+
+                let transform_v = |v: little_clip_ops::Vec3| -> (f32, f32, f32) {
+                    let dx = v.x - center.x;
+                    let dy = v.y - center.y;
+                    let dz = v.z - center.z;
+
+                    let rx = dx * cos_y + dz * sin_y;
+                    let rz = -dx * sin_y + dz * cos_y;
+                    let ry = dy;
+
+                    let fy = ry * cos_x - rz * sin_x;
+                    let fz = ry * sin_x + rz * cos_x;
+
+                    (cx + rx * scale, cy - fy * scale, fz)
+                };
+
+                let (p1x, p1y, p1z) = transform_v(tri.v1);
+                let (p2x, p2y, p2z) = transform_v(tri.v2);
+                let (p3x, p3y, p3z) = transform_v(tri.v3);
+
+                // Doing this makes the preview on the little screen look awful, hence it being commented out.
+                // // Discard screen-space degenerate/collinear paths (prevents empty fill warnings)
+                // let cross_2d = (p2x - p1x) * (p3y - p1y) - (p2y - p1y) * (p3x - p1x);
+                // if cross_2d.abs() < 0.2 {
+                //     continue;
+                // }
+
+                let avg_z = (p1z + p2z + p3z) / 3.0;
+                let diff = rotated_normal.dot(light_dir).max(0.18).min(1.0);
+                projected.push((avg_z, diff, (p1x, p1y), (p2x, p2y), (p3x, p3y)));
+            }
+
+            projected.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+            for (_, diff, (p1x, p1y), (p2x, p2y), (p3x, p3y)) in projected {
+                let mut pb = PathBuilder::new();
+                pb.move_to(p1x, p1y);
+                pb.line_to(p2x, p2y);
+                pb.line_to(p3x, p3y);
+                pb.close();
+
+                if let Some(t_path) = pb.finish() {
+                    // Shaded base facet
+                    let r = (20.0 + diff * 55.0) as u8;
+                    let g = (45.0 + diff * 80.0) as u8;
+                    let b = (95.0 + diff * 125.0) as u8;
+
+                    let mut fill_paint = Paint::default();
+                    fill_paint.set_color(Color::from_rgba8(r, g, b, 235));
+                    pixmap.fill_path(&t_path, &fill_paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+
+                    // High-contrast, crisp wireframe edge lines
+                    let mut line_stroke = Stroke::default();
+                    line_stroke.width = 1.2;
+                    let mut line_paint = Paint::default();
+                    line_paint.set_color(Color::from_rgba8(56, 189, 248, 220));
+                    pixmap.stroke_path(&t_path, &line_paint, &line_stroke, Transform::identity(), None);
+                }
+            }
+        }
+
+        let footer_y = ry + rh - 22.0;
+        self.draw_text_clipped(
+            pixmap,
+            "> Open in Workbench to orbit 3D model",
+            content_x,
+            footer_y,
+            12.0,
+            Color::from_rgba8(100, 116, 139, 255),
+            false,
+            clip_right,
+        );
+    }
+
     fn draw_text_preview(
         &self,
         pixmap: &mut Pixmap,
@@ -1823,6 +2576,56 @@ impl ScreenRenderer {
         is_hero: bool,
         _elision_color: Color,
     ) {
+        let trimmed = text.trim();
+
+        // 1. Unit conversion preview
+        if let Some(conv) = little_clip_ops::detect_unit_conversion(trimmed) {
+            self.draw_unit_conversion_card(pixmap, &conv, rx, ry, rw, rh, is_hero);
+            return;
+        }
+
+        // 2. IP or MAC network preview
+        if let Some(net) = little_clip_ops::detect_network_preview(trimmed) {
+            self.draw_network_preview_card(pixmap, &net, rx, ry, rw, rh, is_hero);
+            return;
+        }
+
+        // 3. Timestamp preview
+        if let Some(ts) = little_clip_ops::detect_timestamp(trimmed) {
+            self.draw_timestamp_card(pixmap, &ts, rx, ry, rw, rh, is_hero);
+            return;
+        }
+
+        // 4. Spreadsheet preview (CSV text or spreadsheet file)
+        let p = Path::new(trimmed);
+        let spreadsheet_opt = if p.is_file() && little_clip_ops::is_spreadsheet_file(p) {
+            little_clip_ops::load_spreadsheet(p).ok()
+        } else {
+            little_clip_ops::detect_csv_text(trimmed)
+        };
+        if let Some(ref sheet_data) = spreadsheet_opt {
+            if let Some(first_sheet) = sheet_data.sheets.first() {
+                self.draw_spreadsheet_card(pixmap, &sheet_data.title, first_sheet, rx, ry, rw, rh, is_hero);
+                return;
+            }
+        }
+
+        // 5. MIDI File Preview
+        if p.is_file() && (p.extension().and_then(|s| s.to_str()).map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")).unwrap_or(false)) {
+            if let Ok(midi_data) = little_clip_ops::MidiData::parse_file(p) {
+                self.draw_midi_card(pixmap, &midi_data, rx, ry, rw, rh, is_hero);
+                return;
+            }
+        }
+
+        // 6. STL 3D Mesh Preview (rotates slowly in preview)
+        if p.is_file() && little_clip_ops::is_stl_file(p) {
+            if let Ok(stl_mesh) = little_clip_ops::StlMesh::parse_file(p) {
+                self.draw_stl_card(pixmap, &stl_mesh, rx, ry, rw, rh, is_hero);
+                return;
+            }
+        }
+
         let content_x = rx + 14.0;
         let clip_right = rx + rw - 10.0;
         let text_font_size = if is_hero { 18.0 } else { 15.0 };
@@ -2068,4 +2871,57 @@ mod tests {
         // Verify well under the hardware 450 KB limit
         assert!(blank_jpeg.len() < 100_000);
     }
+
+    #[test]
+    fn test_render_spreadsheet_and_prose() {
+        let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
+        let mut manager = SlotManager::new();
+
+        // 1. Raw CSV text
+        let csv_text = "Item,Quantity,Price\nWidget A,12,$4.50\nWidget B,8,$19.99\nWidget C,3,$99.00";
+        manager.push_left(ClipItem::from_text(csv_text));
+
+        let pixmap = renderer.render_pixmap(&manager).unwrap();
+        let out_dir = std::path::Path::new("/home/vega/.gemini/antigravity-ide/brain/baf86972-714a-4618-98df-04ae2591b81d/scratch");
+        let _ = std::fs::create_dir_all(out_dir);
+        let _ = pixmap.save_png(out_dir.join("csv_render.png"));
+
+        // 2. CSV File in FileBatch
+        let temp_csv = std::env::temp_dir().join("test_sample.csv");
+        std::fs::write(&temp_csv, csv_text).unwrap();
+        let mut file_item = ClipItem::from_text("test_sample.csv");
+        file_item.payload = ClipPayload::FileBatch(vec![temp_csv.clone()]);
+        manager.push_left(file_item);
+
+        let pixmap_file = renderer.render_pixmap(&manager).unwrap();
+        let _ = pixmap_file.save_png(out_dir.join("csv_file_render.png"));
+        let _ = std::fs::remove_file(&temp_csv);
+
+        // 3. Prose text with commas
+        let prose = "Hey there, how is it going? I am testing out some plain text on my clipboard, to make sure it doesn't get treated as a spreadsheet.";
+        let prose_detect = little_clip_ops::detect_csv_text(prose);
+        assert!(prose_detect.is_none(), "Prose should not be detected as CSV spreadsheet");
+    }
+
+    #[test]
+    fn test_render_stl_card() {
+        let toothless_path = std::path::Path::new("/home/vega/Documents/type_testing/Toothless.stl");
+        if !toothless_path.exists() {
+            return;
+        }
+
+        let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
+        let mut manager = SlotManager::new();
+        let mut item = ClipItem::from_text("Toothless.stl");
+        item.payload = ClipPayload::FileBatch(vec![toothless_path.to_path_buf()]);
+        item.title = "Toothless.stl".to_string();
+        item.subtitle = "STL 3D Model".to_string();
+        manager.push_left(item);
+
+        let pixmap = renderer.render_pixmap(&manager).unwrap();
+        let out_dir = std::path::Path::new("/home/vega/.gemini/antigravity-ide/brain/baf86972-714a-4618-98df-04ae2591b81d/scratch");
+        let _ = std::fs::create_dir_all(out_dir);
+        let _ = pixmap.save_png(out_dir.join("current_stl_card.png"));
+    }
 }
+

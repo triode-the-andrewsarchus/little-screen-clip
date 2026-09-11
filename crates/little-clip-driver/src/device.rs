@@ -157,7 +157,7 @@ impl TrofeoDriver {
             .handle
             .read_serial_number_string_ascii(&desc)
             .unwrap_or_default();
-        if current_serial != self.serial {
+        if !self.serial.is_empty() && !current_serial.is_empty() && current_serial != self.serial {
             return Err(DriverError::Usb(rusb::Error::NoDevice));
         }
         // Also do a harmless control read (get device descriptor) to probe the bus.

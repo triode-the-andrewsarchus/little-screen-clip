@@ -262,7 +262,7 @@ pub fn resolve_diff_target_from_path(p: &Path) -> Option<DiffTarget> {
     None
 }
 
-/// If a single item contains 2 or more images or files (e.g. MultiImage or FileBatch),
+/// If a single item contains 2 or more images or files (e.g. MultiImage, FileBatch, or Text with paths),
 /// resolve the first two as a comparison pair.
 pub fn resolve_diff_pair(item: &ClipItem) -> Option<(DiffTarget, DiffTarget)> {
     match &item.payload {
@@ -272,9 +272,31 @@ pub fn resolve_diff_pair(item: &ClipItem) -> Option<(DiffTarget, DiffTarget)> {
             Some((t1, t2))
         }
         ClipPayload::FileBatch(paths) if paths.len() >= 2 => {
-            let t1 = resolve_diff_target_from_path(&paths[0])?;
-            let t2 = resolve_diff_target_from_path(&paths[1])?;
-            Some((t1, t2))
+            let img_paths: Vec<&PathBuf> = paths.iter().filter(|p| is_image_path(p)).collect();
+            if img_paths.len() >= 2 {
+                let t1 = resolve_diff_target_from_path(img_paths[0])?;
+                let t2 = resolve_diff_target_from_path(img_paths[1])?;
+                Some((t1, t2))
+            } else {
+                let t1 = resolve_diff_target_from_path(&paths[0])?;
+                let t2 = resolve_diff_target_from_path(&paths[1])?;
+                Some((t1, t2))
+            }
+        }
+        ClipPayload::Text(text) => {
+            let paths = little_clip_core::item::extract_local_file_paths(text);
+            let img_paths: Vec<&PathBuf> = paths.iter().filter(|p| is_image_path(p)).collect();
+            if img_paths.len() >= 2 {
+                let t1 = resolve_diff_target_from_path(img_paths[0])?;
+                let t2 = resolve_diff_target_from_path(img_paths[1])?;
+                Some((t1, t2))
+            } else if paths.len() >= 2 {
+                let t1 = resolve_diff_target_from_path(&paths[0])?;
+                let t2 = resolve_diff_target_from_path(&paths[1])?;
+                Some((t1, t2))
+            } else {
+                None
+            }
         }
         _ => None,
     }
@@ -1421,6 +1443,54 @@ mod tests {
             }
         }
         assert!(expected_divider_pos.is_some(), "Expected divider to be found");
+    }
+
+    #[test]
+    fn test_resolve_diff_pair_single_slot_images() {
+        use little_clip_core::ClipItem;
+        let temp_dir = std::env::temp_dir().join("little_clip_test_diff_pair");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let img1_path = temp_dir.join("test1.png");
+        let img2_path = temp_dir.join("test2.png");
+
+        // 1x1 transparent PNG bytes
+        let png_bytes = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+            0x00, 0x1F, 0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0x00, 0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+        std::fs::write(&img1_path, &png_bytes).unwrap();
+        std::fs::write(&img2_path, &png_bytes).unwrap();
+
+        // 1. Test FileBatch with 2 image paths
+        let batch_item = ClipItem::from_files(vec![img1_path.clone(), img2_path.clone()]);
+        let pair = resolve_diff_pair(&batch_item);
+        assert!(pair.is_some(), "FileBatch with 2 images should resolve to diff pair");
+        let (t1, t2) = pair.unwrap();
+        assert!(t1.is_image(), "Target 1 must be image");
+        assert!(t2.is_image(), "Target 2 must be image");
+
+        // 2. Test MultiImage with 2 paths
+        let multi_item = ClipItem::from_multi_image(vec![img1_path.clone(), img2_path.clone()]);
+        let pair_multi = resolve_diff_pair(&multi_item);
+        assert!(pair_multi.is_some(), "MultiImage with 2 images should resolve to diff pair");
+
+        // 3. Test Text with 2 file paths
+        let text_content = format!("{}\n{}", img1_path.display(), img2_path.display());
+        let text_item = ClipItem::from_text(text_content);
+        let pair_text = resolve_diff_pair(&text_item);
+        assert!(pair_text.is_some(), "Text with 2 image paths should resolve to diff pair");
+
+        // Check get_applicable_ops for single item with 2 images
+        let ops = crate::get_applicable_ops(&[&batch_item]);
+        assert!(ops.iter().any(|op| op.name == "diff" && !op.is_binary), "Applicable ops should include diff op for single item containing 2 images");
+
+        // Cleanup
+        let _ = std::fs::remove_file(&img1_path);
+        let _ = std::fs::remove_file(&img2_path);
+        let _ = std::fs::remove_dir(&temp_dir);
     }
 }
 

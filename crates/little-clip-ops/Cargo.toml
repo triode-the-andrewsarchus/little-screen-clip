@@ -19,4 +19,7 @@ base64 = "0.22"
 similar = { version = "2.6", features = ["inline"] }
 syntect.workspace = true
 image = { workspace = true }
+chrono = "0.4"
+calamine = "0.36.1"
+midly = "0.5"
 

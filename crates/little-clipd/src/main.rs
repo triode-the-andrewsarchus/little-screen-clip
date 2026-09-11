@@ -12,12 +12,13 @@ use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, RwLock};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 mod lock_monitor;
 mod rolling_capture;
 
 pub struct DaemonContext {
+    pub config: RwLock<little_clip_core::AppConfig>,
     pub manager: RwLock<SlotManager>,
     pub renderer: RwLock<ScreenRenderer>,
     pub display_tx: mpsc::Sender<Vec<u8>>,
@@ -192,6 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     let ctx = Arc::new(DaemonContext {
+        config: RwLock::new(config.clone()),
         manager: RwLock::new(SlotManager::default()),
         renderer: RwLock::new(renderer),
         display_tx,
@@ -272,9 +274,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn run_display_worker(mut driver: Option<TrofeoDriver>, mut rx: mpsc::Receiver<Vec<u8>>) {
     let mut last_frame: Option<Vec<u8>> = None;
     let mut last_send = tokio::time::Instant::now();
-    let keepalive_interval = Duration::from_millis(800);
+    // Hardware watchdog on Trofeo Vision MCU trips after ~1.0-1.5s of silence.
+    // Ticking every 400ms ensures we refresh the display well before the hardware screensaver kicks in.
+    let keepalive_interval = Duration::from_millis(400);
     // Lower bound between USB writes to prevent overwhelming the embedded JPEG decoder:
-    let min_usb_gap = Duration::from_millis(100);
+    let min_usb_gap = Duration::from_millis(80);
+    let mut keepalive_ticker = tokio::time::interval(keepalive_interval);
+    keepalive_ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
         tokio::select! {
@@ -286,70 +292,85 @@ async fn run_display_worker(mut driver: Option<TrofeoDriver>, mut rx: mpsc::Rece
                             new_frame = freshest;
                         }
 
-                        // Ensure Trofeo MCU has finished decoding prior frame
-                        let elapsed = last_send.elapsed();
-                        if elapsed < min_usb_gap {
-                            tokio::time::sleep(min_usb_gap - elapsed).await;
+                        // If driver handle is not open, attempt initial open or reconnect
+                        if driver.is_none() {
+                            match TrofeoDriver::open() {
+                                Ok(new_drv) => {
+                                    info!("Connected to Trofeo USB display");
+                                    driver = Some(new_drv);
+                                }
+                                Err(e) => {
+                                    debug!("Trofeo display not ready: {}", e);
+                                }
+                            }
                         }
 
                         if let Some(drv) = driver.as_mut() {
-                            // Verify the USB handle still points to the
-                            // correct live device before attempting a write. If the
-                            // device reset between frames the fd can be stale and
-                            // writes may silently succeed against a zombie handle.
-                            let send_result = drv
-                                .check_alive()
-                                .and_then(|_| drv.send_frame(&new_frame));
+                            let elapsed = last_send.elapsed();
+                            if elapsed < min_usb_gap {
+                                tokio::time::sleep(min_usb_gap - elapsed).await;
+                            }
 
-                            if let Err(e) = send_result {
-                                warn!("USB send_frame error: {}. Attempting reconnect in 1s...", e);
-                                tokio::time::sleep(Duration::from_millis(1000)).await;
+                            if let Err(e) = drv.send_frame(&new_frame) {
+                                warn!("USB send_frame error: {}. Reconnecting...", e);
+                                // Drop the dead driver handle first so the kernel releases interface 0!
+                                driver = None;
+                                tokio::time::sleep(Duration::from_millis(500)).await;
                                 match TrofeoDriver::open() {
-                                    Ok(new_drv) => {
+                                    Ok(mut new_drv) => {
                                         info!("Successfully reconnected to Trofeo USB display");
-                                        *drv = new_drv;
+                                        let _ = new_drv.send_frame(&new_frame);
+                                        last_send = tokio::time::Instant::now();
+                                        driver = Some(new_drv);
                                     }
                                     Err(re_err) => {
                                         warn!("USB Reconnect failed: {}", re_err);
                                     }
                                 }
+                            } else {
+                                last_send = tokio::time::Instant::now();
                             }
                         }
                         last_frame = Some(new_frame);
-                        last_send = tokio::time::Instant::now();
                     }
                     None => break,
                 }
             }
-            _ = tokio::time::sleep(keepalive_interval) => {
-                if last_send.elapsed() >= keepalive_interval {
-                    // Handle keepalive send errors and reconnect — this is
-                    // the path that catches silent stale-fd cases where the device
-                    // reset between clipboard events, so no prior send_frame ever
-                    // errored out but the display went dark.
-                    if let Some(drv) = driver.as_mut() {
-                        if last_frame.is_some() {
-                            let send_result = drv
-                                .check_alive()
-                                .and_then(|_| drv.send_frame(last_frame.as_ref().unwrap()));
-
-                            match send_result {
-                                Ok(_) => {
-                                    last_send = tokio::time::Instant::now();
-                                }
-                                Err(e) => {
-                                    warn!("USB keepalive error: {}. Attempting reconnect in 1s...", e);
-                                    tokio::time::sleep(Duration::from_millis(1000)).await;
-                                    match TrofeoDriver::open() {
-                                        Ok(new_drv) => {
-                                            info!("Successfully reconnected to Trofeo USB display (keepalive)");
-                                            *drv = new_drv;
-                                        }
-                                        Err(re_err) => {
-                                            warn!("USB Reconnect failed (keepalive): {}", re_err);
-                                        }
+            _ = keepalive_ticker.tick() => {
+                if driver.is_none() {
+                    // Background poll to reconnect if screen was disconnected
+                    match TrofeoDriver::open() {
+                        Ok(mut new_drv) => {
+                            info!("Successfully (re)connected to Trofeo USB display");
+                            if let Some(ref frame) = last_frame {
+                                let _ = new_drv.send_frame(frame);
+                                last_send = tokio::time::Instant::now();
+                            }
+                            driver = Some(new_drv);
+                        }
+                        Err(_) => {}
+                    }
+                } else if last_send.elapsed() >= Duration::from_millis(400) {
+                    if let Some(ref frame) = last_frame {
+                        if let Some(drv) = driver.as_mut() {
+                            if let Err(e) = drv.send_frame(frame) {
+                                warn!("USB keepalive error: {}. Reconnecting...", e);
+                                // Drop dead driver first so interface 0 is freed
+                                driver = None;
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                                match TrofeoDriver::open() {
+                                    Ok(mut new_drv) => {
+                                        info!("Successfully reconnected to Trofeo USB display (keepalive)");
+                                        let _ = new_drv.send_frame(frame);
+                                        last_send = tokio::time::Instant::now();
+                                        driver = Some(new_drv);
+                                    }
+                                    Err(re_err) => {
+                                        warn!("USB Reconnect failed (keepalive): {}", re_err);
                                     }
                                 }
+                            } else {
+                                last_send = tokio::time::Instant::now();
                             }
                         }
                     }
@@ -375,12 +396,24 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 IpcResponse::State(mgr.clone())
             }
             Ok(IpcRequest::PushText { text, hand }) => {
-                let item = ClipItem::from_text(text);
+                let (item, original) = if ctx.config.read().await.auto_actions.trim_link_tracking {
+                    if let Some(cleaned) = little_clip_ops::clean_url_tracking(&text) {
+                        (ClipItem::from_text(cleaned), Some(ClipItem::from_text(text)))
+                    } else {
+                        (ClipItem::from_text(text), None)
+                    }
+                } else {
+                    (ClipItem::from_text(text), None)
+                };
                 schedule_async_previews(&item, Arc::clone(&ctx));
                 {
                     let mut mgr = ctx.manager.write().await;
-                    mgr.push_to_hand(item, hand);
+                    if let Some(orig) = original {
+                        mgr.undo = Some(orig);
+                    }
+                    mgr.push_to_hand(item.clone(), hand);
                 }
+                copy_to_os_clipboard(&item, &ctx).await;
                 ctx.refresh_display().await;
                 IpcResponse::Success {
                     message: format!("Pushed to {:?}", hand),
@@ -808,6 +841,21 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 let item = mgr.get(slot).cloned();
                 IpcResponse::SlotItem(item)
             }
+            Ok(IpcRequest::GetAutoActions) => {
+                let cfg = ctx.config.read().await;
+                let mut map = std::collections::HashMap::new();
+                map.insert("trim_link_tracking".to_string(), cfg.auto_actions.trim_link_tracking);
+                IpcResponse::AutoActions(map)
+            }
+            Ok(IpcRequest::SetAutoAction { key, enabled }) => {
+                let mut cfg = ctx.config.write().await;
+                if key == "trim_link_tracking" {
+                    cfg.auto_actions.trim_link_tracking = enabled;
+                }
+                IpcResponse::Success {
+                    message: format!("Auto-action '{}' set to {}", key, enabled),
+                }
+            }
             Err(e) => IpcResponse::Error {
                 error: format!("Invalid request: {}", e),
             },
@@ -1229,15 +1277,32 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                             }
                         };
 
-                        let item = ClipItem::from_text(text);
+                        let (item, original_untracked) = if ctx.config.read().await.auto_actions.trim_link_tracking {
+                            if let Some(cleaned) = little_clip_ops::clean_url_tracking(&text) {
+                                info!("Auto-Action: Trimmed link tracking from URL (original saved to Undo)");
+                                (ClipItem::from_text(cleaned), Some(ClipItem::from_text(text.clone())))
+                            } else {
+                                (ClipItem::from_text(text.clone()), None)
+                            }
+                        } else {
+                            (ClipItem::from_text(text.clone()), None)
+                        };
                         info!("Captured clipboard item to {:?}: [{}] {}", target_hand, item.handler_tag, item.title);
                         schedule_async_previews(&item, Arc::clone(&ctx));
                         let prior_left = {
                             let mut mgr = ctx.manager.write().await;
                             let old_left = mgr.left_hand().cloned();
-                            mgr.push_to_hand(item, target_hand);
+                            if let Some(orig) = original_untracked {
+                                mgr.undo = Some(orig);
+                            }
+                            mgr.push_to_hand(item.clone(), target_hand);
                             old_left
                         };
+                        if let Some(clean_text) = item.to_clipboard_text() {
+                            if clean_text != text {
+                                let _ = tokio::process::Command::new("wl-copy").arg(&clean_text).status().await;
+                            }
+                        }
                         ctx.refresh_display().await;
 
                         if restore_os && target_hand == little_clip_core::HandSide::Right {
