@@ -460,232 +460,9 @@ impl eframe::App for WorkbenchApp {
             ctx.request_repaint();
         }
 
-        // If an in-app prompt modal is active, render it over the workbench
-        if let Some(prompt) = &mut self.in_app_prompt {
-            let mut close_prompt = false;
-            let mut submit_text: Option<String> = None;
-
-            egui::Window::new(format!("✦ Input Required — {}", prompt.recipe_name))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .fixed_size([500.0, 180.0])
-                .frame(
-                    egui::Frame::window(&ctx.style())
-                        .fill(egui::Color32::from_rgb(20, 24, 34))
-                        .stroke(egui::Stroke::new(1.5, egui::Color32::from_rgb(99, 102, 241)))
-                        .rounding(8.0)
-                        .inner_margin(egui::Margin::symmetric(22.0, 18.0)),
-                )
-                .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("✦")
-                                .color(egui::Color32::from_rgb(168, 85, 247))
-                                .strong()
-                                .size(18.0),
-                        );
-                        ui.heading(
-                            egui::RichText::new(&prompt.recipe_name)
-                                .color(egui::Color32::from_rgb(241, 245, 249))
-                                .strong(),
-                        );
-                    });
-
-                    ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new(&prompt.message)
-                            .color(egui::Color32::from_rgb(148, 163, 184))
-                            .size(13.0),
-                    );
-
-                    ui.add_space(10.0);
-                    let edit_resp = ui.add(
-                        egui::TextEdit::singleline(&mut prompt.input_text)
-                            .desired_width(ui.available_width())
-                            .hint_text("Type input text here..."),
-                    );
-
-                    if prompt.first_frame {
-                        edit_resp.request_focus();
-                        prompt.first_frame = false;
-                    }
-
-                    let enter = edit_resp.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter));
-
-                    ui.add_space(14.0);
-                    ui.horizontal(|ui| {
-                        let submit_btn = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new("Execute & Run [Enter]")
-                                    .color(egui::Color32::WHITE)
-                                    .strong(),
-                            )
-                            .fill(egui::Color32::from_rgb(79, 70, 229)),
-                        );
-
-                        let cancel_btn = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new("Cancel [Esc]")
-                                    .color(egui::Color32::from_rgb(148, 163, 184)),
-                            )
-                            .fill(egui::Color32::from_rgb(30, 41, 59)),
-                        );
-
-                        if submit_btn.clicked() || enter {
-                            submit_text = Some(prompt.input_text.clone());
-                        }
-
-                        if cancel_btn.clicked() || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                            close_prompt = true;
-                        }
-                    });
-                });
-
-            if let Some(text) = submit_text {
-                let req = IpcRequest::ExecuteRecipeWithPrompt {
-                    recipe_name: prompt.recipe_name.clone(),
-                    prompt_text: Some(text),
-                };
-                let _ = send_ipc_request(&req);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            } else if close_prompt {
-                self.in_app_prompt = None;
-            }
-
-            return; // Don't process background shortcuts while prompt modal is active
-        }
-
-        // If diff viewer is active, render it over the workbench
-        if let Some(diff_state) = &mut self.diff_viewer {
-            let mut close_diff = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    diff_state.render_ui(ui, ctx, &mut close_diff);
-                });
-
-            if close_diff {
-                self.diff_viewer = None;
-            }
-            return; // Don't process background shortcuts while diff viewer is active
-        }
-
-        // If binary diff viewer is active, render it over the workbench
-        if let Some(binary_diff_state) = &mut self.binary_diff_viewer {
-            let mut close_binary_diff = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    binary_diff_state.render_ui(ui, ctx, &mut close_binary_diff);
-                });
-
-            if close_binary_diff {
-                self.binary_diff_viewer = None;
-            }
-            return; // Don't process background shortcuts while binary diff viewer is active
-        }
-
-        // If audio preview is active, render it over the workbench
-        if let Some(audio_state) = &mut self.audio_preview {
-            let mut close_audio = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    audio_state.render_ui(ui, ctx, &mut close_audio);
-                });
-
-            if close_audio {
-                audio_state.stop();
-                self.audio_preview = None;
-            }
-            return; // Don't process background shortcuts while audio preview is active
-        }
-
-        // If image preview is active, render it over the workbench
-        if let Some(image_state) = &mut self.image_preview {
-            let mut close_image = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    image_state.render_ui(ui, ctx, &mut close_image);
-                });
-
-            if close_image {
-                self.image_preview = None;
-            }
-            return; // Don't process background shortcuts while image preview is active
-        }
-
-        // If spreadsheet viewer is active, render it over the workbench
-        if let Some(sheet_state) = &mut self.spreadsheet_viewer {
-            let mut close_sheet = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    sheet_state.render_ui(ui, ctx, &mut close_sheet);
-                });
-
-            if close_sheet {
-                self.spreadsheet_viewer = None;
-            }
+        if self.render_modal_viewers(ctx) {
             return;
         }
-
-        // If PDF editor is active, render it over the workbench
-        if let Some(pdf_state) = &mut self.pdf_viewer {
-            let mut close_pdf = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    pdf_state.render_ui(ui, ctx, &mut close_pdf);
-                });
-
-            if close_pdf {
-                if pdf_state.dirty {
-                    self.dirty_mirror = true;
-                }
-                self.pdf_viewer = None;
-            }
-            return;
-        }
-
-        // If MIDI viewer is active, render it over the workbench
-        if let Some(midi_state) = &mut self.midi_viewer {
-            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                midi_state.stop();
-                self.midi_viewer = None;
-                return;
-            }
-            let mut close_midi = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    midi_state.render_ui(ui, &mut close_midi);
-                });
-
-            if close_midi {
-                midi_state.stop();
-                self.midi_viewer = None;
-            }
-            return;
-        }
-
-        // If STL viewer is active, render it over the workbench
-        if let Some(stl_state) = &mut self.stl_viewer {
-            let mut close_stl = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    stl_state.render_ui(ui, &mut close_stl);
-                });
-
-            if close_stl {
-                self.stl_viewer = None;
-            }
-            return;
-        }
-
 
         if self.state.has_active_animation() {
             self.dirty_mirror = true;
@@ -694,175 +471,7 @@ impl eframe::App for WorkbenchApp {
             ctx.request_repaint_after(Duration::from_millis(120));
         }
 
-        let audio_region_active = self
-            .rolling_audio_strip
-            .as_ref()
-            .map_or(false, |s| s.selected_region.is_some());
-
-        // Global keybindings
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if audio_region_active {
-                if let Some(strip) = &mut self.rolling_audio_strip {
-                    strip.selected_region = None;
-                    strip.stop();
-                }
-            } else if self.view == WorkbenchView::AutoActions {
-                self.view = WorkbenchView::Palette;
-            } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        }
-
-        // Space plays/pauses selected audio region if active
-        if audio_region_active && ctx.input(|i| i.key_pressed(egui::Key::Space)) {
-            if let Some(strip) = &mut self.rolling_audio_strip {
-                strip.toggle_playback();
-            }
-        }
-
-        // Ctrl+C copies selected audio region slice if active
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C)) {
-            if audio_region_active {
-                if let Some(strip) = &mut self.rolling_audio_strip {
-                    let now = ctx.input(|i| i.time);
-                    if strip.copy_selection(now) {
-                        if let Ok(IpcResponse::State(s)) = send_ipc_request(&IpcRequest::GetState) {
-                            self.state = s;
-                        }
-                        self.dirty_mirror = true;
-                    }
-                }
-            }
-        }
-
-        // F5 or Ctrl+R refreshes rolling audio snapshot
-        if ctx.input(|i| i.key_pressed(egui::Key::F5) || (i.modifiers.command && i.key_pressed(egui::Key::R))) {
-            if let Some(strip) = &mut self.rolling_audio_strip {
-                strip.load_snapshot();
-                let now = ctx.input(|i| i.time);
-                let peak = strip.max_amplitude();
-                if peak < 0.001 {
-                    strip.status_toast = Some(("⟳ Snapshot refreshed: buffer is currently silence".to_string(), now));
-                } else {
-                    strip.status_toast = Some((format!("⟳ Snapshot refreshed ({:.1}s, peak: {:.0}%)", strip.duration_sec, peak * 100.0), now));
-                }
-            }
-        }
-
-        // F1, F2, F3 view switching
-        if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
-            self.view = WorkbenchView::NodeMachine;
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
-            self.view = match self.view {
-                WorkbenchView::Palette => WorkbenchView::NodeMachine,
-                WorkbenchView::NodeMachine | WorkbenchView::AutoActions => WorkbenchView::Palette,
-            };
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::F3)) {
-            self.view = match self.view {
-                WorkbenchView::AutoActions => WorkbenchView::Palette,
-                _ => WorkbenchView::AutoActions,
-            };
-        }
-
-        // Quick slot shortcuts when in Palette view and search is empty
-        if self.view == WorkbenchView::Palette {
-            if self.search_query.is_empty() {
-                if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
-                    self.view = WorkbenchView::NodeMachine;
-                } else if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
-                    if !audio_region_active {
-                        self.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
-                        self.dirty_mirror = true;
-                        self.selected_action_index = 0;
-                    }
-                } else if ctx.input(|i| i.key_pressed(egui::Key::Num1)) {
-                    self.selected_slots = vec![SlotId::LeftHand, SlotId::LeftPrior1];
-                    self.dirty_mirror = true;
-                    self.selected_action_index = 0;
-                } else if ctx.input(|i| i.key_pressed(egui::Key::Num2)) {
-                    self.selected_slots = vec![SlotId::LeftHand, SlotId::LeftPrior2];
-                    self.dirty_mirror = true;
-                    self.selected_action_index = 0;
-                } else if ctx.input(|i| i.key_pressed(egui::Key::Num3)) {
-                    self.selected_slots = vec![SlotId::LeftHand, SlotId::LeftPrior1, SlotId::LeftPrior2];
-                    self.dirty_mirror = true;
-                    self.selected_action_index = 0;
-                } else if ctx.input(|i| i.key_pressed(egui::Key::Num0)) {
-                    self.selected_slots = vec![SlotId::LeftHand];
-                    self.dirty_mirror = true;
-                    self.selected_action_index = 0;
-                } else if (ctx.input(|i| i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::X))) && self.selected_slots.len() == 2 {
-                    let a = self.selected_slots[0];
-                    let b = self.selected_slots[1];
-                    let _ = send_ipc_request(&IpcRequest::SwapSlots(a, b));
-                    self.state.swap_slots(a, b);
-                    self.dirty_mirror = true;
-                    self.status_msg = Some(format!("Swapped {} and {}", a.label(), b.label()));
-                }
-            }
-
-            // Intercept first-character shortcuts from search input
-            if self.search_query.starts_with(' ') {
-                if !audio_region_active {
-                    self.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
-                    self.search_query = self.search_query.trim_start().to_string();
-                    self.dirty_mirror = true;
-                    self.selected_action_index = 0;
-                } else {
-                    self.search_query = self.search_query.trim_start().to_string();
-                }
-            } else if self.search_query == "1" {
-                self.selected_slots = vec![SlotId::LeftHand, SlotId::LeftPrior1];
-                self.search_query.clear();
-                self.dirty_mirror = true;
-                self.selected_action_index = 0;
-            } else if self.search_query == "2" {
-                self.selected_slots = vec![SlotId::LeftHand, SlotId::LeftPrior2];
-                self.search_query.clear();
-                self.dirty_mirror = true;
-                self.selected_action_index = 0;
-            } else if self.search_query == "3" {
-                self.selected_slots = vec![SlotId::LeftHand, SlotId::LeftPrior1, SlotId::LeftPrior2];
-                self.search_query.clear();
-                self.dirty_mirror = true;
-                self.selected_action_index = 0;
-            } else if self.search_query == "0" || self.search_query == "`" {
-                self.selected_slots = vec![SlotId::LeftHand];
-                self.search_query.clear();
-                self.dirty_mirror = true;
-                self.selected_action_index = 0;
-            } else if (self.search_query.trim() == "swap" || ((self.search_query == "s" || self.search_query == "x") && self.selected_slots.len() == 2)) && self.selected_slots.len() == 2 {
-                let a = self.selected_slots[0];
-                let b = self.selected_slots[1];
-                let _ = send_ipc_request(&IpcRequest::SwapSlots(a, b));
-                self.state.swap_slots(a, b);
-                self.search_query.clear();
-                self.dirty_mirror = true;
-                self.status_msg = Some(format!("Swapped {} and {}", a.label(), b.label()));
-            }
-
-            let filtered = self.filtered_actions();
-            if !filtered.is_empty() && self.selected_action_index >= filtered.len() {
-                self.selected_action_index = 0;
-            }
-
-            // Arrow navigation
-            if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) && !filtered.is_empty() {
-                self.selected_action_index = (self.selected_action_index + 1) % filtered.len();
-            }
-            if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) && !filtered.is_empty() {
-                self.selected_action_index = if self.selected_action_index == 0 {
-                    filtered.len() - 1
-                } else {
-                    self.selected_action_index - 1
-                };
-            }
-            if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
-                self.execute_current_action(ctx);
-            }
-        }
+        self.handle_global_shortcuts(ctx);
 
         // Top Header Panel: Mirror of Trofeo Screen + Tabs
         egui::TopBottomPanel::top("header_panel")
@@ -1402,6 +1011,7 @@ impl eframe::App for WorkbenchApp {
                                 .color(egui::Color32::from_rgb(99, 102, 241))
                                 .strong(),
                         );
+                        let audio_region_active = self.is_audio_region_active();
                         let mut text_edit = egui::TextEdit::singleline(&mut self.search_query)
                             .hint_text("Type action or /recipe to execute...");
                         if audio_region_active {
@@ -1610,6 +1220,441 @@ impl eframe::App for WorkbenchApp {
                 }
             }
         });
+    }
+}
+
+impl WorkbenchApp {
+    pub fn is_audio_region_active(&self) -> bool {
+        self.rolling_audio_strip
+            .as_ref()
+            .map_or(false, |s| s.selected_region.is_some())
+    }
+
+    fn render_modal_viewers(&mut self, ctx: &egui::Context) -> bool {
+        self.render_prompt_modal(ctx)
+            || self.render_diff_modals(ctx)
+            || self.render_audio_image_modals(ctx)
+            || self.render_doc_3d_modals(ctx)
+    }
+
+    fn render_prompt_modal(&mut self, ctx: &egui::Context) -> bool {
+        if let Some(prompt) = &mut self.in_app_prompt {
+            let mut close_prompt = false;
+            let mut submit_text: Option<String> = None;
+
+            egui::Window::new(format!("✦ Input Required — {}", prompt.recipe_name))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .fixed_size([500.0, 180.0])
+                .frame(
+                    egui::Frame::window(&ctx.style())
+                        .fill(egui::Color32::from_rgb(20, 24, 34))
+                        .stroke(egui::Stroke::new(1.5, egui::Color32::from_rgb(99, 102, 241)))
+                        .rounding(8.0)
+                        .inner_margin(egui::Margin::symmetric(22.0, 18.0)),
+                )
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("✦")
+                                .color(egui::Color32::from_rgb(168, 85, 247))
+                                .strong()
+                                .size(18.0),
+                        );
+                        ui.heading(
+                            egui::RichText::new(&prompt.recipe_name)
+                                .color(egui::Color32::from_rgb(241, 245, 249))
+                                .strong(),
+                        );
+                    });
+
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(&prompt.message)
+                            .color(egui::Color32::from_rgb(148, 163, 184))
+                            .size(13.0),
+                    );
+
+                    ui.add_space(10.0);
+                    let edit_resp = ui.add(
+                        egui::TextEdit::singleline(&mut prompt.input_text)
+                            .desired_width(ui.available_width())
+                            .hint_text("Type input text here..."),
+                    );
+
+                    if prompt.first_frame {
+                        edit_resp.request_focus();
+                        prompt.first_frame = false;
+                    }
+
+                    let enter = edit_resp.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter));
+
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        let submit_btn = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new("Execute & Run [Enter]")
+                                    .color(egui::Color32::WHITE)
+                                    .strong(),
+                            )
+                            .fill(egui::Color32::from_rgb(79, 70, 229)),
+                        );
+
+                        let cancel_btn = ui.add(
+                            egui::Button::new(
+                                egui::RichText::new("Cancel [Esc]")
+                                    .color(egui::Color32::from_rgb(148, 163, 184)),
+                            )
+                            .fill(egui::Color32::from_rgb(30, 41, 59)),
+                        );
+
+                        if submit_btn.clicked() || enter {
+                            submit_text = Some(prompt.input_text.clone());
+                        }
+
+                        if cancel_btn.clicked() || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            close_prompt = true;
+                        }
+                    });
+                });
+
+            if let Some(text) = submit_text {
+                let req = IpcRequest::ExecuteRecipeWithPrompt {
+                    recipe_name: prompt.recipe_name.clone(),
+                    prompt_text: Some(text),
+                };
+                let _ = send_ipc_request(&req);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else if close_prompt {
+                self.in_app_prompt = None;
+            }
+            return true;
+        }
+        false
+    }
+
+    fn render_diff_modals(&mut self, ctx: &egui::Context) -> bool {
+        if let Some(diff_state) = &mut self.diff_viewer {
+            let mut close_diff = false;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    diff_state.render_ui(ui, ctx, &mut close_diff);
+                });
+
+            if close_diff {
+                self.diff_viewer = None;
+            }
+            return true;
+        }
+
+        if let Some(binary_diff_state) = &mut self.binary_diff_viewer {
+            let mut close_binary_diff = false;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    binary_diff_state.render_ui(ui, ctx, &mut close_binary_diff);
+                });
+
+            if close_binary_diff {
+                self.binary_diff_viewer = None;
+            }
+            return true;
+        }
+
+        false
+    }
+
+    fn render_audio_image_modals(&mut self, ctx: &egui::Context) -> bool {
+        if let Some(audio_state) = &mut self.audio_preview {
+            let mut close_audio = false;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    audio_state.render_ui(ui, ctx, &mut close_audio);
+                });
+
+            if close_audio {
+                audio_state.stop();
+                self.audio_preview = None;
+            }
+            return true;
+        }
+
+        if let Some(image_state) = &mut self.image_preview {
+            let mut close_image = false;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    image_state.render_ui(ui, ctx, &mut close_image);
+                });
+
+            if close_image {
+                self.image_preview = None;
+            }
+            return true;
+        }
+
+        false
+    }
+
+    fn render_doc_3d_modals(&mut self, ctx: &egui::Context) -> bool {
+        if let Some(sheet_state) = &mut self.spreadsheet_viewer {
+            let mut close_sheet = false;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    sheet_state.render_ui(ui, ctx, &mut close_sheet);
+                });
+
+            if close_sheet {
+                self.spreadsheet_viewer = None;
+            }
+            return true;
+        }
+
+        if let Some(pdf_state) = &mut self.pdf_viewer {
+            let mut close_pdf = false;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    pdf_state.render_ui(ui, ctx, &mut close_pdf);
+                });
+
+            if close_pdf {
+                if pdf_state.dirty {
+                    self.dirty_mirror = true;
+                }
+                self.pdf_viewer = None;
+            }
+            return true;
+        }
+
+        if let Some(midi_state) = &mut self.midi_viewer {
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                midi_state.stop();
+                self.midi_viewer = None;
+                return true;
+            }
+            let mut close_midi = false;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    midi_state.render_ui(ui, &mut close_midi);
+                });
+
+            if close_midi {
+                midi_state.stop();
+                self.midi_viewer = None;
+            }
+            return true;
+        }
+
+        if let Some(stl_state) = &mut self.stl_viewer {
+            let mut close_stl = false;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    stl_state.render_ui(ui, &mut close_stl);
+                });
+
+            if close_stl {
+                self.stl_viewer = None;
+            }
+            return true;
+        }
+
+        false
+    }
+
+    fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
+        let audio_active = self.is_audio_region_active();
+        self.handle_escape_shortcut(ctx, audio_active);
+        self.handle_audio_strip_shortcuts(ctx, audio_active);
+        self.handle_view_switching_shortcuts(ctx);
+        self.handle_palette_shortcuts(ctx, audio_active);
+    }
+
+    fn handle_escape_shortcut(&mut self, ctx: &egui::Context, audio_region_active: bool) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            if audio_region_active {
+                if let Some(strip) = &mut self.rolling_audio_strip {
+                    strip.selected_region = None;
+                    strip.stop();
+                }
+            } else if self.view == WorkbenchView::AutoActions {
+                self.view = WorkbenchView::Palette;
+            } else {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+    }
+
+    fn handle_audio_strip_shortcuts(&mut self, ctx: &egui::Context, audio_region_active: bool) {
+        self.handle_audio_strip_playback(ctx, audio_region_active);
+        self.handle_audio_strip_copy(ctx, audio_region_active);
+        self.handle_audio_strip_refresh(ctx);
+    }
+
+    fn handle_audio_strip_playback(&mut self, ctx: &egui::Context, audio_region_active: bool) {
+        if !audio_region_active {
+            return;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+            if let Some(strip) = &mut self.rolling_audio_strip {
+                strip.toggle_playback();
+            }
+        }
+    }
+
+    fn handle_audio_strip_copy(&mut self, ctx: &egui::Context, audio_region_active: bool) {
+        if !audio_region_active {
+            return;
+        }
+        let copy_pressed = ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C));
+        if !copy_pressed {
+            return;
+        }
+        if let Some(strip) = &mut self.rolling_audio_strip {
+            if strip.selected_region.is_some() {
+                let now = ctx.input(|i| i.time);
+                if strip.copy_selection(now) {
+                    if let Ok(IpcResponse::State(s)) = send_ipc_request(&IpcRequest::GetState) {
+                        self.state = s;
+                    }
+                    self.dirty_mirror = true;
+                }
+            }
+        }
+    }
+
+    fn handle_audio_strip_refresh(&mut self, ctx: &egui::Context) {
+        let refresh_pressed = ctx.input(|i| i.key_pressed(egui::Key::F5) || (i.modifiers.command && i.key_pressed(egui::Key::R)));
+        if !refresh_pressed {
+            return;
+        }
+        if let Some(strip) = &mut self.rolling_audio_strip {
+            strip.load_snapshot();
+            let now = ctx.input(|i| i.time);
+            let peak = strip.max_amplitude();
+            let toast_msg = if peak < 0.001 {
+                "⟳ Snapshot refreshed: buffer is currently silence".to_string()
+            } else {
+                format!("⟳ Snapshot refreshed ({:.1}s, peak: {:.0}%)", strip.duration_sec, peak * 100.0)
+            };
+            strip.status_toast = Some((toast_msg, now));
+        }
+    }
+
+    fn handle_view_switching_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
+            self.view = WorkbenchView::NodeMachine;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
+            self.view = match self.view {
+                WorkbenchView::Palette => WorkbenchView::NodeMachine,
+                WorkbenchView::NodeMachine | WorkbenchView::AutoActions => WorkbenchView::Palette,
+            };
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::F3)) {
+            self.view = match self.view {
+                WorkbenchView::AutoActions => WorkbenchView::Palette,
+                _ => WorkbenchView::AutoActions,
+            };
+        }
+    }
+
+    fn handle_palette_shortcuts(&mut self, ctx: &egui::Context, audio_region_active: bool) {
+        if self.view != WorkbenchView::Palette {
+            return;
+        }
+
+        if self.search_query.is_empty() {
+            self.handle_empty_search_shortcuts(ctx, audio_region_active);
+        } else {
+            self.handle_search_prefix_shortcuts(audio_region_active);
+        }
+
+        self.handle_palette_nav_and_execution(ctx);
+    }
+
+    fn handle_empty_search_shortcuts(&mut self, ctx: &egui::Context, audio_region_active: bool) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
+            self.view = WorkbenchView::NodeMachine;
+        } else if ctx.input(|i| i.key_pressed(egui::Key::Space)) && !audio_region_active {
+            self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::RightHand]);
+        } else if ctx.input(|i| i.key_pressed(egui::Key::Num1)) {
+            self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::LeftPrior1]);
+        } else if ctx.input(|i| i.key_pressed(egui::Key::Num2)) {
+            self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::LeftPrior2]);
+        } else if ctx.input(|i| i.key_pressed(egui::Key::Num3)) {
+            self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::LeftPrior1, SlotId::LeftPrior2]);
+        } else if ctx.input(|i| i.key_pressed(egui::Key::Num0)) {
+            self.apply_quick_slot_selection(vec![SlotId::LeftHand]);
+        } else if (ctx.input(|i| i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::X))) && self.selected_slots.len() == 2 {
+            self.swap_selected_slots();
+        }
+    }
+
+    fn apply_quick_slot_selection(&mut self, slots: Vec<SlotId>) {
+        self.selected_slots = slots;
+        self.dirty_mirror = true;
+        self.selected_action_index = 0;
+    }
+
+    fn swap_selected_slots(&mut self) {
+        let a = self.selected_slots[0];
+        let b = self.selected_slots[1];
+        let _ = send_ipc_request(&IpcRequest::SwapSlots(a, b));
+        self.state.swap_slots(a, b);
+        self.dirty_mirror = true;
+        self.status_msg = Some(format!("Swapped {} and {}", a.label(), b.label()));
+    }
+
+    fn handle_search_prefix_shortcuts(&mut self, audio_region_active: bool) {
+        if self.search_query.starts_with(' ') {
+            if !audio_region_active {
+                self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::RightHand]);
+            }
+            self.search_query = self.search_query.trim_start().to_string();
+        } else if self.search_query == "1" {
+            self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::LeftPrior1]);
+            self.search_query.clear();
+        } else if self.search_query == "2" {
+            self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::LeftPrior2]);
+            self.search_query.clear();
+        } else if self.search_query == "3" {
+            self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::LeftPrior1, SlotId::LeftPrior2]);
+            self.search_query.clear();
+        } else if self.search_query == "0" || self.search_query == "`" {
+            self.apply_quick_slot_selection(vec![SlotId::LeftHand]);
+            self.search_query.clear();
+        } else if (self.search_query.trim() == "swap" || ((self.search_query == "s" || self.search_query == "x") && self.selected_slots.len() == 2)) && self.selected_slots.len() == 2 {
+            self.swap_selected_slots();
+            self.search_query.clear();
+        }
+    }
+
+    fn handle_palette_nav_and_execution(&mut self, ctx: &egui::Context) {
+        let filtered = self.filtered_actions();
+        if !filtered.is_empty() && self.selected_action_index >= filtered.len() {
+            self.selected_action_index = 0;
+        }
+
+        if ctx.input(|i| i.key_pressed(egui::Key::ArrowDown)) && !filtered.is_empty() {
+            self.selected_action_index = (self.selected_action_index + 1) % filtered.len();
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::ArrowUp)) && !filtered.is_empty() {
+            self.selected_action_index = if self.selected_action_index == 0 {
+                filtered.len() - 1
+            } else {
+                self.selected_action_index - 1
+            };
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+            self.execute_current_action(ctx);
+        }
     }
 }
 

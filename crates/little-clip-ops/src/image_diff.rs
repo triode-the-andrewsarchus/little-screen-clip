@@ -74,6 +74,48 @@ impl ImageDiffResult {
 
 /// Computes the perceptual difference between two RGBA images using the NTSC YIQ color space
 /// (matching ODiff and pixelmatch algorithms), accelerated across all CPU cores.
+#[inline(always)]
+fn write_diff_pixel(
+    m_chunk: &mut [u8],
+    o_chunk: &mut [u8],
+    idx: usize,
+    diff_r: u8,
+    diff_g: u8,
+    diff_b: u8,
+    diff_a: u8,
+) {
+    m_chunk[idx] = diff_r;
+    m_chunk[idx + 1] = diff_g;
+    m_chunk[idx + 2] = diff_b;
+    m_chunk[idx + 3] = diff_a;
+
+    o_chunk[idx] = diff_r;
+    o_chunk[idx + 1] = diff_g;
+    o_chunk[idx + 2] = diff_b;
+    o_chunk[idx + 3] = diff_a;
+}
+
+#[inline(always)]
+fn write_identical_pixel(
+    m_chunk: &mut [u8],
+    o_chunk: &mut [u8],
+    idx: usize,
+    r: u8,
+    g: u8,
+    b: u8,
+) {
+    m_chunk[idx] = 0;
+    m_chunk[idx + 1] = 0;
+    m_chunk[idx + 2] = 0;
+    m_chunk[idx + 3] = 255;
+
+    let gray = ((0.299 * (r as f32) + 0.587 * (g as f32) + 0.114 * (b as f32)) * 0.45) as u8;
+    o_chunk[idx] = gray;
+    o_chunk[idx + 1] = gray;
+    o_chunk[idx + 2] = gray;
+    o_chunk[idx + 3] = 255;
+}
+
 pub fn compare_rgba_images(
     base: &RgbaImage,
     comp: &RgbaImage,
@@ -157,26 +199,9 @@ pub fn compare_rgba_images(
                         let is_diff = is_pixel_different_fast(b, c, threshold_sq);
                         if is_diff {
                             local_diff += 1;
-                            m_chunk[idx] = diff_r;
-                            m_chunk[idx + 1] = diff_g;
-                            m_chunk[idx + 2] = diff_b;
-                            m_chunk[idx + 3] = diff_a;
-
-                            o_chunk[idx] = diff_r;
-                            o_chunk[idx + 1] = diff_g;
-                            o_chunk[idx + 2] = diff_b;
-                            o_chunk[idx + 3] = diff_a;
+                            write_diff_pixel(m_chunk, o_chunk, idx, diff_r, diff_g, diff_b, diff_a);
                         } else {
-                            m_chunk[idx] = 0;
-                            m_chunk[idx + 1] = 0;
-                            m_chunk[idx + 2] = 0;
-                            m_chunk[idx + 3] = 255;
-
-                            let gray = ((0.299 * (b[0] as f32) + 0.587 * (b[1] as f32) + 0.114 * (b[2] as f32)) * 0.45) as u8;
-                            o_chunk[idx] = gray;
-                            o_chunk[idx + 1] = gray;
-                            o_chunk[idx + 2] = gray;
-                            o_chunk[idx + 3] = 255;
+                            write_identical_pixel(m_chunk, o_chunk, idx, b[0], b[1], b[2]);
                         }
                     }
 
@@ -262,33 +287,19 @@ pub fn compare_rgba_images(
 
                             if is_different {
                                 local_diff += 1;
-                                m_chunk[idx] = diff_r;
-                                m_chunk[idx + 1] = diff_g;
-                                m_chunk[idx + 2] = diff_b;
-                                m_chunk[idx + 3] = diff_a;
-
-                                o_chunk[idx] = diff_r;
-                                o_chunk[idx + 1] = diff_g;
-                                o_chunk[idx + 2] = diff_b;
-                                o_chunk[idx + 3] = diff_a;
+                                write_diff_pixel(m_chunk, o_chunk, idx, diff_r, diff_g, diff_b, diff_a);
+                            } else if let Some(b) = p1 {
+                                write_identical_pixel(m_chunk, o_chunk, idx, b[0], b[1], b[2]);
                             } else {
                                 m_chunk[idx] = 0;
                                 m_chunk[idx + 1] = 0;
                                 m_chunk[idx + 2] = 0;
                                 m_chunk[idx + 3] = 255;
 
-                                if let Some(b) = p1 {
-                                    let gray = ((0.299 * (b[0] as f32) + 0.587 * (b[1] as f32) + 0.114 * (b[2] as f32)) * 0.45) as u8;
-                                    o_chunk[idx] = gray;
-                                    o_chunk[idx + 1] = gray;
-                                    o_chunk[idx + 2] = gray;
-                                    o_chunk[idx + 3] = 255;
-                                } else {
-                                    o_chunk[idx] = 15;
-                                    o_chunk[idx + 1] = 15;
-                                    o_chunk[idx + 2] = 15;
-                                    o_chunk[idx + 3] = 255;
-                                }
+                                o_chunk[idx] = 15;
+                                o_chunk[idx + 1] = 15;
+                                o_chunk[idx + 2] = 15;
+                                o_chunk[idx + 3] = 255;
                             }
                         }
                     }

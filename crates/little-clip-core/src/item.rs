@@ -318,237 +318,8 @@ impl ClipItem {
         // 1. Check if copied text represents one or more local file paths / URIs (e.g. from file manager)
         let candidate_paths = extract_local_file_paths(trimmed);
         if !candidate_paths.is_empty() {
-            if candidate_paths.len() == 1 {
-                let path = &candidate_paths[0];
-                if path.is_dir() {
-                    return Self::from_directory(path.clone());
-                }
-
-                // Check if it's a video file on disk
-                if crate::animation::is_video_path(path) {
-                    if let Some(item) = Self::from_video(path.clone()) {
-                        return item;
-                    }
-                }
-
-                // Check if it's an animated image file (GIF or animated WebP) on disk
-                if crate::animation::is_animated_image_path(path) {
-                    if let Some(item) = Self::from_animated_image(path.clone()) {
-                        return item;
-                    }
-                }
-
-                // Check if it's an image file on disk
-                if is_image_path(path) {
-                    if let Ok(bytes) = std::fs::read(path) {
-                        let (w, h) = read_image_dimensions(&bytes).unwrap_or((0, 0));
-                        let size_kb = bytes.len() as f64 / 1024.0;
-                        let file_name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "Image file".to_string());
-                        let ext = path
-                            .extension()
-                            .map(|e| e.to_string_lossy().to_uppercase())
-                            .unwrap_or_else(|| "IMG".to_string());
-
-                        let subtitle = if ext == "SVG" {
-                            if w > 0 && h > 0 {
-                                format!("Vector ({}×{}) • {:.1} KB • SVG", w, h, size_kb)
-                            } else {
-                                format!("Vector • {:.1} KB • SVG", size_kb)
-                            }
-                        } else if w > 0 && h > 0 {
-                            format!("{}×{} • {:.1} KB • {}", w, h, size_kb, ext)
-                        } else {
-                            format!("{:.1} KB • {}", size_kb, ext)
-                        };
-
-                        let thumbnail = ImageThumbnail::generate(&bytes, 320, 220);
-
-                        let handler_tag = if ext == "SVG" {
-                            "SVG (VECTOR)".to_string()
-                        } else {
-                            "IMAGE (FILE)".to_string()
-                        };
-
-                        let mime = if ext == "SVG" {
-                            "image/svg+xml".to_string()
-                        } else {
-                            format!("image/{}", ext.to_lowercase())
-                        };
-
-                        return Self {
-                            id: Uuid::new_v4(),
-                            created_at: current_unix_timestamp(),
-                            payload: ClipPayload::Image {
-                                bytes,
-                                path: Some(path.to_path_buf()),
-                                width: w,
-                                height: h,
-                                mime,
-                                thumbnail,
-                            },
-                            title: file_name,
-                            subtitle,
-                            details: vec![format!("{}×{}", w, h), ext],
-                            handler_tag,
-                        };
-                    }
-                }
-
-                // Check if camera RAW image
-                if crate::raw_image::is_raw_image_path(path) {
-                    if let Ok((preview_bytes, w, h)) = crate::raw_image::extract_raw_image_preview(path) {
-                        let file_name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "RAW Image".to_string());
-                        let ext = path
-                            .extension()
-                            .map(|e| e.to_string_lossy().to_uppercase())
-                            .unwrap_or_else(|| "RAW".to_string());
-                        let file_size_mb = std::fs::metadata(path).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
-                        let subtitle = format!("Camera RAW ({}×{}) • {:.1} MB • {}", w, h, file_size_mb, ext);
-                        let thumbnail = ImageThumbnail::generate(&preview_bytes, 320, 220);
-                        return Self {
-                            id: Uuid::new_v4(),
-                            created_at: current_unix_timestamp(),
-                            payload: ClipPayload::Image {
-                                bytes: preview_bytes,
-                                path: Some(path.to_path_buf()),
-                                width: w,
-                                height: h,
-                                mime: "image/x-camera-raw".to_string(),
-                                thumbnail,
-                            },
-                            title: file_name,
-                            subtitle,
-                            details: vec![format!("{}×{}", w, h), ext, "CAMERA RAW".to_string()],
-                            handler_tag: "RAW (CAMERA)".to_string(),
-                        };
-                    }
-                }
-
-                // Check if PDF document
-                if crate::pdf::is_pdf_path(path) {
-                    if let Ok((page1_bytes, w, h)) = crate::pdf::render_pdf_page_preview(path, 1, 800) {
-                        let file_name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "document.pdf".to_string());
-                        let page_count = crate::pdf::get_pdf_info(path).map(|i| i.page_count).unwrap_or(1);
-                        let file_size_kb = std::fs::metadata(path).map(|m| m.len() as f64 / 1024.0).unwrap_or(0.0);
-                        let subtitle = format!("PDF ({} pg) • {:.1} KB", page_count, file_size_kb);
-                        let thumbnail = ImageThumbnail::generate(&page1_bytes, 320, 220);
-                        return Self {
-                            id: Uuid::new_v4(),
-                            created_at: current_unix_timestamp(),
-                            payload: ClipPayload::Image {
-                                bytes: page1_bytes,
-                                path: Some(path.to_path_buf()),
-                                width: w,
-                                height: h,
-                                mime: "application/pdf".to_string(),
-                                thumbnail,
-                            },
-                            title: file_name,
-                            subtitle,
-                            details: vec![format!("{} pages", page_count), "PDF".to_string()],
-                            handler_tag: "PDF (DOCUMENT)".to_string(),
-                        };
-                    }
-                }
-
-                // Check if it's an audio file on disk
-                if crate::audio::is_audio_path(path) {
-                    if let Some(item) = Self::from_audio(path.clone()) {
-                        return item;
-                    }
-                }
-
-                // Check if Markdown file
-                let ext_lower = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-                if matches!(ext_lower.as_str(), "md" | "markdown" | "mdown") {
-                    if let Ok(content) = std::fs::read_to_string(path) {
-                        let file_name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "document.md".to_string());
-                        let lines_count = content.lines().count();
-                        let size_str = format_bytes(content.len() as u64);
-                        return Self {
-                            id: Uuid::new_v4(),
-                            created_at: current_unix_timestamp(),
-                            payload: ClipPayload::Markdown(content),
-                            title: file_name,
-                            subtitle: format!("Markdown • {} lines • {}", lines_count, size_str),
-                            details: vec!["Markdown".to_string(), format!("{} lines", lines_count), size_str],
-                            handler_tag: "MARKDOWN (FILE)".to_string(),
-                        };
-                    }
-                }
-
-                // Check if Text file (.txt, .text, .log, .ini, .yaml, .yml, .toml, code files)
-                if matches!(
-                    ext_lower.as_str(),
-                    "txt" | "text" | "log" | "ini" | "yaml" | "yml" | "toml" | "rs" | "py" | "c"
-                        | "cpp" | "h" | "js" | "ts" | "html" | "css" | "sh" | "conf" | "env"
-                ) {
-                    if let Ok(content) = std::fs::read_to_string(path) {
-                        let file_name = path
-                            .file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "document.txt".to_string());
-                        let lines_count = content.lines().count();
-                        let size_str = format_bytes(content.len() as u64);
-                        let ext_upper = if ext_lower.is_empty() {
-                            "TXT".to_string()
-                        } else {
-                            ext_lower.to_uppercase()
-                        };
-                        return Self {
-                            id: Uuid::new_v4(),
-                            created_at: current_unix_timestamp(),
-                            payload: ClipPayload::Text(content),
-                            title: file_name,
-                            subtitle: format!("{} • {} lines • {}", ext_upper, lines_count, size_str),
-                            details: vec![ext_upper.clone(), format!("{} lines", lines_count), size_str],
-                            handler_tag: format!("{} (FILE)", ext_upper),
-                        };
-                    }
-                }
-
-                // Check if JSON file
-                if ext_lower == "json" {
-                    if let Ok(content) = std::fs::read_to_string(path) {
-                        if serde_json::from_str::<serde_json::Value>(&content).is_ok() {
-                            let file_name = path
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_else(|| "data.json".to_string());
-                            let size_str = format_bytes(content.len() as u64);
-                            return Self {
-                                id: Uuid::new_v4(),
-                                created_at: current_unix_timestamp(),
-                                payload: ClipPayload::Text(content),
-                                title: file_name,
-                                subtitle: format!("JSON • {}", size_str),
-                                details: vec!["JSON".to_string(), size_str],
-                                handler_tag: "JSON (FILE)".to_string(),
-                            };
-                        }
-                    }
-                }
-
-                // General single file
-                return Self::from_single_file(path);
-            } else {
-                // Multiple files
-                if candidate_paths.iter().all(|p| is_image_path(p)) {
-                    return Self::from_multi_image(candidate_paths);
-                }
-                return Self::from_files(candidate_paths);
+            if let Some(item) = Self::from_candidate_paths(&candidate_paths) {
+                return item;
             }
         }
 
@@ -559,61 +330,19 @@ impl ClipItem {
 
         // 3. Check if raw SVG markup in clipboard
         if is_svg_bytes(trimmed.as_bytes()) && trimmed.contains("</svg>") {
-            let bytes = trimmed.as_bytes().to_vec();
-            let (w, h) = read_image_dimensions(&bytes).unwrap_or((0, 0));
-            let size_kb = bytes.len() as f64 / 1024.0;
-            let thumbnail = ImageThumbnail::generate(&bytes, 320, 220);
-            let staging_dir = std::env::temp_dir().join("little_clip_staging");
-            let _ = std::fs::create_dir_all(&staging_dir);
-            let staging_path = staging_dir.join(format!("{}.svg", Uuid::new_v4()));
-            let _ = std::fs::write(&staging_path, &bytes);
-            return Self {
-                id: Uuid::new_v4(),
-                created_at: current_unix_timestamp(),
-                payload: ClipPayload::Image {
-                    bytes,
-                    path: Some(staging_path),
-                    width: w,
-                    height: h,
-                    mime: "image/svg+xml".to_string(),
-                    thumbnail,
-                },
-                title: "Vector Graphic".to_string(),
-                subtitle: if w > 0 && h > 0 {
-                    format!("Vector ({}×{}) • {:.1} KB • SVG", w, h, size_kb)
-                } else {
-                    format!("Vector • {:.1} KB • SVG", size_kb)
-                },
-                details: vec!["SVG".to_string(), format!("{:.1} KB", size_kb)],
-                handler_tag: "SVG (CLIPBOARD)".to_string(),
-            };
+            return Self::from_svg_clipboard_text(trimmed);
         }
 
-        // 3. Check if JSON string
+        // 4. Check if JSON string
         if (trimmed.starts_with('{') && trimmed.ends_with('}'))
             || (trimmed.starts_with('[') && trimmed.ends_with(']'))
         {
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                let kind_desc = match &val {
-                    serde_json::Value::Object(map) => format!("Object ({} keys)", map.len()),
-                    serde_json::Value::Array(arr) => format!("Array ({} items)", arr.len()),
-                    _ => "JSON Value".to_string(),
-                };
-                let lines_count = text.lines().count();
-                let chars_count = text.chars().count();
-                return Self {
-                    id: Uuid::new_v4(),
-                    created_at: current_unix_timestamp(),
-                    payload: ClipPayload::Text(text),
-                    title: kind_desc,
-                    subtitle: format!("{} lines • {} chars", lines_count, chars_count),
-                    details: vec!["JSON".to_string(), format!("{}L", lines_count)],
-                    handler_tag: "JSON".to_string(),
-                };
+            if let Some(item) = Self::from_json_text(&text, trimmed) {
+                return item;
             }
         }
 
-        // 4. Check if URL
+        // 5. Check if URL
         if (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
             && !trimmed.contains('\n')
         {
@@ -622,45 +351,15 @@ impl ClipItem {
             }
         }
 
-        // 5. Check if Markdown text
-        let is_markdown = trimmed.starts_with("# ")
-            || trimmed.starts_with("## ")
-            || trimmed.starts_with("### ")
-            || (trimmed.contains("\n# ") || trimmed.contains("\n## "))
-            || (trimmed.starts_with("- ") && trimmed.contains("\n- "))
-            || (trimmed.starts_with("* ") && trimmed.contains("\n* "));
-
-        let lines_count = text.lines().count();
-        let chars_count = text.chars().count();
-        let preview_title = text
-            .lines()
-            .next()
-            .unwrap_or("")
-            .trim_start_matches('#')
-            .trim()
-            .chars()
-            .take(40)
-            .collect::<String>();
-
-        let title = if preview_title.is_empty() {
-            if is_markdown { "Markdown note".to_string() } else { "Empty text".to_string() }
-        } else {
-            preview_title
-        };
-
-        if is_markdown {
-            return Self {
-                id: Uuid::new_v4(),
-                created_at: current_unix_timestamp(),
-                payload: ClipPayload::Markdown(text),
-                title,
-                subtitle: format!("Markdown • {} lines • {} chars", lines_count, chars_count),
-                details: vec!["Markdown".to_string(), format!("{} lines", lines_count), format!("{}c", chars_count)],
-                handler_tag: "MARKDOWN".to_string(),
-            };
+        // 6. Check if Markdown text
+        if Self::is_markdown_text(trimmed) {
+            return Self::from_markdown_text(text);
         }
 
-        // 6. Default Plain Text
+        // 7. Default Plain Text
+        let lines_count = text.lines().count();
+        let chars_count = text.chars().count();
+        let title = Self::preview_title_for_text(&text, "Empty text");
         Self {
             id: Uuid::new_v4(),
             created_at: current_unix_timestamp(),
@@ -669,6 +368,337 @@ impl ClipItem {
             subtitle: format!("{} lines • {} chars", lines_count, chars_count),
             details: vec![format!("{}L", lines_count), format!("{}c", chars_count)],
             handler_tag: "TEXT".to_string(),
+        }
+    }
+
+    fn from_candidate_paths(paths: &[PathBuf]) -> Option<Self> {
+        if paths.len() == 1 {
+            Some(Self::from_single_local_path(&paths[0]))
+        } else if paths.iter().all(|p| is_image_path(p)) {
+            Some(Self::from_multi_image(paths.to_vec()))
+        } else {
+            Some(Self::from_files(paths.to_vec()))
+        }
+    }
+
+    fn from_single_local_path(path: &Path) -> Self {
+        if path.is_dir() {
+            return Self::from_directory(path.to_path_buf());
+        }
+        if crate::animation::is_video_path(path) {
+            if let Some(item) = Self::from_video(path.to_path_buf()) {
+                return item;
+            }
+        }
+        if crate::animation::is_animated_image_path(path) {
+            if let Some(item) = Self::from_animated_image(path.to_path_buf()) {
+                return item;
+            }
+        }
+        if is_image_path(path) {
+            if let Some(item) = Self::from_image_file(path) {
+                return item;
+            }
+        }
+        if crate::raw_image::is_raw_image_path(path) {
+            if let Some(item) = Self::from_raw_image_file(path) {
+                return item;
+            }
+        }
+        if crate::pdf::is_pdf_path(path) {
+            if let Some(item) = Self::from_pdf_file(path) {
+                return item;
+            }
+        }
+        if crate::audio::is_audio_path(path) {
+            if let Some(item) = Self::from_audio(path.to_path_buf()) {
+                return item;
+            }
+        }
+        if let Some(item) = Self::from_text_or_code_file(path) {
+            return item;
+        }
+
+        Self::from_single_file(path)
+    }
+
+    fn from_image_file(path: &Path) -> Option<Self> {
+        let bytes = std::fs::read(path).ok()?;
+        let (w, h) = read_image_dimensions(&bytes).unwrap_or((0, 0));
+        let size_kb = bytes.len() as f64 / 1024.0;
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Image file".to_string());
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_uppercase())
+            .unwrap_or_else(|| "IMG".to_string());
+
+        let subtitle = if ext == "SVG" {
+            if w > 0 && h > 0 {
+                format!("Vector ({}×{}) • {:.1} KB • SVG", w, h, size_kb)
+            } else {
+                format!("Vector • {:.1} KB • SVG", size_kb)
+            }
+        } else if w > 0 && h > 0 {
+            format!("{}×{} • {:.1} KB • {}", w, h, size_kb, ext)
+        } else {
+            format!("{:.1} KB • {}", size_kb, ext)
+        };
+
+        let thumbnail = ImageThumbnail::generate(&bytes, 320, 220);
+        let handler_tag = if ext == "SVG" {
+            "SVG (VECTOR)".to_string()
+        } else {
+            "IMAGE (FILE)".to_string()
+        };
+        let mime = if ext == "SVG" {
+            "image/svg+xml".to_string()
+        } else {
+            format!("image/{}", ext.to_lowercase())
+        };
+
+        Some(Self {
+            id: Uuid::new_v4(),
+            created_at: current_unix_timestamp(),
+            payload: ClipPayload::Image {
+                bytes,
+                path: Some(path.to_path_buf()),
+                width: w,
+                height: h,
+                mime,
+                thumbnail,
+            },
+            title: file_name,
+            subtitle,
+            details: vec![format!("{}×{}", w, h), ext],
+            handler_tag,
+        })
+    }
+
+    fn from_raw_image_file(path: &Path) -> Option<Self> {
+        let (preview_bytes, w, h) = crate::raw_image::extract_raw_image_preview(path).ok()?;
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "RAW Image".to_string());
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().to_uppercase())
+            .unwrap_or_else(|| "RAW".to_string());
+        let file_size_mb = std::fs::metadata(path).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+        let subtitle = format!("Camera RAW ({}×{}) • {:.1} MB • {}", w, h, file_size_mb, ext);
+        let thumbnail = ImageThumbnail::generate(&preview_bytes, 320, 220);
+
+        Some(Self {
+            id: Uuid::new_v4(),
+            created_at: current_unix_timestamp(),
+            payload: ClipPayload::Image {
+                bytes: preview_bytes,
+                path: Some(path.to_path_buf()),
+                width: w,
+                height: h,
+                mime: "image/x-camera-raw".to_string(),
+                thumbnail,
+            },
+            title: file_name,
+            subtitle,
+            details: vec![format!("{}×{}", w, h), ext, "CAMERA RAW".to_string()],
+            handler_tag: "RAW (CAMERA)".to_string(),
+        })
+    }
+
+    fn from_pdf_file(path: &Path) -> Option<Self> {
+        let (page1_bytes, w, h) = crate::pdf::render_pdf_page_preview(path, 1, 800).ok()?;
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "document.pdf".to_string());
+        let page_count = crate::pdf::get_pdf_info(path).map(|i| i.page_count).unwrap_or(1);
+        let file_size_kb = std::fs::metadata(path).map(|m| m.len() as f64 / 1024.0).unwrap_or(0.0);
+        let subtitle = format!("PDF ({} pg) • {:.1} KB", page_count, file_size_kb);
+        let thumbnail = ImageThumbnail::generate(&page1_bytes, 320, 220);
+
+        Some(Self {
+            id: Uuid::new_v4(),
+            created_at: current_unix_timestamp(),
+            payload: ClipPayload::Image {
+                bytes: page1_bytes,
+                path: Some(path.to_path_buf()),
+                width: w,
+                height: h,
+                mime: "application/pdf".to_string(),
+                thumbnail,
+            },
+            title: file_name,
+            subtitle,
+            details: vec![format!("{} pages", page_count), "PDF".to_string()],
+            handler_tag: "PDF (DOCUMENT)".to_string(),
+        })
+    }
+
+    fn from_text_or_code_file(path: &Path) -> Option<Self> {
+        let ext_lower = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if matches!(ext_lower.as_str(), "md" | "markdown" | "mdown") {
+            let content = std::fs::read_to_string(path).ok()?;
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "document.md".to_string());
+            let lines_count = content.lines().count();
+            let size_str = format_bytes(content.len() as u64);
+            return Some(Self {
+                id: Uuid::new_v4(),
+                created_at: current_unix_timestamp(),
+                payload: ClipPayload::Markdown(content),
+                title: file_name,
+                subtitle: format!("Markdown • {} lines • {}", lines_count, size_str),
+                details: vec!["Markdown".to_string(), format!("{} lines", lines_count), size_str],
+                handler_tag: "MARKDOWN (FILE)".to_string(),
+            });
+        }
+
+        if ext_lower == "json" {
+            let content = std::fs::read_to_string(path).ok()?;
+            if serde_json::from_str::<serde_json::Value>(&content).is_ok() {
+                let file_name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "data.json".to_string());
+                let size_str = format_bytes(content.len() as u64);
+                return Some(Self {
+                    id: Uuid::new_v4(),
+                    created_at: current_unix_timestamp(),
+                    payload: ClipPayload::Text(content),
+                    title: file_name,
+                    subtitle: format!("JSON • {}", size_str),
+                    details: vec!["JSON".to_string(), size_str],
+                    handler_tag: "JSON (FILE)".to_string(),
+                });
+            }
+        }
+
+        if matches!(
+            ext_lower.as_str(),
+            "txt" | "text" | "log" | "ini" | "yaml" | "yml" | "toml" | "rs" | "py" | "c"
+                | "cpp" | "h" | "js" | "ts" | "html" | "css" | "sh" | "conf" | "env"
+        ) {
+            let content = std::fs::read_to_string(path).ok()?;
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "document.txt".to_string());
+            let lines_count = content.lines().count();
+            let size_str = format_bytes(content.len() as u64);
+            let ext_upper = if ext_lower.is_empty() {
+                "TXT".to_string()
+            } else {
+                ext_lower.to_uppercase()
+            };
+            return Some(Self {
+                id: Uuid::new_v4(),
+                created_at: current_unix_timestamp(),
+                payload: ClipPayload::Text(content),
+                title: file_name,
+                subtitle: format!("{} • {} lines • {}", ext_upper, lines_count, size_str),
+                details: vec![ext_upper.clone(), format!("{} lines", lines_count), size_str],
+                handler_tag: format!("{} (FILE)", ext_upper),
+            });
+        }
+
+        None
+    }
+
+    fn from_svg_clipboard_text(trimmed: &str) -> Self {
+        let bytes = trimmed.as_bytes().to_vec();
+        let (w, h) = read_image_dimensions(&bytes).unwrap_or((0, 0));
+        let size_kb = bytes.len() as f64 / 1024.0;
+        let thumbnail = ImageThumbnail::generate(&bytes, 320, 220);
+        let staging_dir = std::env::temp_dir().join("little_clip_staging");
+        let _ = std::fs::create_dir_all(&staging_dir);
+        let staging_path = staging_dir.join(format!("{}.svg", Uuid::new_v4()));
+        let _ = std::fs::write(&staging_path, &bytes);
+        Self {
+            id: Uuid::new_v4(),
+            created_at: current_unix_timestamp(),
+            payload: ClipPayload::Image {
+                bytes,
+                path: Some(staging_path),
+                width: w,
+                height: h,
+                mime: "image/svg+xml".to_string(),
+                thumbnail,
+            },
+            title: "Vector Graphic".to_string(),
+            subtitle: if w > 0 && h > 0 {
+                format!("Vector ({}×{}) • {:.1} KB • SVG", w, h, size_kb)
+            } else {
+                format!("Vector • {:.1} KB • SVG", size_kb)
+            },
+            details: vec!["SVG".to_string(), format!("{:.1} KB", size_kb)],
+            handler_tag: "SVG (CLIPBOARD)".to_string(),
+        }
+    }
+
+    fn from_json_text(text: &str, trimmed: &str) -> Option<Self> {
+        let val = serde_json::from_str::<serde_json::Value>(trimmed).ok()?;
+        let kind_desc = match &val {
+            serde_json::Value::Object(map) => format!("Object ({} keys)", map.len()),
+            serde_json::Value::Array(arr) => format!("Array ({} items)", arr.len()),
+            _ => "JSON Value".to_string(),
+        };
+        let lines_count = text.lines().count();
+        let chars_count = text.chars().count();
+        Some(Self {
+            id: Uuid::new_v4(),
+            created_at: current_unix_timestamp(),
+            payload: ClipPayload::Text(text.to_string()),
+            title: kind_desc,
+            subtitle: format!("{} lines • {} chars", lines_count, chars_count),
+            details: vec!["JSON".to_string(), format!("{}L", lines_count)],
+            handler_tag: "JSON".to_string(),
+        })
+    }
+
+    fn is_markdown_text(trimmed: &str) -> bool {
+        trimmed.starts_with("# ")
+            || trimmed.starts_with("## ")
+            || trimmed.starts_with("### ")
+            || (trimmed.contains("\n# ") || trimmed.contains("\n## "))
+            || (trimmed.starts_with("- ") && trimmed.contains("\n- "))
+            || (trimmed.starts_with("* ") && trimmed.contains("\n* "))
+    }
+
+    fn from_markdown_text(text: String) -> Self {
+        let lines_count = text.lines().count();
+        let chars_count = text.chars().count();
+        let title = Self::preview_title_for_text(&text, "Markdown note");
+        Self {
+            id: Uuid::new_v4(),
+            created_at: current_unix_timestamp(),
+            payload: ClipPayload::Markdown(text),
+            title,
+            subtitle: format!("Markdown • {} lines • {}", lines_count, chars_count),
+            details: vec!["Markdown".to_string(), format!("{} lines", lines_count), format!("{}c", chars_count)],
+            handler_tag: "MARKDOWN".to_string(),
+        }
+    }
+
+    fn preview_title_for_text(text: &str, default_title: &str) -> String {
+        let preview = text
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim_start_matches('#')
+            .trim()
+            .chars()
+            .take(40)
+            .collect::<String>();
+        if preview.is_empty() {
+            default_title.to_string()
+        } else {
+            preview
         }
     }
 

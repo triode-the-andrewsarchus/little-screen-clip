@@ -141,6 +141,31 @@ impl<'a> PipelineExecutor<'a> {
         Ok(sorted)
     }
 
+    fn extract_script_stdin(inputs: &HashMap<String, PortValue>) -> String {
+        let in_val = inputs.values().next().cloned();
+        match in_val {
+            Some(PortValue::Text(t)) => t,
+            Some(PortValue::FilePath(p)) | Some(PortValue::ImagePath(p)) | Some(PortValue::AudioPath(p)) => {
+                p.display().to_string()
+            }
+            Some(PortValue::FileBatch(paths)) => paths
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join("\n"),
+            None => String::new(),
+        }
+    }
+
+    fn resolve_recipe_script_path(fname: &str) -> std::path::PathBuf {
+        let recipes_dir = super::recipes::get_recipes_dir();
+        if std::path::Path::new(fname).is_absolute() {
+            std::path::PathBuf::from(fname)
+        } else {
+            recipes_dir.join(fname)
+        }
+    }
+
     fn execute_node(
         &self,
         node: &'a NodeInstance,
@@ -776,28 +801,10 @@ else:
 
             // --- Scripting Escape Hatch ---
             NodeKind::PythonScript => {
-                let in_val = inputs.values().next().cloned();
-                let stdin_data = match in_val {
-                    Some(PortValue::Text(t)) => t,
-                    Some(PortValue::FilePath(p)) | Some(PortValue::ImagePath(p)) | Some(PortValue::AudioPath(p)) => {
-                        p.display().to_string()
-                    }
-                    Some(PortValue::FileBatch(paths)) => paths
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                    None => String::new(),
-                };
-
+                let stdin_data = Self::extract_script_stdin(inputs);
                 let script_file = node.props.get("script_file");
                 let stdout = if let Some(fname) = script_file {
-                    let recipes_dir = super::recipes::get_recipes_dir();
-                    let fpath = if std::path::Path::new(fname).is_absolute() {
-                        std::path::PathBuf::from(fname)
-                    } else {
-                        recipes_dir.join(fname)
-                    };
+                    let fpath = Self::resolve_recipe_script_path(fname);
                     if !fpath.exists() {
                         return Err(PipelineError::NodeFailed(
                             node.title.clone(),
@@ -820,28 +827,10 @@ else:
                 out.push(("Output".to_string(), PortValue::Text(stdout)));
             }
             NodeKind::BashCommand => {
-                let in_val = inputs.values().next().cloned();
-                let stdin_data = match in_val {
-                    Some(PortValue::Text(t)) => t,
-                    Some(PortValue::FilePath(p)) | Some(PortValue::ImagePath(p)) | Some(PortValue::AudioPath(p)) => {
-                        p.display().to_string()
-                    }
-                    Some(PortValue::FileBatch(paths)) => paths
-                        .iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                    None => String::new(),
-                };
-
+                let stdin_data = Self::extract_script_stdin(inputs);
                 let script_file = node.props.get("script_file");
                 let stdout = if let Some(fname) = script_file {
-                    let recipes_dir = super::recipes::get_recipes_dir();
-                    let fpath = if std::path::Path::new(fname).is_absolute() {
-                        std::path::PathBuf::from(fname)
-                    } else {
-                        recipes_dir.join(fname)
-                    };
+                    let fpath = Self::resolve_recipe_script_path(fname);
                     if !fpath.exists() {
                         return Err(PipelineError::NodeFailed(
                             node.title.clone(),

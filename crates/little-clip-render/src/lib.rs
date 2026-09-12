@@ -239,6 +239,20 @@ impl ScreenRenderer {
         self.encode_jpeg(&pixmap)
     }
 
+    /// Returns the border color hex string configured for the given slot.
+    pub fn slot_border_hex(&self, slot_id: SlotId) -> &str {
+        match slot_id {
+            SlotId::Undo => &self.config.colors.undo_border,
+            SlotId::LeftHand => &self.config.colors.left_hand_border,
+            SlotId::LeftPrior1 => &self.config.colors.left_prior1_border,
+            SlotId::LeftPrior2 => &self.config.colors.left_prior2_border,
+            SlotId::LeftPrior3 => &self.config.colors.left_prior3_border,
+            SlotId::RightPrior2 => &self.config.colors.right_prior2_border,
+            SlotId::RightPrior1 => &self.config.colors.right_prior1_border,
+            SlotId::RightHand => &self.config.colors.right_hand_border,
+        }
+    }
+
     /// Draws a single slot card on the canvas with rounded header, status badges, and content previews.
     fn draw_slot_card(
         &self,
@@ -260,6 +274,16 @@ impl ScreenRenderer {
         let rect_w = w as f32 - (margin * 2.0);
         let rect_h = h as f32 - (margin * 2.0);
 
+        let border_hex = if is_cursor {
+            &self.config.colors.cursor_border
+        } else if is_selected {
+            &self.config.colors.selected_border
+        } else {
+            self.slot_border_hex(slot_id)
+        };
+        let (br_r, br_g, br_b, br_a) = parse_hex_color(border_hex);
+        let border_color = Color::from_rgba8(br_r, br_g, br_b, br_a);
+
         // Fill background
         if let Some(cr) = Rect::from_xywh(rect_x, rect_y, rect_w, rect_h) {
             let bg_hex = match slot_id {
@@ -275,25 +299,6 @@ impl ScreenRenderer {
             pixmap.fill_rect(cr, &paint, Transform::identity(), None);
 
             // Card Border
-            let border_hex = if is_cursor {
-                &self.config.colors.cursor_border
-            } else if is_selected {
-                &self.config.colors.selected_border
-            } else {
-                match slot_id {
-                    SlotId::Undo => &self.config.colors.undo_border,
-                    SlotId::LeftHand => &self.config.colors.left_hand_border,
-                    SlotId::LeftPrior1 => &self.config.colors.left_prior1_border,
-                    SlotId::LeftPrior2 => &self.config.colors.left_prior2_border,
-                    SlotId::LeftPrior3 => &self.config.colors.left_prior3_border,
-                    SlotId::RightPrior2 => &self.config.colors.right_prior2_border,
-                    SlotId::RightPrior1 => &self.config.colors.right_prior1_border,
-                    SlotId::RightHand => &self.config.colors.right_hand_border,
-                }
-            };
-            let (br_r, br_g, br_b, br_a) = parse_hex_color(border_hex);
-            let border_color = Color::from_rgba8(br_r, br_g, br_b, br_a);
-
             let stroke_width = if is_hero || is_cursor || is_selected {
                 3.0
             } else {
@@ -307,38 +312,9 @@ impl ScreenRenderer {
             pixmap.stroke_path(&path, &stroke_paint, &stroke, Transform::identity(), None);
         }
 
-        // Card Border Color for slot
-        let border_hex = if is_cursor {
-            &self.config.colors.cursor_border
-        } else if is_selected {
-            &self.config.colors.selected_border
-        } else {
-            match slot_id {
-                SlotId::Undo => &self.config.colors.undo_border,
-                SlotId::LeftHand => &self.config.colors.left_hand_border,
-                SlotId::LeftPrior1 => &self.config.colors.left_prior1_border,
-                SlotId::LeftPrior2 => &self.config.colors.left_prior2_border,
-                SlotId::LeftPrior3 => &self.config.colors.left_prior3_border,
-                SlotId::RightPrior2 => &self.config.colors.right_prior2_border,
-                SlotId::RightPrior1 => &self.config.colors.right_prior1_border,
-                SlotId::RightHand => &self.config.colors.right_hand_border,
-            }
-        };
-        let (br_r, br_g, br_b, br_a) = parse_hex_color(border_hex);
-        let border_color = Color::from_rgba8(br_r, br_g, br_b, br_a);
-
         // Header Pill / Slot Label (Font 30px for hero, 24px for prior)
         let header_text = slot_id.label();
-        let header_hex = match slot_id {
-            SlotId::Undo => &self.config.colors.undo_border,
-            SlotId::LeftHand => &self.config.colors.left_hand_border,
-            SlotId::LeftPrior1 => &self.config.colors.left_prior1_border,
-            SlotId::LeftPrior2 => &self.config.colors.left_prior2_border,
-            SlotId::LeftPrior3 => &self.config.colors.left_prior3_border,
-            SlotId::RightPrior2 => &self.config.colors.right_prior2_border,
-            SlotId::RightPrior1 => &self.config.colors.right_prior1_border,
-            SlotId::RightHand => &self.config.colors.right_hand_border,
-        };
+        let header_hex = self.slot_border_hex(slot_id);
         let (hdr_r, hdr_g, hdr_b, hdr_a) = parse_hex_color(header_hex);
         let header_color = Color::from_rgba8(hdr_r, hdr_g, hdr_b, hdr_a);
 
@@ -2274,6 +2250,27 @@ impl ScreenRenderer {
         );
     }
 
+fn draw_card_viewport_frame(
+    pixmap: &mut Pixmap,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) -> Option<Rect> {
+    let rect = Rect::from_xywh(x, y, w, h)?;
+    let mut bg_paint = Paint::default();
+    bg_paint.set_color(Color::from_rgba8(15, 23, 42, 220));
+    pixmap.fill_rect(rect, &bg_paint, Transform::identity(), None);
+
+    let mut border_stroke = Stroke::default();
+    border_stroke.width = 1.0;
+    let mut border_paint = Paint::default();
+    border_paint.set_color(Color::from_rgba8(51, 65, 85, 180));
+    let path = PathBuilder::from_rect(rect);
+    pixmap.stroke_path(&path, &border_paint, &border_stroke, Transform::identity(), None);
+    Some(rect)
+}
+
     fn draw_midi_card(
         &self,
         pixmap: &mut Pixmap,
@@ -2318,17 +2315,7 @@ impl ScreenRenderer {
         let roll_w = clip_right - content_x;
         let roll_h = (ry + rh - 30.0 - roll_y).max(40.0);
 
-        if let Some(rect) = Rect::from_xywh(roll_x, roll_y, roll_w, roll_h) {
-            let mut bg_paint = Paint::default();
-            bg_paint.set_color(Color::from_rgba8(15, 23, 42, 220));
-            pixmap.fill_rect(rect, &bg_paint, Transform::identity(), None);
-
-            let mut border_stroke = Stroke::default();
-            border_stroke.width = 1.0;
-            let mut border_paint = Paint::default();
-            border_paint.set_color(Color::from_rgba8(51, 65, 85, 180));
-            let path = PathBuilder::from_rect(rect);
-            pixmap.stroke_path(&path, &border_paint, &border_stroke, Transform::identity(), None);
+        if let Some(_rect) = Self::draw_card_viewport_frame(pixmap, roll_x, roll_y, roll_w, roll_h) {
 
             let kb_w = 16.0f32;
             if let Some(kb_rect) = Rect::from_xywh(roll_x, roll_y, kb_w, roll_h) {
@@ -2440,18 +2427,7 @@ impl ScreenRenderer {
         let vp_w = clip_right - content_x;
         let vp_h = (ry + rh - 30.0 - vp_y).max(40.0);
 
-        if let Some(rect) = Rect::from_xywh(vp_x, vp_y, vp_w, vp_h) {
-            let mut bg_paint = Paint::default();
-            bg_paint.set_color(Color::from_rgba8(15, 23, 42, 220));
-            pixmap.fill_rect(rect, &bg_paint, Transform::identity(), None);
-
-            let mut border_stroke = Stroke::default();
-            border_stroke.width = 1.0;
-            let mut border_paint = Paint::default();
-            border_paint.set_color(Color::from_rgba8(51, 65, 85, 180));
-            let path = PathBuilder::from_rect(rect);
-            pixmap.stroke_path(&path, &border_paint, &border_stroke, Transform::identity(), None);
-
+        if let Some(_rect) = Self::draw_card_viewport_frame(pixmap, vp_x, vp_y, vp_w, vp_h) {
             let now_millis = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis())

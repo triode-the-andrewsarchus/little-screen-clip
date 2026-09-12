@@ -168,77 +168,47 @@ fn parse_time_component(s: &str) -> Option<(u32, u32, u32, TimePrecision)> {
 
     let is_pm = trimmed.ends_with("pm");
     let is_am = trimmed.ends_with("am");
+    let is_12hr = is_pm || is_am;
 
-    if is_pm || is_am {
-        let core = trimmed.trim_end_matches("pm").trim_end_matches("am").trim();
-        let parts: Vec<&str> = core.split(':').collect();
-        match parts.len() {
-            1 => {
-                let mut h: u32 = parts[0].trim().parse().ok()?;
-                if !(1..=12).contains(&h) {
-                    return None;
-                }
-                if is_pm && h < 12 {
-                    h += 12;
-                } else if is_am && h == 12 {
-                    h = 0;
-                }
-                Some((h, 0, 0, TimePrecision::Hour))
-            }
-            2 => {
-                let mut h: u32 = parts[0].trim().parse().ok()?;
-                let m: u32 = parts[1].trim().parse().ok()?;
-                if !(1..=12).contains(&h) || m >= 60 {
-                    return None;
-                }
-                if is_pm && h < 12 {
-                    h += 12;
-                } else if is_am && h == 12 {
-                    h = 0;
-                }
-                Some((h, m, 0, TimePrecision::Minute))
-            }
-            3 => {
-                let mut h: u32 = parts[0].trim().parse().ok()?;
-                let m: u32 = parts[1].trim().parse().ok()?;
-                let sec: u32 = parts[2].trim().parse().ok()?;
-                if !(1..=12).contains(&h) || m >= 60 || sec >= 60 {
-                    return None;
-                }
-                if is_pm && h < 12 {
-                    h += 12;
-                } else if is_am && h == 12 {
-                    h = 0;
-                }
-                Some((h, m, sec, TimePrecision::Second))
-            }
-            _ => None,
+    let core = if is_12hr {
+        trimmed.trim_end_matches("pm").trim_end_matches("am").trim()
+    } else {
+        trimmed
+    };
+
+    let parts: Vec<&str> = core.split(':').collect();
+    let (h_raw, m, sec, precision) = match (is_12hr, parts.len()) {
+        (true, 1) => (parts[0].trim().parse::<u32>().ok()?, 0, 0, TimePrecision::Hour),
+        (true, 2) => (parts[0].trim().parse::<u32>().ok()?, parts[1].trim().parse::<u32>().ok()?, 0, TimePrecision::Minute),
+        (true, 3) => (parts[0].trim().parse::<u32>().ok()?, parts[1].trim().parse::<u32>().ok()?, parts[2].trim().parse::<u32>().ok()?, TimePrecision::Second),
+        (false, 2) => (parts[0].trim().parse::<u32>().ok()?, parts[1].trim().parse::<u32>().ok()?, 0, TimePrecision::Minute),
+        (false, 3) => (parts[0].trim().parse::<u32>().ok()?, parts[1].trim().parse::<u32>().ok()?, parts[2].trim().parse::<u32>().ok()?, TimePrecision::Second),
+        _ => return None,
+    };
+
+    if m >= 60 || sec >= 60 {
+        return None;
+    }
+
+    let h = if is_12hr {
+        if !(1..=12).contains(&h_raw) {
+            return None;
+        }
+        if is_pm && h_raw < 12 {
+            h_raw + 12
+        } else if is_am && h_raw == 12 {
+            0
+        } else {
+            h_raw
         }
     } else {
-        let parts: Vec<&str> = trimmed.split(':').collect();
-        match parts.len() {
-            2 => {
-                let h: u32 = parts[0].trim().parse().ok()?;
-                let m: u32 = parts[1].trim().parse().ok()?;
-                if h < 24 && m < 60 {
-                    Some((h, m, 0, TimePrecision::Minute))
-                } else {
-                    None
-                }
-            }
-            3 => {
-                let h: u32 = parts[0].trim().parse().ok()?;
-                let m: u32 = parts[1].trim().parse().ok()?;
-                let sec: u32 = parts[2].trim().parse().ok()?;
-                if h < 24 && m < 60 && sec < 60 {
-                    Some((h, m, sec, TimePrecision::Second))
-                } else {
-                    None
-                }
-            }
-            _ => None,
+        if h_raw >= 24 {
+            return None;
         }
-    }
+        h_raw
+    };
+
+    Some((h, m, sec, precision))
 }
 
 /// Parses numeric dates like "02/05/25", "02/05/2025", "2/5/25", "2025-02-05", with optional time.

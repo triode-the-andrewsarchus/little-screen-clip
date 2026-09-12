@@ -4,13 +4,8 @@ use std::path::Path;
 /// and content heuristics, prioritizing common languages: Python, C/C++, Rust, Java, Bash, etc.
 pub fn detect_language(content: &str, ext_hint: Option<&str>) -> &'static str {
     // 1. If explicit extension hint is provided, normalize and map it
-    if let Some(ext) = ext_hint {
-        let clean = ext.trim().trim_start_matches('.').to_lowercase();
-        if !clean.is_empty() && clean != "txt" && clean != "text" {
-            if let Some(lang) = map_extension_to_language(&clean) {
-                return lang;
-            }
-        }
+    if let Some(lang) = check_extension_hint(ext_hint) {
+        return lang;
     }
 
     let trimmed = content.trim();
@@ -19,51 +14,81 @@ pub fn detect_language(content: &str, ext_hint: Option<&str>) -> &'static str {
     }
 
     // 2. Shebang line check (e.g. #!/usr/bin/env python3, #!/bin/bash)
-    if trimmed.starts_with("#!") {
-        if let Some(first_line) = trimmed.lines().next() {
-            let fl = first_line.to_lowercase();
-            if fl.contains("python") {
-                return "py";
-            }
-            if fl.contains("bash") || fl.contains("/sh") || fl.contains("zsh") {
-                return "sh";
-            }
-            if fl.contains("node") || fl.contains("deno") || fl.contains("bun") {
-                return "js";
-            }
-            if fl.contains("ruby") {
-                return "rb";
-            }
-            if fl.contains("perl") {
-                return "pl";
-            }
-        }
+    if let Some(lang) = check_shebang(trimmed) {
+        return lang;
     }
 
     // 3. Fast structural checks
+    if let Some(lang) = check_structural_format(trimmed) {
+        return lang;
+    }
+
+    // 4. Scoring heuristics prioritizing Python, C/C++, Rust, Java, Bash, JS/TS
+    if let Some(lang) = score_language_heuristics(trimmed) {
+        return lang;
+    }
+
+    // 5. Fallback heuristics for short snippets
+    check_snippet_fallback(trimmed).unwrap_or("txt")
+}
+
+fn check_extension_hint(ext_hint: Option<&str>) -> Option<&'static str> {
+    let ext = ext_hint?;
+    let clean = ext.trim().trim_start_matches('.').to_lowercase();
+    if !clean.is_empty() && clean != "txt" && clean != "text" {
+        map_extension_to_language(&clean)
+    } else {
+        None
+    }
+}
+
+fn check_shebang(trimmed: &str) -> Option<&'static str> {
+    if !trimmed.starts_with("#!") {
+        return None;
+    }
+    let first_line = trimmed.lines().next()?.to_lowercase();
+    if first_line.contains("python") {
+        Some("py")
+    } else if first_line.contains("bash") || first_line.contains("/sh") || first_line.contains("zsh") {
+        Some("sh")
+    } else if first_line.contains("node") || first_line.contains("deno") || first_line.contains("bun") {
+        Some("js")
+    } else if first_line.contains("ruby") {
+        Some("rb")
+    } else if first_line.contains("perl") {
+        Some("pl")
+    } else {
+        None
+    }
+}
+
+fn check_structural_format(trimmed: &str) -> Option<&'static str> {
     if (trimmed.starts_with('{') && trimmed.ends_with('}'))
         || (trimmed.starts_with('[') && trimmed.ends_with(']'))
     {
         if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
-            return "json";
+            return Some("json");
         }
     }
 
     if trimmed.starts_with("<!DOCTYPE") || trimmed.starts_with("<html") || trimmed.starts_with("<?xml") {
-        return "html";
+        return Some("html");
     }
 
     if trimmed.starts_with("---") && trimmed.contains(": ") {
-        return "yaml";
+        return Some("yaml");
     }
 
     if (trimmed.starts_with("[package]") || trimmed.starts_with("[dependencies]") || trimmed.starts_with("[workspace]"))
         && trimmed.contains('=')
     {
-        return "toml";
+        return Some("toml");
     }
 
-    // 4. Scoring heuristics prioritizing Python, C/C++, Rust, Java, Bash
+    None
+}
+
+fn score_language_heuristics(trimmed: &str) -> Option<&'static str> {
     let mut py_score: u32 = 0;
     let mut rs_score: u32 = 0;
     let mut c_score: u32 = 0;
@@ -72,134 +97,18 @@ pub fn detect_language(content: &str, ext_hint: Option<&str>) -> &'static str {
     let mut sh_score: u32 = 0;
     let mut js_score: u32 = 0;
 
-    // Line-by-line inspection
     for line in trimmed.lines().take(40) {
         let l = line.trim();
-
-        // Rust patterns
-        if l.starts_with("fn ") || l.starts_with("pub fn ") || l.starts_with("pub async fn ") {
-            rs_score += 4;
-        }
-        if l.starts_with("use std::") || l.starts_with("use crate::") || l.starts_with("pub use ") {
-            rs_score += 3;
-        }
-        if l.starts_with("impl ") || l.starts_with("impl<") || l.starts_with("trait ") {
-            rs_score += 3;
-        }
-        if l.starts_with("let mut ") || l.contains("let mut ") {
-            rs_score += 2;
-        }
-        if l.contains("println!(") || l.contains("eprintln!(") || l.contains("vec![") || l.contains("format!(") {
-            rs_score += 3;
-        }
-        if l.contains("match ") && l.ends_with('{') {
-            rs_score += 2;
-        }
-        if l.contains("-> Result<") || l.contains("-> Option<") {
-            rs_score += 2;
-        }
-
-        // Python patterns
-        if l.starts_with("def ") && l.ends_with(':') {
-            py_score += 4;
-        }
-        if l.starts_with("class ") && l.ends_with(':') {
-            py_score += 3;
-        }
-        if (l.starts_with("import ") || l.starts_with("from ")) && !l.ends_with(';') {
-            py_score += 3;
-        }
-        if l.starts_with("if __name__ == ") || l.contains("__init__") {
-            py_score += 4;
-        }
-        if l.starts_with("elif ") || l.starts_with("except ") || l.starts_with("finally:") {
-            py_score += 3;
-        }
-        if l.contains("print(") && !l.ends_with(';') {
-            py_score += 2;
-        }
-        if l.contains("self.") {
-            py_score += 2;
-        }
-
-        // C / C++ patterns
-        if l.starts_with("#include <") || l.starts_with("#include \"") {
-            c_score += 4;
-            if l.contains("<iostream>") || l.contains("<vector>") || l.contains("<string>") || l.contains("<memory>") {
-                cpp_score += 4;
-            }
-        }
-        if l.starts_with("#define ") {
-            c_score += 2;
-        }
-        if l.contains("int main(") || l.contains("void main(") || l.contains("int main (") {
-            c_score += 3;
-        }
-        if l.contains("std::") || l.contains("cout <<") || l.contains("cin >>") || l.contains("nullptr") {
-            cpp_score += 4;
-        }
-        if l.starts_with("template <") || l.starts_with("template<") || l.contains("namespace ") {
-            cpp_score += 3;
-        }
-        if l.contains("printf(") || l.contains("scanf(") || l.contains("malloc(") {
-            c_score += 3;
-        }
-
-        // Java patterns
-        if l.contains("public static void main") || l.contains("System.out.print") || l.contains("System.err.print") {
-            java_score += 5;
-        }
-        if l.starts_with("public class ") || l.starts_with("private class ") || l.starts_with("public interface ") {
-            java_score += 4;
-        }
-        if l.starts_with("package ") && l.ends_with(';') {
-            java_score += 3;
-        }
-        if l.starts_with("import java.") || l.starts_with("import javax.") {
-            java_score += 4;
-        }
-        if l.contains("@Override") || l.contains("throws Exception") {
-            java_score += 2;
-        }
-
-        // Bash patterns
-        if l.starts_with("echo ") || l.starts_with("echo -e ") {
-            sh_score += 2;
-        }
-        if l.starts_with("export ") && l.contains('=') {
-            sh_score += 3;
-        }
-        if l.starts_with("if [") || l.starts_with("if [[") || l.starts_with("elif [") {
-            sh_score += 3;
-        }
-        if l == "fi" || l == "done" || l == "esac" {
-            sh_score += 4;
-        }
-        if l.starts_with("chmod ") || l.starts_with("chown ") || l.starts_with("source ") {
-            sh_score += 2;
-        }
-        if l.contains("${") && l.contains('}') {
-            sh_score += 1;
-        }
-
-        // JS / TS patterns
-        if l.starts_with("const ") || l.starts_with("let ") || l.starts_with("var ") {
-            if l.contains(" = ") {
-                js_score += 1;
-            }
-        }
-        if l.contains("console.log(") || l.contains("console.error(") {
-            js_score += 3;
-        }
-        if l.starts_with("export default ") || l.starts_with("import React") {
-            js_score += 3;
-        }
-        if l.starts_with("interface ") && l.ends_with('{') {
-            js_score += 3;
-        }
+        rs_score += score_rust_line(l);
+        py_score += score_python_line(l);
+        let (c_inc, cpp_inc) = score_c_cpp_line(l);
+        c_score += c_inc;
+        cpp_score += cpp_inc;
+        java_score += score_java_line(l);
+        sh_score += score_bash_line(l);
+        js_score += score_js_line(l);
     }
 
-    // Determine the highest scoring language
     let scores = [
         (py_score, "py"),
         (rs_score, "rs"),
@@ -212,28 +121,166 @@ pub fn detect_language(content: &str, ext_hint: Option<&str>) -> &'static str {
 
     if let Some(&(max_score, lang)) = scores.iter().max_by_key(|(s, _)| *s) {
         if max_score >= 2 {
-            return lang;
+            return Some(lang);
         }
     }
 
-    // 5. Fallback heuristics for short snippets
-    if trimmed.contains("fn ") || trimmed.contains("println!") {
-        return "rs";
-    }
-    if trimmed.contains("def ") || trimmed.contains("print(") {
-        return "py";
-    }
-    if trimmed.contains("#include") || trimmed.contains("printf(") {
-        return "c";
-    }
-    if trimmed.contains("echo ") || trimmed.contains("export ") {
-        return "sh";
-    }
-    if trimmed.contains("public class") || trimmed.contains("System.out.") {
-        return "java";
-    }
+    None
+}
 
-    "txt"
+fn score_rust_line(l: &str) -> u32 {
+    let mut score = 0;
+    if ["fn ", "pub fn ", "pub async fn "].iter().any(|p| l.starts_with(p)) {
+        score += 4;
+    }
+    if ["use std::", "use crate::", "pub use "].iter().any(|p| l.starts_with(p)) {
+        score += 3;
+    }
+    if ["impl ", "impl<", "trait "].iter().any(|p| l.starts_with(p)) {
+        score += 3;
+    }
+    if l.contains("let mut ") {
+        score += 2;
+    }
+    if ["println!(", "eprintln!(", "vec![", "format!("].iter().any(|p| l.contains(p)) {
+        score += 3;
+    }
+    if l.contains("match ") && l.ends_with('{') {
+        score += 2;
+    }
+    if ["-> Result<", "-> Option<"].iter().any(|p| l.contains(p)) {
+        score += 2;
+    }
+    score
+}
+
+fn score_python_line(l: &str) -> u32 {
+    let mut score = 0;
+    if l.starts_with("def ") && l.ends_with(':') {
+        score += 4;
+    }
+    if l.starts_with("class ") && l.ends_with(':') {
+        score += 3;
+    }
+    if ["import ", "from "].iter().any(|p| l.starts_with(p)) && !l.ends_with(';') {
+        score += 3;
+    }
+    if l.starts_with("if __name__ == ") || l.contains("__init__") {
+        score += 4;
+    }
+    if ["elif ", "except ", "finally:"].iter().any(|p| l.starts_with(p)) {
+        score += 3;
+    }
+    if l.contains("print(") && !l.ends_with(';') {
+        score += 2;
+    }
+    if l.contains("self.") {
+        score += 2;
+    }
+    score
+}
+
+fn score_c_cpp_line(l: &str) -> (u32, u32) {
+    let mut c_score = 0;
+    let mut cpp_score = 0;
+    if ["#include <", "#include \""].iter().any(|p| l.starts_with(p)) {
+        c_score += 4;
+        if ["<iostream>", "<vector>", "<string>", "<memory>"].iter().any(|p| l.contains(p)) {
+            cpp_score += 4;
+        }
+    }
+    if l.starts_with("#define ") {
+        c_score += 2;
+    }
+    if ["int main(", "void main(", "int main ("].iter().any(|p| l.contains(p)) {
+        c_score += 3;
+    }
+    if ["std::", "cout <<", "cin >>", "nullptr"].iter().any(|p| l.contains(p)) {
+        cpp_score += 4;
+    }
+    if ["template <", "template<", "namespace "].iter().any(|p| l.contains(p)) {
+        cpp_score += 3;
+    }
+    if ["printf(", "scanf(", "malloc("].iter().any(|p| l.contains(p)) {
+        c_score += 3;
+    }
+    (c_score, cpp_score)
+}
+
+fn score_java_line(l: &str) -> u32 {
+    let mut score = 0;
+    if ["public static void main", "System.out.print", "System.err.print"].iter().any(|p| l.contains(p)) {
+        score += 5;
+    }
+    if ["public class ", "private class ", "public interface "].iter().any(|p| l.starts_with(p)) {
+        score += 4;
+    }
+    if l.starts_with("package ") && l.ends_with(';') {
+        score += 3;
+    }
+    if ["import java.", "import javax."].iter().any(|p| l.starts_with(p)) {
+        score += 4;
+    }
+    if l.contains("@Override") || l.contains("throws Exception") {
+        score += 2;
+    }
+    score
+}
+
+fn score_bash_line(l: &str) -> u32 {
+    let mut score = 0;
+    if ["echo ", "echo -e "].iter().any(|p| l.starts_with(p)) {
+        score += 2;
+    }
+    if l.starts_with("export ") && l.contains('=') {
+        score += 3;
+    }
+    if ["if [", "if [[", "elif ["].iter().any(|p| l.starts_with(p)) {
+        score += 3;
+    }
+    if ["fi", "done", "esac"].contains(&l) {
+        score += 4;
+    }
+    if ["chmod ", "chown ", "source "].iter().any(|p| l.starts_with(p)) {
+        score += 2;
+    }
+    if l.contains("${") && l.contains('}') {
+        score += 1;
+    }
+    score
+}
+
+fn score_js_line(l: &str) -> u32 {
+    let mut score = 0;
+    if (l.starts_with("const ") || l.starts_with("let ") || l.starts_with("var ")) && l.contains(" = ") {
+        score += 1;
+    }
+    if l.contains("console.log(") || l.contains("console.error(") {
+        score += 3;
+    }
+    if l.starts_with("export default ") || l.starts_with("import React") {
+        score += 3;
+    }
+    if l.starts_with("interface ") && l.ends_with('{') {
+        score += 3;
+    }
+    score
+}
+
+fn check_snippet_fallback(trimmed: &str) -> Option<&'static str> {
+    if trimmed.contains("fn ") || trimmed.contains("println!") {
+        Some("rs")
+    } else if trimmed.contains("def ") || trimmed.contains("print(") {
+        Some("py")
+    } else if trimmed.contains("#include") || trimmed.contains("printf(") {
+        Some("c")
+    } else if trimmed.contains("echo ") || trimmed.contains("export ") {
+        Some("sh")
+    } else if trimmed.contains("public class") || trimmed.contains("System.out.") {
+        Some("java")
+    } else {
+        None
+    }
 }
 
 /// Maps standard file extensions to syntect language identifiers

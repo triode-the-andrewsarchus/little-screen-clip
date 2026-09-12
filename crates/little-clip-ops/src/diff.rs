@@ -621,24 +621,11 @@ pub fn generate_unified_inline_diff(lhs: &DiffTarget, rhs: &DiffTarget) -> DiffR
     ));
 
     for group in &groups {
-        let first_op = match group.first() {
-            Some(op) => op,
-            None => continue,
-        };
-        let last_op = match group.last() {
-            Some(op) => op,
-            None => continue,
-        };
-
-        let old_start = first_op.old_range().start + 1;
-        let new_start = first_op.new_range().start + 1;
-        let old_count = last_op.old_range().end - first_op.old_range().start;
-        let new_count = last_op.new_range().end - first_op.new_range().start;
-
-        out.push_str(&format!(
-            "\x1b[36m@@ -{},{} +{},{} @@\x1b[0m\n",
-            old_start, old_count, new_start, new_count
-        ));
+        if let Some(header) = format_hunk_header(group) {
+            out.push_str(&header);
+        } else {
+            continue;
+        }
 
         for op in group {
             match op {
@@ -740,6 +727,59 @@ pub fn generate_unified_inline_diff(lhs: &DiffTarget, rhs: &DiffTarget) -> DiffR
     }
 }
 
+fn format_hunk_header(group: &[similar::DiffOp]) -> Option<String> {
+    let first_op = group.first()?;
+    let last_op = group.last()?;
+
+    let old_start = first_op.old_range().start + 1;
+    let new_start = first_op.new_range().start + 1;
+    let old_count = last_op.old_range().end - first_op.old_range().start;
+    let new_count = last_op.new_range().end - first_op.new_range().start;
+
+    Some(format!(
+        "\x1b[36m@@ -{},{} +{},{} @@\x1b[0m\n",
+        old_start, old_count, new_start, new_count
+    ))
+}
+
+fn append_highlighted_tokens(
+    out: &mut String,
+    ranges: &[(syntect::highlighting::Style, &str)],
+) {
+    for (style, token_str) in ranges {
+        let (r, g, b) = (style.foreground.r, style.foreground.g, style.foreground.b);
+        out.push_str(&format!("\x1b[38;2;{};{};{}m{}", r, g, b, token_str));
+    }
+}
+
+fn compute_word_diff_spans<'a>(
+    word_diff: &similar::TextDiff<'a, 'a, 'a, str>,
+) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
+    let mut old_spans = Vec::new();
+    let mut new_spans = Vec::new();
+    let mut cur_old = 0;
+    let mut cur_new = 0;
+
+    for change in word_diff.iter_all_changes() {
+        let len = change.value().len();
+        match change.tag() {
+            similar::ChangeTag::Delete => {
+                old_spans.push((cur_old, cur_old + len));
+                cur_old += len;
+            }
+            similar::ChangeTag::Insert => {
+                new_spans.push((cur_new, cur_new + len));
+                cur_new += len;
+            }
+            similar::ChangeTag::Equal => {
+                cur_old += len;
+                cur_new += len;
+            }
+        }
+    }
+    (old_spans, new_spans)
+}
+
 fn highlight_line_ansi(
     line: &str,
     highlighter: &mut HighlightLines,
@@ -752,10 +792,7 @@ fn highlight_line_ansi(
         out.push_str(bg);
     }
 
-    for (style, token_str) in ranges {
-        let (r, g, b) = (style.foreground.r, style.foreground.g, style.foreground.b);
-        out.push_str(&format!("\x1b[38;2;{};{};{}m{}", r, g, b, token_str));
-    }
+    append_highlighted_tokens(&mut out, &ranges);
 
     out.push_str("\x1b[0m");
     out
@@ -784,10 +821,7 @@ fn highlight_line_ansi_fixed(
         out.push_str(bg);
     }
 
-    for (style, token_str) in ranges {
-        let (r, g, b) = (style.foreground.r, style.foreground.g, style.foreground.b);
-        out.push_str(&format!("\x1b[38;2;{};{};{}m{}", r, g, b, token_str));
-    }
+    append_highlighted_tokens(&mut out, &ranges);
 
     if char_count < target_w {
         out.push_str(&" ".repeat(target_w - char_count));
@@ -862,28 +896,7 @@ fn format_word_diff_syntax(
         );
     }
 
-    let mut old_spans = Vec::new();
-    let mut new_spans = Vec::new();
-    let mut cur_old = 0;
-    let mut cur_new = 0;
-
-    for change in word_diff.iter_all_changes() {
-        let len = change.value().len();
-        match change.tag() {
-            similar::ChangeTag::Delete => {
-                old_spans.push((cur_old, cur_old + len));
-                cur_old += len;
-            }
-            similar::ChangeTag::Insert => {
-                new_spans.push((cur_new, cur_new + len));
-                cur_new += len;
-            }
-            similar::ChangeTag::Equal => {
-                cur_old += len;
-                cur_new += len;
-            }
-        }
-    }
+    let (old_spans, new_spans) = compute_word_diff_spans(&word_diff);
 
     let old_ranges = highlighter.highlight_line(old_line, &SYNTAX_SET).unwrap_or_default();
     let mut hl_old = render_syntax_with_badges(
@@ -945,28 +958,7 @@ fn format_word_diff_split(
         );
     }
 
-    let mut old_spans = Vec::new();
-    let mut new_spans = Vec::new();
-    let mut cur_old = 0;
-    let mut cur_new = 0;
-
-    for change in word_diff.iter_all_changes() {
-        let len = change.value().len();
-        match change.tag() {
-            similar::ChangeTag::Delete => {
-                old_spans.push((cur_old, cur_old + len));
-                cur_old += len;
-            }
-            similar::ChangeTag::Insert => {
-                new_spans.push((cur_new, cur_new + len));
-                cur_new += len;
-            }
-            similar::ChangeTag::Equal => {
-                cur_old += len;
-                cur_new += len;
-            }
-        }
-    }
+    let (old_spans, new_spans) = compute_word_diff_spans(&word_diff);
 
     let old_ranges = highlighter_lhs.highlight_line(&old_trunc, &SYNTAX_SET).unwrap_or_default();
     let mut hl_old = render_syntax_with_badges(
@@ -1092,24 +1084,11 @@ pub fn generate_split_diff(
     ));
 
     for group in &groups {
-        let first_op = match group.first() {
-            Some(op) => op,
-            None => continue,
-        };
-        let last_op = match group.last() {
-            Some(op) => op,
-            None => continue,
-        };
-
-        let old_start = first_op.old_range().start + 1;
-        let new_start = first_op.new_range().start + 1;
-        let old_count = last_op.old_range().end - first_op.old_range().start;
-        let new_count = last_op.new_range().end - first_op.new_range().start;
-
-        out.push_str(&format!(
-            "\x1b[36m@@ -{},{} +{},{} @@\x1b[0m\n",
-            old_start, old_count, new_start, new_count
-        ));
+        if let Some(header) = format_hunk_header(group) {
+            out.push_str(&header);
+        } else {
+            continue;
+        }
 
         for op in group {
             match op {
