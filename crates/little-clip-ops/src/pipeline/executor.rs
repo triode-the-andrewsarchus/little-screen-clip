@@ -1011,17 +1011,29 @@ fn shellexpand(path: &str) -> PathBuf {
 }
 
 fn prompt_desktop_entry(title: &str, message: &str, default_val: &str) -> Option<String> {
+    // Only attempt GUI dialogs if an X11 or Wayland display session is active
+    let has_display = std::env::var("DISPLAY").map(|v| !v.is_empty()).unwrap_or(false)
+        || std::env::var("WAYLAND_DISPLAY").map(|v| !v.is_empty()).unwrap_or(false);
+
+    if !has_display {
+        return None;
+    }
+
     if let Ok(out) = Command::new("zenity")
         .args([
             "--entry",
             &format!("--title={}", title),
             &format!("--text={}", message),
             &format!("--entry-text={}", default_val),
+            "--timeout=30",
         ])
         .output()
     {
         if out.status.success() {
-            return Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
+            let res = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !res.is_empty() {
+                return Some(res);
+            }
         }
     }
 
@@ -1031,11 +1043,15 @@ fn prompt_desktop_entry(title: &str, message: &str, default_val: &str) -> Option
             &format!("--title={}", title),
             &format!("--text={}", message),
             &format!("--entry-text={}", default_val),
+            "--timeout=30",
         ])
         .output()
     {
         if out.status.success() {
-            return Some(String::from_utf8_lossy(&out.stdout).trim().to_string());
+            let res = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !res.is_empty() {
+                return Some(res);
+            }
         }
     }
 

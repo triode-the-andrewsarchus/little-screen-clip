@@ -28,6 +28,11 @@ pub const USB_BURST_WRITE_SIZE: usize = 4096;
 /// Maximum allowed single frame JPEG payload size in bytes.
 pub const MAX_JPEG_PAYLOAD_BYTES: usize = 450_000;
 
+/// Trofeo Vision protocol requires chunk count to be padded to multiples of 4 (2048-byte burst alignment).
+pub const CHUNK_BURST_ALIGNMENT: usize = 4;
+/// Fixed size of the USB ACK response packet in bytes.
+pub const USB_ACK_SIZE: usize = 512;
+
 /// USB timeout for handshake requests.
 pub const TIMEOUT_HANDSHAKE: Duration = Duration::from_millis(1500);
 /// USB timeout for bulk frame writes.
@@ -220,10 +225,10 @@ impl TrofeoDriver {
         let num_chunks = (total_size / CHUNK_DATA_SIZE) + 1;
         let last_chunk_data = total_size % CHUNK_DATA_SIZE;
 
-        // Pad chunks to multiple of 4
-        let remainder = num_chunks % 4;
+        // Pad chunks to multiple of CHUNK_BURST_ALIGNMENT (4)
+        let remainder = num_chunks % CHUNK_BURST_ALIGNMENT;
         let padded_chunks = if remainder != 0 {
-            num_chunks + (4 - remainder)
+            num_chunks + (CHUNK_BURST_ALIGNMENT - remainder)
         } else {
             num_chunks
         };
@@ -272,9 +277,9 @@ impl TrofeoDriver {
             pos += USB_BURST_WRITE_SIZE;
         }
 
-        // Read 512-byte ACK and propagate errors — a failure here means
+        // Read ACK packet and propagate errors — a failure here means
         // the device is gone/stale and the caller should trigger a reconnect.
-        let mut ack = vec![0u8; 512];
+        let mut ack = vec![0u8; USB_ACK_SIZE];
         self.handle
             .read_bulk(EP_IN, &mut ack, TIMEOUT_READ)
             .map_err(|e| DriverError::WriteFailed(format!("ACK read failed: {e}")))?;

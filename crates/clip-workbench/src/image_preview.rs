@@ -1642,9 +1642,7 @@ impl ImagePreviewState {
     /// Ensure the file exists on disk so external programs can open it.
     /// If image was modified, saves modified buffer to disk.
     pub fn ensure_disk_path(&self) -> Result<PathBuf, String> {
-        let staging_dir = std::env::temp_dir().join("little_clip_staging");
-        std::fs::create_dir_all(&staging_dir)
-            .map_err(|e| format!("Failed to create staging directory: {}", e))?;
+        let staging_dir = little_clip_core::staging::get_staging_dir();
 
         let is_modified = !self.undo_stack.is_empty();
         if !is_modified {

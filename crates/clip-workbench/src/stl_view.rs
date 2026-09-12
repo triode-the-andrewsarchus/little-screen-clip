@@ -224,12 +224,9 @@ impl StlViewerState {
 
                 let light_dir = Vec3::new(0.4, 0.6, 0.7).normalize();
 
-                // Dynamic detail scaling: target ~60,000 triangles when static, ~25,000 when dragging
-                let step = if response.dragged() {
-                    (self.mesh.triangles.len() / 25000).max(1)
-                } else {
-                    (self.mesh.triangles.len() / 60000).max(1)
-                };
+                // Stable detail scaling: target ~60,000 triangles to maintain high interactive framerates
+                // without geometric popping or flickering when transitioning between dragged and static states.
+                let step = (self.mesh.triangles.len() / 60000).max(1);
 
                 let mut projected: Vec<(f32, f32, [Pos2; 3])> = Vec::with_capacity(self.mesh.triangles.len() / step);
 

@@ -375,19 +375,7 @@ pub fn resolve_diff_target(item: &ClipItem) -> Option<DiffTarget> {
             }
 
             if actual_bytes.is_empty() {
-                if let Ok(home) = std::env::var("HOME") {
-                    let candidate = PathBuf::from(&home).join("Documents/type_testing").join(&item.title);
-                    if candidate.is_file() {
-                        if let Ok(b) = std::fs::read(&candidate) {
-                            actual_bytes = b;
-                            actual_path = Some(candidate);
-                        }
-                    }
-                }
-            }
-
-            if actual_bytes.is_empty() {
-                let staging = std::env::temp_dir().join("little_clip_staging").join(&item.title);
+                let staging = little_clip_core::staging::get_staging_dir().join(&item.title);
                 if staging.is_file() {
                     if let Ok(b) = std::fs::read(&staging) {
                         actual_bytes = b;

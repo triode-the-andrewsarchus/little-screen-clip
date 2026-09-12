@@ -197,20 +197,30 @@ pub fn rotate_pdf_page(input: &Path, page_to_rotate: usize, degrees: u32, output
     }
 
     let target_page = temp_dir.join(format!("page-{}.pdf", page_to_rotate));
-    if target_page.is_file() {
-        let rotated_page = temp_dir.join(format!("page-{}-rot.pdf", page_to_rotate));
-        let rot_status = Command::new("magick")
-            .arg(&target_page)
-            .arg("-rotate")
-            .arg(degrees.to_string())
-            .arg(&rotated_page)
-            .status();
+    if !target_page.is_file() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err(format!("PDF page {} does not exist", page_to_rotate));
+    }
+    let rotated_page = temp_dir.join(format!("page-{}-rot.pdf", page_to_rotate));
+    let rot_status = Command::new("magick")
+        .arg(&target_page)
+        .arg("-rotate")
+        .arg(degrees.to_string())
+        .arg(&rotated_page)
+        .status()
+        .map_err(|e| {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            format!("Failed to spawn magick for page rotation: {}", e)
+        })?;
 
-        if let Ok(st) = rot_status {
-            if st.success() && rotated_page.is_file() {
-                let _ = std::fs::rename(&rotated_page, &target_page);
-            }
-        }
+    if !rot_status.success() || !rotated_page.is_file() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err(format!("magick failed to rotate page {} by {} degrees", page_to_rotate, degrees));
+    }
+
+    if let Err(e) = std::fs::rename(&rotated_page, &target_page) {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Err(format!("Failed to replace rotated page: {}", e));
     }
 
     let mut unite_cmd = Command::new("pdfunite");

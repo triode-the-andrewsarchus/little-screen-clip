@@ -607,7 +607,13 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 }
             }
             Ok(IpcRequest::PushImage { bytes, mime, hand }) => {
-                if let Some(item) = ClipItem::from_image_bytes(bytes, mime) {
+                let item_opt = tokio::task::spawn_blocking(move || {
+                    ClipItem::from_image_bytes(bytes, mime)
+                })
+                .await
+                .unwrap_or(None);
+
+                if let Some(item) = item_opt {
                     schedule_async_previews(&item, Arc::clone(&ctx));
                     {
                         let mut mgr = ctx.manager.write().await;
@@ -625,7 +631,13 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 }
             }
             Ok(IpcRequest::PushFile { path, hand }) => {
-                let item = ClipItem::from_single_file(&path);
+                let path_clone = path.clone();
+                let item = tokio::task::spawn_blocking(move || {
+                    ClipItem::from_single_file(&path_clone)
+                })
+                .await
+                .unwrap_or_else(|_| ClipItem::from_single_file(&path));
+
                 schedule_async_previews(&item, Arc::clone(&ctx));
                 {
                     let mut mgr = ctx.manager.write().await;
@@ -643,11 +655,23 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                         error: "No files provided".to_string(),
                     }
                 } else {
-                    let item = if paths.len() == 1 {
-                        ClipItem::from_single_file(&paths[0])
-                    } else {
-                        ClipItem::from_files(paths.clone())
-                    };
+                    let paths_clone = paths.clone();
+                    let item = tokio::task::spawn_blocking(move || {
+                        if paths_clone.len() == 1 {
+                            ClipItem::from_single_file(&paths_clone[0])
+                        } else {
+                            ClipItem::from_files(paths_clone)
+                        }
+                    })
+                    .await
+                    .unwrap_or_else(|_| {
+                        if paths.len() == 1 {
+                            ClipItem::from_single_file(&paths[0])
+                        } else {
+                            ClipItem::from_files(paths.clone())
+                        }
+                    });
+
                     schedule_async_previews(&item, Arc::clone(&ctx));
                     {
                         let mut mgr = ctx.manager.write().await;

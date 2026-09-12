@@ -156,21 +156,27 @@ async fn run_dbus_monitor(ctx: Arc<DaemonContext>) {
 }
 
 async fn run_noctalia_watchdog(ctx: Arc<DaemonContext>) {
-    let mut interval = tokio::time::interval(Duration::from_millis(1000));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
     let mut was_noctalia_locked = false;
+    let mut consecutive_failures: u32 = 0;
 
     loop {
-        interval.tick().await;
+        let sleep_duration = if consecutive_failures == 0 {
+            Duration::from_millis(1000)
+        } else {
+            let backoff_secs = (1u64 << consecutive_failures.min(5)).min(30);
+            Duration::from_secs(backoff_secs)
+        };
+
+        tokio::time::sleep(sleep_duration).await;
 
         let output = tokio::process::Command::new("qs")
             .args(["-c", "noctalia-shell", "ipc", "call", "state", "all"])
             .output()
             .await;
 
-        if let Ok(out) = output {
-            if out.status.success() {
+        match output {
+            Ok(out) if out.status.success() => {
+                consecutive_failures = 0;
                 if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
                     if let Some(is_active) = val.get("state").and_then(|s| s.get("lockScreenActive")).and_then(|b| b.as_bool()) {
                         if is_active && !was_noctalia_locked {
@@ -183,6 +189,12 @@ async fn run_noctalia_watchdog(ctx: Arc<DaemonContext>) {
                             ctx.set_locked(false).await;
                         }
                     }
+                }
+            }
+            _ => {
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                if consecutive_failures == 1 {
+                    debug!("Noctalia watchdog: 'qs' IPC call unavailable, backing off polling");
                 }
             }
         }

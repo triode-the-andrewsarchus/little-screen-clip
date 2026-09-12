@@ -18,6 +18,9 @@ pub enum ImageDiffError {
     /// Image data was empty or invalid format.
     #[error("Unsupported or empty image data")]
     EmptyData,
+    /// SVG rendering failed (e.g. rsvg-convert missing or invalid SVG markup).
+    #[error("Failed to render SVG vector data: {0}. Ensure 'rsvg-convert' (librsvg) is installed.")]
+    SvgRenderError(String),
 }
 
 /// Configuration options for perceptual image comparison.
@@ -431,10 +434,13 @@ pub fn load_rgba_from_bytes(bytes: &[u8]) -> Result<RgbaImage, ImageDiffError> {
 
     // Try SVG conversion
     if is_svg(bytes) {
-        if let Some(png_bytes) = render_svg_to_png(bytes) {
-            if let Ok(dyn_img) = image::load_from_memory(&png_bytes) {
-                return Ok(dyn_img.to_rgba8());
+        match render_svg_to_png(bytes) {
+            Ok(png_bytes) => {
+                if let Ok(dyn_img) = image::load_from_memory(&png_bytes) {
+                    return Ok(dyn_img.to_rgba8());
+                }
             }
+            Err(e) => return Err(ImageDiffError::SvgRenderError(e)),
         }
     }
 
@@ -519,7 +525,7 @@ fn is_svg(bytes: &[u8]) -> bool {
 }
 
 /// Invokes `rsvg-convert` CLI to render SVG bytes to PNG format.
-fn render_svg_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
+fn render_svg_to_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
@@ -527,19 +533,27 @@ fn render_svg_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
         .arg("-a")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
-        .ok()?;
+        .map_err(|e| format!("Failed to execute 'rsvg-convert': {}", e))?;
 
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(bytes);
     }
 
-    let output = child.wait_with_output().ok()?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("'rsvg-convert' failed while waiting for output: {}", e))?;
+
     if output.status.success() && !output.stdout.is_empty() {
-        Some(output.stdout)
+        Ok(output.stdout)
     } else {
-        None
+        let err_msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if err_msg.is_empty() {
+            format!("'rsvg-convert' exited with status {:?}", output.status.code())
+        } else {
+            err_msg
+        })
     }
 }
 

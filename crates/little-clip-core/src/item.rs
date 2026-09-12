@@ -341,9 +341,7 @@ impl ClipItem {
         } else {
             "png"
         };
-        let staging_dir = std::env::temp_dir().join("little_clip_staging");
-        let _ = std::fs::create_dir_all(&staging_dir);
-        let staging_path = staging_dir.join(format!("{}.{}", Uuid::new_v4(), ext));
+        let staging_path = crate::staging::create_staging_path("img", ext);
         let _ = std::fs::write(&staging_path, &bytes);
 
         Some(Self {
@@ -669,9 +667,7 @@ impl ClipItem {
         let (w, h) = read_image_dimensions(&bytes).unwrap_or((0, 0));
         let size_kb = bytes.len() as f64 / 1024.0;
         let thumbnail = ImageThumbnail::generate(&bytes, 320, 220);
-        let staging_dir = std::env::temp_dir().join("little_clip_staging");
-        let _ = std::fs::create_dir_all(&staging_dir);
-        let staging_path = staging_dir.join(format!("{}.svg", Uuid::new_v4()));
+        let staging_path = crate::staging::create_staging_path("svg", "svg");
         let _ = std::fs::write(&staging_path, &bytes);
         Self {
             id: Uuid::new_v4(),
@@ -810,9 +806,7 @@ impl ClipItem {
         } else {
             "png"
         };
-        let staging_dir = std::env::temp_dir().join("little_clip_staging");
-        let _ = std::fs::create_dir_all(&staging_dir);
-        let staging_path = staging_dir.join(format!("{}.{}", Uuid::new_v4(), ext));
+        let staging_path = crate::staging::create_staging_path("img", ext);
         let _ = std::fs::write(&staging_path, &bytes);
 
         Self {
@@ -1374,24 +1368,7 @@ fn parse_raw_path_string(clean: &str, home: Option<&str>) -> Option<String> {
 }
 
 fn parse_hex_color(s: &str) -> Option<(u8, u8, u8, String)> {
-    let s = s.trim();
-    if !s.starts_with('#') {
-        return None;
-    }
-    let hex = &s[1..];
-    if hex.len() == 6 {
-        let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-        let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-        let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-        return Some((r, g, b, format!("#{}", hex.to_uppercase())));
-    }
-    if hex.len() == 3 {
-        let r = u8::from_str_radix(&hex[0..1].repeat(2), 16).ok()?;
-        let g = u8::from_str_radix(&hex[1..2].repeat(2), 16).ok()?;
-        let b = u8::from_str_radix(&hex[2..3].repeat(2), 16).ok()?;
-        return Some((r, g, b, format!("#{}", hex.to_uppercase())));
-    }
-    None
+    crate::color::parse_hex_color(s)
 }
 
 #[cfg(test)]

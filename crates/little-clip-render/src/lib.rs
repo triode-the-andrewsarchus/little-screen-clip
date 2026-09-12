@@ -98,50 +98,79 @@ impl ScreenRenderer {
     }
 
     fn load_fonts() -> (Option<Font>, Option<Font>, Option<Font>, Option<Font>) {
-        let regular_paths = [
-            "/usr/share/fonts/TTF/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+        let home_font_dir = std::env::var("HOME").ok().map(|h| format!("{}/.local/share/fonts", h));
+        let home_fonts_legacy = std::env::var("HOME").ok().map(|h| format!("{}/.fonts", h));
+
+        let mut regular_candidates = vec![
+            "/usr/share/fonts/TTF/DejaVuSans.ttf".to_string(),
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf".to_string(),
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf".to_string(),
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf".to_string(),
+            "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf".to_string(),
+            "/usr/share/fonts/noto/NotoSans-Regular.ttf".to_string(),
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf".to_string(),
+            "/usr/share/fonts/gnu-free/FreeSans.ttf".to_string(),
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf".to_string(),
         ];
-        let bold_paths = [
-            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
+        let mut bold_candidates = vec![
+            "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf".to_string(),
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf".to_string(),
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf".to_string(),
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf".to_string(),
+            "/usr/share/fonts/liberation-sans/LiberationSans-Bold.ttf".to_string(),
+            "/usr/share/fonts/noto/NotoSans-Bold.ttf".to_string(),
+            "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf".to_string(),
+            "/usr/share/fonts/gnu-free/FreeSansBold.ttf".to_string(),
+            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf".to_string(),
         ];
-        let italic_paths = [
-            "/usr/share/fonts/TTF/DejaVuSans-Oblique.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf",
-            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Oblique.ttf",
+        let mut italic_candidates = vec![
+            "/usr/share/fonts/TTF/DejaVuSans-Oblique.ttf".to_string(),
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf".to_string(),
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Oblique.ttf".to_string(),
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf".to_string(),
+            "/usr/share/fonts/liberation-sans/LiberationSans-Italic.ttf".to_string(),
+            "/usr/share/fonts/noto/NotoSans-Italic.ttf".to_string(),
+            "/usr/share/fonts/truetype/noto/NotoSans-Italic.ttf".to_string(),
+            "/usr/share/fonts/gnu-free/FreeSansOblique.ttf".to_string(),
+            "/usr/share/fonts/truetype/freefont/FreeSansOblique.ttf".to_string(),
         ];
-        let mono_paths = [
-            "/usr/share/fonts/TTF/DejaVuSansMono.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSansMono.ttf",
+        let mut mono_candidates = vec![
+            "/usr/share/fonts/TTF/DejaVuSansMono.ttf".to_string(),
+            "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf".to_string(),
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSansMono.ttf".to_string(),
+            "/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf".to_string(),
+            "/usr/share/fonts/liberation-mono/LiberationMono-Regular.ttf".to_string(),
+            "/usr/share/fonts/noto/NotoSansMono-Regular.ttf".to_string(),
+            "/usr/share/fonts/truetype/noto/NotoSansMono-Regular.ttf".to_string(),
+            "/usr/share/fonts/gnu-free/FreeMono.ttf".to_string(),
+            "/usr/share/fonts/truetype/freefont/FreeMono.ttf".to_string(),
         ];
 
-        let regular = regular_paths.iter().find_map(|path| {
-            std::fs::read(path)
-                .ok()
-                .and_then(|data| Font::from_bytes(data, FontSettings::default()).ok())
-        });
+        if let Some(ref hfd) = home_font_dir {
+            regular_candidates.push(format!("{}/DejaVuSans.ttf", hfd));
+            bold_candidates.push(format!("{}/DejaVuSans-Bold.ttf", hfd));
+            italic_candidates.push(format!("{}/DejaVuSans-Oblique.ttf", hfd));
+            mono_candidates.push(format!("{}/DejaVuSansMono.ttf", hfd));
+        }
+        if let Some(ref hfl) = home_fonts_legacy {
+            regular_candidates.push(format!("{}/DejaVuSans.ttf", hfl));
+            bold_candidates.push(format!("{}/DejaVuSans-Bold.ttf", hfl));
+            italic_candidates.push(format!("{}/DejaVuSans-Oblique.ttf", hfl));
+            mono_candidates.push(format!("{}/DejaVuSansMono.ttf", hfl));
+        }
 
-        let bold = bold_paths.iter().find_map(|path| {
-            std::fs::read(path)
-                .ok()
-                .and_then(|data| Font::from_bytes(data, FontSettings::default()).ok())
-        });
+        let try_load = |paths: &[String]| -> Option<Font> {
+            paths.iter().find_map(|path| {
+                std::fs::read(path)
+                    .ok()
+                    .and_then(|data| Font::from_bytes(data, FontSettings::default()).ok())
+            })
+        };
 
-        let italic = italic_paths.iter().find_map(|path| {
-            std::fs::read(path)
-                .ok()
-                .and_then(|data| Font::from_bytes(data, FontSettings::default()).ok())
-        });
-
-        let mono = mono_paths.iter().find_map(|path| {
-            std::fs::read(path)
-                .ok()
-                .and_then(|data| Font::from_bytes(data, FontSettings::default()).ok())
-        });
+        let regular = try_load(&regular_candidates);
+        let bold = try_load(&bold_candidates).or_else(|| regular.clone());
+        let italic = try_load(&italic_candidates).or_else(|| regular.clone());
+        let mono = try_load(&mono_candidates).or_else(|| regular.clone());
 
         (regular, bold, italic, mono)
     }

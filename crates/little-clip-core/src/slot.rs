@@ -248,6 +248,25 @@ impl SlotManager {
         }
     }
 
+    /// Enforces configured depth limits on prior history slots.
+    pub fn apply_config(&mut self, config: &crate::config::SlotsConfig) {
+        if config.left_priors < 3 {
+            self.left_prior3 = None;
+        }
+        if config.left_priors < 2 {
+            self.left_prior2 = None;
+        }
+        if config.left_priors < 1 {
+            self.left_prior1 = None;
+        }
+        if config.right_priors < 2 {
+            self.right_prior2 = None;
+        }
+        if config.right_priors < 1 {
+            self.right_prior1 = None;
+        }
+    }
+
     /// Swaps the contents of any two slots.
     pub fn swap_slots(&mut self, a: SlotId, b: SlotId) {
         if a == b {
@@ -329,6 +348,7 @@ impl SlotManager {
             &mut self.left_hand,
             &mut self.left_prior1,
             &mut self.left_prior2,
+            &mut self.left_prior3,
             &mut self.right_prior2,
             &mut self.right_prior1,
             &mut self.right_hand,
@@ -354,6 +374,7 @@ impl SlotManager {
             &mut self.left_hand,
             &mut self.left_prior1,
             &mut self.left_prior2,
+            &mut self.left_prior3,
             &mut self.right_prior2,
             &mut self.right_prior1,
             &mut self.right_hand,
@@ -388,6 +409,7 @@ impl SlotManager {
             &mut self.left_hand,
             &mut self.left_prior1,
             &mut self.left_prior2,
+            &mut self.left_prior3,
             &mut self.right_prior2,
             &mut self.right_prior1,
             &mut self.right_hand,
@@ -417,6 +439,7 @@ impl SlotManager {
             &mut self.left_hand,
             &mut self.left_prior1,
             &mut self.left_prior2,
+            &mut self.left_prior3,
             &mut self.right_prior2,
             &mut self.right_prior1,
             &mut self.right_hand,
@@ -453,6 +476,7 @@ impl SlotManager {
             &self.left_hand,
             &self.left_prior1,
             &self.left_prior2,
+            &self.left_prior3,
             &self.right_prior2,
             &self.right_prior1,
             &self.right_hand,
@@ -539,4 +563,62 @@ mod tests {
         assert!(json.contains("right_hand"));
         assert!(json.contains("undo"));
     }
+
+    #[test]
+    fn test_left_prior3_async_updates() {
+        let mut mgr = SlotManager::new();
+        let item = ClipItem::from_text("L1");
+        let item_id = item.id;
+        mgr.push_left(item); // left_hand
+        mgr.push_left(ClipItem::from_text("L2")); // L1 -> left_prior1
+        mgr.push_left(ClipItem::from_text("L3")); // L1 -> left_prior2
+        mgr.push_left(ClipItem::from_text("L4")); // L1 -> left_prior3
+
+        assert_eq!(mgr.get(SlotId::LeftPrior3).unwrap().id, item_id);
+
+        // Test multi-image thumbnail update reaching left_prior3
+        let thumb = crate::item::ImageThumbnail {
+            width: 100,
+            height: 100,
+            premultiplied_rgba: vec![255; 100 * 100 * 4],
+        };
+        // Replace payload in left_prior3 with multi-image
+        if let Some(slot) = mgr.get_mut(SlotId::LeftPrior3) {
+            if let Some(it) = slot {
+                it.payload = crate::item::ClipPayload::MultiImage {
+                    paths: vec![std::path::PathBuf::from("a.png")],
+                    total_count: 1,
+                    preview_indices: vec![0],
+                    thumbnails: Vec::new(),
+                };
+            }
+        }
+        assert!(mgr.update_multi_image_thumbnails(item_id, vec![thumb]));
+        if let Some(crate::item::ClipPayload::MultiImage { thumbnails, .. }) =
+            mgr.get(SlotId::LeftPrior3).map(|i| &i.payload)
+        {
+            assert_eq!(thumbnails.len(), 1);
+        } else {
+            panic!("Expected MultiImage payload in LeftPrior3");
+        }
+    }
+
+    #[test]
+    fn test_slots_config_depth_limits() {
+        let mut mgr = SlotManager::new();
+        mgr.push_left(ClipItem::from_text("L1"));
+        mgr.push_left(ClipItem::from_text("L2"));
+        mgr.push_left(ClipItem::from_text("L3"));
+        mgr.push_left(ClipItem::from_text("L4"));
+        assert!(mgr.get(SlotId::LeftPrior3).is_some());
+
+        let cfg = crate::config::SlotsConfig {
+            left_priors: 2,
+            right_priors: 1,
+        };
+        mgr.apply_config(&cfg);
+        assert!(mgr.get(SlotId::LeftPrior3).is_none());
+        assert!(mgr.get(SlotId::LeftPrior2).is_some());
+    }
 }
+

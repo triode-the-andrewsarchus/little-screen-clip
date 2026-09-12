@@ -462,25 +462,5 @@ pub fn get_user_config_path() -> Option<PathBuf> {
 
 /// Helper to parse hex string like "#RRGGBB" or "#RGB" into `(r, g, b, a)` tuple.
 pub fn parse_hex_color(s: &str) -> (u8, u8, u8, u8) {
-    let s = s.trim();
-    let s = s.strip_prefix('#').unwrap_or(s);
-    if s.len() == 6 {
-        let r = u8::from_str_radix(&s[0..2], 16).unwrap_or(255);
-        let g = u8::from_str_radix(&s[2..4], 16).unwrap_or(255);
-        let b = u8::from_str_radix(&s[4..6], 16).unwrap_or(255);
-        (r, g, b, 255)
-    } else if s.len() == 8 {
-        let r = u8::from_str_radix(&s[0..2], 16).unwrap_or(255);
-        let g = u8::from_str_radix(&s[2..4], 16).unwrap_or(255);
-        let b = u8::from_str_radix(&s[4..6], 16).unwrap_or(255);
-        let a = u8::from_str_radix(&s[6..8], 16).unwrap_or(255);
-        (r, g, b, a)
-    } else if s.len() == 3 {
-        let r = u8::from_str_radix(&s[0..1].repeat(2), 16).unwrap_or(255);
-        let g = u8::from_str_radix(&s[1..2].repeat(2), 16).unwrap_or(255);
-        let b = u8::from_str_radix(&s[2..3].repeat(2), 16).unwrap_or(255);
-        (r, g, b, 255)
-    } else {
-        (255, 255, 255, 255)
-    }
+    crate::color::parse_hex_color_rgba(s)
 }

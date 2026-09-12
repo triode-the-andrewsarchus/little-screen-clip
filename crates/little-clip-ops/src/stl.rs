@@ -362,61 +362,66 @@ endsolid simple_triangle
     }
 
     #[test]
-    fn test_part9_stl() {
-        let p = std::path::Path::new("/home/vega/Downloads/Telegram Desktop/Part9.STL");
-        if p.exists() {
-            let mesh = StlMesh::parse_file(p).unwrap();
-            println!("Part9: name={}, tris={}, center={:?}, size={:?}, max_dim={}",
-                mesh.name, mesh.triangles.len(), mesh.center, mesh.size, mesh.max_dimension);
-            
-            // Check projected coordinates
-            let pitch = 0.4f32;
-            let yaw = 0.6f32;
-            let cx = 400.0f32;
-            let cy = 300.0f32;
-            let scale = 30.0f32;
+    fn test_stl_mesh_projection_and_geometry() {
+        // Construct a tetrahedron mesh with 4 triangles
+        let v0 = Vec3::new(0.0, 0.0, 0.0);
+        let v1 = Vec3::new(10.0, 0.0, 0.0);
+        let v2 = Vec3::new(5.0, 10.0, 0.0);
+        let v3 = Vec3::new(5.0, 5.0, 10.0);
 
-            let sin_yaw = yaw.sin();
-            let cos_yaw = yaw.cos();
-            let sin_pitch = pitch.sin();
-            let cos_pitch = pitch.cos();
-            let center = mesh.center;
+        let triangles = vec![
+            Triangle { normal: Vec3::new(0.0, 0.0, -1.0), v1: v0, v2: v1, v3: v2 },
+            Triangle { normal: Vec3::new(0.0, -0.894, 0.447), v1: v0, v2: v1, v3: v3 },
+            Triangle { normal: Vec3::new(0.894, 0.447, 0.447), v1: v1, v2: v2, v3: v3 },
+            Triangle { normal: Vec3::new(-0.894, 0.447, 0.447), v1: v2, v2: v0, v3: v3 },
+        ];
 
-            let transform_v = |v: Vec3| -> (f32, f32) {
-                let dx = v.x - center.x;
-                let dy = v.y - center.y;
-                let dz = v.z - center.z;
+        let mesh = StlMesh::build_mesh("Tetrahedron".to_string(), triangles).unwrap();
+        assert_eq!(mesh.triangles.len(), 4);
+        assert_eq!(mesh.name, "Tetrahedron");
+        assert_eq!(mesh.min_bounds, Vec3::new(0.0, 0.0, 0.0));
+        assert_eq!(mesh.max_bounds, Vec3::new(10.0, 10.0, 10.0));
+        assert_eq!(mesh.center, Vec3::new(5.0, 5.0, 5.0));
+        assert_eq!(mesh.max_dimension, 10.0);
 
-                let rx = dx * cos_yaw + dz * sin_yaw;
-                let rz = -dx * sin_yaw + dz * cos_yaw;
-                let ry = dy;
+        // Check projected coordinates
+        let pitch = 0.4f32;
+        let yaw = 0.6f32;
+        let cx = 400.0f32;
+        let cy = 300.0f32;
+        let scale = 30.0f32;
 
-                let fy = ry * cos_pitch - rz * sin_pitch;
-                (cx + rx * scale, cy - fy * scale)
-            };
+        let sin_yaw = yaw.sin();
+        let cos_yaw = yaw.cos();
+        let sin_pitch = pitch.sin();
+        let cos_pitch = pitch.cos();
+        let center = mesh.center;
 
-            let mut out_of_bounds = 0;
-            let mut huge_edges = 0;
-            for (i, t) in mesh.triangles.iter().enumerate() {
-                let p1 = transform_v(t.v1);
-                let p2 = transform_v(t.v2);
-                let p3 = transform_v(t.v3);
+        let transform_v = |v: Vec3| -> (f32, f32) {
+            let dx = v.x - center.x;
+            let dy = v.y - center.y;
+            let dz = v.z - center.z;
 
-                let d1 = ((p1.0 - p2.0).powi(2) + (p1.1 - p2.1).powi(2)).sqrt();
-                let d2 = ((p2.0 - p3.0).powi(2) + (p2.1 - p3.1).powi(2)).sqrt();
-                let d3 = ((p3.0 - p1.0).powi(2) + (p3.1 - p1.1).powi(2)).sqrt();
+            let rx = dx * cos_yaw + dz * sin_yaw;
+            let rz = -dx * sin_yaw + dz * cos_yaw;
+            let ry = dy;
 
-                if p1.0 < -1000.0 || p1.0 > 2000.0 || p1.1 < -1000.0 || p1.1 > 2000.0 {
-                    out_of_bounds += 1;
-                }
-                if d1 > 200.0 || d2 > 200.0 || d3 > 200.0 {
-                    huge_edges += 1;
-                    if huge_edges <= 5 {
-                        println!("Huge edge in tri {}: v1={:?}, v2={:?}, v3={:?}, len={:?}", i, t.v1, t.v2, t.v3, (d1, d2, d3));
-                    }
-                }
-            }
-            println!("Out of bounds: {}, Huge edges (>200px): {}", out_of_bounds, huge_edges);
+            let fy = ry * cos_pitch - rz * sin_pitch;
+            (cx + rx * scale, cy - fy * scale)
+        };
+
+        for t in &mesh.triangles {
+            let p1 = transform_v(t.v1);
+            let p2 = transform_v(t.v2);
+            let p3 = transform_v(t.v3);
+
+            let d1 = ((p1.0 - p2.0).powi(2) + (p1.1 - p2.1).powi(2)).sqrt();
+            let d2 = ((p2.0 - p3.0).powi(2) + (p2.1 - p3.1).powi(2)).sqrt();
+            let d3 = ((p3.0 - p1.0).powi(2) + (p3.1 - p1.1).powi(2)).sqrt();
+
+            assert!(p1.0 > 0.0 && p1.0 < 800.0);
+            assert!(p1.1 > 0.0 && p1.1 < 600.0);
+            assert!(d1 > 0.0 && d2 > 0.0 && d3 > 0.0);
         }
     }
 }

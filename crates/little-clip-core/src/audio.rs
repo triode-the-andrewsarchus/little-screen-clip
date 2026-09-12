@@ -128,6 +128,8 @@ pub struct FullAudioAnalysis {
     pub transients: Vec<f32>,
     pub is_transients_ready: bool,
     pub is_spectrogram_ready: bool,
+    pub is_truncated: bool,
+    pub truncation_warning: Option<String>,
 }
 
 /// Incremental progress stages emitted during progressive background audio decoding.
@@ -1251,6 +1253,10 @@ where
             break;
         }
     }
+    let is_truncated = ch1_samples.len() >= max_frames;
+    if is_truncated {
+        tracing::warn!("Audio decoding truncated at max frame cap of {} frames", max_frames);
+    }
     let t_decode_elapsed = t_decode_start.elapsed();
 
     let total_frames = ch1_samples.len();
@@ -1364,6 +1370,12 @@ where
         transients: Vec::new(),
         is_transients_ready: false,
         is_spectrogram_ready: false,
+        is_truncated,
+        truncation_warning: if is_truncated {
+            Some(format!("Audio track exceeded decoding frame limit of {} frames (~{:.1} min) and was truncated", max_frames, (max_frames as f64 / sample_rate as f64) / 60.0))
+        } else {
+            None
+        },
     };
     on_progress(AudioAnalysisProgress::WaveformReady(Box::new(analysis.clone())));
 
@@ -2421,6 +2433,8 @@ mod tests {
             transients: Vec::new(),
             is_transients_ready: false,
             is_spectrogram_ready: false,
+            is_truncated: false,
+            truncation_warning: None,
         };
 
         let bounds = analysis.detect_silence_bounds(-45.0);

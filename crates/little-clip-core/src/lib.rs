@@ -4,6 +4,7 @@
 
 pub mod animation;
 pub mod audio;
+pub mod color;
 pub mod config;
 pub mod ipc;
 pub mod item;
@@ -15,6 +16,7 @@ pub mod raw_image;
 pub use raw_image::*;
 pub mod pdf;
 pub use pdf::*;
+pub use color::parse_hex_color;
 
 
 pub use animation::{
