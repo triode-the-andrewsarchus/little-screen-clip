@@ -40,6 +40,9 @@ pub use midi::*;
 pub mod stl;
 pub use stl::*;
 
+pub mod barcode;
+pub use barcode::*;
+
 /// Error encountered during transformation or diff execution.
 #[derive(Debug, Error)]
 pub enum OpError {

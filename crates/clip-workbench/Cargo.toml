@@ -22,4 +22,10 @@ rodio = "0.22.2"
 image = { workspace = true }
 syntect = { workspace = true }
 regex = { workspace = true }
+webp = "0.3.1"
+tempfile = "3.10"
+libc = "0.2"
+
+[dev-dependencies]
+rxing = "0.9.2"
 

@@ -6,6 +6,7 @@
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use image::RgbaImage;
 use little_clip_core::{AppConfig, ClipItem, HandSide, IpcRequest};
+use little_clip_ops::barcode::BarcodeDetection;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -25,6 +26,12 @@ pub enum ImageToolMode {
     Resize,
     /// Rotation and horizontal/vertical flipping.
     Transform,
+    /// Format conversion with before/after comparison slider.
+    Convert,
+    /// Multi-model document OCR.
+    Ocr,
+    /// 1D and 2D barcode, QR, and DataMatrix decoding.
+    Barcode,
     /// Dominant color palette extraction and harmonic scheme generation.
     Palette,
     /// AI-powered background removal.
@@ -43,12 +50,143 @@ impl ImageToolMode {
             ImageToolMode::PickColor => "💉 Pick Color",
             ImageToolMode::Resize => "↔ Resize",
             ImageToolMode::Transform => "🔄 Rotate & Flip",
+            ImageToolMode::Convert => "🔄 Convert",
+            ImageToolMode::Ocr => "📝 OCR",
+            ImageToolMode::Barcode => "▦ Barcode / QR",
             ImageToolMode::Palette => "🎨 Palette",
             ImageToolMode::RemoveBg => "✨ Remove BG",
             ImageToolMode::DepthMap => "🌊 Depth Map",
         }
     }
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConvertTargetFormat {
+    #[default]
+    Png,
+    Jpeg,
+    Webp,
+}
+
+impl ConvertTargetFormat {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ConvertTargetFormat::Png => "PNG (.png)",
+            ConvertTargetFormat::Jpeg => "JPEG (.jpg)",
+            ConvertTargetFormat::Webp => "WebP (.webp)",
+        }
+    }
+
+    pub fn extension(&self) -> &'static str {
+        match self {
+            ConvertTargetFormat::Png => "png",
+            ConvertTargetFormat::Jpeg => "jpg",
+            ConvertTargetFormat::Webp => "webp",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ConvertState {
+    pub target_format: ConvertTargetFormat,
+    pub lossless: bool,
+    pub quality: u8,
+    pub comparison_split: f32,
+    pub is_dragging_split: bool,
+    pub encoded_bytes: Vec<u8>,
+    pub converted_rgba: Option<RgbaImage>,
+    pub converted_texture: Option<egui::TextureHandle>,
+    pub dirty_texture: bool,
+    pub is_running_optipng: bool,
+    pub optipng_savings: Option<(usize, usize)>,
+}
+
+impl Default for ConvertState {
+    fn default() -> Self {
+        Self {
+            target_format: ConvertTargetFormat::Webp,
+            lossless: false,
+            quality: 80,
+            comparison_split: 0.50,
+            is_dragging_split: false,
+            encoded_bytes: Vec::new(),
+            converted_rgba: None,
+            converted_texture: None,
+            dirty_texture: false,
+            is_running_optipng: false,
+            optipng_savings: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OcrEngine {
+    #[default]
+    GlmOcr,
+    Tesseract,
+}
+
+impl OcrEngine {
+    pub fn label(&self) -> &'static str {
+        match self {
+            OcrEngine::GlmOcr => "GLM-OCR (Default • 0.9B VLM)",
+            OcrEngine::Tesseract => "Tesseract (Quick Local)",
+        }
+    }
+
+    pub fn arg_name(&self) -> &'static str {
+        match self {
+            OcrEngine::GlmOcr => "glm-ocr",
+            OcrEngine::Tesseract => "tesseract",
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum OcrMsg {
+    Progress(String),
+    Success {
+        text: String,
+        engine: String,
+        duration_ms: u128,
+    },
+    Error(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct OcrState {
+    pub engine: OcrEngine,
+    pub custom_prompt: String,
+    pub extracted_text: String,
+    pub in_progress: bool,
+    pub status_text: Option<String>,
+    pub error: Option<String>,
+    pub duration_ms: Option<u128>,
+}
+
+impl Default for OcrState {
+    fn default() -> Self {
+        Self {
+            engine: OcrEngine::GlmOcr,
+            custom_prompt: String::new(),
+            extracted_text: String::new(),
+            in_progress: false,
+            status_text: None,
+            error: None,
+            duration_ms: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BarcodeScanState {
+    pub detections: Vec<BarcodeDetection>,
+    pub selected_idx: Option<usize>,
+    pub is_scanning: bool,
+    pub has_scanned: bool,
+    pub last_scan_duration_ms: u128,
+}
+
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CropRatio {
@@ -625,6 +763,17 @@ pub struct ImagePreviewState {
     pub bg_removal_error: Option<String>,
     pub bg_removal_cmd: Option<String>,
     pub multimatte_prompt: String,
+
+    // Format Conversion (Squoosh-style)
+    pub convert_state: ConvertState,
+
+    // Multi-Model Document OCR
+    pub ocr_state: OcrState,
+    pub ocr_rx: Option<std::sync::mpsc::Receiver<OcrMsg>>,
+    pub ocr_child_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
+
+    // Barcode / QR / DataMatrix Decoder
+    pub barcode_state: BarcodeScanState,
 }
 
 #[derive(Debug)]
@@ -707,7 +856,7 @@ impl ImagePreviewState {
         resize_state.sync_from_image(&rgba);
         let palette_state = PaletteState::default();
 
-        Ok(Self {
+        let mut preview = Self {
             path,
             title,
             mime,
@@ -746,7 +895,15 @@ impl ImagePreviewState {
             bg_removal_error: None,
             bg_removal_cmd: config.image.bg_removal_cmd.clone(),
             multimatte_prompt: String::new(),
-        })
+            convert_state: ConvertState::default(),
+            ocr_state: OcrState::default(),
+            ocr_rx: None,
+            ocr_child_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            barcode_state: BarcodeScanState::default(),
+        };
+
+        preview.update_conversion();
+        Ok(preview)
     }
 
     pub fn show_toast(&mut self, msg: impl Into<String>) {
@@ -1484,6 +1641,55 @@ impl ImagePreviewState {
         }
     }
 
+    /// Opens a save dialog targeting a specific extension (e.g. "png", "jpg", "webp").
+    pub fn open_save_dialog_with_ext(&mut self, target_ext: &str) {
+        let default_target = if let Some(p) = &self.path {
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("image");
+            let parent = p.parent().unwrap_or_else(|| Path::new("."));
+            parent.join(format!("{}_converted.{}", stem, target_ext))
+        } else {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+            let pic_dir = PathBuf::from(home).join("Pictures");
+            if pic_dir.exists() {
+                pic_dir.join(format!("converted_clip.{}", target_ext))
+            } else {
+                PathBuf::from(format!("converted_clip.{}", target_ext))
+            }
+        };
+
+        let target_str = default_target.to_string_lossy().to_string();
+
+        let zenity_available = Path::new("/usr/bin/zenity").exists()
+            || Command::new("zenity").arg("--version").output().is_ok();
+
+        if zenity_available {
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.save_dialog_rx = Some(rx);
+
+            let filter_arg = format!("Target (*.{}) | *.{}", target_ext, target_ext);
+            std::thread::spawn(move || {
+                let mut cmd = Command::new("zenity");
+                cmd.arg("--file-selection")
+                    .arg("--save")
+                    .arg("--confirm-overwrite")
+                    .arg(format!("--filename={}", target_str))
+                    .arg(format!("--file-filter={}", filter_arg))
+                    .arg("--file-filter=All files | *");
+                if let Ok(output) = cmd.output() {
+                    if output.status.success() {
+                        let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        if !path_str.is_empty() {
+                            let _ = tx.send(PathBuf::from(path_str));
+                        }
+                    }
+                }
+            });
+        } else {
+            self.fallback_save_path = target_str;
+            self.show_fallback_save_modal = true;
+        }
+    }
+
     /// Saves the current display image to the specified file path, creating parent dirs if needed.
     pub fn save_image_to_path(&mut self, path: &Path) {
         let mut final_path = path.to_path_buf();
@@ -1504,7 +1710,12 @@ impl ImagePreviewState {
             .unwrap_or("png")
             .to_lowercase();
 
-        let save_res = if ext == "jpg" || ext == "jpeg" {
+        let save_res = if self.active_mode == ImageToolMode::Convert
+            && !self.convert_state.encoded_bytes.is_empty()
+            && ext == self.convert_state.target_format.extension()
+        {
+            std::fs::write(&final_path, &self.convert_state.encoded_bytes).map_err(image::ImageError::IoError)
+        } else if ext == "jpg" || ext == "jpeg" {
             // Composite RGBA onto white RGB background for JPEG
             let mut rgb = image::RgbImage::new(img.width(), img.height());
             for (x, y, pixel) in img.enumerate_pixels() {
@@ -1515,9 +1726,18 @@ impl ImagePreviewState {
                 rgb.put_pixel(x, y, image::Rgb([r, g, b]));
             }
             rgb.save(&final_path)
+        } else if ext == "webp" {
+            let quality = self.convert_state.quality;
+            let lossless = self.convert_state.lossless;
+            if let Ok(bytes) = encode_webp(&img, lossless, quality) {
+                std::fs::write(&final_path, bytes).map_err(image::ImageError::IoError)
+            } else {
+                Err(image::ImageError::IoError(std::io::Error::new(std::io::ErrorKind::Other, "WebP encoding failed")))
+            }
         } else {
             img.save(&final_path)
         };
+
 
         match save_res {
             Ok(_) => {
@@ -1778,7 +1998,9 @@ impl ImagePreviewState {
 
         // Global hotkey handling
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if self.active_mode == ImageToolMode::Crop && self.crop_state.normalized_rect != Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)) {
+            if self.ocr_state.in_progress {
+                self.cancel_ocr();
+            } else if self.active_mode == ImageToolMode::Crop && self.crop_state.normalized_rect != Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)) {
                 self.crop_state.normalized_rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
                 self.crop_state.ratio = CropRatio::Free;
             } else if self.active_mode == ImageToolMode::Redact && self.redaction_state.selected_idx.is_some() {
@@ -1786,6 +2008,9 @@ impl ImagePreviewState {
             } else if self.active_mode == ImageToolMode::Redact && !self.redaction_state.boxes.is_empty() {
                 self.clear_all_redactions();
             } else {
+                if self.ocr_state.in_progress {
+                    self.cancel_ocr();
+                }
                 *close = true;
                 return;
             }
@@ -1820,6 +2045,15 @@ impl ImagePreviewState {
         }
         if self.active_mode == ImageToolMode::DepthMap && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             self.run_depth_estimation();
+        }
+        if self.active_mode == ImageToolMode::Convert && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            self.apply_converted_to_canvas();
+        }
+        if self.active_mode == ImageToolMode::Ocr && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            self.run_ocr();
+        }
+        if self.active_mode == ImageToolMode::Barcode && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            self.run_barcode_scan();
         }
         if !ctx.wants_keyboard_input() {
             if self.active_mode == ImageToolMode::Redact {
@@ -1910,6 +2144,15 @@ impl ImagePreviewState {
                 } else if self.active_mode == ImageToolMode::Resize {
                     ui.add_space(2.0);
                     self.render_resize_toolbar(ui, ctx);
+                } else if self.active_mode == ImageToolMode::Convert {
+                    ui.add_space(2.0);
+                    self.render_convert_toolbar(ui, ctx);
+                } else if self.active_mode == ImageToolMode::Ocr {
+                    ui.add_space(2.0);
+                    self.render_ocr_toolbar(ui, ctx);
+                } else if self.active_mode == ImageToolMode::Barcode {
+                    ui.add_space(2.0);
+                    self.render_barcode_toolbar(ui, ctx);
                 } else if self.active_mode == ImageToolMode::Palette {
                     ui.add_space(2.0);
                     self.render_palette_toolbar(ui, ctx);
@@ -1987,6 +2230,9 @@ impl ImagePreviewState {
                         .stroke(Stroke::new(1.0, Color32::from_rgb(71, 85, 105)))
                         .rounding(Rounding::same(4.0));
                         if ui.add(close_btn).clicked() {
+                            if self.ocr_state.in_progress {
+                                self.cancel_ocr();
+                            }
                             *close = true;
                         }
 
@@ -2093,6 +2339,9 @@ impl ImagePreviewState {
                         ImageToolMode::Redact,
                         ImageToolMode::PickColor,
                         ImageToolMode::Resize,
+                        ImageToolMode::Convert,
+                        ImageToolMode::Ocr,
+                        ImageToolMode::Barcode,
                         ImageToolMode::Palette,
                         ImageToolMode::RemoveBg,
                         ImageToolMode::DepthMap,
@@ -2115,17 +2364,32 @@ impl ImagePreviewState {
 
                         let resp = ui.add(btn);
                         if resp.clicked() {
+                            let prev_mode = self.active_mode;
                             self.active_mode = mode;
+                            if prev_mode == ImageToolMode::Ocr && mode != ImageToolMode::Ocr && self.ocr_state.in_progress {
+                                self.cancel_ocr();
+                            }
                             match mode {
                                 ImageToolMode::View
                                 | ImageToolMode::Crop
                                 | ImageToolMode::Transform
                                 | ImageToolMode::Redact
                                 | ImageToolMode::PickColor
+                                | ImageToolMode::Ocr
                                 | ImageToolMode::RemoveBg
                                 | ImageToolMode::DepthMap => {}
                                 ImageToolMode::Resize => {
                                     self.resize_state.sync_from_image(&self.current_rgba);
+                                }
+                                ImageToolMode::Convert => {
+                                    if self.convert_state.converted_rgba.is_none() {
+                                        self.update_conversion();
+                                    }
+                                }
+                                ImageToolMode::Barcode => {
+                                    if !self.barcode_state.has_scanned {
+                                        self.run_barcode_scan();
+                                    }
                                 }
                                 ImageToolMode::Palette => {
                                     if !self.palette_state.is_extracted || self.palette_state.extracted_colors.is_empty() {
@@ -2135,6 +2399,7 @@ impl ImagePreviewState {
                             }
                         }
                     }
+
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Reset View
@@ -3206,7 +3471,1062 @@ impl ImagePreviewState {
             });
     }
 
-    fn render_viewport(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context) {
+    // --- Format Conversion (Squoosh-style) ---
+
+    pub fn update_conversion(&mut self) {
+        let base_img = self.current_display_image();
+        let fmt = self.convert_state.target_format;
+        let quality = self.convert_state.quality;
+        let lossless = self.convert_state.lossless;
+
+        let encode_res = match fmt {
+            ConvertTargetFormat::Png => encode_png(&base_img).map_err(|e| e.to_string()),
+            ConvertTargetFormat::Jpeg => encode_jpeg_with_quality(&base_img, quality).map_err(|e| e.to_string()),
+            ConvertTargetFormat::Webp => encode_webp(&base_img, lossless, quality),
+        };
+
+        match encode_res {
+            Ok(bytes) => {
+                let decoded_rgba = match image::load_from_memory(&bytes) {
+                    Ok(dyn_img) => Some(dyn_img.to_rgba8()),
+                    Err(_) => Some(base_img),
+                };
+                self.convert_state.encoded_bytes = bytes;
+                self.convert_state.converted_rgba = decoded_rgba;
+                self.convert_state.dirty_texture = true;
+                self.convert_state.optipng_savings = None;
+            }
+            Err(e) => {
+                self.show_toast(format!("Conversion failed: {}", e));
+            }
+        }
+    }
+
+    pub fn apply_converted_to_canvas(&mut self) {
+        if let Some(converted) = self.convert_state.converted_rgba.clone() {
+            self.undo_stack.push(self.current_rgba.clone());
+            self.redo_stack.clear();
+            self.current_rgba = converted;
+            self.dirty_texture = true;
+            self.resize_state.sync_from_image(&self.current_rgba);
+            self.palette_state.is_extracted = false;
+            self.update_conversion();
+            self.show_toast("✔ Applied converted image to canvas");
+        }
+    }
+
+    pub fn run_optipng_conversion(&mut self) {
+        if self.convert_state.target_format != ConvertTargetFormat::Png {
+            self.show_toast("⚠ OptiPNG is only applicable for PNG format");
+            return;
+        }
+
+        self.convert_state.is_running_optipng = true;
+        let original_bytes = self.convert_state.encoded_bytes.clone();
+        if original_bytes.is_empty() {
+            self.convert_state.is_running_optipng = false;
+            self.show_toast("⚠ No PNG bytes available to optimize");
+            return;
+        }
+
+        let orig_len = original_bytes.len();
+        match run_optipng_optimization(&original_bytes) {
+            Ok(opt_bytes) => {
+                let opt_len = opt_bytes.len();
+                self.convert_state.encoded_bytes = opt_bytes;
+                self.convert_state.optipng_savings = Some((orig_len, opt_len));
+                self.convert_state.is_running_optipng = false;
+                let pct = if orig_len > 0 && opt_len < orig_len {
+                    (orig_len - opt_len) as f32 / orig_len as f32 * 100.0
+                } else {
+                    0.0
+                };
+                self.show_toast(format!("✔ OptiPNG complete! Saved {:.1}%", pct));
+            }
+            Err(e) => {
+                self.convert_state.is_running_optipng = false;
+                self.show_toast(format!("❌ OptiPNG error: {}", e));
+            }
+        }
+    }
+
+    fn render_convert_toolbar(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context) {
+        egui::Frame::none()
+            .fill(Color32::from_rgb(22, 27, 39))
+            .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(45, 55, 75)))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Format:")
+                            .small()
+                            .strong()
+                            .color(Color32::from_rgb(148, 163, 184)),
+                    );
+
+                    let fmts = [
+                        ConvertTargetFormat::Png,
+                        ConvertTargetFormat::Jpeg,
+                        ConvertTargetFormat::Webp,
+                    ];
+
+                    let mut changed = false;
+                    for fmt in fmts {
+                        let label = fmt.label();
+                        let active = self.convert_state.target_format == fmt;
+                        let (bg, border, text_col) = if active {
+                            (Color32::from_rgb(14, 165, 233), Color32::from_rgb(56, 189, 248), Color32::WHITE)
+                        } else {
+                            (Color32::from_rgb(30, 41, 59), Color32::from_rgb(51, 65, 85), Color32::from_rgb(203, 213, 225))
+                        };
+
+                        let btn = egui::Button::new(
+                            egui::RichText::new(label).small().strong().color(text_col),
+                        )
+                        .fill(bg)
+                        .stroke(Stroke::new(1.0, border))
+                        .rounding(Rounding::same(4.0));
+
+                        if ui.add(btn).clicked() && self.convert_state.target_format != fmt {
+                            self.convert_state.target_format = fmt;
+                            if fmt == ConvertTargetFormat::Png {
+                                self.convert_state.lossless = true;
+                            } else if fmt == ConvertTargetFormat::Jpeg {
+                                self.convert_state.lossless = false;
+                            }
+                            changed = true;
+                        }
+                    }
+
+                    ui.add_space(8.0);
+
+                    // Lossless toggle
+                    match self.convert_state.target_format {
+                        ConvertTargetFormat::Png => {
+                            let mut dummy_true = true;
+                            ui.add_enabled_ui(false, |ui| {
+                                ui.checkbox(&mut dummy_true, egui::RichText::new("Lossless").small().color(Color32::from_rgb(148, 163, 184)))
+                                    .on_disabled_hover_text("PNG is always a lossless format");
+                            });
+                        }
+                        ConvertTargetFormat::Jpeg => {
+                            let mut dummy_false = false;
+                            ui.add_enabled_ui(false, |ui| {
+                                ui.checkbox(&mut dummy_false, egui::RichText::new("Lossless").small().color(Color32::from_rgb(100, 116, 139)))
+                                    .on_disabled_hover_text("JPEG standard does not support lossless encoding");
+                            });
+                        }
+                        ConvertTargetFormat::Webp => {
+                            let mut is_lossless = self.convert_state.lossless;
+                            if ui.checkbox(&mut is_lossless, egui::RichText::new("Lossless").small().strong().color(Color32::from_rgb(224, 231, 255)))
+                                .on_hover_text("Encode as lossless WebP (VP8L)")
+                                .changed()
+                            {
+                                self.convert_state.lossless = is_lossless;
+                                changed = true;
+                            }
+                        }
+                    }
+
+                    // Quality slider (if not lossless)
+                    if !self.convert_state.lossless {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new("Quality:").small().color(Color32::from_rgb(148, 163, 184)),
+                        );
+                        let mut q = self.convert_state.quality;
+                        let slider = egui::Slider::new(&mut q, 1..=100)
+                            .show_value(true)
+                            .suffix("%");
+                        let resp = ui.add(slider);
+                        if resp.changed() {
+                            self.convert_state.quality = q;
+                            changed = true;
+                        }
+                    }
+
+                    // OptiPNG button for PNG
+                    if self.convert_state.target_format == ConvertTargetFormat::Png {
+                        ui.add_space(8.0);
+                        let opti_btn = egui::Button::new(
+                            egui::RichText::new("⚡ Run OptiPNG").small().strong().color(Color32::from_rgb(254, 240, 138)),
+                        )
+                        .fill(Color32::from_rgb(113, 63, 18))
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(234, 179, 8)))
+                        .rounding(Rounding::same(4.0));
+
+                        if ui.add(opti_btn).on_hover_text("Run lossless bytecode optimization via /usr/bin/optipng").clicked() {
+                            self.run_optipng_conversion();
+                        }
+
+                        if let Some((orig, opti)) = self.convert_state.optipng_savings {
+                            let diff = orig.saturating_sub(opti);
+                            let pct = if orig > 0 { (diff as f64 / orig as f64) * 100.0 } else { 0.0 };
+                            let label_txt = format!("Saved {} (-{:.1}%)", format_bytes_size(diff), pct);
+                            chip_badge(ui, &label_txt, Color32::from_rgb(74, 222, 128), Color32::from_rgb(20, 83, 45));
+                        }
+                    }
+
+                    // Size comparison badge
+                    ui.add_space(8.0);
+                    let orig_size = self.file_size_bytes;
+                    let conv_size = self.convert_state.encoded_bytes.len();
+                    if conv_size > 0 {
+                        let pct_delta = if orig_size > 0 {
+                            ((conv_size as f64 - orig_size as f64) / orig_size as f64) * 100.0
+                        } else {
+                            0.0
+                        };
+                        let (sign, fg, bg) = if pct_delta <= 0.0 {
+                            ("-", Color32::from_rgb(74, 222, 128), Color32::from_rgb(20, 83, 45))
+                        } else {
+                            ("+", Color32::from_rgb(251, 146, 60), Color32::from_rgb(124, 45, 18))
+                        };
+                        let badge_txt = format!(
+                            "{} ➔ {} ({}{:.1}%)",
+                            format_bytes_size(orig_size),
+                            format_bytes_size(conv_size),
+                            sign,
+                            pct_delta.abs()
+                        );
+                        chip_badge(ui, &badge_txt, fg, bg);
+                    }
+
+                    // Squoosh split slider hint
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new("Drag vertical divider on canvas to compare")
+                            .small()
+                            .italics()
+                            .color(Color32::from_rgb(100, 116, 139)),
+                    );
+
+                    // Right-aligned actions
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Apply button
+                        let apply_btn = egui::Button::new(
+                            egui::RichText::new("✔ Apply (Enter)").small().strong().color(Color32::WHITE),
+                        )
+                        .fill(Color32::from_rgb(16, 185, 129))
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(52, 211, 153)))
+                        .rounding(Rounding::same(4.0));
+                        if ui.add(apply_btn).on_hover_text("Apply converted image as active editor canvas (Enter)").clicked() {
+                            self.apply_converted_to_canvas();
+                        }
+
+                        // Save As button
+                        let ext = self.convert_state.target_format.extension();
+                        let save_btn = egui::Button::new(
+                            egui::RichText::new(format!("💾 Save as .{}", ext)).small().strong().color(Color32::from_rgb(224, 231, 255)),
+                        )
+                        .fill(Color32::from_rgb(30, 41, 59))
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(99, 102, 241)))
+                        .rounding(Rounding::same(4.0));
+                        if ui.add(save_btn).on_hover_text(format!("Export converted image as .{}", ext)).clicked() {
+                            self.open_save_dialog_with_ext(ext);
+                        }
+
+                        // Copy slot buttons
+                        let push_rh = egui::Button::new(
+                            egui::RichText::new("📋 Slot: RH").small().color(Color32::from_rgb(52, 211, 153)),
+                        )
+                        .fill(Color32::from_rgb(15, 23, 42))
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(16, 185, 129)))
+                        .rounding(Rounding::same(3.0));
+                        if ui.add(push_rh).on_hover_text("Push converted image directly to Right Hand slot").clicked() {
+                            self.copy_to_hand_slot(HandSide::Right);
+                        }
+
+                        let push_lh = egui::Button::new(
+                            egui::RichText::new("📋 Slot: LH").small().color(Color32::from_rgb(129, 140, 248)),
+                        )
+                        .fill(Color32::from_rgb(15, 23, 42))
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(99, 102, 241)))
+                        .rounding(Rounding::same(3.0));
+                        if ui.add(push_lh).on_hover_text("Push converted image directly to Left Hand slot").clicked() {
+                            self.copy_to_hand_slot(HandSide::Left);
+                        }
+                    });
+
+                    if changed {
+                        self.update_conversion();
+                    }
+                });
+            });
+    }
+
+    fn render_convert_comparison(
+        &mut self,
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        response: &egui::Response,
+        img_rect: Rect,
+        _canvas_rect: Rect,
+        ctx: &egui::Context,
+    ) {
+        // Ensure converted texture is loaded
+        if self.convert_state.dirty_texture || self.convert_state.converted_texture.is_none() {
+            if let Some(ref conv_rgba) = self.convert_state.converted_rgba {
+                let color_img = egui::ColorImage::from_rgba_unmultiplied(
+                    [conv_rgba.width() as usize, conv_rgba.height() as usize],
+                    conv_rgba.as_raw(),
+                );
+                self.convert_state.converted_texture = Some(ctx.load_texture(
+                    "converted_preview_tex",
+                    color_img,
+                    egui::TextureOptions::LINEAR,
+                ));
+                self.convert_state.dirty_texture = false;
+            }
+        }
+
+        let split = self.convert_state.comparison_split.clamp(0.0, 1.0);
+        let split_x = img_rect.min.x + split * img_rect.width();
+
+        // 1. Draw Left Side (Original / Before)
+        if let Some(ref orig_tex) = self.texture {
+            let left_rect = Rect::from_min_max(img_rect.min, Pos2::new(split_x, img_rect.max.y));
+            let left_uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(split, 1.0));
+            let mut left_mesh = egui::Mesh::with_texture(orig_tex.id());
+            left_mesh.add_rect_with_uv(left_rect, left_uv, Color32::WHITE);
+            painter.add(egui::Shape::mesh(left_mesh));
+        }
+
+        // 2. Draw Right Side (Converted / After)
+        let conv_tex_id = self.convert_state.converted_texture.as_ref().map(|t| t.id())
+            .or_else(|| self.texture.as_ref().map(|t| t.id()));
+        if let Some(tex_id) = conv_tex_id {
+            let right_rect = Rect::from_min_max(Pos2::new(split_x, img_rect.min.y), img_rect.max);
+            let right_uv = Rect::from_min_max(Pos2::new(split, 0.0), Pos2::new(1.0, 1.0));
+            let mut right_mesh = egui::Mesh::with_texture(tex_id);
+            right_mesh.add_rect_with_uv(right_rect, right_uv, Color32::WHITE);
+            painter.add(egui::Shape::mesh(right_mesh));
+        }
+
+        // 3. Draw Crisp Divider Line
+        painter.line_segment(
+            [Pos2::new(split_x, img_rect.min.y), Pos2::new(split_x, img_rect.max.y)],
+            Stroke::new(3.0, Color32::from_black_alpha(150)),
+        );
+        painter.line_segment(
+            [Pos2::new(split_x, img_rect.min.y), Pos2::new(split_x, img_rect.max.y)],
+            Stroke::new(1.5, Color32::WHITE),
+        );
+
+        // 4. Draggable Center Knob
+        let knob_center = Pos2::new(split_x, img_rect.center().y);
+        let knob_radius = 16.0;
+        painter.circle(
+            knob_center,
+            knob_radius,
+            Color32::from_rgb(15, 23, 42),
+            Stroke::new(2.0, Color32::from_rgb(56, 189, 248)),
+        );
+        painter.text(
+            knob_center,
+            egui::Align2::CENTER_CENTER,
+            "◀ ▶",
+            egui::FontId::monospace(10.0),
+            Color32::WHITE,
+        );
+
+        // 5. Draggable Handle Interaction
+        let ptr_pos = response.hover_pos();
+        let near_divider = if let Some(pos) = ptr_pos {
+            (pos.x - split_x).abs() <= 16.0 && pos.y >= img_rect.min.y && pos.y <= img_rect.max.y
+        } else {
+            false
+        };
+
+        if near_divider || self.convert_state.is_dragging_split {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+
+        if near_divider && response.drag_started() {
+            self.convert_state.is_dragging_split = true;
+        }
+
+        if self.convert_state.is_dragging_split {
+            if response.dragged() {
+                if let Some(pos) = ptr_pos {
+                    let new_split = ((pos.x - img_rect.min.x) / img_rect.width()).clamp(0.01, 0.99);
+                    self.convert_state.comparison_split = new_split;
+                }
+            }
+            if response.drag_stopped() {
+                self.convert_state.is_dragging_split = false;
+            }
+        }
+
+        // 6. Squoosh-Style Floating HUD Badges
+        let orig_size_str = format_bytes_size(self.file_size_bytes);
+        let conv_size_str = format_bytes_size(self.convert_state.encoded_bytes.len());
+        let orig_fmt = self.mime.replace("image/", "").to_uppercase();
+        let conv_fmt = self.convert_state.target_format.extension().to_uppercase();
+
+        let before_badge_pos = Pos2::new(img_rect.min.x + 12.0, img_rect.min.y + 12.0);
+        let before_rect = Rect::from_min_size(before_badge_pos, Vec2::new(140.0, 24.0));
+        painter.rect_filled(before_rect, Rounding::same(4.0), Color32::from_rgba_unmultiplied(15, 23, 42, 210));
+        painter.rect_stroke(before_rect, Rounding::same(4.0), Stroke::new(1.0, Color32::from_rgb(51, 65, 85)));
+        painter.text(
+            before_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            format!("BEFORE: {} ({})", orig_fmt, orig_size_str),
+            egui::FontId::proportional(11.0),
+            Color32::from_rgb(224, 231, 255),
+        );
+
+        let after_badge_pos = Pos2::new(img_rect.max.x - 152.0, img_rect.min.y + 12.0);
+        let after_rect = Rect::from_min_size(after_badge_pos, Vec2::new(140.0, 24.0));
+        painter.rect_filled(after_rect, Rounding::same(4.0), Color32::from_rgba_unmultiplied(15, 23, 42, 210));
+        painter.rect_stroke(after_rect, Rounding::same(4.0), Stroke::new(1.0, Color32::from_rgb(56, 189, 248)));
+        painter.text(
+            after_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            format!("AFTER: {} ({})", conv_fmt, conv_size_str),
+            egui::FontId::proportional(11.0),
+            Color32::from_rgb(56, 189, 248),
+        );
+    }
+
+    // --- Document OCR Suite ---
+
+    pub fn run_ocr(&mut self) {
+        if self.ocr_state.in_progress {
+            return;
+        }
+        let base_img = self.current_display_image();
+        let mut png_bytes = Vec::new();
+        if let Err(e) = base_img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png) {
+            self.ocr_state.error = Some(format!("Failed to encode image to PNG: {}", e));
+            return;
+        }
+
+        let engine = self.ocr_state.engine;
+        let engine_arg = engine.arg_name().to_string();
+        let custom_prompt = if self.ocr_state.custom_prompt.trim().is_empty() {
+            None
+        } else {
+            Some(self.ocr_state.custom_prompt.trim().to_string())
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel::<OcrMsg>();
+        self.ocr_rx = Some(rx);
+        self.ocr_state.in_progress = true;
+        self.ocr_state.error = None;
+        self.ocr_state.status_text = Some(format!("Starting {}...", engine.label()));
+        let child_pid_arc = self.ocr_child_pid.clone();
+
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let _ = tx.send(OcrMsg::Progress(format!("Launching OCR engine ({})...", engine_arg)));
+
+            let script_candidates = [
+                "scripts/ocr.py",
+                "./scripts/ocr.py",
+            ];
+            let mut script_path = "scripts/ocr.py".to_string();
+            for p in &script_candidates {
+                if std::path::Path::new(p).exists() {
+                    script_path = p.to_string();
+                    break;
+                }
+            }
+
+            let venv_python = std::env::var("HOME")
+                .map(|h| format!("{}/.local/share/little-screen-clip/nobg-venv/bin/python", h))
+                .unwrap_or_default();
+            let python_bin = if std::path::Path::new(&venv_python).exists() {
+                venv_python
+            } else {
+                "python3".to_string()
+            };
+
+            let mut cmd = Command::new(python_bin);
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::CommandExt;
+                cmd.process_group(0);
+            }
+            cmd.arg(&script_path);
+            cmd.arg("-").arg("-");
+            cmd.arg("--engine").arg(&engine_arg);
+            if let Some(ref p) = custom_prompt {
+                cmd.arg("--prompt").arg(p);
+            }
+
+            let mut child = match cmd
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(OcrMsg::Error(format!("Failed to spawn python3 {}: {}", script_path, e)));
+                    return;
+                }
+            };
+
+            let pid = child.id();
+            child_pid_arc.store(pid, std::sync::atomic::Ordering::SeqCst);
+
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                if let Err(e) = stdin.write_all(&png_bytes) {
+                    child_pid_arc.store(0, std::sync::atomic::Ordering::SeqCst);
+                    let _ = tx.send(OcrMsg::Error(format!("Failed to pipe image to OCR worker: {}", e)));
+                    return;
+                }
+            }
+
+            let stdout_handle = child.stdout.take();
+            let stderr_handle = child.stderr.take();
+
+            let (stdout_tx, stdout_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+            if let Some(mut stdout) = stdout_handle {
+                std::thread::spawn(move || {
+                    use std::io::Read;
+                    let mut out = Vec::new();
+                    let _ = stdout.read_to_end(&mut out);
+                    let _ = stdout_tx.send(out);
+                });
+            }
+
+            let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<String>();
+            let tx_progress = tx.clone();
+            if let Some(stderr) = stderr_handle {
+                std::thread::spawn(move || {
+                    use std::io::{BufRead, BufReader};
+                    let reader = BufReader::new(stderr);
+                    let mut all_stderr = Vec::new();
+                    for line in reader.lines().flatten() {
+                        if line.starts_with("[ocr:progress]") {
+                            let msg = line.trim_start_matches("[ocr:progress]").trim().to_string();
+                            let _ = tx_progress.send(OcrMsg::Progress(msg));
+                        } else {
+                            all_stderr.push(line);
+                        }
+                    }
+                    let _ = stderr_tx.send(all_stderr.join("\n"));
+                });
+            }
+
+            let status = match child.wait() {
+                Ok(s) => {
+                    child_pid_arc.store(0, std::sync::atomic::Ordering::SeqCst);
+                    s
+                }
+                Err(e) => {
+                    child_pid_arc.store(0, std::sync::atomic::Ordering::SeqCst);
+                    let _ = tx.send(OcrMsg::Error(format!("Error waiting for OCR worker: {}", e)));
+                    return;
+                }
+            };
+
+            let stdout_bytes = stdout_rx.recv().unwrap_or_default();
+            let stderr_text = stderr_rx.recv().unwrap_or_default();
+
+            let duration_ms = start.elapsed().as_millis();
+            if status.success() {
+                let text = String::from_utf8_lossy(&stdout_bytes).to_string();
+                if text.trim().is_empty() {
+                    let err_msg = if !stderr_text.trim().is_empty() {
+                        format!("OCR finished with no recognized text. Diagnostics:\n{}", stderr_text)
+                    } else {
+                        "OCR engine returned empty output (no text recognized in image).".to_string()
+                    };
+                    eprintln!("[OCR Warning] {}", err_msg);
+                    let _ = tx.send(OcrMsg::Error(err_msg));
+                } else {
+                    let _ = tx.send(OcrMsg::Success {
+                        text,
+                        engine: engine_arg,
+                        duration_ms,
+                    });
+                }
+            } else {
+                let err_detail = if !stderr_text.trim().is_empty() {
+                    stderr_text
+                } else {
+                    format!("Process exited with status code: {:?}", status.code())
+                };
+                eprintln!("[OCR Error] {}", err_detail);
+                let _ = tx.send(OcrMsg::Error(format!("OCR worker failed: {}", err_detail)));
+            }
+        });
+    }
+
+    pub fn poll_ocr(&mut self) {
+        if let Some(ref rx) = self.ocr_rx {
+            while let Ok(msg) = rx.try_recv() {
+                match msg {
+                    OcrMsg::Progress(status) => {
+                        self.ocr_state.status_text = Some(status);
+                    }
+                    OcrMsg::Success { text, engine, duration_ms } => {
+                        self.ocr_state.extracted_text = text;
+                        self.ocr_state.duration_ms = Some(duration_ms);
+                        self.ocr_state.in_progress = false;
+                        self.ocr_state.status_text = None;
+                        self.ocr_rx = None;
+                        self.ocr_child_pid.store(0, std::sync::atomic::Ordering::SeqCst);
+                        self.show_toast(format!("✔ OCR complete with {} in {:.2}s", engine, duration_ms as f64 / 1000.0));
+                        break;
+                    }
+                    OcrMsg::Error(err) => {
+                        self.ocr_state.error = Some(err);
+                        self.ocr_state.in_progress = false;
+                        self.ocr_state.status_text = None;
+                        self.ocr_rx = None;
+                        self.ocr_child_pid.store(0, std::sync::atomic::Ordering::SeqCst);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn cancel_ocr(&mut self) {
+        let pid = self.ocr_child_pid.swap(0, std::sync::atomic::Ordering::SeqCst);
+        if pid != 0 {
+            #[cfg(unix)]
+            unsafe {
+                // Send SIGTERM then SIGKILL to the entire process group
+                libc::kill(-(pid as i32), libc::SIGTERM);
+                libc::kill(-(pid as i32), libc::SIGKILL);
+                // Also signal the process directly
+                libc::kill(pid as i32, libc::SIGTERM);
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        }
+        if self.ocr_state.in_progress {
+            self.ocr_state.in_progress = false;
+            self.ocr_state.status_text = None;
+            self.ocr_rx = None;
+            self.show_toast("⏹ OCR process cancelled");
+        }
+    }
+
+    pub fn push_text_to_hand_slot(&mut self, hand: HandSide, text: String) {
+        let req = IpcRequest::PushText {
+            text: text.clone(),
+            hand,
+        };
+        let _ = crate::send_ipc_request(&req);
+        let text_for_cmd = text;
+        std::thread::spawn(move || {
+            use std::io::Write;
+            if let Ok(mut child) = Command::new("wl-copy")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(text_for_cmd.as_bytes());
+                }
+                let _ = child.wait();
+            } else if let Ok(mut child) = Command::new("xclip")
+                .arg("-selection")
+                .arg("clipboard")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(text_for_cmd.as_bytes());
+                }
+                let _ = child.wait();
+            }
+        });
+        self.show_toast(format!("📋 Pushed to {} Hand slot", match hand { HandSide::Left => "Left", HandSide::Right => "Right" }));
+    }
+
+    fn render_ocr_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        self.poll_ocr();
+        if self.ocr_state.in_progress {
+            ctx.request_repaint();
+        }
+
+        egui::Frame::none()
+            .fill(Color32::from_rgb(24, 20, 36))
+            .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(63, 45, 86)))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if self.ocr_state.in_progress {
+                        ui.add(egui::Spinner::new().size(16.0).color(Color32::from_rgb(192, 132, 252)));
+                        ui.add_space(6.0);
+                        let st = self.ocr_state.status_text.as_deref().unwrap_or("Running OCR model on image...");
+                        ui.label(
+                            egui::RichText::new(st)
+                                .small()
+                                .monospace()
+                                .strong()
+                                .color(Color32::from_rgb(216, 180, 254)),
+                        );
+
+                        ui.add_space(10.0);
+                        let cancel_btn = egui::Button::new(
+                            egui::RichText::new("⏹ Cancel (Esc)")
+                                .small()
+                                .strong()
+                                .color(Color32::from_rgb(254, 202, 202)),
+                        )
+                        .fill(Color32::from_rgb(153, 27, 27))
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(239, 68, 68)))
+                        .rounding(Rounding::same(4.0));
+
+                        if ui.add(cancel_btn).on_hover_text("Stop running OCR process and free GPU memory immediately (Esc)").clicked() {
+                            self.cancel_ocr();
+                        }
+                    } else {
+                        let engines = [
+                            (OcrEngine::GlmOcr, "GLM-OCR (Default)"),
+                            (OcrEngine::Tesseract, "Tesseract (Quick)"),
+                        ];
+
+                        for (eng, label) in engines {
+                            let active = self.ocr_state.engine == eng;
+                            let (bg, border, text_col) = if active {
+                                (Color32::from_rgb(126, 34, 206), Color32::from_rgb(192, 132, 252), Color32::WHITE)
+                            } else {
+                                (Color32::from_rgb(33, 26, 48), Color32::from_rgb(58, 44, 82), Color32::from_rgb(196, 181, 224))
+                            };
+
+                            let btn = egui::Button::new(
+                                egui::RichText::new(label).small().strong().color(text_col),
+                            )
+                            .fill(bg)
+                            .stroke(Stroke::new(1.0, border))
+                            .rounding(Rounding::same(4.0));
+
+                            if ui.add(btn).clicked() {
+                                self.ocr_state.engine = eng;
+                            }
+                        }
+
+                        ui.add_space(8.0);
+
+                        let run_btn = egui::Button::new(
+                            egui::RichText::new("📝 Run OCR (Enter)").small().strong().color(Color32::WHITE),
+                        )
+                        .fill(Color32::from_rgb(147, 51, 234))
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(216, 180, 254)))
+                        .rounding(Rounding::same(4.0));
+
+                        if ui.add(run_btn).on_hover_text("Execute AI text recognition with chosen model (Enter)").clicked() {
+                            self.run_ocr();
+                        }
+
+                        ui.add_space(4.0);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.ocr_state.custom_prompt)
+                                .hint_text("Prompt (optional, e.g. 'Text Recognition:')...")
+                                .desired_width(180.0),
+                        );
+                    }
+
+                    if let Some(err) = &self.ocr_state.error {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(format!("⚠ {}", err))
+                                .small()
+                                .strong()
+                                .color(Color32::from_rgb(248, 113, 113)),
+                        );
+                    }
+
+                    if !self.ocr_state.extracted_text.is_empty() {
+                        let chars = self.ocr_state.extracted_text.len();
+                        let lines = self.ocr_state.extracted_text.lines().count();
+                        let dur_str = if let Some(ms) = self.ocr_state.duration_ms {
+                            format!("{:.2}s", ms as f64 / 1000.0)
+                        } else {
+                            "".to_string()
+                        };
+                        let stat_txt = if dur_str.is_empty() {
+                            format!("{} chars • {} lines", chars, lines)
+                        } else {
+                            format!("{} chars • {} lines • {}", chars, lines, dur_str)
+                        };
+                        chip_badge(ui, &stat_txt, Color32::from_rgb(192, 132, 252), Color32::from_rgb(46, 16, 80));
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let copy_btn = egui::Button::new(
+                                egui::RichText::new("📋 Copy Text").small().strong().color(Color32::WHITE),
+                            )
+                            .fill(Color32::from_rgb(126, 34, 206))
+                            .stroke(Stroke::new(1.0, Color32::from_rgb(192, 132, 252)))
+                            .rounding(Rounding::same(4.0));
+
+                            if ui.add(copy_btn).clicked() {
+                                ctx.output_mut(|o| o.copied_text = self.ocr_state.extracted_text.clone());
+                                self.show_toast("📋 Extracted text copied to clipboard!");
+                            }
+
+                            let text_copy = self.ocr_state.extracted_text.clone();
+                            let push_rh = egui::Button::new(
+                                egui::RichText::new("📋 Slot: RH").small().color(Color32::from_rgb(52, 211, 153)),
+                            )
+                            .fill(Color32::from_rgb(15, 23, 42))
+                            .stroke(Stroke::new(1.0, Color32::from_rgb(16, 185, 129)))
+                            .rounding(Rounding::same(3.0));
+
+                            if ui.add(push_rh).on_hover_text("Push extracted text to Right Hand slot").clicked() {
+                                self.push_text_to_hand_slot(HandSide::Right, text_copy.clone());
+                            }
+
+                            let push_lh = egui::Button::new(
+                                egui::RichText::new("📋 Slot: LH").small().color(Color32::from_rgb(129, 140, 248)),
+                            )
+                            .fill(Color32::from_rgb(15, 23, 42))
+                            .stroke(Stroke::new(1.0, Color32::from_rgb(99, 102, 241)))
+                            .rounding(Rounding::same(3.0));
+
+                            if ui.add(push_lh).on_hover_text("Push extracted text to Left Hand slot").clicked() {
+                                self.push_text_to_hand_slot(HandSide::Left, text_copy);
+                            }
+                        });
+                    }
+                });
+
+                if !self.ocr_state.extracted_text.is_empty() {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        egui::ScrollArea::vertical()
+                            .max_height(90.0)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::TextEdit::multiline(&mut self.ocr_state.extracted_text)
+                                        .font(egui::TextStyle::Monospace)
+                                        .desired_width(ui.available_width())
+                                        .desired_rows(3),
+                                );
+                            });
+                    });
+                }
+            });
+    }
+
+    // --- Barcode / QR / DataMatrix Decoder ---
+
+    pub fn run_barcode_scan(&mut self) {
+        self.barcode_state.is_scanning = true;
+        let start = std::time::Instant::now();
+        let base_img = self.current_display_image();
+        let detections = little_clip_ops::barcode::detect_barcodes(&base_img);
+        self.barcode_state.last_scan_duration_ms = start.elapsed().as_millis();
+        self.barcode_state.has_scanned = true;
+        self.barcode_state.is_scanning = false;
+        let count = detections.len();
+        self.barcode_state.detections = detections;
+        self.barcode_state.selected_idx = if count > 0 { Some(0) } else { None };
+
+        if count > 0 {
+            self.show_toast(format!("✔ Found {} code{} in {}ms", count, if count == 1 { "" } else { "s" }, self.barcode_state.last_scan_duration_ms));
+        } else {
+            self.show_toast("No barcodes or QR codes found");
+        }
+    }
+
+    fn render_barcode_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        egui::Frame::none()
+            .fill(Color32::from_rgb(18, 25, 38))
+            .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+            .stroke(Stroke::new(1.0, Color32::from_rgb(30, 58, 100)))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let rescan_btn = egui::Button::new(
+                        egui::RichText::new("🔄 Rescan (Enter)").small().strong().color(Color32::WHITE),
+                    )
+                    .fill(Color32::from_rgb(2, 132, 199))
+                    .stroke(Stroke::new(1.0, Color32::from_rgb(56, 189, 248)))
+                    .rounding(Rounding::same(4.0));
+
+                    if ui.add(rescan_btn).on_hover_text("Scan current image for QR codes, Data Matrix, and barcodes (Enter)").clicked() {
+                        self.run_barcode_scan();
+                    }
+
+                    ui.add_space(8.0);
+                    let count = self.barcode_state.detections.len();
+                    let (badge_txt, fg, bg) = if count > 0 {
+                        (format!("{} Codes Detected ({}ms)", count, self.barcode_state.last_scan_duration_ms), Color32::from_rgb(56, 189, 248), Color32::from_rgb(12, 45, 78))
+                    } else if self.barcode_state.has_scanned {
+                        ("No Barcodes Detected".to_string(), Color32::from_rgb(148, 163, 184), Color32::from_rgb(30, 41, 59))
+                    } else {
+                        ("Ready to Scan".to_string(), Color32::from_rgb(148, 163, 184), Color32::from_rgb(30, 41, 59))
+                    };
+                    chip_badge(ui, &badge_txt, fg, bg);
+
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("QR • DataMatrix • Aztec • PDF417 • Code 128 • EAN-13")
+                            .small()
+                            .color(Color32::from_rgb(100, 116, 139)),
+                    );
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !self.barcode_state.detections.is_empty() {
+                            let copy_all_btn = egui::Button::new(
+                                egui::RichText::new("📋 Copy All").small().color(Color32::from_rgb(203, 213, 225)),
+                            )
+                            .fill(Color32::from_rgb(30, 41, 59))
+                            .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
+                            .rounding(Rounding::same(3.0));
+
+                            if ui.add(copy_all_btn).clicked() {
+                                let combined: Vec<String> = self.barcode_state.detections.iter().map(|d| d.text.clone()).collect();
+                                ctx.output_mut(|o| o.copied_text = combined.join("\n"));
+                                self.show_toast("📋 Copied all barcode payloads to clipboard!");
+                            }
+                        }
+                    });
+                });
+
+                if !self.barcode_state.detections.is_empty() {
+                    ui.add_space(4.0);
+                    egui::ScrollArea::horizontal()
+                        .max_height(75.0)
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                for (idx, det) in self.barcode_state.detections.clone().iter().enumerate() {
+                                    let is_selected = self.barcode_state.selected_idx == Some(idx);
+                                    let card_border = if is_selected {
+                                        Color32::from_rgb(250, 204, 21)
+                                    } else {
+                                        Color32::from_rgb(51, 65, 85)
+                                    };
+
+                                    egui::Frame::none()
+                                        .fill(Color32::from_rgb(15, 23, 42))
+                                        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                                        .stroke(Stroke::new(1.0, card_border))
+                                        .rounding(Rounding::same(4.0))
+                                        .show(ui, |ui| {
+                                            ui.horizontal(|ui| {
+                                                chip_badge(ui, &det.format, Color32::from_rgb(56, 189, 248), Color32::from_rgb(12, 45, 78));
+
+                                                let display_text = if det.text.len() > 36 {
+                                                    format!("{}...", &det.text[..36])
+                                                } else {
+                                                    det.text.clone()
+                                                };
+                                                ui.label(
+                                                    egui::RichText::new(&display_text)
+                                                        .small()
+                                                        .monospace()
+                                                        .color(Color32::from_rgb(224, 231, 255)),
+                                                )
+                                                .on_hover_text(&det.text);
+
+                                                if det.is_url {
+                                                    let url_btn = egui::Button::new(
+                                                        egui::RichText::new("🌐 Open").small().color(Color32::from_rgb(96, 165, 250)),
+                                                    )
+                                                    .fill(Color32::from_rgb(30, 41, 59))
+                                                    .rounding(Rounding::same(3.0));
+                                                    if ui.add(url_btn).clicked() {
+                                                        let _ = Command::new("xdg-open").arg(&det.text).spawn();
+                                                    }
+                                                }
+
+                                                let copy_btn = egui::Button::new(
+                                                    egui::RichText::new("📋").small(),
+                                                )
+                                                .fill(Color32::from_rgb(30, 41, 59))
+                                                .rounding(Rounding::same(3.0));
+                                                if ui.add(copy_btn).on_hover_text("Copy this code").clicked() {
+                                                    ctx.output_mut(|o| o.copied_text = det.text.clone());
+                                                    self.show_toast("📋 Copied code payload to clipboard!");
+                                                }
+
+                                                let push_btn = egui::Button::new(
+                                                    egui::RichText::new("RH").small().color(Color32::from_rgb(52, 211, 153)),
+                                                )
+                                                .fill(Color32::from_rgb(15, 23, 42))
+                                                .rounding(Rounding::same(3.0));
+                                                if ui.add(push_btn).on_hover_text("Push to Right Hand slot").clicked() {
+                                                    self.push_text_to_hand_slot(HandSide::Right, det.text.clone());
+                                                }
+                                            });
+                                        });
+                                }
+                            });
+                        });
+                }
+            });
+    }
+
+    fn render_barcode_overlay(
+        &mut self,
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        response: &egui::Response,
+        img_rect: Rect,
+    ) {
+        let ptr_pos = response.hover_pos();
+        let clicked = response.clicked();
+
+        for (idx, det) in self.barcode_state.detections.iter().enumerate() {
+            let is_selected = self.barcode_state.selected_idx == Some(idx);
+            let b = det.bbox;
+            let scr_min = Pos2::new(img_rect.min.x + b[0] * img_rect.width(), img_rect.min.y + b[1] * img_rect.height());
+            let scr_max = Pos2::new(img_rect.min.x + b[2] * img_rect.width(), img_rect.min.y + b[3] * img_rect.height());
+            let code_rect = Rect::from_min_max(scr_min, scr_max);
+
+            let hovered = ptr_pos.map(|p| code_rect.contains(p)).unwrap_or(false);
+
+            let (fill, border, stroke_w) = if is_selected || hovered {
+                (Color32::from_rgba_unmultiplied(250, 204, 21, 50), Color32::from_rgb(250, 204, 21), 2.5)
+            } else {
+                (Color32::from_rgba_unmultiplied(56, 189, 248, 30), Color32::from_rgb(56, 189, 248), 1.5)
+            };
+
+            if det.points.len() >= 3 {
+                let pts: Vec<Pos2> = det.points.iter().map(|p| Pos2::new(img_rect.min.x + p[0] * img_rect.width(), img_rect.min.y + p[1] * img_rect.height())).collect();
+                for i in 0..pts.len() {
+                    let next = pts[(i + 1) % pts.len()];
+                    painter.line_segment([pts[i], next], Stroke::new(stroke_w, border));
+                }
+                painter.rect_filled(code_rect, Rounding::same(3.0), fill);
+            } else {
+                painter.rect_filled(code_rect, Rounding::same(4.0), fill);
+                painter.rect_stroke(code_rect, Rounding::same(4.0), Stroke::new(stroke_w, border));
+            }
+
+            let badge_pos = Pos2::new(code_rect.min.x, (code_rect.min.y - 18.0).max(img_rect.min.y));
+            let badge_rect = Rect::from_min_size(badge_pos, Vec2::new(75.0, 16.0));
+            painter.rect_filled(badge_rect, Rounding::same(3.0), Color32::from_rgb(15, 23, 42));
+            painter.rect_stroke(badge_rect, Rounding::same(3.0), Stroke::new(1.0, border));
+            painter.text(
+                badge_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                &det.format,
+                egui::FontId::proportional(9.0),
+                Color32::WHITE,
+            );
+
+            if hovered {
+                egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new(format!("barcode_tip_{}", idx)), |ui| {
+                    ui.label(egui::RichText::new(format!("Format: {}", det.format)).strong().color(Color32::from_rgb(56, 189, 248)));
+                    ui.label(egui::RichText::new(&det.text).monospace());
+                    if det.is_url {
+                        ui.label(egui::RichText::new("🌐 Click in toolbar to open URL").small().color(Color32::from_rgb(96, 165, 250)));
+                    }
+                });
+
+                if clicked {
+                    self.barcode_state.selected_idx = Some(idx);
+                }
+            }
+        }
+    }
+
+
+    fn render_viewport(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let avail_size = ui.available_size() - Vec2::new(0.0, 32.0);
         if !self.auto_fitted && avail_size.x > 50.0 && avail_size.y > 50.0 {
             self.fit_to_view(avail_size);
@@ -3219,13 +4539,16 @@ impl ImagePreviewState {
         // Background canvas fill
         painter.rect_filled(canvas_rect, Rounding::same(6.0), Color32::from_rgb(12, 14, 20));
 
-        // Panning interaction (drag) when in View, Resize, Palette, RemoveBg, or DepthMap mode or middle-click dragged
+        // Panning interaction (drag) when in View, Resize, Palette, RemoveBg, DepthMap, Ocr, Barcode, or Convert mode (when not dragging split handle)
         let middle_drag = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
         let can_drag_pan = self.active_mode == ImageToolMode::View
             || self.active_mode == ImageToolMode::Resize
             || self.active_mode == ImageToolMode::Palette
             || self.active_mode == ImageToolMode::RemoveBg
-            || self.active_mode == ImageToolMode::DepthMap;
+            || self.active_mode == ImageToolMode::DepthMap
+            || self.active_mode == ImageToolMode::Ocr
+            || self.active_mode == ImageToolMode::Barcode
+            || (self.active_mode == ImageToolMode::Convert && !self.convert_state.is_dragging_split);
         if (can_drag_pan && response.dragged()) || middle_drag {
             self.pan += response.drag_delta();
         }
@@ -3262,14 +4585,18 @@ impl ImagePreviewState {
             // Draw checkerboard under image for alpha transparency
             draw_checkerboard(&painter, img_rect, self.zoom);
 
-            // Draw image mesh
-            let mut mesh = egui::Mesh::with_texture(texture.id());
-            mesh.add_rect_with_uv(
-                img_rect,
-                Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)),
-                Color32::WHITE,
-            );
-            painter.add(egui::Shape::mesh(mesh));
+            // Draw image mesh (or Squoosh-style split view in Convert mode)
+            if self.active_mode == ImageToolMode::Convert {
+                self.render_convert_comparison(ui, &painter, &response, img_rect, canvas_rect, ctx);
+            } else {
+                let mut mesh = egui::Mesh::with_texture(texture.id());
+                mesh.add_rect_with_uv(
+                    img_rect,
+                    Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+                painter.add(egui::Shape::mesh(mesh));
+            }
 
             // Draw crisp subtle border around the image bounds
             painter.rect_stroke(
@@ -3298,9 +4625,12 @@ impl ImagePreviewState {
                 self.render_redact_overlay(ui, &painter, &response, img_rect);
             } else if self.active_mode == ImageToolMode::PickColor {
                 self.render_pick_color_overlay(ui, &painter, &response, img_rect);
+            } else if self.active_mode == ImageToolMode::Barcode {
+                self.render_barcode_overlay(ui, &painter, &response, img_rect);
             }
         }
     }
+
 
     fn render_crop_overlay(
         &mut self,
@@ -3846,8 +5176,12 @@ impl ImagePreviewState {
                         ImageToolMode::Transform => "🖱 Rotate / Flip buttons above | Ctrl+Z: Undo | Ctrl+C: Copy Slot | Ctrl+S: Save As",
                         ImageToolMode::Redact => "🖱 Drag on image: Place black bar | Del: Remove | Enter: Burn/Apply | Ctrl+C: Copy Slot | Ctrl+S: Save As",
                         ImageToolMode::PickColor => "🖱 Hover: Magnifying loupe | Click: Copy Hex code to clipboard | Ctrl+C: Copy Slot",
+                        ImageToolMode::Convert => "🖱 Drag vertical divider: Before/After comparison | Enter: Apply to Canvas | Ctrl+S: Save As",
+                        ImageToolMode::Ocr => "🖱 Choose model above | Enter: Run OCR | 📋 Copy Text / Push to Slot",
+                        ImageToolMode::Barcode => "🖱 Click code card or box to inspect | Enter: Rescan | 🌐 Open Link | 📋 Copy Payload",
                         _ => "🖱 Scroll: Zoom | Drag: Pan | Ctrl+C: Copy to Slot | Ctrl+S: Save As | F: Fit | Esc: Close",
                     };
+
 
                     ui.label(
                         egui::RichText::new(hint_text)
@@ -3973,6 +5307,47 @@ fn encode_jpeg_with_quality(img: &RgbaImage, quality: u8) -> Result<Vec<u8>, ima
     encoder.encode(rgb.as_raw(), rgb.width(), rgb.height(), image::ExtendedColorType::Rgb8)?;
     Ok(buf.into_inner())
 }
+
+fn encode_png(img: &RgbaImage) -> Result<Vec<u8>, image::ImageError> {
+    let mut buf = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut buf, image::ImageFormat::Png)?;
+    Ok(buf.into_inner())
+}
+
+fn encode_webp(img: &RgbaImage, lossless: bool, quality: u8) -> Result<Vec<u8>, String> {
+    let encoder = webp::Encoder::from_rgba(img.as_raw(), img.width(), img.height());
+    let memory = if lossless {
+        encoder.encode_lossless()
+    } else {
+        encoder.encode(quality as f32)
+    };
+    Ok(memory.to_vec())
+}
+
+fn run_optipng_optimization(png_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Write;
+    let mut temp_file = tempfile::Builder::new()
+        .suffix(".png")
+        .tempfile()
+        .map_err(|e| format!("Tempfile creation failed: {}", e))?;
+    temp_file.write_all(png_bytes)
+        .map_err(|e| format!("Tempfile write failed: {}", e))?;
+    let temp_path = temp_file.path().to_path_buf();
+
+    let status = Command::new("optipng")
+        .arg("-o2")
+        .arg("-quiet")
+        .arg(&temp_path)
+        .status()
+        .map_err(|e| format!("Failed to run optipng: {}. Ensure optipng is installed.", e))?;
+
+    if !status.success() {
+        return Err(format!("optipng failed with exit status {:?}", status.code()));
+    }
+
+    std::fs::read(&temp_path).map_err(|e| format!("Failed to read optipng output: {}", e))
+}
+
 
 #[allow(dead_code)]
 pub fn optimize_to_target_size(
@@ -4305,6 +5680,12 @@ pub fn optimize_to_target_size_with_progress(
                 result_rgba: best_scaled_img,
             }
         }
+    }
+}
+
+impl Drop for ImagePreviewState {
+    fn drop(&mut self) {
+        self.cancel_ocr();
     }
 }
 
@@ -4970,6 +6351,146 @@ mod tests {
         assert!(state.status_toast.is_some());
         state.copy_to_hand_slot(HandSide::Right);
         assert!(state.status_toast.is_some());
+    }
+
+    #[test]
+    fn test_convert_state_png_jpeg_webp_and_optipng() {
+        let config = AppConfig::default();
+        let mut img = RgbaImage::new(40, 40);
+        for (x, y, pixel) in img.enumerate_pixels_mut() {
+            *pixel = image::Rgba([((x * 6) % 255) as u8, ((y * 6) % 255) as u8, 128, 255]);
+        }
+        let mut png_bytes = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png).unwrap();
+        let item = ClipItem::from_image(png_bytes, 40, 40, "image/png");
+        let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
+
+        // 1. Initial convert state should be WebP
+        assert_eq!(state.convert_state.target_format, ConvertTargetFormat::Webp);
+        assert!(!state.convert_state.encoded_bytes.is_empty());
+        assert!(state.convert_state.converted_rgba.is_some());
+
+        // 2. Switch to PNG and test OptiPNG
+        state.convert_state.target_format = ConvertTargetFormat::Png;
+        state.convert_state.lossless = true;
+        state.update_conversion();
+        assert!(!state.convert_state.encoded_bytes.is_empty());
+        assert!(state.convert_state.converted_rgba.is_some());
+
+        state.run_optipng_conversion();
+        assert!(!state.convert_state.encoded_bytes.is_empty());
+
+        // 3. Switch to JPEG lossy
+        state.convert_state.target_format = ConvertTargetFormat::Jpeg;
+        state.convert_state.lossless = false;
+        state.convert_state.quality = 75;
+        state.update_conversion();
+        assert!(!state.convert_state.encoded_bytes.is_empty());
+        assert!(state.convert_state.converted_rgba.is_some());
+
+        // 4. Switch to WebP lossless
+        state.convert_state.target_format = ConvertTargetFormat::Webp;
+        state.convert_state.lossless = true;
+        state.update_conversion();
+        assert!(!state.convert_state.encoded_bytes.is_empty());
+        assert!(state.convert_state.converted_rgba.is_some());
+
+        // 5. Switch to WebP lossy
+        state.convert_state.lossless = false;
+        state.convert_state.quality = 60;
+        state.update_conversion();
+        assert!(!state.convert_state.encoded_bytes.is_empty());
+        assert!(state.convert_state.converted_rgba.is_some());
+
+        // 6. Apply converted to canvas and verify undo stack
+        state.apply_converted_to_canvas();
+        assert_eq!(state.undo_stack.len(), 1);
+    }
+
+    #[test]
+    fn test_barcode_state_and_scan() {
+        let config = AppConfig::default();
+        // Generate a QR code using rxing
+        let writer = rxing::qrcode::QRCodeWriter;
+        use rxing::Writer;
+        let bit_matrix = writer
+            .encode(
+                "https://github.com",
+                &rxing::BarcodeFormat::QR_CODE,
+                64,
+                64,
+            )
+            .unwrap();
+
+        let mut img = RgbaImage::new(64, 64);
+        for y in 0..64 {
+            for x in 0..64 {
+                let color = if bit_matrix.get(x, y) {
+                    image::Rgba([0, 0, 0, 255])
+                } else {
+                    image::Rgba([255, 255, 255, 255])
+                };
+                img.put_pixel(x as u32, y as u32, color);
+            }
+        }
+
+        let mut png_bytes = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png).unwrap();
+        let item = ClipItem::from_image(png_bytes, 64, 64, "image/png");
+        let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
+
+        // Run barcode scan
+        state.run_barcode_scan();
+        assert!(state.barcode_state.has_scanned);
+        assert_eq!(state.barcode_state.detections.len(), 1);
+        assert_eq!(state.barcode_state.detections[0].text, "https://github.com");
+    }
+
+    #[test]
+    fn test_ocr_state_transitions() {
+        let config = AppConfig::default();
+        let img = RgbaImage::new(20, 20);
+        let mut png_bytes = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png).unwrap();
+        let item = ClipItem::from_image(png_bytes, 20, 20, "image/png");
+        let state = ImagePreviewState::from_item(&item, &config).unwrap();
+
+        assert_eq!(state.ocr_state.engine, OcrEngine::GlmOcr);
+        assert!(!state.ocr_state.in_progress);
+        assert!(state.ocr_state.extracted_text.is_empty());
+
+        // Test engine enum conversions
+        assert_eq!(OcrEngine::GlmOcr.arg_name(), "glm-ocr");
+        assert_eq!(OcrEngine::Tesseract.arg_name(), "tesseract");
+    }
+
+    #[test]
+    fn test_ocr_cancellation_and_cleanup() {
+        let config = AppConfig::default();
+        let img = RgbaImage::new(20, 20);
+        let mut png_bytes = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png).unwrap();
+        let item = ClipItem::from_image(png_bytes, 20, 20, "image/png");
+        let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
+
+        state.ocr_state.in_progress = true;
+        state.ocr_state.status_text = Some("Processing image with GLM-OCR...".into());
+        state.ocr_child_pid.store(999999, std::sync::atomic::Ordering::SeqCst);
+
+        // Cancel OCR
+        state.cancel_ocr();
+
+        assert!(!state.ocr_state.in_progress);
+        assert!(state.ocr_state.status_text.is_none());
+        assert_eq!(state.ocr_child_pid.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(state.ocr_rx.is_none());
+
+        // Drop state test - ensuring drop executes cancel_ocr without panic
+        {
+            let mut scoped_state = ImagePreviewState::from_item(&item, &config).unwrap();
+            scoped_state.ocr_state.in_progress = true;
+            // Dropping scoped_state here invokes Drop -> cancel_ocr
+        }
     }
 }
 
