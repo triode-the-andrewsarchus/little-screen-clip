@@ -1199,59 +1199,107 @@ pub fn guess_image_mime(p: &Path) -> String {
 }
 
 pub fn extract_local_file_paths(text: &str) -> Vec<PathBuf> {
-    let mut paths = Vec::new();
     let home = std::env::var("HOME").ok();
+    let home_ref = home.as_deref();
+    let non_empty_lines: Vec<&str> = text
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
 
-    let resolve_str = |s: &str| -> Option<PathBuf> {
-        let clean = s.trim().trim_matches('"').trim_matches('\'');
-        if clean.is_empty() || clean.starts_with('#') {
-            return None;
-        }
-        let raw = if let Some(stripped) = clean.strip_prefix("file://") {
-            percent_encoding::percent_decode_str(stripped)
-                .decode_utf8()
-                .ok()
-                .map(|s| s.into_owned())
-        } else if clean.starts_with('/') {
-            Some(clean.to_string())
-        } else if let Some(ref h) = home {
-            if let Some(rest) = clean.strip_prefix("~/") {
-                Some(format!("{}/{}", h, rest))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+    if non_empty_lines.is_empty() {
+        return Vec::new();
+    }
 
-        if let Some(path_str) = raw {
-            let p = PathBuf::from(path_str);
-            if p.exists() {
-                return Some(p);
-            }
-        }
-        None
-    };
+    if non_empty_lines.len() > 1 {
+        extract_from_multiline(&non_empty_lines, home_ref)
+    } else {
+        extract_from_single_line(non_empty_lines[0], home_ref)
+    }
+}
 
-    for line in text.lines() {
-        if let Some(p) = resolve_str(line) {
+fn extract_from_multiline(lines: &[&str], home: Option<&str>) -> Vec<PathBuf> {
+    let mut paths = Vec::with_capacity(lines.len());
+    for line in lines {
+        if let Some(p) = resolve_candidate_path(line, home, false) {
             if !paths.contains(&p) {
                 paths.push(p);
             }
+        } else {
+            // If not all lines are valid paths, the multiline text is code/prose, not a file batch
+            return Vec::new();
         }
     }
+    paths
+}
 
-    if paths.is_empty() {
-        for token in text.split_whitespace() {
-            if let Some(p) = resolve_str(token) {
+fn extract_from_single_line(line: &str, home: Option<&str>) -> Vec<PathBuf> {
+    if let Some(p) = resolve_candidate_path(line, home, true) {
+        return vec![p];
+    }
+
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    if tokens.len() > 1 {
+        let mut paths = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            if let Some(p) = resolve_candidate_path(token, home, false) {
                 if !paths.contains(&p) {
                     paths.push(p);
                 }
+            } else {
+                return Vec::new();
             }
         }
+        return paths;
     }
 
-    paths
+    Vec::new()
+}
+
+fn resolve_candidate_path(s: &str, home: Option<&str>, is_sole_input: bool) -> Option<PathBuf> {
+    let clean = s.trim().trim_matches('"').trim_matches('\'');
+    if is_disallowed_path_string(clean, is_sole_input) {
+        return None;
+    }
+
+    let raw = parse_raw_path_string(clean, home)?;
+    let p = PathBuf::from(raw);
+    if p.exists() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+fn is_disallowed_path_string(clean: &str, is_sole_input: bool) -> bool {
+    if clean.is_empty() || clean.starts_with('#') {
+        return true;
+    }
+    if clean.starts_with("//") || clean.starts_with("/*") || clean.starts_with("*/") {
+        return true;
+    }
+    if clean == "." || clean == ".." {
+        return true;
+    }
+    if !is_sole_input && clean == "/" {
+        return true;
+    }
+    false
+}
+
+fn parse_raw_path_string(clean: &str, home: Option<&str>) -> Option<String> {
+    if let Some(stripped) = clean.strip_prefix("file://") {
+        percent_encoding::percent_decode_str(stripped)
+            .decode_utf8()
+            .ok()
+            .map(|s| s.into_owned())
+    } else if clean.starts_with('/') {
+        Some(clean.to_string())
+    } else if let Some(h) = home {
+        clean.strip_prefix("~/").map(|rest| format!("{}/{}", h, rest))
+    } else {
+        None
+    }
 }
 
 fn parse_hex_color(s: &str) -> Option<(u8, u8, u8, String)> {
@@ -1357,6 +1405,56 @@ mod tests {
         assert_eq!(bytes, fake_png_bytes);
         assert_eq!(mime, "image/png");
         assert!(path.is_some());
+    }
+
+    #[test]
+    fn test_code_with_comments_not_treated_as_directory() {
+        let snippet = r#"
+        egui::Frame::none()
+            .fill(Color32::from_rgb(15, 23, 42)) // Slate 900
+            .inner_margin(egui::Margin::same(16.0))
+            .show(ui, |ui| {
+                // 1. Header Toolbar
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("📊")
+                            .size(24.0),
+                    );
+                    ui.label(
+                        egui::RichText::new(&self.title)
+                            .strong()
+                            .size(18.0)
+                            .color(Color32::WHITE),
+                    );
+
+                    ui.add_space(8.0);
+                    let info_badge = format!("{} rows × {} cols", total_rows, total_cols);
+                    ui.label(
+                        egui::RichText::new(info_badge)
+                            .small()
+                            .color(Color32::from_rgb(148, 163, 184)),
+                    );
+
+                    // Search box
+                    ui.add_space(16.0);
+                    ui.label(egui::RichText::new("🔍").small());
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.search_query)
+                            .hint_text("Filter cells...")
+                            .desired_width(180.0),
+                    );
+        "#;
+        let paths = extract_local_file_paths(snippet);
+        assert!(paths.is_empty(), "Expected empty paths, got: {:?}", paths);
+
+        let item = ClipItem::from_text(snippet);
+        assert_eq!(item.handler_tag, "TEXT");
+        match item.payload {
+            ClipPayload::Text(content) => {
+                assert!(content.contains("Header Toolbar"));
+            }
+            other => panic!("Expected ClipPayload::Text, got: {:?}", other),
+        }
     }
 }
 
