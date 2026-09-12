@@ -354,6 +354,116 @@ pub fn is_code_file(path: &Path) -> bool {
         .is_some()
 }
 
+const CODE_PREFIXES: &[&str] = &[
+    "#include", "#define", "#pragma", "#ifdef", "#ifndef",
+    "import ", "from ", "package ", "use std::", "pub fn ",
+    "int main(", "void main(",
+];
+
+fn is_code_indicator(l: &str) -> bool {
+    if CODE_PREFIXES.iter().any(|p| l.starts_with(p)) {
+        return true;
+    }
+    if l.starts_with("def ") && l.ends_with(':') {
+        return true;
+    }
+    if l.starts_with("class ") && (l.ends_with(':') || l.ends_with('{')) {
+        return true;
+    }
+    if l.starts_with("fn ") && l.contains('(') {
+        return true;
+    }
+    false
+}
+
+fn is_heading_line(l: &str) -> bool {
+    let offset = if l.starts_with("### ") {
+        Some(4)
+    } else if l.starts_with("## ") {
+        Some(3)
+    } else if l.starts_with("# ") {
+        Some(2)
+    } else {
+        None
+    };
+
+    offset
+        .and_then(|idx| l.chars().nth(idx))
+        .map(|c| c.is_alphanumeric())
+        .unwrap_or(false)
+}
+
+fn is_list_line(l: &str) -> bool {
+    l.len() > 3 && (l.starts_with("- ") || l.starts_with("* ") || l.starts_with("+ "))
+}
+
+fn is_link_line(l: &str) -> bool {
+    l.contains("](") && l.contains('[') && l.contains(')')
+}
+
+#[derive(Default)]
+struct MarkdownSignalCounter {
+    fence_count: usize,
+    heading_count: usize,
+    list_count: usize,
+    link_count: usize,
+}
+
+impl MarkdownSignalCounter {
+    fn is_markdown(&self) -> bool {
+        if self.fence_count >= 2 {
+            return true;
+        }
+        if self.heading_count >= 1 && (self.list_count >= 1 || self.link_count >= 1 || self.fence_count >= 1) {
+            return true;
+        }
+        self.heading_count >= 2 && self.list_count >= 1
+    }
+
+    fn record_line(&mut self, line: &str) {
+        if is_heading_line(line) {
+            self.heading_count += 1;
+        } else if is_list_line(line) {
+            self.list_count += 1;
+        } else if is_link_line(line) {
+            self.link_count += 1;
+        }
+    }
+}
+
+/// Returns true if the text exhibits strong Markdown structural signals and is not code.
+pub fn detect_markdown_text(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.starts_with("#!") {
+        return false;
+    }
+
+    let mut in_fence = false;
+    let mut signals = MarkdownSignalCounter::default();
+
+    for line in trimmed.lines() {
+        let l = line.trim();
+        if l.starts_with("```") {
+            in_fence = !in_fence;
+            signals.fence_count += 1;
+            continue;
+        }
+
+        if in_fence {
+            continue;
+        }
+
+        if is_code_indicator(l) {
+            return false;
+        }
+
+        signals.record_line(l);
+    }
+
+    signals.is_markdown()
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

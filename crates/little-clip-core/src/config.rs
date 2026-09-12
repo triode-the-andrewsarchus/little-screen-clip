@@ -25,6 +25,9 @@ pub struct AppConfig {
     /// Raster/vector image editor and viewer tool paths.
     #[serde(default)]
     pub image: ImageConfig,
+    /// Text preview and external editor configuration.
+    #[serde(default)]
+    pub text: TextConfig,
     /// Dual-stack slot history depths.
     #[serde(default)]
     pub slots: SlotsConfig,
@@ -183,6 +186,50 @@ impl WorkbenchConfig {
             }
         }
         "xdg-open".to_string()
+    }
+}
+
+/// External text editor settings for big text preview escape hatch.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TextConfig {
+    /// Preferred external text editor command (e.g. "code", "subl", "gedit", "kate", "nano", "nvim").
+    /// Defaults to "code".
+    #[serde(default = "default_text_editor")]
+    pub editor: String,
+}
+
+fn default_text_editor() -> String {
+    "code".to_string()
+}
+
+impl Default for TextConfig {
+    fn default() -> Self {
+        Self {
+            editor: default_text_editor(),
+        }
+    }
+}
+
+impl TextConfig {
+    /// Resolves the command to launch the user's preferred text editor.
+    pub fn resolve_editor(&self) -> String {
+        let trimmed = self.editor.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+        if let Ok(vis) = std::env::var("VISUAL") {
+            let trimmed = vis.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        if let Ok(ed) = std::env::var("EDITOR") {
+            let trimmed = ed.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+        "code".to_string()
     }
 }
 
@@ -397,6 +444,7 @@ impl Default for AppConfig {
             audio: AudioConfig::default(),
             workbench: WorkbenchConfig::default(),
             image: ImageConfig::default(),
+            text: TextConfig::default(),
             slots: SlotsConfig::default(),
             auto_actions: AutoActionsConfig::default(),
         }

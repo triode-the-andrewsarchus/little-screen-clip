@@ -946,6 +946,60 @@ fn op_diff(hand: &ClipItem, slot: &ClipItem) -> Result<ClipItem, OpError> {
     Ok(ClipItem::from_text(res.raw_ansi))
 }
 
+/// Determines whether a given filesystem path contains readable text (valid UTF-8, non-binary, no null bytes in sample).
+pub fn is_text_file<P: AsRef<std::path::Path>>(path: P) -> bool {
+    let p = path.as_ref();
+    if !p.is_file() {
+        return false;
+    }
+    use std::io::Read;
+    let Ok(mut file) = std::fs::File::open(p) else {
+        return false;
+    };
+    let mut buffer = [0u8; 8192];
+    let Ok(n) = file.read(&mut buffer) else {
+        return false;
+    };
+    if n == 0 {
+        return true; // empty file is valid text
+    }
+    let sample = &buffer[..n];
+    // Check for null bytes which indicate binary data
+    if sample.contains(&0) {
+        return false;
+    }
+    // Check if sample is valid UTF-8
+    match std::str::from_utf8(sample) {
+        Ok(_) => true,
+        Err(e) => {
+            // If error is at the very end of buffer due to truncated UTF-8 char, it's valid so far
+            e.valid_up_to() > 0 && e.error_len().is_none()
+        }
+    }
+}
+
+/// Reads the contents of a text file up to `max_bytes` (or full if smaller).
+pub fn read_text_file_preview<P: AsRef<std::path::Path>>(path: P, max_bytes: usize) -> Option<String> {
+    let p = path.as_ref();
+    if !is_text_file(p) {
+        return None;
+    }
+    use std::io::Read;
+    let mut file = std::fs::File::open(p).ok()?;
+    let mut buffer = vec![0u8; max_bytes];
+    let n = file.read(&mut buffer).ok()?;
+    buffer.truncate(n);
+    match String::from_utf8(buffer) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            let valid = e.utf8_error().valid_up_to();
+            let mut bytes = e.into_bytes();
+            bytes.truncate(valid);
+            String::from_utf8(bytes).ok()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1032,5 +1086,25 @@ mod tests {
             _ => panic!("Expected Image payload from diff operation"),
         }
     }
+
+    #[test]
+    fn test_is_text_file_detection() {
+        let tmp_dir = std::env::temp_dir();
+        let txt_path = tmp_dir.join("little_clip_test_sample.txt");
+        let bin_path = tmp_dir.join("little_clip_test_sample.bin");
+
+        std::fs::write(&txt_path, "Hello, world! This is a UTF-8 text file.\nWith multiple lines.").unwrap();
+        std::fs::write(&bin_path, b"\x00\x01\x02\xFF\xFE\x00BinaryDataHere").unwrap();
+
+        assert!(is_text_file(&txt_path));
+        assert!(!is_text_file(&bin_path));
+
+        let preview = read_text_file_preview(&txt_path, 1024).unwrap();
+        assert!(preview.contains("Hello, world!"));
+
+        let _ = std::fs::remove_file(&txt_path);
+        let _ = std::fs::remove_file(&bin_path);
+    }
 }
+
 

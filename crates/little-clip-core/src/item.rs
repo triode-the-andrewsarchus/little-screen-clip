@@ -299,6 +299,8 @@ impl ClipItem {
         match &self.payload {
             ClipPayload::Image { path: Some(p), .. } => Some(p.clone()),
             ClipPayload::AudioRef { path, .. } => Some(path.clone()),
+            ClipPayload::Directory(p) => Some(p.clone()),
+            ClipPayload::FileBatch(files) if files.len() == 1 => files.first().cloned(),
             ClipPayload::Text(t) | ClipPayload::Markdown(t) => {
                 let p = Path::new(t.trim());
                 if p.is_file() {
@@ -404,7 +406,7 @@ impl ClipItem {
         }
 
         // 6. Check if Markdown text
-        if Self::is_markdown_text(trimmed) {
+        if crate::syntax::detect_markdown_text(trimmed) {
             return Self::from_markdown_text(text);
         }
 
@@ -592,43 +594,40 @@ impl ClipItem {
 
     fn from_text_or_code_file(path: &Path) -> Option<Self> {
         let ext_lower = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let size_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let size_str = format_bytes(size_bytes);
+
         if matches!(ext_lower.as_str(), "md" | "markdown" | "mdown") {
-            let content = std::fs::read_to_string(path).ok()?;
             let file_name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "document.md".to_string());
-            let lines_count = content.lines().count();
-            let size_str = format_bytes(content.len() as u64);
+            let subtitle = format!("Markdown • {}", size_str);
             return Some(Self {
                 id: Uuid::new_v4(),
                 created_at: current_unix_timestamp(),
-                payload: ClipPayload::Markdown(content),
+                payload: ClipPayload::FileBatch(vec![path.to_path_buf()]),
                 title: file_name,
-                subtitle: format!("Markdown • {} lines • {}", lines_count, size_str),
-                details: vec!["Markdown".to_string(), format!("{} lines", lines_count), size_str],
+                subtitle,
+                details: vec!["Markdown".to_string(), size_str],
                 handler_tag: "MARKDOWN (FILE)".to_string(),
             });
         }
 
         if ext_lower == "json" {
-            let content = std::fs::read_to_string(path).ok()?;
-            if serde_json::from_str::<serde_json::Value>(&content).is_ok() {
-                let file_name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "data.json".to_string());
-                let size_str = format_bytes(content.len() as u64);
-                return Some(Self {
-                    id: Uuid::new_v4(),
-                    created_at: current_unix_timestamp(),
-                    payload: ClipPayload::Text(content),
-                    title: file_name,
-                    subtitle: format!("JSON • {}", size_str),
-                    details: vec!["JSON".to_string(), size_str],
-                    handler_tag: "JSON (FILE)".to_string(),
-                });
-            }
+            let file_name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| "data.json".to_string());
+            return Some(Self {
+                id: Uuid::new_v4(),
+                created_at: current_unix_timestamp(),
+                payload: ClipPayload::FileBatch(vec![path.to_path_buf()]),
+                title: file_name,
+                subtitle: format!("JSON • {}", size_str),
+                details: vec!["JSON".to_string(), size_str],
+                handler_tag: "JSON (FILE)".to_string(),
+            });
         }
 
         if matches!(
@@ -636,13 +635,10 @@ impl ClipItem {
             "txt" | "text" | "log" | "ini" | "yaml" | "yml" | "toml" | "rs" | "py" | "c"
                 | "cpp" | "h" | "js" | "ts" | "html" | "css" | "sh" | "conf" | "env"
         ) {
-            let content = std::fs::read_to_string(path).ok()?;
             let file_name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_else(|| "document.txt".to_string());
-            let lines_count = content.lines().count();
-            let size_str = format_bytes(content.len() as u64);
             let ext_upper = if ext_lower.is_empty() {
                 "TXT".to_string()
             } else {
@@ -651,10 +647,10 @@ impl ClipItem {
             return Some(Self {
                 id: Uuid::new_v4(),
                 created_at: current_unix_timestamp(),
-                payload: ClipPayload::Text(content),
+                payload: ClipPayload::FileBatch(vec![path.to_path_buf()]),
                 title: file_name,
-                subtitle: format!("{} • {} lines • {}", ext_upper, lines_count, size_str),
-                details: vec![ext_upper.clone(), format!("{} lines", lines_count), size_str],
+                subtitle: format!("{} • {}", ext_upper, size_str),
+                details: vec![ext_upper.clone(), size_str],
                 handler_tag: format!("{} (FILE)", ext_upper),
             });
         }
@@ -711,14 +707,6 @@ impl ClipItem {
         })
     }
 
-    fn is_markdown_text(trimmed: &str) -> bool {
-        trimmed.starts_with("# ")
-            || trimmed.starts_with("## ")
-            || trimmed.starts_with("### ")
-            || (trimmed.contains("\n# ") || trimmed.contains("\n## "))
-            || (trimmed.starts_with("- ") && trimmed.contains("\n- "))
-            || (trimmed.starts_with("* ") && trimmed.contains("\n* "))
-    }
 
     fn from_markdown_text(text: String) -> Self {
         let lines_count = text.lines().count();
@@ -1503,6 +1491,59 @@ mod tests {
             }
             other => panic!("Expected ClipPayload::Text, got: {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_copied_markdown_file_preserves_file_batch() {
+        let temp_dir = std::env::temp_dir().join("little_clip_test_md");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let file_path = temp_dir.join("sample_interview.md");
+        std::fs::write(&file_path, "# Interview with Soatok\n\nThis is content.\n").unwrap();
+
+        let uri = format!("file://{}", file_path.to_string_lossy());
+        let item = ClipItem::from_text(uri);
+
+        assert_eq!(item.handler_tag, "MARKDOWN (FILE)");
+        assert_eq!(item.title, "sample_interview.md");
+        assert_eq!(item.file_path(), Some(file_path.clone()));
+
+        // Crucial: payload MUST be FileBatch, and clipboard text MUST be the file path (not contents)
+        match &item.payload {
+            ClipPayload::FileBatch(files) => {
+                assert_eq!(files.len(), 1);
+                assert_eq!(files[0], file_path);
+            }
+            other => panic!("Expected FileBatch payload, got: {:?}", other),
+        }
+        assert_eq!(item.to_clipboard_text(), Some(file_path.to_string_lossy().to_string()));
+
+        let _ = std::fs::remove_file(&file_path);
+    }
+
+    #[test]
+    fn test_copied_code_file_preserves_file_batch() {
+        let temp_dir = std::env::temp_dir().join("little_clip_test_c");
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let file_path = temp_dir.join("main.c");
+        std::fs::write(&file_path, "#include <stdio.h>\nint main() { return 0; }\n").unwrap();
+
+        let path_str = file_path.to_string_lossy().to_string();
+        let item = ClipItem::from_text(&path_str);
+
+        assert_eq!(item.handler_tag, "C (FILE)");
+        assert_eq!(item.title, "main.c");
+        assert_eq!(item.file_path(), Some(file_path.clone()));
+
+        match &item.payload {
+            ClipPayload::FileBatch(files) => {
+                assert_eq!(files.len(), 1);
+                assert_eq!(files[0], file_path);
+            }
+            other => panic!("Expected FileBatch payload, got: {:?}", other),
+        }
+        assert_eq!(item.to_clipboard_text(), Some(path_str));
+
+        let _ = std::fs::remove_file(&file_path);
     }
 }
 

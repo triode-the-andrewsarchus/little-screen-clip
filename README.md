@@ -28,6 +28,7 @@ Standard clipboard managers flatten everything into a single chronological list.
   - **Quick Action Palette**: Fuzzy search for instantaneous transforms (case changes, JSON formatting, URL cleaning, hashing, extraction).
   - **The Big Node Machine**: Visual node canvas to build and execute multi-step pipelines (Python, Bash, ImageMagick, FFmpeg).
   - **Diff Viewers**: Interactive text/code diffs and Biodiff-style aligned binary hex comparisons.
+  - **Big Text & Code Previewer (`Right-Click Text/Code Slot`)**: Full-screen inspection modal with Syntect syntax highlighting, rich Markdown rendering, toggleable line-wrapping, line numbers gutter, regex/find toolbar, text selection/copying, and configured editor escape hatch (`code`).
   - **Rolling Audio Strip**: Ambient 30s background audio buffer snapshot, waveform visualizer, and slicer.
   - **Picture Studio (`Right-Click Image Slot` / `Palette`)**: Interactive visual editor with lossless cropping (1:1, 16:9, 9:16), rotations/flips, privacy black-bar redaction, magnifying color loupe eyedropper, target pixel & file size optimizer, palette extraction, one-click escape hatches (Krita, Inkscape, Nomacs), and AI background removal (`nobg`).
 

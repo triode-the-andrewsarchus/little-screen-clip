@@ -1,29 +1,7 @@
-IMMEDIATE:
-
-- Reduce number of R prior slots by 1, increase L prior by 1
-- Add ability to swap any two slots easily (drag and drop? Shortcut?)
-- Add matched auto-actions - trimming tracking from links as first option
-    - This needs to be easy to bypass, probably just automatically going to the undo slot.
-
 Goals:
 
-- More format preview support
-    - MIDI preview
-    - csv, .xls preview
-    - .raw preview
-    - .stl preview
-    - .pdf (first page)
-- Actually tying in with keybinds
 - format conversion (.png, .jpg, .webp) in big picture preview
-- big text previews (right click, very simple editor)
-- Text to image
-- Image to text (OCR)
-- Background removal
-- "Escape hatches"
-    - Button to open audio in Audacity
-    - PDF to Sioyek
-    - Etc. ; configurable per type, with extension overrides (ie, set image, but able to add exception for webp or svg)
-- Background pre-process audio file, image diffing, etc. with high nice-ness
+- Image to text (OCR) - probably one of the newer models
 
 future goals:
 

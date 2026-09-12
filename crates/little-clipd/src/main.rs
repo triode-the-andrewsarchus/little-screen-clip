@@ -1304,6 +1304,7 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                         } else {
                             (ClipItem::from_text(text.clone()), None)
                         };
+                        let was_cleaned = original_untracked.is_some();
                         info!("Captured clipboard item to {:?}: [{}] {}", target_hand, item.handler_tag, item.title);
                         schedule_async_previews(&item, Arc::clone(&ctx));
                         let prior_left = {
@@ -1315,8 +1316,9 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                             mgr.push_to_hand(item.clone(), target_hand);
                             old_left
                         };
-                        if let Some(clean_text) = item.to_clipboard_text() {
-                            if clean_text != text {
+                        if was_cleaned {
+                            if let Some(clean_text) = item.to_clipboard_text() {
+                                last_clipboard_text = clean_text.clone();
                                 let _ = tokio::process::Command::new("wl-copy").arg(&clean_text).status().await;
                             }
                         }

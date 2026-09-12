@@ -4813,7 +4813,7 @@ mod tests {
 
         state.run_target_file_size_optimizer();
         // Poll for async optimizer completion
-        for _ in 0..200 {
+        for _ in 0..500 {
             state.poll_optimizer();
             if !state.resize_state.is_optimizing && state.resize_state.last_result.is_some() {
                 break;

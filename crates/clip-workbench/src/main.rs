@@ -27,6 +27,7 @@ mod spreadsheet_view;
 mod pdf_view;
 mod midi_view;
 mod stl_view;
+mod text_preview;
 use audio_preview::AudioPreviewState;
 use binary_diff_view::BinaryDiffViewState;
 use canvas::*;
@@ -37,6 +38,7 @@ use spreadsheet_view::SpreadsheetViewerState;
 use pdf_view::PdfEditorState;
 use midi_view::MidiViewerState;
 use stl_view::StlViewerState;
+use text_preview::TextPreviewState;
 use little_clip_ops::binary_diff::resolve_binary_diff_pair;
 use little_clip_ops::diff::{resolve_diff_pair, resolve_diff_target, DiffDisplayMode};
 
@@ -112,6 +114,7 @@ struct WorkbenchApp {
     pdf_viewer: Option<PdfEditorState>,
     midi_viewer: Option<MidiViewerState>,
     stl_viewer: Option<StlViewerState>,
+    text_preview: Option<TextPreviewState>,
     rolling_audio_strip: Option<RollingAudioStripState>,
     dragging_slot: Option<SlotId>,
     config: AppConfig,
@@ -184,6 +187,7 @@ impl WorkbenchApp {
             pdf_viewer: None,
             midi_viewer: None,
             stl_viewer: None,
+            text_preview: None,
             rolling_audio_strip,
             dragging_slot: None,
             config,
@@ -664,53 +668,9 @@ impl eframe::App for WorkbenchApp {
                             let rel_x = (pos.x - rect.min.x) / rect.width() * SCREEN_WIDTH as f32;
                             let clicked_slot = get_slot_from_rel_x(rel_x);
 
-                            if let Some(item) = self.state.get(clicked_slot) {
-                                if let Some(audio_path) = item.audio_path() {
-                                    self.audio_preview = Some(AudioPreviewState::new(audio_path, item.title.clone()).with_editor(self.config.audio.editor.clone()));
-                                } else if let Some(fp) = item.file_path() {
-                                    if fp.extension().and_then(|s| s.to_str()).map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")).unwrap_or(false) {
-                                        if let Ok(st) = MidiViewerState::from_file(fp) {
-                                            self.midi_viewer = Some(st);
-                                        }
-                                    } else if little_clip_ops::is_stl_file(&fp) {
-                                        if let Ok(st) = StlViewerState::from_file(fp) {
-                                            self.stl_viewer = Some(st);
-                                        }
-                                    } else if little_clip_core::pdf::is_pdf_path(&fp) {
-                                        self.pdf_viewer = Some(PdfEditorState::new(fp));
-                                    } else if little_clip_ops::is_spreadsheet_file(&fp) {
-                                        if let Ok(data) = little_clip_ops::load_spreadsheet(&fp) {
-                                            self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, Some(fp)));
-                                        }
-                                    } else if item.is_image() {
-                                        if let Ok(editor) = ImagePreviewState::from_item(item, &self.config) {
-                                            self.image_preview = Some(editor);
-                                        }
-                                    }
-                                } else if item.is_image() {
-                                    if let Ok(editor) = ImagePreviewState::from_item(item, &self.config) {
-                                        self.image_preview = Some(editor);
-                                    }
-                                } else if let Some(text) = item.to_clipboard_text() {
-                                    let p = std::path::Path::new(text.trim());
-                                    if p.is_file() && (p.extension().and_then(|s| s.to_str()).map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")).unwrap_or(false)) {
-                                        if let Ok(st) = MidiViewerState::from_file(p.to_path_buf()) {
-                                            self.midi_viewer = Some(st);
-                                        }
-                                    } else if p.is_file() && little_clip_ops::is_stl_file(p) {
-                                        if let Ok(st) = StlViewerState::from_file(p.to_path_buf()) {
-                                            self.stl_viewer = Some(st);
-                                        }
-                                    } else if p.is_file() && little_clip_core::pdf::is_pdf_path(p) {
-                                        self.pdf_viewer = Some(PdfEditorState::new(p.to_path_buf()));
-                                    } else if p.is_file() && little_clip_ops::is_spreadsheet_file(p) {
-                                        if let Ok(data) = little_clip_ops::load_spreadsheet(p) {
-                                            self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, Some(p.to_path_buf())));
-                                        }
-                                    } else if let Some(data) = little_clip_ops::detect_csv_text(text.trim()) {
-                                        self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, None));
-                                    }
-                                }
+                            let item = self.state.get(clicked_slot).cloned();
+                            if let Some(item) = item {
+                                self.open_slot_preview_modal(&item);
                             }
                         }
                     }
@@ -1008,6 +968,33 @@ impl eframe::App for WorkbenchApp {
                                 }
                             }
                         }
+
+                        if let Some((raw_txt, file_p, is_md)) = Self::check_inspector_text_preview(&self.selected_slots, &self.state) {
+                            ui.add_space(8.0);
+                            let label = if is_md {
+                                "📖 Preview Markdown"
+                            } else {
+                                "📄 View Text / Code"
+                            };
+                            let txt_btn = egui::Button::new(
+                                egui::RichText::new(label)
+                                    .small()
+                                    .strong()
+                                    .color(egui::Color32::WHITE),
+                            )
+                            .fill(egui::Color32::from_rgb(14, 116, 144))
+                            .rounding(4.0);
+                            if ui.add(txt_btn).on_hover_text("Open big text preview (syntax highlighting, line wrapping, search, and editor export)").clicked() {
+                                if let Some(p) = file_p {
+                                    if let Some(st) = TextPreviewState::from_file(p, &self.config) {
+                                        self.text_preview = Some(st);
+                                    }
+                                } else if let Some(txt) = raw_txt {
+                                    self.text_preview = Some(TextPreviewState::from_text(txt, None, &self.config));
+                                }
+                            }
+                        }
+
                     });
 
                     if open_diff_requested {
@@ -1477,7 +1464,107 @@ impl WorkbenchApp {
             return true;
         }
 
+        if let Some(text_state) = &mut self.text_preview {
+            let mut close_text = false;
+            egui::CentralPanel::default()
+                .frame(egui::Frame::none())
+                .show(ctx, |ui| {
+                    text_state.render_ui(ui, ctx, &mut close_text);
+                });
+
+            if close_text {
+                self.text_preview = None;
+            }
+            return true;
+        }
+
         false
+    }
+
+    fn open_slot_file_preview(&mut self, fp: &std::path::Path, is_image: bool) {
+        if fp.extension().and_then(|s| s.to_str()).map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")).unwrap_or(false) {
+            if let Ok(st) = MidiViewerState::from_file(fp.to_path_buf()) {
+                self.midi_viewer = Some(st);
+            }
+        } else if little_clip_ops::is_stl_file(fp) {
+            if let Ok(st) = StlViewerState::from_file(fp.to_path_buf()) {
+                self.stl_viewer = Some(st);
+            }
+        } else if little_clip_core::pdf::is_pdf_path(fp) {
+            self.pdf_viewer = Some(PdfEditorState::new(fp.to_path_buf()));
+        } else if little_clip_ops::is_spreadsheet_file(fp) {
+            if let Ok(data) = little_clip_ops::load_spreadsheet(fp) {
+                self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, Some(fp.to_path_buf())));
+            }
+        } else if is_image || little_clip_ops::is_image_path(fp) {
+            if let Ok(editor) = ImagePreviewState::from_path(fp.to_path_buf(), &self.config) {
+                self.image_preview = Some(editor);
+            }
+        } else if little_clip_ops::is_text_file(fp) {
+            if let Some(st) = TextPreviewState::from_file(fp, &self.config) {
+                self.text_preview = Some(st);
+            }
+        }
+    }
+
+    fn open_slot_text_preview(&mut self, text: &str, title: &str) {
+        let p = std::path::Path::new(text.trim());
+        if p.is_file() {
+            self.open_slot_file_preview(p, false);
+            return;
+        }
+        if let Some(data) = little_clip_ops::detect_csv_text(text.trim()) {
+            self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, None));
+        } else {
+            self.text_preview = Some(TextPreviewState::from_text(text.to_string(), Some(title.to_string()), &self.config));
+        }
+    }
+
+    fn open_slot_preview_modal(&mut self, item: &ClipItem) {
+        if let Some(audio_path) = item.audio_path() {
+            self.audio_preview = Some(AudioPreviewState::new(audio_path, item.title.clone()).with_editor(self.config.audio.editor.clone()));
+            return;
+        }
+        if let Some(fp) = item.file_path() {
+            self.open_slot_file_preview(&fp, item.is_image());
+        } else if item.is_image() {
+            if let Ok(editor) = ImagePreviewState::from_item(item, &self.config) {
+                self.image_preview = Some(editor);
+            }
+        } else if let Some(text) = item.to_clipboard_text() {
+            self.open_slot_text_preview(&text, &item.title);
+        }
+    }
+
+    fn check_inspector_text_preview(
+        selected_slots: &[SlotId],
+        state: &SlotManager,
+    ) -> Option<(Option<String>, Option<PathBuf>, bool)> {
+        let (raw_txt, file_p): (Option<String>, Option<PathBuf>) = selected_slots.iter().find_map(|s| {
+            let it = state.get(*s)?;
+            if let Some(p) = it.file_path().filter(|p| little_clip_ops::is_text_file(p)) {
+                Some((None, Some(p)))
+            } else if let Some(txt) = it.to_clipboard_text() {
+                let p = std::path::Path::new(txt.trim());
+                if p.is_file() && little_clip_ops::is_text_file(p) {
+                    Some((None, Some(p.to_path_buf())))
+                } else {
+                    Some((Some(txt), None))
+                }
+            } else {
+                None
+            }
+        })?;
+
+        let is_md = if let Some(p) = &file_p {
+            p.extension().map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown")).unwrap_or(false)
+        } else if let Some(txt) = &raw_txt {
+            text_preview::detect_markdown_text(txt)
+        } else {
+            false
+        };
+
+        Some((raw_txt, file_p, is_md))
     }
 
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
