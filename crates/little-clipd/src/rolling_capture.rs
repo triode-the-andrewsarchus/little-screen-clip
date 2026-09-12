@@ -1,3 +1,8 @@
+//! Background audio ring buffer capture worker.
+//!
+//! Spawns `pw-record` (or `parec` fallback) to stream raw PCM audio from the system default sink
+//! into a shared [`RollingAudioBuffer`].
+
 use little_clip_core::config::AudioConfig;
 use little_clip_core::rolling_audio::RollingAudioBuffer;
 use std::io::Read;
@@ -6,6 +11,7 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tracing::{info, warn};
 
+/// Spawns a background worker thread continuously capturing system audio into `buffer`.
 pub fn start_rolling_capture_thread(
     buffer: Arc<RwLock<RollingAudioBuffer>>,
     config: AudioConfig,

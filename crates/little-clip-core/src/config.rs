@@ -1,31 +1,45 @@
+//! Application configuration definitions and TOML serialization/deserialization.
+//!
+//! Defines schemas and default values for display preferences, color themes, audio settings,
+//! image/vector external editors, workbench text editors, and automatic clipboard actions.
+
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
+/// Root application configuration holding all sub-configurations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
+    /// Display options (rotation, animations, debug badges, elision character).
     #[serde(default)]
     pub display: DisplayConfig,
+    /// Color theme palette for canvas, slots, borders, and text.
     #[serde(default)]
     pub colors: ColorConfig,
+    /// Audio preview, capture, and waveform settings.
     #[serde(default)]
     pub audio: AudioConfig,
+    /// Workbench editor integrations.
     #[serde(default)]
     pub workbench: WorkbenchConfig,
+    /// Raster/vector image editor and viewer tool paths.
     #[serde(default)]
     pub image: ImageConfig,
+    /// Dual-stack slot history depths.
     #[serde(default)]
     pub slots: SlotsConfig,
+    /// Automatic clip actions (e.g. link tracking parameter stripping).
     #[serde(default)]
     pub auto_actions: AutoActionsConfig,
 }
 
+/// Slot depth configuration for the dual-stack model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SlotsConfig {
-    /// Number of prior history slots for Left Hand (default: 3)
+    /// Number of prior history slots for Left Hand (default: 3).
     #[serde(default = "default_left_priors")]
     pub left_priors: usize,
-    /// Number of prior history slots for Right Hand (default: 1)
+    /// Number of prior history slots for Right Hand (default: 1).
     #[serde(default = "default_right_priors")]
     pub right_priors: usize,
 }
@@ -47,9 +61,10 @@ impl Default for SlotsConfig {
     }
 }
 
+/// Automatic mutation actions executed upon copying new items.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AutoActionsConfig {
-    /// Automatically strip tracking query parameters (utm_*, fbclid, etc.) from copied URLs
+    /// Automatically strip tracking query parameters (`utm_*`, `fbclid`, `si`, etc.) from copied URLs.
     #[serde(default = "default_true")]
     pub trim_link_tracking: bool,
 }
@@ -66,6 +81,7 @@ impl Default for AutoActionsConfig {
     }
 }
 
+/// External tool paths for image viewing, editing, and background removal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageConfig {
     /// Preferred raster image editor (e.g. "krita", "gimp"). Defaults to "krita".
@@ -107,7 +123,7 @@ impl Default for ImageConfig {
 }
 
 impl ImageConfig {
-    /// Resolves the command and initial arguments for background removal.
+    /// Resolves the executable path and arguments for background removal.
     pub fn resolve_bg_removal_cmd(&self) -> (String, Vec<String>) {
         if let Some(ref cmd) = self.bg_removal_cmd {
             let parts: Vec<String> = cmd.split_whitespace().map(|s| s.to_string()).collect();
@@ -130,6 +146,7 @@ impl ImageConfig {
     }
 }
 
+/// Workbench application editor settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkbenchConfig {
     /// Preferred text editor command (e.g. "code", "subl", "gedit", "kate", "nano", "nvim")
@@ -145,6 +162,7 @@ impl Default for WorkbenchConfig {
 }
 
 impl WorkbenchConfig {
+    /// Resolves the command to launch the user's preferred text editor.
     pub fn resolve_editor(&self) -> String {
         if let Some(ref ed) = self.editor {
             let trimmed = ed.trim();
@@ -169,10 +187,13 @@ impl WorkbenchConfig {
 }
 
 
+/// Preferred position for sampling a preview snippet in long audio tracks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AudioSamplePosition {
+    /// Sample the snippet centered around the track's midpoint.
     Middle,
+    /// Sample the snippet starting from the track's beginning.
     Start,
 }
 
@@ -182,24 +203,25 @@ impl Default for AudioSamplePosition {
     }
 }
 
+/// Audio decoding, rolling capture, and waveform preview configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AudioConfig {
-    /// Threshold (in seconds) above which audio clips use a snippet preview instead of full waveform (default: 300 = 5 min)
+    /// Threshold (in seconds) above which audio clips use a snippet preview instead of full waveform (default: 300 = 5 min).
     #[serde(default = "default_max_full_waveform_sec")]
     pub max_full_waveform_sec: u64,
-    /// Duration (in seconds) of the snippet to preview for long audio files (default: 30)
+    /// Duration (in seconds) of the snippet to preview for long audio files (default: 30).
     #[serde(default = "default_snippet_duration_sec")]
     pub snippet_duration_sec: u64,
-    /// Where to sample the snippet from for long audio files: "middle" (default) or "start"
+    /// Where to sample the snippet from for long audio files: "middle" (default) or "start".
     #[serde(default)]
     pub sample_position: AudioSamplePosition,
-    /// Continuous rolling capture duration in seconds (default: 30)
+    /// Continuous rolling capture duration in seconds (default: 30).
     #[serde(default = "default_rolling_capture_duration_sec")]
     pub rolling_capture_duration_sec: u64,
-    /// Whether background rolling audio capture is enabled (default: true)
+    /// Whether background rolling audio capture is enabled (default: true).
     #[serde(default = "default_rolling_capture_enabled")]
     pub rolling_capture_enabled: bool,
-    /// Optional specific capture device/sink name (default: None, captures @DEFAULT_SINK@)
+    /// Optional specific capture device/sink name (default: None, captures `@DEFAULT_SINK@`).
     #[serde(default)]
     pub rolling_capture_device: Option<String>,
     /// Preferred external audio editor escape hatch (e.g. "audacity"). Defaults to "audacity".
@@ -241,20 +263,21 @@ impl Default for AudioConfig {
     }
 }
 
+/// Display rendering preferences for the small USB screen and Workbench canvas.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisplayConfig {
-    /// Invert the display 180 degrees (true for standard Trofeo Vision mounting)
+    /// Invert the display 180 degrees (true for standard Trofeo Vision mounting).
     pub rotate_180: bool,
-    /// Display active handler badge in bottom-left corner
+    /// Display active handler badge in bottom-left corner.
     pub show_debug_handler: bool,
-    /// Minimum interval between animation frame updates to the small USB display in milliseconds (default: 350ms)
+    /// Minimum interval between animation frame updates to the small USB display in milliseconds (default: 350ms).
     #[serde(default = "default_animation_interval_ms")]
     pub animation_interval_ms: u64,
-    /// Character / glyph used for truncating long filenames (default: "▸")
+    /// Character / glyph used for truncating long filenames (default: "▸").
     #[serde(default = "default_elision_char")]
     pub elision_char: String,
     /// Color for the elision character: "border" to dynamically match the slot box's border color (default),
-    /// or any hex color code (e.g. "#f59e0b", "#38bdf8")
+    /// or any hex color code (e.g. "#f59e0b", "#38bdf8").
     #[serde(default = "default_elision_color")]
     pub elision_color: String,
 }
@@ -283,36 +306,53 @@ impl Default for DisplayConfig {
     }
 }
 
+/// Theme color palette for backgrounds, slot card fills, borders, and text labels.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColorConfig {
-    /// Main canvas background
+    /// Main canvas background color.
     pub background: String,
-    /// Background fill for Left Hand and Right Hand
+    /// Background fill for Left Hand and Right Hand cards.
     pub hero_card_bg: String,
-    /// Background fill for L Prior and R Prior cards
+    /// Background fill for L Prior and R Prior cards.
     pub prior_card_bg: String,
-    /// Background fill for Undo card
+    /// Background fill for Undo card.
     pub undo_card_bg: String,
 
     // Border Colors
+    /// Border stroke color for the Undo slot.
     pub undo_border: String,
+    /// Border stroke color for the Left Hand slot.
     pub left_hand_border: String,
+    /// Border stroke color for Left Prior 1.
     pub left_prior1_border: String,
+    /// Border stroke color for Left Prior 2.
     pub left_prior2_border: String,
+    /// Border stroke color for Left Prior 3.
     #[serde(default = "default_left_prior3_border")]
     pub left_prior3_border: String,
+    /// Border stroke color for Right Prior 2.
     pub right_prior2_border: String,
+    /// Border stroke color for Right Prior 1.
     pub right_prior1_border: String,
+    /// Border stroke color for the Right Hand slot.
     pub right_hand_border: String,
+    /// Focused cursor border color.
     pub cursor_border: String,
+    /// Multi-selected slot border color.
     pub selected_border: String,
 
     // Text & Element Colors
+    /// Primary title font color.
     pub title_color: String,
+    /// Secondary subtitle font color.
     pub subtitle_color: String,
+    /// Body text color.
     pub body_color: String,
+    /// URL text highlight color.
     pub url_color: String,
+    /// Debug handler badge background.
     pub debug_badge_bg: String,
+    /// Debug handler badge text.
     pub debug_badge_text: String,
 }
 
@@ -401,6 +441,7 @@ impl AppConfig {
         Self::default()
     }
 
+    /// Deserializes an `AppConfig` from a TOML file path.
     pub fn load_from_path(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let contents = std::fs::read_to_string(path)?;
         let config: AppConfig = toml::from_str(&contents)?;
@@ -408,6 +449,7 @@ impl AppConfig {
     }
 }
 
+/// Computes the default user configuration file path according to XDG base directory specifications.
 pub fn get_user_config_path() -> Option<PathBuf> {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         Some(PathBuf::from(xdg).join("little-screen-clip/config.toml"))
@@ -418,7 +460,7 @@ pub fn get_user_config_path() -> Option<PathBuf> {
     }
 }
 
-/// Helper to parse hex string like "#RRGGBB" or "#RGB" into (r, g, b, a).
+/// Helper to parse hex string like "#RRGGBB" or "#RGB" into `(r, g, b, a)` tuple.
 pub fn parse_hex_color(s: &str) -> (u8, u8, u8, u8) {
     let s = s.trim();
     let s = s.strip_prefix('#').unwrap_or(s);

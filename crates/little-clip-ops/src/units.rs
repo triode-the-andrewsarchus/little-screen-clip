@@ -1,15 +1,27 @@
+//! Physical unit detection and conversion engine.
+//!
+//! Recognizes single and composite imperial/metric measurements in clipboard text
+//! (length, weight/mass, temperature, volume, speed, digital storage), computing SI/metric
+//! or imperial equivalents along with context-aware rules of thumb (e.g. boiling point, room temp, human height).
+
 use regex::Regex;
 use std::sync::LazyLock;
 
+/// Converted unit measurement pair with primary/secondary units and contextual heuristics.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnitConversion {
+    /// Original input string.
     pub original: String,
+    /// Primary conversion target.
     pub primary_conversion: String,
+    /// Secondary or alternate unit conversion if available.
     pub secondary_conversion: Option<String>,
+    /// Human-friendly rule of thumb or physical landmark (e.g. "water freezing point", "highway speed").
     pub rule_of_thumb: Option<String>,
 }
 
 impl UnitConversion {
+    /// Formats the unit conversion into a single descriptive arrow line.
     pub fn summary_line(&self) -> String {
         let mut s = format!("{} ➔ {}", self.original, self.primary_conversion);
         if let Some(ref sec) = self.secondary_conversion {
@@ -30,6 +42,7 @@ static PATTERN_SINGLE_VALUE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)^\s*(-?\d+(?:\.\d+)?)\s*([°a-z/]+(?:/[a-z]+)?|'|")\s*$"#).unwrap()
 });
 
+/// Recognizes physical unit expressions and computes converted metrics.
 pub fn detect_unit_conversion(text: &str) -> Option<UnitConversion> {
     let trimmed = text.trim();
     if trimmed.is_empty() || trimmed.len() > 60 {

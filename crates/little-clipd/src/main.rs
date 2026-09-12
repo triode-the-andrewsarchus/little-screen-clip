@@ -1,3 +1,8 @@
+//! Little Screen Clip background daemon (`little-clipd`).
+//!
+//! Manages active clipboard items, background audio recording, physical display updates,
+//! Wayland clipboard monitoring (`wl-paste`), and IPC communication with `clipctl` and `clip-workbench`.
+
 use little_clip_core::{
     ipc::{IpcRequest, IpcResponse},
     rolling_audio::RollingAudioBuffer,
@@ -17,20 +22,32 @@ use tracing::{debug, error, info, warn};
 mod lock_monitor;
 mod rolling_capture;
 
+/// Shared runtime state across daemon IPC handlers, background workers, and display pipelines.
 pub struct DaemonContext {
+    /// Active application configuration.
     pub config: RwLock<little_clip_core::AppConfig>,
+    /// Multi-slot clipboard inventory state.
     pub manager: RwLock<SlotManager>,
+    /// Frame rasterizer for secondary screen hardware.
     pub renderer: RwLock<ScreenRenderer>,
+    /// Frame sender channel connected to the USB display worker.
     pub display_tx: mpsc::Sender<Vec<u8>>,
+    /// Circular buffer of recently self-copied text strings to ignore in clipboard watcher.
     pub self_copied_text: RwLock<Vec<String>>,
+    /// Hash of recently self-copied image to avoid echo loops.
     pub self_copied_image_hash: RwLock<Option<u64>>,
+    /// Most recently executed IPC action for repeat / replay commands.
     pub last_action: RwLock<Option<little_clip_core::ipc::LastAction>>,
+    /// Flag indicating whether the screen is blanked due to session lock or sleep.
     pub is_locked: AtomicBool,
+    /// Continuous PCM audio circular buffer.
     pub rolling_audio: Arc<std::sync::RwLock<RollingAudioBuffer>>,
+    /// Temporary routing override for the next incoming system clipboard copy.
     pub route_next_clipboard: RwLock<Option<(little_clip_core::HandSide, tokio::time::Instant, bool)>>,
 }
 
 impl DaemonContext {
+    /// Records text copied to OS clipboard by this daemon to prevent echo loop re-ingestion.
     pub async fn add_self_copied_text(&self, text: String) {
         if text.trim().is_empty() {
             return;
@@ -42,6 +59,7 @@ impl DaemonContext {
         guard.push(text);
     }
 
+    /// Checks if the given text matches a recently self-copied string.
     pub async fn is_self_copied_text(&self, text: &str) -> bool {
         let guard = self.self_copied_text.read().await;
         let t_norm = text.trim().replace("\r\n", "\n");
@@ -53,10 +71,12 @@ impl DaemonContext {
         false
     }
 
+    /// Returns `true` if the display is currently blanked due to system lock or sleep.
     pub async fn is_locked(&self) -> bool {
         self.is_locked.load(Ordering::SeqCst)
     }
 
+    /// Updates the system locked state and triggers screen blanking or refresh.
     pub async fn set_locked(&self, locked: bool) {
         let old = self.is_locked.swap(locked, Ordering::SeqCst);
         if old == locked {
@@ -72,6 +92,7 @@ impl DaemonContext {
         }
     }
 
+    /// Renders a blank screen frame and dispatches it to the physical display.
     pub async fn render_and_send_blank(&self) {
         let frame = {
             let renderer = self.renderer.read().await;
@@ -86,6 +107,7 @@ impl DaemonContext {
         let _ = self.display_tx.send(frame).await;
     }
 
+    /// Rerenders the current slot inventory layout and sends the new frame to the display.
     pub async fn refresh_display(&self) {
         if self.is_locked.load(Ordering::SeqCst) {
             self.render_and_send_blank().await;
@@ -108,6 +130,7 @@ impl DaemonContext {
         let _ = self.display_tx.send(frame).await;
     }
 
+    /// Consumes and returns any active routing override (hand destination and clipboard restore flag).
     pub async fn take_route_override(&self) -> (little_clip_core::HandSide, bool) {
         let mut route_guard = self.route_next_clipboard.write().await;
         if let Some((hand, expires, restore)) = *route_guard {
@@ -122,6 +145,7 @@ impl DaemonContext {
         }
     }
 
+    /// Restores the previously active OS clipboard item if a route-with-restore operation was performed.
     pub fn maybe_restore_os_clipboard_after_route(
         self: &Arc<Self>,
         restore_os: bool,
@@ -1439,6 +1463,7 @@ async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
 }
 
 
+/// Returns the Unix domain socket path used for IPC communication (`$XDG_RUNTIME_DIR/little-screen-clip.sock`).
 pub fn get_socket_path() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         PathBuf::from(runtime_dir).join("little-screen-clip.sock")
@@ -1447,6 +1472,7 @@ pub fn get_socket_path() -> PathBuf {
     }
 }
 
+/// Returns the filesystem directory for saving rolling audio buffer snapshots.
 pub fn get_rolling_snapshot_dir() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         PathBuf::from(runtime_dir).join("little-screen-clip").join("rolling_snapshots")

@@ -1,17 +1,24 @@
+//! Temporary file staging directory management and automatic cache cleanup.
+//!
+//! Provides unique scratch paths for generated previews, intermediate transforms, and exports.
+
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+/// Error type encountered during staging directory operations.
 #[derive(Debug, Error)]
 pub enum StagingError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
 
+/// Manages temporary files created during conversions, transforms, and clip previews.
 pub struct StagingManager {
     base_dir: PathBuf,
 }
 
 impl StagingManager {
+    /// Initializes the staging directory under `$XDG_CACHE_HOME/little-screen-clip/staging`.
     pub fn new() -> Result<Self, StagingError> {
         let cache_dir = dirs_or_fallback_cache();
         let staging_dir = cache_dir.join("little-screen-clip").join("staging");

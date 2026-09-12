@@ -1,3 +1,8 @@
+//! Ambient display rendering engine for multi-slot clipboard layouts, text previews, waveforms, images, and pipelines.
+//!
+//! Provides the primary [`ScreenRenderer`] responsible for rasterizing the 1920x462 secondary screen layout
+//! to JPEG or direct tiny-skia Pixmap buffers.
+
 use fontdue::{Font, FontSettings};
 use image::{codecs::jpeg::JpegEncoder, ExtendedColorType};
 use little_clip_core::config::{parse_hex_color, AppConfig};
@@ -14,37 +19,51 @@ use tracing::debug;
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_nonewlines);
 static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
+/// Target width in pixels for the physical secondary display.
 pub const SCREEN_WIDTH: u32 = 1920;
+/// Target height in pixels for the physical secondary display.
 pub const SCREEN_HEIGHT: u32 = 462;
 
+/// Errors that can occur during layout rasterization or image encoding.
 #[derive(Debug, Error)]
 pub enum RenderError {
+    /// Failed to load required TrueType font file.
     #[error("Font load error: {0}")]
     FontLoad(String),
+    /// Failed to encode rendered frame to target format (e.g. JPEG).
     #[error("Image encode error: {0}")]
     ImageEncode(String),
 }
 
 pub mod markdown;
 
+/// Font weight and slant variations for typography rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontStyle {
+    /// Standard regular font weight.
     Regular,
+    /// Bold font weight.
     Bold,
+    /// Italic / oblique font slant.
     Italic,
+    /// Bold and italic font style.
     BoldItalic,
+    /// Monospaced font style.
     Mono,
 }
 
+/// Canvas rasterizer for rendering slot cards, thumbnails, waveforms, and code blocks onto a tiny-skia Pixmap.
 pub struct ScreenRenderer {
     font_regular: Option<Font>,
     font_bold: Option<Font>,
     font_italic: Option<Font>,
     font_mono: Option<Font>,
+    /// Active styling and theme configuration.
     pub config: AppConfig,
 }
 
 impl ScreenRenderer {
+    /// Creates a new `ScreenRenderer` with standard system fonts loaded.
     pub fn new(config: AppConfig) -> Result<Self, RenderError> {
         let (font_regular, font_bold, font_italic, font_mono) = Self::load_fonts();
         Ok(Self {
@@ -56,6 +75,7 @@ impl ScreenRenderer {
         })
     }
 
+    /// Creates a fallback `ScreenRenderer` without loaded fonts (for headless or font-free testing).
     pub fn fallback(config: AppConfig) -> Self {
         Self {
             font_regular: None,
@@ -66,11 +86,13 @@ impl ScreenRenderer {
         }
     }
 
+    /// Creates a `ScreenRenderer` initialized with default configuration.
     pub fn default_renderer() -> Result<Self, RenderError> {
         let config = AppConfig::load();
         Self::new(config)
     }
 
+    /// Updates the active application configuration used for rendering.
     pub fn set_config(&mut self, config: AppConfig) {
         self.config = config;
     }
@@ -127,14 +149,19 @@ impl ScreenRenderer {
 
 pub use tiny_skia;
 
+/// Structured text split into a prefix, elision glyph (e.g. `▸`), and optional suffix (e.g. file extension).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ElidedText {
+    /// Leading text before elision.
     pub prefix: String,
+    /// Elision glyph or marker string.
     pub elision: Option<String>,
+    /// Trailing suffix preserved after elision (e.g. `.png`).
     pub suffix: Option<String>,
 }
 
 impl ElidedText {
+    /// Reconstitutes the prefix, elision glyph, and suffix into a single string.
     pub fn full_text(&self) -> String {
         format!(
             "{}{}{}",
@@ -1418,6 +1445,7 @@ impl ScreenRenderer {
         }
     }
 
+    /// Draws TrueType text onto the pixmap using the specified style, size, and right clipping boundary.
     pub fn draw_text_styled_clipped(
         &self,
         pixmap: &mut Pixmap,

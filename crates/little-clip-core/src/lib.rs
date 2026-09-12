@@ -1,3 +1,7 @@
+//! `little-clip-core` provides fundamental domain models, clipboard item representations,
+//! multi-slot history management, audio/video analysis, configuration definitions, and IPC contracts
+//! for the Little Screen Clip ecosystem.
+
 pub mod animation;
 pub mod audio;
 pub mod config;

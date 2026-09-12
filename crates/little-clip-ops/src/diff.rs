@@ -1,3 +1,9 @@
+//! Text and image diffing engine.
+//!
+//! Provides syntax-highlighted inline (unified) and side-by-side (split) diff generation
+//! with word-level difference badges, difftastic (AST) binary integration when available,
+//! and diff target resolution for clipboard text, file paths, and images.
+
 use little_clip_core::{ClipItem, ClipPayload};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -10,13 +16,17 @@ use uuid::Uuid;
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_nonewlines);
 static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
+/// Visual display format for rendering textual diffs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffDisplayMode {
+    /// Single-column unified diff with dual line numbers and +/- gutters.
     Inline,
+    /// Dual-column side-by-side split diff with aligned columns.
     SideBySide,
 }
 
 impl DiffDisplayMode {
+    /// Returns human-readable label for this mode.
     pub fn label(&self) -> &'static str {
         match self {
             DiffDisplayMode::Inline => "Inline",
@@ -24,6 +34,7 @@ impl DiffDisplayMode {
         }
     }
 
+    /// Toggles between inline and side-by-side modes.
     pub fn toggled(&self) -> Self {
         match self {
             DiffDisplayMode::Inline => DiffDisplayMode::SideBySide,
@@ -32,18 +43,22 @@ impl DiffDisplayMode {
     }
 }
 
+/// Represents one side of a diff comparison.
 #[derive(Debug, Clone)]
 pub enum DiffTarget {
+    /// Raw clipboard string with optional language hint.
     ClipboardText {
         label: String,
         content: String,
         ext_hint: Option<String>,
     },
+    /// A file on disk.
     File {
         label: String,
         path: PathBuf,
         content: String,
     },
+    /// An image buffer or image file.
     Image {
         label: String,
         path: Option<PathBuf>,
@@ -55,6 +70,7 @@ pub enum DiffTarget {
 }
 
 impl DiffTarget {
+    /// Returns the descriptive label for this diff target.
     pub fn label(&self) -> &str {
         match self {
             DiffTarget::ClipboardText { label, .. } => label,
@@ -63,6 +79,7 @@ impl DiffTarget {
         }
     }
 
+    /// Returns textual content for text/file targets, or empty string for images.
     pub fn content(&self) -> &str {
         match self {
             DiffTarget::ClipboardText { content, .. } => content,
@@ -71,14 +88,17 @@ impl DiffTarget {
         }
     }
 
+    /// Returns `true` if this target represents a disk file.
     pub fn is_file(&self) -> bool {
         matches!(self, DiffTarget::File { .. })
     }
 
+    /// Returns `true` if this target is an image.
     pub fn is_image(&self) -> bool {
         matches!(self, DiffTarget::Image { .. })
     }
 
+    /// Returns the raw image bytes if this is an image target.
     pub fn image_bytes(&self) -> Option<&[u8]> {
         match self {
             DiffTarget::Image { bytes, .. } => Some(bytes.as_slice()),
@@ -86,6 +106,7 @@ impl DiffTarget {
         }
     }
 
+    /// Returns the filesystem path if available.
     pub fn path(&self) -> Option<&Path> {
         match self {
             DiffTarget::File { path, .. } => Some(path.as_path()),
@@ -94,6 +115,7 @@ impl DiffTarget {
         }
     }
 
+    /// Returns file extension or syntax hint.
     pub fn ext_hint(&self) -> Option<&str> {
         match self {
             DiffTarget::File { path, .. } => path.extension().and_then(|s| s.to_str()),
@@ -116,6 +138,7 @@ impl DiffTarget {
         }
     }
 
+    /// Returns total number of lines in text content (or 1 for images).
     pub fn line_count(&self) -> usize {
         match self {
             DiffTarget::ClipboardText { content, .. } | DiffTarget::File { content, .. } => {
@@ -125,6 +148,7 @@ impl DiffTarget {
         }
     }
 
+    /// Returns total byte size of payload or content.
     pub fn byte_size(&self) -> usize {
         match self {
             DiffTarget::ClipboardText { content, .. } | DiffTarget::File { content, .. } => {
@@ -135,14 +159,20 @@ impl DiffTarget {
     }
 }
 
+/// Formatted diff output containing engine metadata and ANSI colored text.
 #[derive(Debug, Clone)]
 pub struct DiffResult {
+    /// Name of diff engine that produced the output (e.g., Difftastic, Unified Diff).
     pub engine_name: String,
+    /// Terminal ANSI formatted diff string.
     pub raw_ansi: String,
+    /// `true` if lhs and rhs are identical.
     pub is_identical: bool,
+    /// Display mode used to format the diff.
     pub mode: DiffDisplayMode,
 }
 
+/// Attempts to discover the `difft` (difftastic) executable path on the system.
 pub fn find_difft_bin() -> Option<PathBuf> {
     // 1. Check user local bin
     if let Ok(home) = std::env::var("HOME") {
@@ -170,6 +200,7 @@ pub fn find_difft_bin() -> Option<PathBuf> {
     None
 }
 
+/// Heuristically identifies source file extension from content snippet if recognizable.
 pub fn guess_extension_from_content(content: &str) -> Option<&'static str> {
     let trimmed = content.trim();
     if trimmed.is_empty() {
@@ -205,11 +236,13 @@ pub fn guess_extension_from_content(content: &str) -> Option<&'static str> {
     None
 }
 
+/// Returns `true` if the path has a known image file extension.
 pub fn is_image_path(p: &Path) -> bool {
     let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
     matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "bmp" | "svg" | "gif" | "tiff" | "tif")
 }
 
+/// Infers the MIME type for an image file path based on its extension.
 pub fn guess_image_mime(p: &Path) -> String {
     let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
     match ext.as_str() {
@@ -223,6 +256,7 @@ pub fn guess_image_mime(p: &Path) -> String {
     }
 }
 
+/// Constructs a `DiffTarget` from a filesystem path if the file exists.
 pub fn resolve_diff_target_from_path(p: &Path) -> Option<DiffTarget> {
     if !p.is_file() {
         return None;
@@ -302,6 +336,7 @@ pub fn resolve_diff_pair(item: &ClipItem) -> Option<(DiffTarget, DiffTarget)> {
     }
 }
 
+/// Extracts a `DiffTarget` from any `ClipItem`.
 pub fn resolve_diff_target(item: &ClipItem) -> Option<DiffTarget> {
     match &item.payload {
         ClipPayload::Image { bytes, path, width, height, mime, .. } => {
@@ -446,6 +481,7 @@ pub fn resolve_diff_target(item: &ClipItem) -> Option<DiffTarget> {
     }
 }
 
+/// Computes a diff between two `DiffTarget` objects using the specified display mode.
 pub fn compute_diff(
     lhs: &DiffTarget,
     rhs: &DiffTarget,
@@ -471,6 +507,7 @@ pub fn compute_diff(
     }
 }
 
+/// Runs the external `difftastic` AST diffing binary on temporary or disk files.
 pub fn run_difft(
     difft_bin: &Path,
     lhs: &DiffTarget,
@@ -571,6 +608,7 @@ pub fn run_difft(
     })
 }
 
+/// Generates a unified inline diff with syntax highlighting and intra-line word difference badges.
 pub fn generate_unified_inline_diff(lhs: &DiffTarget, rhs: &DiffTarget) -> DiffResult {
     let old_lines: Vec<&str> = lhs.content().lines().collect();
     let new_lines: Vec<&str> = rhs.content().lines().collect();
@@ -727,6 +765,7 @@ pub fn generate_unified_inline_diff(lhs: &DiffTarget, rhs: &DiffTarget) -> DiffR
     }
 }
 
+/// Formats standard unified diff hunk header `@@ -o_start,o_len +n_start,n_len @@`.
 fn format_hunk_header(group: &[similar::DiffOp]) -> Option<String> {
     let first_op = group.first()?;
     let last_op = group.last()?;
@@ -742,6 +781,7 @@ fn format_hunk_header(group: &[similar::DiffOp]) -> Option<String> {
     ))
 }
 
+/// Appends syntax highlighted tokens as 24-bit TrueColor ANSI escape sequences.
 fn append_highlighted_tokens(
     out: &mut String,
     ranges: &[(syntect::highlighting::Style, &str)],
@@ -752,6 +792,7 @@ fn append_highlighted_tokens(
     }
 }
 
+/// Identifies character index spans corresponding to intra-line deletions and insertions.
 fn compute_word_diff_spans<'a>(
     word_diff: &similar::TextDiff<'a, 'a, 'a, str>,
 ) -> (Vec<(usize, usize)>, Vec<(usize, usize)>) {
@@ -780,6 +821,7 @@ fn compute_word_diff_spans<'a>(
     (old_spans, new_spans)
 }
 
+/// Highlights a line using Syntect syntax highlighting with an optional background ANSI color.
 fn highlight_line_ansi(
     line: &str,
     highlighter: &mut HighlightLines,
@@ -798,6 +840,7 @@ fn highlight_line_ansi(
     out
 }
 
+/// Highlights a line truncated or padded to a fixed target width for side-by-side alignment.
 fn highlight_line_ansi_fixed(
     line: &str,
     highlighter: &mut HighlightLines,
@@ -831,6 +874,7 @@ fn highlight_line_ansi_fixed(
     out
 }
 
+/// Injects background highlight badges into syntect syntax token ranges for intra-line word diffs.
 fn render_syntax_with_badges(
     text: &str,
     changed_spans: &[(usize, usize)],
@@ -882,6 +926,7 @@ fn render_syntax_with_badges(
     out
 }
 
+/// Formats word-level difference highlighting for a pair of old and new lines in inline diff mode.
 fn format_word_diff_syntax(
     old_line: &str,
     new_line: &str,
@@ -921,6 +966,7 @@ fn format_word_diff_syntax(
     (hl_old, hl_new)
 }
 
+/// Formats word-level difference highlighting for split side-by-side mode with column width constraints.
 fn format_word_diff_split(
     old_line: &str,
     new_line: &str,
@@ -989,6 +1035,7 @@ fn format_word_diff_split(
     (hl_old, hl_new)
 }
 
+/// Generates a split side-by-side diff with syntax highlighting, column alignment, and word diff badges.
 pub fn generate_split_diff(
     lhs: &DiffTarget,
     rhs: &DiffTarget,

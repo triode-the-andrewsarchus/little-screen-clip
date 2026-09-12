@@ -1,3 +1,8 @@
+//! Command-line control utility for Little Screen Clip daemon (`clipctl`).
+//!
+//! Provides CLI commands to inspect slots, push text, swap cards, run transformations,
+//! execute pipeline recipes, and simulate capture/paste actions.
+
 use clap::{Parser, Subcommand};
 use colored::*;
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
@@ -6,6 +11,7 @@ use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
+/// Top-level CLI arguments parser for `clipctl`.
 #[derive(Parser)]
 #[command(name = "clipctl", about = "Control Little Screen Clip daemon")]
 struct Cli {
@@ -13,6 +19,7 @@ struct Cli {
     command: Commands,
 }
 
+/// Available CLI subcommands for controlling daemon state and operations.
 #[derive(Subcommand)]
 enum Commands {
     /// Show current slots state across both hands and stacks
@@ -76,6 +83,7 @@ enum Commands {
 }
 
 
+/// Subcommands for inspecting and executing pipeline recipes.
 #[derive(Subcommand)]
 enum RecipeAction {
     /// List all discovered recipes
@@ -84,7 +92,7 @@ enum RecipeAction {
     Run { name: String },
 }
 
-
+/// Sends a JSON-serialized IPC request over Unix domain socket and reads the daemon's response.
 async fn send_ipc_req(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
     lines: &mut tokio::io::Lines<BufReader<tokio::net::unix::OwnedReadHalf>>,
@@ -383,6 +391,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Prints a formatted status line for a single slot and its contents.
 fn print_slot(slot: SlotId, item: Option<&little_clip_core::ClipItem>) {
     let lbl_str = match slot {
         SlotId::Undo => format!("[{:^10}]", slot.label()).bold().yellow(),
@@ -399,6 +408,7 @@ fn print_slot(slot: SlotId, item: Option<&little_clip_core::ClipItem>) {
     }
 }
 
+/// Parses user slot name input loosely into a [`SlotId`].
 fn parse_slot_str(s: &str) -> Result<SlotId, String> {
     SlotId::from_str_loose(s).ok_or_else(|| {
         format!(
@@ -408,6 +418,7 @@ fn parse_slot_str(s: &str) -> Result<SlotId, String> {
     })
 }
 
+/// Returns the active daemon Unix socket path (`$XDG_RUNTIME_DIR/little-screen-clip.sock`).
 fn get_socket_path() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
         PathBuf::from(runtime_dir).join("little-screen-clip.sock")

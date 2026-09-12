@@ -1,3 +1,5 @@
+//! Standalone diagnostic utility to verify physical Trofeo Vision display communication and frame streaming.
+
 use little_clip_driver::TrofeoDriver;
 use little_clip_render::ScreenRenderer;
 use little_clip_core::SlotManager;

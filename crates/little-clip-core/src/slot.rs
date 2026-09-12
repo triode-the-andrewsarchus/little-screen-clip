@@ -1,19 +1,34 @@
+//! Slot and clipboard history manager.
+//!
+//! Defines the dual-stack clipboard slots (`LeftHand`, `RightHand`, prior history stacks, and `Undo`),
+//! along with navigation, selection, and payload mutation routines.
+
 use crate::item::ClipItem;
 use serde::{Deserialize, Serialize};
 
+/// Identifies a specific UI slot or history position in the dual-stack model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SlotId {
+    /// Holds the item overwritten by the last destructive operation.
     Undo,
+    /// Primary active item in the Left Hand stack.
     LeftHand,
+    /// Most recent history item in the Left Hand stack.
     LeftPrior1,
+    /// Second most recent history item in the Left Hand stack.
     LeftPrior2,
+    /// Third most recent history item in the Left Hand stack.
     LeftPrior3,
+    /// Second most recent history item in the Right Hand stack.
     RightPrior2,
+    /// Most recent history item in the Right Hand stack.
     RightPrior1,
+    /// Primary active item in the Right Hand stack.
     RightHand,
 }
 
 impl SlotId {
+    /// Returns an array of all available `SlotId` variants in display order.
     pub fn all() -> [SlotId; 8] {
         [
             SlotId::Undo,
@@ -27,6 +42,7 @@ impl SlotId {
         ]
     }
 
+    /// Returns a human-readable display label for the slot.
     pub fn label(&self) -> &'static str {
         match self {
             SlotId::Undo => "UNDO",
@@ -40,6 +56,7 @@ impl SlotId {
         }
     }
 
+    /// Returns a compact short label (e.g. for badges and CLI output).
     pub fn short_label(&self) -> &'static str {
         match self {
             SlotId::Undo => "Z",
@@ -53,6 +70,9 @@ impl SlotId {
         }
     }
 
+    /// Parses a loose string representation into a `SlotId`.
+    ///
+    /// Accepts abbreviations such as `"l"`, `"lh"`, `"rp1"`, `"undo"`, `"z"`.
     pub fn from_str_loose(s: &str) -> Option<SlotId> {
         match s.to_lowercase().trim() {
             "undo" | "z" => Some(SlotId::Undo),
@@ -68,6 +88,7 @@ impl SlotId {
     }
 }
 
+/// Identifies which hand (stack) a clipboard operation targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum HandSide {
     Left,
@@ -80,17 +101,28 @@ impl Default for HandSide {
     }
 }
 
+/// Manages dual-stack clipboard history, undo state, and UI cursor/selection.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SlotManager {
+    /// Item preserved during the most recent operation.
     pub undo: Option<ClipItem>,
+    /// Active item in the Left Hand.
     pub left_hand: Option<ClipItem>,
+    /// Preceding item in Left Hand history.
     pub left_prior1: Option<ClipItem>,
+    /// Second preceding item in Left Hand history.
     pub left_prior2: Option<ClipItem>,
+    /// Third preceding item in Left Hand history.
     pub left_prior3: Option<ClipItem>,
+    /// Second preceding item in Right Hand history.
     pub right_prior2: Option<ClipItem>,
+    /// Preceding item in Right Hand history.
     pub right_prior1: Option<ClipItem>,
+    /// Active item in the Right Hand.
     pub right_hand: Option<ClipItem>,
+    /// Currently focused slot for UI navigation.
     pub cursor: SlotId,
+    /// List of multi-selected slots for batch operations.
     pub selected: Vec<SlotId>,
 }
 
@@ -112,10 +144,12 @@ impl Default for SlotManager {
 }
 
 impl SlotManager {
+    /// Creates a new empty `SlotManager` with the cursor at `LeftHand`.
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Returns a reference to the item in the specified slot, if present.
     pub fn get(&self, id: SlotId) -> Option<&ClipItem> {
         match id {
             SlotId::Undo => self.undo.as_ref(),
@@ -129,6 +163,7 @@ impl SlotManager {
         }
     }
 
+    /// Returns a mutable reference to the `Option<ClipItem>` slot storage.
     pub fn get_mut(&mut self, id: SlotId) -> Option<&mut Option<ClipItem>> {
         match id {
             SlotId::Undo => Some(&mut self.undo),
@@ -142,28 +177,31 @@ impl SlotManager {
         }
     }
 
+    /// Returns a reference to the active Left Hand item (primary clipboard item).
     pub fn hand(&self) -> Option<&ClipItem> {
         self.left_hand.as_ref()
     }
 
+    /// Returns a reference to the active Left Hand item.
     pub fn left_hand(&self) -> Option<&ClipItem> {
         self.left_hand.as_ref()
     }
 
+    /// Returns a reference to the active Right Hand item.
     pub fn right_hand(&self) -> Option<&ClipItem> {
         self.right_hand.as_ref()
     }
 
+    /// Returns a reference to the item in the Undo slot.
     pub fn undo_slot(&self) -> Option<&ClipItem> {
         self.undo.as_ref()
     }
 
     /// Pushes a new item into Left Hand.
-    /// Moves current left_prior2 to left_prior3,
-    /// moves current left_prior1 to left_prior2,
-    /// moves current left_hand to left_prior1,
-    /// and places item into left_hand.
-    /// Note: UNDO is NOT modified during normal copying/pushing.
+    ///
+    /// Cascades existing Left Hand history:
+    /// `left_prior2` -> `left_prior3`, `left_prior1` -> `left_prior2`, `left_hand` -> `left_prior1`.
+    /// Note: `Undo` is NOT modified during normal copy pushes.
     pub fn push_left(&mut self, item: ClipItem) {
         self.left_prior3 = self.left_prior2.take();
         self.left_prior2 = self.left_prior1.take();
@@ -172,17 +210,17 @@ impl SlotManager {
     }
 
     /// Pushes a new item into Right Hand.
-    /// Moves current right_prior1 to right_prior2,
-    /// moves current right_hand to right_prior1,
-    /// and places item into right_hand.
-    /// Note: UNDO is NOT modified during normal copying/pushing.
+    ///
+    /// Cascades existing Right Hand history:
+    /// `right_prior1` -> `right_prior2`, `right_hand` -> `right_prior1`.
+    /// Note: `Undo` is NOT modified during normal copy pushes.
     pub fn push_right(&mut self, item: ClipItem) {
         self.right_prior2 = self.right_prior1.take();
         self.right_prior1 = self.right_hand.take();
         self.right_hand = Some(item);
     }
 
-    /// Helper for pushing to specified hand (defaults to Left).
+    /// Pushes an item to the specified hand side.
     pub fn push_to_hand(&mut self, item: ClipItem, hand: HandSide) {
         match hand {
             HandSide::Left => self.push_left(item),
@@ -190,15 +228,17 @@ impl SlotManager {
         }
     }
 
-    /// Applies the result of an operation.
-    /// Moves previous Left Hand contents into UNDO box,
-    /// and places the result into Left Hand.
+    /// Applies the result of a transformation operation.
+    ///
+    /// Moves previous Left Hand contents into the `Undo` slot and places the result into `LeftHand`.
     pub fn apply_op_result(&mut self, result: ClipItem) {
         self.undo = self.left_hand.take();
         self.left_hand = Some(result);
     }
 
-    /// Restores Left Hand from UNDO.
+    /// Restores Left Hand from Undo, swapping the current Left Hand into Undo.
+    ///
+    /// Returns `true` if an item was present in Undo, `false` otherwise.
     pub fn undo(&mut self) -> bool {
         if self.undo.is_some() {
             self.swap_slots(SlotId::LeftHand, SlotId::Undo);
@@ -224,7 +264,7 @@ impl SlotManager {
         }
     }
 
-    /// Clears the specified slot.
+    /// Clears the specified slot and removes it from selection if present.
     pub fn clear(&mut self, slot: SlotId) {
         if let Some(s) = self.get_mut(slot) {
             *s = None;
@@ -232,6 +272,7 @@ impl SlotManager {
         self.selected.retain(|&id| id != slot);
     }
 
+    /// Toggles the multi-selection status of a slot.
     pub fn toggle_selection(&mut self, slot: SlotId) {
         if let Some(pos) = self.selected.iter().position(|&s| s == slot) {
             self.selected.remove(pos);
@@ -240,10 +281,12 @@ impl SlotManager {
         }
     }
 
+    /// Returns `true` if the given slot is currently in the multi-selection set.
     pub fn is_selected(&self, slot: SlotId) -> bool {
         self.selected.contains(&slot)
     }
 
+    /// Sets the active UI cursor slot.
     pub fn set_cursor(&mut self, slot: SlotId) {
         self.cursor = slot;
     }

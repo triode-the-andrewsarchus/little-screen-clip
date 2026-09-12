@@ -1,25 +1,42 @@
+//! Network entity detection and metadata enrichment.
+//!
+//! Identifies IPv4, IPv6, and MAC addresses in text, classifies IP addresses according to RFC
+//! specifications (RFC 1918, RFC 1122, RFC 6598, etc.), identifies well-known public DNS resolvers,
+//! performs OUI hardware vendor lookups for MAC addresses, and runs non-blocking ICMP ping reachability checks.
+
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::{LazyLock, RwLock};
 use std::time::{Duration, Instant};
 
+/// Structured network entity detected from clipboard text.
 #[derive(Debug, Clone, PartialEq)]
 pub enum NetworkPreview {
+    /// An IPv4 or IPv6 network address.
     Ip {
+        /// Parsed IP address.
         ip: IpAddr,
+        /// RFC classification string (e.g. "RFC 1918 Private Network (192.168.0.0/16)").
         rfc_class: String,
+        /// Detailed description or well-known service name if applicable.
         description: Option<String>,
+        /// Background ICMP ping reachability status if checked.
         ping_status: Option<String>,
     },
+    /// An IEEE 802 MAC hardware address.
     Mac {
+        /// Standard colon-delimited uppercase MAC string (`XX:XX:XX:XX:XX:XX`).
         formatted: String,
+        /// Identified manufacturer or OUI classification.
         vendor: String,
+        /// MAC address type (e.g. UAA, Locally Administered, Multicast).
         mac_type: String,
     },
 }
 
 impl NetworkPreview {
+    /// Formats the network entity into human-readable detail lines with emoji icons.
     pub fn summary_lines(&self) -> Vec<String> {
         match self {
             NetworkPreview::Ip {
@@ -58,6 +75,7 @@ impl NetworkPreview {
 static PING_CACHE: LazyLock<RwLock<HashMap<IpAddr, (String, Instant)>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
+/// Asynchronously initiates a 1-second ICMP ping and returns cached result if available.
 pub fn check_bounded_ping(ip: IpAddr) -> Option<String> {
     let now = Instant::now();
     // 1. Check cache (valid for 60s)
@@ -107,6 +125,7 @@ pub fn check_bounded_ping(ip: IpAddr) -> Option<String> {
     }
 }
 
+/// Classifies an IPv4 address according to IETF RFC subnet specifications.
 pub fn classify_ipv4(ip: Ipv4Addr) -> (&'static str, Option<&'static str>) {
     let [a, b, c, _d] = ip.octets();
 
@@ -154,6 +173,7 @@ pub fn classify_ipv4(ip: Ipv4Addr) -> (&'static str, Option<&'static str>) {
     }
 }
 
+/// Classifies an IPv6 address according to IETF RFC subnet specifications.
 pub fn classify_ipv6(ip: Ipv6Addr) -> (&'static str, Option<&'static str>) {
     if ip.is_loopback() {
         return ("RFC 4291 IPv6 Loopback (::1)", Some("Localhost loopback"));
@@ -178,6 +198,7 @@ pub fn classify_ipv6(ip: Ipv6Addr) -> (&'static str, Option<&'static str>) {
     ("Global Unicast IPv6", None)
 }
 
+/// Looks up the Organizationally Unique Identifier (OUI) hardware vendor name.
 pub fn lookup_mac_vendor(oui: &[u8; 3]) -> &'static str {
     match oui {
         // Raspberry Pi
@@ -228,6 +249,7 @@ pub fn lookup_mac_vendor(oui: &[u8; 3]) -> &'static str {
     }
 }
 
+/// Parses a string into 6 MAC bytes if formatted as colon/dash/dot delimited hex.
 pub fn parse_mac_address(text: &str) -> Option<[u8; 6]> {
     let clean: String = text
         .chars()
@@ -255,6 +277,7 @@ pub fn parse_mac_address(text: &str) -> Option<[u8; 6]> {
     Some(bytes)
 }
 
+/// Attempts to parse text into an enriched `NetworkPreview` (IP or MAC address).
 pub fn detect_network_preview(text: &str) -> Option<NetworkPreview> {
     let trimmed = text.trim();
     if trimmed.is_empty() || trimmed.len() > 60 {

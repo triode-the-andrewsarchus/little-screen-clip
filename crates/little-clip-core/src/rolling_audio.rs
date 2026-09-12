@@ -1,3 +1,8 @@
+//! Circular ring-buffer audio capture and WAV extraction/slicing utilities.
+//!
+//! Stores continuous rolling PCM audio in a fixed-capacity ring buffer and supports
+//! non-destructive slicing of sub-regions from standard 16-bit PCM WAV containers.
+
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;

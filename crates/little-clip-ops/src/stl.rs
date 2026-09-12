@@ -1,35 +1,50 @@
+//! STL 3D mesh file parsing and vector geometry.
+//!
+//! Provides 3D vector math operations (`Vec3`), triangle definitions, and dual-format
+//! (ASCII and binary) STL mesh parsing with automatic boundary and center calculations.
+
 use std::fs::File;
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
+/// 3-dimensional single-precision floating point vector for 3D coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Vec3 {
+    /// X component.
     pub x: f32,
+    /// Y component.
     pub y: f32,
+    /// Z component.
     pub z: f32,
 }
 
 impl Vec3 {
+    /// Constructs a new 3D vector.
     pub fn new(x: f32, y: f32, z: f32) -> Self {
         Self { x, y, z }
     }
 
+    /// Subtracts vector `other` from `self`.
     pub fn sub(self, other: Vec3) -> Vec3 {
         Vec3::new(self.x - other.x, self.y - other.y, self.z - other.z)
     }
 
+    /// Adds vector `other` to `self`.
     pub fn add(self, other: Vec3) -> Vec3 {
         Vec3::new(self.x + other.x, self.y + other.y, self.z + other.z)
     }
 
+    /// Multiplies all components by scalar `s`.
     pub fn scale(self, s: f32) -> Vec3 {
         Vec3::new(self.x * s, self.y * s, self.z * s)
     }
 
+    /// Computes dot product with `other`.
     pub fn dot(self, other: Vec3) -> f32 {
         self.x * other.x + self.y * other.y + self.z * other.z
     }
 
+    /// Computes 3D cross product with `other`.
     pub fn cross(self, other: Vec3) -> Vec3 {
         Vec3::new(
             self.y * other.z - self.z * other.y,
@@ -38,10 +53,12 @@ impl Vec3 {
         )
     }
 
+    /// Computes Euclidean norm (length) of the vector.
     pub fn length(self) -> f32 {
         (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
     }
 
+    /// Returns unit length vector in same direction, or Z-up fallback if zero length.
     pub fn normalize(self) -> Vec3 {
         let l = self.length();
         if l > 1e-6 {
@@ -52,25 +69,39 @@ impl Vec3 {
     }
 }
 
+/// A 3D triangle defined by facet normal and three 3D vertices.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Triangle {
+    /// Surface normal vector.
     pub normal: Vec3,
+    /// First vertex coordinate.
     pub v1: Vec3,
+    /// Second vertex coordinate.
     pub v2: Vec3,
+    /// Third vertex coordinate.
     pub v3: Vec3,
 }
 
+/// Parsed 3D STL mesh with bounding box and centering geometry.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StlMesh {
+    /// Model name.
     pub name: String,
+    /// Triangle facets making up the 3D surface.
     pub triangles: Vec<Triangle>,
+    /// Minimum axis-aligned bounding box coordinates.
     pub min_bounds: Vec3,
+    /// Maximum axis-aligned bounding box coordinates.
     pub max_bounds: Vec3,
+    /// Geometric center point of the model.
     pub center: Vec3,
+    /// Dimensional span along X, Y, and Z axes.
     pub size: Vec3,
+    /// Maximum dimension among width, height, and depth.
     pub max_dimension: f32,
 }
 
+/// Returns `true` if the path has an `.stl` extension.
 pub fn is_stl_file<P: AsRef<Path>>(path: P) -> bool {
     let p = path.as_ref();
     if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
@@ -81,6 +112,7 @@ pub fn is_stl_file<P: AsRef<Path>>(path: P) -> bool {
 }
 
 impl StlMesh {
+    /// Reads and parses an STL 3D model file from disk.
     pub fn parse_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let mut file = File::open(path.as_ref())
             .map_err(|e| format!("Failed to open STL file: {}", e))?;
@@ -98,6 +130,7 @@ impl StlMesh {
         Self::parse_bytes(&buffer, name)
     }
 
+    /// Auto-detects ASCII vs binary format and parses raw STL byte payload into an `StlMesh`.
     pub fn parse_bytes(buffer: &[u8], default_name: String) -> Result<Self, String> {
         if buffer.len() < 84 {
             return Err("STL file is too short (< 84 bytes)".to_string());

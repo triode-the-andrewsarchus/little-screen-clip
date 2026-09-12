@@ -1,3 +1,8 @@
+//! System sleep, session lock, and lock screen detection for ambient display blanking.
+//!
+//! Listens for systemd-logind `PrepareForSleep`, `Session.Lock`, `Session.Unlock`,
+//! and queries Noctalia lock screen state to automatically blank the screen-saver frame.
+
 use crate::DaemonContext;
 use futures_util::StreamExt;
 use std::sync::Arc;
@@ -5,32 +10,39 @@ use std::time::Duration;
 use tracing::{debug, info, warn};
 use zbus::proxy;
 
+/// D-Bus interface proxy for `org.freedesktop.login1.Manager`.
 #[proxy(
     default_service = "org.freedesktop.login1",
     default_path = "/org/freedesktop/login1",
     interface = "org.freedesktop.login1.Manager"
 )]
 trait Login1Manager {
+    /// Signal emitted when the system is preparing for or resuming from sleep/suspend.
     #[zbus(signal)]
     fn prepare_for_sleep(&self, start: bool) -> zbus::Result<()>;
 }
 
+/// D-Bus interface proxy for `org.freedesktop.login1.Session`.
 #[proxy(
     default_service = "org.freedesktop.login1",
     default_path = "/org/freedesktop/login1/session/auto",
     interface = "org.freedesktop.login1.Session"
 )]
 trait Login1Session {
+    /// Signal emitted when session is locked.
     #[zbus(signal)]
     fn lock(&self) -> zbus::Result<()>;
 
+    /// Signal emitted when session is unlocked.
     #[zbus(signal)]
     fn unlock(&self) -> zbus::Result<()>;
 
+    /// Property indicating whether the session is currently locked.
     #[zbus(property)]
     fn locked_hint(&self) -> zbus::Result<bool>;
 }
 
+/// Spawns background tasks monitoring systemd-logind D-Bus signals and Noctalia shell lock states.
 pub async fn run_lock_monitor(ctx: Arc<DaemonContext>) {
     let dbus_ctx = Arc::clone(&ctx);
     tokio::spawn(async move {

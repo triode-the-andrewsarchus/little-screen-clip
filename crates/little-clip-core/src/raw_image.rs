@@ -1,6 +1,12 @@
+//! Camera RAW format detection and embedded JPEG preview extraction.
+//!
+//! Uses `exiftool` to rapidly extract embedded full-resolution JPEG previews from camera RAW files
+//! (`.CR2`, `.NEF`, `.ARW`, `.DNG`, `.RAF`, etc.) with fallback to ImageMagick.
+
 use std::path::Path;
 use std::process::Command;
 
+/// Returns `true` if the path has a known camera RAW file extension.
 pub fn is_raw_image_path(p: &Path) -> bool {
     if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
         matches!(
@@ -12,6 +18,7 @@ pub fn is_raw_image_path(p: &Path) -> bool {
     }
 }
 
+/// Extracts embedded JPEG preview bytes and dimensions from a camera RAW image file.
 pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), String> {
     // 1. Try exiftool embedded preview extraction (near-instant)
     let exiftool_tags = ["-PreviewImage", "-JpgFromRaw", "-ThumbnailImage"];

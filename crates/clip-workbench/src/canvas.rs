@@ -1,3 +1,8 @@
+//! Visual node graph canvas editor for custom pipelines and recipes.
+//!
+//! Provides interactive drag-and-drop node graph design, wire connections, parameter tweaking,
+//! recipe loading/saving, and live graph execution.
+
 use eframe::egui::{self, Color32, Id, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::config::AppConfig;
 use little_clip_core::SlotManager;
@@ -13,12 +18,16 @@ use std::path::PathBuf;
 use std::time::Instant;
 use uuid::Uuid;
 
+/// Actions emitted by the canvas UI back to the main workbench loop.
 pub enum CanvasAction {
+    /// Request asynchronous execution of the current pipeline graph.
     RunPipeline,
+    /// Result was applied directly to slots.
     #[allow(dead_code)]
     AppliedResult { item_title: String },
 }
 
+/// Interactive state for the visual node pipeline graph editor canvas.
 pub struct NodeCanvasState {
     pub graph: NodeGraph,
     pub selected_node: Option<Uuid>,
@@ -42,10 +51,12 @@ pub struct NodeCanvasState {
 }
 
 impl NodeCanvasState {
+    /// Creates a default canvas state initialized with default configuration.
     pub fn new() -> Self {
         Self::with_config(AppConfig::load())
     }
 
+    /// Creates a canvas state with customized application configuration.
     pub fn with_config(config: AppConfig) -> Self {
         let recipes = load_all_recipes();
         let default_recipe = recipes

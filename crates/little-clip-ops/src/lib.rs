@@ -1,3 +1,7 @@
+//! `little-clip-ops` provides text transformations, syntax and binary diffing,
+//! perceptual image diffs, MIDI synthesis, spreadsheet/CSV parsing, STL mesh rendering,
+//! unit/timestamp conversions, and DAG execution pipelines.
+
 use base64::Engine;
 use little_clip_core::{ClipItem, ClipPayload};
 use std::collections::HashSet;
@@ -36,24 +40,33 @@ pub use midi::*;
 pub mod stl;
 pub use stl::*;
 
-
+/// Error encountered during transformation or diff execution.
 #[derive(Debug, Error)]
 pub enum OpError {
+    /// The input clip item payload cannot be used with this operation.
     #[error("Incompatible payload: {0}")]
     IncompatiblePayload(String),
+    /// Transformation or process execution failed.
     #[error("Operation execution failed: {0}")]
     ExecutionFailed(String),
 }
 
+/// Metadata descriptor describing an available clipboard transformation or diff operation.
 #[derive(Debug, Clone)]
 pub struct OpDescriptor {
+    /// Unique operation identifier (e.g. `"trim"`, `"clean-url"`, `"diff"`).
     pub name: &'static str,
+    /// Human-friendly display label.
     pub label: &'static str,
+    /// Detailed description of what the operation accomplishes.
     pub description: &'static str,
+    /// `true` if the operation requires two or more input slots.
     pub is_binary: bool,
+    /// UI category grouping (e.g. `"Text"`, `"URL"`, `"Compare"`, `"Combine"`).
     pub category: &'static str,
 }
 
+/// List of all built-in transformation and comparison operations.
 pub const AVAILABLE_OPS: &[OpDescriptor] = &[
     OpDescriptor {
         name: "trim",
@@ -227,6 +240,7 @@ pub const AVAILABLE_OPS: &[OpDescriptor] = &[
     },
 ];
 
+/// Returns a list of operations applicable to the provided slice of selected clipboard items.
 pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
     if items.is_empty() {
         return Vec::new();
@@ -526,6 +540,7 @@ pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
     Vec::new()
 }
 
+/// Executes a unary operation (e.g. `trim`, `slugify`, `uppercase`) on a single clip item.
 pub fn execute_unary_op(op_name: &str, item: &ClipItem) -> Result<ClipItem, OpError> {
     match op_name {
         "trim" => op_trim(item),
@@ -590,6 +605,7 @@ fn op_binary_diff_unary(item: &ClipItem) -> Result<ClipItem, OpError> {
     }
 }
 
+/// Executes a binary operation (e.g. `concat`, `diff`, `binary-diff`) combining two clip items.
 pub fn execute_binary_op(
     op_name: &str,
     hand: &ClipItem,
@@ -627,6 +643,7 @@ fn op_binary_diff(a: &ClipItem, b: &ClipItem) -> Result<ClipItem, OpError> {
     Ok(item)
 }
 
+/// Executes an operation on a slice of 1, 2, or 3+ selected items.
 pub fn execute_multi_op(
     op_name: &str,
     items: &[&ClipItem],

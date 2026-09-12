@@ -1,3 +1,8 @@
+//! Side-by-side hex dump and binary diff visualizer workbench view.
+//!
+//! Renders aligned hex grids, diff blocks, ASCII previews, and interactive navigation
+//! across binary byte buffers.
+
 use eframe::egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
 use little_clip_ops::binary_diff::{
     byte_to_ascii_char, compute_binary_diff, search_rows, AlignedCell,
@@ -6,12 +11,16 @@ use little_clip_ops::binary_diff::{
 use std::sync::mpsc::{channel, Receiver};
 use std::thread;
 
+/// Color highlighting mode for hexadecimal byte displays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ByteColorMode {
+    /// Tint individual hex digit characters.
     Digits,
+    /// Tint the entire background bounding box of the byte.
     Background,
 }
 
+/// UI and navigation state for the binary hex diff viewer.
 pub struct BinaryDiffViewState {
     pub left_label: String,
     pub left_bytes: Vec<u8>,
@@ -39,6 +48,7 @@ pub struct BinaryDiffViewState {
 }
 
 impl BinaryDiffViewState {
+    /// Creates a new binary diff viewer state and spawns background diff computation.
     pub fn new(
         left_label: String,
         left_bytes: Vec<u8>,

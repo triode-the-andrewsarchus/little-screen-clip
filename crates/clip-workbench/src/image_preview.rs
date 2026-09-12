@@ -1,24 +1,40 @@
+//! Rich interactive image workbench and manipulation suite.
+//!
+//! Provides pan/zoom, cropping with fixed aspect ratios, pixelation/blackout redaction,
+//! eyedropper color inspection, resizing, palette extraction, background removal, and 3D depth map generation.
+
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use image::RgbaImage;
 use little_clip_core::{AppConfig, ClipItem, HandSide, IpcRequest};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Active image manipulation tool mode selected in the toolbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImageToolMode {
+    /// Pan and zoom inspection mode.
     #[default]
     View,
+    /// Crop region selection and trimming.
     Crop,
+    /// Blackout, blur, or pixelation redaction.
     Redact,
+    /// Eyedropper pixel color sampler.
     PickColor,
+    /// Dimension and file size optimization resizing.
     Resize,
+    /// Rotation and horizontal/vertical flipping.
     Transform,
+    /// Dominant color palette extraction and harmonic scheme generation.
     Palette,
+    /// AI-powered background removal.
     RemoveBg,
+    /// Monocular depth map generation.
     DepthMap,
 }
 
 impl ImageToolMode {
+    /// Human-readable toolbar label with icon.
     pub fn label(&self) -> &'static str {
         match self {
             ImageToolMode::View => "🔍 View / Pan",

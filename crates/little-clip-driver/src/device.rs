@@ -1,52 +1,83 @@
+//! Trofeo Vision USB hardware interface and protocol communication.
+
 use rusb::{DeviceHandle, GlobalContext};
 use std::time::Duration;
 use thiserror::Error;
 use tracing::{debug, info};
 
+/// Winbond Vendor ID (0x0416).
 pub const VID_WINBOND: u16 = 0x0416;
+/// Trofeo Vision Product ID (0x5408).
 pub const PID_TROFEO: u16 = 0x5408;
 
+/// USB OUT bulk endpoint for sending handshake and frame data.
 pub const EP_OUT: u8 = 0x09;
+/// USB IN bulk endpoint for receiving handshake responses and ACKs.
 pub const EP_IN: u8 = 0x81;
+/// Default USB interface index.
 pub const USB_INTERFACE: u8 = 0;
 
+/// Fixed chunk packet size in bytes.
 pub const CHUNK_SIZE: usize = 512;
+/// Size of chunk header preceding image bytes.
 pub const CHUNK_HEADER_SIZE: usize = 16;
+/// Usable image payload capacity per chunk packet.
 pub const CHUNK_DATA_SIZE: usize = 496;
+/// Bulk burst write transfer size.
 pub const USB_BURST_WRITE_SIZE: usize = 4096;
+/// Maximum allowed single frame JPEG payload size in bytes.
 pub const MAX_JPEG_PAYLOAD_BYTES: usize = 450_000;
 
+/// USB timeout for handshake requests.
 pub const TIMEOUT_HANDSHAKE: Duration = Duration::from_millis(1500);
+/// USB timeout for bulk frame writes.
 pub const TIMEOUT_WRITE: Duration = Duration::from_millis(5000);
+/// USB timeout for bulk ACK responses.
 pub const TIMEOUT_READ: Duration = Duration::from_millis(1500);
 
+/// Errors encountered when communicating with Trofeo Vision USB hardware.
 #[derive(Debug, Error)]
 pub enum DriverError {
+    /// Trofeo Vision display device was not found on the USB bus.
     #[error("Device not found (0416:5408)")]
     DeviceNotFound,
+    /// Underlying USB transport error from `rusb`.
     #[error("USB error: {0}")]
     Usb(#[from] rusb::Error),
+    /// Device failed initial handshake or returned invalid response signature.
     #[error("Handshake failed: {0}")]
     HandshakeFailed(String),
+    /// Rendered frame payload exceeded maximum allowable size limit.
     #[error("Payload too large: {size} bytes (limit {MAX_JPEG_PAYLOAD_BYTES} bytes)")]
     PayloadTooLarge { size: usize },
+    /// Bulk write transfer or ACK read failed.
     #[error("Frame write failed: {0}")]
     WriteFailed(String),
 }
 
+/// Hardware identification and handshake parameters reported by the display.
 #[derive(Debug, Clone)]
 pub struct DeviceInfo {
+    /// USB Vendor ID.
     pub vid: u16,
+    /// USB Product ID.
     pub pid: u16,
+    /// Hardware product model code returned by handshake.
     pub pm: u8,
+    /// Hardware sub-model code returned by handshake.
     pub sub: u8,
+    /// Chunk protocol command index negotiated during handshake.
     pub chunk_cmd: u8,
+    /// Display resolution width in pixels.
     pub width: u32,
+    /// Display resolution height in pixels.
     pub height: u32,
 }
 
+/// Active USB driver session connected to a Trofeo Vision secondary display.
 pub struct TrofeoDriver {
     handle: DeviceHandle<GlobalContext>,
+    /// Device parameters negotiated during handshake.
     pub info: DeviceInfo,
     serial: String,
 }

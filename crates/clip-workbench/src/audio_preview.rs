@@ -1,3 +1,8 @@
+//! Rich interactive audio inspection workbench view.
+//!
+//! Provides spectral waterfall analysis, zero-crossing snapping, multi-slice region selection,
+//! audio playback with Rodio, and export/split capabilities.
+
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::audio::{
     compute_audio_analysis_progressive, read_audio_metadata,
@@ -12,20 +17,28 @@ use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver};
 use std::time::{Duration, Instant};
 
+/// Channel routing options when extracting audio slices to clipboard or disk.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ChannelCopyMode {
+    /// Preserves original multi-channel audio format.
     Native,
+    /// Extracts only the left channel (mono).
     LeftOnly,
+    /// Extracts only the right channel (mono).
     RightOnly,
 }
 
+/// Region selection mode for slicing waveforms.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SelectionMode {
+    /// Single continuous range selection.
     #[default]
     Single,
+    /// Multiple independent slice regions across the timeline.
     Multi,
 }
 
+/// Formats a time in seconds as `[hh]m:ss.mmm`.
 pub fn format_sample_timestamp(sec: f32) -> String {
     let total_ms = (sec.max(0.0) * 1000.0).round() as u64;
     let ms = total_ms % 1000;
@@ -40,6 +53,7 @@ pub fn format_sample_timestamp(sec: f32) -> String {
     }
 }
 
+/// Formats an audio slice duration in seconds into human-readable minutes/seconds/milliseconds.
 pub fn format_sample_duration(sec: f32) -> String {
     let total_ms = (sec.max(0.0) * 1000.0).round() as u64;
     let ms = total_ms % 1000;
@@ -56,6 +70,7 @@ pub fn format_sample_duration(sec: f32) -> String {
     }
 }
 
+/// Generates a descriptive filename for an extracted audio slice containing timestamp and duration metadata.
 pub fn format_sample_filename(original_stem: &str, start_sec: f32, duration_sec: f32, suffix: &str, ext: &str) -> String {
     let ts_str = format_sample_timestamp(start_sec);
     let dur_str = format_sample_duration(duration_sec);
@@ -100,6 +115,7 @@ enum DragAction {
     },
 }
 
+/// Interactive UI state for audio waveform preview, spectrogram analysis, and multi-slice editing.
 pub struct AudioPreviewState {
     pub path: PathBuf,
     pub title: String,
@@ -155,6 +171,7 @@ pub struct AudioPreviewState {
 }
 
 impl AudioPreviewState {
+    /// Initializes an audio workbench viewer for the given audio file path.
     pub fn new(path: PathBuf, title: String) -> Self {
         let default_save_dir = path
             .parent()

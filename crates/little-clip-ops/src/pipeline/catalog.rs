@@ -1,21 +1,38 @@
+//! Node template catalog for the pipeline graph builder.
+//!
+//! Provides predefined operator templates (`NODE_CATALOG`) spanning sources, text filters,
+//! ImageMagick transforms, FFmpeg audio filters, file compressors, scripting escape hatches (Python/Bash),
+//! and clipboard/file sinks, with keyword/tag search and node instantiation helpers.
+
 use super::types::{NodeInstance, NodeKind, Pin, PortType};
 use little_clip_core::slot::SlotId;
 use std::collections::HashMap;
 use uuid::Uuid;
 
+/// Template definition for a node available in the node palette.
 #[derive(Debug, Clone)]
 pub struct NodeTemplate {
+    /// Unique catalog identifier.
     pub id: &'static str,
+    /// Human-readable display name.
     pub name: &'static str,
+    /// Functional category (e.g. "Source", "Text", "Image", "Audio", "Files", "Script", "Sink").
     pub category: &'static str,
+    /// Descriptive summary of node purpose and tools invoked.
     pub description: &'static str,
+    /// Search tags and keywords.
     pub tags: &'static [&'static str],
+    /// Underlying node kind enum variant.
     pub kind: NodeKind,
+    /// Static input pin definitions `(name, port_type)`.
     pub inputs: &'static [(&'static str, PortType)],
+    /// Static output pin definitions `(name, port_type)`.
     pub outputs: &'static [(&'static str, PortType)],
+    /// Default property key-value pairs.
     pub default_props: &'static [(&'static str, &'static str)],
 }
 
+/// Static catalog of all available pipeline node templates.
 pub const NODE_CATALOG: &[NodeTemplate] = &[
     // -------------------------------------------------------------
     // Sources
@@ -490,10 +507,12 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
     },
 ];
 
+/// Finds a node template in `NODE_CATALOG` by its identifier.
 pub fn find_template(id: &str) -> Option<&'static NodeTemplate> {
     NODE_CATALOG.iter().find(|t| t.id == id)
 }
 
+/// Searches catalog templates by name, description, tags, or category filter.
 pub fn search_templates(query: &str, category_filter: Option<&str>) -> Vec<&'static NodeTemplate> {
     let q = query.trim().to_lowercase();
     NODE_CATALOG
@@ -515,6 +534,7 @@ pub fn search_templates(query: &str, category_filter: Option<&str>) -> Vec<&'sta
         .collect()
 }
 
+/// Creates a new `NodeInstance` from a `NodeTemplate` at the specified canvas position.
 pub fn instantiate_template(template: &NodeTemplate, pos: [f32; 2]) -> NodeInstance {
     let mut props = HashMap::new();
     for &(k, v) in template.default_props {

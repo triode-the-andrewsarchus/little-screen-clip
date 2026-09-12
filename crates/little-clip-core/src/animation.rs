@@ -1,18 +1,28 @@
+//! Animation and video preview frame extraction, JPEG thumbnail sequences, and timing calculations.
+//!
+//! Provides decoders for animated GIF, animated WebP, and common video formats (via `ffmpeg`/`ffprobe`),
+//! compiling them into compact MJPEG frame sequences for display playback.
+
 use std::io::Cursor;
 use std::path::Path;
 use serde::{Deserialize, Serialize};
 
+/// Lightweight animation preview containing downsampled JPEG frames and frame delays.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AnimationThumbnail {
+    /// Rendered thumbnail width in pixels.
     pub width: u32,
+    /// Rendered thumbnail height in pixels.
     pub height: u32,
+    /// Number of frames extracted in the loop.
     pub frame_count: usize,
+    /// Nominal frames per second of playback.
     pub fps: f32,
-    /// JPEG-encoded frames (each ~2 - 6 KB), keeping memory and IPC tiny
+    /// JPEG-encoded frames (each ~2 - 6 KB), keeping memory and IPC tiny.
     pub frames_jpeg: Vec<Vec<u8>>,
-    /// Delay per frame in milliseconds
+    /// Delay per frame in milliseconds.
     pub frame_delays_ms: Vec<u32>,
-    /// Total duration of animation loop in milliseconds
+    /// Total duration of animation loop in milliseconds.
     pub loop_duration_ms: u64,
 }
 

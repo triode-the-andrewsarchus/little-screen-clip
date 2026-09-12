@@ -1,3 +1,8 @@
+//! Text and image differential inspection workbench view.
+//!
+//! Provides side-by-side, unified, and inline word diffs for text, and 3-up/overlay/mask
+//! pixel diffs for bitmap images.
+
 use crate::ansi::ansi_to_layout_job;
 use crate::send_ipc_request;
 use eframe::egui::{self, Color32, Rounding, Stroke, Vec2};
@@ -6,15 +11,21 @@ use little_clip_core::HandSide;
 use little_clip_ops::diff::{compute_diff, DiffDisplayMode, DiffResult, DiffTarget};
 use little_clip_ops::image_diff::{ImageDiffOptions, ImageDiffResult};
 
+/// Layout visualization mode for comparing bitmap images.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageDiffViewMode {
+    /// 3-Up view: `[Base] [Comparison] [Diff Mask]`.
     ThreeUp,    // [ base ] [ comparison ] [ diff ] (matching ODiff demo table)
+    /// Dimmed base image overlayed with glowing diff pixels.
     Overlay,    // [ dimmed base + glowing diff pixels ]
+    /// High-contrast black mask highlighting pixel differences.
     MaskOnly,   // [ black mask + glowing diff pixels ]
+    /// Split view: `[Base] [Diff Mask]`.
     Split,      // [ base ] [ diff ]
 }
 
 impl ImageDiffViewMode {
+    /// Human-readable display label with icon.
     pub fn label(&self) -> &'static str {
         match self {
             ImageDiffViewMode::ThreeUp => "⬌ 3-Up (Base | Compare | Diff)",
@@ -25,6 +36,7 @@ impl ImageDiffViewMode {
     }
 }
 
+/// Interactive state for the text and visual image diff viewer.
 pub struct DiffViewerState {
     pub lhs: DiffTarget,
     pub rhs: DiffTarget,
@@ -86,6 +98,7 @@ fn spawn_image_diff_worker(
 }
 
 impl DiffViewerState {
+    /// Initializes text or image diff calculation between two comparison targets.
     pub fn new(lhs: DiffTarget, rhs: DiffTarget, mode: DiffDisplayMode) -> Self {
         let is_img = lhs.is_image() && rhs.is_image();
         let image_options = ImageDiffOptions::default();

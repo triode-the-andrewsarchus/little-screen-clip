@@ -1,25 +1,35 @@
+//! Perceptual image comparison engine.
+//!
+//! Provides multithreaded YIQ-space perceptual image comparison (compatible with ODiff/pixelmatch),
+//! producing difference masks, dimmed overlays with highlighted diff pixels, and diff percentage metrics.
+
 use image::{ImageBuffer, RgbaImage};
 use std::path::Path;
 
+/// Errors that can occur during image diff decoding and comparison.
 #[derive(Debug, thiserror::Error)]
 pub enum ImageDiffError {
+    /// Failed to decode image buffer.
     #[error("Failed to decode image: {0}")]
     DecodeError(#[from] image::ImageError),
+    /// File I/O failure while reading image from disk.
     #[error("Failed to read file '{0}': {1}")]
     IoError(String, std::io::Error),
+    /// Image data was empty or invalid format.
     #[error("Unsupported or empty image data")]
     EmptyData,
 }
 
+/// Configuration options for perceptual image comparison.
 #[derive(Debug, Clone)]
 pub struct ImageDiffOptions {
-    /// Perceptual difference threshold in range 0.0 .. 1.0 (default 0.1, matching ODiff)
+    /// Perceptual difference threshold in range 0.0 .. 1.0 (default 0.1, matching ODiff).
     pub threshold: f32,
-    /// RGBA color used to highlight differing pixels (default: [255, 0, 0, 255] bright red)
+    /// RGBA color used to highlight differing pixels (default: [255, 0, 0, 255] bright red).
     pub diff_color: [u8; 4],
-    /// Whether to generate the black-background diff mask (matching ODiff demo)
+    /// Whether to generate the black-background diff mask (matching ODiff demo).
     pub output_mask: bool,
-    /// Whether to generate the dimmed base overlay with glowing diff pixels
+    /// Whether to generate the dimmed base overlay with glowing diff pixels.
     pub output_overlay: bool,
 }
 
@@ -34,17 +44,28 @@ impl Default for ImageDiffOptions {
     }
 }
 
+/// Results of a perceptual image comparison.
 #[derive(Debug, Clone)]
 pub struct ImageDiffResult {
+    /// Comparison canvas width in pixels.
     pub width: u32,
+    /// Comparison canvas height in pixels.
     pub height: u32,
+    /// Total number of differing pixels detected.
     pub diff_count: usize,
+    /// Total pixels evaluated across width × height.
     pub total_pixels: usize,
+    /// Percentage of differing pixels (0.0 to 100.0).
     pub diff_percentage: f64,
+    /// True if both images have identical dimensions and zero differing pixels.
     pub is_identical: bool,
+    /// Raw RGBA bytes for base image.
     pub base_rgba: Vec<u8>,
+    /// Raw RGBA bytes for comparison image.
     pub comp_rgba: Vec<u8>,
+    /// Raw RGBA bytes for diff mask (black background with diff color markers).
     pub mask_rgba: Vec<u8>,
+    /// Raw RGBA bytes for dimmed overlay with diff highlights.
     pub overlay_rgba: Vec<u8>,
 }
 
@@ -72,8 +93,7 @@ impl ImageDiffResult {
     }
 }
 
-/// Computes the perceptual difference between two RGBA images using the NTSC YIQ color space
-/// (matching ODiff and pixelmatch algorithms), accelerated across all CPU cores.
+/// Writes diff highlight color into mask and overlay buffers at `idx`.
 #[inline(always)]
 fn write_diff_pixel(
     m_chunk: &mut [u8],
@@ -95,6 +115,7 @@ fn write_diff_pixel(
     o_chunk[idx + 3] = diff_a;
 }
 
+/// Writes matching pixel as black in mask and dimmed grayscale in overlay at `idx`.
 #[inline(always)]
 fn write_identical_pixel(
     m_chunk: &mut [u8],
@@ -116,6 +137,8 @@ fn write_identical_pixel(
     o_chunk[idx + 3] = 255;
 }
 
+/// Computes the perceptual difference between two RGBA images using the NTSC YIQ color space
+/// (matching ODiff and pixelmatch algorithms), accelerated across all CPU cores.
 pub fn compare_rgba_images(
     base: &RgbaImage,
     comp: &RgbaImage,
@@ -486,6 +509,7 @@ pub fn downsample_rgba(width: u32, height: u32, rgba: &[u8], max_dim: u32) -> (u
     (new_w, new_h, out)
 }
 
+/// Sniffs SVG XML headers from the start of image bytes.
 fn is_svg(bytes: &[u8]) -> bool {
     let header = std::str::from_utf8(bytes.get(..1024).unwrap_or(bytes)).unwrap_or("");
     let trimmed = header.trim_start();
@@ -494,6 +518,7 @@ fn is_svg(bytes: &[u8]) -> bool {
         || header.contains("<svg")
 }
 
+/// Invokes `rsvg-convert` CLI to render SVG bytes to PNG format.
 fn render_svg_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
     use std::io::Write;
     use std::process::{Command, Stdio};

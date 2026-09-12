@@ -1,7 +1,13 @@
+//! Multi-page PDF thumbnail grid viewer and page manipulation workbench view.
+//!
+//! Renders visual page thumbnails with live rotation (90° increments), page deletion,
+//! and dirty state tracking.
+
 use eframe::egui::{self, Color32, Rounding, Stroke, Vec2};
 use little_clip_core::pdf::{delete_pdf_pages, get_pdf_info, render_pdf_page_preview, rotate_pdf_page};
 use std::path::PathBuf;
 
+/// Rendered raster thumbnail and metadata for a single PDF page.
 pub struct PdfPageItem {
     pub page_num: usize,
     pub png_bytes: Vec<u8>,
@@ -12,6 +18,7 @@ pub struct PdfPageItem {
     pub rotation: u32,
 }
 
+/// Interactive state for the multi-page PDF thumbnail grid editor.
 pub struct PdfEditorState {
     pub path: PathBuf,
     pub title: String,
@@ -23,6 +30,7 @@ pub struct PdfEditorState {
 }
 
 impl PdfEditorState {
+    /// Loads page metadata and generates thumbnail previews for the given PDF file.
     pub fn new(path: PathBuf) -> Self {
         let title = path
             .file_name()

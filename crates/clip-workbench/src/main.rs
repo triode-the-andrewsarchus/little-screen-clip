@@ -1,3 +1,8 @@
+//! Little Screen Clip desktop GUI workbench (`clip-workbench`).
+//!
+//! An egui-based control center providing multi-slot visual inspection, operation command palette,
+//! visual node graph builder, audio/image/video/3D/PDF/MIDI inspection windows, and live screen mirror.
+
 use eframe::egui;
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::{AppConfig, ClipItem, SlotId, SlotManager};
@@ -35,16 +40,23 @@ use stl_view::StlViewerState;
 use little_clip_ops::binary_diff::resolve_binary_diff_pair;
 use little_clip_ops::diff::{resolve_diff_pair, resolve_diff_target, DiffDisplayMode};
 
+/// Primary navigation view tabs in the desktop workbench.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkbenchView {
+    /// Command palette for searching and executing transform operations and recipes.
     Palette,
+    /// Interactive visual node pipeline recipe editor.
     NodeMachine,
+    /// Automated action trigger rules configuration.
     AutoActions,
 }
 
+/// Action item displayed in the command palette search list.
 #[derive(Clone)]
 enum PaletteAction {
+    /// Built-in Rust transformation operation.
     Op(OpDescriptor),
+    /// Configured visual pipeline recipe.
     Recipe(Recipe),
 }
 

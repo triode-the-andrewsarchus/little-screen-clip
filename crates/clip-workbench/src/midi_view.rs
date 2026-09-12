@@ -1,3 +1,8 @@
+//! Piano roll visualization and MIDI playback workbench view.
+//!
+//! Renders multi-track MIDI piano rolls, measure grid lines, note inspection,
+//! and live audio synthesis playback via Rodio.
+
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_ops::{MidiData, MidiNote};
 use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
@@ -6,6 +11,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Instant;
 
+/// Interactive UI state for piano roll inspection and MIDI playback.
 pub struct MidiViewerState {
     #[allow(dead_code)]
     pub path: Option<PathBuf>,
@@ -26,6 +32,7 @@ pub struct MidiViewerState {
     pub status_toast: Option<(String, f64)>,
 }
 
+/// Computes a distinct palette color for notes in a given MIDI track and channel.
 pub fn get_track_color(track_idx: usize, channel: u8, total_tracks: usize) -> Color32 {
     if total_tracks <= 1 {
         if channel == 9 {
@@ -55,6 +62,7 @@ pub fn get_track_color(track_idx: usize, channel: u8, total_tracks: usize) -> Co
 }
 
 impl MidiViewerState {
+    /// Loads and parses a MIDI file into workbench viewer state.
     pub fn from_file(path: PathBuf) -> Result<Self, String> {
         let data = MidiData::parse_file(&path)?;
         let title = path

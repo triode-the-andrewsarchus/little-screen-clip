@@ -1,9 +1,16 @@
+//! Recipe storage, default presets, and script scaffolding.
+//!
+//! Handles disk persistence of recipes in YAML format (`~/.config/little-screen-clip/recipes`),
+//! default recipe generation ("Pad and Caption", "Normalize Audio", "Clean and Slugify"),
+//! and external Python/Bash script file generation and synchronization.
+
 use super::catalog::{find_template, instantiate_template};
 use super::types::{Connection, NodeGraph, NodeKind, Recipe, RecipeInputType};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
+/// Returns the configuration directory path where custom recipes and scripts are stored.
 pub fn get_recipes_dir() -> PathBuf {
     if let Ok(config_home) = std::env::var("XDG_CONFIG_HOME") {
         PathBuf::from(config_home)
@@ -19,6 +26,7 @@ pub fn get_recipes_dir() -> PathBuf {
     }
 }
 
+/// Ensures the recipe storage directory exists and initializes default recipes if empty.
 pub fn ensure_recipes_dir_and_defaults() -> Result<PathBuf, std::io::Error> {
     let dir = get_recipes_dir();
     if !dir.exists() {
@@ -38,6 +46,7 @@ pub fn ensure_recipes_dir_and_defaults() -> Result<PathBuf, std::io::Error> {
     Ok(dir)
 }
 
+/// Loads all recipes from the recipes directory, sorted alphabetically by name.
 pub fn load_all_recipes() -> Vec<Recipe> {
     let dir = match ensure_recipes_dir_and_defaults() {
         Ok(d) => d,
@@ -71,6 +80,7 @@ pub fn load_all_recipes() -> Vec<Recipe> {
     recipes
 }
 
+/// Serializes a recipe into its YAML file on disk.
 pub fn save_recipe(recipe: &Recipe) -> Result<PathBuf, std::io::Error> {
     let dir = ensure_recipes_dir_and_defaults()?;
     let safe_name: String = recipe
@@ -88,6 +98,7 @@ pub fn save_recipe(recipe: &Recipe) -> Result<PathBuf, std::io::Error> {
     Ok(path)
 }
 
+/// Looks up a recipe by name or slugified name match.
 pub fn find_recipe_by_name(name: &str) -> Option<Recipe> {
     let recipes = load_all_recipes();
     recipes.into_iter().find(|r| {
@@ -99,6 +110,7 @@ pub fn find_recipe_by_name(name: &str) -> Option<Recipe> {
     })
 }
 
+/// Populates default YAML recipes into the target directory if not present.
 fn init_default_recipes(dir: &Path) -> Result<(), std::io::Error> {
     let defaults = vec![
         make_pad_and_caption_recipe(),
@@ -188,6 +200,7 @@ pub fn make_pad_and_caption_recipe() -> Recipe {
     }
 }
 
+/// Creates default recipe: Left Hand Audio -> Loudness Normalize (-14 LUFS) -> Set in Left Hand.
 pub fn make_normalize_audio_recipe() -> Recipe {
     let t_lh = find_template("source_lh").unwrap();
     let t_norm = find_template("audio_normalize").unwrap();
@@ -232,6 +245,7 @@ pub fn make_normalize_audio_recipe() -> Recipe {
     }
 }
 
+/// Creates default recipe: Left Hand Text -> Regex Separator Normalize -> Slugify -> Set in Left Hand.
 pub fn make_clean_and_slugify_recipe() -> Recipe {
     let t_lh = find_template("source_lh").unwrap();
     let t_regex = find_template("text_regex_replace").unwrap();

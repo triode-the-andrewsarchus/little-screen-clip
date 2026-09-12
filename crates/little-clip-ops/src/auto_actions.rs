@@ -1,3 +1,8 @@
+//! Automatic clipboard transformations executed on clipboard capture.
+//!
+//! Provides rules for stripping marketing/analytics tracking query parameters (`utm_*`, `fbclid`,
+//! `gclid`, `si`, `igshid`, etc.) from incoming URLs.
+
 use url::Url;
 
 /// List of query parameter keys to strip from URLs.

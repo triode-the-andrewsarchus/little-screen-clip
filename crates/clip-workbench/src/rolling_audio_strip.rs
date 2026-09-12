@@ -1,3 +1,8 @@
+//! Quick scrubbing and region extraction strip for rolling audio buffer snapshots.
+//!
+//! Provides waveform peak pyramid visualization, scrub playback, slice selection,
+//! and routing to left/right slots.
+
 use egui::{Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::audio::{build_peak_pyramid, PeakBlock};
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
@@ -10,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tracing::{error, info};
 
+/// UI and playback state for the rolling audio snapshot quick-strip widget.
 pub struct RollingAudioStripState {
     pub path: Option<PathBuf>,
     pub duration_sec: f32,
@@ -41,6 +47,7 @@ pub struct RollingAudioStripState {
 }
 
 impl RollingAudioStripState {
+    /// Creates a new rolling audio strip state and loads the latest daemon snapshot.
     pub fn new() -> Self {
         let mut sink = DeviceSinkBuilder::open_default_sink().ok();
         if let Some(ref mut s) = sink {

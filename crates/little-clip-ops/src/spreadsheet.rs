@@ -1,21 +1,36 @@
+//! Spreadsheet parsing and clipboard table detection.
+//!
+//! Provides parsing for delimiter-separated text (CSV, TSV, semicolon-delimited), heuristic
+//! tabular clipboard detection that guards against prose punctuation false-positives, and workbook
+//! loading for Excel / OpenDocument formats (`.xlsx`, `.xls`, `.xlsb`, `.ods`) using `calamine`.
+
 use calamine::{open_workbook_auto, Reader};
 use std::path::Path;
 
+/// A single tabular sheet containing rows and columns of cell string values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpreadsheetSheet {
+    /// Sheet name or identifier.
     pub name: String,
+    /// Total row count.
     pub total_rows: usize,
+    /// Total column count.
     pub total_cols: usize,
+    /// 2D grid of cell values.
     pub rows: Vec<Vec<String>>,
 }
 
+/// A parsed workbook or tabular dataset containing one or more sheets.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpreadsheetData {
+    /// Workbook or file title.
     pub title: String,
+    /// Sheets contained within the workbook.
     pub sheets: Vec<SpreadsheetSheet>,
 }
 
 impl SpreadsheetSheet {
+    /// Constructs a new `SpreadsheetSheet` and calculates its dimensions.
     pub fn new(name: String, rows: Vec<Vec<String>>) -> Self {
         let total_rows = rows.len();
         let total_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
@@ -27,7 +42,7 @@ impl SpreadsheetSheet {
         }
     }
 
-    /// Returns a sliced 2D grid of the upper-left cells (e.g. top 8 rows, first 5 cols)
+    /// Returns a sliced 2D grid of the upper-left cells (e.g. top 8 rows, first 5 cols).
     pub fn upper_left_slice(&self, max_rows: usize, max_cols: usize) -> Vec<Vec<String>> {
         let r_limit = self.rows.len().min(max_rows);
         let mut slice = Vec::with_capacity(r_limit);
@@ -45,6 +60,7 @@ impl SpreadsheetSheet {
     }
 }
 
+/// Parses a delimiter-separated text string (auto-detecting comma, tab, or semicolon delimiters) into rows.
 pub fn parse_csv_string(csv_text: &str) -> Vec<Vec<String>> {
     let mut rows = Vec::new();
     // Detect delimiter: comma, tab, or semicolon
@@ -230,6 +246,7 @@ pub fn load_spreadsheet(path: &Path) -> Result<SpreadsheetData, String> {
     Err(format!("Unsupported spreadsheet format: .{}", ext))
 }
 
+/// Returns `true` if the given path has a supported spreadsheet file extension.
 pub fn is_spreadsheet_file(path: &Path) -> bool {
     let ext = path
         .extension()

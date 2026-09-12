@@ -1,3 +1,8 @@
+//! Programming and markup language detection heuristics.
+//!
+//! Classifies plain text and code snippets into language tags (`rs`, `py`, `c`, `cpp`, `java`, `sh`, `json`, etc.)
+//! using file extension hints, shebang lines, structural markers, and keyword scoring.
+
 use std::path::Path;
 
 /// Detects the programming or markup language from an optional file extension hint

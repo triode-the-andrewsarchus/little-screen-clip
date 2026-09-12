@@ -1,31 +1,57 @@
+//! Clipboard items, payloads, thumbnail generators, and content classifiers.
+//!
+//! Handles extraction, MIME detection, dimension inspection, and thumbnail generation
+//! across text, markdown, URLs, raster/vector images, camera RAW, PDFs, audio clips,
+//! animations/video, directories, and file batches.
+
 use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+/// High-level discriminator for the kind of payload stored in a `ClipItem`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum PayloadKind {
+    /// Plain unformatted text.
     Text,
+    /// Markdown-formatted text.
     Markdown,
+    /// Web or network URL.
     Url,
+    /// Raster or vector single image.
     Image,
+    /// Multiple image paths / gallery.
     MultiImage,
+    /// Audio file reference with waveform/metadata.
     Audio,
+    /// Looping animation (GIF, animated WebP) or video clip preview.
     Animation,
+    /// Batch of arbitrary filesystem files.
     FileBatch,
+    /// Single filesystem directory.
     Directory,
+    /// Hex/RGB color representation.
     Color,
+    /// Unrecognized or generic binary format.
     Unknown,
 }
 
+/// Pre-rendered thumbnail bitmap with premultiplied RGBA pixels.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ImageThumbnail {
+    /// Width of the rendered thumbnail in pixels.
     pub width: u32,
+    /// Height of the rendered thumbnail in pixels.
     pub height: u32,
+    /// Premultiplied RGBA byte buffer (`[R, G, B, A, ...]`).
     pub premultiplied_rgba: Vec<u8>,
 }
 
 impl ImageThumbnail {
+    /// Generates a downscaled thumbnail from raw image bytes, fitting within `(max_w, max_h)`.
+    ///
+    /// Supports standard raster formats (PNG, JPEG, WebP, BMP, GIF) and falls back to
+    /// SVG conversion via `rsvg-convert` if the payload contains vector markup.
     pub fn generate(bytes: &[u8], max_w: u32, max_h: u32) -> Option<Self> {
         if let Ok(dyn_img) = image::load_from_memory(bytes) {
             let thumb = dyn_img.thumbnail(max_w, max_h);
@@ -56,6 +82,7 @@ impl ImageThumbnail {
         None
     }
 
+    /// Renders vector SVG bytes to raster pixels using the `rsvg-convert` command-line tool.
     pub fn generate_from_svg(bytes: &[u8], max_w: u32, max_h: u32) -> Option<Self> {
         use std::io::Write;
         use std::process::{Command, Stdio};
@@ -85,6 +112,7 @@ impl ImageThumbnail {
     }
 }
 
+/// Returns `true` if the byte slice starts with an SVG XML declaration or `<svg` tag.
 pub fn is_svg_bytes(bytes: &[u8]) -> bool {
     let header = std::str::from_utf8(bytes.get(..1024).unwrap_or(bytes)).unwrap_or("");
     let trimmed = header.trim_start();
@@ -93,6 +121,7 @@ pub fn is_svg_bytes(bytes: &[u8]) -> bool {
         || header.contains("<svg")
 }
 
+/// Parses width and height attributes or `viewBox` bounds from raw SVG bytes without full XML parsing.
 pub fn read_svg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let text = std::str::from_utf8(bytes.get(..4096).unwrap_or(bytes)).ok()?;
 
@@ -141,6 +170,7 @@ pub fn read_svg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
+/// Fast header-only image dimension reader for raster and vector formats (~0.05ms, skips pixel decode).
 pub fn read_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     use std::io::Cursor;
     if let Ok(reader) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format() {
@@ -154,11 +184,16 @@ pub fn read_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
+/// Concrete typed payload data contained within a clipboard item.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ClipPayload {
+    /// Raw text string.
     Text(String),
+    /// Markdown formatted content.
     Markdown(String),
+    /// Validated web URL.
     Url(url::Url),
+    /// Raster image bytes with dimensions, MIME, and optional thumbnail.
     Image {
         #[serde(skip)]
         bytes: Vec<u8>,
@@ -170,6 +205,7 @@ pub enum ClipPayload {
         #[serde(default)]
         thumbnail: Option<ImageThumbnail>,
     },
+    /// Audio file reference with duration, sample rate, channels, and optional waveform analysis.
     AudioRef {
         path: PathBuf,
         duration_ms: u64,
@@ -179,6 +215,7 @@ pub enum ClipPayload {
         #[serde(default)]
         waveform: Option<crate::audio::AudioWaveform>,
     },
+    /// Looping animated image or video clip.
     Animation {
         path: PathBuf,
         format: String,
@@ -188,7 +225,9 @@ pub enum ClipPayload {
         #[serde(default)]
         thumbnail: Option<crate::animation::AnimationThumbnail>,
     },
+    /// Multiple files selected or copied together.
     FileBatch(Vec<PathBuf>),
+    /// Multiple image files with thumbnail preview indices.
     MultiImage {
         paths: Vec<PathBuf>,
         total_count: usize,
@@ -196,7 +235,9 @@ pub enum ClipPayload {
         #[serde(default)]
         thumbnails: Vec<ImageThumbnail>,
     },
+    /// Filesystem directory reference.
     Directory(PathBuf),
+    /// Hex and RGB color definition.
     Color {
         hex: String,
         r: u8,
@@ -205,18 +246,27 @@ pub enum ClipPayload {
     },
 }
 
+/// Represents a single clipboard entry stored in a slot, including metadata and display labels.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ClipItem {
+    /// Unique identifier for the item.
     pub id: Uuid,
+    /// Unix timestamp (seconds) when the item was captured.
     pub created_at: u64,
+    /// Stored clipboard payload.
     pub payload: ClipPayload,
+    /// Primary title for UI display.
     pub title: String,
+    /// Subtitle or secondary metadata string (dimensions, size, duration).
     pub subtitle: String,
+    /// Detailed badges / chips displayed on the card.
     pub details: Vec<String>,
+    /// Active handler / processor tag (e.g. `"IMAGE (FILE)"`, `"TEXT"`, `"SVG"`).
     pub handler_tag: String,
 }
 
 impl ClipItem {
+    /// Serializes the item to plain text suitable for system clipboard export.
     pub fn to_clipboard_text(&self) -> Option<String> {
         match &self.payload {
             ClipPayload::Text(t) => Some(t.clone()),
@@ -244,6 +294,7 @@ impl ClipItem {
         }
     }
 
+    /// Returns the local filesystem path if this item refers to a file on disk.
     pub fn file_path(&self) -> Option<PathBuf> {
         match &self.payload {
             ClipPayload::Image { path: Some(p), .. } => Some(p.clone()),
@@ -260,11 +311,13 @@ impl ClipItem {
         }
     }
 
+    /// Sets a custom handler tag badge for the item.
     pub fn with_handler(mut self, handler: impl Into<String>) -> Self {
         self.handler_tag = handler.into();
         self
     }
 
+    /// Creates an image `ClipItem` directly from in-memory bytes and a MIME type string.
     pub fn from_image_bytes(bytes: Vec<u8>, mime: impl Into<String>) -> Option<Self> {
         let mime = mime.into();
         // Fast header-only dimension extraction in ~0.05ms (does NOT decode pixels)
@@ -311,6 +364,7 @@ impl ClipItem {
         })
     }
 
+    /// Parses arbitrary clipboard text, classifying it into files, URLs, colors, SVGs, JSON, Markdown, or plain text.
     pub fn from_text(text: impl Into<String>) -> Self {
         let text = text.into();
         let trimmed = text.trim();
@@ -702,6 +756,7 @@ impl ClipItem {
         }
     }
 
+    /// Creates a URL `ClipItem` from a parsed `Url`.
     pub fn from_url(parsed: url::Url) -> Self {
         let host = parsed.host_str().unwrap_or("URL").to_string();
         let path = parsed.path().to_string();
@@ -719,6 +774,7 @@ impl ClipItem {
         }
     }
 
+    /// Creates a Color `ClipItem` from RGB bytes and hex string.
     pub fn from_color((r, g, b, hex): (u8, u8, u8, String)) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -736,6 +792,7 @@ impl ClipItem {
         }
     }
 
+    /// Creates an Image `ClipItem` with known dimensions and MIME string.
     pub fn from_image(bytes: Vec<u8>, width: u32, height: u32, mime: impl Into<String>) -> Self {
         let mime = mime.into();
         let size_kb = bytes.len() as f64 / 1024.0;
@@ -776,6 +833,7 @@ impl ClipItem {
         }
     }
 
+    /// Reads audio metadata from a file path and creates an `AudioRef` `ClipItem`.
     pub fn from_audio(path: PathBuf) -> Option<Self> {
         let meta = crate::audio::read_audio_metadata(&path)?;
         let file_name = path
@@ -816,6 +874,7 @@ impl ClipItem {
         })
     }
 
+    /// Reads video metadata via `ffprobe` and creates an `Animation` `ClipItem`.
     pub fn from_video(path: PathBuf) -> Option<Self> {
         let file_name = path
             .file_name()
@@ -857,6 +916,7 @@ impl ClipItem {
         })
     }
 
+    /// Verifies animated image headers (GIF/WebP) and creates an `Animation` `ClipItem`.
     pub fn from_animated_image(path: PathBuf) -> Option<Self> {
         let bytes = std::fs::read(&path).ok()?;
         let ext = path
@@ -913,6 +973,7 @@ impl ClipItem {
         })
     }
 
+    /// Creates a Directory `ClipItem` referencing a filesystem folder.
     pub fn from_directory(path: PathBuf) -> Self {
         let name = path
             .file_name()
@@ -930,6 +991,7 @@ impl ClipItem {
         }
     }
 
+    /// Creates a `ClipItem` for a single file on disk, attempting format-specific dispatch.
     pub fn from_single_file(p: &Path) -> Self {
         if is_image_path(p) {
             if let Ok(bytes) = std::fs::read(p) {
@@ -989,7 +1051,7 @@ impl ClipItem {
         }
     }
 
-
+    /// Creates a `ClipItem` representing a collection of files.
     pub fn from_files(paths: Vec<PathBuf>) -> Self {
         let count = paths.len();
         let first_name = paths
@@ -1035,6 +1097,7 @@ impl ClipItem {
         }
     }
 
+    /// Creates a MultiImage `ClipItem` representing multiple image files for gallery preview.
     pub fn from_multi_image(paths: Vec<PathBuf>) -> Self {
         let total_count = paths.len();
         let preview_indices = if total_count <= 4 {
@@ -1078,6 +1141,7 @@ impl ClipItem {
         }
     }
 
+    /// Returns the high-level `PayloadKind` of this item.
     pub fn kind(&self) -> PayloadKind {
         match &self.payload {
             ClipPayload::Text(_) => PayloadKind::Text,
@@ -1093,6 +1157,7 @@ impl ClipItem {
         }
     }
 
+    /// Returns an audio file path if the payload contains or references audio.
     pub fn audio_path(&self) -> Option<PathBuf> {
         match &self.payload {
             ClipPayload::AudioRef { path, .. } => Some(path.clone()),
@@ -1112,6 +1177,7 @@ impl ClipItem {
         }
     }
 
+    /// Returns an image file path if the payload contains or references an image.
     pub fn image_path(&self) -> Option<PathBuf> {
         match &self.payload {
             ClipPayload::Image { path: Some(p), .. } if p.is_file() => Some(p.clone()),
@@ -1136,6 +1202,7 @@ impl ClipItem {
         }
     }
 
+    /// Returns `true` if this item is an image payload or points to an image file.
     pub fn is_image(&self) -> bool {
         match &self.payload {
             ClipPayload::Image { .. } => true,
@@ -1143,6 +1210,7 @@ impl ClipItem {
         }
     }
 
+    /// Resolves the raw image bytes, MIME type string, and optional source path.
     pub fn resolve_image_data(&self) -> Option<(Vec<u8>, String, Option<PathBuf>)> {
         match &self.payload {
             ClipPayload::Image { bytes, path, mime, .. } => {
@@ -1168,6 +1236,7 @@ impl ClipItem {
     }
 }
 
+/// Returns `true` if the path has a standard raster or vector image extension.
 pub fn is_image_path(p: &Path) -> bool {
     if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
         matches!(
@@ -1179,6 +1248,7 @@ pub fn is_image_path(p: &Path) -> bool {
     }
 }
 
+/// Guesses the MIME type string from a file path's extension.
 pub fn guess_image_mime(p: &Path) -> String {
     if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
         match ext.to_lowercase().as_str() {
@@ -1198,6 +1268,7 @@ pub fn guess_image_mime(p: &Path) -> String {
     }
 }
 
+/// Parses local file paths or `file://` URIs from clipboard text, expanding tildes and validating existence.
 pub fn extract_local_file_paths(text: &str) -> Vec<PathBuf> {
     let home = std::env::var("HOME").ok();
     let home_ref = home.as_deref();

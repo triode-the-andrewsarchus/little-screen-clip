@@ -1,3 +1,9 @@
+//! Audio decoding, waveform peak pyramids, spectral analysis, pitch detection, and transient extraction.
+//!
+//! Integrates Symphonia for decoding diverse audio formats, RealFFT / Rayon for parallel STFT
+//! spectrogram generation, logarithmic spectral flux for beat/transient onset detection,
+//! YIN algorithm for pitch detection, and Serato/ColorChord harmonic color mapping.
+
 use std::path::Path;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
@@ -11,57 +17,90 @@ use rustchord::cc_to_rgb;
 use rayon::prelude::*;
 use crate::config::{AudioConfig, AudioSamplePosition};
 
+/// Downsampled audio waveform peaks and optional spectral frequency coloring for UI display.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct AudioWaveform {
+    /// Number of audio channels (1 = mono, 2 = stereo).
     pub channels: u16,
+    /// Sample rate in Hz.
     pub sample_rate: u32,
+    /// Total duration in milliseconds.
     pub duration_ms: u64,
+    /// Peak amplitude values for channel 1 (values in `[0.0, 1.0]`).
     pub ch1_peaks: Vec<f32>,
+    /// Optional peak amplitude values for channel 2.
     pub ch2_peaks: Option<Vec<f32>>,
+    /// 3-band spectral frequency colors per bar (`[R, G, B]`).
     pub spectral_colors: Option<Vec<[u8; 3]>>,
+    /// Whether this waveform represents a truncated snippet rather than the full file.
     #[serde(default)]
     pub is_snippet: bool,
+    /// Millisecond start offset of the snippet within the file.
     #[serde(default)]
     pub snippet_start_ms: u64,
+    /// Duration of the snippet in milliseconds.
     #[serde(default)]
     pub snippet_duration_ms: u64,
 }
 
+/// Basic audio file metadata extracted via container probing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioMetadata {
+    /// Total duration in milliseconds.
     pub duration_ms: u64,
+    /// Sample rate in Hz.
     pub sample_rate: u32,
+    /// Number of audio channels.
     pub channels: u16,
+    /// Container or codec format name (e.g. `"WAV"`, `"FLAC"`, `"MP3"`).
     pub format: String,
 }
 
+/// Identified musical pitch note information for a single detected harmonic.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SingleNoteInfo {
+    /// Note name with octave (e.g. `"C4"`, `"A#3"`).
     pub note_name: String,
+    /// Fundamental frequency in Hz.
     pub frequency_hz: f32,
+    /// Normalized amplitude in `[0.0, 1.0]`.
     pub amplitude: f32,
+    /// Harmonic ColorChord RGB color.
     pub rgb: [u8; 3],
 }
 
+/// ColorChord pitch and chord estimation metadata for an audio time column.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ColorChordNoteInfo {
+    /// Primary dominant note name (e.g. `"A4"`).
     pub note_name: String,
+    /// Primary dominant frequency in Hz.
     pub frequency_hz: f32,
+    /// Overall note activity amplitude.
     pub amplitude: f32,
+    /// `true` if a musical pitch was detected above threshold.
     pub active: bool,
+    /// Harmonic color corresponding to the dominant pitch.
     pub rgb: [u8; 3],
+    /// All detected chord components in descending order of energy.
     #[serde(default)]
     pub chord_notes: Vec<SingleNoteInfo>,
 }
 
+/// Multi-scale min/max peak summary block with 3-band crossover color.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PeakBlock {
+    /// Minimum negative sample amplitude in block.
     pub min: f32,
+    /// Maximum positive sample amplitude in block.
     pub max: f32,
+    /// Crossover filter RGB color.
     #[serde(default)]
     pub rgb: [u8; 3],
 }
 
+/// Comprehensive audio analysis data containing raw PCM samples, peak pyramids,
+/// spectrogram image, ColorChord note ribbon, spectral colors, and transient onset points.
 #[derive(Debug, Clone)]
 pub struct FullAudioAnalysis {
     pub channels: u16,
@@ -91,6 +130,7 @@ pub struct FullAudioAnalysis {
     pub is_spectrogram_ready: bool,
 }
 
+/// Incremental progress stages emitted during progressive background audio decoding.
 #[derive(Debug, Clone)]
 pub enum AudioAnalysisProgress {
     /// Stage 1: Waveform ready! PCM samples, peak pyramids, overview peaks, duration, metadata.
@@ -108,9 +148,9 @@ pub enum AudioAnalysisProgress {
         note_strip_info: Vec<ColorChordNoteInfo>,
         spectral_colors: Vec<[u8; 3]>,
     },
-    /// All processing stages complete
+    /// All processing stages complete.
     Complete,
-    /// An error occurred during audio processing
+    /// An error occurred during audio processing.
     Failed(String),
 }
 

@@ -1,25 +1,44 @@
+//! Natural and structured timestamp parsing, relative time calculation, and epoch conversion.
+//!
+//! Identifies ISO 8601 strings, UNIX epoch timestamps (seconds, ms, µs, ns), numeric dates
+//! (e.g. `MM/DD/YYYY`, `YYYY-MM-DD`), textual dates (e.g. `May 2nd, 2025`), and time-of-day strings.
+
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
 
+/// Granularity of the recognized timestamp expression.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimePrecision {
+    /// Date only (e.g. `2025-05-02`, `May 2nd`).
     Day,
+    /// Hour-level precision (e.g. `1pm`).
     Hour,
+    /// Minute-level precision (e.g. `1:30 pm`, `13:30`).
     Minute,
+    /// Second-level precision (e.g. `1:30:45 pm`, epoch seconds/ms, ISO8601).
     Second,
 }
 
+/// Enriched timestamp summary with UTC, local human-readable, relative time, and epoch representations.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TimestampPreview {
+    /// Original raw text matched.
     pub original: String,
+    /// Canonical ISO 8601 / RFC 3339 UTC representation.
     pub utc_iso: String,
+    /// Local time formatted for human display.
     pub human_readable: String,
+    /// Relative offset from present moment (e.g. `+45D`, `-1H`, `-00:01:10`).
     pub relative: String,
+    /// UNIX epoch timestamp in seconds.
     pub epoch_sec: i64,
+    /// Day of year and week number information.
     pub day_info: String,
+    /// Inferred timestamp precision.
     pub precision: TimePrecision,
 }
 
 impl TimestampPreview {
+    /// Formats the timestamp metadata into display lines with emoji icons.
     pub fn summary_lines(&self) -> Vec<String> {
         vec![
             format!("📅 {}", self.human_readable),
@@ -101,6 +120,7 @@ pub fn format_relative_time_from(
     }
 }
 
+/// Converts a `NaiveDateTime` to local system timezone handling ambiguity.
 fn local_from_naive(naive: &NaiveDateTime) -> Option<DateTime<Local>> {
     match Local.from_local_datetime(naive) {
         chrono::LocalResult::Single(dt) => Some(dt),
@@ -109,6 +129,7 @@ fn local_from_naive(naive: &NaiveDateTime) -> Option<DateTime<Local>> {
     }
 }
 
+/// Matches full or abbreviated month names to 1-based month index (1..=12).
 fn parse_month_name(s: &str) -> Option<u32> {
     match s.to_ascii_lowercase().as_str() {
         "january" | "jan" => Some(1),
@@ -127,6 +148,7 @@ fn parse_month_name(s: &str) -> Option<u32> {
     }
 }
 
+/// Parses day number with optional ordinal suffix (e.g. "2nd", "25th").
 fn parse_day_number(s: &str) -> Option<u32> {
     let lower = s.to_ascii_lowercase();
     let clean = if lower.ends_with("st") || lower.ends_with("nd") || lower.ends_with("rd") || lower.ends_with("th") {
@@ -145,6 +167,7 @@ fn parse_day_number(s: &str) -> Option<u32> {
     }
 }
 
+/// Parses 2-digit or 4-digit year string.
 fn parse_year(s: &str) -> Option<i32> {
     let clean = s.trim_matches(|c: char| !c.is_ascii_digit());
     let y: i32 = clean.parse().ok()?;
@@ -352,6 +375,7 @@ fn parse_textual_date(input: &str) -> Option<(DateTime<Utc>, TimePrecision)> {
     Some((local_dt.with_timezone(&Utc), TimePrecision::Day))
 }
 
+/// Identifies and parses timestamps in various epoch, ISO, and natural date/time formats.
 pub fn detect_timestamp(text: &str) -> Option<TimestampPreview> {
     let trimmed = text.trim();
     if trimmed.is_empty() || trimmed.len() > 60 || trimmed.lines().count() > 1 {

@@ -1,5 +1,10 @@
+//! ANSI escape sequence parser and styled egui text layout converter.
+//!
+//! Converts terminal color codes, bold, italic, and underline markers into styled [`egui::text::LayoutJob`]s.
+
 use eframe::egui::{self, Color32, FontId, Stroke};
 
+/// Converts raw ANSI terminal escape sequences into a styled [`egui::text::LayoutJob`].
 pub fn ansi_to_layout_job(ansi_text: &str, font_size: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     job.wrap = egui::text::TextWrapping::no_max_width();

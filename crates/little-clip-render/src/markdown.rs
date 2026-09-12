@@ -13,29 +13,47 @@
 //! - Inline code (`code`)
 //! - Links ([label](url))
 
+/// A styled inline segment within a Markdown line.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MarkdownSpan {
+    /// Plain unformatted text.
     Text(String),
+    /// Bold text (`**text**` or `__text__`).
     Bold(String),
+    /// Italic text (`*text*` or `_text_`).
     Italic(String),
+    /// Bold and italic text (`***text***`).
     BoldItalic(String),
+    /// Inline code span (`` `code` ``).
     Code(String),
+    /// Hyperlink with label and URL (`[label](url)`).
     Link { label: String, url: String },
 }
 
+/// A parsed line of Markdown content for ambient preview rendering.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MarkdownLine {
+    /// Section heading with level 1..=3.
     Heading { level: usize, text: String, spans: Vec<MarkdownSpan> },
+    /// Bulleted list item with indentation level.
     Bullet { indent: usize, spans: Vec<MarkdownSpan> },
+    /// Numbered list item with number prefix.
     Numbered { number: String, spans: Vec<MarkdownSpan> },
+    /// Blockquote line.
     Quote { spans: Vec<MarkdownSpan> },
+    /// Horizontal divider rule (`---`, `***`, `___`).
     Rule,
+    /// Code fence boundary with optional language tag.
     CodeFence { language: String },
+    /// Raw unparsed line within a code block.
     CodeLine { line: String },
+    /// Standard text paragraph line.
     Paragraph { spans: Vec<MarkdownSpan> },
+    /// Blank line between blocks.
     Empty,
 }
 
+/// Parses raw Markdown text into a sequence of [`MarkdownLine`] blocks.
 pub fn parse_markdown(input: &str) -> Vec<MarkdownLine> {
     let mut lines = Vec::new();
     let mut in_code_fence = false;
@@ -147,6 +165,7 @@ pub fn parse_markdown(input: &str) -> Vec<MarkdownLine> {
     lines
 }
 
+/// Parses inline formatting spans (bold, italic, code, links) within a line of text.
 pub fn parse_markdown_spans(text: &str) -> Vec<MarkdownSpan> {
     let mut spans = Vec::new();
     let chars: Vec<char> = text.chars().collect();

@@ -1,3 +1,9 @@
+//! Graph topological evaluation and DAG execution engine.
+//!
+//! Performs cycle detection via Kahn's topological sort algorithm, dispatches nodes in
+//! topological order, handles inter-process communication for CLI tools (FFmpeg, ImageMagick, jq, Python),
+//! manages prompt inputs, and collects output payloads for slot state commitment or file saving.
+
 use super::types::{NodeGraph, NodeInstance, NodeKind, PortValue};
 use base64::Engine;
 use little_clip_core::item::{ClipItem, ClipPayload};
@@ -9,37 +15,51 @@ use std::process::{Command, Stdio};
 use thiserror::Error;
 use uuid::Uuid;
 
-
+/// Errors that can occur during graph compilation or node execution.
 #[derive(Debug, Error)]
 pub enum PipelineError {
+    /// Graph contains a directed dependency cycle.
     #[error("Graph contains a cycle")]
     CycleDetected,
+    /// A node required an input on a pin that was not connected or produced.
     #[error("Missing required input: {0}")]
     MissingInput(String),
+    /// Subprocess or operation failed within a specific node.
     #[error("Node {0} execution failed: {1}")]
     NodeFailed(String, String),
+    /// Underlying filesystem I/O error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
 
+/// Consolidated outputs and side-effects produced by a pipeline graph execution.
 #[derive(Debug, Clone, Default)]
 pub struct PipelineExecutionResult {
+    /// Resulting item to assign to Left Hand if a `SetLeftHand` or `PasteToApp` node fired.
     pub left_hand_item: Option<ClipItem>,
+    /// Resulting item to assign to Right Hand if a `SetRightHand` node fired.
     pub right_hand_item: Option<ClipItem>,
+    /// Paths to files saved to disk during execution.
     pub saved_files: Vec<PathBuf>,
+    /// True if the output item should be simulated pasted into the active application.
     pub should_paste: bool,
+    /// Per-node intermediate output summary previews.
     pub node_previews: HashMap<Uuid, String>,
 }
 
+/// Evaluator that topologically executes a `NodeGraph` against current slot contents.
 pub struct PipelineExecutor<'a> {
     graph: &'a NodeGraph,
     slot_mgr: &'a SlotManager,
     temp_dir: PathBuf,
+    /// Node-specific prompt overrides mapped by node UUID.
     pub prompt_overrides: HashMap<Uuid, String>,
+    /// Single prompt override applied to the first interactive prompt node.
     pub single_prompt_override: Option<String>,
 }
 
 impl<'a> PipelineExecutor<'a> {
+    /// Constructs a new `PipelineExecutor` with an isolated temporary working directory.
     pub fn new(graph: &'a NodeGraph, slot_mgr: &'a SlotManager) -> Self {
         let run_id = Uuid::new_v4();
         let temp_dir = std::env::temp_dir()
@@ -56,16 +76,19 @@ impl<'a> PipelineExecutor<'a> {
         }
     }
 
+    /// Sets node-specific text prompt overrides.
     pub fn with_prompts(mut self, prompts: HashMap<Uuid, String>) -> Self {
         self.prompt_overrides = prompts;
         self
     }
 
+    /// Sets a single prompt override applied to the first interactive prompt node.
     pub fn with_single_prompt(mut self, prompt: Option<String>) -> Self {
         self.single_prompt_override = prompt;
         self
     }
 
+    /// Topologically sorts the graph nodes and executes all operations in dependency order.
     pub fn execute(&self) -> Result<PipelineExecutionResult, PipelineError> {
         let ordered_nodes = self.topological_sort()?;
         let mut outputs: HashMap<(Uuid, String), PortValue> = HashMap::new();

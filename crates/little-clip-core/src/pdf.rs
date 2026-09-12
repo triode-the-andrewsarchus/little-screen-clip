@@ -1,14 +1,25 @@
+//! PDF inspection, preview rendering via `pdftoppm`, page deletion, and rotation.
+//!
+//! Wraps poppler utilities (`pdfinfo`, `pdftoppm`, `pdfseparate`, `pdfunite`) and `magick`
+//! for manipulation of multi-page PDF documents.
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Metadata summary extracted from a PDF document.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PdfInfo {
+    /// Total number of pages.
     pub page_count: usize,
+    /// Document title if present in metadata.
     pub title: Option<String>,
+    /// Document author if present in metadata.
     pub author: Option<String>,
+    /// Page size description string (e.g. `"595 x 842 pts (A4)"`).
     pub page_size: Option<String>,
 }
 
+/// Returns `true` if the path has a `.pdf` extension (case-insensitive).
 pub fn is_pdf_path(p: &Path) -> bool {
     p.extension()
         .and_then(|e| e.to_str())
@@ -16,6 +27,7 @@ pub fn is_pdf_path(p: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Runs `pdfinfo` on a file and parses its page count and metadata tags.
 pub fn get_pdf_info(path: &Path) -> Result<PdfInfo, String> {
     let output = Command::new("pdfinfo")
         .arg(path)

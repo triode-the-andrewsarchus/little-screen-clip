@@ -1,7 +1,13 @@
+//! 3D STL mesh inspection and orbital viewport workbench view.
+//!
+//! Renders 3D triangle meshes using software projection, painter's algorithm depth sorting,
+//! directional shading, wireframe mode, and auto-rotation.
+
 use eframe::egui::{self, Color32, Pos2, Rounding, Stroke, Vec2};
 use little_clip_ops::{StlMesh, Vec3};
 use std::path::PathBuf;
 
+/// Interactive 3D orbital viewer state for STL meshes.
 pub struct StlViewerState {
     #[allow(dead_code)]
     pub path: Option<PathBuf>,
@@ -17,6 +23,7 @@ pub struct StlViewerState {
 }
 
 impl StlViewerState {
+    /// Loads an STL mesh from disk into orbital viewer state.
     pub fn from_file(path: PathBuf) -> Result<Self, String> {
         let mesh = StlMesh::parse_file(&path)?;
         let title = path

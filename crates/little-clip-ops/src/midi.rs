@@ -1,20 +1,35 @@
+//! MIDI file parsing, note event extraction, and software synthesis.
+//!
+//! Parses Standard MIDI Files (`.mid`), extracts polyphonic note sequences with timing,
+//! pitch, velocity, and program instrumentation, and provides a built-in multi-timbral
+//! software synthesizer generating 44.1kHz 16-bit PCM WAV audio.
+
 use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// An individual parsed MIDI note event.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MidiNote {
+    /// Zero-based track index where the note was defined.
     pub track: usize,
+    /// MIDI channel (0..15; channel 9 is GM percussion).
     pub channel: u8,
+    /// General MIDI program / instrument patch (0..127).
     #[serde(default)]
     pub program: u8,
-    pub key: u8,          // 0..127 (60 is C4)
-    pub velocity: u8,     // 1..127
+    /// MIDI note key number (0..127; 60 = Middle C / C4).
+    pub key: u8,
+    /// Note strike velocity (1..127).
+    pub velocity: u8,
+    /// Absolute start timestamp in seconds.
     pub start_sec: f32,
+    /// Note duration in seconds.
     pub duration_sec: f32,
 }
 
 impl MidiNote {
+    /// Returns the pitch class name without octave (e.g. "C", "F#").
     pub fn note_name(&self) -> &'static str {
         const NOTE_NAMES: [&str; 12] = [
             "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
@@ -22,33 +37,47 @@ impl MidiNote {
         NOTE_NAMES[(self.key % 12) as usize]
     }
 
+    /// Returns the scientific octave number (e.g. 4 for Middle C).
     pub fn octave(&self) -> i32 {
         (self.key as i32 / 12) - 1
     }
 
+    /// Returns the full scientific note name with octave (e.g. "C4", "A#3").
     pub fn full_name(&self) -> String {
         format!("{}{}", self.note_name(), self.octave())
     }
 
+    /// Computes the fundamental frequency in Hertz (based on A4 = 440 Hz equal temperament).
     pub fn frequency(&self) -> f32 {
         440.0 * 2.0_f32.powf((self.key as f32 - 69.0) / 12.0)
     }
 }
 
+/// Parsed MIDI score containing metadata, track names, and note sequences.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MidiData {
+    /// Score title or filename.
     pub title: String,
+    /// Total number of tracks.
     pub track_count: usize,
+    /// Names of individual tracks if declared in MIDI meta events.
     #[serde(default)]
     pub track_names: Vec<String>,
+    /// Total number of note events across all tracks.
     pub total_notes: usize,
+    /// Estimated total duration of the score in seconds.
     pub duration_sec: f32,
+    /// Initial tempo in beats per minute (BPM).
     pub bpm: f32,
+    /// Lowest MIDI note key present in the score.
     pub min_key: u8,
+    /// Highest MIDI note key present in the score.
     pub max_key: u8,
+    /// Chronologically ordered list of all parsed notes.
     pub notes: Vec<MidiNote>,
 }
 
+/// Internal instrument class used for software sound synthesis.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum InstrumentType {
     Drums,
@@ -61,6 +90,7 @@ enum InstrumentType {
 }
 
 impl MidiData {
+    /// Reads and parses a MIDI file from disk.
     pub fn parse_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
         let bytes = std::fs::read(path.as_ref())
             .map_err(|e| format!("Failed to read MIDI file: {}", e))?;
@@ -72,6 +102,7 @@ impl MidiData {
         Self::parse_bytes(&bytes, title)
     }
 
+    /// Parses raw Standard MIDI File (`.mid`) byte payload.
     pub fn parse_bytes(bytes: &[u8], default_title: String) -> Result<Self, String> {
         let smf = Smf::parse(bytes).map_err(|e| format!("Failed to parse MIDI: {}", e))?;
 
@@ -233,6 +264,7 @@ impl MidiData {
         })
     }
 
+    /// Heuristically classifies note instrument type based on track channel, program patch, and track name.
     fn resolve_instrument(&self, note: &MidiNote) -> InstrumentType {
         // Channel 9 is standard General MIDI Percussion (0-indexed)
         if note.channel == 9 {

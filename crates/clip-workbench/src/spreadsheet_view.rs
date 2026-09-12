@@ -1,7 +1,12 @@
+//! 2D grid spreadsheet inspection workbench view.
+//!
+//! Renders multi-sheet tabs, column auto-sizing, cell search filtering, and TSV clipboard exporting.
+
 use eframe::egui::{self, Color32, Rounding, Stroke, Vec2};
 use little_clip_ops::spreadsheet::{SpreadsheetData, SpreadsheetSheet};
 use std::path::PathBuf;
 
+/// Interactive UI state for multi-sheet spreadsheet data tables and search filters.
 pub struct SpreadsheetViewerState {
     pub title: String,
     #[allow(dead_code)]
@@ -14,6 +19,7 @@ pub struct SpreadsheetViewerState {
 }
 
 impl SpreadsheetViewerState {
+    /// Creates a new spreadsheet viewer state from parsed spreadsheet data.
     pub fn new(data: SpreadsheetData, path: Option<PathBuf>) -> Self {
         let title = data.title.clone();
         Self {

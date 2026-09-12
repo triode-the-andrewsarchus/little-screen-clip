@@ -1,21 +1,36 @@
+//! Binary diffing and alignment engine.
+//!
+//! Provides Myers-based aligned byte-level diffing (similar to `biodiff`), raw byte diffing,
+//! diff block classification (mismatch, deletion, insertion, replacement), statistics calculation,
+//! and hex/ASCII search capabilities across diff rows.
+
 use little_clip_core::{ClipItem, ClipPayload, SlotId, SlotManager};
 use std::path::Path;
 
+/// Indicates the comparison classification for an aligned byte cell or diff block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffKind {
+    /// Bytes match on both left and right sides.
     Match,
+    /// Bytes differ between left and right sides.
     Mismatch,
+    /// Byte exists only on the left side (deletion in right).
     LeftOnly,
+    /// Byte exists only on the right side (insertion in right).
     RightOnly,
 }
 
+/// Comparison alignment strategy for binary diffing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryDiffMode {
+    /// Aligned diffing using Myers diff algorithm on byte slices.
     Aligned,
+    /// Simple positional offset matching without alignment gap insertion.
     Raw,
 }
 
 impl BinaryDiffMode {
+    /// Returns a human-friendly display label for the mode.
     pub fn label(&self) -> &'static str {
         match self {
             BinaryDiffMode::Aligned => "Aligned (Biodiff)",
@@ -23,6 +38,7 @@ impl BinaryDiffMode {
         }
     }
 
+    /// Toggles between aligned and raw diff modes.
     pub fn toggled(&self) -> Self {
         match self {
             BinaryDiffMode::Aligned => BinaryDiffMode::Raw,
@@ -31,57 +47,96 @@ impl BinaryDiffMode {
     }
 }
 
+/// A single byte cell within an aligned or raw diff stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AlignedCell {
+    /// The byte value if present in this stream position, or `None` if padded/gap.
     pub byte_val: Option<u8>,
+    /// The original file byte offset if present.
     pub offset: Option<usize>,
+    /// The diff classification for this cell.
     pub kind: DiffKind,
 }
 
+/// A single row of side-by-side aligned byte cells.
 #[derive(Debug, Clone)]
 pub struct BinaryDiffRow {
+    /// Zero-based row index in the rendered diff.
     pub row_index: usize,
+    /// Starting byte offset for the left stream in this row.
     pub left_offset: Option<usize>,
+    /// List of cells on the left side for this row (length matches `bytes_per_row`).
     pub left_cells: Vec<AlignedCell>,
+    /// Starting byte offset for the right stream in this row.
     pub right_offset: Option<usize>,
+    /// List of cells on the right side for this row.
     pub right_cells: Vec<AlignedCell>,
+    /// True if any cell in this row has a difference.
     pub has_diff: bool,
+    /// Single-character visual glyph summarizing the row state (e.g., `│`, `≠`, `+`, `-`, `~`).
     pub row_glyph: &'static str,
 }
 
+/// Aggregate statistics for a binary diff comparison.
 #[derive(Debug, Clone, Default)]
 pub struct BinaryDiffStats {
+    /// Total bytes in the left stream.
     pub left_total_bytes: usize,
+    /// Total bytes in the right stream.
     pub right_total_bytes: usize,
+    /// Number of matching bytes.
     pub match_count: usize,
+    /// Number of mismatched/substituted bytes.
     pub mismatch_count: usize,
+    /// Number of bytes present only on the left side.
     pub left_only_count: usize,
+    /// Number of bytes present only on the right side.
     pub right_only_count: usize,
+    /// Calculated percentage similarity (0.0 to 100.0).
     pub similarity_pct: f32,
 }
 
+/// A contiguous block of differences across one or more rows.
 #[derive(Debug, Clone)]
 pub struct BinaryDiffBlock {
-    pub id: usize,                  // 1-indexed (1, 2, 3...)
+    /// 1-indexed block identifier.
+    pub id: usize,
+    /// Starting row index (inclusive).
     pub start_row: usize,
+    /// Ending row index (inclusive).
     pub end_row: usize,
+    /// Left stream byte offset at the start of the block.
     pub left_offset: Option<usize>,
+    /// Right stream byte offset at the start of the block.
     pub right_offset: Option<usize>,
+    /// Total number of differing bytes in this block.
     pub byte_count: usize,
-    pub kind_label: String,         // "Mismatch", "Deletion", "Insertion", "Replacement"
+    /// Human-readable description of change kind ("Mismatch", "Deletion", "Insertion", "Replacement").
+    pub kind_label: String,
+    /// Primary diff kind.
     pub kind: DiffKind,
+    /// Compact text or hex preview summary of the change.
     pub preview: String,
 }
 
+/// Complete binary comparison result including rows, summary stats, and diff blocks.
 #[derive(Debug, Clone)]
 pub struct BinaryDiffResult {
+    /// Label for the left side item.
     pub left_label: String,
+    /// Label for the right side item.
     pub right_label: String,
+    /// Number of bytes displayed per row column.
     pub bytes_per_row: usize,
+    /// Diff alignment mode used.
     pub mode: BinaryDiffMode,
+    /// All computed diff rows.
     pub rows: Vec<BinaryDiffRow>,
+    /// Summary metrics.
     pub stats: BinaryDiffStats,
+    /// List of row indices containing at least one difference.
     pub diff_row_indices: Vec<usize>,
+    /// Clustered contiguous diff blocks.
     pub diff_blocks: Vec<BinaryDiffBlock>,
 }
 
@@ -406,6 +461,7 @@ pub fn compute_binary_diff(
     }
 }
 
+/// Groups contiguous diff rows into discrete diff blocks for high-level navigation.
 pub fn extract_diff_blocks(rows: &[BinaryDiffRow]) -> Vec<BinaryDiffBlock> {
     let mut blocks = Vec::new();
     let mut current_start: Option<usize> = None;
@@ -430,6 +486,7 @@ pub fn extract_diff_blocks(rows: &[BinaryDiffRow]) -> Vec<BinaryDiffBlock> {
     blocks
 }
 
+/// Constructs a single `BinaryDiffBlock` from a span of rows.
 fn build_diff_block(
     id: usize,
     start_row: usize,
@@ -520,6 +577,7 @@ fn build_diff_block(
     }
 }
 
+/// Computes Myers-aligned cell streams for left and right byte slices.
 fn compute_aligned_stream(
     left_bytes: &[u8],
     right_bytes: &[u8],
@@ -625,6 +683,7 @@ fn compute_aligned_stream(
     (flat_left, flat_right)
 }
 
+/// Computes unaligned cell streams for left and right byte slices at identical offsets.
 fn compute_raw_stream(
     left_bytes: &[u8],
     right_bytes: &[u8],
