@@ -851,7 +851,7 @@ pub fn freq_to_note(freq: f32) -> (&'static str, i32, f32) {
 /// YIN fundamental frequency pitch detector (De Cheveigné and Kawahara).
 /// Accurately detects pitches from C1 (~32.7 Hz) up to C8 (>4186 Hz) with sub-cent accuracy.
 pub fn detect_pitch_yin(samples: &[f32], sample_rate: f32) -> Option<(f32, f32)> {
-    let min_freq = 25.0f32; // Allow down to C1 (32.7 Hz) and below
+    let min_freq = 25.0f32; // Allow detecting down to 25 Hz so true fundamental is identified before thresholding
     let max_freq = 4200.0f32; // Up to C8
 
     let min_tau = (sample_rate / max_freq).floor() as usize;
@@ -1038,93 +1038,241 @@ pub fn detect_transients_with_sensitivity(samples: &[f32], sample_rate: f32, sen
     transients
 }
 
-/// Extracts all active notes (chords and single notes) from STFT frequency bins.
+/// Extracts all active notes (chords and single notes) from STFT frequency bins
+/// using ColorChord's BaseNoteFinder algorithms (24-bin chromatic octave,
+/// frequency slope amplification, circular neighbor smoothing, DecomposeHistogram
+/// sub-bin interpolation, and non-linear amplitude compression).
 pub fn detect_chord_from_fft(
     out_data: &[realfft::num_complex::Complex<f32>],
     sample_rate: f32,
     window_size: usize,
 ) -> Vec<SingleNoteInfo> {
+    const BINS_PER_OCTAVE: usize = 24;
+    const OCTAVE_FILTER_ITERATIONS: usize = 2;
+    const OCTAVE_FILTER_STRENGTH: f32 = 0.5;
+    const PEAK_COMPRESS_COEFF: f32 = 1.0;
+    const PEAK_COMPRESS_EXP: f32 = 0.5;
+    const MIN_NOTE_COMBINE_DIST: f32 = 0.5; // in 24-bin units (0.25 semitones / 25 cents)
+    const NOTE_OUTPUT_CHOP: f32 = 0.04;
+    const MIN_NOTE_CREATION_AMP: f32 = 0.02;
+
     let num_bins = out_data.len();
-    let mut chroma = [0.0f32; 12];
-    let mut chroma_octave_mag = [[0.0f32; 9]; 12];
-    let mut total_energy = 0.0f32;
+    let mut chroma = [0.0f32; BINS_PER_OCTAVE];
+    let mut chroma_octave_mag = [[0.0f32; 9]; BINS_PER_OCTAVE];
+    let mut total_note_energy = 0.0f32;
+    let mut total_full_energy = 0.0f32;
 
     for b in 1..num_bins {
         let freq = b as f32 * sample_rate / window_size as f32;
-        if freq < 25.0 || freq > 8000.0 {
-            continue;
-        }
         let mag = (out_data[b].re * out_data[b].re + out_data[b].im * out_data[b].im).sqrt();
         let energy = mag * mag;
-        total_energy += energy;
+        total_full_energy += energy;
 
+        if freq < 65.0 || freq > 8000.0 {
+            continue;
+        }
+        total_note_energy += energy;
+
+        // Apply DFTSlope frequency-dependent amplification to compensate for 1/f falloff
+        // and balance higher melody/harmony frequencies with low bass
+        let slope_gain = 1.0 + 0.12 * (freq / 100.0).ln_1p().max(0.0);
+        let weighted_mag = mag * slope_gain;
+
+        // Map frequency to ColorChord 24-bin chromatic octave (A4 = 69 = bin 0, yellow)
         let midi = 69.0 + 12.0 * (freq / 440.0).log2();
-        let note_float = midi.rem_euclid(12.0);
-        let n0 = (note_float.floor() as usize) % 12;
-        let n1 = (n0 + 1) % 12;
-        let frac = note_float - note_float.floor();
+        let bin_float = ((midi - 69.0) * 2.0).rem_euclid(BINS_PER_OCTAVE as f32);
+        let n0 = (bin_float.floor() as usize) % BINS_PER_OCTAVE;
+        let n1 = (n0 + 1) % BINS_PER_OCTAVE;
+        let frac = bin_float - bin_float.floor();
 
-        chroma[n0] += mag * (1.0 - frac);
-        chroma[n1] += mag * frac;
+        chroma[n0] += weighted_mag * (1.0 - frac);
+        chroma[n1] += weighted_mag * frac;
 
         let oct = ((midi / 12.0).floor() as i32 - 1).clamp(0, 8) as usize;
-        chroma_octave_mag[n0][oct] += mag * (1.0 - frac);
-        chroma_octave_mag[n1][oct] += mag * frac;
+        chroma_octave_mag[n0][oct] += weighted_mag * (1.0 - frac);
+        chroma_octave_mag[n1][oct] += weighted_mag * frac;
     }
 
     let max_chroma = chroma.iter().cloned().fold(0.0f32, f32::max);
-    if max_chroma < 1e-4 || total_energy < 1e-5 {
+    if max_chroma < 0.1 || total_note_energy < 1e-4 || (total_full_energy > 1e-4 && total_note_energy / total_full_energy < 0.25) {
         return Vec::new();
     }
 
-    let min_thresh = max_chroma * 0.28;
-    let mut detected = Vec::new();
-
-    for c in 0..12 {
-        let left = chroma[(c + 11) % 12];
-        let val = chroma[c];
-        let right = chroma[(c + 1) % 12];
-
-        if val > left && val >= right && val >= min_thresh {
-            let denom = 2.0 * (2.0 * val - left - right);
-            let delta = if denom.abs() > 1e-6 {
-                ((left - right) / denom).clamp(-0.5, 0.5)
-            } else {
-                0.0
-            };
-            let fine_note = (c as f32 + delta).rem_euclid(12.0);
-            let note_id = (fine_note - 9.0).rem_euclid(12.0) / 12.0;
-
-            let mut best_oct = 4;
-            let mut best_oct_mag = 0.0f32;
-            for oct in 1..=7 {
-                if chroma_octave_mag[c][oct] > best_oct_mag {
-                    best_oct_mag = chroma_octave_mag[c][oct];
-                    best_oct = oct;
-                }
-            }
-
-            let amp = (val / max_chroma).clamp(0.3, 1.0);
-            let rgb_f = rustchord::cc_to_rgb(note_id, 1.0, amp);
-            let rgb = [
-                (rgb_f[0] * 255.0).clamp(0.0, 255.0) as u8,
-                (rgb_f[1] * 255.0).clamp(0.0, 255.0) as u8,
-                (rgb_f[2] * 255.0).clamp(0.0, 255.0) as u8,
-            ];
-
-            let note_name = format!("{}{}", CHROMATIC_NOTE_NAMES[c], best_oct);
-            let approx_freq = 440.0 * 2.0f32.powf(((best_oct as i32 + 1) * 12 + c as i32 - 69) as f32 / 12.0);
-
-            detected.push(SingleNoteInfo {
-                note_name,
-                frequency_hz: approx_freq,
-                amplitude: amp,
-                rgb,
-            });
+    // ColorChord Step 1: Neighbor filtering (circular smoothing across the 24 folded bins)
+    let mut filtered_chroma = chroma;
+    for _ in 0..OCTAVE_FILTER_ITERATIONS {
+        let pre = filtered_chroma;
+        for c in 0..BINS_PER_OCTAVE {
+            let right = pre[(c + 1) % BINS_PER_OCTAVE];
+            let left = pre[(c + BINS_PER_OCTAVE - 1) % BINS_PER_OCTAVE];
+            filtered_chroma[c] = pre[c] * (1.0 - OCTAVE_FILTER_STRENGTH)
+                + 0.5 * (left + right) * OCTAVE_FILTER_STRENGTH;
         }
     }
 
-    detected.sort_by(|a, b| b.amplitude.partial_cmp(&a.amplitude).unwrap());
+    // ColorChord Step 2: Peak detection with sub-bin interpolation (DecomposeHistogram in Turbo mode)
+    struct RawDist {
+        mean: f32,
+        amplitude: f32,
+    }
+    let mut dists = Vec::with_capacity(12);
+
+    for c in 0..BINS_PER_OCTAVE {
+        let left = filtered_chroma[(c + BINS_PER_OCTAVE - 1) % BINS_PER_OCTAVE];
+        let here = filtered_chroma[c];
+        let right = filtered_chroma[(c + 1) % BINS_PER_OCTAVE];
+
+        if left >= here || right > here {
+            continue;
+        }
+        if left == here && right == here {
+            continue;
+        }
+
+        let total_adj_diff = (here - left) + (here - right);
+        if total_adj_diff <= 1e-9 {
+            continue;
+        }
+        let prop_diff_left = (here - left) / total_adj_diff;
+        let prop_diff_right = (here - right) / total_adj_diff;
+        let internal_offset = if prop_diff_left < prop_diff_right {
+            -(0.5 - prop_diff_left)
+        } else {
+            0.5 - prop_diff_right
+        };
+
+        let mean = (c as f32 + internal_offset).rem_euclid(BINS_PER_OCTAVE as f32);
+        dists.push(RawDist {
+            mean,
+            amplitude: here * 4.0,
+        });
+    }
+
+    if dists.is_empty() {
+        return Vec::new();
+    }
+
+    // ColorChord Step 3: Normalize and non-linearly compress peak amplitudes
+    let amp_sum: f32 = dists.iter().map(|d| d.amplitude).sum();
+    if amp_sum > 1e-6 {
+        let coeff = PEAK_COMPRESS_COEFF / (amp_sum * PEAK_COMPRESS_COEFF).powf(PEAK_COMPRESS_EXP);
+        for d in &mut dists {
+            d.amplitude *= coeff;
+        }
+    }
+    dists.sort_by(|a, b| b.amplitude.partial_cmp(&a.amplitude).unwrap_or(std::cmp::Ordering::Equal));
+
+    // ColorChord Step 4: Combine note peaks that are within MinNoteCombineDistance (0.5 bins)
+    fn circular_dist(a: f32, b: f32, length: f32) -> f32 {
+        let mut d = (a - b).abs() % length;
+        if d > length / 2.0 {
+            d = length - d;
+        }
+        d
+    }
+
+    fn circular_weighted_avg(pos_a: f32, weight_a: f32, pos_b: f32, weight_b: f32, length: f32) -> f32 {
+        let weight_sum = weight_a + weight_b;
+        if weight_sum <= 1e-9 {
+            return pos_a % length;
+        }
+        let mut a = pos_a;
+        let mut b = pos_b;
+        if (a - b).abs() > length / 2.0 {
+            if a < b {
+                a += length;
+            } else {
+                b += length;
+            }
+        }
+        let mid = (a * weight_a + b * weight_b) / weight_sum;
+        mid.rem_euclid(length)
+    }
+
+    let mut combined: Vec<RawDist> = Vec::new();
+    for d in dists {
+        if let Some(existing) = combined.iter_mut().find(|e| circular_dist(e.mean, d.mean, BINS_PER_OCTAVE as f32) < MIN_NOTE_COMBINE_DIST) {
+            existing.mean = circular_weighted_avg(existing.mean, existing.amplitude, d.mean, d.amplitude, BINS_PER_OCTAVE as f32);
+            existing.amplitude += d.amplitude;
+        } else {
+            combined.push(d);
+        }
+    }
+
+    // ColorChord Step 5: Output chop and thresholding
+    let mut detected = Vec::new();
+    for d in combined {
+        let final_amp = d.amplitude - NOTE_OUTPUT_CHOP;
+        if final_amp <= MIN_NOTE_CREATION_AMP {
+            continue;
+        }
+
+        let mean_pos = d.mean.rem_euclid(BINS_PER_OCTAVE as f32);
+        // In ColorChord: Mean = 0 is A (Yellow).
+        let fine_semitone = mean_pos / 2.0; // 0.0 is A, 1.0 is A#, etc.
+        let note_id = (mean_pos / BINS_PER_OCTAVE as f32).rem_euclid(1.0); // 0.0 is A (Yellow)
+
+        // Semitone index 0 is A -> MIDI class 9 (A).
+        let semitone_from_c = (fine_semitone.round() as i32 + 9).rem_euclid(12);
+
+        // Find predominant octave from FFT energy across octaves 2..7 for this note class
+        let mut best_oct = 4;
+        let mut best_oct_mag = 0.0f32;
+        for oct_idx in 2..=7 {
+            let f = 440.0 * 2.0f32.powf(((oct_idx + 1) * 12 + semitone_from_c - 69) as f32 / 12.0);
+            if f < 65.0 {
+                continue;
+            }
+            let b_float = f * window_size as f32 / sample_rate;
+            let b0 = (b_float.floor() as usize).min(num_bins - 1);
+            let b1 = (b0 + 1).min(num_bins - 1);
+            let frac = b_float - b_float.floor();
+            let mag0 = (out_data[b0].re * out_data[b0].re + out_data[b0].im * out_data[b0].im).sqrt();
+            let mag1 = (out_data[b1].re * out_data[b1].re + out_data[b1].im * out_data[b1].im).sqrt();
+            let interp_mag = mag0 * (1.0 - frac) + mag1 * frac;
+            if interp_mag > best_oct_mag {
+                best_oct_mag = interp_mag;
+                best_oct = oct_idx;
+            }
+        }
+
+        // Base MIDI note for this note class in best_oct
+        let base_midi = (best_oct + 1) * 12 + semitone_from_c;
+        // Nominal ColorChord bin for this MIDI note
+        let nominal_bin = (((base_midi - 69) as f32) * 2.0).rem_euclid(BINS_PER_OCTAVE as f32);
+        // Sub-bin deviation from nominal bin (-0.5 .. +0.5 bins = -25 .. +25 cents)
+        let mut bin_diff = (mean_pos - nominal_bin).rem_euclid(BINS_PER_OCTAVE as f32);
+        if bin_diff > (BINS_PER_OCTAVE as f32 / 2.0) {
+            bin_diff -= BINS_PER_OCTAVE as f32;
+        }
+        let full_midi = base_midi as f32 + bin_diff * 0.5;
+        let approx_freq = 440.0 * 2.0f32.powf((full_midi - 69.0) / 12.0);
+
+        if approx_freq < 65.0 {
+            continue;
+        }
+
+        let (note_class, octave_num, _) = freq_to_note(approx_freq);
+        let note_name = format!("{}{}", note_class, octave_num);
+
+        let amp = final_amp.clamp(0.25, 1.0);
+        let rgb_f = rustchord::cc_to_rgb(note_id, 1.0, amp);
+        let rgb = [
+            (rgb_f[0] * 255.0).clamp(0.0, 255.0) as u8,
+            (rgb_f[1] * 255.0).clamp(0.0, 255.0) as u8,
+            (rgb_f[2] * 255.0).clamp(0.0, 255.0) as u8,
+        ];
+
+        detected.push(SingleNoteInfo {
+            note_name,
+            frequency_hz: approx_freq,
+            amplitude: amp,
+            rgb,
+        });
+    }
+
+    detected.sort_by(|a, b| b.amplitude.partial_cmp(&a.amplitude).unwrap_or(std::cmp::Ordering::Equal));
+    detected.truncate(6);
     detected
 }
 
@@ -1496,7 +1644,10 @@ where
             // Sub-cent pitch refinement via fast early-exit YIN
             if rms > 0.005 && win_slice.len() >= 256 {
                 if let Some((detected_freq, clarity)) = detect_pitch_yin(win_slice, sample_rate as f32) {
-                    if clarity >= 0.35 && detected_freq >= 25.0 && detected_freq <= 4200.0 {
+                    if detected_freq < 65.0 && clarity >= 0.35 {
+                        // Fundamental is below 65 Hz (sub-bass / rumble / ~40Hz). Ignore as non-musical.
+                        chord_notes.clear();
+                    } else if clarity >= 0.35 && detected_freq >= 65.0 && detected_freq <= 4200.0 {
                         let (note_class, octave, midi) = freq_to_note(detected_freq);
                         let note_name = format!("{}{}", note_class, octave);
                         let note_id = (midi - 69.0).rem_euclid(12.0) / 12.0;
@@ -1523,7 +1674,7 @@ where
                                 if pos > 0 {
                                     chord_notes.swap(0, pos);
                                 }
-                            } else {
+                            } else if clarity >= 0.5 {
                                 chord_notes.insert(0, yin_note);
                             }
                         }
@@ -2186,6 +2337,66 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_chord_from_fft_chords() {
+        let sample_rate = 44100.0f32;
+        let window_size = 2048;
+        let mut planner = RealFftPlanner::<f32>::new();
+        let r2c = planner.plan_fft_forward(window_size);
+
+        // 1. Test C Major chord: C4 (261.63 Hz) + E4 (329.63 Hz) + G4 (392.00 Hz)
+        let c4 = 261.63f32;
+        let e4 = 329.63f32;
+        let g4 = 392.00f32;
+        let mut in_data = r2c.make_input_vec();
+        let mut out_data = r2c.make_output_vec();
+
+        for i in 0..window_size {
+            let t = i as f32 / sample_rate;
+            let w = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (window_size - 1) as f32).cos());
+            let s = ((t * c4 * 2.0 * std::f32::consts::PI).sin()
+                + (t * e4 * 2.0 * std::f32::consts::PI).sin()
+                + (t * g4 * 2.0 * std::f32::consts::PI).sin())
+                * 0.33;
+            in_data[i] = s * w;
+        }
+        r2c.process(&mut in_data, &mut out_data).unwrap();
+
+        let notes = detect_chord_from_fft(&out_data, sample_rate, window_size);
+        println!("C Major detected notes: {:?}", notes);
+        assert!(notes.len() >= 3, "Expected at least 3 chord components, got {}", notes.len());
+
+        let has_c = notes.iter().any(|n| n.note_name.starts_with('C') && (n.frequency_hz - c4).abs() / c4 < 0.04);
+        let has_e = notes.iter().any(|n| n.note_name.starts_with('E') && (n.frequency_hz - e4).abs() / e4 < 0.04);
+        let has_g = notes.iter().any(|n| n.note_name.starts_with('G') && (n.frequency_hz - g4).abs() / g4 < 0.04);
+        assert!(has_c, "C Major missing C note component");
+        assert!(has_e, "C Major missing E note component");
+        assert!(has_g, "C Major missing G note component");
+
+        // 2. Test A Minor chord: A3 (220.00 Hz) + C4 (261.63 Hz) + E4 (329.63 Hz)
+        let a3 = 220.00f32;
+        for i in 0..window_size {
+            let t = i as f32 / sample_rate;
+            let w = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (window_size - 1) as f32).cos());
+            let s = ((t * a3 * 2.0 * std::f32::consts::PI).sin()
+                + (t * c4 * 2.0 * std::f32::consts::PI).sin()
+                + (t * e4 * 2.0 * std::f32::consts::PI).sin())
+                * 0.33;
+            in_data[i] = s * w;
+        }
+        r2c.process(&mut in_data, &mut out_data).unwrap();
+
+        let aminor_notes = detect_chord_from_fft(&out_data, sample_rate, window_size);
+        println!("A Minor detected notes: {:?}", aminor_notes);
+        assert!(aminor_notes.len() >= 3, "Expected at least 3 chord components in A Minor");
+        let has_a = aminor_notes.iter().any(|n| n.note_name.starts_with('A') && (n.frequency_hz - a3).abs() / a3 < 0.04);
+        let has_am_c = aminor_notes.iter().any(|n| n.note_name.starts_with('C') && (n.frequency_hz - c4).abs() / c4 < 0.04);
+        let has_am_e = aminor_notes.iter().any(|n| n.note_name.starts_with('E') && (n.frequency_hz - e4).abs() / e4 < 0.04);
+        assert!(has_a, "A Minor missing A note component");
+        assert!(has_am_c, "A Minor missing C note component");
+        assert!(has_am_e, "A Minor missing E note component");
+    }
+
+    #[test]
     fn test_compute_full_audio_analysis() {
         let wav_path = generate_test_wav();
         let analysis = compute_full_audio_analysis(&wav_path, 150)
@@ -2357,10 +2568,16 @@ mod tests {
                 .min(analysis.note_strip_info.len().saturating_sub(1));
             let info = &analysis.note_strip_info[col_idx];
 
-            let freq_err_ratio = (info.frequency_hz - expected_freq).abs() / expected_freq;
-            let is_match = info.active && info.note_name == expected_name && freq_err_ratio < 0.05;
+            let is_match = if expected_freq < 65.0 {
+                // Frequencies below 65 Hz are ignored as non-musical sub-bass rumble
+                !info.active || info.note_name == "—"
+            } else {
+                let freq_err_ratio = (info.frequency_hz - expected_freq).abs() / expected_freq;
+                info.active && info.note_name == expected_name && freq_err_ratio < 0.05
+            };
 
             if !is_match {
+                let freq_err_ratio = (info.frequency_hz - expected_freq).abs() / expected_freq;
                 println!(
                     "MISMATCH: Note {} (MIDI {}, expected {} at {:.2} Hz) -> got active={}, name='{}', freq={:.2} Hz (err={:.1}%)",
                     note_idx, midi, expected_name, expected_freq, info.active, info.note_name, info.frequency_hz, freq_err_ratio * 100.0
