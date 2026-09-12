@@ -44,18 +44,18 @@ impl ImageToolMode {
     /// Human-readable toolbar label with icon.
     pub fn label(&self) -> &'static str {
         match self {
-            ImageToolMode::View => "🔍 View / Pan",
-            ImageToolMode::Crop => "✂ Crop",
-            ImageToolMode::Redact => "█ Redact",
-            ImageToolMode::PickColor => "💉 Pick Color",
-            ImageToolMode::Resize => "↔ Resize",
-            ImageToolMode::Transform => "🔄 Rotate & Flip",
-            ImageToolMode::Convert => "🔄 Convert",
-            ImageToolMode::Ocr => "📝 OCR",
-            ImageToolMode::Barcode => "▦ Barcode / QR",
+            ImageToolMode::View => "🔍 [V]iew",
+            ImageToolMode::Crop => "✂ [C]rop",
+            ImageToolMode::Transform => "🔄 [F]lip/Rotate",
+            ImageToolMode::Redact => "█ [X] Redact",
+            ImageToolMode::PickColor => "💉 [P]ick Color",
+            ImageToolMode::Resize => "↔ Re[S]ize",
+            ImageToolMode::Convert => "🔄 Conver[T]",
+            ImageToolMode::Ocr => "📝 [O]CR",
+            ImageToolMode::Barcode => "▦ [B]arcode",
             ImageToolMode::Palette => "🎨 Palette",
-            ImageToolMode::RemoveBg => "✨ Remove BG",
-            ImageToolMode::DepthMap => "🌊 Depth Map",
+            ImageToolMode::RemoveBg => "✨ [R]emove BG",
+            ImageToolMode::DepthMap => "🌊 [D]epth Map",
         }
     }
 }
@@ -2063,7 +2063,7 @@ impl ImagePreviewState {
                     self.delete_selected_redaction();
                 }
             }
-            if ui.input(|i| i.key_pressed(egui::Key::Num0) || i.key_pressed(egui::Key::F)) {
+            if ui.input(|i| i.key_pressed(egui::Key::Num0)) {
                 self.fit_to_view(ui.available_size());
             }
             if ui.input(|i| i.key_pressed(egui::Key::Num1)) {
@@ -2075,6 +2075,34 @@ impl ImagePreviewState {
             }
             if ui.input(|i| i.key_pressed(egui::Key::Minus)) {
                 self.zoom = (self.zoom / 1.25).clamp(0.05, 50.0);
+            }
+
+            // Unmodified single-key tool selection shortcuts
+            let no_modifiers = ui.input(|i| !i.modifiers.command && !i.modifiers.ctrl && !i.modifiers.alt && !i.modifiers.mac_cmd);
+            if no_modifiers {
+                if ui.input(|i| i.key_pressed(egui::Key::V)) {
+                    self.set_tool_mode(ImageToolMode::View);
+                } else if ui.input(|i| i.key_pressed(egui::Key::C)) {
+                    self.set_tool_mode(ImageToolMode::Crop);
+                } else if ui.input(|i| i.key_pressed(egui::Key::F)) {
+                    self.set_tool_mode(ImageToolMode::Transform);
+                } else if ui.input(|i| i.key_pressed(egui::Key::X)) {
+                    self.set_tool_mode(ImageToolMode::Redact);
+                } else if ui.input(|i| i.key_pressed(egui::Key::P)) {
+                    self.set_tool_mode(ImageToolMode::PickColor);
+                } else if ui.input(|i| i.key_pressed(egui::Key::S)) {
+                    self.set_tool_mode(ImageToolMode::Resize);
+                } else if ui.input(|i| i.key_pressed(egui::Key::T)) {
+                    self.set_tool_mode(ImageToolMode::Convert);
+                } else if ui.input(|i| i.key_pressed(egui::Key::O)) {
+                    self.set_tool_mode(ImageToolMode::Ocr);
+                } else if ui.input(|i| i.key_pressed(egui::Key::B)) {
+                    self.set_tool_mode(ImageToolMode::Barcode);
+                } else if ui.input(|i| i.key_pressed(egui::Key::R)) {
+                    self.set_tool_mode(ImageToolMode::RemoveBg);
+                } else if ui.input(|i| i.key_pressed(egui::Key::D)) {
+                    self.set_tool_mode(ImageToolMode::DepthMap);
+                }
             }
         }
 
@@ -2155,7 +2183,7 @@ impl ImagePreviewState {
                     self.render_barcode_toolbar(ui, ctx);
                 } else if self.active_mode == ImageToolMode::Palette {
                     ui.add_space(2.0);
-                    self.render_palette_toolbar(ui, ctx);
+                    self.render_pick_color_toolbar(ui, ctx);
                 } else if self.active_mode == ImageToolMode::RemoveBg {
                     ui.add_space(2.0);
                     self.render_remove_bg_toolbar(ui, ctx);
@@ -2324,6 +2352,49 @@ impl ImagePreviewState {
             });
     }
 
+    pub fn set_tool_mode(&mut self, mode: ImageToolMode) {
+        let target_mode = if mode == ImageToolMode::Palette {
+            ImageToolMode::PickColor
+        } else {
+            mode
+        };
+        if self.active_mode == target_mode {
+            return;
+        }
+        let prev_mode = self.active_mode;
+        self.active_mode = target_mode;
+        if prev_mode == ImageToolMode::Ocr && target_mode != ImageToolMode::Ocr && self.ocr_state.in_progress {
+            self.cancel_ocr();
+        }
+        match target_mode {
+            ImageToolMode::View
+            | ImageToolMode::Crop
+            | ImageToolMode::Transform
+            | ImageToolMode::Redact
+            | ImageToolMode::Ocr
+            | ImageToolMode::RemoveBg
+            | ImageToolMode::DepthMap => {}
+            ImageToolMode::PickColor | ImageToolMode::Palette => {
+                if !self.palette_state.is_extracted || self.palette_state.extracted_colors.is_empty() {
+                    self.run_palette_extraction();
+                }
+            }
+            ImageToolMode::Resize => {
+                self.resize_state.sync_from_image(&self.current_rgba);
+            }
+            ImageToolMode::Convert => {
+                if self.convert_state.converted_rgba.is_none() {
+                    self.update_conversion();
+                }
+            }
+            ImageToolMode::Barcode => {
+                if !self.barcode_state.has_scanned {
+                    self.run_barcode_scan();
+                }
+            }
+        }
+    }
+
     fn render_toolbar(&mut self, ui: &mut egui::Ui) {
         egui::Frame::none()
             .fill(Color32::from_rgb(18, 22, 32))
@@ -2342,13 +2413,12 @@ impl ImagePreviewState {
                         ImageToolMode::Convert,
                         ImageToolMode::Ocr,
                         ImageToolMode::Barcode,
-                        ImageToolMode::Palette,
                         ImageToolMode::RemoveBg,
                         ImageToolMode::DepthMap,
                     ];
 
                     for mode in modes {
-                        let is_active = self.active_mode == mode;
+                        let is_active = self.active_mode == mode || (mode == ImageToolMode::PickColor && self.active_mode == ImageToolMode::Palette);
                         let (bg, border, text_col) = if is_active {
                             (Color32::from_rgb(99, 102, 241), Color32::from_rgb(165, 180, 252), Color32::WHITE)
                         } else {
@@ -2362,41 +2432,8 @@ impl ImagePreviewState {
                         .stroke(Stroke::new(1.0, border))
                         .rounding(Rounding::same(4.0));
 
-                        let resp = ui.add(btn);
-                        if resp.clicked() {
-                            let prev_mode = self.active_mode;
-                            self.active_mode = mode;
-                            if prev_mode == ImageToolMode::Ocr && mode != ImageToolMode::Ocr && self.ocr_state.in_progress {
-                                self.cancel_ocr();
-                            }
-                            match mode {
-                                ImageToolMode::View
-                                | ImageToolMode::Crop
-                                | ImageToolMode::Transform
-                                | ImageToolMode::Redact
-                                | ImageToolMode::PickColor
-                                | ImageToolMode::Ocr
-                                | ImageToolMode::RemoveBg
-                                | ImageToolMode::DepthMap => {}
-                                ImageToolMode::Resize => {
-                                    self.resize_state.sync_from_image(&self.current_rgba);
-                                }
-                                ImageToolMode::Convert => {
-                                    if self.convert_state.converted_rgba.is_none() {
-                                        self.update_conversion();
-                                    }
-                                }
-                                ImageToolMode::Barcode => {
-                                    if !self.barcode_state.has_scanned {
-                                        self.run_barcode_scan();
-                                    }
-                                }
-                                ImageToolMode::Palette => {
-                                    if !self.palette_state.is_extracted || self.palette_state.extracted_colors.is_empty() {
-                                        self.run_palette_extraction();
-                                    }
-                                }
-                            }
+                        if ui.add(btn).clicked() {
+                            self.set_tool_mode(mode);
                         }
                     }
 
@@ -2824,6 +2861,75 @@ impl ImagePreviewState {
                             }
                         }
                     }
+
+                    // Integrated Dominant Palette
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+
+                    ui.label(
+                        egui::RichText::new("🎨 Dominant Palette:")
+                            .strong()
+                            .small()
+                            .color(Color32::from_rgb(244, 114, 182)),
+                    );
+
+                    // Re-extract button
+                    let re_btn = egui::Button::new(
+                        egui::RichText::new("↺ Refresh").small().color(Color32::from_rgb(203, 213, 225)),
+                    )
+                    .fill(Color32::from_rgb(30, 41, 59))
+                    .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
+                    .rounding(Rounding::same(4.0));
+                    if ui.add(re_btn).on_hover_text("Re-extract dominant color palette from image").clicked() {
+                        self.run_palette_extraction();
+                    }
+
+                    if !self.palette_state.extracted_colors.is_empty() {
+                        let csv_btn = egui::Button::new(
+                            egui::RichText::new("📋 CSV").small().color(Color32::from_rgb(203, 213, 225)),
+                        )
+                        .fill(Color32::from_rgb(30, 41, 59))
+                        .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
+                        .rounding(Rounding::same(4.0));
+                        if ui.add(csv_btn).on_hover_text("Copy all hex codes as CSV").clicked() {
+                            let csv = self.palette_state.extracted_colors.iter().map(|c| c.hex.as_str()).collect::<Vec<_>>().join(", ");
+                            ctx.output_mut(|o| o.copied_text = csv.clone());
+                            let csv_for_cmd = csv.clone();
+                            std::thread::spawn(move || {
+                                let _ = Command::new("wl-copy").arg(&csv_for_cmd).output();
+                                let _ = Command::new("xclip").arg("-selection").arg("clipboard").arg(&csv_for_cmd).output();
+                            });
+                            self.show_toast("📋 Copied all palette hex codes to clipboard");
+                        }
+
+                        // Swatches
+                        for pal in self.palette_state.extracted_colors.clone() {
+                            let (rect, resp) = ui.allocate_exact_size(Vec2::new(16.0, 16.0), egui::Sense::click());
+                            ui.painter().rect_filled(rect, Rounding::same(2.0), pal.color);
+                            ui.painter().rect_stroke(rect, Rounding::same(2.0), Stroke::new(1.0, Color32::from_rgb(71, 85, 105)));
+
+                            let tip = format!("{} ({:.1}%) - Click to copy", pal.hex, pal.percentage);
+                            if resp.on_hover_text(tip).clicked() {
+                                self.copy_color_to_clipboard(pal.color, ctx);
+                            }
+
+                            ui.label(
+                                egui::RichText::new(format!("{} ({:.0}%)", pal.hex, pal.percentage))
+                                    .small()
+                                    .monospace()
+                                    .color(Color32::from_rgb(226, 232, 240)),
+                            );
+                            ui.add_space(2.0);
+                        }
+                    } else {
+                        ui.label(
+                            egui::RichText::new("(No palette extracted)")
+                                .small()
+                                .italics()
+                                .color(Color32::from_rgb(148, 163, 184)),
+                        );
+                    }
                 });
             });
     }
@@ -3142,111 +3248,6 @@ impl ImagePreviewState {
                                 self.copy_optimized_to_slot();
                             }
                         }
-                    }
-                });
-            });
-    }
-
-    fn render_palette_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        egui::Frame::none()
-            .fill(Color32::from_rgb(22, 27, 39))
-            .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(45, 55, 75)))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("🎨 Dominant Palette:")
-                            .strong()
-                            .small()
-                            .color(Color32::from_rgb(244, 114, 182)),
-                    );
-
-                    let colors_len = self.palette_state.extracted_colors.len();
-                    let count_str = if colors_len == 0 {
-                        "No palette extracted".to_string()
-                    } else {
-                        format!("{} dominant hues", colors_len)
-                    };
-                    ui.label(
-                        egui::RichText::new(count_str)
-                            .small()
-                            .color(Color32::from_rgb(148, 163, 184)),
-                    );
-
-                    ui.add_space(6.0);
-
-                    // Re-extract button
-                    let re_btn = egui::Button::new(
-                        egui::RichText::new("↺ Refresh").small().color(Color32::from_rgb(203, 213, 225)),
-                    )
-                    .fill(Color32::from_rgb(30, 41, 59))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
-                    .rounding(Rounding::same(4.0));
-                    if ui.add(re_btn).on_hover_text("Re-extract dominant color palette from image").clicked() {
-                        self.run_palette_extraction();
-                    }
-
-                    // Copy All Hex CSV
-                    if !self.palette_state.extracted_colors.is_empty() {
-                        let csv_btn = egui::Button::new(
-                            egui::RichText::new("📋 Copy Hex CSV").small().color(Color32::from_rgb(203, 213, 225)),
-                        )
-                        .fill(Color32::from_rgb(30, 41, 59))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
-                        .rounding(Rounding::same(4.0));
-                        if ui.add(csv_btn).on_hover_text("Copy all hex codes as comma-separated list").clicked() {
-                            let csv = self.palette_state.extracted_colors.iter().map(|c| c.hex.as_str()).collect::<Vec<_>>().join(", ");
-                            ctx.output_mut(|o| o.copied_text = csv.clone());
-                            let csv_for_cmd = csv.clone();
-                            std::thread::spawn(move || {
-                                let _ = Command::new("wl-copy").arg(&csv_for_cmd).output();
-                                let _ = Command::new("xclip").arg("-selection").arg("clipboard").arg(&csv_for_cmd).output();
-                            });
-                            self.show_toast("📋 Copied all palette hex codes to clipboard");
-                        }
-
-                        // Copy CSS Variables
-                        let css_btn = egui::Button::new(
-                            egui::RichText::new("📋 Copy CSS").small().color(Color32::from_rgb(203, 213, 225)),
-                        )
-                        .fill(Color32::from_rgb(30, 41, 59))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
-                        .rounding(Rounding::same(4.0));
-                        if ui.add(css_btn).on_hover_text("Copy palette formatted as CSS custom properties").clicked() {
-                            let mut css = String::new();
-                            for (i, c) in self.palette_state.extracted_colors.iter().enumerate() {
-                                css.push_str(&format!("  --color-{}: {}; /* {:.1}% */\n", i + 1, c.hex, c.percentage));
-                            }
-                            ctx.output_mut(|o| o.copied_text = css.clone());
-                            let css_for_cmd = css.clone();
-                            std::thread::spawn(move || {
-                                let _ = Command::new("wl-copy").arg(&css_for_cmd).output();
-                                let _ = Command::new("xclip").arg("-selection").arg("clipboard").arg(&css_for_cmd).output();
-                            });
-                            self.show_toast("📋 Copied palette CSS variables to clipboard");
-                        }
-                    }
-
-                    ui.add_space(8.0);
-
-                    // Dominant color swatches
-                    for pal in self.palette_state.extracted_colors.clone() {
-                        let (rect, resp) = ui.allocate_exact_size(Vec2::new(18.0, 18.0), egui::Sense::click());
-                        ui.painter().rect_filled(rect, Rounding::same(3.0), pal.color);
-                        ui.painter().rect_stroke(rect, Rounding::same(3.0), Stroke::new(1.0, Color32::from_rgb(71, 85, 105)));
-
-                        let tip = format!("{} ({:.1}%) - Click to copy", pal.hex, pal.percentage);
-                        if resp.on_hover_text(tip).clicked() {
-                            self.copy_color_to_clipboard(pal.color, ctx);
-                        }
-
-                        ui.label(
-                            egui::RichText::new(format!("{} ({:.0}%)", pal.hex, pal.percentage))
-                                .small()
-                                .monospace()
-                                .color(Color32::from_rgb(226, 232, 240)),
-                        );
-                        ui.add_space(4.0);
                     }
                 });
             });
@@ -5179,7 +5180,7 @@ impl ImagePreviewState {
                         ImageToolMode::Convert => "🖱 Drag vertical divider: Before/After comparison | Enter: Apply to Canvas | Ctrl+S: Save As",
                         ImageToolMode::Ocr => "🖱 Choose model above | Enter: Run OCR | 📋 Copy Text / Push to Slot",
                         ImageToolMode::Barcode => "🖱 Click code card or box to inspect | Enter: Rescan | 🌐 Open Link | 📋 Copy Payload",
-                        _ => "🖱 Scroll: Zoom | Drag: Pan | Ctrl+C: Copy to Slot | Ctrl+S: Save As | F: Fit | Esc: Close",
+                        _ => "🖱 Scroll: Zoom | Drag: Pan | Ctrl+C: Copy to Slot | Ctrl+S: Save As | 0: Fit | Esc: Close",
                     };
 
 
@@ -6491,6 +6492,54 @@ mod tests {
             scoped_state.ocr_state.in_progress = true;
             // Dropping scoped_state here invokes Drop -> cancel_ocr
         }
+    }
+
+    #[test]
+    fn test_tool_mode_labels_and_shortcuts() {
+        assert_eq!(ImageToolMode::View.label(), "🔍 [V]iew");
+        assert_eq!(ImageToolMode::Crop.label(), "✂ [C]rop");
+        assert_eq!(ImageToolMode::Transform.label(), "🔄 [F]lip/Rotate");
+        assert_eq!(ImageToolMode::Redact.label(), "█ [X] Redact");
+        assert_eq!(ImageToolMode::PickColor.label(), "💉 [P]ick Color");
+        assert_eq!(ImageToolMode::Resize.label(), "↔ Re[S]ize");
+        assert_eq!(ImageToolMode::Convert.label(), "🔄 Conver[T]");
+        assert_eq!(ImageToolMode::Ocr.label(), "📝 [O]CR");
+        assert_eq!(ImageToolMode::Barcode.label(), "▦ [B]arcode");
+        assert_eq!(ImageToolMode::RemoveBg.label(), "✨ [R]emove BG");
+        assert_eq!(ImageToolMode::DepthMap.label(), "🌊 [D]epth Map");
+    }
+
+    #[test]
+    fn test_set_tool_mode_integration() {
+        let config = AppConfig::default();
+        let img = RgbaImage::new(20, 20);
+        let mut png_bytes = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png).unwrap();
+        let item = ClipItem::from_image(png_bytes, 20, 20, "image/png");
+        let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
+
+        // Switching to Palette routes to PickColor and auto-runs palette extraction
+        state.set_tool_mode(ImageToolMode::Palette);
+        assert_eq!(state.active_mode, ImageToolMode::PickColor);
+        assert!(state.palette_state.is_extracted);
+
+        // Switching to Crop
+        state.set_tool_mode(ImageToolMode::Crop);
+        assert_eq!(state.active_mode, ImageToolMode::Crop);
+
+        // Switching to Transform
+        state.set_tool_mode(ImageToolMode::Transform);
+        assert_eq!(state.active_mode, ImageToolMode::Transform);
+
+        // Switching from OCR in progress cancels OCR
+        state.set_tool_mode(ImageToolMode::Ocr);
+        assert_eq!(state.active_mode, ImageToolMode::Ocr);
+        state.ocr_state.in_progress = true;
+        state.ocr_child_pid.store(12345, std::sync::atomic::Ordering::SeqCst);
+        state.set_tool_mode(ImageToolMode::View);
+        assert_eq!(state.active_mode, ImageToolMode::View);
+        assert!(!state.ocr_state.in_progress);
+        assert_eq!(state.ocr_child_pid.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }
 
