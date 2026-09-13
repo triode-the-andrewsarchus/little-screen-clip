@@ -8,6 +8,10 @@ use image::RgbaImage;
 use little_clip_core::theme::AppPalette;
 use little_clip_core::{AppConfig, ClipItem, HandSide, IpcRequest};
 use little_clip_ops::barcode::BarcodeDetection;
+use little_clip_ops::decorrelation_stretch::{
+    auto_stride, run_decorrelation_stretch, DecorrelationMatrixMode, DecorrelationStats,
+    DecorrelationStretchParams, DecorrelationTransform, TargetValue,
+};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use crate::{contrast_text_c32, hex_to_c32, hex_to_c32_alpha};
@@ -40,6 +44,8 @@ pub enum ImageToolMode {
     RemoveBg,
     /// Monocular depth map generation.
     DepthMap,
+    /// Decorrelation stretch (Alley / JPL 1996) color enhancement.
+    DecorrelationStretch,
 }
 
 impl ImageToolMode {
@@ -58,6 +64,7 @@ impl ImageToolMode {
             ImageToolMode::Palette => "🎨 Palette",
             ImageToolMode::RemoveBg => "✨ [R]emove BG",
             ImageToolMode::DepthMap => "🌊 [D]epth Map",
+            ImageToolMode::DecorrelationStretch => "🌈 Decorrelation Stretch",
         }
     }
 }
@@ -187,6 +194,43 @@ pub struct BarcodeScanState {
     pub is_scanning: bool,
     pub has_scanned: bool,
     pub last_scan_duration_ms: u128,
+}
+
+#[derive(Clone)]
+pub struct DecorrelationStretchState {
+    pub params: DecorrelationStretchParams,
+    pub custom_mean: f64,
+    pub custom_sigma: f64,
+    pub stats: Option<DecorrelationStats>,
+    pub transform: Option<DecorrelationTransform>,
+    pub stretched_rgba: Option<RgbaImage>,
+    pub stretched_texture: Option<egui::TextureHandle>,
+    pub dirty_texture: bool,
+    pub comparison_split: f32,
+    pub is_dragging_split: bool,
+    pub is_holding_original: bool,
+    pub show_stats: bool,
+    pub last_duration_ms: u128,
+}
+
+impl Default for DecorrelationStretchState {
+    fn default() -> Self {
+        Self {
+            params: DecorrelationStretchParams::nasa(),
+            custom_mean: 127.5,
+            custom_sigma: 50.0,
+            stats: None,
+            transform: None,
+            stretched_rgba: None,
+            stretched_texture: None,
+            dirty_texture: false,
+            comparison_split: 0.50,
+            is_dragging_split: false,
+            is_holding_original: false,
+            show_stats: false,
+            last_duration_ms: 0,
+        }
+    }
 }
 
 
@@ -776,6 +820,9 @@ pub struct ImagePreviewState {
 
     // Barcode / QR / DataMatrix Decoder
     pub barcode_state: BarcodeScanState,
+
+    // Decorrelation Stretch State
+    pub dcs_state: DecorrelationStretchState,
 }
 
 #[derive(Debug)]
@@ -902,6 +949,7 @@ impl ImagePreviewState {
             ocr_rx: None,
             ocr_child_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             barcode_state: BarcodeScanState::default(),
+            dcs_state: DecorrelationStretchState::default(),
         };
 
         preview.update_conversion();
@@ -1835,6 +1883,7 @@ impl ImagePreviewState {
             self.current_rgba = prev;
             self.dirty_texture = true;
             self.crop_state.normalized_rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
+            self.dcs_state.stretched_rgba = None;
             self.show_toast("⟲ Undone");
         } else {
             self.show_toast("Nothing to undo");
@@ -1847,6 +1896,7 @@ impl ImagePreviewState {
             self.current_rgba = next;
             self.dirty_texture = true;
             self.crop_state.normalized_rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
+            self.dcs_state.stretched_rgba = None;
             self.show_toast("⟳ Redone");
         }
     }
@@ -1857,6 +1907,7 @@ impl ImagePreviewState {
             self.current_rgba = self.original_rgba.clone();
             self.dirty_texture = true;
             self.crop_state.normalized_rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
+            self.dcs_state.stretched_rgba = None;
             self.show_toast("↺ Reverted to original image");
         }
     }
@@ -2057,6 +2108,9 @@ impl ImagePreviewState {
         if self.active_mode == ImageToolMode::Barcode && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             self.run_barcode_scan();
         }
+        if self.active_mode == ImageToolMode::DecorrelationStretch && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            self.apply_decorrelation_stretch();
+        }
         if !ctx.wants_keyboard_input() {
             if self.active_mode == ImageToolMode::Redact {
                 let del_pressed = ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
@@ -2192,6 +2246,9 @@ impl ImagePreviewState {
                 } else if self.active_mode == ImageToolMode::DepthMap {
                     ui.add_space(2.0);
                     self.render_depth_map_toolbar(ui, ctx, palette);
+                } else if self.active_mode == ImageToolMode::DecorrelationStretch {
+                    ui.add_space(2.0);
+                    self.render_decorrelation_stretch_toolbar(ui, ctx, palette);
                 }
 
                 ui.add_space(4.0);
@@ -2360,6 +2417,11 @@ impl ImagePreviewState {
                     self.update_conversion();
                 }
             }
+            ImageToolMode::DecorrelationStretch => {
+                if self.dcs_state.stretched_rgba.is_none() {
+                    self.update_decorrelation_stretch();
+                }
+            }
             ImageToolMode::Barcode => {
                 if !self.barcode_state.has_scanned {
                     self.run_barcode_scan();
@@ -2388,6 +2450,7 @@ impl ImagePreviewState {
                         ImageToolMode::Barcode,
                         ImageToolMode::RemoveBg,
                         ImageToolMode::DepthMap,
+                        ImageToolMode::DecorrelationStretch,
                     ];
 
                     for mode in modes {
@@ -3945,6 +4008,551 @@ impl ImagePreviewState {
         );
     }
 
+    // --- Decorrelation Stretch (DCS) Tool Suite ---
+
+    pub fn update_decorrelation_stretch(&mut self) {
+        let base_img = self.current_display_image();
+        let t0 = std::time::Instant::now();
+        let (stats, transform, stretched) = run_decorrelation_stretch(&base_img, &self.dcs_state.params);
+        let duration_ms = t0.elapsed().as_millis();
+
+        self.dcs_state.stats = Some(stats);
+        self.dcs_state.transform = Some(transform);
+        self.dcs_state.stretched_rgba = Some(stretched);
+        self.dcs_state.dirty_texture = true;
+        self.dcs_state.last_duration_ms = duration_ms;
+    }
+
+    pub fn apply_decorrelation_stretch(&mut self) {
+        if let Some(stretched) = self.dcs_state.stretched_rgba.clone() {
+            self.undo_stack.push(self.current_rgba.clone());
+            self.redo_stack.clear();
+            self.current_rgba = stretched;
+            self.dirty_texture = true;
+            self.resize_state.sync_from_image(&self.current_rgba);
+            self.palette_state.is_extracted = false;
+            self.update_decorrelation_stretch();
+            self.show_toast("✔ Applied decorrelation stretch to canvas");
+        }
+    }
+
+    fn render_decorrelation_stretch_toolbar(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context, palette: &AppPalette) {
+        let b_low = hex_to_c32(&palette.theme.b_low);
+        let b_med = hex_to_c32(&palette.theme.b_med);
+        let base_c = hex_to_c32(&palette.harmonies.base);
+        let f_med = hex_to_c32(&palette.theme.f_med);
+        let diff_add = hex_to_c32(&palette.diff_add);
+        let diff_mod = hex_to_c32(&palette.diff_mod);
+
+        let mut changed = false;
+
+        egui::Frame::none()
+            .fill(b_low)
+            .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+            .stroke(Stroke::new(1.0, b_med))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("🌈 Decorrelation Stretch:")
+                            .strong()
+                            .color(base_c),
+                    );
+
+                    ui.add_space(4.0);
+
+                    // Preset buttons
+                    let nasa_btn = crate::secondary_button("NASA/ASTER", b_med, palette);
+                    if ui.add(nasa_btn).on_hover_text("Preset: Correlation matrix, target mean 127.5, sigma 50.0, tol 0").clicked() {
+                        self.dcs_state.params = DecorrelationStretchParams::nasa();
+                        self.dcs_state.custom_mean = 127.5;
+                        self.dcs_state.custom_sigma = 50.0;
+                        changed = true;
+                    }
+
+                    let matlab_btn = crate::secondary_button("MATLAB", b_med, palette);
+                    if ui.add(matlab_btn).on_hover_text("Preset: Correlation matrix, preserve band mean and sigma").clicked() {
+                        self.dcs_state.params = DecorrelationStretchParams::matlab_preserve();
+                        changed = true;
+                    }
+
+                    ui.add_space(6.0);
+
+                    // Matrix Mode
+                    let is_corr = self.dcs_state.params.mode == DecorrelationMatrixMode::Correlation;
+                    let (corr_bg, corr_border, corr_fg) = if is_corr {
+                        (base_c, b_med, contrast_text_c32(base_c, None, palette))
+                    } else {
+                        (b_med, b_low, contrast_text_c32(b_med, Some(f_med), palette))
+                    };
+                    let corr_btn = egui::Button::new(egui::RichText::new("Correlation").small().strong().color(corr_fg))
+                        .fill(corr_bg)
+                        .stroke(Stroke::new(1.0, corr_border))
+                        .rounding(Rounding::same(4.0));
+                    if ui.add(corr_btn).on_hover_text("Correlation matrix (equal band weight - standard for decorrelation stretching)").clicked() && !is_corr {
+                        self.dcs_state.params.mode = DecorrelationMatrixMode::Correlation;
+                        changed = true;
+                    }
+
+                    let is_cov = self.dcs_state.params.mode == DecorrelationMatrixMode::Covariance;
+                    let (cov_bg, cov_border, cov_fg) = if is_cov {
+                        (base_c, b_med, contrast_text_c32(base_c, None, palette))
+                    } else {
+                        (b_med, b_low, contrast_text_c32(b_med, Some(f_med), palette))
+                    };
+                    let cov_btn = egui::Button::new(egui::RichText::new("Covariance").small().strong().color(cov_fg))
+                        .fill(cov_bg)
+                        .stroke(Stroke::new(1.0, cov_border))
+                        .rounding(Rounding::same(4.0));
+                    if ui.add(cov_btn).on_hover_text("Covariance matrix (weights bands by original variance)").clicked() && !is_cov {
+                        self.dcs_state.params.mode = DecorrelationMatrixMode::Covariance;
+                        changed = true;
+                    }
+
+                    ui.add_space(6.0);
+
+                    // Target Mean
+                    ui.label(egui::RichText::new("Mean:").small().color(f_med));
+                    let is_mean_preserve = matches!(self.dcs_state.params.target_mean, TargetValue::Preserve);
+                    let (mean_p_bg, mean_p_border, mean_p_fg) = if is_mean_preserve {
+                        (base_c, b_med, contrast_text_c32(base_c, None, palette))
+                    } else {
+                        (b_med, b_low, contrast_text_c32(b_med, Some(f_med), palette))
+                    };
+                    let mean_p_btn = egui::Button::new(egui::RichText::new("Preserve").small().strong().color(mean_p_fg))
+                        .fill(mean_p_bg)
+                        .stroke(Stroke::new(1.0, mean_p_border))
+                        .rounding(Rounding::same(4.0));
+                    if ui.add(mean_p_btn).on_hover_text("Preserve each band's input mean").clicked() {
+                        if is_mean_preserve {
+                            self.dcs_state.params.target_mean = TargetValue::Custom(self.dcs_state.custom_mean);
+                        } else {
+                            self.dcs_state.params.target_mean = TargetValue::Preserve;
+                        }
+                        changed = true;
+                    }
+                    if !is_mean_preserve {
+                        let mut m_val = self.dcs_state.custom_mean;
+                        let drag = egui::DragValue::new(&mut m_val).speed(0.5).clamp_range(0.0..=255.0);
+                        if ui.add(drag).on_hover_text("Target output mean (0-255)").changed() {
+                            self.dcs_state.custom_mean = m_val;
+                            self.dcs_state.params.target_mean = TargetValue::Custom(m_val);
+                            changed = true;
+                        }
+                    }
+
+                    ui.add_space(6.0);
+
+                    // Target Sigma
+                    ui.label(egui::RichText::new("Sigma:").small().color(f_med));
+                    let is_sig_preserve = matches!(self.dcs_state.params.target_sigma, TargetValue::Preserve);
+                    let (sig_p_bg, sig_p_border, sig_p_fg) = if is_sig_preserve {
+                        (base_c, b_med, contrast_text_c32(base_c, None, palette))
+                    } else {
+                        (b_med, b_low, contrast_text_c32(b_med, Some(f_med), palette))
+                    };
+                    let sig_p_btn = egui::Button::new(egui::RichText::new("Preserve").small().strong().color(sig_p_fg))
+                        .fill(sig_p_bg)
+                        .stroke(Stroke::new(1.0, sig_p_border))
+                        .rounding(Rounding::same(4.0));
+                    if ui.add(sig_p_btn).on_hover_text("Preserve each band's input standard deviation").clicked() {
+                        if is_sig_preserve {
+                            self.dcs_state.params.target_sigma = TargetValue::Custom(self.dcs_state.custom_sigma);
+                        } else {
+                            self.dcs_state.params.target_sigma = TargetValue::Preserve;
+                        }
+                        changed = true;
+                    }
+                    if !is_sig_preserve {
+                        let mut s_val = self.dcs_state.custom_sigma;
+                        let drag = egui::DragValue::new(&mut s_val).speed(0.5).clamp_range(1.0..=200.0);
+                        if ui.add(drag).on_hover_text("Target standard deviation (1-200, NASA default: 50)").changed() {
+                            self.dcs_state.custom_sigma = s_val;
+                            self.dcs_state.params.target_sigma = TargetValue::Custom(s_val);
+                            changed = true;
+                        }
+                    }
+
+                    ui.add_space(6.0);
+
+                    // Tol (contrast clip)
+                    ui.label(egui::RichText::new("Tol:").small().color(f_med));
+                    let current_tol = self.dcs_state.params.tol;
+                    let tol_label = if current_tol <= 0.0 { "0 (off)".to_string() } else { format!("{}", current_tol) };
+                    egui::ComboBox::from_id_source("dcs_tol_combo")
+                        .selected_text(tol_label)
+                        .width(64.0)
+                        .show_ui(ui, |ui| {
+                            for (t_val, t_name) in [(0.0, "0 (off)"), (0.005, "0.005"), (0.01, "0.01"), (0.02, "0.02")] {
+                                if ui.selectable_label((current_tol - t_val).abs() < 1e-4, t_name).clicked() {
+                                    self.dcs_state.params.tol = t_val;
+                                    changed = true;
+                                }
+                            }
+                        });
+
+                    ui.add_space(6.0);
+
+                    // Stride
+                    ui.label(egui::RichText::new("Stride:").small().color(f_med));
+                    let current_stride = self.dcs_state.params.stride;
+                    let stride_label = match current_stride {
+                        0 => "auto".to_string(),
+                        1 => "1 (all)".to_string(),
+                        s => format!("{}", s),
+                    };
+                    egui::ComboBox::from_id_source("dcs_stride_combo")
+                        .selected_text(stride_label)
+                        .width(64.0)
+                        .show_ui(ui, |ui| {
+                            for (s_val, s_name) in [(0, "auto"), (1, "1 (all)"), (2, "2"), (3, "3"), (5, "5")] {
+                                if ui.selectable_label(current_stride == s_val, s_name).clicked() {
+                                    self.dcs_state.params.stride = s_val;
+                                    changed = true;
+                                }
+                            }
+                        });
+
+                    // Hold to compare button
+                    ui.add_space(6.0);
+                    let hold_btn = egui::Button::new(
+                        egui::RichText::new("👁 Hold to Compare")
+                            .small()
+                            .strong()
+                            .color(if self.dcs_state.is_holding_original { base_c } else { f_med }),
+                    )
+                    .fill(if self.dcs_state.is_holding_original { b_med } else { b_low })
+                    .stroke(Stroke::new(1.0, b_med))
+                    .rounding(Rounding::same(4.0));
+                    let hold_resp = ui.add(hold_btn).on_hover_text("Click and hold to momentarily view the original image");
+                    self.dcs_state.is_holding_original = hold_resp.is_pointer_button_down_on();
+
+                    // Stats toggle
+                    let stats_active = self.dcs_state.show_stats;
+                    let (stats_bg, stats_fg) = if stats_active {
+                        (base_c, contrast_text_c32(base_c, None, palette))
+                    } else {
+                        (b_med, contrast_text_c32(b_med, Some(f_med), palette))
+                    };
+                    let stats_btn = egui::Button::new(egui::RichText::new("📊 Stats").small().strong().color(stats_fg))
+                        .fill(stats_bg)
+                        .stroke(Stroke::new(1.0, b_med))
+                        .rounding(Rounding::same(4.0));
+                    if ui.add(stats_btn).on_hover_text("Toggle detailed statistics report (means, covariance, correlation, eigenvalues, eigenvectors, transform matrix)").clicked() {
+                        self.dcs_state.show_stats = !self.dcs_state.show_stats;
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Apply button
+                        let apply_btn = crate::action_button("✓ Apply (Enter)", diff_add, palette);
+                        if ui.add(apply_btn).on_hover_text("Commit decorrelation stretch result to image (Enter)").clicked() {
+                            self.apply_decorrelation_stretch();
+                        }
+
+                        // Recompute button
+                        let recompute_btn = crate::secondary_button("⟲ Recompute", b_med, palette);
+                        if ui.add(recompute_btn).on_hover_text("Recalculate decorrelation stretch statistics and transform").clicked() {
+                            self.update_decorrelation_stretch();
+                        }
+
+                        // Undo if available
+                        if !self.undo_stack.is_empty() {
+                            let undo_fg = contrast_text_c32(b_med, Some(diff_mod), palette);
+                            let undo_btn = egui::Button::new(
+                                egui::RichText::new("⟲ Undo (Ctrl+Z)").small().strong().color(undo_fg),
+                            )
+                            .fill(b_med)
+                            .rounding(Rounding::same(4.0));
+                            if ui.add(undo_btn).clicked() {
+                                self.undo();
+                                self.update_decorrelation_stretch();
+                            }
+                        }
+                    });
+                });
+            });
+
+        // Recompute if parameters changed
+        if changed {
+            self.update_decorrelation_stretch();
+        }
+
+        // Stats popup / collapsible drawer
+        if self.dcs_state.show_stats {
+            self.render_decorrelation_stretch_stats_drawer(ui, palette);
+        }
+    }
+
+    fn render_decorrelation_stretch_stats_drawer(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        let b_med = hex_to_c32(&palette.theme.b_med);
+        let f_high = hex_to_c32(&palette.theme.f_high);
+        let f_med = hex_to_c32(&palette.theme.f_med);
+        let f_low = hex_to_c32(&palette.theme.f_low);
+        let diff_del = hex_to_c32(&palette.diff_del);
+        let base_c = hex_to_c32(&palette.harmonies.base);
+
+        egui::Frame::none()
+            .fill(hex_to_c32(&palette.theme.background))
+            .inner_margin(egui::Margin::symmetric(14.0, 8.0))
+            .stroke(Stroke::new(1.0, b_med))
+            .show(ui, |ui| {
+                if let (Some(stats), Some(tr)) = (&self.dcs_state.stats, &self.dcs_state.transform) {
+                    ui.horizontal_wrapped(|ui| {
+                        // Samples & timing
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("SAMPLES & TIMING").small().strong().color(base_c));
+                            ui.label(egui::RichText::new(format!("Count: {} px", stats.sample_count)).small().monospace().color(f_high));
+                            ui.label(egui::RichText::new(format!("Compute: {} ms", self.dcs_state.last_duration_ms)).small().monospace().color(f_low));
+                            let stride_used = if self.dcs_state.params.stride == 0 {
+                                auto_stride(self.current_rgba.width(), self.current_rgba.height())
+                            } else {
+                                self.dcs_state.params.stride
+                            };
+                            ui.label(egui::RichText::new(format!("Stride: {}", stride_used)).small().monospace().color(f_low));
+                        });
+
+                        ui.add_space(16.0);
+
+                        // Mean & Sigma
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("BAND MEAN / SIGMA").small().strong().color(base_c));
+                            ui.label(egui::RichText::new(format!("R: {:.1} / {:.1}", stats.mean[0], stats.sd[0])).small().monospace().color(f_high));
+                            ui.label(egui::RichText::new(format!("G: {:.1} / {:.1}", stats.mean[1], stats.sd[1])).small().monospace().color(f_high));
+                            ui.label(egui::RichText::new(format!("B: {:.1} / {:.1}", stats.mean[2], stats.sd[2])).small().monospace().color(f_high));
+                        });
+
+                        ui.add_space(16.0);
+
+                        // Correlation Matrix
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("CORRELATION MATRIX").small().strong().color(base_c));
+                            for row in 0..3 {
+                                let r = &stats.corr[row];
+                                ui.label(egui::RichText::new(format!("[{:>6.3}, {:>6.3}, {:>6.3}]", r[0], r[1], r[2])).small().monospace().color(f_high));
+                            }
+                        });
+
+                        ui.add_space(16.0);
+
+                        // Covariance Matrix
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("COVARIANCE MATRIX").small().strong().color(base_c));
+                            for row in 0..3 {
+                                let r = &stats.cov[row];
+                                ui.label(egui::RichText::new(format!("[{:>7.1}, {:>7.1}, {:>7.1}]", r[0], r[1], r[2])).small().monospace().color(f_high));
+                            }
+                        });
+
+                        ui.add_space(16.0);
+
+                        // Eigenvalues & Eigenvectors
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("EIGENVALUES").small().strong().color(base_c));
+                            ui.label(egui::RichText::new(format!("λ: [{:.4}, {:.4}, {:.4}]", tr.eigenvalues[0], tr.eigenvalues[1], tr.eigenvalues[2])).small().monospace().color(f_high));
+                            ui.label(egui::RichText::new("EIGENVECTORS (COLUMNS)").small().strong().color(base_c));
+                            for row in 0..3 {
+                                let v = &tr.eigenvectors[row];
+                                ui.label(egui::RichText::new(format!("[{:>6.3}, {:>6.3}, {:>6.3}]", v[0], v[1], v[2])).small().monospace().color(f_high));
+                            }
+                        });
+
+                        ui.add_space(16.0);
+
+                        // Transform Matrix T & Offset
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new("TRANSFORM MATRIX T").small().strong().color(base_c));
+                            for row in 0..3 {
+                                let t_row = &tr.transform[row];
+                                ui.label(egui::RichText::new(format!("[{:>6.3}, {:>6.3}, {:>6.3}]", t_row[0], t_row[1], t_row[2])).small().monospace().color(f_high));
+                            }
+                            ui.label(egui::RichText::new(format!("Offset: [{:.1}, {:.1}, {:.1}]", tr.offset[0], tr.offset[1], tr.offset[2])).small().monospace().color(f_low));
+                        });
+                    });
+
+                    // Diagnostic warnings
+                    if !tr.warnings.is_empty() {
+                        ui.add_space(4.0);
+                        for w in &tr.warnings {
+                            ui.label(egui::RichText::new(format!("⚠ {}", w)).small().strong().color(diff_del));
+                        }
+                    }
+
+                    if let Some(lims) = tr.tol_limits {
+                        ui.add_space(2.0);
+                        ui.label(
+                            egui::RichText::new(format!("Tol clip limits: R: [{:.1}, {:.1}], G: [{:.1}, {:.1}], B: [{:.1}, {:.1}]",
+                                lims[0][0], lims[0][1], lims[1][0], lims[1][1], lims[2][0], lims[2][1]))
+                                .small()
+                                .monospace()
+                                .color(f_low),
+                        );
+                    }
+                } else {
+                    ui.label(egui::RichText::new("No statistics computed yet.").small().color(f_med));
+                }
+            });
+    }
+
+    fn render_decorrelation_stretch_comparison(
+        &mut self,
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        response: &egui::Response,
+        img_rect: Rect,
+        _canvas_rect: Rect,
+        ctx: &egui::Context,
+        palette: &AppPalette,
+    ) {
+        // Ensure stretched texture is loaded
+        if self.dcs_state.dirty_texture || self.dcs_state.stretched_texture.is_none() {
+            if let Some(ref dcs_rgba) = self.dcs_state.stretched_rgba {
+                let color_img = egui::ColorImage::from_rgba_unmultiplied(
+                    [dcs_rgba.width() as usize, dcs_rgba.height() as usize],
+                    dcs_rgba.as_raw(),
+                );
+                self.dcs_state.stretched_texture = Some(ctx.load_texture(
+                    "decorrelation_stretch_preview_tex",
+                    color_img,
+                    egui::TextureOptions::LINEAR,
+                ));
+                self.dcs_state.dirty_texture = false;
+            }
+        }
+
+        let b_low = hex_to_c32(&palette.theme.b_low);
+        let b_med = hex_to_c32(&palette.theme.b_med);
+        let base_c = hex_to_c32(&palette.harmonies.base);
+
+        // If user is holding original (via Hold to Compare button), show full original
+        if self.dcs_state.is_holding_original {
+            if let Some(ref orig_tex) = self.texture {
+                let mut full_mesh = egui::Mesh::with_texture(orig_tex.id());
+                full_mesh.add_rect_with_uv(
+                    img_rect,
+                    Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+                painter.add(egui::Shape::mesh(full_mesh));
+
+                let badge_pos = Pos2::new(img_rect.min.x + 12.0, img_rect.min.y + 12.0);
+                let badge_rect = Rect::from_min_size(badge_pos, Vec2::new(170.0, 24.0));
+                let badge_bg = hex_to_c32_alpha(&palette.theme.b_low, 210);
+                let badge_fg = contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_med)), palette);
+                painter.rect_filled(badge_rect, Rounding::same(4.0), badge_bg);
+                painter.rect_stroke(badge_rect, Rounding::same(4.0), Stroke::new(1.0, b_med));
+                painter.text(
+                    badge_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "ORIGINAL (HOLDING)",
+                    egui::FontId::proportional(11.0),
+                    badge_fg,
+                );
+            }
+            return;
+        }
+
+        let split = self.dcs_state.comparison_split.clamp(0.0, 1.0);
+        let split_x = img_rect.min.x + split * img_rect.width();
+
+        // 1. Draw Left Side (Original / Before)
+        if let Some(ref orig_tex) = self.texture {
+            let left_rect = Rect::from_min_max(img_rect.min, Pos2::new(split_x, img_rect.max.y));
+            let left_uv = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(split, 1.0));
+            let mut left_mesh = egui::Mesh::with_texture(orig_tex.id());
+            left_mesh.add_rect_with_uv(left_rect, left_uv, Color32::WHITE);
+            painter.add(egui::Shape::mesh(left_mesh));
+        }
+
+        // 2. Draw Right Side (Decorrelation Stretched / After)
+        let dcs_tex_id = self.dcs_state.stretched_texture.as_ref().map(|t| t.id())
+            .or_else(|| self.texture.as_ref().map(|t| t.id()));
+        if let Some(tex_id) = dcs_tex_id {
+            let right_rect = Rect::from_min_max(Pos2::new(split_x, img_rect.min.y), img_rect.max);
+            let right_uv = Rect::from_min_max(Pos2::new(split, 0.0), Pos2::new(1.0, 1.0));
+            let mut right_mesh = egui::Mesh::with_texture(tex_id);
+            right_mesh.add_rect_with_uv(right_rect, right_uv, Color32::WHITE);
+            painter.add(egui::Shape::mesh(right_mesh));
+        }
+
+        // 3. Draw Crisp Divider Line
+        painter.line_segment(
+            [Pos2::new(split_x, img_rect.min.y), Pos2::new(split_x, img_rect.max.y)],
+            Stroke::new(3.0, Color32::from_black_alpha(150)),
+        );
+        painter.line_segment(
+            [Pos2::new(split_x, img_rect.min.y), Pos2::new(split_x, img_rect.max.y)],
+            Stroke::new(1.5, Color32::WHITE),
+        );
+
+        // 4. Draggable Center Knob
+        let knob_center = Pos2::new(split_x, img_rect.center().y);
+        let knob_radius = 16.0;
+        let knob_fg = contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_high)), palette);
+        painter.circle(knob_center, knob_radius, b_low, Stroke::new(2.0, base_c));
+        painter.text(
+            knob_center,
+            egui::Align2::CENTER_CENTER,
+            "◀ ▶",
+            egui::FontId::monospace(10.0),
+            knob_fg,
+        );
+
+        // 5. Draggable Handle Interaction
+        let ptr_pos = response.hover_pos();
+        let near_divider = if let Some(pos) = ptr_pos {
+            (pos.x - split_x).abs() <= 16.0 && pos.y >= img_rect.min.y && pos.y <= img_rect.max.y
+        } else {
+            false
+        };
+
+        if near_divider || self.dcs_state.is_dragging_split {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+
+        if near_divider && response.drag_started() {
+            self.dcs_state.is_dragging_split = true;
+        }
+
+        if self.dcs_state.is_dragging_split {
+            if response.dragged() {
+                if let Some(pos) = ptr_pos {
+                    let new_split = ((pos.x - img_rect.min.x) / img_rect.width()).clamp(0.01, 0.99);
+                    self.dcs_state.comparison_split = new_split;
+                }
+            }
+            if response.drag_stopped() {
+                self.dcs_state.is_dragging_split = false;
+            }
+        }
+
+        // 6. Floating HUD Badges
+        let before_badge_pos = Pos2::new(img_rect.min.x + 12.0, img_rect.min.y + 12.0);
+        let before_rect = Rect::from_min_size(before_badge_pos, Vec2::new(140.0, 24.0));
+        let badge_bg = hex_to_c32_alpha(&palette.theme.b_low, 210);
+        let before_fg = contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_med)), palette);
+        painter.rect_filled(before_rect, Rounding::same(4.0), badge_bg);
+        painter.rect_stroke(before_rect, Rounding::same(4.0), Stroke::new(1.0, b_med));
+        painter.text(
+            before_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "ORIGINAL",
+            egui::FontId::proportional(11.0),
+            before_fg,
+        );
+
+        let after_badge_pos = Pos2::new(img_rect.max.x - 172.0, img_rect.min.y + 12.0);
+        let after_rect = Rect::from_min_size(after_badge_pos, Vec2::new(160.0, 24.0));
+        let after_fg = contrast_text_c32(b_low, Some(base_c), palette);
+        painter.rect_filled(after_rect, Rounding::same(4.0), badge_bg);
+        painter.rect_stroke(after_rect, Rounding::same(4.0), Stroke::new(1.0, base_c));
+        painter.text(
+            after_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            format!("DCS ({:.0} ms)", self.dcs_state.last_duration_ms),
+            egui::FontId::proportional(11.0),
+            after_fg,
+        );
+    }
+
     // --- Document OCR Suite ---
 
     pub fn run_ocr(&mut self) {
@@ -4634,7 +5242,8 @@ impl ImagePreviewState {
             || self.active_mode == ImageToolMode::DepthMap
             || self.active_mode == ImageToolMode::Ocr
             || self.active_mode == ImageToolMode::Barcode
-            || (self.active_mode == ImageToolMode::Convert && !self.convert_state.is_dragging_split);
+            || (self.active_mode == ImageToolMode::Convert && !self.convert_state.is_dragging_split)
+            || (self.active_mode == ImageToolMode::DecorrelationStretch && !self.dcs_state.is_dragging_split);
         if (can_drag_pan && response.dragged()) || middle_drag {
             self.pan += response.drag_delta();
         }
@@ -4671,9 +5280,11 @@ impl ImagePreviewState {
             // Draw checkerboard under image for alpha transparency
             draw_checkerboard(&painter, img_rect, self.zoom, hex_to_c32(&palette.theme.b_low), hex_to_c32(&palette.theme.b_med));
 
-            // Draw image mesh (or Squoosh-style split view in Convert mode)
+            // Draw image mesh (or Squoosh-style split view in Convert mode or DCS curtain view in DecorrelationStretch mode)
             if self.active_mode == ImageToolMode::Convert {
                 self.render_convert_comparison(ui, &painter, &response, img_rect, canvas_rect, ctx, palette);
+            } else if self.active_mode == ImageToolMode::DecorrelationStretch {
+                self.render_decorrelation_stretch_comparison(ui, &painter, &response, img_rect, canvas_rect, ctx, palette);
             } else {
                 let mut mesh = egui::Mesh::with_texture(texture.id());
                 mesh.add_rect_with_uv(
@@ -6593,6 +7204,7 @@ mod tests {
         assert_eq!(ImageToolMode::Barcode.label(), "▦ [B]arcode");
         assert_eq!(ImageToolMode::RemoveBg.label(), "✨ [R]emove BG");
         assert_eq!(ImageToolMode::DepthMap.label(), "🌊 [D]epth Map");
+        assert_eq!(ImageToolMode::DecorrelationStretch.label(), "🌈 Decorrelation Stretch");
     }
 
     #[test]
@@ -6616,6 +7228,11 @@ mod tests {
         // Switching to Transform
         state.set_tool_mode(ImageToolMode::Transform);
         assert_eq!(state.active_mode, ImageToolMode::Transform);
+
+        // Switching to DecorrelationStretch
+        state.set_tool_mode(ImageToolMode::DecorrelationStretch);
+        assert_eq!(state.active_mode, ImageToolMode::DecorrelationStretch);
+        assert!(state.dcs_state.stretched_rgba.is_some());
 
         // Switching from OCR in progress cancels OCR
         state.set_tool_mode(ImageToolMode::Ocr);
