@@ -75,6 +75,24 @@ pub(crate) fn hex_to_c32_alpha(hex: &str, alpha: u8) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(r, g, b, alpha)
 }
 
+pub(crate) fn contrast_text_c32(
+    bg: egui::Color32,
+    preferred_fg: Option<egui::Color32>,
+    palette: &AppPalette,
+) -> egui::Color32 {
+    let bg_rgb = (bg.r(), bg.g(), bg.b());
+    if let Some(pref) = preferred_fg {
+        let pref_rgb = (pref.r(), pref.g(), pref.b());
+        if little_clip_core::theme::contrast_ratio(bg_rgb, pref_rgb) >= 4.5 {
+            return pref;
+        }
+    }
+    let hex_bg = format!("#{:02x}{:02x}{:02x}", bg.r(), bg.g(), bg.b());
+    let pref_hex = preferred_fg.map(|c| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()));
+    let fg_hex = palette.contrast_pair_fg(&hex_bg, pref_hex.as_deref());
+    hex_to_c32(&fg_hex)
+}
+
 fn apply_theme_to_egui(ctx: &egui::Context, palette: &AppPalette) {
     let mut visuals = if palette.is_dark {
         egui::Visuals::dark()
@@ -98,12 +116,14 @@ fn apply_theme_to_egui(ctx: &egui::Context, palette: &AppPalette) {
     visuals.widgets.hovered.fg_stroke.color = hex_to_c32(&palette.title_color);
     visuals.widgets.hovered.bg_stroke.color = hex_to_c32(&palette.left_hand_border);
 
-    visuals.widgets.active.bg_fill = hex_to_c32(&palette.hero_card_bg);
-    visuals.widgets.active.fg_stroke.color = egui::Color32::WHITE;
+    let active_bg = hex_to_c32(&palette.hero_card_bg);
+    visuals.widgets.active.bg_fill = active_bg;
+    visuals.widgets.active.fg_stroke.color = contrast_text_c32(active_bg, Some(hex_to_c32(&palette.f_high)), palette);
     visuals.widgets.active.bg_stroke.color = hex_to_c32(&palette.cursor_border);
 
-    visuals.selection.bg_fill = hex_to_c32(&palette.left_hand_border);
-    visuals.selection.stroke.color = egui::Color32::WHITE;
+    let sel_bg = hex_to_c32(&palette.left_hand_border);
+    visuals.selection.bg_fill = sel_bg;
+    visuals.selection.stroke.color = contrast_text_c32(sel_bg, Some(hex_to_c32(&palette.f_high)), palette);
 
     visuals.hyperlink_color = hex_to_c32(&palette.url_color);
 
@@ -592,12 +612,17 @@ impl eframe::App for WorkbenchApp {
                     // View Mode Switcher Tabs on the Right
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let is_node = self.view == WorkbenchView::NodeMachine;
+                        let tab_selected_fg = contrast_text_c32(
+                            ui.visuals().selection.bg_fill,
+                            Some(hex_to_c32(&self.renderer.palette.f_high)),
+                            &self.renderer.palette,
+                        );
                         let node_tab = ui.selectable_label(
                             is_node,
                             egui::RichText::new("★ Big Node Machine [F1]")
                                 .strong()
                                 .color(if is_node {
-                                    egui::Color32::WHITE
+                                    tab_selected_fg
                                 } else {
                                     hex_to_c32(&self.renderer.palette.right_prior1_border)
                                 }),
@@ -612,7 +637,7 @@ impl eframe::App for WorkbenchApp {
                             egui::RichText::new("📋 Quick Palette [F2]")
                                 .strong()
                                 .color(if is_pal {
-                                    egui::Color32::WHITE
+                                    tab_selected_fg
                                 } else {
                                     brand_color
                                 }),
@@ -628,7 +653,7 @@ impl eframe::App for WorkbenchApp {
                             egui::RichText::new("⚙ Auto-Actions [F3]")
                                 .strong()
                                 .color(if is_auto {
-                                    egui::Color32::WHITE
+                                    tab_selected_fg
                                 } else {
                                     hex_to_c32(&self.renderer.palette.url_color)
                                 }),
@@ -648,7 +673,7 @@ impl eframe::App for WorkbenchApp {
                             egui::RichText::new("🎨 Themes [F4]")
                                 .strong()
                                 .color(if is_themes {
-                                    egui::Color32::WHITE
+                                    tab_selected_fg
                                 } else {
                                     hex_to_c32(&self.renderer.palette.right_hand_border)
                                 }),
@@ -823,24 +848,26 @@ impl eframe::App for WorkbenchApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(format!("Selected ({}): {}", self.selected_slots.len(), slot_labels.join(" + ")))
-                                .color(egui::Color32::from_rgb(168, 85, 247))
+                                .color(hex_to_c32(&self.renderer.palette.harmonies.base))
                                 .strong(),
                         );
                         ui.label(
                             egui::RichText::new(" • [Space] Hands  |  [1] L+L1  |  [2] L+L2  |  [3] 3 Left  |  [0] L only")
-                                .color(egui::Color32::from_rgb(148, 163, 184))
+                                .color(hex_to_c32(&self.renderer.palette.theme.f_low))
                                 .small(),
                         );
 
                         if let Some((path, title)) = first_audio_item {
                             ui.add_space(8.0);
+                            let audio_bg = hex_to_c32(&self.renderer.palette.diff_add);
+                            let audio_fg = contrast_text_c32(audio_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
                             let audio_btn = egui::Button::new(
                                 egui::RichText::new("🎵 Preview & Slice Audio")
                                     .small()
                                     .strong()
-                                    .color(egui::Color32::WHITE),
+                                    .color(audio_fg),
                             )
-                            .fill(egui::Color32::from_rgb(16, 185, 129))
+                            .fill(audio_bg)
                             .rounding(4.0);
                             if ui.add(audio_btn).clicked() {
                                 self.audio_preview = Some(AudioPreviewState::new(path, title).with_editor(self.config.audio.editor.clone()));
@@ -849,13 +876,15 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some(img_item) = first_image_item {
                             ui.add_space(8.0);
+                            let img_bg = hex_to_c32(&self.renderer.palette.harmonies.base);
+                            let img_fg = contrast_text_c32(img_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
                             let img_btn = egui::Button::new(
                                 egui::RichText::new("🖼 Preview & Edit Image")
                                     .small()
                                     .strong()
-                                    .color(egui::Color32::WHITE),
+                                    .color(img_fg),
                             )
-                            .fill(egui::Color32::from_rgb(168, 85, 247))
+                            .fill(img_bg)
                             .rounding(4.0);
                             if ui.add(img_btn).clicked() {
                                 if let Ok(state) = ImagePreviewState::from_item(img_item, &self.config) {
@@ -890,13 +919,15 @@ impl eframe::App for WorkbenchApp {
                         };
                         if has_two_images {
                             ui.add_space(8.0);
+                            let diff_bg = hex_to_c32(&self.renderer.palette.harmonies.warm_attention);
+                            let diff_fg = contrast_text_c32(diff_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
                             let diff_btn = egui::Button::new(
                                 egui::RichText::new("🔍 Compare Images")
                                     .small()
                                     .strong()
-                                    .color(egui::Color32::WHITE),
+                                    .color(diff_fg),
                             )
-                            .fill(egui::Color32::from_rgb(234, 88, 12))
+                            .fill(diff_bg)
                             .rounding(4.0);
                             if ui.add(diff_btn).on_hover_text("Open interactive visual diff comparing the 2 images").clicked() {
                                 open_diff_requested = true;
@@ -951,13 +982,15 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some(pdf_path) = first_pdf_item {
                             ui.add_space(8.0);
+                            let pdf_bg = hex_to_c32(&self.renderer.palette.diff_del);
+                            let pdf_fg = contrast_text_c32(pdf_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
                             let pdf_btn = egui::Button::new(
                                 egui::RichText::new("📑 Edit PDF")
                                     .small()
                                     .strong()
-                                    .color(egui::Color32::WHITE),
+                                    .color(pdf_fg),
                             )
-                            .fill(egui::Color32::from_rgb(220, 38, 38))
+                            .fill(pdf_bg)
                             .rounding(4.0);
                             if ui.add(pdf_btn).on_hover_text("Open PDF Page Editor (Delete / Rotate pages)").clicked() {
                                 self.pdf_viewer = Some(PdfEditorState::new(pdf_path));
@@ -966,13 +999,15 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some((data, path)) = first_spreadsheet_item {
                             ui.add_space(8.0);
+                            let sheet_bg = hex_to_c32(&self.renderer.palette.harmonies.triadic_1);
+                            let sheet_fg = contrast_text_c32(sheet_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
                             let sheet_btn = egui::Button::new(
                                 egui::RichText::new("📊 View Spreadsheet")
                                     .small()
                                     .strong()
-                                    .color(egui::Color32::WHITE),
+                                    .color(sheet_fg),
                             )
-                            .fill(egui::Color32::from_rgb(13, 148, 136))
+                            .fill(sheet_bg)
                             .rounding(4.0);
                             if ui.add(sheet_btn).on_hover_text("Open full multi-sheet X/Y scrollable table").clicked() {
                                 self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, path));
@@ -981,13 +1016,15 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some(midi_path) = first_midi_item {
                             ui.add_space(8.0);
+                            let midi_bg = hex_to_c32(&self.renderer.palette.harmonies.triadic_2);
+                            let midi_fg = contrast_text_c32(midi_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
                             let midi_btn = egui::Button::new(
                                 egui::RichText::new("🎹 MIDI Piano Roll")
                                     .small()
                                     .strong()
-                                    .color(egui::Color32::WHITE),
+                                    .color(midi_fg),
                             )
-                            .fill(egui::Color32::from_rgb(37, 99, 235)) // Blue
+                            .fill(midi_bg)
                             .rounding(4.0);
                             if ui.add(midi_btn).on_hover_text("Open interactive MIDI piano roll visualizer & synth audio").clicked() {
                                 if let Ok(st) = MidiViewerState::from_file(midi_path) {
@@ -998,13 +1035,15 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some(stl_path) = first_stl_item {
                             ui.add_space(8.0);
+                            let stl_bg = hex_to_c32(&self.renderer.palette.harmonies.split_comp_1);
+                            let stl_fg = contrast_text_c32(stl_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
                             let stl_btn = egui::Button::new(
                                 egui::RichText::new("🧊 3D STL Model")
                                     .small()
                                     .strong()
-                                    .color(egui::Color32::WHITE),
+                                    .color(stl_fg),
                             )
-                            .fill(egui::Color32::from_rgb(217, 119, 6)) // Amber
+                            .fill(stl_bg)
                             .rounding(4.0);
                             if ui.add(stl_btn).on_hover_text("Open interactive 3D orbit viewer (pan, zoom, rotate)").clicked() {
                                 if let Ok(st) = StlViewerState::from_file(stl_path) {
@@ -1021,14 +1060,16 @@ impl eframe::App for WorkbenchApp {
                             let trimmed = text.trim();
                             if let Some(conv) = little_clip_ops::detect_unit_conversion(trimmed) {
                                 ui.add_space(8.0);
+                                let unit_bg = hex_to_c32(&self.renderer.palette.harmonies.split_comp_2);
+                                let unit_fg = contrast_text_c32(unit_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
                                 let label = format!("⚖ {}", conv.summary_line());
                                 let btn = egui::Button::new(
                                     egui::RichText::new(label)
                                         .small()
                                         .strong()
-                                        .color(egui::Color32::from_rgb(167, 243, 208)),
+                                        .color(unit_fg),
                                 )
-                                .fill(egui::Color32::from_rgb(6, 78, 59))
+                                .fill(unit_bg)
                                 .rounding(4.0);
                                 if ui.add(btn).on_hover_text("Click to copy converted unit").clicked() {
                                     ui.output_mut(|o| o.copied_text = conv.primary_conversion.clone());
@@ -1036,6 +1077,8 @@ impl eframe::App for WorkbenchApp {
                                 }
                             } else if let Some(net) = little_clip_ops::detect_network_preview(trimmed) {
                                 ui.add_space(8.0);
+                                let net_bg = hex_to_c32(&self.renderer.palette.diff_mod);
+                                let net_fg = contrast_text_c32(net_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
                                 let label = match &net {
                                     little_clip_ops::NetworkPreview::Ip { ip, rfc_class, .. } => format!("🌐 {} ({})", ip, rfc_class),
                                     little_clip_ops::NetworkPreview::Mac { formatted, vendor, .. } => format!("🔌 {} ({})", formatted, vendor),
@@ -1044,9 +1087,9 @@ impl eframe::App for WorkbenchApp {
                                     egui::RichText::new(label)
                                         .small()
                                         .strong()
-                                        .color(egui::Color32::from_rgb(186, 230, 253)),
+                                        .color(net_fg),
                                 )
-                                .fill(egui::Color32::from_rgb(12, 74, 110))
+                                .fill(net_bg)
                                 .rounding(4.0);
                                 if ui.add(btn).on_hover_text("Network address info (Click to copy summary)").clicked() {
                                     let lines = net.summary_lines().join("\n");
@@ -1055,14 +1098,16 @@ impl eframe::App for WorkbenchApp {
                                 }
                             } else if let Some(ts) = little_clip_ops::detect_timestamp(trimmed) {
                                 ui.add_space(8.0);
+                                let ts_bg = hex_to_c32(&self.renderer.palette.harmonies.tetradic_1);
+                                let ts_fg = contrast_text_c32(ts_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
                                 let label = format!("⏱ {} ({})", ts.human_readable, ts.relative);
                                 let btn = egui::Button::new(
                                     egui::RichText::new(label)
                                         .small()
                                         .strong()
-                                        .color(egui::Color32::from_rgb(253, 230, 138)),
+                                        .color(ts_fg),
                                 )
-                                .fill(egui::Color32::from_rgb(120, 53, 15))
+                                .fill(ts_bg)
                                 .rounding(4.0);
                                 if ui.add(btn).on_hover_text(format!("UTC: {}\nEpoch: {}\nClick to copy ISO 8601", ts.utc_iso, ts.epoch_sec)).clicked() {
                                     ui.output_mut(|o| o.copied_text = ts.utc_iso.clone());
@@ -1078,13 +1123,15 @@ impl eframe::App for WorkbenchApp {
                             } else {
                                 "📄 View Text / Code"
                             };
+                            let txt_bg = hex_to_c32(&self.renderer.palette.harmonies.tetradic_2);
+                            let txt_fg = contrast_text_c32(txt_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
                             let txt_btn = egui::Button::new(
                                 egui::RichText::new(label)
                                     .small()
                                     .strong()
-                                    .color(egui::Color32::WHITE),
+                                    .color(txt_fg),
                             )
-                            .fill(egui::Color32::from_rgb(14, 116, 144))
+                            .fill(txt_bg)
                             .rounding(4.0);
                             if ui.add(txt_btn).on_hover_text("Open big text preview (syntax highlighting, line wrapping, search, and editor export)").clicked() {
                                 if let Some(p) = file_p {
@@ -1109,7 +1156,7 @@ impl eframe::App for WorkbenchApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("Action > ")
-                                .color(egui::Color32::from_rgb(99, 102, 241))
+                                .color(hex_to_c32(&self.renderer.palette.harmonies.base))
                                 .strong(),
                         );
                         let audio_region_active = self.is_audio_region_active();
@@ -1147,16 +1194,16 @@ impl eframe::App for WorkbenchApp {
                             ui.add_space(10.0);
                             ui.label(
                                 egui::RichText::new("No matching actions or recipes found.")
-                                    .color(egui::Color32::from_rgb(148, 163, 184))
+                                    .color(hex_to_c32(&self.renderer.palette.theme.f_low))
                                     .italics(),
                             );
                         } else {
                             for (idx, act) in filtered.iter().enumerate() {
                                 let is_selected = idx == self.selected_action_index;
                                 let bg = if is_selected {
-                                    egui::Color32::from_rgb(45, 55, 80)
+                                    hex_to_c32(&self.renderer.palette.theme.b_med)
                                 } else {
-                                    egui::Color32::from_rgb(24, 28, 38)
+                                    hex_to_c32(&self.renderer.palette.theme.b_low)
                                 };
 
                                 let frame = egui::Frame::none()
@@ -1166,17 +1213,18 @@ impl eframe::App for WorkbenchApp {
 
                                 frame.show(ui, |ui| {
                                     ui.horizontal(|ui| {
-                                        let label_color = if is_selected {
-                                            egui::Color32::from_rgb(255, 255, 255)
+                                        let preferred_fg = if is_selected {
+                                            hex_to_c32(&self.renderer.palette.theme.f_high)
                                         } else {
-                                            egui::Color32::from_rgb(226, 232, 240)
+                                            hex_to_c32(&self.renderer.palette.theme.f_med)
                                         };
+                                        let label_color = contrast_text_c32(bg, Some(preferred_fg), &self.renderer.palette);
 
                                         ui.label(egui::RichText::new(act.label()).color(label_color).strong());
                                         let cat_color = if act.category() == "Recipe" {
-                                            egui::Color32::from_rgb(168, 85, 247)
+                                            hex_to_c32(&self.renderer.palette.harmonies.triadic_1)
                                         } else {
-                                            egui::Color32::from_rgb(148, 163, 184)
+                                            hex_to_c32(&self.renderer.palette.theme.f_med)
                                         };
                                         ui.label(
                                             egui::RichText::new(format!("[{}]", act.category()))
@@ -1187,7 +1235,7 @@ impl eframe::App for WorkbenchApp {
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                             ui.label(
                                                 egui::RichText::new(act.description())
-                                                    .color(egui::Color32::from_rgb(148, 163, 184))
+                                                    .color(hex_to_c32(&self.renderer.palette.theme.f_low))
                                                     .small(),
                                             );
                                         });
@@ -1200,7 +1248,7 @@ impl eframe::App for WorkbenchApp {
 
                     if let Some(msg) = &self.status_msg {
                         ui.add_space(6.0);
-                        ui.label(egui::RichText::new(msg).color(egui::Color32::from_rgb(239, 68, 68)));
+                        ui.label(egui::RichText::new(msg).color(hex_to_c32(&self.renderer.palette.diff_del)));
                     }
 
                     // Footer hints
@@ -1209,7 +1257,7 @@ impl eframe::App for WorkbenchApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("[Enter] Execute & Paste  |  [F2 / Tab] Big Node Machine  |  [Esc] Dismiss")
-                                .color(egui::Color32::from_rgb(100, 116, 139))
+                                .color(hex_to_c32(&self.renderer.palette.theme.f_low))
                                 .small(),
                         );
                     });
@@ -1229,7 +1277,7 @@ impl eframe::App for WorkbenchApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("[Right/Mid Drag] Pan Canvas  |  [Scroll] Zoom  |  [F2] Quick Palette  |  [Esc] Dismiss")
-                                .color(egui::Color32::from_rgb(100, 116, 139))
+                                .color(hex_to_c32(&self.renderer.palette.theme.f_low))
                                 .small(),
                         );
                     });
@@ -1239,32 +1287,35 @@ impl eframe::App for WorkbenchApp {
                     ui.horizontal(|ui| {
                         ui.heading(
                             egui::RichText::new("⚙ Matched Auto-Actions")
-                                .color(egui::Color32::from_rgb(56, 189, 248))
+                                .color(hex_to_c32(&self.renderer.palette.harmonies.base))
                                 .strong(),
                         );
                         ui.label(
                             egui::RichText::new("— Actions trigger automatically on clipboard match")
-                                .color(egui::Color32::from_rgb(148, 163, 184)),
+                                .color(hex_to_c32(&self.renderer.palette.theme.f_med)),
                         );
                     });
                     ui.add_space(8.0);
 
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         // Card 1: URL Tracking Cleaner
+                        let card_bg = hex_to_c32(&self.renderer.palette.theme.b_low);
+                        let card_stroke = hex_to_c32(&self.renderer.palette.theme.b_med);
                         egui::Frame::none()
-                            .fill(egui::Color32::from_rgb(24, 28, 38))
-                            .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(56, 189, 248)))
+                            .fill(card_bg)
+                            .stroke(egui::Stroke::new(1.0, card_stroke))
                             .rounding(egui::Rounding::same(8.0))
                             .inner_margin(egui::Margin::symmetric(16.0, 14.0))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     let mut trim = self.config.auto_actions.trim_link_tracking;
+                                    let title_color = contrast_text_c32(card_bg, Some(hex_to_c32(&self.renderer.palette.theme.f_high)), &self.renderer.palette);
                                     let cb = ui.checkbox(
                                         &mut trim,
                                         egui::RichText::new("Clean Tracking from Links")
                                             .strong()
                                             .size(15.0)
-                                            .color(egui::Color32::WHITE),
+                                            .color(title_color),
                                     );
                                     if cb.changed() {
                                         self.config.auto_actions.trim_link_tracking = trim;
@@ -1275,17 +1326,18 @@ impl eframe::App for WorkbenchApp {
                                     }
 
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        let (status_text, status_color) = if trim {
-                                            ("ENABLED", egui::Color32::from_rgb(34, 197, 94))
+                                        let (status_text, badge_bg, pref_fg) = if trim {
+                                            ("ENABLED", hex_to_c32(&self.renderer.palette.diff_add), hex_to_c32(&self.renderer.palette.theme.f_high))
                                         } else {
-                                            ("DISABLED", egui::Color32::from_rgb(148, 163, 184))
+                                            ("DISABLED", hex_to_c32(&self.renderer.palette.theme.b_med), hex_to_c32(&self.renderer.palette.theme.f_med))
                                         };
+                                        let badge_fg = contrast_text_c32(badge_bg, Some(pref_fg), &self.renderer.palette);
                                         egui::Frame::none()
-                                            .fill(if trim { egui::Color32::from_rgb(20, 83, 45) } else { egui::Color32::from_rgb(51, 65, 85) })
+                                            .fill(badge_bg)
                                             .rounding(egui::Rounding::same(4.0))
                                             .inner_margin(egui::Margin::symmetric(8.0, 3.0))
                                             .show(ui, |ui| {
-                                                ui.label(egui::RichText::new(status_text).size(11.0).strong().color(status_color));
+                                                ui.label(egui::RichText::new(status_text).size(11.0).strong().color(badge_fg));
                                             });
                                     });
                                 });
@@ -1295,7 +1347,7 @@ impl eframe::App for WorkbenchApp {
                                     egui::RichText::new(
                                         "Automatically strips tracking queries (utm_source, utm_medium, fbclid, gclid, twclid, si, etc.) when any HTTP or HTTPS URL is copied to the clipboard.",
                                     )
-                                    .color(egui::Color32::from_rgb(203, 213, 225)),
+                                    .color(hex_to_c32(&self.renderer.palette.theme.f_high)),
                                 );
                                 ui.add_space(4.0);
                                 ui.label(
@@ -1303,7 +1355,7 @@ impl eframe::App for WorkbenchApp {
                                         "↳ Behavior: Cleaned link is placed directly into the active hand; original untracked URL is preserved in Undo [Z] for instant bypass.",
                                     )
                                     .small()
-                                    .color(egui::Color32::from_rgb(148, 163, 184)),
+                                    .color(hex_to_c32(&self.renderer.palette.theme.f_med)),
                                 );
                             });
 
@@ -1313,8 +1365,8 @@ impl eframe::App for WorkbenchApp {
                     ui.separator();
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new("[Esc / F2] Back to Quick Palette  |  [F1] Big Node Machine  |  [F4] Themes")
-                                .color(hex_to_c32(&self.renderer.palette.subtitle_color))
+                            egui::RichText::new("[Click] Toggle Setting  |  [Esc] Dismiss")
+                                .color(hex_to_c32(&self.renderer.palette.theme.f_low))
                                 .small(),
                         );
                     });
@@ -1346,6 +1398,8 @@ impl WorkbenchApp {
             let mut close_prompt = false;
             let mut submit_text: Option<String> = None;
 
+            let modal_bg = hex_to_c32(&self.renderer.palette.theme.b_low);
+            let modal_stroke = hex_to_c32(&self.renderer.palette.harmonies.base);
             egui::Window::new(format!("✦ Input Required — {}", prompt.recipe_name))
                 .collapsible(false)
                 .resizable(false)
@@ -1353,8 +1407,8 @@ impl WorkbenchApp {
                 .fixed_size([500.0, 180.0])
                 .frame(
                     egui::Frame::window(&ctx.style())
-                        .fill(egui::Color32::from_rgb(20, 24, 34))
-                        .stroke(egui::Stroke::new(1.5, egui::Color32::from_rgb(99, 102, 241)))
+                        .fill(modal_bg)
+                        .stroke(egui::Stroke::new(1.5, modal_stroke))
                         .rounding(8.0)
                         .inner_margin(egui::Margin::symmetric(22.0, 18.0)),
                 )
@@ -1362,13 +1416,13 @@ impl WorkbenchApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("✦")
-                                .color(egui::Color32::from_rgb(168, 85, 247))
+                                .color(hex_to_c32(&self.renderer.palette.harmonies.triadic_1))
                                 .strong()
                                 .size(18.0),
                         );
                         ui.heading(
                             egui::RichText::new(&prompt.recipe_name)
-                                .color(egui::Color32::from_rgb(241, 245, 249))
+                                .color(hex_to_c32(&self.renderer.palette.theme.f_high))
                                 .strong(),
                         );
                     });
@@ -1376,7 +1430,7 @@ impl WorkbenchApp {
                     ui.add_space(8.0);
                     ui.label(
                         egui::RichText::new(&prompt.message)
-                            .color(egui::Color32::from_rgb(148, 163, 184))
+                            .color(hex_to_c32(&self.renderer.palette.theme.f_med))
                             .size(13.0),
                     );
 
@@ -1396,21 +1450,25 @@ impl WorkbenchApp {
 
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
+                        let sub_bg = hex_to_c32(&self.renderer.palette.harmonies.base);
+                        let sub_fg = contrast_text_c32(sub_bg, Some(hex_to_c32(&self.renderer.palette.theme.f_high)), &self.renderer.palette);
                         let submit_btn = ui.add(
                             egui::Button::new(
                                 egui::RichText::new("Execute & Run [Enter]")
-                                    .color(egui::Color32::WHITE)
+                                    .color(sub_fg)
                                     .strong(),
                             )
-                            .fill(egui::Color32::from_rgb(79, 70, 229)),
+                            .fill(sub_bg),
                         );
 
+                        let can_bg = hex_to_c32(&self.renderer.palette.theme.b_med);
+                        let can_fg = contrast_text_c32(can_bg, Some(hex_to_c32(&self.renderer.palette.theme.f_med)), &self.renderer.palette);
                         let cancel_btn = ui.add(
                             egui::Button::new(
                                 egui::RichText::new("Cancel [Esc]")
-                                    .color(egui::Color32::from_rgb(148, 163, 184)),
+                                    .color(can_fg),
                             )
-                            .fill(egui::Color32::from_rgb(30, 41, 59)),
+                            .fill(can_bg),
                         );
 
                         if submit_btn.clicked() || enter {
@@ -2060,7 +2118,7 @@ impl WorkbenchApp {
                                     let c = hex_to_c32(hex);
                                     let (rect, resp) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
                                     ui.painter().circle_filled(rect.center(), 4.5, c);
-                                    ui.painter().circle_stroke(rect.center(), 4.5, egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 60)));
+                                    ui.painter().circle_stroke(rect.center(), 4.5, egui::Stroke::new(0.5, hex_to_c32_alpha(&theme.f_high, 60)));
                                     resp.on_hover_ui(|ui| {
                                         ui.label(egui::RichText::new(format!("{}: {}", label, hex)).small());
                                     });
@@ -2086,7 +2144,7 @@ impl WorkbenchApp {
                                 for (_id, hex, label) in swatches {
                                     let c = hex_to_c32(hex);
                                     let (rect, resp) = ui.allocate_exact_size(egui::vec2(15.0, 13.0), egui::Sense::hover());
-                                    ui.painter().rect(rect, 2.0, c, egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 40)));
+                                    ui.painter().rect(rect, 2.0, c, egui::Stroke::new(0.5, hex_to_c32_alpha(&theme.f_high, 40)));
                                     resp.on_hover_ui(|ui| {
                                         ui.label(egui::RichText::new(format!("{}: {}", label, hex)).small().strong());
                                     });
@@ -2155,16 +2213,18 @@ struct PromptApp {
     input_text: String,
     recipe_name: Option<String>,
     first_frame: bool,
+    palette: AppPalette,
 }
 
 impl PromptApp {
-    pub fn new(title: String, message: String, default_text: String, recipe_name: Option<String>) -> Self {
+    pub fn new(title: String, message: String, default_text: String, recipe_name: Option<String>, palette: AppPalette) -> Self {
         Self {
             title,
             message,
             input_text: default_text,
             recipe_name,
             first_frame: true,
+            palette,
         }
     }
 }
@@ -2175,23 +2235,26 @@ impl eframe::App for PromptApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
 
+        let p_bg = hex_to_c32(&self.palette.theme.b_low);
+        let p_border = hex_to_c32(&self.palette.harmonies.base);
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(15, 17, 23))
+                    .fill(p_bg)
+                    .stroke(egui::Stroke::new(1.0, p_border))
                     .inner_margin(egui::Margin::symmetric(24.0, 20.0)),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("✦")
-                            .color(egui::Color32::from_rgb(168, 85, 247))
+                            .color(hex_to_c32(&self.palette.harmonies.triadic_1))
                             .strong()
                             .size(18.0),
                     );
                     ui.heading(
                         egui::RichText::new(&self.title)
-                            .color(egui::Color32::from_rgb(241, 245, 249))
+                            .color(hex_to_c32(&self.palette.theme.f_high))
                             .strong(),
                     );
                 });
@@ -2199,7 +2262,7 @@ impl eframe::App for PromptApp {
                 ui.add_space(8.0);
                 ui.label(
                     egui::RichText::new(&self.message)
-                        .color(egui::Color32::from_rgb(148, 163, 184))
+                        .color(hex_to_c32(&self.palette.theme.f_med))
                         .size(13.0),
                 );
 
@@ -2220,22 +2283,26 @@ impl eframe::App for PromptApp {
 
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
+                    let sub_bg = hex_to_c32(&self.palette.harmonies.base);
+                    let sub_fg = contrast_text_c32(sub_bg, Some(hex_to_c32(&self.palette.theme.f_high)), &self.palette);
                     let submit_btn = ui.add(
                         egui::Button::new(
                             egui::RichText::new("Execute & Run [Enter]")
-                                .color(egui::Color32::WHITE)
+                                .color(sub_fg)
                                 .strong(),
                         )
-                        .fill(egui::Color32::from_rgb(79, 70, 229))
+                        .fill(sub_bg)
                         .min_size(egui::vec2(140.0, 32.0)),
                     );
 
+                    let can_bg = hex_to_c32(&self.palette.theme.b_med);
+                    let can_fg = contrast_text_c32(can_bg, Some(hex_to_c32(&self.palette.theme.f_med)), &self.palette);
                     let cancel_btn = ui.add(
                         egui::Button::new(
                             egui::RichText::new("Cancel [Esc]")
-                                .color(egui::Color32::from_rgb(148, 163, 184)),
+                                .color(can_fg),
                         )
-                        .fill(egui::Color32::from_rgb(30, 41, 59))
+                        .fill(can_bg)
                         .min_size(egui::vec2(80.0, 32.0)),
                     );
 
@@ -2268,6 +2335,10 @@ fn run_prompt_modal(
     default_text: String,
     recipe_name: Option<String>,
 ) -> Result<(), eframe::Error> {
+    let config = AppConfig::load();
+    let renderer = ScreenRenderer::new(config.clone())
+        .unwrap_or_else(|_| ScreenRenderer::fallback(config.clone()));
+    let palette = renderer.palette;
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([480.0, 180.0])
@@ -2282,7 +2353,7 @@ fn run_prompt_modal(
     eframe::run_native(
         "clip-prompt",
         options,
-        Box::new(move |_cc| Box::new(PromptApp::new(title, message, default_text, recipe_name))),
+        Box::new(move |_cc| Box::new(PromptApp::new(title, message, default_text, recipe_name, palette))),
     )
 }
 

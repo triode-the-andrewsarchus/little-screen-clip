@@ -29,6 +29,27 @@ impl Default for Theme {
     }
 }
 
+/// Computes the relative luminance (0.0 to 1.0) of an RGB color according to WCAG 2.1.
+pub fn relative_luminance(r: u8, g: u8, b: u8) -> f32 {
+    fn to_linear(c: u8) -> f32 {
+        let s = c as f32 / 255.0;
+        if s <= 0.04045 {
+            s / 12.92
+        } else {
+            ((s + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * to_linear(r) + 0.7152 * to_linear(g) + 0.0722 * to_linear(b)
+}
+
+/// Computes the WCAG contrast ratio (between 1.0 and 21.0) between two RGB colors.
+pub fn contrast_ratio(rgb1: (u8, u8, u8), rgb2: (u8, u8, u8)) -> f32 {
+    let l1 = relative_luminance(rgb1.0, rgb1.1, rgb1.2);
+    let l2 = relative_luminance(rgb2.0, rgb2.1, rgb2.2);
+    let (lighter, darker) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
 impl Theme {
     /// Apollo built-in default theme.
     pub fn apollo() -> Self {
@@ -52,6 +73,51 @@ impl Theme {
         // Perceived relative luminance
         let lum = 0.2126 * (r as f32) + 0.7152 * (g as f32) + 0.0722 * (b as f32);
         lum < 128.0
+    }
+
+    /// Selects the best foreground color to render on `bg_hex`.
+    /// 1. Tests `preferred_fg` (or `f_high` by default). If contrast >= 4.5, returns it.
+    /// 2. If contrast < 4.5, tries the bg color from other theme fg/bg pairs, or `f_inv` (e.g. `background`, `b_low`, `b_med`, `b_high`, `b_inv`, `f_inv`).
+    /// 3. If none achieve contrast >= 4.5, selects between pure black ("#000000") and pure white ("#ffffff"),
+    ///    whichever provides higher contrast against `bg_hex`.
+    pub fn contrast_pair_fg(&self, bg_hex: &str, preferred_fg: Option<&str>) -> String {
+        let (br, bg, bb, _) = parse_hex_color_rgba(bg_hex);
+        let bg_rgb = (br, bg, bb);
+
+        let pref = preferred_fg.unwrap_or(&self.f_high);
+        let (pr, pg, pb, _) = parse_hex_color_rgba(pref);
+        if contrast_ratio(bg_rgb, (pr, pg, pb)) >= 4.5 {
+            return pref.to_string();
+        }
+
+        // Try the bg color from other fg/bg pairs or f_inv / fg colors
+        let candidates = [
+            &self.f_inv,
+            &self.background,
+            &self.b_low,
+            &self.b_high,
+            &self.b_med,
+            &self.b_inv,
+            &self.f_high,
+            &self.f_med,
+            &self.f_low,
+        ];
+
+        for cand in candidates {
+            let (cr, cg, cb, _) = parse_hex_color_rgba(cand);
+            if contrast_ratio(bg_rgb, (cr, cg, cb)) >= 4.5 {
+                return cand.clone();
+            }
+        }
+
+        // Fallback: Pick between pure black and pure white
+        let black_ratio = contrast_ratio(bg_rgb, (0, 0, 0));
+        let white_ratio = contrast_ratio(bg_rgb, (255, 255, 255));
+        if black_ratio >= white_ratio {
+            "#000000".to_string()
+        } else {
+            "#ffffff".to_string()
+        }
     }
 
     /// Parses a Hundred Rabbits SVG theme content.
@@ -518,6 +584,11 @@ impl AppPalette {
     pub fn rgba(&self, hex: &str) -> (u8, u8, u8, u8) {
         parse_hex_color_rgba(hex)
     }
+
+    /// Selects the best foreground color to render on `bg_hex` with sufficient contrast (minimum 4.5:1).
+    pub fn contrast_pair_fg(&self, bg_hex: &str, preferred_fg: Option<&str>) -> String {
+        self.theme.contrast_pair_fg(bg_hex, preferred_fg)
+    }
 }
 
 #[cfg(test)]
@@ -530,6 +601,25 @@ mod tests {
         let oklab = Oklab::from_rgb(r, g, b);
         let (out_r, out_g, out_b) = oklab.to_rgb();
         assert_eq!((r, g, b), (out_r, out_g, out_b));
+    }
+
+    #[test]
+    fn test_contrast_calculation_and_selection() {
+        // Black vs White contrast is 21:1
+        let cr = contrast_ratio((0, 0, 0), (255, 255, 255));
+        assert!((cr - 21.0).abs() < 0.1);
+
+        let theme = Theme::apollo();
+        // On dark background (#28211c), preferred f_high (#ffefc9) has great contrast
+        let fg_on_dark = theme.contrast_pair_fg(&theme.background, Some(&theme.f_high));
+        assert_eq!(fg_on_dark, theme.f_high);
+
+        // On a light background that matches f_high, contrast_pair_fg should choose a dark color
+        let fg_on_light = theme.contrast_pair_fg("#ffffff", Some(&theme.f_high));
+        assert_ne!(fg_on_light, "#ffffff");
+        let (fg_r, fg_g, fg_b, _) = parse_hex_color_rgba(&fg_on_light);
+        let ratio = contrast_ratio((255, 255, 255), (fg_r, fg_g, fg_b));
+        assert!(ratio >= 4.5);
     }
 
     #[test]

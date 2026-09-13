@@ -1684,7 +1684,8 @@ where
 
             let mut note_strip_col_rgba = vec![0u8; note_strip_height * 4];
             let note_info = if chord_notes.is_empty() {
-                let bg_rgb = [15u8, 20u8, 32u8, 255u8];
+                // Fully transparent so active theme background displays seamlessly behind the ribbon
+                let bg_rgb = [0u8, 0u8, 0u8, 0u8];
                 for row in 0..note_strip_height {
                     let idx = row * 4;
                     note_strip_col_rgba[idx..idx + 4].copy_from_slice(&bg_rgb);
@@ -1694,7 +1695,7 @@ where
                     frequency_hz: 0.0,
                     amplitude: 0.0,
                     active: false,
-                    rgb: [15, 20, 32],
+                    rgb: [0, 0, 0],
                     chord_notes: Vec::new(),
                 }
             } else {
@@ -1706,7 +1707,7 @@ where
                     for row in row_start..row_end {
                         let idx = row * 4;
                         if num_notes > 1 && row == row_start && k > 0 {
-                            note_strip_col_rgba[idx..idx + 4].copy_from_slice(&[10, 15, 26, 255]);
+                            note_strip_col_rgba[idx..idx + 4].copy_from_slice(&[0, 0, 0, 160]);
                         } else {
                             note_strip_col_rgba[idx..idx + 4].copy_from_slice(&[n.rgb[0], n.rgb[1], n.rgb[2], 255]);
                         }

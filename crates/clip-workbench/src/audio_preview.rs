@@ -2858,6 +2858,8 @@ impl AudioPreviewState {
             let u_start = (v_start / total_dur).clamp(0.0, 1.0);
             let u_end = ((v_start + v_dur) / total_dur).clamp(0.0, 1.0);
             let uv = Rect::from_min_max(Pos2::new(u_start, 0.0), Pos2::new(u_end, 1.0));
+            // Paint theme background under texture so silent/empty note regions match active theme
+            painter.rect_filled(strip_rect, Rounding::ZERO, bg_frame);
             painter.image(tex.id(), strip_rect, uv, Color32::WHITE);
         } else {
             painter.rect_filled(strip_rect, Rounding::ZERO, bg_frame);
@@ -3056,14 +3058,14 @@ impl AudioPreviewState {
             painter.rect_filled(
                 Rect::from_min_size(badge_pos, Vec2::new(65.0, 18.0)),
                 Rounding::same(4.0),
-                Color32::from_rgba_unmultiplied(15, 23, 42, 220),
+                crate::hex_to_c32_alpha(&palette.theme.b_low, 220),
             );
             painter.text(
                 Pos2::new(badge_pos.x + 4.0, badge_pos.y + 9.0),
                 egui::Align2::LEFT_CENTER,
                 badge_text,
                 egui::FontId::monospace(10.0),
-                Color32::from_rgb(248, 113, 113),
+                crate::hex_to_c32(&palette.diff_del),
             );
         }
 

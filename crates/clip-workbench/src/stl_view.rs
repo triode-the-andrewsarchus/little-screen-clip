@@ -126,36 +126,41 @@ impl StlViewerState {
 
                     ui.add_space(16.0);
                     // Controls
+                    let auto_rot_bg = if self.auto_rotate { b_med } else { accent };
+                    let auto_rot_fg = crate::contrast_text_c32(auto_rot_bg, Some(f_high), palette);
                     let auto_rot_btn = egui::Button::new(
                         egui::RichText::new(if self.auto_rotate { "⏸ Pause Rotation" } else { "▶ Auto-Rotate" })
                             .small()
                             .strong()
-                            .color(f_high),
+                            .color(auto_rot_fg),
                     )
-                    .fill(if self.auto_rotate { b_med } else { accent })
+                    .fill(auto_rot_bg)
                     .stroke(Stroke::new(1.0, b_low))
                     .rounding(Rounding::same(4.0));
                     if ui.add(auto_rot_btn).clicked() {
                         self.auto_rotate = !self.auto_rotate;
                     }
 
+                    let wire_bg = if self.wireframe { accent } else { b_med };
+                    let wire_fg = crate::contrast_text_c32(wire_bg, Some(f_high), palette);
                     let wire_btn = egui::Button::new(
                         egui::RichText::new(if self.wireframe { "🎨 Shaded" } else { "📐 Wireframe" })
                             .small()
                             .strong()
-                            .color(f_high),
+                            .color(wire_fg),
                     )
-                    .fill(if self.wireframe { accent } else { b_med })
+                    .fill(wire_bg)
                     .stroke(Stroke::new(1.0, b_low))
                     .rounding(Rounding::same(4.0));
                     if ui.add(wire_btn).clicked() {
                         self.wireframe = !self.wireframe;
                     }
 
+                    let reset_fg = crate::contrast_text_c32(b_med, Some(f_med), palette);
                     let reset_btn = egui::Button::new(
                         egui::RichText::new("↺ Reset View")
                             .small()
-                            .color(f_med),
+                            .color(reset_fg),
                     )
                     .fill(b_med)
                     .stroke(Stroke::new(1.0, b_low))
@@ -166,12 +171,14 @@ impl StlViewerState {
 
                     // Right aligned Close button
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let close_bg = crate::hex_to_c32(&palette.undo_card_bg);
+                        let close_fg = crate::contrast_text_c32(close_bg, Some(crate::hex_to_c32(&palette.undo_border)), palette);
                         let close_btn = egui::Button::new(
                             egui::RichText::new("✕ Close (Esc)")
                                 .strong()
-                                .color(crate::hex_to_c32(&palette.undo_border)),
+                                .color(close_fg),
                         )
-                        .fill(crate::hex_to_c32(&palette.undo_card_bg))
+                        .fill(close_bg)
                         .stroke(Stroke::new(1.0, crate::hex_to_c32(&palette.undo_border)))
                         .rounding(Rounding::same(6.0));
                         if ui.add(close_btn).clicked() {
