@@ -16,6 +16,8 @@ pub mod raw_image;
 pub use raw_image::*;
 pub mod pdf;
 pub use pdf::*;
+pub mod theme;
+pub use theme::{AppPalette, DerivedHarmonies, Oklab, Oklch, Theme, find_themes_dir, load_themes_from_dir};
 pub use color::parse_hex_color;
 
 

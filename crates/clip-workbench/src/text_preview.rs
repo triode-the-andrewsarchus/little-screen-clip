@@ -347,7 +347,7 @@ impl TextPreviewState {
         self.handle_shortcuts(ctx, close);
 
         egui::Frame::none()
-            .fill(Color32::from_rgb(15, 23, 42)) // Slate 900
+            .fill(ui.visuals().window_fill())
             .inner_margin(egui::Margin::same(16.0))
             .show(ui, |ui| {
                 self.render_header(ui, ctx, close);
@@ -405,13 +405,13 @@ impl TextPreviewState {
                 egui::RichText::new(&self.title)
                     .strong()
                     .size(17.0)
-                    .color(Color32::WHITE),
+                    .color(ui.visuals().text_color()),
             );
 
             ui.add_space(8.0);
             let lang_label = self.language.to_uppercase();
             egui::Frame::none()
-                .fill(Color32::from_rgb(30, 41, 59))
+                .fill(ui.visuals().widgets.noninteractive.bg_fill)
                 .rounding(Rounding::same(4.0))
                 .inner_margin(egui::Margin::symmetric(6.0, 2.0))
                 .show(ui, |ui| {
@@ -419,7 +419,7 @@ impl TextPreviewState {
                         egui::RichText::new(lang_label)
                             .small()
                             .strong()
-                            .color(Color32::from_rgb(56, 189, 248)),
+                            .color(ui.visuals().hyperlink_color),
                     );
                 });
 
@@ -717,8 +717,8 @@ impl TextPreviewState {
 
         // Unified editor surface frame
         egui::Frame::none()
-            .fill(Color32::from_rgb(18, 22, 30))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(45, 55, 75)))
+            .fill(ui.visuals().extreme_bg_color)
+            .stroke(ui.visuals().window_stroke())
             .rounding(Rounding::same(6.0))
             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
@@ -736,13 +736,13 @@ impl TextPreviewState {
                             ui.label(
                                 egui::RichText::new(line_numbers_text)
                                     .font(FontId::monospace(12.5))
-                                    .color(Color32::from_rgb(90, 105, 130)),
+                                    .color(ui.visuals().weak_text_color()),
                             );
 
                             ui.add_space(8.0);
                             let h = (total_lines as f32 * 17.5).max(ui.available_height());
                             let (div_rect, _) = ui.allocate_exact_size(Vec2::new(1.0, h), egui::Sense::hover());
-                            ui.painter().vline(div_rect.center().x, div_rect.y_range(), Stroke::new(1.0, Color32::from_rgb(45, 55, 75)));
+                            ui.painter().vline(div_rect.center().x, div_rect.y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
                             ui.add_space(8.0);
                         }
 

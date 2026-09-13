@@ -6,6 +6,7 @@
 use fontdue::{Font, FontSettings};
 use image::{codecs::jpeg::JpegEncoder, ExtendedColorType};
 use little_clip_core::config::{parse_hex_color, AppConfig};
+use little_clip_core::theme::AppPalette;
 use little_clip_core::{ClipItem, ClipPayload, SlotId, SlotManager};
 use std::path::Path;
 use std::sync::LazyLock;
@@ -37,16 +38,16 @@ pub enum RenderError {
 
 pub mod markdown;
 
-/// Font weight and slant variations for typography rendering.
+/// Font style variants supported by the screen renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontStyle {
     /// Standard regular font weight.
     Regular,
-    /// Bold font weight.
+    /// Bold font weight for headers and titles.
     Bold,
-    /// Italic / oblique font slant.
+    /// Italic slant for subtitles and file paths.
     Italic,
-    /// Bold and italic font style.
+    /// Bold italic emphasis.
     BoldItalic,
     /// Monospaced font style.
     Mono,
@@ -60,29 +61,35 @@ pub struct ScreenRenderer {
     font_mono: Option<Font>,
     /// Active styling and theme configuration.
     pub config: AppConfig,
+    /// Resolved active theme palette.
+    pub palette: AppPalette,
 }
 
 impl ScreenRenderer {
     /// Creates a new `ScreenRenderer` with standard system fonts loaded.
     pub fn new(config: AppConfig) -> Result<Self, RenderError> {
         let (font_regular, font_bold, font_italic, font_mono) = Self::load_fonts();
+        let palette = config.resolve_palette();
         Ok(Self {
             font_regular,
             font_bold,
             font_italic,
             font_mono,
             config,
+            palette,
         })
     }
 
     /// Creates a fallback `ScreenRenderer` without loaded fonts (for headless or font-free testing).
     pub fn fallback(config: AppConfig) -> Self {
+        let palette = config.resolve_palette();
         Self {
             font_regular: None,
             font_bold: None,
             font_italic: None,
             font_mono: None,
             config,
+            palette,
         }
     }
 
@@ -94,7 +101,22 @@ impl ScreenRenderer {
 
     /// Updates the active application configuration used for rendering.
     pub fn set_config(&mut self, config: AppConfig) {
+        self.palette = config.resolve_palette();
         self.config = config;
+    }
+
+    /// Converts a hex string into tiny-skia `Color`.
+    #[inline]
+    pub fn color_from_hex(&self, hex: &str) -> Color {
+        let (r, g, b, a) = parse_hex_color(hex);
+        Color::from_rgba8(r, g, b, a)
+    }
+
+    /// Converts a hex string into tiny-skia `Color` with custom alpha channel.
+    #[inline]
+    pub fn color_from_hex_alpha(&self, hex: &str, alpha: u8) -> Color {
+        let (r, g, b, _) = parse_hex_color(hex);
+        Color::from_rgba8(r, g, b, alpha)
     }
 
     fn load_fonts() -> (Option<Font>, Option<Font>, Option<Font>, Option<Font>) {
@@ -209,7 +231,7 @@ impl ScreenRenderer {
             .ok_or_else(|| RenderError::ImageEncode("Failed to allocate pixmap".to_string()))?;
 
         // Background: Configurable canvas color
-        let (bg_r, bg_g, bg_b, bg_a) = parse_hex_color(&self.config.colors.background);
+        let (bg_r, bg_g, bg_b, bg_a) = parse_hex_color(&self.palette.background);
         pixmap.fill(Color::from_rgba8(bg_r, bg_g, bg_b, bg_a));
 
         // 1. [Undo] (x: 0, w: 240)
@@ -252,12 +274,12 @@ impl ScreenRenderer {
             let badge_w = 460.0;
             let badge_h = 32.0;
             if let Some(br) = Rect::from_xywh(badge_x, badge_y, badge_w, badge_h) {
-                let (br_r, br_g, br_b, br_a) = parse_hex_color(&self.config.colors.debug_badge_bg);
+                let (br_r, br_g, br_b, br_a) = parse_hex_color(&self.palette.debug_badge_bg);
                 let mut paint = Paint::default();
                 paint.set_color(Color::from_rgba8(br_r, br_g, br_b, br_a));
                 pixmap.fill_rect(br, &paint, Transform::identity(), None);
 
-                let (str_r, str_g, str_b, str_a) = parse_hex_color(&self.config.colors.debug_badge_text);
+                let (str_r, str_g, str_b, str_a) = parse_hex_color(&self.palette.debug_badge_text);
                 let mut stroke_paint = Paint::default();
                 stroke_paint.set_color(Color::from_rgba8(str_r, str_g, str_b, (str_a as f32 * 0.8) as u8));
                 let mut stroke = Stroke::default();
@@ -276,6 +298,7 @@ impl ScreenRenderer {
                 );
             }
         }
+
 
         Ok(pixmap)
     }
@@ -298,14 +321,14 @@ impl ScreenRenderer {
     /// Returns the border color hex string configured for the given slot.
     pub fn slot_border_hex(&self, slot_id: SlotId) -> &str {
         match slot_id {
-            SlotId::Undo => &self.config.colors.undo_border,
-            SlotId::LeftHand => &self.config.colors.left_hand_border,
-            SlotId::LeftPrior1 => &self.config.colors.left_prior1_border,
-            SlotId::LeftPrior2 => &self.config.colors.left_prior2_border,
-            SlotId::LeftPrior3 => &self.config.colors.left_prior3_border,
-            SlotId::RightPrior2 => &self.config.colors.right_prior2_border,
-            SlotId::RightPrior1 => &self.config.colors.right_prior1_border,
-            SlotId::RightHand => &self.config.colors.right_hand_border,
+            SlotId::Undo => &self.palette.undo_border,
+            SlotId::LeftHand => &self.palette.left_hand_border,
+            SlotId::LeftPrior1 => &self.palette.left_prior1_border,
+            SlotId::LeftPrior2 => &self.palette.left_prior2_border,
+            SlotId::LeftPrior3 => &self.palette.left_prior3_border,
+            SlotId::RightPrior2 => &self.palette.right_prior2_border,
+            SlotId::RightPrior1 => &self.palette.right_prior1_border,
+            SlotId::RightHand => &self.palette.right_hand_border,
         }
     }
 
@@ -331,9 +354,9 @@ impl ScreenRenderer {
         let rect_h = h as f32 - (margin * 2.0);
 
         let border_hex = if is_cursor {
-            &self.config.colors.cursor_border
+            &self.palette.cursor_border
         } else if is_selected {
-            &self.config.colors.selected_border
+            &self.palette.selected_border
         } else {
             self.slot_border_hex(slot_id)
         };
@@ -343,10 +366,10 @@ impl ScreenRenderer {
         // Fill background
         if let Some(cr) = Rect::from_xywh(rect_x, rect_y, rect_w, rect_h) {
             let bg_hex = match slot_id {
-                SlotId::Undo => &self.config.colors.undo_card_bg,
-                SlotId::LeftHand | SlotId::RightHand => &self.config.colors.hero_card_bg,
+                SlotId::Undo => &self.palette.undo_card_bg,
+                SlotId::LeftHand | SlotId::RightHand => &self.palette.hero_card_bg,
                 SlotId::LeftPrior1 | SlotId::LeftPrior2 | SlotId::LeftPrior3 | SlotId::RightPrior2 | SlotId::RightPrior1 => {
-                    &self.config.colors.prior_card_bg
+                    &self.palette.prior_card_bg
                 }
             };
             let (bg_r, bg_g, bg_b, bg_a) = parse_hex_color(bg_hex);
@@ -398,7 +421,7 @@ impl ScreenRenderer {
                 rect_x + 14.0,
                 rect_y + 54.0,
                 if is_hero { 26.0 } else { 21.0 },
-                Color::from_rgba8(75, 85, 99, 255),
+                self.color_from_hex(&self.palette.f_low),
                 false,
                 card_clip_right,
             );
@@ -416,9 +439,9 @@ impl ScreenRenderer {
         is_hero: bool,
         border_color: Color,
     ) {
-        let (t_r, t_g, t_b, t_a) = parse_hex_color(&self.config.colors.title_color);
-        let (s_r, s_g, s_b, s_a) = parse_hex_color(&self.config.colors.subtitle_color);
-        let (u_r, u_g, u_b, u_a) = parse_hex_color(&self.config.colors.url_color);
+        let (t_r, t_g, t_b, t_a) = parse_hex_color(&self.palette.title_color);
+        let (s_r, s_g, s_b, s_a) = parse_hex_color(&self.palette.subtitle_color);
+        let (u_r, u_g, u_b, u_a) = parse_hex_color(&self.palette.url_color);
 
         let content_x = rx + 14.0;
         let max_content_w = (rw - 28.0).max(10.0);
@@ -1615,11 +1638,10 @@ impl ScreenRenderer {
         clip_right: f32,
     ) -> f32 {
         use crate::markdown::MarkdownSpan;
-        let (u_r, u_g, u_b, u_a) = parse_hex_color(&self.config.colors.url_color);
-        let url_color = Color::from_rgba8(u_r, u_g, u_b, u_a);
-        let title_color = Color::from_rgba8(248, 250, 252, 255);
-        let italic_color = Color::from_rgba8(203, 213, 225, 240);
-        let code_color = Color::from_rgba8(245, 158, 11, 255);
+        let url_color = self.color_from_hex(&self.palette.url_color);
+        let title_color = self.color_from_hex(&self.palette.title_color);
+        let italic_color = self.color_from_hex_alpha(&self.palette.body_color, 240);
+        let code_color = self.color_from_hex(&self.palette.undo_border);
 
         for span in spans {
             if cx >= clip_right {
@@ -1710,8 +1732,7 @@ impl ScreenRenderer {
         elision_color: Color,
     ) {
         use crate::markdown::MarkdownLine;
-        let (b_r, b_g, b_b, b_a) = parse_hex_color(&self.config.colors.body_color);
-        let body_color = Color::from_rgba8(b_r, b_g, b_b, b_a);
+        let body_color = self.color_from_hex(&self.palette.body_color);
         let content_x = rx + 14.0;
         let max_content_w = (rw - 28.0).max(10.0);
         let clip_right = rx + rw - 10.0;

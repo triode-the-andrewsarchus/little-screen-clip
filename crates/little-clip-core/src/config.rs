@@ -353,88 +353,175 @@ impl Default for DisplayConfig {
     }
 }
 
+fn default_theme() -> String {
+    "apollo".to_string()
+}
+
 /// Theme color palette for backgrounds, slot card fills, borders, and text labels.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColorConfig {
-    /// Main canvas background color.
-    pub background: String,
-    /// Background fill for Left Hand and Right Hand cards.
-    pub hero_card_bg: String,
-    /// Background fill for L Prior and R Prior cards.
-    pub prior_card_bg: String,
-    /// Background fill for Undo card.
-    pub undo_card_bg: String,
+    /// Active Hundred Rabbits theme name (e.g. "apollo", "peppermint", "nord").
+    #[serde(default = "default_theme")]
+    pub theme: String,
+
+    /// Optional override: Main canvas background color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    /// Optional override: Background fill for Left Hand and Right Hand cards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hero_card_bg: Option<String>,
+    /// Optional override: Background fill for L Prior and R Prior cards.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_card_bg: Option<String>,
+    /// Optional override: Background fill for Undo card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo_card_bg: Option<String>,
 
     // Border Colors
-    /// Border stroke color for the Undo slot.
-    pub undo_border: String,
-    /// Border stroke color for the Left Hand slot.
-    pub left_hand_border: String,
-    /// Border stroke color for Left Prior 1.
-    pub left_prior1_border: String,
-    /// Border stroke color for Left Prior 2.
-    pub left_prior2_border: String,
-    /// Border stroke color for Left Prior 3.
-    #[serde(default = "default_left_prior3_border")]
-    pub left_prior3_border: String,
-    /// Border stroke color for Right Prior 2.
-    pub right_prior2_border: String,
-    /// Border stroke color for Right Prior 1.
-    pub right_prior1_border: String,
-    /// Border stroke color for the Right Hand slot.
-    pub right_hand_border: String,
-    /// Focused cursor border color.
-    pub cursor_border: String,
-    /// Multi-selected slot border color.
-    pub selected_border: String,
+    /// Optional override: Border stroke color for the Undo slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo_border: Option<String>,
+    /// Optional override: Border stroke color for the Left Hand slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_hand_border: Option<String>,
+    /// Optional override: Border stroke color for Left Prior 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_prior1_border: Option<String>,
+    /// Optional override: Border stroke color for Left Prior 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_prior2_border: Option<String>,
+    /// Optional override: Border stroke color for Left Prior 3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_prior3_border: Option<String>,
+    /// Optional override: Border stroke color for Right Prior 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_prior2_border: Option<String>,
+    /// Optional override: Border stroke color for Right Prior 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_prior1_border: Option<String>,
+    /// Optional override: Border stroke color for the Right Hand slot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub right_hand_border: Option<String>,
+    /// Optional override: Focused cursor border color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_border: Option<String>,
+    /// Optional override: Multi-selected slot border color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_border: Option<String>,
 
     // Text & Element Colors
-    /// Primary title font color.
-    pub title_color: String,
-    /// Secondary subtitle font color.
-    pub subtitle_color: String,
-    /// Body text color.
-    pub body_color: String,
-    /// URL text highlight color.
-    pub url_color: String,
-    /// Debug handler badge background.
-    pub debug_badge_bg: String,
-    /// Debug handler badge text.
-    pub debug_badge_text: String,
+    /// Optional override: Primary title font color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_color: Option<String>,
+    /// Optional override: Secondary subtitle font color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subtitle_color: Option<String>,
+    /// Optional override: Body text color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_color: Option<String>,
+    /// Optional override: URL text highlight color.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url_color: Option<String>,
+    /// Optional override: Debug handler badge background.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_badge_bg: Option<String>,
+    /// Optional override: Debug handler badge text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_badge_text: Option<String>,
 }
 
-fn default_left_prior3_border() -> String {
-    "#38bdf8".to_string()
+impl ColorConfig {
+    /// Resolves the full `AppPalette` using the specified theme and any explicit overrides.
+    pub fn resolve_palette(&self) -> crate::theme::AppPalette {
+        let themes_dir = crate::theme::find_themes_dir();
+        let theme_file = themes_dir.join(format!("{}.svg", self.theme));
+        let theme = if theme_file.exists() {
+            crate::theme::Theme::from_file(&theme_file)
+                .unwrap_or_else(|_| crate::theme::Theme::apollo())
+        } else {
+            crate::theme::Theme::apollo()
+        };
+
+        let mut overrides = std::collections::HashMap::new();
+        if let Some(v) = &self.background { overrides.insert("background".to_string(), v.clone()); }
+        if let Some(v) = &self.hero_card_bg { overrides.insert("hero_card_bg".to_string(), v.clone()); }
+        if let Some(v) = &self.prior_card_bg { overrides.insert("prior_card_bg".to_string(), v.clone()); }
+        if let Some(v) = &self.undo_card_bg { overrides.insert("undo_card_bg".to_string(), v.clone()); }
+
+        if let Some(v) = &self.undo_border { overrides.insert("undo_border".to_string(), v.clone()); }
+        if let Some(v) = &self.left_hand_border { overrides.insert("left_hand_border".to_string(), v.clone()); }
+        if let Some(v) = &self.left_prior1_border { overrides.insert("left_prior1_border".to_string(), v.clone()); }
+        if let Some(v) = &self.left_prior2_border { overrides.insert("left_prior2_border".to_string(), v.clone()); }
+        if let Some(v) = &self.left_prior3_border { overrides.insert("left_prior3_border".to_string(), v.clone()); }
+        if let Some(v) = &self.right_prior2_border { overrides.insert("right_prior2_border".to_string(), v.clone()); }
+        if let Some(v) = &self.right_prior1_border { overrides.insert("right_prior1_border".to_string(), v.clone()); }
+        if let Some(v) = &self.right_hand_border { overrides.insert("right_hand_border".to_string(), v.clone()); }
+        if let Some(v) = &self.cursor_border { overrides.insert("cursor_border".to_string(), v.clone()); }
+        if let Some(v) = &self.selected_border { overrides.insert("selected_border".to_string(), v.clone()); }
+
+        if let Some(v) = &self.title_color { overrides.insert("title_color".to_string(), v.clone()); }
+        if let Some(v) = &self.subtitle_color { overrides.insert("subtitle_color".to_string(), v.clone()); }
+        if let Some(v) = &self.body_color { overrides.insert("body_color".to_string(), v.clone()); }
+        if let Some(v) = &self.url_color { overrides.insert("url_color".to_string(), v.clone()); }
+        if let Some(v) = &self.debug_badge_bg { overrides.insert("debug_badge_bg".to_string(), v.clone()); }
+        if let Some(v) = &self.debug_badge_text { overrides.insert("debug_badge_text".to_string(), v.clone()); }
+
+        crate::theme::AppPalette::from_theme(&theme, &overrides)
+    }
+
+    /// Clears all manual overrides, reverting to purely theme-derived colors.
+    pub fn clear_overrides(&mut self) {
+        self.background = None;
+        self.hero_card_bg = None;
+        self.prior_card_bg = None;
+        self.undo_card_bg = None;
+        self.undo_border = None;
+        self.left_hand_border = None;
+        self.left_prior1_border = None;
+        self.left_prior2_border = None;
+        self.left_prior3_border = None;
+        self.right_prior2_border = None;
+        self.right_prior1_border = None;
+        self.right_hand_border = None;
+        self.cursor_border = None;
+        self.selected_border = None;
+        self.title_color = None;
+        self.subtitle_color = None;
+        self.body_color = None;
+        self.url_color = None;
+        self.debug_badge_bg = None;
+        self.debug_badge_text = None;
+    }
 }
 
 impl Default for ColorConfig {
     fn default() -> Self {
         Self {
-            background: "#0f1117".to_string(),
-            hero_card_bg: "#181b26".to_string(),
-            prior_card_bg: "#13151d".to_string(),
-            undo_card_bg: "#14161e".to_string(),
-
-            undo_border: "#f59e0b".to_string(),
-            left_hand_border: "#6366f1".to_string(),
-            left_prior1_border: "#0ea5e9".to_string(),
-            left_prior2_border: "#475569".to_string(),
-            left_prior3_border: default_left_prior3_border(),
-            right_prior2_border: "#475569".to_string(),
-            right_prior1_border: "#a855f7".to_string(),
-            right_hand_border: "#10b981".to_string(),
-            cursor_border: "#ec4899".to_string(),
-            selected_border: "#8b5cf6".to_string(),
-
-            title_color: "#f1f5f9".to_string(),
-            subtitle_color: "#94a3b8".to_string(),
-            body_color: "#cbd5e1".to_string(),
-            url_color: "#38bdf8".to_string(),
-            debug_badge_bg: "#0f172a".to_string(),
-            debug_badge_text: "#38bdf8".to_string(),
+            theme: default_theme(),
+            background: None,
+            hero_card_bg: None,
+            prior_card_bg: None,
+            undo_card_bg: None,
+            undo_border: None,
+            left_hand_border: None,
+            left_prior1_border: None,
+            left_prior2_border: None,
+            left_prior3_border: None,
+            right_prior2_border: None,
+            right_prior1_border: None,
+            right_hand_border: None,
+            cursor_border: None,
+            selected_border: None,
+            title_color: None,
+            subtitle_color: None,
+            body_color: None,
+            url_color: None,
+            debug_badge_bg: None,
+            debug_badge_text: None,
         }
     }
 }
+
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -495,6 +582,149 @@ impl AppConfig {
         let config: AppConfig = toml::from_str(&contents)?;
         Ok(config)
     }
+
+    /// Resolves the active theme and color overrides into the unified `AppPalette`.
+    pub fn resolve_palette(&self) -> crate::theme::AppPalette {
+        self.colors.resolve_palette()
+    }
+
+    /// Saves the current configuration to disk (non-destructively updating theme).
+    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
+        Self::save_theme_to_file(&self.colors.theme)
+    }
+
+    /// Non-destructively updates the active theme in `config.toml` without modifying comments,
+    /// display rotation, or other user configuration settings.
+    pub fn save_theme_to_file(new_theme: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let path = find_config_file_path();
+        if path.exists() {
+            let content = std::fs::read_to_string(&path)?;
+            let updated = update_theme_in_text(&content, new_theme);
+            std::fs::write(&path, updated)?;
+        } else {
+            let new_content = format!("[colors]\ntheme = \"{}\"\n", new_theme);
+            std::fs::write(&path, new_content)?;
+        }
+        Ok(())
+    }
+
+    /// Non-destructively clears color overrides in `config.toml` by commenting them out,
+    /// preserving all user comments and other configuration sections.
+    pub fn clear_overrides_in_file() -> Result<(), Box<dyn std::error::Error>> {
+        let path = find_config_file_path();
+        if path.exists() {
+            let content = std::fs::read_to_string(&path)?;
+            let updated = clear_overrides_in_text(&content);
+            std::fs::write(&path, updated)?;
+        }
+        Ok(())
+    }
+}
+
+/// Finds the active config file path, prioritizing local `config.toml` if present.
+pub fn find_config_file_path() -> PathBuf {
+    if Path::new("config.toml").exists() {
+        PathBuf::from("config.toml")
+    } else if let Some(p) = get_user_config_path() {
+        if p.exists() {
+            p
+        } else {
+            PathBuf::from("config.toml")
+        }
+    } else {
+        PathBuf::from("config.toml")
+    }
+}
+
+/// Non-destructively updates the `theme = "..."` entry under `[colors]` in TOML text,
+/// preserving all existing comments, other sections, indentation, and formatting.
+pub fn update_theme_in_text(text: &str, new_theme: &str) -> String {
+    let mut output = Vec::new();
+    let mut in_colors = false;
+    let mut theme_updated = false;
+    let mut colors_found = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // Check for table header like [colors] or [display]
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            if in_colors && !theme_updated {
+                output.push(format!("theme = \"{}\"", new_theme));
+                theme_updated = true;
+            }
+            if trimmed == "[colors]" {
+                in_colors = true;
+                colors_found = true;
+            } else {
+                in_colors = false;
+            }
+            output.push(line.to_string());
+            continue;
+        }
+
+        if in_colors && !theme_updated {
+            let key = trimmed.split('=').next().unwrap_or("").trim();
+            if key == "theme" {
+                let leading: String = line.chars().take_while(|c| c.is_whitespace()).collect();
+                output.push(format!("{}theme = \"{}\"", leading, new_theme));
+                theme_updated = true;
+                continue;
+            }
+        }
+
+        output.push(line.to_string());
+    }
+
+    if in_colors && !theme_updated {
+        output.push(format!("theme = \"{}\"", new_theme));
+    }
+
+    if !colors_found {
+        if !output.is_empty() && !output.last().map(|s| s.is_empty()).unwrap_or(false) {
+            output.push(String::new());
+        }
+        output.push("[colors]".to_string());
+        output.push(format!("theme = \"{}\"", new_theme));
+    }
+
+    let mut res = output.join("\n");
+    if text.ends_with('\n') {
+        res.push('\n');
+    }
+    res
+}
+
+/// Non-destructively clears overrides under `[colors]` by commenting out non-theme key-values,
+/// preserving all comments and other configuration sections.
+pub fn clear_overrides_in_text(text: &str) -> String {
+    let mut output = Vec::new();
+    let mut in_colors = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            in_colors = trimmed == "[colors]";
+            output.push(line.to_string());
+            continue;
+        }
+
+        if in_colors && !trimmed.starts_with('#') && trimmed.contains('=') {
+            let key = trimmed.split('=').next().unwrap_or("").trim();
+            if key != "theme" {
+                // Comment out this override line
+                output.push(format!("# {}", line));
+                continue;
+            }
+        }
+
+        output.push(line.to_string());
+    }
+
+    let mut res = output.join("\n");
+    if text.ends_with('\n') {
+        res.push('\n');
+    }
+    res
 }
 
 /// Computes the default user configuration file path according to XDG base directory specifications.
@@ -511,4 +741,55 @@ pub fn get_user_config_path() -> Option<PathBuf> {
 /// Helper to parse hex string like "#RRGGBB" or "#RGB" into `(r, g, b, a)` tuple.
 pub fn parse_hex_color(s: &str) -> (u8, u8, u8, u8) {
     crate::color::parse_hex_color_rgba(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_non_destructive_update_theme_preserves_everything() {
+        let original = r##"# Main Header Comment
+[display]
+rotate_180 = true # Must be preserved!
+show_debug_handler = false
+
+[colors]
+# Theme comment
+theme = "apollo"
+# An override comment
+left_hand_border = "#6366f1"
+
+[audio]
+editor = "audacity"
+"##;
+
+        let updated = update_theme_in_text(original, "boysenberry");
+        assert!(updated.contains("rotate_180 = true # Must be preserved!"));
+        assert!(updated.contains("# Main Header Comment"));
+        assert!(updated.contains("theme = \"boysenberry\""));
+        assert!(!updated.contains("theme = \"apollo\""));
+        assert!(updated.contains("left_hand_border = \"#6366f1\""));
+        assert!(updated.contains("[audio]\neditor = \"audacity\""));
+    }
+
+    #[test]
+    fn test_non_destructive_clear_overrides() {
+        let original = r##"[display]
+rotate_180 = true
+
+[colors]
+theme = "apollo"
+hero_card_bg = "#181b26"
+left_hand_border = "#6366f1"
+# Existing comment
+"##;
+
+        let cleared = clear_overrides_in_text(original);
+        assert!(cleared.contains("rotate_180 = true"));
+        assert!(cleared.contains("theme = \"apollo\""));
+        assert!(cleared.contains("# hero_card_bg = \"#181b26\""));
+        assert!(cleared.contains("# left_hand_border = \"#6366f1\""));
+        assert!(cleared.contains("# Existing comment"));
+    }
 }

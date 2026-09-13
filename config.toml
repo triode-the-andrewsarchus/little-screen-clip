@@ -34,37 +34,28 @@ elision_char = "▸"
 elision_color = "border"
 
 [colors]
-# Canvas background color
-background = "#0f1117"
+# Hundred Rabbits Theme name (from ./themes/*.svg, e.g. "apollo", "peppermint", "nord", "monokai", "dracula", etc.)
+# All UI elements, cards, accents, borders, and harmonies automatically derive from this theme.
+# Missing / accent colors are perceptually derived using Oklab harmonies (Complementary, Triadic, Tetradic, Split-Complementary).
+theme = "battlestation"
 
-# Card background fills
-hero_card_bg  = "#181b26"   # Left Hand and Right Hand card background
-prior_card_bg = "#13151d"   # Prior history stack card background
-undo_card_bg  = "#14161e"   # Undo card background
-
-# Card Borders & Accent Headers
-undo_border         = "#f59e0b"   # Warm Amber for Undo
-left_hand_border    = "#6366f1"   # Electric Indigo for Left Hand
-left_prior1_border  = "#0ea5e9"   # Sky Blue for Left Prior 1
-left_prior2_border  = "#475569"   # Muted Slate for Left Prior 2
-left_prior3_border  = "#38bdf8"   # Cyan for Left Prior 3
-right_prior2_border = "#475569"   # Muted Slate for Right Prior 2
-right_prior1_border = "#a855f7"   # Vivid Purple for Right Prior 1
-right_hand_border   = "#10b981"   # Emerald Green for Right Hand
-
-# Interactive highlights
-cursor_border   = "#ec4899"   # Hot pink cursor outline
-selected_border = "#8b5cf6"   # Purple multi-select outline
-
-# Text & Preview Typography Colors
-title_color    = "#f1f5f9"    # Main card title (e.g. file name, snippet headline)
-subtitle_color = "#94a3b8"    # Metadata subtitle (e.g. dimensions, line counts)
-body_color     = "#cbd5e1"    # Text payload preview lines
-url_color      = "#38bdf8"    # URL links
-
-# Debug Handler Badge (Bottom-Left)
-debug_badge_bg   = "#0f172a"  # Badge pill background
-debug_badge_text = "#38bdf8"  # Badge text & border accent
+# Optional element color overrides:
+# Uncomment any field below to customize specific UI elements while retaining the theme base.
+# background         = "#0f1117"
+# hero_card_bg       = "#181b26"
+# prior_card_bg      = "#13151d"
+# undo_card_bg       = "#14161e"
+# left_hand_border   = "#6366f1"
+# right_hand_border  = "#10b981"
+# undo_border        = "#f59e0b"
+# cursor_border      = "#ec4899"
+# selected_border    = "#8b5cf6"
+# title_color        = "#f1f5f9"
+# subtitle_color     = "#94a3b8"
+# body_color         = "#cbd5e1"
+# url_color          = "#38bdf8"
+# debug_badge_bg     = "#0f172a"
+# debug_badge_text   = "#38bdf8"
 
 [slots]
 # Number of prior history slots allocated to Left Hand (default: 3)
@@ -91,6 +82,8 @@ snippet_duration_sec = 30
 #   "middle" (default) -> Extracts a 30s representative sample from the middle of the audio file
 #   "start"            -> Extracts a 30s sample from the very beginning (00:00) of the audio file
 sample_position = "middle"
+rolling_capture_duration_sec = 30
+rolling_capture_enabled = true
 
 [workbench]
 # Preferred text editor command for editing Python and Bash script nodes
