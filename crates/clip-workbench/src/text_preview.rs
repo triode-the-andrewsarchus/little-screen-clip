@@ -114,7 +114,7 @@ pub struct TextPreviewState {
     pub focus_find_input: bool,
 
     // Status / Toast notification
-    pub status_toast: Option<(String, f64)>, // (message, timestamp_secs)
+    pub status_toast: crate::ui_ext::StatusToast,
 
     // Scroll state
     pub scroll_to_line: Option<usize>,
@@ -165,7 +165,7 @@ impl TextPreviewState {
             active_match_idx: 0,
             regex_error: None,
             focus_find_input: false,
-            status_toast: None,
+            status_toast: crate::ui_ext::StatusToast::new(),
             scroll_to_line: None,
         }
     }
@@ -207,7 +207,7 @@ impl TextPreviewState {
             active_match_idx: 0,
             regex_error: None,
             focus_find_input: false,
-            status_toast: None,
+            status_toast: crate::ui_ext::StatusToast::new(),
             scroll_to_line: None,
         })
     }
@@ -347,7 +347,7 @@ impl TextPreviewState {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs_f64())
                     .unwrap_or(0.0);
-                self.status_toast = Some((format!("Failed to write temporary file: {}", e), now));
+                self.status_toast.set(format!("Failed to write temporary file: {}", e), now);
                 return;
             }
             temp_path
@@ -359,7 +359,7 @@ impl TextPreviewState {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs_f64())
                     .unwrap_or(0.0);
-                self.status_toast = Some((format!("Opened in {}", editor), now));
+                self.status_toast.set(format!("Opened in {}", editor), now);
             }
             Err(e) => {
                 // Try xdg-open fallback
@@ -368,13 +368,13 @@ impl TextPreviewState {
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs_f64())
                         .unwrap_or(0.0);
-                    self.status_toast = Some(("Opened in system default editor".to_string(), now));
+                    self.status_toast.set("Opened in system default editor", now);
                 } else {
                     let now = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_secs_f64())
                         .unwrap_or(0.0);
-                    self.status_toast = Some((format!("Failed to launch {}: {}", editor, e), now));
+                    self.status_toast.set(format!("Failed to launch {}: {}", editor, e), now);
                 }
             }
         }
@@ -390,7 +390,7 @@ impl TextPreviewState {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
                     .unwrap_or(0.0);
-        self.status_toast = Some(("Copied full text to clipboard! 📋".to_string(), now));
+        self.status_toast.set("Copied full text to clipboard! 📋", now);
     }
 
     /// Renders the complete preview modal UI.
@@ -458,51 +458,37 @@ impl TextPreviewState {
     ) {
         let total_lines = self.content.lines().count().max(1);
         let total_chars = self.content.chars().count();
+        let icon = if self.is_markdown {
+            "📖"
+        } else if self.language != "txt" {
+            "📝"
+        } else {
+            "📄"
+        };
+        let lang_label = self.language.to_uppercase();
+        let title = self.title.clone();
 
-        ui.horizontal(|ui| {
-            let icon = if self.is_markdown {
-                "📖"
-            } else if self.language != "txt" {
-                "📝"
-            } else {
-                "📄"
-            };
-
-            ui.label(egui::RichText::new(icon).size(22.0));
-            ui.label(
-                egui::RichText::new(&self.title)
-                    .strong()
-                    .size(17.0)
-                    .color(hex_to_c32(&palette.theme.f_high)),
-            );
-
-            ui.add_space(8.0);
-            let lang_label = self.language.to_uppercase();
-            egui::Frame::none()
-                .fill(hex_to_c32(&palette.theme.b_low))
-                .rounding(Rounding::same(4.0))
-                .inner_margin(egui::Margin::symmetric(6.0, 2.0))
-                .show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new(lang_label)
-                            .small()
-                            .strong()
-                            .color(hex_to_c32(&palette.harmonies.base)),
-                    );
-                });
-
-            ui.add_space(4.0);
-            let info_text = format!("{} lines  •  {} chars", total_lines, total_chars);
-            ui.label(
-                egui::RichText::new(info_text)
-                    .small()
-                    .color(hex_to_c32(&palette.theme.f_low)),
-            );
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.render_header_actions(ui, ctx, palette, close);
-            });
-        });
+        crate::ui_ext::render_view_header(
+            ui,
+            icon,
+            &title,
+            palette,
+            close,
+            |ui| {
+                ui.add_space(8.0);
+                crate::ui_ext::badge_pill(ui, lang_label, Some(hex_to_c32(&palette.harmonies.base)), palette);
+                ui.add_space(4.0);
+                let info_text = format!("{} lines  •  {} chars", total_lines, total_chars);
+                ui.label(
+                    egui::RichText::new(info_text)
+                        .small()
+                        .color(hex_to_c32(&palette.theme.f_low)),
+                );
+            },
+            |ui| {
+                self.render_header_actions(ui, ctx, palette);
+            },
+        );
     }
 
     fn render_header_command_buttons(
@@ -510,13 +496,7 @@ impl TextPreviewState {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         palette: &AppPalette,
-        close: &mut bool,
     ) {
-        let close_btn = crate::danger_button("✕ Close (Esc)", hex_to_c32(&palette.diff_del), palette);
-        if ui.add(close_btn).clicked() {
-            *close = true;
-        }
-
         let editor_label = format!("📝 Open in {}", self.editor_cmd);
         let hatch_btn = crate::action_button(editor_label, hex_to_c32(&palette.harmonies.base), palette);
         if ui
@@ -588,30 +568,13 @@ impl TextPreviewState {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         palette: &AppPalette,
-        close: &mut bool,
     ) {
-        self.render_header_command_buttons(ui, ctx, palette, close);
+        self.render_header_command_buttons(ui, ctx, palette);
         self.render_header_toggle_buttons(ui, palette);
     }
 
     fn render_toast(&self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
-        if let Some((msg, timestamp)) = &self.status_toast {
-            if now - timestamp < 4.0 {
-                ui.add_space(4.0);
-                egui::Frame::none()
-                    .fill(hex_to_c32(&palette.theme.b_low))
-                    .stroke(Stroke::new(1.0, hex_to_c32(&palette.diff_add)))
-                    .rounding(Rounding::same(4.0))
-                    .inner_margin(egui::Margin::symmetric(8.0, 4.0))
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(msg)
-                                .size(11.0)
-                                .color(hex_to_c32(&palette.diff_add)),
-                        );
-                    });
-            }
-        }
+        self.status_toast.render_pill(ui, palette, now);
     }
 
     fn render_search_status_label(&self, ui: &mut egui::Ui, palette: &AppPalette) {

@@ -6,6 +6,7 @@
 use eframe::egui::{self, Rounding, Stroke, Vec2};
 use little_clip_core::pdf::{delete_pdf_pages, get_pdf_info, render_pdf_page_preview, rotate_pdf_page};
 use std::path::PathBuf;
+use crate::ui_ext::{self, StatusToast};
 
 /// Rendered raster thumbnail and metadata for a single PDF page.
 pub struct PdfPageItem {
@@ -25,7 +26,7 @@ pub struct PdfEditorState {
     pub page_count: usize,
     pub pages: Vec<PdfPageItem>,
     pub selected_page: Option<usize>,
-    pub status_toast: Option<(String, f64)>,
+    pub status_toast: StatusToast,
     pub dirty: bool,
 }
 
@@ -67,7 +68,7 @@ impl PdfEditorState {
             page_count,
             pages,
             selected_page,
-            status_toast: None,
+            status_toast: StatusToast::new(),
             dirty: false,
         }
     }
@@ -120,7 +121,7 @@ impl PdfEditorState {
     pub fn delete_current_page(&mut self, ctx: &egui::Context, now: f64) {
         let Some(cur) = self.selected_page else { return; };
         if self.page_count <= 1 {
-            self.status_toast = Some(("Cannot delete only page from PDF".to_string(), now));
+            self.status_toast.set("Cannot delete only page from PDF", now);
             return;
         }
 
@@ -130,9 +131,9 @@ impl PdfEditorState {
             let _ = std::fs::remove_file(&temp_out);
             self.reload_pages(ctx);
             self.dirty = true;
-            self.status_toast = Some((format!("Deleted page {}", cur), now));
+            self.status_toast.set(format!("Deleted page {}", cur), now);
         } else {
-            self.status_toast = Some(("Failed to delete page".to_string(), now));
+            self.status_toast.set("Failed to delete page", now);
         }
     }
 
@@ -144,9 +145,9 @@ impl PdfEditorState {
             let _ = std::fs::remove_file(&temp_out);
             self.reload_pages(ctx);
             self.dirty = true;
-            self.status_toast = Some((format!("Rotated page {} by {}°", cur, degrees), now));
+            self.status_toast.set(format!("Rotated page {} by {}°", cur, degrees), now);
         } else {
-            self.status_toast = Some(("Failed to rotate page".to_string(), now));
+            self.status_toast.set("Failed to rotate page", now);
         }
     }
 
@@ -192,87 +193,68 @@ impl PdfEditorState {
         }
 
         let bg = crate::hex_to_c32(&palette.theme.background);
-        let f_high = crate::hex_to_c32(&palette.theme.f_high);
         let f_low = crate::hex_to_c32(&palette.theme.f_low);
         let b_med = crate::hex_to_c32(&palette.theme.b_med);
         let b_low = crate::hex_to_c32(&palette.theme.b_low);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
         let warn_accent = crate::hex_to_c32(&palette.undo_border);
         let warn_bg = crate::hex_to_c32(&palette.undo_card_bg);
-        let success_accent = crate::hex_to_c32(&palette.diff_add);
 
         egui::Frame::none()
             .fill(bg)
             .inner_margin(egui::Margin::same(16.0))
             .show(ui, |ui| {
+                let title = self.title.clone();
+                let page_count = self.page_count;
+                let mut rotate_clicked = false;
+                let mut delete_clicked = false;
+
                 // Header Toolbar
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("📑").size(24.0));
-                    ui.label(
-                        egui::RichText::new(&self.title)
-                            .strong()
-                            .size(18.0)
-                            .color(f_high),
-                    );
+                ui_ext::render_view_header(
+                    ui,
+                    "📑",
+                    &title,
+                    palette,
+                    close,
+                    |ui| {
+                        ui.add_space(8.0);
+                        ui_ext::badge_pill(ui, format!("{} pages", page_count), None, palette);
+                        ui.add_space(16.0);
 
-                    ui.add_space(8.0);
-                    let info_badge = format!("{} pages", self.page_count);
-                    ui.label(
-                        egui::RichText::new(info_badge)
-                            .small()
-                            .color(f_low),
-                    );
+                        // Rotate 90 CW Button
+                        let rot_btn = crate::secondary_button("↻ Rotate 90° [R]", b_med, palette)
+                            .stroke(Stroke::new(1.0, b_low));
+                        if ui.add(rot_btn).on_hover_text("Rotate selected page 90° clockwise (Hotkey: R)").clicked() {
+                            rotate_clicked = true;
+                        }
 
-                    ui.add_space(16.0);
-
-                    // Rotate 90 CW Button
-                    let rot_btn = crate::secondary_button("↻ Rotate 90° [R]", b_med, palette)
-                        .stroke(Stroke::new(1.0, b_low));
-                    if ui.add(rot_btn).on_hover_text("Rotate selected page 90° clockwise (Hotkey: R)").clicked() {
-                        self.rotate_current_page(ctx, 90, now);
-                    }
-
-                    // Delete Page Button
-                    let del_fg = crate::contrast_text_c32(warn_bg, Some(warn_accent), palette);
-                    let del_btn = egui::Button::new(
-                        egui::RichText::new("🗑 Delete Page [Del]")
-                            .small()
-                            .strong()
-                            .color(del_fg),
-                    )
-                    .fill(warn_bg)
-                    .stroke(Stroke::new(1.0, warn_accent))
-                    .rounding(Rounding::same(4.0));
-                    if ui.add(del_btn).on_hover_text("Delete selected page from PDF (Hotkey: Del)").clicked() {
-                        self.delete_current_page(ctx, now);
-                    }
-
-                    // Right-aligned close button & toast
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let close_fg = crate::contrast_text_c32(warn_bg, Some(f_high), palette);
-                        let close_btn = egui::Button::new(
-                            egui::RichText::new("✕ Close (Esc)")
+                        // Delete Page Button
+                        let del_fg = crate::contrast_text_c32(warn_bg, Some(warn_accent), palette);
+                        let del_btn = egui::Button::new(
+                            egui::RichText::new("🗑 Delete Page [Del]")
+                                .small()
                                 .strong()
-                                .color(close_fg),
+                                .color(del_fg),
                         )
                         .fill(warn_bg)
                         .stroke(Stroke::new(1.0, warn_accent))
-                        .rounding(Rounding::same(6.0));
-                        if ui.add(close_btn).clicked() {
-                            *close = true;
+                        .rounding(Rounding::same(4.0));
+                        if ui.add(del_btn).on_hover_text("Delete selected page from PDF (Hotkey: Del)").clicked() {
+                            delete_clicked = true;
                         }
+                    },
+                    |ui| {
+                        self.status_toast.render(ui, palette, now);
+                    },
+                );
 
-                        if let Some((msg, ts)) = &self.status_toast {
-                            if now - ts < 4.0 {
-                                ui.label(
-                                    egui::RichText::new(msg)
-                                        .small()
-                                        .color(success_accent),
-                                );
-                            }
-                        }
-                    });
-                });
+                if rotate_clicked {
+                    self.rotate_current_page(ctx, 90, now);
+                }
+                if delete_clicked {
+                    self.delete_current_page(ctx, now);
+                }
+
 
                 ui.add_space(8.0);
                 ui.separator();

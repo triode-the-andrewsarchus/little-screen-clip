@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, Response, RichText, Rounding, Stroke, Ui};
+use eframe::egui::{self, Color32, Response, RichText, Rounding, Stroke, Ui, Vec2};
 use little_clip_core::theme::{contrast_ratio, AppPalette};
 use crate::hex_to_c32;
 
@@ -157,6 +157,219 @@ impl UiThemedExt for Ui {
     }
 }
 
+/// Unified status toast manager with automatic time-based dismissal.
+#[derive(Debug, Clone)]
+pub struct StatusToast {
+    toast: Option<(String, f64)>,
+    duration: f64,
+}
+
+impl Default for StatusToast {
+    fn default() -> Self {
+        Self {
+            toast: None,
+            duration: 4.0,
+        }
+    }
+}
+
+impl StatusToast {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_duration(duration: f64) -> Self {
+        Self {
+            toast: None,
+            duration,
+        }
+    }
+
+    pub fn set(&mut self, message: impl Into<String>, now: f64) {
+        self.toast = Some((message.into(), now));
+    }
+
+    pub fn clear(&mut self) {
+        self.toast = None;
+    }
+
+    pub fn is_active(&self, now: f64) -> bool {
+        self.toast.as_ref().map_or(false, |(_, ts)| now - ts < self.duration)
+    }
+
+    pub fn message(&self, now: f64) -> Option<&str> {
+        self.toast.as_ref().and_then(|(msg, ts)| {
+            if now - ts < self.duration {
+                Some(msg.as_str())
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn render(&self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
+        if let Some(msg) = self.message(now) {
+            let color = hex_to_c32(&palette.diff_add);
+            ui.label(egui::RichText::new(msg).small().color(color));
+        }
+    }
+
+    pub fn render_opt(
+        toast: &Option<(String, f64)>,
+        duration: f64,
+        ui: &mut egui::Ui,
+        palette: &AppPalette,
+        now: f64,
+    ) {
+        if let Some((msg, ts)) = toast {
+            if now - ts < duration {
+                let color = hex_to_c32(&palette.diff_add);
+                ui.label(egui::RichText::new(msg).small().strong().color(color));
+            }
+        }
+    }
+
+    pub fn render_pill(&self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
+        if let Some(msg) = self.message(now) {
+            let bg = hex_to_c32(&palette.theme.b_low);
+            let stroke = hex_to_c32(&palette.diff_add);
+            let fg = contrast_text_c32(bg, Some(stroke), palette);
+            egui::Frame::none()
+                .fill(bg)
+                .stroke(Stroke::new(1.0, stroke))
+                .rounding(Rounding::same(4.0))
+                .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new(msg).size(11.0).color(fg));
+                });
+        }
+    }
+}
+
+/// Renders a small metadata chip/badge pill with theme-consistent fill and guaranteed contrast.
+pub fn badge_pill(
+    ui: &mut egui::Ui,
+    text: impl AsRef<str>,
+    accent: Option<Color32>,
+    palette: &AppPalette,
+) -> egui::Response {
+    let bg = hex_to_c32(&palette.theme.b_med);
+    let pref_fg = accent.unwrap_or_else(|| hex_to_c32(&palette.theme.f_med));
+    let fg = contrast_text_c32(bg, Some(pref_fg), palette);
+    let frame = egui::Frame::none()
+        .fill(bg)
+        .rounding(Rounding::same(4.0))
+        .inner_margin(egui::Margin::symmetric(6.0, 2.0));
+    frame
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(text.as_ref()).small().strong().color(fg))
+        })
+        .response
+}
+
+/// Standard label + value indicator (e.g. "Matches: 120 B" or "Deletions: 4").
+pub fn stat_pill(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: impl std::fmt::Display,
+    val_color: Option<Color32>,
+    palette: &AppPalette,
+) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
+        ui.label(
+            egui::RichText::new(format!("{}:", label))
+                .font(egui::FontId::proportional(12.0))
+                .color(hex_to_c32(&palette.theme.f_low)),
+        );
+        let color = val_color.unwrap_or_else(|| hex_to_c32(&palette.harmonies.base));
+        ui.label(
+            egui::RichText::new(format!("{}", value))
+                .font(egui::FontId::monospace(12.0))
+                .strong()
+                .color(color),
+        );
+    });
+}
+
+/// Actions emitted by the zoom control toolbar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZoomAction {
+    ZoomIn,
+    ZoomOut,
+    Fit,
+}
+
+/// Renders a standardized zoom toolbar with 🔍+, 🔍-, ⟲ Fit buttons and percentage label.
+pub fn zoom_control_bar(
+    ui: &mut egui::Ui,
+    zoom_pct: u32,
+    palette: &AppPalette,
+) -> Option<ZoomAction> {
+    let mut action = None;
+    let zoom_in_btn = secondary_button("🔍+", hex_to_c32(&palette.theme.b_low), palette);
+    if ui.add(zoom_in_btn).on_hover_text("Zoom In (+ / Ctrl+Wheel)").clicked() {
+        action = Some(ZoomAction::ZoomIn);
+    }
+    let zoom_out_btn = secondary_button("🔍-", hex_to_c32(&palette.theme.b_low), palette);
+    if ui.add(zoom_out_btn).on_hover_text("Zoom Out (- / Ctrl+Wheel)").clicked() {
+        action = Some(ZoomAction::ZoomOut);
+    }
+    let fit_btn = secondary_button("⟲ Fit", hex_to_c32(&palette.theme.b_low), palette);
+    if ui.add(fit_btn).on_hover_text("Fit Track / Window (Ctrl+0)").clicked() {
+        action = Some(ZoomAction::Fit);
+    }
+    ui.label(
+        egui::RichText::new(format!("{}%", zoom_pct))
+            .small()
+            .monospace()
+            .color(hex_to_c32(&palette.theme.f_med)),
+    );
+    action
+}
+
+/// Renders a standardized view top toolbar header with icon, title, metadata badges slot,
+/// right-aligned action buttons slot, and a contrast-safe Close [Esc] button.
+pub fn render_view_header<R>(
+    ui: &mut egui::Ui,
+    icon: &str,
+    title: &str,
+    palette: &AppPalette,
+    close: &mut bool,
+    badges: impl FnOnce(&mut egui::Ui),
+    right_actions: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    ui.horizontal(|ui| {
+        if !icon.is_empty() {
+            ui.label(egui::RichText::new(icon).size(18.0));
+        }
+        ui.label(
+            egui::RichText::new(title)
+                .strong()
+                .size(17.0)
+                .color(hex_to_c32(&palette.theme.f_high)),
+        );
+        badges(ui);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let close_bg = hex_to_c32(&palette.theme.b_med);
+            let close_fg = contrast_text_c32(close_bg, Some(hex_to_c32(&palette.diff_del)), palette);
+            let close_btn = egui::Button::new(
+                egui::RichText::new("✕ Close (Esc)")
+                    .small()
+                    .strong()
+                    .color(close_fg),
+            )
+            .fill(close_bg)
+            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_low)))
+            .rounding(Rounding::same(4.0));
+            if ui.add(close_btn).clicked() {
+                *close = true;
+            }
+            right_actions(ui)
+        }).inner
+    }).inner
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,5 +466,33 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn test_status_toast() {
+        let mut toast = StatusToast::new();
+        assert!(!toast.is_active(10.0));
+        assert_eq!(toast.message(10.0), None);
+
+        toast.set("Copied item!", 10.0);
+        assert!(toast.is_active(12.0));
+        assert_eq!(toast.message(12.0), Some("Copied item!"));
+
+        // After 4s duration, it expires
+        assert!(!toast.is_active(14.5));
+        assert_eq!(toast.message(14.5), None);
+
+        // Manual clear
+        toast.set("New toast", 20.0);
+        assert!(toast.is_active(20.5));
+        toast.clear();
+        assert!(!toast.is_active(20.5));
+    }
+
+    #[test]
+    fn test_zoom_action_equality() {
+        assert_eq!(ZoomAction::ZoomIn, ZoomAction::ZoomIn);
+        assert_ne!(ZoomAction::ZoomIn, ZoomAction::ZoomOut);
+        assert_ne!(ZoomAction::ZoomOut, ZoomAction::Fit);
     }
 }

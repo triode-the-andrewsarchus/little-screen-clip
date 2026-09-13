@@ -10,6 +10,7 @@ use rodio::{Decoder, Player};
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Instant;
+use crate::ui_ext::{self, StatusToast, ZoomAction};
 
 /// Interactive UI state for piano roll inspection and MIDI playback.
 pub struct MidiViewerState {
@@ -29,7 +30,7 @@ pub struct MidiViewerState {
     pub user_panned_during_playback: bool,
     pub was_playing_before_drag: bool,
     pub hovered_note: Option<MidiNote>,
-    pub status_toast: Option<(String, f64)>,
+    pub status_toast: StatusToast,
 }
 
 /// Computes a distinct palette color for notes in a given MIDI track and channel using theme harmonies.
@@ -94,7 +95,7 @@ impl MidiViewerState {
             user_panned_during_playback: false,
             was_playing_before_drag: false,
             hovered_note: None,
-            status_toast: None,
+            status_toast: StatusToast::new(),
             data,
         })
     }
@@ -118,7 +119,7 @@ impl MidiViewerState {
             user_panned_during_playback: false,
             was_playing_before_drag: false,
             hovered_note: None,
-            status_toast: None,
+            status_toast: StatusToast::new(),
             data,
         })
     }
@@ -218,13 +219,13 @@ impl MidiViewerState {
                     }
                     Err(e) => {
                         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
-                        self.status_toast = Some((format!("Audio decode error: {}", e), now));
+                        self.status_toast.set(format!("Audio decode error: {}", e), now);
                     }
                 }
             }
             Err(e) => {
                 let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
-                self.status_toast = Some((format!("Audio device error: {}", e), now));
+                self.status_toast.set(format!("Audio device error: {}", e), now);
             }
         }
     }
@@ -323,114 +324,93 @@ impl MidiViewerState {
             .fill(bg)
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
+                let title = self.title.clone();
+                let total_notes = self.data.total_notes;
+                let duration_sec = self.data.duration_sec;
+                let bpm = self.data.bpm;
+                let track_count = self.data.track_count;
+                let playhead_sec = self.playhead_sec;
+                let is_playing = self.is_playing;
+                let zoom_pct = ((duration_sec / self.view_duration_sec.max(0.01)) * 100.0).round() as u32;
+
+                let mut play_clicked = false;
+                let mut pause_clicked = false;
+                let mut stop_clicked = false;
+                let mut zoom_action = None;
+
                 // 1. Top Control Bar
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("🎹")
-                            .size(20.0),
-                    );
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(&self.title)
-                            .strong()
-                            .size(18.0)
-                            .color(f_high),
-                    );
+                ui_ext::render_view_header(
+                    ui,
+                    "🎹",
+                    &title,
+                    palette,
+                    close,
+                    |ui| {
+                        ui.add_space(8.0);
+                        let info_text = format!(
+                            "{} notes • {:.1}s • {:.0} BPM • {} tracks",
+                            total_notes, duration_sec, bpm, track_count
+                        );
+                        ui_ext::badge_pill(ui, info_text, None, palette);
 
-                    ui.add_space(10.0);
-                    let info_text = format!(
-                        "{} notes • {:.1}s • {:.0} BPM • {} tracks",
-                        self.data.total_notes, self.data.duration_sec, self.data.bpm, self.data.track_count
-                    );
-                    ui.label(
-                        egui::RichText::new(info_text)
-                            .small()
-                            .color(f_low),
-                    );
-
-                    ui.add_space(14.0);
-                    // Transport controls
-                    if self.is_playing {
-                        let pause_btn = crate::action_button("⏸ Pause (Space)", pause_color, palette);
-                        if ui.add(pause_btn).clicked() {
-                            self.pause();
-                        }
-                    } else {
-                        let play_btn = crate::action_button("▶ Play (Space)", success_color, palette);
-                        if ui.add(play_btn).clicked() {
-                            self.play();
-                        }
-                    }
-
-                    let stop_btn = crate::secondary_button("⏹ Stop", b_med, palette)
-                        .stroke(Stroke::new(1.0, b_low));
-                    if ui.add(stop_btn).clicked() {
-                        self.stop();
-                    }
-
-                    ui.add_space(6.0);
-                    let time_text = format!("{:.1}s / {:.1}s", self.playhead_sec, self.data.duration_sec);
-                    ui.label(
-                        egui::RichText::new(time_text)
-                            .monospace()
-                            .small()
-                            .strong()
-                            .color(accent),
-                    );
-
-                    ui.add_space(12.0);
-                    // Zoom Toolbar Controls
-                    let zoom_out_btn = crate::secondary_button("🔍 -", b_med, palette)
-                        .stroke(Stroke::new(1.0, b_low));
-                    if ui.add(zoom_out_btn).on_hover_text("Zoom Out (- / Wheel Down)").clicked() {
-                        self.zoom(1.25, self.playhead_sec);
-                    }
-
-                    let zoom_in_btn = crate::secondary_button("🔍 +", b_med, palette)
-                        .stroke(Stroke::new(1.0, b_low));
-                    if ui.add(zoom_in_btn).on_hover_text("Zoom In (+ / Wheel Up)").clicked() {
-                        self.zoom(0.8, self.playhead_sec);
-                    }
-
-                    let fit_btn = crate::secondary_button("Fit", b_med, palette)
-                        .stroke(Stroke::new(1.0, b_low));
-                    if ui.add(fit_btn).on_hover_text("Reset Zoom / Fit Entire Track").clicked() {
-                        self.reset_zoom();
-                    }
-
-                    let zoom_pct = ((self.data.duration_sec / self.view_duration_sec.max(0.01)) * 100.0).round() as u32;
-                    ui.label(
-                        egui::RichText::new(format!("{}%", zoom_pct))
-                            .monospace()
-                            .small()
-                            .color(f_low),
-                    );
-
-                    // Right aligned Close button & toast
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let close_btn = crate::danger_button(
-                            "✕ Close (Esc)",
-                            crate::hex_to_c32(&palette.undo_card_bg),
-                            palette,
-                        )
-                        .stroke(Stroke::new(1.0, crate::hex_to_c32(&palette.undo_border)))
-                        .rounding(Rounding::same(6.0));
-                        if ui.add(close_btn).clicked() {
-                            self.stop();
-                            *close = true;
-                        }
-
-                        if let Some((msg, ts)) = &self.status_toast {
-                            if now - ts < 4.0 {
-                                ui.label(
-                                    egui::RichText::new(msg)
-                                        .small()
-                                        .color(success_color),
-                                );
+                        ui.add_space(14.0);
+                        // Transport controls
+                        if is_playing {
+                            let pause_btn = crate::action_button("⏸ Pause (Space)", pause_color, palette);
+                            if ui.add(pause_btn).clicked() {
+                                pause_clicked = true;
+                            }
+                        } else {
+                            let play_btn = crate::action_button("▶ Play (Space)", success_color, palette);
+                            if ui.add(play_btn).clicked() {
+                                play_clicked = true;
                             }
                         }
-                    });
-                });
+
+                        let stop_btn = crate::secondary_button("⏹ Stop", b_med, palette)
+                            .stroke(Stroke::new(1.0, b_low));
+                        if ui.add(stop_btn).clicked() {
+                            stop_clicked = true;
+                        }
+
+                        ui.add_space(6.0);
+                        let time_text = format!("{:.1}s / {:.1}s", playhead_sec, duration_sec);
+                        ui.label(
+                            egui::RichText::new(time_text)
+                                .monospace()
+                                .small()
+                                .strong()
+                                .color(accent),
+                        );
+
+                        ui.add_space(12.0);
+                        zoom_action = ui_ext::zoom_control_bar(ui, zoom_pct, palette);
+                    },
+                    |ui| {
+                        self.status_toast.render(ui, palette, now);
+                    },
+                );
+
+                if *close {
+                    self.stop();
+                }
+                if play_clicked {
+                    self.play();
+                }
+                if pause_clicked {
+                    self.pause();
+                }
+                if stop_clicked {
+                    self.stop();
+                }
+                if let Some(action) = zoom_action {
+                    match action {
+                        ZoomAction::ZoomIn => self.zoom(0.8, self.playhead_sec),
+                        ZoomAction::ZoomOut => self.zoom(1.25, self.playhead_sec),
+                        ZoomAction::Fit => self.reset_zoom(),
+                    }
+                }
+
 
                 // 2. Track Legend (if multi-track)
                 if self.data.track_count > 1 {

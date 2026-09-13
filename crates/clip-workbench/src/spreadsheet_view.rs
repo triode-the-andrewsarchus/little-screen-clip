@@ -5,6 +5,7 @@
 use eframe::egui::{self, Rounding, Stroke, Vec2};
 use little_clip_ops::spreadsheet::{SpreadsheetData, SpreadsheetSheet};
 use std::path::PathBuf;
+use crate::ui_ext::{self, StatusToast};
 
 /// Interactive UI state for multi-sheet spreadsheet data tables and search filters.
 pub struct SpreadsheetViewerState {
@@ -15,7 +16,7 @@ pub struct SpreadsheetViewerState {
     pub active_sheet_idx: usize,
     pub search_query: String,
     pub selected_cell: Option<(usize, usize)>, // (row, col)
-    pub status_toast: Option<(String, f64)>,
+    pub status_toast: StatusToast,
 }
 
 impl SpreadsheetViewerState {
@@ -29,7 +30,7 @@ impl SpreadsheetViewerState {
             active_sheet_idx: 0,
             search_query: String::new(),
             selected_cell: None,
-            status_toast: None,
+            status_toast: StatusToast::new(),
         }
     }
 
@@ -65,79 +66,54 @@ impl SpreadsheetViewerState {
         let b_low = crate::hex_to_c32(&palette.theme.b_low);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
         let warn_accent = crate::hex_to_c32(&palette.harmonies.warm_attention);
-        let success_accent = crate::hex_to_c32(&palette.diff_add);
 
         egui::Frame::none()
             .fill(bg)
             .inner_margin(egui::Margin::same(16.0))
             .show(ui, |ui| {
+                let title = self.title.clone();
+                let current_tsv = self.current_sheet().map(|sheet| {
+                    sheet.rows.iter().map(|r| r.join("\t")).collect::<Vec<_>>().join("\n")
+                });
+                let search_query = &mut self.search_query;
+                let status_toast = &mut self.status_toast;
+
                 // 1. Header Toolbar
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("📊").size(24.0));
-                    ui.label(
-                        egui::RichText::new(&self.title)
-                            .strong()
-                            .size(18.0)
-                            .color(f_high),
-                    );
+                ui_ext::render_view_header(
+                    ui,
+                    "📊",
+                    &title,
+                    palette,
+                    close,
+                    |ui| {
+                        ui.add_space(8.0);
+                        let info_badge = format!("{} rows × {} cols", total_rows, total_cols);
+                        ui_ext::badge_pill(ui, info_badge, None, palette);
 
-                    ui.add_space(8.0);
-                    let info_badge = format!("{} rows × {} cols", total_rows, total_cols);
-                    ui.label(
-                        egui::RichText::new(info_badge)
-                            .small()
-                            .color(f_low),
-                    );
-
-                    // Search box
-                    ui.add_space(16.0);
-                    ui.label(egui::RichText::new("🔍").small());
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.search_query)
-                            .hint_text("Filter cells...")
-                            .desired_width(180.0),
-                    );
-
-                    // Right-aligned actions & close button
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let close_btn = crate::secondary_button(
-                            "✕ Close (Esc)",
-                            crate::hex_to_c32(&palette.undo_card_bg),
-                            palette,
-                        )
-                        .stroke(Stroke::new(1.0, crate::hex_to_c32(&palette.undo_border)))
-                        .rounding(Rounding::same(6.0));
-                        if ui.add(close_btn).clicked() {
-                            *close = true;
-                        }
-
+                        // Search box
+                        ui.add_space(16.0);
+                        ui.label(egui::RichText::new("🔍").small());
+                        ui.add(
+                            egui::TextEdit::singleline(search_query)
+                                .hint_text("Filter cells...")
+                                .desired_width(180.0),
+                        );
+                    },
+                    |ui| {
                         // Copy Table button
                         let copy_btn = crate::secondary_button("📋 Copy Table", b_med, palette)
                             .stroke(Stroke::new(1.0, b_low));
                         if ui.add(copy_btn).clicked() {
-                            if let Some(sheet) = self.current_sheet() {
-                                let csv_str = sheet
-                                    .rows
-                                    .iter()
-                                    .map(|r| r.join("\t"))
-                                    .collect::<Vec<_>>()
-                                    .join("\n");
-                                ui.output_mut(|o| o.copied_text = csv_str);
-                                self.status_toast = Some(("Copied table as TSV".to_string(), now));
+                            if let Some(tsv) = &current_tsv {
+                                ui.output_mut(|o| o.copied_text = tsv.clone());
+                                status_toast.set("Copied table as TSV", now);
                             }
                         }
 
-                        if let Some((msg, ts)) = &self.status_toast {
-                            if now - ts < 4.0 {
-                                ui.label(
-                                    egui::RichText::new(msg)
-                                        .small()
-                                        .color(success_accent),
-                                );
-                            }
-                        }
-                    });
-                });
+                        status_toast.render(ui, palette, now);
+                    },
+                );
+
 
                 ui.add_space(8.0);
 
@@ -274,7 +250,7 @@ impl SpreadsheetViewerState {
                         if let Some((r_idx, c_idx, val)) = clicked_cell {
                             self.selected_cell = Some((r_idx, c_idx));
                             ui.output_mut(|o| o.copied_text = val.clone());
-                            self.status_toast = Some((format!("Copied: {}", val), now));
+                            self.status_toast.set(format!("Copied: {}", val), now);
                         }
                     });
             });

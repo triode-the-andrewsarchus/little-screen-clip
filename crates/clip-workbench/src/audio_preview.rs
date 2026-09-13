@@ -1423,35 +1423,19 @@ impl AudioPreviewState {
                     format!("{} • {:02}:{:04.1}", self.title, mins, secs)
                 };
 
-                let meta_bg = hex_to_c32(&palette.theme.b_low);
-                let meta_fg = crate::contrast_text_c32(meta_bg, Some(hex_to_c32(&palette.theme.f_med)), palette);
-                let meta_badge = egui::Button::new(
-                    egui::RichText::new(meta_str)
-                        .small()
-                        .strong()
-                        .color(meta_fg),
-                )
-                .fill(meta_bg)
-                .stroke(Stroke::NONE)
-                .rounding(Rounding::same(4.0));
-                ui.add(meta_badge);
+                crate::ui_ext::badge_pill(ui, meta_str, Some(hex_to_c32(&palette.theme.f_med)), palette);
 
                 // Multi-channel warning badge if > 2 channels
                 if let Some(ref an) = self.analysis {
                     if an.channels > 2 {
                         ui.add_space(6.0);
-                        let warn_bg = hex_to_c32_alpha(&palette.diff_mod, 40);
-                        let warn_fg = crate::contrast_text_c32(warn_bg, Some(hex_to_c32(&palette.diff_mod)), palette);
-                        let warn_badge = egui::Button::new(
-                            egui::RichText::new(format!("⚠️ Multi-channel ({} ch) — Displaying L & R only", an.channels))
-                                .small()
-                                .strong()
-                                .color(warn_fg),
-                        )
-                        .fill(warn_bg)
-                        .stroke(Stroke::NONE)
-                        .rounding(Rounding::same(4.0));
-                        ui.add(warn_badge).on_hover_text(format!(
+                        let warn_badge = crate::ui_ext::badge_pill(
+                            ui,
+                            format!("⚠️ Multi-channel ({} ch) — Displaying L & R only", an.channels),
+                            Some(hex_to_c32(&palette.diff_mod)),
+                            palette,
+                        );
+                        warn_badge.on_hover_text(format!(
                             "Audio contains {} channels. The first 2 channels (Left and Right) are visualized and can be isolated.",
                             an.channels
                         ));
@@ -1482,16 +1466,7 @@ impl AudioPreviewState {
 
                     ui.add_space(8.0);
 
-                    if let Some((msg, ts)) = &self.status_toast {
-                        if now - ts < 4.5 {
-                            ui.label(
-                                egui::RichText::new(msg)
-                                    .color(hex_to_c32(&palette.diff_add))
-                                    .small()
-                                    .strong(),
-                            );
-                        }
-                    }
+                    crate::ui_ext::StatusToast::render_opt(&self.status_toast, 4.5, ui, palette, now);
                 });
             });
 
@@ -1576,28 +1551,14 @@ impl AudioPreviewState {
                 ui.add_space(12.0);
 
                 // Zoom Controls (Audacity Style)
-                let zoom_in_btn = crate::secondary_button("🔍+", hex_to_c32(&palette.theme.b_low), palette);
-                if ui.add(zoom_in_btn).on_hover_text("Zoom In (+ / Ctrl+Wheel)").clicked() {
-                    self.zoom(0.75, self.current_time_sec);
-                }
-
-                let zoom_out_btn = crate::secondary_button("🔍-", hex_to_c32(&palette.theme.b_low), palette);
-                if ui.add(zoom_out_btn).on_hover_text("Zoom Out (- / Ctrl+Wheel)").clicked() {
-                    self.zoom(1.33, self.current_time_sec);
-                }
-
-                let fit_btn = crate::secondary_button("⟲ Fit", hex_to_c32(&palette.theme.b_low), palette);
-                if ui.add(fit_btn).on_hover_text("Fit Full Track (Ctrl+0)").clicked() {
-                    self.fit_to_window();
-                }
-
                 let zoom_pct = ((self.duration_sec / self.view_duration_sec.max(0.0001)) * 100.0).round() as u32;
-                ui.label(
-                    egui::RichText::new(format!("{}%", zoom_pct))
-                        .small()
-                        .monospace()
-                        .color(hex_to_c32(&palette.theme.f_med)),
-                );
+                if let Some(action) = crate::ui_ext::zoom_control_bar(ui, zoom_pct, palette) {
+                    match action {
+                        crate::ui_ext::ZoomAction::ZoomIn => self.zoom(0.75, self.current_time_sec),
+                        crate::ui_ext::ZoomAction::ZoomOut => self.zoom(1.33, self.current_time_sec),
+                        crate::ui_ext::ZoomAction::Fit => self.fit_to_window(),
+                    }
+                }
 
                 ui.add_space(12.0);
 

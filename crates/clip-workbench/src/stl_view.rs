@@ -6,6 +6,7 @@
 use eframe::egui::{self, Color32, Pos2, Rounding, Stroke, Vec2};
 use little_clip_ops::{StlMesh, Vec3};
 use std::path::PathBuf;
+use crate::ui_ext::{self, StatusToast};
 
 /// Interactive 3D orbital viewer state for STL meshes.
 pub struct StlViewerState {
@@ -19,7 +20,7 @@ pub struct StlViewerState {
     pub pan_offset: Vec2,
     pub auto_rotate: bool,
     pub wireframe: bool,
-    pub status_toast: Option<(String, f64)>,
+    pub status_toast: StatusToast,
 }
 
 impl StlViewerState {
@@ -42,7 +43,7 @@ impl StlViewerState {
             pan_offset: Vec2::ZERO,
             auto_rotate: true,
             wireframe: true, // User prefers wireframe by default
-            status_toast: None,
+            status_toast: StatusToast::new(),
         })
     }
 
@@ -59,7 +60,7 @@ impl StlViewerState {
             pan_offset: Vec2::ZERO,
             auto_rotate: true,
             wireframe: true, // User prefers wireframe by default
-            status_toast: None,
+            status_toast: StatusToast::new(),
         })
     }
 
@@ -93,109 +94,98 @@ impl StlViewerState {
         let f_med = crate::hex_to_c32(&palette.theme.f_med);
         let f_low = crate::hex_to_c32(&palette.theme.f_low);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
-        let success_accent = crate::hex_to_c32(&palette.diff_add);
 
         egui::Frame::none()
             .fill(bg)
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
+                let title = self.title.clone();
+                let tri_count = self.mesh.triangles.len();
+                let size_x = self.mesh.size.x;
+                let size_y = self.mesh.size.y;
+                let size_z = self.mesh.size.z;
+                let auto_rotate = self.auto_rotate;
+                let wireframe = self.wireframe;
+
+                let mut auto_rot_clicked = false;
+                let mut wire_clicked = false;
+                let mut reset_clicked = false;
+
                 // 1. Top Control Bar
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("🧊").size(20.0));
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(&self.title)
-                            .strong()
-                            .size(18.0)
-                            .color(f_high),
-                    );
+                ui_ext::render_view_header(
+                    ui,
+                    "🧊",
+                    &title,
+                    palette,
+                    close,
+                    |ui| {
+                        ui.add_space(8.0);
+                        let info_badge = format!(
+                            "{} triangles • {:.1}×{:.1}×{:.1} mm",
+                            tri_count, size_x, size_y, size_z
+                        );
+                        ui_ext::badge_pill(ui, info_badge, None, palette);
 
-                    ui.add_space(8.0);
-                    let info_badge = format!(
-                        "{} triangles • {:.1}×{:.1}×{:.1} mm",
-                        self.mesh.triangles.len(),
-                        self.mesh.size.x,
-                        self.mesh.size.y,
-                        self.mesh.size.z
-                    );
-                    ui.label(
-                        egui::RichText::new(info_badge)
-                            .small()
-                            .color(f_low),
-                    );
-
-                    ui.add_space(16.0);
-                    // Controls
-                    let auto_rot_bg = if self.auto_rotate { b_med } else { accent };
-                    let auto_rot_fg = crate::contrast_text_c32(auto_rot_bg, Some(f_high), palette);
-                    let auto_rot_btn = egui::Button::new(
-                        egui::RichText::new(if self.auto_rotate { "⏸ Pause Rotation" } else { "▶ Auto-Rotate" })
-                            .small()
-                            .strong()
-                            .color(auto_rot_fg),
-                    )
-                    .fill(auto_rot_bg)
-                    .stroke(Stroke::new(1.0, b_low))
-                    .rounding(Rounding::same(4.0));
-                    if ui.add(auto_rot_btn).clicked() {
-                        self.auto_rotate = !self.auto_rotate;
-                    }
-
-                    let wire_bg = if self.wireframe { accent } else { b_med };
-                    let wire_fg = crate::contrast_text_c32(wire_bg, Some(f_high), palette);
-                    let wire_btn = egui::Button::new(
-                        egui::RichText::new(if self.wireframe { "🎨 Shaded" } else { "📐 Wireframe" })
-                            .small()
-                            .strong()
-                            .color(wire_fg),
-                    )
-                    .fill(wire_bg)
-                    .stroke(Stroke::new(1.0, b_low))
-                    .rounding(Rounding::same(4.0));
-                    if ui.add(wire_btn).clicked() {
-                        self.wireframe = !self.wireframe;
-                    }
-
-                    let reset_fg = crate::contrast_text_c32(b_med, Some(f_med), palette);
-                    let reset_btn = egui::Button::new(
-                        egui::RichText::new("↺ Reset View")
-                            .small()
-                            .color(reset_fg),
-                    )
-                    .fill(b_med)
-                    .stroke(Stroke::new(1.0, b_low))
-                    .rounding(Rounding::same(4.0));
-                    if ui.add(reset_btn).clicked() {
-                        self.reset_view();
-                    }
-
-                    // Right aligned Close button
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let close_bg = crate::hex_to_c32(&palette.undo_card_bg);
-                        let close_fg = crate::contrast_text_c32(close_bg, Some(crate::hex_to_c32(&palette.undo_border)), palette);
-                        let close_btn = egui::Button::new(
-                            egui::RichText::new("✕ Close (Esc)")
+                        ui.add_space(16.0);
+                        // Controls
+                        let auto_rot_bg = if auto_rotate { b_med } else { accent };
+                        let auto_rot_fg = crate::contrast_text_c32(auto_rot_bg, Some(f_high), palette);
+                        let auto_rot_btn = egui::Button::new(
+                            egui::RichText::new(if auto_rotate { "⏸ Pause Rotation" } else { "▶ Auto-Rotate" })
+                                .small()
                                 .strong()
-                                .color(close_fg),
+                                .color(auto_rot_fg),
                         )
-                        .fill(close_bg)
-                        .stroke(Stroke::new(1.0, crate::hex_to_c32(&palette.undo_border)))
-                        .rounding(Rounding::same(6.0));
-                        if ui.add(close_btn).clicked() {
-                            *close = true;
+                        .fill(auto_rot_bg)
+                        .stroke(Stroke::new(1.0, b_low))
+                        .rounding(Rounding::same(4.0));
+                        if ui.add(auto_rot_btn).clicked() {
+                            auto_rot_clicked = true;
                         }
 
-                        if let Some((msg, ts)) = &self.status_toast {
-                            if now - ts < 4.0 {
-                                ui.label(
-                                    egui::RichText::new(msg)
-                                        .small()
-                                        .color(success_accent),
-                                );
-                            }
+                        let wire_bg = if wireframe { accent } else { b_med };
+                        let wire_fg = crate::contrast_text_c32(wire_bg, Some(f_high), palette);
+                        let wire_btn = egui::Button::new(
+                            egui::RichText::new(if wireframe { "🎨 Shaded" } else { "📐 Wireframe" })
+                                .small()
+                                .strong()
+                                .color(wire_fg),
+                        )
+                        .fill(wire_bg)
+                        .stroke(Stroke::new(1.0, b_low))
+                        .rounding(Rounding::same(4.0));
+                        if ui.add(wire_btn).clicked() {
+                            wire_clicked = true;
                         }
-                    });
-                });
+
+                        let reset_fg = crate::contrast_text_c32(b_med, Some(f_med), palette);
+                        let reset_btn = egui::Button::new(
+                            egui::RichText::new("↺ Reset View")
+                                .small()
+                                .color(reset_fg),
+                        )
+                        .fill(b_med)
+                        .stroke(Stroke::new(1.0, b_low))
+                        .rounding(Rounding::same(4.0));
+                        if ui.add(reset_btn).clicked() {
+                            reset_clicked = true;
+                        }
+                    },
+                    |ui| {
+                        self.status_toast.render(ui, palette, now);
+                    },
+                );
+
+                if auto_rot_clicked {
+                    self.auto_rotate = !self.auto_rotate;
+                }
+                if wire_clicked {
+                    self.wireframe = !self.wireframe;
+                }
+                if reset_clicked {
+                    self.reset_view();
+                }
+
 
                 ui.add_space(8.0);
                 ui.separator();

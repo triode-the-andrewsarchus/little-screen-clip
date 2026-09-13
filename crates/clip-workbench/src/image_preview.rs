@@ -2234,7 +2234,7 @@ impl ImagePreviewState {
                         self.current_rgba.height(),
                         aspect_str
                     );
-                    chip_badge(ui, &dim_text, hex_to_c32(&palette.harmonies.split_comp_1), hex_to_c32(&palette.theme.b_med));
+                    crate::ui_ext::badge_pill(ui, &dim_text, Some(hex_to_c32(&palette.harmonies.split_comp_1)), palette);
 
                     // Format chip
                     let fmt_str = if self.is_svg && self.undo_stack.is_empty() {
@@ -2242,11 +2242,11 @@ impl ImagePreviewState {
                     } else {
                         self.mime.replace("image/", "").to_uppercase()
                     };
-                    chip_badge(ui, &fmt_str, hex_to_c32(&palette.diff_add), hex_to_c32(&palette.theme.b_med));
+                    crate::ui_ext::badge_pill(ui, &fmt_str, Some(hex_to_c32(&palette.diff_add)), palette);
 
                     // File size chip
                     let size_str = format_bytes_size(self.file_size_bytes);
-                    chip_badge(ui, &size_str, hex_to_c32(&palette.diff_mod), hex_to_c32(&palette.theme.b_med));
+                    crate::ui_ext::badge_pill(ui, &size_str, Some(hex_to_c32(&palette.diff_mod)), palette);
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Close button
@@ -5288,17 +5288,8 @@ impl ImagePreviewState {
                     );
 
                     // Toast message
-                    if let Some((ref msg, toast_time)) = self.status_toast {
-                        let elapsed = now - toast_time;
-                        if elapsed < 5.0 {
-                            let alpha = ((5.0 - elapsed) / 1.0).clamp(0.0, 1.0);
-                            let col = hex_to_c32_alpha(&palette.diff_add, (alpha * 255.0) as u8);
-                            ui.add_space(20.0);
-                            ui.label(egui::RichText::new(msg).small().strong().color(col));
-                        } else {
-                            self.status_toast = None;
-                        }
-                    }
+                    ui.add_space(20.0);
+                    crate::ui_ext::StatusToast::render_opt(&self.status_toast, 5.0, ui, palette, now);
                 });
             });
     }

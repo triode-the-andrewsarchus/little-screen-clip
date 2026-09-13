@@ -41,7 +41,7 @@ pub struct BinaryDiffViewState {
     pub current_diff_idx: usize,
     pub scroll_target_row: Option<usize>,
     pub hovered_cell: Option<(usize, usize)>, // (row_idx, col_idx)
-    pub status_toast: Option<(String, f64)>,  // (text, timestamp)
+    pub status_toast: crate::ui_ext::StatusToast,
     pub selected_diff_block: Option<usize>,
     pub current_scroll_offset_x: f32,
     pub current_scroll_offset_y: f32,
@@ -88,7 +88,7 @@ impl BinaryDiffViewState {
             current_diff_idx: 0,
             scroll_target_row: None,
             hovered_cell: None,
-            status_toast: None,
+            status_toast: crate::ui_ext::StatusToast::with_duration(3.0),
             selected_diff_block: None,
             current_scroll_offset_x: 0.0,
             current_scroll_offset_y: 0.0,
@@ -335,16 +335,7 @@ impl BinaryDiffViewState {
                     );
 
                     // Status toast
-                    if let Some((ref msg, t)) = self.status_toast {
-                        if now - t < 3.0 {
-                            ui.add_space(16.0);
-                            ui.label(
-                                egui::RichText::new(msg)
-                                    .font(FontId::proportional(12.0))
-                                    .color(hex_to_c32(&palette.diff_add)),
-                            );
-                        }
-                    }
+                    self.status_toast.render(ui, palette, now);
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Close button
@@ -415,7 +406,7 @@ impl BinaryDiffViewState {
                                     res.mode
                                 );
                                 ctx.output_mut(|o| o.copied_text = summary);
-                                self.status_toast = Some(("Summary copied to clipboard!".to_string(), now));
+                                self.status_toast.set("Summary copied to clipboard!", now);
                             }
                         }
                     });
@@ -428,51 +419,47 @@ impl BinaryDiffViewState {
             return;
         };
 
+        let match_count = res.stats.match_count;
+        let mismatch_count = res.stats.mismatch_count;
+        let left_only_count = res.stats.left_only_count;
+        let right_only_count = res.stats.right_only_count;
+        let diff_blocks_len = res.diff_blocks.len();
+        let search_len = self.search_matches.len();
+        let search_idx = self.current_search_idx;
+
         let mut next_diff = false;
         let mut prev_diff = false;
         let mut next_search = false;
         let mut prev_search = false;
         let mut do_search = false;
 
-        let pct = res.stats.similarity_pct;
-        let match_count = res.stats.match_count;
-        let mismatch_count = res.stats.mismatch_count;
-        let left_only_count = res.stats.left_only_count;
-        let right_only_count = res.stats.right_only_count;
-        let diff_blocks_len = res.diff_blocks.len();
-
-        let search_len = self.search_matches.len();
-        let search_idx = self.current_search_idx;
-
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_low))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let pct_color = if pct >= 95.0 {
+                    let pct_color = if res.stats.similarity_pct >= 90.0 {
                         hex_to_c32(&palette.diff_add)
-                    } else if pct >= 70.0 {
-                        hex_to_c32(&palette.harmonies.base)
-                    } else if pct >= 40.0 {
-                        hex_to_c32(&palette.diff_mod)
+                    } else if res.stats.similarity_pct >= 50.0 {
+                        hex_to_c32(&palette.harmonies.warm_attention)
                     } else {
                         hex_to_c32(&palette.diff_del)
                     };
 
                     ui.label(
-                        egui::RichText::new(format!("Similarity: {:.1}%", pct))
-                            .font(FontId::proportional(13.0))
+                        egui::RichText::new(format!("{:.1}% similar", res.stats.similarity_pct))
+                            .font(FontId::proportional(12.0))
                             .strong()
                             .color(pct_color),
                     );
 
                     ui.add_space(14.0);
 
-                    render_stat_pill(ui, "Matches", match_count, hex_to_c32(&palette.theme.f_med), palette);
-                    render_stat_pill(ui, "Mismatches", mismatch_count, hex_to_c32(&palette.diff_mod), palette);
-                    render_stat_pill(ui, "Deletions", left_only_count, hex_to_c32(&palette.diff_del), palette);
-                    render_stat_pill(ui, "Insertions", right_only_count, hex_to_c32(&palette.diff_add), palette);
-                    render_stat_pill(ui, "Diff Blocks", diff_blocks_len, hex_to_c32(&palette.harmonies.warm_attention), palette);
+                    crate::ui_ext::stat_pill(ui, "Matches", match_count, Some(hex_to_c32(&palette.theme.f_med)), palette);
+                    crate::ui_ext::stat_pill(ui, "Mismatches", mismatch_count, Some(hex_to_c32(&palette.diff_mod)), palette);
+                    crate::ui_ext::stat_pill(ui, "Deletions", left_only_count, Some(hex_to_c32(&palette.diff_del)), palette);
+                    crate::ui_ext::stat_pill(ui, "Insertions", right_only_count, Some(hex_to_c32(&palette.diff_add)), palette);
+                    crate::ui_ext::stat_pill(ui, "Diff Blocks", diff_blocks_len, Some(hex_to_c32(&palette.harmonies.warm_attention)), palette);
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let next_btn = crate::secondary_button("Next Diff [J]", hex_to_c32(&palette.theme.b_med), palette);
@@ -1372,23 +1359,6 @@ fn format_cell_ascii(
         }
         (None, _) => ('·', hex_to_c32(&palette.theme.f_low)),
     }
-}
-
-fn render_stat_pill(ui: &mut egui::Ui, label: &str, count: usize, color: Color32, palette: &AppPalette) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
-        ui.label(
-            egui::RichText::new(format!("{}:", label))
-                .font(FontId::proportional(12.0))
-                .color(hex_to_c32(&palette.theme.f_low)),
-        );
-        ui.label(
-            egui::RichText::new(format!("{}", count))
-                .font(FontId::monospace(12.0))
-                .strong()
-                .color(color),
-        );
-    });
 }
 
 fn format_bytes_size(len: usize) -> String {
