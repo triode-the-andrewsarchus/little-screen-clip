@@ -2544,26 +2544,13 @@ impl ScreenRenderer {
 
                 if let Some(n_rect) = Rect::from_xywh(nx, ny, nw, note_h) {
                     let mut n_paint = Paint::default();
-                    let (r, g, b) = if midi.track_count <= 1 {
-                        if note.channel == 9 {
-                            (251, 146, 60)
-                        } else {
-                            (56, 189, 248)
-                        }
-                    } else if note.channel == 9 {
-                        (249, 115, 22)
-                    } else {
-                        match note.track % 8 {
-                            0 => (6, 182, 212),   // Cyan
-                            1 => (245, 158, 11),  // Amber
-                            2 => (168, 85, 247),  // Purple
-                            3 => (244, 63, 94),   // Rose
-                            4 => (34, 197, 94),   // Green
-                            5 => (59, 130, 246),  // Blue
-                            6 => (234, 88, 12),   // Orange
-                            _ => (236, 72, 153),  // Pink
-                        }
-                    };
+                    let (r, g, b) = self.palette.midi_note_color(
+                        note.track,
+                        note.channel,
+                        midi.track_count,
+                        note.key,
+                        note.velocity,
+                    );
                     n_paint.set_color(Color::from_rgba8(r, g, b, 240));
                     pixmap.fill_rect(n_rect, &n_paint, Transform::identity(), None);
                 }

@@ -40,33 +40,8 @@ pub fn get_track_color(
     total_tracks: usize,
     palette: &little_clip_core::theme::AppPalette,
 ) -> Color32 {
-    let drum_color = crate::hex_to_c32(&palette.harmonies.warm_attention);
-    let base_accent = crate::hex_to_c32(&palette.harmonies.base);
-    if total_tracks <= 1 {
-        if channel == 9 {
-            drum_color
-        } else {
-            base_accent
-        }
-    } else {
-        let track_palette: [Color32; 10] = [
-            crate::hex_to_c32(&palette.harmonies.base),
-            crate::hex_to_c32(&palette.harmonies.complementary),
-            crate::hex_to_c32(&palette.harmonies.triadic_1),
-            crate::hex_to_c32(&palette.harmonies.triadic_2),
-            crate::hex_to_c32(&palette.harmonies.tetradic_1),
-            crate::hex_to_c32(&palette.harmonies.tetradic_2),
-            crate::hex_to_c32(&palette.diff_add),
-            crate::hex_to_c32(&palette.diff_mod),
-            crate::hex_to_c32(&palette.diff_del),
-            crate::hex_to_c32(&palette.harmonies.warm_attention),
-        ];
-        if channel == 9 {
-            drum_color
-        } else {
-            track_palette[track_idx % track_palette.len()]
-        }
-    }
+    let (r, g, b) = palette.midi_track_color(track_idx, channel, total_tracks);
+    Color32::from_rgb(r, g, b)
 }
 
 impl MidiViewerState {
@@ -673,17 +648,18 @@ impl MidiViewerState {
                         hovered = Some(note.clone());
                     }
 
-                    // Colored per track using palette harmonies
-                    let base_track_color = get_track_color(note.track, note.channel, self.data.track_count, palette);
+                    // Colored per track/channel/pitch using palette theme harmonies
                     let fill_color = if is_note_hovered {
                         f_high
                     } else {
-                        let vel_factor = (note.velocity as f32 / 127.0).clamp(0.5, 1.0);
-                        Color32::from_rgb(
-                            (base_track_color.r() as f32 * vel_factor) as u8,
-                            (base_track_color.g() as f32 * vel_factor) as u8,
-                            (base_track_color.b() as f32 * vel_factor) as u8,
-                        )
+                        let (r, g, b) = palette.midi_note_color(
+                            note.track,
+                            note.channel,
+                            self.data.track_count,
+                            note.key,
+                            note.velocity,
+                        );
+                        Color32::from_rgb(r, g, b)
                     };
 
                     painter.rect_filled(note_rect, Rounding::same(2.0), fill_color);
@@ -760,3 +736,53 @@ impl MidiViewerState {
             });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use little_clip_core::theme::{find_themes_dir, AppPalette, Theme};
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_midi_view_track_colors() {
+        let theme = Theme::apollo();
+        let palette = AppPalette::from_theme(&theme, &HashMap::new());
+
+        let t0 = get_track_color(0, 0, 4, &palette);
+        let t1 = get_track_color(1, 0, 4, &palette);
+        let drums = get_track_color(2, 9, 4, &palette);
+
+        assert_ne!(t0, t1, "Track 0 and Track 1 should be distinct colors");
+        assert_ne!(t0, drums, "Melodic and drum tracks should be distinct");
+    }
+
+    #[test]
+    fn test_midi_view_note_colors_vibrancy_zenburn() {
+        let dir = find_themes_dir();
+        let zenburn_path = dir.join("zenburn.svg");
+        if !zenburn_path.exists() {
+            return;
+        }
+        let theme = Theme::from_file(&zenburn_path).expect("failed to load zenburn");
+        let palette = AppPalette::from_theme(&theme, &HashMap::new());
+
+        let note_c = palette.midi_note_color(0, 0, 4, 60, 100);
+        let note_d = palette.midi_note_color(1, 0, 4, 62, 100);
+
+        assert_ne!(note_c, note_d);
+        // Ensure note_c is not dark or muted (r + g + b should indicate good brightness)
+        let brightness = note_c.0 as u32 + note_c.1 as u32 + note_c.2 as u32;
+        assert!(brightness >= 350, "Note brightness should be vibrant in Zenburn, got {}", brightness);
+    }
+
+    #[test]
+    fn test_midi_view_single_track_pitch_differentiation() {
+        let theme = Theme::apollo();
+        let palette = AppPalette::from_theme(&theme, &HashMap::new());
+
+        let c4 = palette.midi_note_color(0, 0, 1, 60, 100);
+        let g4 = palette.midi_note_color(0, 0, 1, 67, 100);
+        assert_ne!(c4, g4, "Single-track C4 and G4 must have different chromatic hues");
+    }
+}
+

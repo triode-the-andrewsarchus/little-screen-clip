@@ -69,10 +69,13 @@ impl Theme {
 
     /// Whether this theme is predominantly dark or light.
     pub fn is_dark(&self) -> bool {
-        let (r, g, b, _) = parse_hex_color_rgba(&self.background);
-        // Perceived relative luminance
-        let lum = 0.2126 * (r as f32) + 0.7152 * (g as f32) + 0.0722 * (b as f32);
-        lum < 128.0
+        let (br, bg, bb, _) = parse_hex_color_rgba(&self.background);
+        let (fr, fg, fb, _) = parse_hex_color_rgba(&self.f_high);
+        let bg_lum = relative_luminance(br, bg, bb);
+        let fg_lum = relative_luminance(fr, fg, fb);
+        // A theme is dark if its background is dark (< 0.20 relative luminance)
+        // and its primary text foreground is brighter than the background.
+        bg_lum < 0.20 && fg_lum > bg_lum
     }
 
     /// Selects the best foreground color to render on `bg_hex`.
@@ -601,6 +604,134 @@ impl AppPalette {
     pub fn contrast_pair_fg(&self, bg_hex: &str, preferred_fg: Option<&str>) -> String {
         self.theme.contrast_pair_fg(bg_hex, preferred_fg)
     }
+
+    /// Computes the theme-derived vibrant color for a MIDI track / channel.
+    ///
+    /// Used for track legend chips, channel headers, and track-level badges.
+    pub fn midi_track_color(&self, track: usize, channel: u8, total_tracks: usize) -> (u8, u8, u8) {
+        self.midi_note_color(track, channel, total_tracks, 60, 100)
+    }
+
+    /// Hex string helper for `midi_track_color`.
+    pub fn midi_track_color_hex(&self, track: usize, channel: u8, total_tracks: usize) -> String {
+        let (r, g, b) = self.midi_track_color(track, channel, total_tracks);
+        format!("#{:02x}{:02x}{:02x}", r, g, b)
+    }
+
+    /// Computes a vibrant, theme-harmonized color for an individual MIDI note.
+    ///
+    /// Ensures note colors:
+    /// 1. Genuinely derive from the theme's core accent hue.
+    /// 2. Maintain a healthy chroma floor ($C \ge 0.18$) so notes never look muted or washed out,
+    ///    even in desaturated themes like Zenburn or Paper.
+    /// 3. Provide sufficient contrast against canvas backgrounds in both dark and light modes.
+    /// 4. Distinguish GM percussion (channel 9) with a warm attention hue.
+    /// 5. Provide chromatic pitch-class wheel separation $(key \% 12) \times 30^\circ$ for single-track files.
+    /// 6. Modulate gently by velocity in Oklch space without crushing dark-mode luminance.
+    pub fn midi_note_color(
+        &self,
+        track: usize,
+        channel: u8,
+        total_tracks: usize,
+        pitch_key: u8,
+        velocity: u8,
+    ) -> (u8, u8, u8) {
+        // 1. Determine base hue angle from the theme's base accent
+        let (f_r, f_g, f_b, _) = parse_hex_color_rgba(&self.harmonies.base);
+        let base_oklch = Oklab::from_rgb(f_r, f_g, f_b).to_oklch();
+
+        let h_0 = if base_oklch.c < 0.04 {
+            // Theme has an almost completely neutral/achromatic accent.
+            // Check if b_inv has color:
+            let (inv_r, inv_g, inv_b, _) = parse_hex_color_rgba(&self.b_inv);
+            let inv_oklch = Oklab::from_rgb(inv_r, inv_g, inv_b).to_oklch();
+            if inv_oklch.c >= 0.04 {
+                inv_oklch.h
+            } else {
+                240.0 // Default to vibrant sapphire
+            }
+        } else {
+            base_oklch.h
+        };
+
+        // 2. Chroma floor: guarantee vibrant notes even for desaturated themes
+        let note_c = base_oklch.c.max(0.18).min(0.24);
+
+        // 3. Base lightness depending on dark vs light mode
+        let base_l = if self.is_dark { 0.74 } else { 0.38 };
+
+        // 4. Resolve Hue based on track / channel / pitch
+        let target_h = if channel == 9 {
+            // GM Channel 9 = Drums / Percussion: punchy warm attention hue (amber/orange)
+            75.0
+        } else if total_tracks <= 1 {
+            if channel > 0 {
+                // Single-track Type 0 file with multiple channels: color by channel
+                const HARMONIC_STEPS: [f32; 12] = [
+                    0.0, 180.0, 120.0, 240.0, 60.0, 300.0, 90.0, 270.0, 150.0, 210.0, 30.0, 330.0,
+                ];
+                let offset = HARMONIC_STEPS[channel as usize % HARMONIC_STEPS.len()];
+                (h_0 + offset) % 360.0
+            } else {
+                // Single-track solo instrument (e.g. piano on ch 0):
+                // Chromatic pitch-class wheel (12 semitones around 360 degrees)
+                let pitch_class = (pitch_key % 12) as f32;
+                (h_0 + pitch_class * 30.0) % 360.0
+            }
+        } else {
+            // Multi-track file: cycle through harmonic wheel
+            const HARMONIC_STEPS: [f32; 12] = [
+                0.0, 180.0, 120.0, 240.0, 60.0, 300.0, 90.0, 270.0, 150.0, 210.0, 30.0, 330.0,
+            ];
+            let offset = if track < HARMONIC_STEPS.len() {
+                HARMONIC_STEPS[track]
+            } else {
+                (track as f32 * 137.508) % 360.0
+            };
+            (h_0 + offset) % 360.0
+        };
+
+        // 5. Perceptual velocity dynamics in Oklch space
+        let vel_norm = (velocity as f32 / 127.0).clamp(0.1, 1.0);
+        let (final_l, final_c) = if channel == 9 {
+            let drum_c = note_c.max(0.20);
+            if self.is_dark {
+                ((0.78 + (vel_norm - 0.7) * 0.08).clamp(0.65, 0.86), drum_c)
+            } else {
+                ((0.36 - (vel_norm - 0.7) * 0.06).clamp(0.28, 0.42), drum_c)
+            }
+        } else if self.is_dark {
+            // Dark mode: soft notes: ~0.66, loud notes: ~0.78
+            let l = (base_l - 0.08 + vel_norm * 0.12).clamp(0.62, 0.85);
+            let c = (note_c * (0.85 + 0.20 * vel_norm)).clamp(0.14, 0.26);
+            (l, c)
+        } else {
+            // Light mode: soft notes: ~0.42, loud notes: ~0.34 (richer/deeper, high contrast)
+            let l = (base_l + 0.04 - vel_norm * 0.08).clamp(0.28, 0.46);
+            let c = (note_c * (0.85 + 0.20 * vel_norm)).clamp(0.14, 0.26);
+            (l, c)
+        };
+
+        Oklch {
+            l: final_l,
+            c: final_c,
+            h: target_h,
+        }
+        .to_rgb()
+    }
+
+    /// Hex string helper for `midi_note_color`.
+    pub fn midi_note_color_hex(
+        &self,
+        track: usize,
+        channel: u8,
+        total_tracks: usize,
+        pitch_key: u8,
+        velocity: u8,
+    ) -> String {
+        let (r, g, b) = self.midi_note_color(track, channel, total_tracks, pitch_key, velocity);
+        format!("#{:02x}{:02x}{:02x}", r, g, b)
+    }
 }
 
 #[cfg(test)]
@@ -724,6 +855,95 @@ mod tests {
                     ratio
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_zenburn_midi_colors_vibrancy() {
+        let dir = find_themes_dir();
+        let zenburn_file = dir.join("zenburn.svg");
+        if !zenburn_file.exists() {
+            return;
+        }
+        let theme = Theme::from_file(&zenburn_file).expect("zenburn load failed");
+        let palette = AppPalette::from_theme(&theme, &HashMap::new());
+
+        // Test track colors
+        let t0 = palette.midi_track_color(0, 0, 4);
+        let t1 = palette.midi_track_color(1, 0, 4);
+        let drums = palette.midi_track_color(2, 9, 4);
+
+        assert_ne!(t0, t1, "Track 0 and Track 1 should have distinct colors");
+        assert_ne!(t0, drums, "Melodic and drum channels should be distinct");
+
+        // Convert t0 to Oklch and check chroma
+        let oklch0 = Oklab::from_rgb(t0.0, t0.1, t0.2).to_oklch();
+        assert!(oklch0.c >= 0.16, "Zenburn track 0 chroma should be vibrant (>= 0.16), got {:.3}", oklch0.c);
+
+        // Check contrast against b_low (canvas background)
+        let (br, bg, bb, _) = parse_hex_color_rgba(&palette.theme.b_low);
+        let cr0 = contrast_ratio((br, bg, bb), t0);
+        assert!(cr0 >= 3.0, "Zenburn note should have >= 3.0:1 contrast against b_low, got {:.2}", cr0);
+
+        // Test soft velocity note is still legible
+        let soft_note = palette.midi_note_color(0, 0, 4, 60, 25);
+        let cr_soft = contrast_ratio((br, bg, bb), soft_note);
+        assert!(cr_soft >= 2.5, "Soft velocity note should remain legible, got {:.2}", cr_soft);
+    }
+
+    #[test]
+    fn test_midi_single_track_pitch_differentiation() {
+        let theme = Theme::apollo();
+        let palette = AppPalette::from_theme(&theme, &HashMap::new());
+
+        // Single-track piano notes of different pitch classes
+        let c4 = palette.midi_note_color(0, 0, 1, 60, 100);
+        let e4 = palette.midi_note_color(0, 0, 1, 64, 100);
+        let g4 = palette.midi_note_color(0, 0, 1, 67, 100);
+
+        assert_ne!(c4, e4, "C4 and E4 should have different colors in single-track");
+        assert_ne!(e4, g4, "E4 and G4 should have different colors in single-track");
+
+        // Octaves of same pitch class should share hue
+        let c5 = palette.midi_note_color(0, 0, 1, 72, 100);
+        assert_eq!(c4, c5, "Octaves (C4 and C5) should share the same pitch-class color");
+    }
+
+    #[test]
+    fn test_midi_colors_across_all_themes() {
+        let dir = find_themes_dir();
+        if !dir.exists() {
+            return;
+        }
+        let themes = load_themes_from_dir(&dir);
+        for theme in themes {
+            let palette = AppPalette::from_theme(&theme, &HashMap::new());
+            let (br, bg, bb, _) = parse_hex_color_rgba(&palette.theme.b_low);
+
+            // Test 4 tracks + drum channel
+            for track in 0..4 {
+                let col = palette.midi_track_color(track, 0, 4);
+                let cr = contrast_ratio((br, bg, bb), col);
+                assert!(
+                    cr >= 2.5,
+                    "Theme '{}' track {} note color {:?} has low contrast {:.2} against b_low",
+                    theme.name,
+                    track,
+                    col,
+                    cr
+                );
+            }
+
+            // Drums
+            let drum_col = palette.midi_track_color(0, 9, 4);
+            let cr_drum = contrast_ratio((br, bg, bb), drum_col);
+            assert!(
+                cr_drum >= 2.5,
+                "Theme '{}' drum note color {:?} has low contrast {:.2} against b_low",
+                theme.name,
+                drum_col,
+                cr_drum
+            );
         }
     }
 }
