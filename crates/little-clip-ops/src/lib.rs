@@ -46,6 +46,12 @@ pub use barcode::*;
 pub mod decorrelation_stretch;
 pub use decorrelation_stretch::*;
 
+pub mod metadata;
+pub use metadata::*;
+
+pub mod perspective;
+pub use perspective::*;
+
 /// Error encountered during transformation or diff execution.
 #[derive(Debug, Error)]
 pub enum OpError {
