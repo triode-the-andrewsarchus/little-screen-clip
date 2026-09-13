@@ -4,6 +4,8 @@
 //! across binary byte buffers.
 
 use eframe::egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
+use little_clip_core::theme::AppPalette;
+use crate::{hex_to_c32, hex_to_c32_alpha};
 use little_clip_ops::binary_diff::{
     byte_to_ascii_char, compute_binary_diff, search_rows, AlignedCell,
     BinaryDiffMode, BinaryDiffResult, DiffKind,
@@ -196,6 +198,7 @@ impl BinaryDiffViewState {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
+        palette: &AppPalette,
         close_requested: &mut bool,
     ) {
         let now = ctx.input(|i| i.time);
@@ -238,12 +241,12 @@ impl BinaryDiffViewState {
             ui.painter().rect_filled(
                 full_rect,
                 Rounding::ZERO,
-                Color32::from_rgb(11, 15, 25),
+                hex_to_c32(&palette.theme.background),
             );
 
             ui.vertical(|ui| {
-                self.render_header_bar(ui, ctx, close_requested, now);
-                self.render_stats_bar(ui);
+                self.render_header_bar(ui, ctx, palette, close_requested, now);
+                self.render_stats_bar(ui, palette);
                 ui.separator();
 
                 let avail_h = (ui.available_height() - 36.0).max(100.0);
@@ -258,25 +261,25 @@ impl BinaryDiffViewState {
                             Vec2::new(table_w, avail_h),
                             egui::Layout::top_down(egui::Align::LEFT),
                             |ui| {
-                                self.render_hex_table(ui, avail_h);
+                                self.render_hex_table(ui, palette, avail_h);
                             },
                         );
                     });
 
                     // 2. Minimap Track (Red diff markers & viewport position)
                     ui.push_id("binary_minimap_section", |ui| {
-                        self.render_minimap(ui, avail_h);
+                        self.render_minimap(ui, palette, avail_h);
                     });
 
                     ui.separator();
 
                     // 3. Differences Table on the right
                     ui.push_id("binary_diff_panel_section", |ui| {
-                        self.render_differences_panel(ui, avail_h, diff_panel_w);
+                        self.render_differences_panel(ui, palette, avail_h, diff_panel_w);
                     });
                 });
 
-                self.render_footer_inspection(ui);
+                self.render_footer_inspection(ui, palette);
             });
         });
     }
@@ -285,12 +288,13 @@ impl BinaryDiffViewState {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
+        palette: &AppPalette,
         close_requested: &mut bool,
         now: f64,
     ) {
         egui::Frame::none()
-            .fill(Color32::from_rgb(20, 27, 45))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(45, 55, 75)))
+            .fill(hex_to_c32(&palette.theme.b_low))
+            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
             .inner_margin(egui::Margin::symmetric(14.0, 10.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -299,7 +303,7 @@ impl BinaryDiffViewState {
                         egui::RichText::new("🔬 BINARY DIFF")
                             .font(FontId::proportional(15.0))
                             .strong()
-                            .color(Color32::from_rgb(56, 189, 248)),
+                            .color(hex_to_c32(&palette.harmonies.base)),
                     );
 
                     ui.add_space(8.0);
@@ -309,12 +313,12 @@ impl BinaryDiffViewState {
                     ui.label(
                         egui::RichText::new(format!("◀ {} ({})", self.left_label, l_size_str))
                             .font(FontId::monospace(13.0))
-                            .color(Color32::from_rgb(226, 232, 240)),
+                            .color(hex_to_c32(&palette.theme.f_high)),
                     );
 
                     // Swap button
                     if ui
-                        .button(egui::RichText::new("⇄").font(FontId::proportional(14.0)).color(Color32::from_rgb(148, 163, 184)))
+                        .button(egui::RichText::new("⇄").font(FontId::proportional(14.0)).color(hex_to_c32(&palette.theme.f_med)))
                         .on_hover_text("Swap Left & Right operands (Shortcut: [S])")
                         .clicked()
                     {
@@ -326,7 +330,7 @@ impl BinaryDiffViewState {
                     ui.label(
                         egui::RichText::new(format!("▶ {} ({})", self.right_label, r_size_str))
                             .font(FontId::monospace(13.0))
-                            .color(Color32::from_rgb(226, 232, 240)),
+                            .color(hex_to_c32(&palette.theme.f_high)),
                     );
 
                     // Status toast
@@ -336,7 +340,7 @@ impl BinaryDiffViewState {
                             ui.label(
                                 egui::RichText::new(msg)
                                     .font(FontId::proportional(12.0))
-                                    .color(Color32::from_rgb(52, 211, 153)),
+                                    .color(hex_to_c32(&palette.diff_add)),
                             );
                         }
                     }
@@ -344,7 +348,7 @@ impl BinaryDiffViewState {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Close button
                         if ui
-                            .button(egui::RichText::new("✖ Close [Esc]").font(FontId::proportional(12.0)).color(Color32::from_rgb(244, 63, 94)))
+                            .button(egui::RichText::new("✖ Close [Esc]").font(FontId::proportional(12.0)).color(hex_to_c32(&palette.diff_del)))
                             .clicked()
                         {
                             *close_requested = true;
@@ -352,8 +356,8 @@ impl BinaryDiffViewState {
 
                         // Mode toggle button
                         let (mode_lbl, mode_color) = match self.mode {
-                            BinaryDiffMode::Aligned => ("Aligned (Myers LCS)", Color32::from_rgb(56, 189, 248)),
-                            BinaryDiffMode::Raw => ("Raw (Unaligned)", Color32::from_rgb(251, 191, 36)),
+                            BinaryDiffMode::Aligned => ("Aligned (Myers LCS)", hex_to_c32(&palette.harmonies.base)),
+                            BinaryDiffMode::Raw => ("Raw (Unaligned)", hex_to_c32(&palette.diff_mod)),
                         };
                         if ui
                             .button(egui::RichText::new(format!("Mode: {} [Tab]", mode_lbl)).font(FontId::proportional(12.0)).color(mode_color))
@@ -365,12 +369,12 @@ impl BinaryDiffViewState {
 
                         // Width selector
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Width:").font(FontId::proportional(12.0)).color(Color32::from_rgb(148, 163, 184)));
+                            ui.label(egui::RichText::new("Width:").font(FontId::proportional(12.0)).color(hex_to_c32(&palette.theme.f_low)));
                             for &w in &[8, 16, 32] {
                                 let is_active = self.bytes_per_row == w;
                                 let btn = egui::RichText::new(format!("{}B", w))
                                     .font(FontId::monospace(11.0))
-                                    .color(if is_active { Color32::from_rgb(56, 189, 248) } else { Color32::from_rgb(148, 163, 184) });
+                                    .color(if is_active { hex_to_c32(&palette.harmonies.base) } else { hex_to_c32(&palette.theme.f_med) });
                                 if ui.button(btn).clicked() && self.bytes_per_row != w {
                                     self.bytes_per_row = w;
                                     self.recompute();
@@ -380,7 +384,7 @@ impl BinaryDiffViewState {
 
                         // Color mode selector: Digits vs Background
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("Color:").font(FontId::proportional(12.0)).color(Color32::from_rgb(148, 163, 184)));
+                            ui.label(egui::RichText::new("Color:").font(FontId::proportional(12.0)).color(hex_to_c32(&palette.theme.f_low)));
                             for &(mode, label) in &[
                                 (ByteColorMode::Digits, "Digits"),
                                 (ByteColorMode::Background, "Background"),
@@ -388,7 +392,7 @@ impl BinaryDiffViewState {
                                 let is_active = self.color_mode == mode;
                                 let btn = egui::RichText::new(label)
                                     .font(FontId::proportional(11.0))
-                                    .color(if is_active { Color32::from_rgb(56, 189, 248) } else { Color32::from_rgb(148, 163, 184) });
+                                    .color(if is_active { hex_to_c32(&palette.harmonies.base) } else { hex_to_c32(&palette.theme.f_med) });
                                 if ui.button(btn).clicked() && self.color_mode != mode {
                                     self.color_mode = mode;
                                 }
@@ -397,7 +401,7 @@ impl BinaryDiffViewState {
 
                         // Copy summary button
                         if ui
-                            .button(egui::RichText::new("📋 Copy Summary").font(FontId::proportional(12.0)).color(Color32::from_rgb(226, 232, 240)))
+                            .button(egui::RichText::new("📋 Copy Summary").font(FontId::proportional(12.0)).color(hex_to_c32(&palette.theme.f_high)))
                             .clicked()
                         {
                             if let Some(ref res) = self.result {
@@ -421,7 +425,7 @@ impl BinaryDiffViewState {
             });
     }
 
-    fn render_stats_bar(&mut self, ui: &mut egui::Ui) {
+    fn render_stats_bar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let Some(ref res) = self.result else {
             return;
         };
@@ -443,18 +447,18 @@ impl BinaryDiffViewState {
         let search_idx = self.current_search_idx;
 
         egui::Frame::none()
-            .fill(Color32::from_rgb(15, 23, 42))
+            .fill(hex_to_c32(&palette.theme.b_low))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let pct_color = if pct >= 95.0 {
-                        Color32::from_rgb(52, 211, 153)
+                        hex_to_c32(&palette.diff_add)
                     } else if pct >= 70.0 {
-                        Color32::from_rgb(56, 189, 248)
+                        hex_to_c32(&palette.harmonies.base)
                     } else if pct >= 40.0 {
-                        Color32::from_rgb(251, 191, 36)
+                        hex_to_c32(&palette.diff_mod)
                     } else {
-                        Color32::from_rgb(244, 63, 94)
+                        hex_to_c32(&palette.diff_del)
                     };
 
                     ui.label(
@@ -466,11 +470,11 @@ impl BinaryDiffViewState {
 
                     ui.add_space(14.0);
 
-                    render_stat_pill(ui, "Matches", match_count, Color32::from_rgb(148, 163, 184));
-                    render_stat_pill(ui, "Mismatches", mismatch_count, Color32::from_rgb(251, 191, 36));
-                    render_stat_pill(ui, "Deletions", left_only_count, Color32::from_rgb(244, 63, 94));
-                    render_stat_pill(ui, "Insertions", right_only_count, Color32::from_rgb(52, 211, 153));
-                    render_stat_pill(ui, "Diff Blocks", diff_blocks_len, Color32::from_rgb(239, 68, 68));
+                    render_stat_pill(ui, "Matches", match_count, hex_to_c32(&palette.theme.f_med), palette);
+                    render_stat_pill(ui, "Mismatches", mismatch_count, hex_to_c32(&palette.diff_mod), palette);
+                    render_stat_pill(ui, "Deletions", left_only_count, hex_to_c32(&palette.diff_del), palette);
+                    render_stat_pill(ui, "Insertions", right_only_count, hex_to_c32(&palette.diff_add), palette);
+                    render_stat_pill(ui, "Diff Blocks", diff_blocks_len, hex_to_c32(&palette.harmonies.warm_attention), palette);
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
@@ -492,7 +496,7 @@ impl BinaryDiffViewState {
                             ui.label(
                                 egui::RichText::new(format!("{}/{}", search_idx + 1, search_len))
                                     .font(FontId::monospace(11.0))
-                                    .color(Color32::from_rgb(56, 189, 248)),
+                                    .color(hex_to_c32(&palette.harmonies.base)),
                             );
                             if ui.button("▼").clicked() {
                                 next_search = true;
@@ -531,7 +535,7 @@ impl BinaryDiffViewState {
         }
     }
 
-    fn render_hex_table(&mut self, ui: &mut egui::Ui, _avail_h: f32) {
+    fn render_hex_table(&mut self, ui: &mut egui::Ui, palette: &AppPalette, _avail_h: f32) {
         if self.is_computing {
             ui.vertical_centered(|ui| {
                 ui.add_space(80.0);
@@ -540,7 +544,7 @@ impl BinaryDiffViewState {
                 ui.label(
                     egui::RichText::new("Aligning binary sequences using Myers LCS diff...")
                         .font(FontId::proportional(15.0))
-                        .color(Color32::from_rgb(56, 189, 248)),
+                        .color(hex_to_c32(&palette.harmonies.base)),
                 );
             });
             return;
@@ -563,7 +567,7 @@ impl BinaryDiffViewState {
 
         // Table column headers
         let (header_rect, _) = ui.allocate_exact_size(Vec2::new(ui.available_width(), 26.0), egui::Sense::hover());
-        ui.painter().rect_filled(header_rect, Rounding::ZERO, Color32::from_rgb(17, 24, 39));
+        ui.painter().rect_filled(header_rect, Rounding::ZERO, hex_to_c32(&palette.theme.b_low));
         let header_ui_rect = egui::Rect::from_min_max(
             egui::pos2(header_rect.min.x + 4.0 - self.current_scroll_offset_x, header_rect.min.y),
             egui::pos2(header_rect.min.x + 4.0 - self.current_scroll_offset_x + 3500.0, header_rect.max.y),
@@ -573,27 +577,27 @@ impl BinaryDiffViewState {
         child_ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
 
         child_ui.allocate_ui_with_layout(Vec2::new(offset_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new("Offset L").font(FontId::monospace(11.5)).strong().color(Color32::from_rgb(100, 116, 139)));
+            ui.label(egui::RichText::new("Offset L").font(FontId::monospace(11.5)).strong().color(hex_to_c32(&palette.theme.f_low)));
         });
         child_ui.allocate_ui_with_layout(Vec2::new(hex_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(format!("Hex Bytes ({})", res.left_label)).font(FontId::monospace(11.5)).strong().color(Color32::from_rgb(148, 163, 184)));
+            ui.label(egui::RichText::new(format!("Hex Bytes ({})", res.left_label)).font(FontId::monospace(11.5)).strong().color(hex_to_c32(&palette.theme.f_med)));
         });
         child_ui.add_space(8.0);
         child_ui.allocate_ui_with_layout(Vec2::new(ascii_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new("ASCII").font(FontId::monospace(11.5)).strong().color(Color32::from_rgb(148, 163, 184)));
+            ui.label(egui::RichText::new("ASCII").font(FontId::monospace(11.5)).strong().color(hex_to_c32(&palette.theme.f_med)));
         });
         child_ui.allocate_ui_with_layout(Vec2::new(center_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new("Diff").font(FontId::monospace(11.5)).strong().color(Color32::from_rgb(251, 191, 36)));
+            ui.label(egui::RichText::new("Diff").font(FontId::monospace(11.5)).strong().color(hex_to_c32(&palette.diff_mod)));
         });
         child_ui.allocate_ui_with_layout(Vec2::new(hex_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new(format!("Hex Bytes ({})", res.right_label)).font(FontId::monospace(11.5)).strong().color(Color32::from_rgb(148, 163, 184)));
+            ui.label(egui::RichText::new(format!("Hex Bytes ({})", res.right_label)).font(FontId::monospace(11.5)).strong().color(hex_to_c32(&palette.theme.f_med)));
         });
         child_ui.add_space(8.0);
         child_ui.allocate_ui_with_layout(Vec2::new(ascii_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new("ASCII").font(FontId::monospace(11.5)).strong().color(Color32::from_rgb(148, 163, 184)));
+            ui.label(egui::RichText::new("ASCII").font(FontId::monospace(11.5)).strong().color(hex_to_c32(&palette.theme.f_med)));
         });
         child_ui.allocate_ui_with_layout(Vec2::new(offset_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.label(egui::RichText::new("Offset R").font(FontId::monospace(11.5)).strong().color(Color32::from_rgb(100, 116, 139)));
+            ui.label(egui::RichText::new("Offset R").font(FontId::monospace(11.5)).strong().color(hex_to_c32(&palette.theme.f_low)));
         });
 
         ui.separator();
@@ -635,13 +639,13 @@ impl BinaryDiffViewState {
 
                 // Row background
                 let bg_color = if is_selected_diff {
-                    Color32::from_rgba_unmultiplied(56, 189, 248, 45)
+                    hex_to_c32_alpha(&palette.harmonies.base, 45)
                 } else if is_search_match {
-                    Color32::from_rgba_unmultiplied(56, 189, 248, 25)
+                    hex_to_c32_alpha(&palette.harmonies.base, 25)
                 } else if row.has_diff {
-                    Color32::from_rgba_unmultiplied(251, 191, 36, 14)
+                    hex_to_c32_alpha(&palette.diff_mod, 18)
                 } else if row_idx % 2 == 1 {
-                    Color32::from_rgba_unmultiplied(255, 255, 255, 3)
+                    hex_to_c32_alpha(&palette.theme.f_low, 8)
                 } else {
                     Color32::TRANSPARENT
                 };
@@ -654,15 +658,15 @@ impl BinaryDiffViewState {
                     ui.painter().rect_filled(
                         egui::Rect::from_min_size(actual_row_rect.min, Vec2::new(3.5, row_height)),
                         Rounding::ZERO,
-                        Color32::from_rgb(56, 189, 248),
+                        hex_to_c32(&palette.harmonies.base),
                     );
                     ui.painter().line_segment(
                         [actual_row_rect.left_top(), actual_row_rect.right_top()],
-                        Stroke::new(1.0, Color32::from_rgba_unmultiplied(56, 189, 248, 100)),
+                        Stroke::new(1.0, hex_to_c32_alpha(&palette.harmonies.base, 100)),
                     );
                     ui.painter().line_segment(
                         [actual_row_rect.left_bottom(), actual_row_rect.right_bottom()],
-                        Stroke::new(1.0, Color32::from_rgba_unmultiplied(56, 189, 248, 100)),
+                        Stroke::new(1.0, hex_to_c32_alpha(&palette.harmonies.base, 100)),
                     );
                 }
 
@@ -680,7 +684,7 @@ impl BinaryDiffViewState {
                         ui.label(
                             egui::RichText::new(l_off_str)
                                 .font(FontId::monospace(font_size - 1.0))
-                                .color(Color32::from_rgb(100, 116, 139)),
+                                .color(hex_to_c32(&palette.theme.f_low)),
                         );
                     });
 
@@ -690,7 +694,7 @@ impl BinaryDiffViewState {
                             ui.add_space(hex_group_space);
                         }
 
-                        let (text, color, pill_bg) = format_cell_hex(cell, true, self.color_mode);
+                        let (text, color, pill_bg) = format_cell_hex(cell, true, self.color_mode, palette);
                         let is_cell_hovered = hovered == Some((row_idx, col_idx));
 
                         let (rect, r) = ui.allocate_exact_size(Vec2::new(cell_w, row_height), egui::Sense::hover());
@@ -711,7 +715,7 @@ impl BinaryDiffViewState {
                             ui.painter().rect_stroke(
                                 rect.expand(1.0),
                                 Rounding::same(2.0),
-                                Stroke::new(1.5, Color32::from_rgb(56, 189, 248)),
+                                Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
                             );
                         }
 
@@ -724,7 +728,7 @@ impl BinaryDiffViewState {
 
                     // 3. Left ASCII
                     for (col_idx, cell) in row.left_cells.iter().enumerate() {
-                        let (ch, color) = format_cell_ascii(cell, true, self.color_mode);
+                        let (ch, color) = format_cell_ascii(cell, true, self.color_mode, palette);
                         let is_cell_hovered = hovered == Some((row_idx, col_idx));
 
                         let (rect, r) = ui.allocate_exact_size(Vec2::new(ascii_char_w, row_height), egui::Sense::hover());
@@ -741,7 +745,7 @@ impl BinaryDiffViewState {
                             ui.painter().rect_stroke(
                                 rect.expand(1.0),
                                 Rounding::same(2.0),
-                                Stroke::new(1.5, Color32::from_rgb(56, 189, 248)),
+                                Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
                             );
                         }
 
@@ -752,11 +756,11 @@ impl BinaryDiffViewState {
 
                     // 4. Center Match Glyph
                     let glyph_color = match row.row_glyph {
-                        "≠" => Color32::from_rgb(251, 191, 36),
-                        "+" => Color32::from_rgb(52, 211, 153),
-                        "-" => Color32::from_rgb(244, 63, 94),
-                        "~" => Color32::from_rgb(168, 85, 247),
-                        _ => Color32::from_rgb(71, 85, 105),
+                        "≠" => hex_to_c32(&palette.diff_mod),
+                        "+" => hex_to_c32(&palette.diff_add),
+                        "-" => hex_to_c32(&palette.diff_del),
+                        "~" => hex_to_c32(&palette.harmonies.triadic_1),
+                        _ => hex_to_c32(&palette.theme.f_low),
                     };
                     ui.allocate_ui_with_layout(Vec2::new(center_w, row_height), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.label(
@@ -772,7 +776,7 @@ impl BinaryDiffViewState {
                             ui.add_space(hex_group_space);
                         }
 
-                        let (text, color, pill_bg) = format_cell_hex(cell, false, self.color_mode);
+                        let (text, color, pill_bg) = format_cell_hex(cell, false, self.color_mode, palette);
                         let is_cell_hovered = hovered == Some((row_idx, col_idx));
 
                         let (rect, r) = ui.allocate_exact_size(Vec2::new(cell_w, row_height), egui::Sense::hover());
@@ -793,7 +797,7 @@ impl BinaryDiffViewState {
                             ui.painter().rect_stroke(
                                 rect.expand(1.0),
                                 Rounding::same(2.0),
-                                Stroke::new(1.5, Color32::from_rgb(56, 189, 248)),
+                                Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
                             );
                         }
 
@@ -806,7 +810,7 @@ impl BinaryDiffViewState {
 
                     // 6. Right ASCII
                     for (col_idx, cell) in row.right_cells.iter().enumerate() {
-                        let (ch, color) = format_cell_ascii(cell, false, self.color_mode);
+                        let (ch, color) = format_cell_ascii(cell, false, self.color_mode, palette);
                         let is_cell_hovered = hovered == Some((row_idx, col_idx));
 
                         let (rect, r) = ui.allocate_exact_size(Vec2::new(ascii_char_w, row_height), egui::Sense::hover());
@@ -823,7 +827,7 @@ impl BinaryDiffViewState {
                             ui.painter().rect_stroke(
                                 rect.expand(1.0),
                                 Rounding::same(2.0),
-                                Stroke::new(1.5, Color32::from_rgb(56, 189, 248)),
+                                Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
                             );
                         }
 
@@ -842,7 +846,7 @@ impl BinaryDiffViewState {
                         ui.label(
                             egui::RichText::new(r_off_str)
                                 .font(FontId::monospace(font_size - 1.0))
-                                .color(Color32::from_rgb(100, 116, 139)),
+                                .color(hex_to_c32(&palette.theme.f_low)),
                         );
                     });
                 });
@@ -855,7 +859,7 @@ impl BinaryDiffViewState {
         self.hovered_cell = hovered;
     }
 
-    fn render_minimap(&mut self, ui: &mut egui::Ui, avail_h: f32) {
+    fn render_minimap(&mut self, ui: &mut egui::Ui, palette: &AppPalette, avail_h: f32) {
         let Some(ref res) = self.result else {
             return;
         };
@@ -869,10 +873,10 @@ impl BinaryDiffViewState {
         let (rect, response) = ui.allocate_exact_size(Vec2::new(width, avail_h - 10.0), egui::Sense::click_and_drag());
 
         // Background groove
-        ui.painter().rect_filled(rect, Rounding::same(3.0), Color32::from_rgb(15, 23, 42));
-        ui.painter().rect_stroke(rect, Rounding::same(3.0), Stroke::new(1.0, Color32::from_rgb(30, 41, 59)));
+        ui.painter().rect_filled(rect, Rounding::same(3.0), hex_to_c32(&palette.theme.b_low));
+        ui.painter().rect_stroke(rect, Rounding::same(3.0), Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)));
 
-        // Difference markers in red!
+        // Difference markers
         for block in &res.diff_blocks {
             let start_frac = block.start_row as f32 / total_rows as f32;
             let end_frac = (block.end_row + 1) as f32 / total_rows as f32;
@@ -885,11 +889,10 @@ impl BinaryDiffViewState {
                 Vec2::new(width - 4.0, h),
             );
 
-            // Red highlights for differences
             let marker_color = match block.kind {
-                DiffKind::LeftOnly => Color32::from_rgb(244, 63, 94),
-                DiffKind::RightOnly => Color32::from_rgb(52, 211, 153),
-                _ => Color32::from_rgb(239, 68, 68),
+                DiffKind::LeftOnly => hex_to_c32(&palette.diff_del),
+                DiffKind::RightOnly => hex_to_c32(&palette.diff_add),
+                _ => hex_to_c32(&palette.harmonies.warm_attention),
             };
 
             ui.painter().rect_filled(marker_rect, Rounding::same(1.0), marker_color);
@@ -911,12 +914,12 @@ impl BinaryDiffViewState {
         ui.painter().rect_filled(
             view_rect,
             Rounding::same(2.0),
-            Color32::from_rgba_unmultiplied(255, 255, 255, 25),
+            hex_to_c32_alpha(&palette.theme.f_high, 25),
         );
         ui.painter().rect_stroke(
             view_rect,
             Rounding::same(2.0),
-            Stroke::new(1.5, Color32::from_rgb(96, 165, 250)),
+            Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
         );
 
         // Click / Drag to jump
@@ -942,14 +945,14 @@ impl BinaryDiffViewState {
                     ui.label(
                         egui::RichText::new(format!("Jump to ~0x{:08X} (Row {})", approx_off, hover_row + 1))
                             .font(FontId::monospace(11.0))
-                            .color(Color32::from_rgb(226, 232, 240)),
+                            .color(hex_to_c32(&palette.theme.f_high)),
                     );
                 });
             }
         }
     }
 
-    fn render_differences_panel(&mut self, ui: &mut egui::Ui, avail_h: f32, panel_width: f32) {
+    fn render_differences_panel(&mut self, ui: &mut egui::Ui, palette: &AppPalette, avail_h: f32, panel_width: f32) {
         let Some(ref res) = self.result else {
             return;
         };
@@ -963,7 +966,7 @@ impl BinaryDiffViewState {
             |ui| {
                 // Header bar
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(20, 27, 45))
+                    .fill(hex_to_c32(&palette.theme.b_low))
                     .inner_margin(egui::Margin::symmetric(8.0, 5.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -971,7 +974,7 @@ impl BinaryDiffViewState {
                                 egui::RichText::new(format!("⚡ Diffs ({})", res.diff_blocks.len()))
                                     .font(FontId::proportional(12.0))
                                     .strong()
-                                    .color(Color32::from_rgb(251, 191, 36)),
+                                    .color(hex_to_c32(&palette.diff_mod)),
                             );
 
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1001,7 +1004,7 @@ impl BinaryDiffViewState {
                         ui.label(
                             egui::RichText::new("✔ Files identical")
                                 .font(FontId::proportional(12.0))
-                                .color(Color32::from_rgb(52, 211, 153)),
+                                .color(hex_to_c32(&palette.diff_add)),
                         );
                     });
                     return;
@@ -1027,23 +1030,22 @@ impl BinaryDiffViewState {
                             let is_selected = self.selected_diff_block == Some(block.id);
 
                             let badge_color = match block.kind {
-                                DiffKind::Mismatch => Color32::from_rgb(251, 191, 36),
-                                DiffKind::LeftOnly => Color32::from_rgb(244, 63, 94),
-                                DiffKind::RightOnly => Color32::from_rgb(52, 211, 153),
-                                DiffKind::Match => Color32::from_rgb(148, 163, 184),
+                                DiffKind::Mismatch => hex_to_c32(&palette.diff_mod),
+                                DiffKind::LeftOnly => hex_to_c32(&palette.diff_del),
+                                DiffKind::RightOnly => hex_to_c32(&palette.diff_add),
+                                DiffKind::Match => hex_to_c32(&palette.theme.f_med),
                             };
 
                             let frame = egui::Frame::none()
                                 .fill(if is_selected {
-                                    Color32::from_rgba_unmultiplied(56, 189, 248, 30)
+                                    hex_to_c32_alpha(&palette.harmonies.base, 35)
                                 } else {
-                                    Color32::from_rgb(20, 27, 44)
-                                }
-                                .into())
+                                    hex_to_c32(&palette.theme.b_low)
+                                })
                                 .stroke(if is_selected {
-                                    Stroke::new(1.5, Color32::from_rgb(56, 189, 248))
+                                    Stroke::new(1.5, hex_to_c32(&palette.harmonies.base))
                                 } else {
-                                    Stroke::new(1.0, Color32::from_rgb(38, 48, 70))
+                                    Stroke::new(1.0, hex_to_c32(&palette.theme.b_med))
                                 })
                                 .rounding(Rounding::same(4.0))
                                 .inner_margin(egui::Margin {
@@ -1064,7 +1066,7 @@ impl BinaryDiffViewState {
                                                 egui::RichText::new(format!("#{}", block.id))
                                                     .font(FontId::monospace(10.0))
                                                     .strong()
-                                                    .color(Color32::from_rgb(148, 163, 184)),
+                                                    .color(hex_to_c32(&palette.theme.f_med)),
                                             );
 
                                             ui.label(
@@ -1079,7 +1081,7 @@ impl BinaryDiffViewState {
                                                     egui::RichText::new(format!("{} B", block.byte_count))
                                                         .font(FontId::monospace(10.0))
                                                         .strong()
-                                                        .color(Color32::from_rgb(148, 163, 184)),
+                                                        .color(hex_to_c32(&palette.theme.f_med)),
                                                 );
                                             });
                                         });
@@ -1095,14 +1097,14 @@ impl BinaryDiffViewState {
                                         ui.label(
                                             egui::RichText::new(off_str)
                                                 .font(FontId::monospace(10.0))
-                                                .color(Color32::from_rgb(100, 116, 139)),
+                                                .color(hex_to_c32(&palette.theme.f_low)),
                                         );
 
                                         // Row 3: Preview
                                         ui.label(
                                             egui::RichText::new(&block.preview)
                                                 .font(FontId::monospace(10.0))
-                                                .color(Color32::from_rgb(226, 232, 240)),
+                                                .color(hex_to_c32(&palette.theme.f_high)),
                                         );
                                     });
                                 });
@@ -1144,15 +1146,15 @@ impl BinaryDiffViewState {
         }
     }
 
-    fn render_footer_inspection(&self, ui: &mut egui::Ui) {
+    fn render_footer_inspection(&self, ui: &mut egui::Ui, palette: &AppPalette) {
         if let (Some(res), Some((row_idx, col_idx))) = (&self.result, self.hovered_cell) {
             if let Some(row) = res.rows.get(row_idx) {
                 let l_cell = row.left_cells.get(col_idx);
                 let r_cell = row.right_cells.get(col_idx);
 
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(20, 27, 45))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(45, 55, 75)))
+                    .fill(hex_to_c32(&palette.theme.b_low))
+                    .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
                     .inner_margin(egui::Margin::symmetric(14.0, 6.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -1160,7 +1162,7 @@ impl BinaryDiffViewState {
                                 egui::RichText::new("🔍 INSPECT: ")
                                     .font(FontId::proportional(12.0))
                                     .strong()
-                                    .color(Color32::from_rgb(56, 189, 248)),
+                                    .color(hex_to_c32(&palette.harmonies.base)),
                             );
 
                             // Left cell details
@@ -1173,13 +1175,13 @@ impl BinaryDiffViewState {
                                             b, b, b, byte_to_ascii_char(b), off_str
                                         ))
                                         .font(FontId::monospace(12.0))
-                                        .color(Color32::from_rgb(226, 232, 240)),
+                                        .color(hex_to_c32(&palette.theme.f_high)),
                                     );
                                 } else {
                                     ui.label(
                                         egui::RichText::new("LEFT: <GAP (Deletion)>")
                                             .font(FontId::monospace(12.0))
-                                            .color(Color32::from_rgb(244, 63, 94)),
+                                            .color(hex_to_c32(&palette.diff_del)),
                                     );
                                 }
                             }
@@ -1188,11 +1190,11 @@ impl BinaryDiffViewState {
 
                             // Diff status
                             let (kind_txt, kind_col) = match (l_cell.map(|c| c.kind), r_cell.map(|c| c.kind)) {
-                                (Some(DiffKind::Match), _) => ("MATCH (=)", Color32::from_rgb(52, 211, 153)),
-                                (Some(DiffKind::Mismatch), _) => ("MISMATCH (≠)", Color32::from_rgb(251, 191, 36)),
-                                (Some(DiffKind::LeftOnly), _) => ("LEFT ONLY (DELETION)", Color32::from_rgb(244, 63, 94)),
-                                (Some(DiffKind::RightOnly), _) => ("RIGHT ONLY (INSERTION)", Color32::from_rgb(52, 211, 153)),
-                                _ => ("UNKNOWN", Color32::from_rgb(148, 163, 184)),
+                                (Some(DiffKind::Match), _) => ("MATCH (=)", hex_to_c32(&palette.diff_add)),
+                                (Some(DiffKind::Mismatch), _) => ("MISMATCH (≠)", hex_to_c32(&palette.diff_mod)),
+                                (Some(DiffKind::LeftOnly), _) => ("LEFT ONLY (DELETION)", hex_to_c32(&palette.diff_del)),
+                                (Some(DiffKind::RightOnly), _) => ("RIGHT ONLY (INSERTION)", hex_to_c32(&palette.diff_add)),
+                                _ => ("UNKNOWN", hex_to_c32(&palette.theme.f_med)),
                             };
                             ui.label(
                                 egui::RichText::new(format!("DIFF: {}", kind_txt))
@@ -1213,13 +1215,13 @@ impl BinaryDiffViewState {
                                             b, b, b, byte_to_ascii_char(b), off_str
                                         ))
                                         .font(FontId::monospace(12.0))
-                                        .color(Color32::from_rgb(226, 232, 240)),
+                                        .color(hex_to_c32(&palette.theme.f_high)),
                                     );
                                 } else {
                                     ui.label(
                                         egui::RichText::new("RIGHT: <GAP (Insertion)>")
                                             .font(FontId::monospace(12.0))
-                                            .color(Color32::from_rgb(52, 211, 153)),
+                                            .color(hex_to_c32(&palette.diff_add)),
                                     );
                                 }
                             }
@@ -1274,6 +1276,7 @@ fn format_cell_hex(
     cell: &AlignedCell,
     is_left: bool,
     color_mode: ByteColorMode,
+    palette: &AppPalette,
 ) -> (String, Color32, Option<Color32>) {
     match (cell.byte_val, cell.kind) {
         (Some(b), DiffKind::Match) => match color_mode {
@@ -1284,20 +1287,20 @@ fn format_cell_hex(
             ),
             ByteColorMode::Background => (
                 format!("{:02X}", b),
-                Color32::from_rgb(240, 240, 240),
+                hex_to_c32(&palette.theme.f_high),
                 Some(byte_subtle_bg_opaque(b)),
             ),
         },
         (Some(b), DiffKind::Mismatch) => match color_mode {
             ByteColorMode::Digits => (
                 format!("{:02X}", b),
-                Color32::from_rgb(251, 191, 36),
+                hex_to_c32(&palette.diff_mod),
                 None,
             ),
             ByteColorMode::Background => (
                 format!("{:02X}", b),
-                Color32::from_rgb(15, 23, 42),
-                Some(Color32::from_rgb(251, 191, 36)),
+                hex_to_c32(&palette.theme.background),
+                Some(hex_to_c32(&palette.diff_mod)),
             ),
         },
         (Some(b), DiffKind::LeftOnly) => {
@@ -1305,17 +1308,17 @@ fn format_cell_hex(
                 match color_mode {
                     ByteColorMode::Digits => (
                         format!("{:02X}", b),
-                        Color32::from_rgb(244, 63, 94),
+                        hex_to_c32(&palette.diff_del),
                         None,
                     ),
                     ByteColorMode::Background => (
                         format!("{:02X}", b),
-                        Color32::WHITE,
-                        Some(Color32::from_rgb(225, 29, 72)),
+                        hex_to_c32(&palette.theme.f_high),
+                        Some(hex_to_c32(&palette.diff_del)),
                     ),
                 }
             } else {
-                ("--".to_string(), Color32::from_rgb(71, 85, 105), None)
+                ("--".to_string(), hex_to_c32(&palette.theme.f_low), None)
             }
         }
         (Some(b), DiffKind::RightOnly) => {
@@ -1323,20 +1326,20 @@ fn format_cell_hex(
                 match color_mode {
                     ByteColorMode::Digits => (
                         format!("{:02X}", b),
-                        Color32::from_rgb(52, 211, 153),
+                        hex_to_c32(&palette.diff_add),
                         None,
                     ),
                     ByteColorMode::Background => (
                         format!("{:02X}", b),
-                        Color32::from_rgb(15, 23, 42),
-                        Some(Color32::from_rgb(52, 211, 153)),
+                        hex_to_c32(&palette.theme.background),
+                        Some(hex_to_c32(&palette.diff_add)),
                     ),
                 }
             } else {
-                ("--".to_string(), Color32::from_rgb(71, 85, 105), None)
+                ("--".to_string(), hex_to_c32(&palette.theme.f_low), None)
             }
         }
-        (None, _) => ("--".to_string(), Color32::from_rgb(71, 85, 105), None),
+        (None, _) => ("--".to_string(), hex_to_c32(&palette.theme.f_low), None),
     }
 }
 
@@ -1344,41 +1347,42 @@ fn format_cell_ascii(
     cell: &AlignedCell,
     is_left: bool,
     color_mode: ByteColorMode,
+    palette: &AppPalette,
 ) -> (char, Color32) {
     match (cell.byte_val, cell.kind) {
         (Some(b), DiffKind::Match) => {
             let col = match color_mode {
                 ByteColorMode::Digits => byte_subtle_color(b),
-                ByteColorMode::Background => Color32::from_rgb(203, 213, 225),
+                ByteColorMode::Background => hex_to_c32(&palette.theme.f_med),
             };
             (byte_to_ascii_char(b), col)
         }
-        (Some(b), DiffKind::Mismatch) => (byte_to_ascii_char(b), Color32::from_rgb(251, 191, 36)),
+        (Some(b), DiffKind::Mismatch) => (byte_to_ascii_char(b), hex_to_c32(&palette.diff_mod)),
         (Some(b), DiffKind::LeftOnly) => {
             if is_left {
-                (byte_to_ascii_char(b), Color32::from_rgb(244, 63, 94))
+                (byte_to_ascii_char(b), hex_to_c32(&palette.diff_del))
             } else {
-                ('·', Color32::from_rgb(71, 85, 105))
+                ('·', hex_to_c32(&palette.theme.f_low))
             }
         }
         (Some(b), DiffKind::RightOnly) => {
             if !is_left {
-                (byte_to_ascii_char(b), Color32::from_rgb(52, 211, 153))
+                (byte_to_ascii_char(b), hex_to_c32(&palette.diff_add))
             } else {
-                ('·', Color32::from_rgb(71, 85, 105))
+                ('·', hex_to_c32(&palette.theme.f_low))
             }
         }
-        (None, _) => ('·', Color32::from_rgb(71, 85, 105)),
+        (None, _) => ('·', hex_to_c32(&palette.theme.f_low)),
     }
 }
 
-fn render_stat_pill(ui: &mut egui::Ui, label: &str, count: usize, color: Color32) {
+fn render_stat_pill(ui: &mut egui::Ui, label: &str, count: usize, color: Color32, palette: &AppPalette) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
         ui.label(
             egui::RichText::new(format!("{}:", label))
                 .font(FontId::proportional(12.0))
-                .color(Color32::from_rgb(100, 116, 139)),
+                .color(hex_to_c32(&palette.theme.f_low)),
         );
         ui.label(
             egui::RichText::new(format!("{}", count))
@@ -1474,24 +1478,25 @@ mod tests {
 
     #[test]
     fn test_cell_formatting() {
+        let palette = AppPalette::default();
         let match_cell = AlignedCell {
             offset: Some(0),
             byte_val: Some(0x41),
             kind: DiffKind::Match,
         };
         // Digits mode: text is colored, no background pill
-        let (hex, color, bg) = format_cell_hex(&match_cell, true, ByteColorMode::Digits);
+        let (hex, color, bg) = format_cell_hex(&match_cell, true, ByteColorMode::Digits, &palette);
         assert_eq!(hex, "41");
         assert_eq!(color, byte_subtle_color(0x41));
         assert!(bg.is_none());
 
         // Background mode: background pill is colored, text is light neutral
-        let (hex_bg, color_bg, pill) = format_cell_hex(&match_cell, true, ByteColorMode::Background);
+        let (hex_bg, color_bg, pill) = format_cell_hex(&match_cell, true, ByteColorMode::Background, &palette);
         assert_eq!(hex_bg, "41");
-        assert_eq!(color_bg, Color32::from_rgb(240, 240, 240));
+        assert_eq!(color_bg, hex_to_c32(&palette.theme.f_high));
         assert!(pill.is_some());
 
-        let (ascii, a_color) = format_cell_ascii(&match_cell, true, ByteColorMode::Digits);
+        let (ascii, a_color) = format_cell_ascii(&match_cell, true, ByteColorMode::Digits, &palette);
         assert_eq!(ascii, 'A');
         assert_eq!(a_color, byte_subtle_color(0x41));
 
@@ -1500,14 +1505,15 @@ mod tests {
             byte_val: None,
             kind: DiffKind::LeftOnly,
         };
-        let (gap_hex, _, _) = format_cell_hex(&gap_cell, false, ByteColorMode::Digits);
+        let (gap_hex, _, _) = format_cell_hex(&gap_cell, false, ByteColorMode::Digits, &palette);
         assert_eq!(gap_hex, "--");
-        let (gap_ascii, _) = format_cell_ascii(&gap_cell, false, ByteColorMode::Digits);
+        let (gap_ascii, _) = format_cell_ascii(&gap_cell, false, ByteColorMode::Digits, &palette);
         assert_eq!(gap_ascii, '·');
     }
 
     #[test]
     fn test_layout_fits_window() {
+        let palette = AppPalette::default();
         for bpr in [8, 16, 32] {
             let mut state = BinaryDiffViewState::new(
                 "file_a.bin".to_string(),
@@ -1535,7 +1541,7 @@ mod tests {
             }, |ctx| {
                 egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
                     let mut close_req = false;
-                    state.render_ui(ui, ctx, &mut close_req);
+                    state.render_ui(ui, ctx, &palette, &mut close_req);
                 });
             });
             
@@ -1546,7 +1552,7 @@ mod tests {
             }, |ctx| {
                 egui::CentralPanel::default().frame(egui::Frame::none()).show(ctx, |ui| {
                     let mut close_req = false;
-                    state.render_ui(ui, ctx, &mut close_req);
+                    state.render_ui(ui, ctx, &palette, &mut close_req);
                     println!("[TEST BPR={}] min_rect: {:?}", bpr, ui.min_rect());
                     assert!(ui.min_rect().max.x <= 1180.5, "bpr={} overflows width: max.x={}", bpr, ui.min_rect().max.x);
                 });

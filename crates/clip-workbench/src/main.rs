@@ -65,9 +65,14 @@ enum WorkbenchView {
     Themes,
 }
 
-fn hex_to_c32(hex: &str) -> egui::Color32 {
+pub(crate) fn hex_to_c32(hex: &str) -> egui::Color32 {
     let (r, g, b, a) = parse_hex_color_rgba(hex);
     egui::Color32::from_rgba_unmultiplied(r, g, b, a)
+}
+
+pub(crate) fn hex_to_c32_alpha(hex: &str, alpha: u8) -> egui::Color32 {
+    let (r, g, b, _) = parse_hex_color_rgba(hex);
+    egui::Color32::from_rgba_unmultiplied(r, g, b, alpha)
 }
 
 fn apply_theme_to_egui(ctx: &egui::Context, palette: &AppPalette) {
@@ -780,12 +785,12 @@ impl eframe::App for WorkbenchApp {
             egui::TopBottomPanel::bottom("rolling_audio_strip_panel")
                 .frame(
                     egui::Frame::none()
-                        .fill(egui::Color32::from_rgb(18, 22, 32))
+                        .fill(crate::hex_to_c32(&self.renderer.palette.theme.background))
                         .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-                        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(45, 55, 75))),
+                        .stroke(egui::Stroke::new(1.0, crate::hex_to_c32(&self.renderer.palette.theme.b_med))),
                 )
                 .show(ctx, |ui| {
-                    strip.render_ui(ui, ctx, &mut open_full_editor);
+                    strip.render_ui(ui, ctx, &self.renderer.palette, &mut open_full_editor);
                 });
         }
 
@@ -1210,7 +1215,7 @@ impl eframe::App for WorkbenchApp {
                     });
                 }
                 WorkbenchView::NodeMachine => {
-                    let action = self.canvas_state.ui(ui, &self.state);
+                    let action = self.canvas_state.ui(ui, &self.state, &self.renderer.palette);
                     if let Some(CanvasAction::RunPipeline) = action {
                         if let Ok(yaml) = serde_yaml::to_string(&self.canvas_state.graph) {
                             let _ = send_ipc_request(&IpcRequest::ExecuteGraphYaml { yaml });
@@ -1439,7 +1444,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    diff_state.render_ui(ui, ctx, &mut close_diff);
+                    diff_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_diff);
                 });
 
             if close_diff {
@@ -1453,7 +1458,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    binary_diff_state.render_ui(ui, ctx, &mut close_binary_diff);
+                    binary_diff_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_binary_diff);
                 });
 
             if close_binary_diff {
@@ -1471,7 +1476,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    audio_state.render_ui(ui, ctx, &mut close_audio);
+                    audio_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_audio);
                 });
 
             if close_audio {
@@ -1486,7 +1491,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    image_state.render_ui(ui, ctx, &mut close_image);
+                    image_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_image);
                 });
 
             if close_image {
@@ -1504,7 +1509,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    sheet_state.render_ui(ui, ctx, &mut close_sheet);
+                    sheet_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_sheet);
                 });
 
             if close_sheet {
@@ -1518,7 +1523,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    pdf_state.render_ui(ui, ctx, &mut close_pdf);
+                    pdf_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_pdf);
                 });
 
             if close_pdf {
@@ -1540,7 +1545,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    midi_state.render_ui(ui, &mut close_midi);
+                    midi_state.render_ui(ui, &self.renderer.palette, &mut close_midi);
                 });
 
             if close_midi {
@@ -1555,7 +1560,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    stl_state.render_ui(ui, &mut close_stl);
+                    stl_state.render_ui(ui, &self.renderer.palette, &mut close_stl);
                 });
 
             if close_stl {
@@ -1569,7 +1574,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    text_state.render_ui(ui, ctx, &mut close_text);
+                    text_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_text);
                 });
 
             if close_text {

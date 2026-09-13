@@ -5,7 +5,9 @@
 
 use eframe::egui::{self, Color32, Id, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::config::AppConfig;
+use little_clip_core::theme::AppPalette;
 use little_clip_core::SlotManager;
+use crate::{hex_to_c32, hex_to_c32_alpha};
 use little_clip_ops::pipeline::catalog::{instantiate_template, search_templates};
 use little_clip_ops::pipeline::recipes::{
     create_script_file_scaffold, get_recipes_dir, load_all_recipes, make_basic_template_recipe,
@@ -154,7 +156,12 @@ impl NodeCanvasState {
         }
     }
 
-    pub fn ui(&mut self, ui: &mut egui::Ui, slot_mgr: &SlotManager) -> Option<CanvasAction> {
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        slot_mgr: &SlotManager,
+        palette: &AppPalette,
+    ) -> Option<CanvasAction> {
         let mut action = None;
 
         // Undo / Redo & Node Delete shortcuts (when not typing in a text field)
@@ -181,7 +188,7 @@ impl NodeCanvasState {
         }
 
         // Top Toolbar
-        self.render_toolbar(ui, slot_mgr, &mut action);
+        self.render_toolbar(ui, slot_mgr, &mut action, palette);
 
         ui.separator();
 
@@ -210,7 +217,7 @@ impl NodeCanvasState {
         let painter = ui.painter_at(canvas_rect);
 
         // 1. Draw Background Grid
-        render_grid(&painter, canvas_rect, self.graph.pan, self.graph.zoom);
+        render_grid(&painter, canvas_rect, self.graph.pan, self.graph.zoom, palette);
 
         // 2. Compute Node Screen Rectangles
         let mut node_screen_rects: HashMap<Uuid, Rect> = HashMap::new();
@@ -221,7 +228,6 @@ impl NodeCanvasState {
             node_screen_rects.insert(node.id, Rect::from_min_size(screen_pos, Vec2::new(width, height)));
         }
 
-
         // 3. Draw Existing Connection Cables
         for conn in &self.graph.connections {
             if let (Some(&from_rect), Some(&to_rect)) =
@@ -229,7 +235,7 @@ impl NodeCanvasState {
             {
                 let from_pos = get_pin_pos(from_rect, &self.graph.nodes, conn.from_node, &conn.from_pin, true, self.graph.zoom);
                 let to_pos = get_pin_pos(to_rect, &self.graph.nodes, conn.to_node, &conn.to_pin, false, self.graph.zoom);
-                let cable_color = Color32::from_rgb(168, 85, 247);
+                let cable_color = hex_to_c32(&palette.harmonies.base);
                 draw_bezier_cable(&painter, from_pos, to_pos, cable_color, self.graph.zoom);
             }
         }
@@ -282,6 +288,7 @@ impl NodeCanvasState {
                 screen_rect,
                 is_selected,
                 &mut node_to_delete,
+                palette,
             );
         }
 
@@ -343,6 +350,7 @@ impl NodeCanvasState {
                         snapped_candidate.as_ref(),
                         time,
                         zoom,
+                        palette,
                     );
                 }
             }
@@ -462,7 +470,7 @@ impl NodeCanvasState {
 
         // Catalog Modal / Popup
         if self.catalog_open {
-            self.render_catalog_window(ui, canvas_rect);
+            self.render_catalog_window(ui, canvas_rect, palette);
         }
 
         // Save Recipe Modal
@@ -478,13 +486,14 @@ impl NodeCanvasState {
         ui: &mut egui::Ui,
         slot_mgr: &SlotManager,
         action: &mut Option<CanvasAction>,
+        palette: &AppPalette,
     ) {
         ui.horizontal(|ui| {
             // Group 1: Add Node button (Prominent)
             if ui
                 .button(
                     egui::RichText::new("＋ Add Node")
-                        .color(Color32::from_rgb(241, 245, 249))
+                        .color(hex_to_c32(&palette.theme.f_high))
                         .strong(),
                 )
                 .clicked()
@@ -500,7 +509,7 @@ impl NodeCanvasState {
             if ui
                 .button(
                     egui::RichText::new("📄 New Recipe")
-                        .color(Color32::from_rgb(203, 213, 225)),
+                        .color(hex_to_c32(&palette.theme.f_med)),
                 )
                 .on_hover_text("Start a fresh recipe from the basic template")
                 .clicked()
@@ -516,7 +525,7 @@ impl NodeCanvasState {
 
             ui.label(
                 egui::RichText::new("Recipe:")
-                    .color(Color32::from_rgb(148, 163, 184))
+                    .color(hex_to_c32(&palette.theme.f_low))
                     .small(),
             );
 
@@ -524,7 +533,7 @@ impl NodeCanvasState {
             egui::ComboBox::from_id_source("recipe_combobox")
                 .selected_text(
                     egui::RichText::new(&self.selected_recipe_name)
-                        .color(Color32::from_rgb(168, 85, 247))
+                        .color(hex_to_c32(&palette.harmonies.base))
                         .strong(),
                 )
                 .show_ui(ui, |ui| {
@@ -554,7 +563,7 @@ impl NodeCanvasState {
             if ui
                 .button(
                     egui::RichText::new("💾 Save")
-                        .color(Color32::from_rgb(203, 213, 225)),
+                        .color(hex_to_c32(&palette.theme.f_med)),
                 )
                 .on_hover_text("Save changes to this recipe")
                 .clicked()
@@ -591,7 +600,7 @@ impl NodeCanvasState {
             if ui
                 .button(
                     egui::RichText::new("💾 Save As...")
-                        .color(Color32::from_rgb(203, 213, 225)),
+                        .color(hex_to_c32(&palette.theme.f_med)),
                 )
                 .on_hover_text("Save copy under a new recipe name")
                 .clicked()
@@ -606,9 +615,9 @@ impl NodeCanvasState {
             // Group 3: Undo, Redo, Clear
             let undo_enabled = !self.undo_stack.is_empty();
             let undo_col = if undo_enabled {
-                Color32::from_rgb(203, 213, 225)
+                hex_to_c32(&palette.theme.f_med)
             } else {
-                Color32::from_rgb(100, 116, 139)
+                hex_to_c32(&palette.theme.f_low)
             };
             if ui
                 .add_enabled(
@@ -623,9 +632,9 @@ impl NodeCanvasState {
 
             let redo_enabled = !self.redo_stack.is_empty();
             let redo_col = if redo_enabled {
-                Color32::from_rgb(203, 213, 225)
+                hex_to_c32(&palette.theme.f_med)
             } else {
-                Color32::from_rgb(100, 116, 139)
+                hex_to_c32(&palette.theme.f_low)
             };
             if ui
                 .add_enabled(
@@ -642,7 +651,7 @@ impl NodeCanvasState {
             if ui
                 .button(
                     egui::RichText::new("🗑 Clear")
-                        .color(Color32::from_rgb(203, 213, 225)),
+                        .color(hex_to_c32(&palette.theme.f_med)),
                 )
                 .on_hover_text("Clear all nodes from the canvas")
                 .clicked()
@@ -655,13 +664,13 @@ impl NodeCanvasState {
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // RUN PIPELINE BUTTON (Hero purple accent)
+                // RUN PIPELINE BUTTON (Themed hero accent)
                 let run_btn = egui::Button::new(
                     egui::RichText::new("▶  RUN PIPELINE")
-                        .color(Color32::WHITE)
+                        .color(hex_to_c32(&palette.theme.background))
                         .strong(),
                 )
-                .fill(Color32::from_rgb(147, 51, 234))
+                .fill(hex_to_c32(&palette.harmonies.base))
                 .min_size(Vec2::new(140.0, 26.0));
 
                 if ui.add(run_btn).clicked() {
@@ -678,9 +687,9 @@ impl NodeCanvasState {
                 // Status Message badge
                 if let Some((ref msg, is_err)) = self.status_message {
                     let col = if is_err {
-                        Color32::from_rgb(239, 68, 68)
+                        hex_to_c32(&palette.diff_del)
                     } else {
-                        Color32::from_rgb(34, 197, 94)
+                        hex_to_c32(&palette.diff_add)
                     };
                     ui.label(egui::RichText::new(msg).color(col).small().strong());
                 }
@@ -688,7 +697,12 @@ impl NodeCanvasState {
         });
     }
 
-    fn render_catalog_window(&mut self, ui: &mut egui::Ui, parent_rect: Rect) {
+    fn render_catalog_window(
+        &mut self,
+        ui: &mut egui::Ui,
+        parent_rect: Rect,
+        palette: &AppPalette,
+    ) {
         let center = parent_rect.center();
         let modal_w = 480.0;
         let modal_h = 420.0;
@@ -705,8 +719,8 @@ impl NodeCanvasState {
             .fixed_pos(modal_rect.min)
             .show(ui.ctx(), |ui| {
                 egui::Frame::window(&ui.style())
-                    .fill(Color32::from_rgb(24, 32, 47))
-                    .stroke(Stroke::new(1.5, Color32::from_rgb(99, 102, 241)))
+                    .fill(hex_to_c32(&palette.theme.b_low))
+                    .stroke(Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)))
                     .rounding(8.0)
                     .inner_margin(egui::Margin::same(14.0))
                     .show(ui, |ui| {
@@ -716,7 +730,7 @@ impl NodeCanvasState {
                         ui.horizontal(|ui| {
                             ui.heading(
                                 egui::RichText::new("Add Node to Canvas")
-                                    .color(Color32::from_rgb(168, 85, 247))
+                                    .color(hex_to_c32(&palette.harmonies.base))
                                     .strong(),
                             );
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -766,13 +780,13 @@ impl NodeCanvasState {
                                 if filtered.is_empty() {
                                     ui.label(
                                         egui::RichText::new("No matching nodes found.")
-                                            .color(Color32::from_rgb(148, 163, 184))
+                                            .color(hex_to_c32(&palette.theme.f_low))
                                             .italics(),
                                     );
                                 } else {
                                     for template in filtered {
                                         let frame = egui::Frame::none()
-                                            .fill(Color32::from_rgb(30, 41, 59))
+                                            .fill(hex_to_c32(&palette.theme.b_med))
                                             .rounding(4.0)
                                             .inner_margin(egui::Margin::symmetric(10.0, 6.0));
 
@@ -780,12 +794,12 @@ impl NodeCanvasState {
                                             ui.horizontal(|ui| {
                                                 ui.label(
                                                     egui::RichText::new(template.name)
-                                                        .color(Color32::WHITE)
+                                                        .color(hex_to_c32(&palette.theme.f_high))
                                                         .strong(),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(format!("[{}]", template.category))
-                                                        .color(Color32::from_rgb(148, 163, 184))
+                                                        .color(hex_to_c32(&palette.theme.f_low))
                                                         .small(),
                                                 );
                                                 ui.with_layout(
@@ -794,7 +808,7 @@ impl NodeCanvasState {
                                                         if ui
                                                             .button(
                                                                 egui::RichText::new("+ Add")
-                                                                    .color(Color32::from_rgb(99, 102, 241)),
+                                                                    .color(hex_to_c32(&palette.harmonies.base)),
                                                             )
                                                             .clicked()
                                                         {
@@ -828,7 +842,7 @@ impl NodeCanvasState {
                                             });
                                             ui.label(
                                                 egui::RichText::new(template.description)
-                                                    .color(Color32::from_rgb(148, 163, 184))
+                                                    .color(hex_to_c32(&palette.theme.f_med))
                                                     .small(),
                                             );
                                         });
@@ -895,16 +909,22 @@ impl NodeCanvasState {
     }
 }
 
-fn render_grid(painter: &egui::Painter, rect: Rect, pan: [f32; 2], zoom: f32) {
-    // Dark blueprint background
-    painter.rect_filled(rect, Rounding::ZERO, Color32::from_rgb(15, 23, 42));
+fn render_grid(
+    painter: &egui::Painter,
+    rect: Rect,
+    pan: [f32; 2],
+    zoom: f32,
+    palette: &AppPalette,
+) {
+    // Dark blueprint background from theme
+    painter.rect_filled(rect, Rounding::ZERO, hex_to_c32(&palette.theme.background));
 
     let grid_size = 32.0 * zoom;
     if grid_size > 8.0 {
         let offset_x = (pan[0] % grid_size + grid_size) % grid_size;
         let offset_y = (pan[1] % grid_size + grid_size) % grid_size;
 
-        let dot_color = Color32::from_rgba_unmultiplied(51, 65, 85, 120);
+        let dot_color = hex_to_c32_alpha(&palette.theme.b_med, 120);
 
         let mut x = rect.min.x + offset_x;
         while x < rect.max.x {
@@ -948,6 +968,7 @@ fn draw_active_cable(
     snapped: Option<&SnappedTargetInfo>,
     time: f64,
     zoom: f32,
+    palette: &AppPalette,
 ) {
     let end_pos = if let Some(target) = snapped {
         target.pin_pos
@@ -969,14 +990,14 @@ fn draw_active_cable(
     if let Some(target) = snapped {
         let is_compat = target.is_compatible;
         let main_color = if is_compat {
-            Color32::from_rgb(52, 211, 153) // Vibrant Emerald
+            hex_to_c32(&palette.diff_add)
         } else {
-            Color32::from_rgb(251, 191, 36) // Amber Warning
+            hex_to_c32(&palette.diff_mod)
         };
         let core_color = if is_compat {
-            Color32::from_rgb(209, 250, 229) // Mint / light emerald
+            hex_to_c32(&palette.harmonies.triadic_1)
         } else {
-            Color32::from_rgb(254, 243, 199) // Light amber
+            hex_to_c32(&palette.harmonies.triadic_2)
         };
 
         let pulse = ((time * 6.0).sin() * 0.5 + 0.5) as f32;
@@ -1062,7 +1083,7 @@ fn draw_active_cable(
         };
 
         let font_id = egui::FontId::proportional((11.0 * zoom).max(10.0));
-        let galley = painter.layout_no_wrap(badge_text, font_id, Color32::WHITE);
+        let galley = painter.layout_no_wrap(badge_text, font_id, hex_to_c32(&palette.theme.f_high));
         let padding = Vec2::new(8.0 * zoom, 4.0 * zoom);
         let badge_size = galley.size() + padding * 2.0;
 
@@ -1080,7 +1101,7 @@ fn draw_active_cable(
         painter.rect_filled(
             badge_rect,
             Rounding::same(6.0 * zoom),
-            Color32::from_rgba_unmultiplied(15, 23, 42, 235),
+            hex_to_c32_alpha(&palette.theme.b_low, 235),
         );
         // Badge border
         painter.rect_stroke(
@@ -1089,19 +1110,19 @@ fn draw_active_cable(
             Stroke::new(1.5 * zoom, main_color),
         );
         // Text inside badge
-        painter.galley(badge_rect.min + padding, galley, Color32::WHITE);
+        painter.galley(badge_rect.min + padding, galley, hex_to_c32(&palette.theme.f_high));
     } else {
         // Not snapped: normal smooth dragging cable
-        let cable_color = Color32::from_rgb(168, 85, 247);
+        let cable_color = hex_to_c32(&palette.harmonies.base);
         draw_bezier_cable(painter, p0, p3, cable_color, zoom);
 
         // Glowing focal point at cursor
         painter.circle_filled(
             mouse_pos,
             5.0 * zoom,
-            Color32::from_rgba_unmultiplied(168, 85, 247, 80),
+            hex_to_c32_alpha(&palette.harmonies.base, 80),
         );
-        painter.circle_filled(mouse_pos, 2.5 * zoom, Color32::from_rgb(216, 180, 254));
+        painter.circle_filled(mouse_pos, 2.5 * zoom, hex_to_c32(&palette.harmonies.base));
     }
 }
 
@@ -1146,18 +1167,19 @@ fn render_node_card(
     rect: Rect,
     is_selected: bool,
     node_to_delete: &mut Option<Uuid>,
+    palette: &AppPalette,
 ) {
     let border_col = if is_selected {
-        Color32::from_rgb(192, 132, 252)
+        hex_to_c32(&palette.harmonies.base)
     } else {
-        Color32::from_rgb(51, 65, 85)
+        hex_to_c32(&palette.theme.b_med)
     };
 
     // Card body background
     painter.rect_filled(
         rect,
         Rounding::same(8.0 * zoom),
-        Color32::from_rgb(30, 41, 59),
+        hex_to_c32(&palette.theme.b_low),
     );
     painter.rect_stroke(
         rect,
@@ -1168,7 +1190,7 @@ fn render_node_card(
     // Category Header banner
     let header_h = 26.0 * zoom;
     let header_rect = Rect::from_min_size(rect.min, Vec2::new(rect.width(), header_h));
-    let cat_color = get_node_category_color(&node.kind);
+    let cat_color = get_node_category_color(&node.kind, palette);
     painter.rect_filled(
         header_rect,
         Rounding {
@@ -1186,7 +1208,7 @@ fn render_node_card(
         egui::Align2::LEFT_CENTER,
         &node.title,
         egui::FontId::proportional(12.0 * zoom),
-        Color32::WHITE,
+        hex_to_c32(&palette.theme.f_high),
     );
 
     // Close / Delete button (×)
@@ -1203,9 +1225,9 @@ fn render_node_card(
         *node_to_delete = Some(node.id);
     }
     let close_col = if close_resp.hovered() {
-        Color32::from_rgb(239, 68, 68)
+        hex_to_c32(&palette.diff_del)
     } else {
-        Color32::from_rgba_unmultiplied(255, 255, 255, 180)
+        hex_to_c32_alpha(&palette.theme.f_high, 180)
     };
     painter.text(
         close_rect.center(),
@@ -1233,6 +1255,7 @@ fn render_node_card(
             zoom,
             dragging_from,
             socket_to_disconnect,
+            palette,
         );
 
         painter.text(
@@ -1240,7 +1263,7 @@ fn render_node_card(
             egui::Align2::LEFT_CENTER,
             &pin.name,
             egui::FontId::proportional(11.0 * zoom),
-            Color32::from_rgb(203, 213, 225),
+            hex_to_c32(&palette.theme.f_med),
         );
     }
 
@@ -1258,6 +1281,7 @@ fn render_node_card(
             zoom,
             dragging_from,
             socket_to_disconnect,
+            palette,
         );
 
         painter.text(
@@ -1265,7 +1289,7 @@ fn render_node_card(
             egui::Align2::RIGHT_CENTER,
             &pin.name,
             egui::FontId::proportional(11.0 * zoom),
-            Color32::from_rgb(203, 213, 225),
+            hex_to_c32(&palette.theme.f_med),
         );
     }
 
@@ -1285,7 +1309,7 @@ fn render_node_card(
                 Pos2::new(rect.min.x + 8.0 * zoom, props_top - 4.0 * zoom),
                 Pos2::new(rect.max.x - 8.0 * zoom, props_top - 4.0 * zoom),
             ],
-            Stroke::new(1.0, Color32::from_rgb(51, 65, 85)),
+            Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)),
         );
     }
 
@@ -1308,16 +1332,16 @@ fn render_node_card(
             child_ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("file:")
-                        .color(Color32::from_rgb(148, 163, 184))
+                        .color(hex_to_c32(&palette.theme.f_low))
                         .small(),
                 );
                 let file_btn = egui::Button::new(
                     egui::RichText::new(format!("📄 {}", script_file))
                         .monospace()
                         .small()
-                        .color(Color32::from_rgb(56, 189, 248)),
+                        .color(hex_to_c32(&palette.harmonies.split_comp_1)),
                 )
-                .fill(Color32::from_rgb(15, 23, 42));
+                .fill(hex_to_c32(&palette.theme.b_med));
 
                 if ui.add(file_btn).on_hover_text("Click to open script in text editor").clicked() {
                     *script_to_open = Some(script_file.clone());
@@ -1328,11 +1352,11 @@ fn render_node_card(
 
             let edit_btn = egui::Button::new(
                 egui::RichText::new("✏  Open in Editor")
-                    .color(Color32::WHITE)
+                    .color(hex_to_c32(&palette.theme.background))
                     .small()
                     .strong(),
             )
-            .fill(Color32::from_rgb(59, 130, 246))
+            .fill(hex_to_c32(&palette.harmonies.base))
             .min_size(Vec2::new(child_ui.available_width(), 20.0 * zoom));
 
             if child_ui.add(edit_btn).clicked() {
@@ -1343,7 +1367,7 @@ fn render_node_card(
                 child_ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(key.replace('_', " "))
-                            .color(Color32::from_rgb(148, 163, 184))
+                            .color(hex_to_c32(&palette.theme.f_low))
                             .small(),
                     );
                     ui.add(
@@ -1368,7 +1392,7 @@ fn render_node_card(
             egui::Align2::LEFT_BOTTOM,
             format!("✔ {}", preview_short),
             egui::FontId::proportional(9.5 * zoom),
-            Color32::from_rgb(74, 222, 128),
+            hex_to_c32(&palette.diff_add),
         );
     }
 }
@@ -1384,6 +1408,7 @@ fn render_socket(
     zoom: f32,
     dragging_from: &mut Option<(Uuid, String, bool)>,
     socket_to_disconnect: &mut Option<(Uuid, String, bool)>,
+    palette: &AppPalette,
 ) {
     let radius = 5.5 * zoom;
     let base_col = port_type.color_rgba();
@@ -1416,7 +1441,7 @@ fn render_socket(
         painter.circle_stroke(
             pos,
             radius,
-            Stroke::new(1.2, Color32::from_rgb(15, 23, 42)),
+            Stroke::new(1.2, hex_to_c32(&palette.theme.background)),
         );
     }
 }
@@ -1485,15 +1510,14 @@ fn get_pin_pos_by_idx(
     Pos2::new(x, y)
 }
 
-fn get_node_category_color(kind: &NodeKind) -> Color32 {
+fn get_node_category_color(kind: &NodeKind, palette: &AppPalette) -> Color32 {
     match kind {
         NodeKind::LeftHandSource
         | NodeKind::RightHandSource
         | NodeKind::SlotSource(_)
         | NodeKind::ConstantText
         | NodeKind::ConstantNumber
-        | NodeKind::PromptOrHandText => Color32::from_rgb(59, 130, 246), // Blue
-
+        | NodeKind::PromptOrHandText => hex_to_c32(&palette.harmonies.triadic_1),
 
         NodeKind::TextTrim
         | NodeKind::TextSlugify
@@ -1502,7 +1526,7 @@ fn get_node_category_color(kind: &NodeKind) -> Color32 {
         | NodeKind::TextSplitLines
         | NodeKind::TextJoin
         | NodeKind::TextJsonQuery
-        | NodeKind::TextBase64 => Color32::from_rgb(245, 158, 11), // Amber
+        | NodeKind::TextBase64 => hex_to_c32(&palette.harmonies.triadic_2),
 
         NodeKind::ImagePadFrame
         | NodeKind::ImageAddTitle
@@ -1512,23 +1536,23 @@ fn get_node_category_color(kind: &NodeKind) -> Color32 {
         | NodeKind::ImageRotate
         | NodeKind::ImageStitch
         | NodeKind::ImageStripExif
-        | NodeKind::ImageDiff => Color32::from_rgb(6, 182, 212), // Cyan
+        | NodeKind::ImageDiff => hex_to_c32(&palette.harmonies.split_comp_1),
 
         NodeKind::AudioNormalize
         | NodeKind::AudioTrimSilence
         | NodeKind::AudioAdjustGain
-        | NodeKind::AudioConcat => Color32::from_rgb(168, 85, 247), // Purple
+        | NodeKind::AudioConcat => hex_to_c32(&palette.harmonies.base),
 
         NodeKind::FileSha256 | NodeKind::FileZip | NodeKind::FileExtractName => {
-            Color32::from_rgb(236, 72, 153) // Pink
+            hex_to_c32(&palette.diff_mod)
         }
 
-        NodeKind::PythonScript | NodeKind::BashCommand => Color32::from_rgb(16, 185, 129), // Emerald
+        NodeKind::PythonScript | NodeKind::BashCommand => hex_to_c32(&palette.diff_add),
 
         NodeKind::SetLeftHand
         | NodeKind::SetRightHand
         | NodeKind::SaveToDisk
-        | NodeKind::PasteToApp => Color32::from_rgb(99, 102, 241), // Indigo
+        | NodeKind::PasteToApp => hex_to_c32(&palette.diff_del),
     }
 }
 

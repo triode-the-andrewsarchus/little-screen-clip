@@ -4,6 +4,8 @@
 //! and routing to left/right slots.
 
 use egui::{Color32, Pos2, Rect, Rounding, Stroke, Vec2};
+use little_clip_core::theme::AppPalette;
+use crate::{hex_to_c32, hex_to_c32_alpha};
 use little_clip_core::audio::{build_peak_pyramid, PeakBlock};
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::slot::HandSide;
@@ -372,6 +374,7 @@ impl RollingAudioStripState {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
+        palette: &AppPalette,
         open_full_editor: &mut Option<(PathBuf, Option<(f32, f32)>)>,
     ) {
         self.update_playback();
@@ -394,21 +397,21 @@ impl RollingAudioStripState {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("🎙 ROLLING AUDIO")
-                        .color(egui::Color32::from_rgb(129, 140, 248))
+                        .color(hex_to_c32(&palette.harmonies.base))
                         .strong()
                         .small(),
                 );
                 ui.label(
                     egui::RichText::new(format!("({:.0}s snapshot)", total_dur))
-                        .color(egui::Color32::from_rgb(148, 163, 184))
+                        .color(hex_to_c32(&palette.theme.f_med))
                         .small(),
                 );
 
                 // Refresh Snapshot button
                 let refresh_btn = ui.add(
                     egui::Button::new(egui::RichText::new("⟳ Refresh").small())
-                        .fill(Color32::from_rgb(30, 41, 59))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85))),
+                        .fill(hex_to_c32(&palette.theme.b_low))
+                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med))),
                 );
                 if refresh_btn.clicked() {
                     self.load_snapshot();
@@ -424,7 +427,7 @@ impl RollingAudioStripState {
                 if self.is_silent() {
                     ui.label(
                         egui::RichText::new("⚠️ Buffer is silence (play audio to capture)")
-                            .color(egui::Color32::from_rgb(251, 191, 36))
+                            .color(hex_to_c32(&palette.diff_mod))
                             .small(),
                     );
                 } else if let Some((s, e)) = self.selected_region {
@@ -436,19 +439,19 @@ impl RollingAudioStripState {
                             "• Selected: {:.1}s to {:.1}s ({:.2}s)",
                             s_rel, e_rel, sel_dur
                         ))
-                        .color(egui::Color32::from_rgb(52, 211, 153))
+                        .color(hex_to_c32(&palette.harmonies.base))
                         .strong()
                         .small(),
                     );
                     ui.label(
                         egui::RichText::new("[Space] Play  [Ctrl+C] Copy  [Esc] Clear")
-                            .color(egui::Color32::from_rgb(203, 213, 225))
+                            .color(hex_to_c32(&palette.theme.f_med))
                             .small(),
                     );
                 } else {
                     ui.label(
                         egui::RichText::new("• Drag on waveform to select  |  Right-click: Full Editor")
-                            .color(egui::Color32::from_rgb(100, 116, 139))
+                            .color(hex_to_c32(&palette.theme.f_low))
                             .small(),
                     );
                 }
@@ -457,7 +460,7 @@ impl RollingAudioStripState {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             egui::RichText::new(msg)
-                                .color(egui::Color32::from_rgb(52, 211, 153))
+                                .color(hex_to_c32(&palette.diff_add))
                                 .strong()
                                 .small(),
                         );
@@ -480,12 +483,12 @@ impl RollingAudioStripState {
 
             let painter = ui.painter_at(rect);
 
-            // Background & Border (glow green border when selection is active and focused)
-            painter.rect_filled(rect, Rounding::same(4.0), Color32::from_rgb(11, 15, 25));
+            // Background & Border (glow border when selection is active and focused)
+            painter.rect_filled(rect, Rounding::same(4.0), hex_to_c32(&palette.theme.b_low));
             let border_stroke = if self.selected_region.is_some() {
-                Stroke::new(1.5, Color32::from_rgb(52, 211, 153))
+                Stroke::new(1.5, hex_to_c32(&palette.harmonies.base))
             } else {
-                Stroke::new(1.0, Color32::from_rgb(30, 41, 59))
+                Stroke::new(1.0, hex_to_c32(&palette.theme.b_med))
             };
             painter.rect_stroke(
                 rect,
@@ -499,7 +502,7 @@ impl RollingAudioStripState {
             // Center zero-baseline
             painter.line_segment(
                 [Pos2::new(rect.min.x, center_y), Pos2::new(rect.max.x, center_y)],
-                Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 15)),
+                Stroke::new(1.0, hex_to_c32_alpha(&palette.theme.f_low, 30)),
             );
 
             // Time Tick Marks (-30s, -20s, -10s, NOW)
@@ -517,14 +520,14 @@ impl RollingAudioStripState {
 
                 painter.line_segment(
                     [Pos2::new(tick_x, rect.min.y), Pos2::new(tick_x, rect.min.y + 4.0)],
-                    Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 40)),
+                    Stroke::new(1.0, hex_to_c32_alpha(&palette.theme.f_med, 60)),
                 );
                 painter.text(
                     Pos2::new(tick_x + 2.0, rect.min.y + 3.0),
                     egui::Align2::LEFT_TOP,
                     tick_label,
                     egui::FontId::proportional(9.0),
-                    Color32::from_rgba_unmultiplied(148, 163, 184, 80),
+                    hex_to_c32_alpha(&palette.theme.f_med, 100),
                 );
 
                 t_tick += tick_step_sec;
@@ -538,7 +541,7 @@ impl RollingAudioStripState {
                         egui::Align2::CENTER_CENTER,
                         "Capture buffer is currently silence — play audio and click ⟳ Refresh (or press F5)",
                         egui::FontId::proportional(11.0),
-                        Color32::from_rgba_unmultiplied(148, 163, 184, 160),
+                        hex_to_c32_alpha(&palette.theme.f_med, 160),
                     );
                 } else {
                     let num_bars = (rect.width() as usize).clamp(50, 1000);
@@ -563,9 +566,9 @@ impl RollingAudioStripState {
 
                         if is_silent_col {
                             let dot_col = if in_sel {
-                                Color32::from_rgba_unmultiplied(52, 211, 153, 100)
+                                hex_to_c32_alpha(&palette.harmonies.base, 100)
                             } else {
-                                Color32::from_rgba_unmultiplied(255, 255, 255, 25)
+                                hex_to_c32_alpha(&palette.theme.f_low, 30)
                             };
                             mesh.add_colored_rect(
                                 Rect::from_min_size(Pos2::new(bar_x, center_y - 0.5), Vec2::new(bar_w.max(1.0), 1.0)),
@@ -573,7 +576,7 @@ impl RollingAudioStripState {
                             );
                         } else {
                             let bar_col = if in_sel {
-                                Color32::from_rgb(52, 211, 153)
+                                hex_to_c32(&palette.harmonies.base)
                             } else {
                                 Color32::from_rgb(block_col[0], block_col[1], block_col[2])
                             };
@@ -596,7 +599,7 @@ impl RollingAudioStripState {
                     egui::Align2::CENTER_CENTER,
                     format!("⚠️ {}", err),
                     egui::FontId::proportional(11.0),
-                    Color32::from_rgb(239, 68, 68),
+                    hex_to_c32(&palette.diff_del),
                 );
             } else {
                 painter.text(
@@ -604,7 +607,7 @@ impl RollingAudioStripState {
                     egui::Align2::CENTER_CENTER,
                     "No system audio captured yet",
                     egui::FontId::proportional(11.0),
-                    Color32::from_rgb(148, 163, 184),
+                    hex_to_c32(&palette.theme.f_low),
                 );
             }
 
@@ -622,15 +625,15 @@ impl RollingAudioStripState {
                 painter.rect_filled(
                     sel_rect,
                     Rounding::ZERO,
-                    Color32::from_rgba_unmultiplied(52, 211, 153, 40),
+                    hex_to_c32_alpha(&palette.harmonies.base, 40),
                 );
                 painter.line_segment(
                     [Pos2::new(x_s, rect.min.y), Pos2::new(x_s, rect.max.y)],
-                    Stroke::new(1.5, Color32::from_rgb(52, 211, 153)),
+                    Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
                 );
                 painter.line_segment(
                     [Pos2::new(x_e, rect.min.y), Pos2::new(x_e, rect.max.y)],
-                    Stroke::new(1.5, Color32::from_rgb(52, 211, 153)),
+                    Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
                 );
             }
 
@@ -639,9 +642,9 @@ impl RollingAudioStripState {
                 let px = rect.min.x + (self.playhead_sec.clamp(0.0, total_dur) / total_dur) * rect.width();
                 painter.line_segment(
                     [Pos2::new(px, rect.min.y), Pos2::new(px, rect.max.y)],
-                    Stroke::new(2.0, Color32::WHITE),
+                    Stroke::new(2.0, hex_to_c32(&palette.harmonies.complementary)),
                 );
-                painter.circle_filled(Pos2::new(px, rect.min.y + 3.0), 3.0, Color32::from_rgb(255, 215, 0));
+                painter.circle_filled(Pos2::new(px, rect.min.y + 3.0), 3.0, hex_to_c32(&palette.harmonies.complementary));
             }
 
             // --- Mouse / Pointer Interaction ---

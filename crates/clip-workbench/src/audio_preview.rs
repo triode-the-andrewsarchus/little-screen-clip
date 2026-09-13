@@ -4,6 +4,8 @@
 //! audio playback with Rodio, and export/split capabilities.
 
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
+use little_clip_core::theme::AppPalette;
+use crate::{hex_to_c32, hex_to_c32_alpha};
 use little_clip_core::audio::{
     compute_audio_analysis_progressive, read_audio_metadata,
     AudioAnalysisProgress, AudioMetadata, FullAudioAnalysis,
@@ -994,7 +996,7 @@ impl AudioPreviewState {
         let _ = self.execute_save(now);
     }
 
-    pub fn render_save_dialog(&mut self, ctx: &egui::Context, now: f64) {
+    pub fn render_save_dialog(&mut self, ctx: &egui::Context, palette: &AppPalette, now: f64) {
         if !self.save_dialog_open {
             return;
         }
@@ -1012,13 +1014,13 @@ impl AudioPreviewState {
                 ui.heading(
                     egui::RichText::new("Save Audio Slices to Disk")
                         .strong()
-                        .color(Color32::from_rgb(244, 244, 245)),
+                        .color(hex_to_c32(&palette.harmonies.base)),
                 );
                 ui.label(
                     egui::RichText::new(
                         "Extract and save selections as individual audio files with sample timestamps & durations.",
                     )
-                    .color(Color32::from_rgb(148, 163, 184)),
+                    .color(hex_to_c32(&palette.theme.f_med)),
                 );
                 ui.add_space(8.0);
                 ui.separator();
@@ -1029,7 +1031,7 @@ impl AudioPreviewState {
                     ui.label(
                         egui::RichText::new("📁 Destination:")
                             .strong()
-                            .color(Color32::from_rgb(226, 232, 240)),
+                            .color(hex_to_c32(&palette.theme.f_high)),
                     );
                     let text_width = (ui.available_width() - 90.0).max(100.0);
                     ui.add(
@@ -1049,7 +1051,7 @@ impl AudioPreviewState {
                     ui.label(
                         egui::RichText::new(format!("📄 Files to Save ({}):", slice_count))
                             .strong()
-                            .color(Color32::from_rgb(226, 232, 240)),
+                            .color(hex_to_c32(&palette.theme.f_high)),
                     );
                     ui.add_space(8.0);
                     if ui.button("↺ Reset Names").on_hover_text("Reset filenames to default original_name + timestamp + duration").clicked() {
@@ -1059,7 +1061,7 @@ impl AudioPreviewState {
                 ui.label(
                     egui::RichText::new("Format: [OriginalName]_[SampleTimestamp]_[Duration]")
                         .small()
-                        .color(Color32::from_rgb(148, 163, 184)),
+                        .color(hex_to_c32(&palette.theme.f_low)),
                 );
 
                 ui.add_space(6.0);
@@ -1096,9 +1098,9 @@ impl AudioPreviewState {
                     let save_btn = egui::Button::new(
                         egui::RichText::new(btn_text)
                             .strong()
-                            .color(Color32::WHITE),
+                            .color(hex_to_c32(&palette.theme.f_high)),
                     )
-                    .fill(Color32::from_rgb(16, 185, 129))
+                    .fill(hex_to_c32(&palette.diff_add))
                     .rounding(Rounding::same(6.0));
 
                     let is_enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -1123,6 +1125,7 @@ impl AudioPreviewState {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
+        palette: &AppPalette,
         close_requested: &mut bool,
     ) {
         let now = ctx.input(|i| i.time);
@@ -1392,7 +1395,7 @@ impl AudioPreviewState {
             ui.painter().rect_filled(
                 full_rect,
                 Rounding::ZERO,
-                Color32::from_rgba_unmultiplied(11, 15, 25, 252),
+                hex_to_c32(&palette.theme.background),
             );
 
             ui.add_space(8.0);
@@ -1404,7 +1407,7 @@ impl AudioPreviewState {
                     egui::RichText::new("🎵 Audio Analysis & Slicer")
                         .heading()
                         .strong()
-                        .color(Color32::WHITE),
+                        .color(hex_to_c32(&palette.harmonies.base)),
                 );
 
                 ui.add_space(10.0);
@@ -1429,9 +1432,9 @@ impl AudioPreviewState {
                     egui::RichText::new(meta_str)
                         .small()
                         .strong()
-                        .color(Color32::from_rgb(148, 163, 184)),
+                        .color(hex_to_c32(&palette.theme.f_med)),
                 )
-                .fill(Color32::from_rgb(30, 41, 59))
+                .fill(hex_to_c32(&palette.theme.b_low))
                 .stroke(Stroke::NONE)
                 .rounding(Rounding::same(4.0));
                 ui.add(meta_badge);
@@ -1444,9 +1447,9 @@ impl AudioPreviewState {
                             egui::RichText::new(format!("⚠️ Multi-channel ({} ch) — Displaying L & R only", an.channels))
                                 .small()
                                 .strong()
-                                .color(Color32::from_rgb(251, 191, 36)), // Amber 400
+                                .color(hex_to_c32(&palette.diff_mod)),
                         )
-                        .fill(Color32::from_rgb(120, 53, 15)) // Amber 900
+                        .fill(hex_to_c32_alpha(&palette.diff_mod, 40))
                         .stroke(Stroke::NONE)
                         .rounding(Rounding::same(4.0));
                         ui.add(warn_badge).on_hover_text(format!(
@@ -1462,9 +1465,9 @@ impl AudioPreviewState {
                     let close_btn = egui::Button::new(
                         egui::RichText::new("✕ Close (Esc)")
                             .strong()
-                            .color(Color32::WHITE),
+                            .color(hex_to_c32(&palette.theme.f_high)),
                     )
-                    .fill(Color32::from_rgb(220, 38, 38))
+                    .fill(hex_to_c32(&palette.diff_del))
                     .rounding(Rounding::same(6.0));
 
                     if ui.add(close_btn).clicked() {
@@ -1479,10 +1482,10 @@ impl AudioPreviewState {
                         egui::RichText::new(audacity_label)
                             .small()
                             .strong()
-                            .color(Color32::WHITE),
+                            .color(hex_to_c32(&palette.theme.f_high)),
                     )
-                    .fill(Color32::from_rgb(30, 58, 138))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(96, 165, 250)))
+                    .fill(hex_to_c32(&palette.theme.b_low))
+                    .stroke(Stroke::new(1.0, hex_to_c32(&palette.harmonies.base)))
                     .rounding(Rounding::same(6.0));
 
                     if ui.add(audacity_btn).on_hover_text(format!("Open audio file in external editor ({})", self.audio_editor)).clicked() {
@@ -1495,7 +1498,7 @@ impl AudioPreviewState {
                         if now - ts < 4.5 {
                             ui.label(
                                 egui::RichText::new(msg)
-                                    .color(Color32::from_rgb(52, 211, 153))
+                                    .color(hex_to_c32(&palette.diff_add))
                                     .small()
                                     .strong(),
                             );
@@ -1513,15 +1516,15 @@ impl AudioPreviewState {
                 // Play / Pause Button
                 let play_icon = if self.is_playing { "⏸ Pause [Space]" } else { "▶ Play [Space]" };
                 let play_color = if self.is_playing {
-                    Color32::from_rgb(245, 158, 11) // Amber
+                    hex_to_c32(&palette.diff_mod)
                 } else {
-                    Color32::from_rgb(16, 185, 129) // Emerald
+                    hex_to_c32(&palette.diff_add)
                 };
 
                 let play_btn = egui::Button::new(
                     egui::RichText::new(play_icon)
                         .strong()
-                        .color(Color32::WHITE),
+                        .color(hex_to_c32(&palette.theme.f_high)),
                 )
                 .fill(play_color)
                 .rounding(Rounding::same(6.0));
@@ -1535,9 +1538,9 @@ impl AudioPreviewState {
                 // Stop Button
                 let stop_btn = egui::Button::new(
                     egui::RichText::new("⏹ Stop")
-                        .color(Color32::from_rgb(226, 232, 240)),
+                        .color(hex_to_c32(&palette.theme.f_high)),
                 )
-                .fill(Color32::from_rgb(30, 41, 59))
+                .fill(hex_to_c32(&palette.theme.b_low))
                 .rounding(Rounding::same(6.0));
                 if ui.add(stop_btn).clicked() {
                     self.stop();
@@ -1546,9 +1549,9 @@ impl AudioPreviewState {
                 // Replay Button
                 let replay_btn = egui::Button::new(
                     egui::RichText::new("⟲ Start")
-                        .color(Color32::from_rgb(226, 232, 240)),
+                        .color(hex_to_c32(&palette.theme.f_high)),
                 )
-                .fill(Color32::from_rgb(30, 41, 59))
+                .fill(hex_to_c32(&palette.theme.b_low))
                 .rounding(Rounding::same(6.0));
                 if ui.add(replay_btn).clicked() {
                     self.seek_to(self.active_selection_range().map(|(s, _)| s).unwrap_or(0.0));
@@ -1564,7 +1567,7 @@ impl AudioPreviewState {
 
                 ui.label(
                     egui::RichText::new(format!("{:02}:{:05.2} / {:02}:{:05.2}", cur_m, cur_s, tot_m, tot_s))
-                        .color(Color32::from_rgb(56, 189, 248))
+                        .color(hex_to_c32(&palette.harmonies.base))
                         .strong()
                         .monospace(),
                 );
@@ -1572,7 +1575,7 @@ impl AudioPreviewState {
                 ui.add_space(10.0);
 
                 // Volume slider
-                ui.label(egui::RichText::new("🔊").color(Color32::from_rgb(148, 163, 184)));
+                ui.label(egui::RichText::new("🔊").color(hex_to_c32(&palette.theme.f_med)));
                 let mut vol_pct = self.volume * 100.0;
                 let slider = egui::Slider::new(&mut vol_pct, 0.0..=100.0)
                     .show_value(false);
@@ -1587,27 +1590,27 @@ impl AudioPreviewState {
 
                 // Zoom Controls (Audacity Style)
                 let zoom_in_btn = egui::Button::new(
-                    egui::RichText::new("🔍+").color(Color32::from_rgb(226, 232, 240)),
+                    egui::RichText::new("🔍+").color(hex_to_c32(&palette.theme.f_high)),
                 )
-                .fill(Color32::from_rgb(30, 41, 59))
+                .fill(hex_to_c32(&palette.theme.b_low))
                 .rounding(Rounding::same(4.0));
                 if ui.add(zoom_in_btn).on_hover_text("Zoom In (+ / Ctrl+Wheel)").clicked() {
                     self.zoom(0.75, self.current_time_sec);
                 }
 
                 let zoom_out_btn = egui::Button::new(
-                    egui::RichText::new("🔍-").color(Color32::from_rgb(226, 232, 240)),
+                    egui::RichText::new("🔍-").color(hex_to_c32(&palette.theme.f_high)),
                 )
-                .fill(Color32::from_rgb(30, 41, 59))
+                .fill(hex_to_c32(&palette.theme.b_low))
                 .rounding(Rounding::same(4.0));
                 if ui.add(zoom_out_btn).on_hover_text("Zoom Out (- / Ctrl+Wheel)").clicked() {
                     self.zoom(1.33, self.current_time_sec);
                 }
 
                 let fit_btn = egui::Button::new(
-                    egui::RichText::new("⟲ Fit").small().color(Color32::from_rgb(148, 163, 184)),
+                    egui::RichText::new("⟲ Fit").small().color(hex_to_c32(&palette.theme.f_med)),
                 )
-                .fill(Color32::from_rgb(30, 41, 59))
+                .fill(hex_to_c32(&palette.theme.b_low))
                 .rounding(Rounding::same(4.0));
                 if ui.add(fit_btn).on_hover_text("Fit Full Track (Ctrl+0)").clicked() {
                     self.fit_to_window();
@@ -1618,7 +1621,7 @@ impl AudioPreviewState {
                     egui::RichText::new(format!("{}%", zoom_pct))
                         .small()
                         .monospace()
-                        .color(Color32::from_rgb(148, 163, 184)),
+                        .color(hex_to_c32(&palette.theme.f_med)),
                 );
 
                 ui.add_space(12.0);
@@ -1626,9 +1629,9 @@ impl AudioPreviewState {
                 // Mode Toggle: Single Region (default) vs Multi-Region Mode
                 let is_multi = self.selection_mode == SelectionMode::Multi;
                 let (mode_icon, mode_col, mode_bg) = if is_multi {
-                    ("☷ Multi-Region", Color32::from_rgb(167, 243, 208), Color32::from_rgb(6, 78, 59))
+                    ("☷ Multi-Region", hex_to_c32(&palette.diff_add), hex_to_c32_alpha(&palette.diff_add, 40))
                 } else {
-                    ("▢ Single Region", Color32::from_rgb(203, 213, 225), Color32::from_rgb(30, 41, 59))
+                    ("▢ Single Region", hex_to_c32(&palette.theme.f_med), hex_to_c32(&palette.theme.b_low))
                 };
                 let mode_btn = egui::Button::new(
                     egui::RichText::new(mode_icon).small().strong().color(mode_col),
@@ -1642,9 +1645,9 @@ impl AudioPreviewState {
 
                 // Snap to 0-Crossing Toggle
                 let (snap_col, snap_bg) = if self.snap_zero_crossings {
-                    (Color32::from_rgb(56, 189, 248), Color32::from_rgb(12, 74, 110))
+                    (hex_to_c32(&palette.harmonies.base), hex_to_c32_alpha(&palette.harmonies.base, 40))
                 } else {
-                    (Color32::from_rgb(148, 163, 184), Color32::from_rgb(30, 41, 59))
+                    (hex_to_c32(&palette.theme.f_med), hex_to_c32(&palette.theme.b_low))
                 };
                 let snap_btn = egui::Button::new(
                     egui::RichText::new("∿ Snap 0-Cross [Z]").small().strong().color(snap_col),
@@ -1661,11 +1664,11 @@ impl AudioPreviewState {
                 // Transient Detection & Snap Toggle
                 let transients_ready = self.analysis.as_ref().map(|a| a.is_transients_ready).unwrap_or(false);
                 let (trans_col, trans_bg) = if !transients_ready {
-                    (Color32::from_rgb(100, 116, 139), Color32::from_rgb(20, 26, 42))
+                    (hex_to_c32(&palette.theme.f_low), hex_to_c32(&palette.theme.b_low))
                 } else if self.show_transients {
-                    (Color32::from_rgb(251, 191, 36), Color32::from_rgb(120, 53, 15))
+                    (hex_to_c32(&palette.diff_mod), hex_to_c32_alpha(&palette.diff_mod, 40))
                 } else {
-                    (Color32::from_rgb(148, 163, 184), Color32::from_rgb(30, 41, 59))
+                    (hex_to_c32(&palette.theme.f_med), hex_to_c32(&palette.theme.b_low))
                 };
                 let btn_label = if !transients_ready {
                     "⏳ Transients...".to_string()
@@ -1715,10 +1718,10 @@ impl AudioPreviewState {
                     egui::RichText::new("✂ Trim Silence")
                         .small()
                         .strong()
-                        .color(Color32::from_rgb(203, 213, 225)),
+                        .color(hex_to_c32(&palette.theme.f_high)),
                 )
-                .fill(Color32::from_rgb(30, 41, 59))
-                .stroke(Stroke::new(1.0, Color32::from_rgb(71, 85, 105)))
+                .fill(hex_to_c32(&palette.theme.b_low))
+                .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
                 .rounding(Rounding::same(4.0));
                 if ui.add(trim_btn).on_hover_text("Trim silence (< -45 dB) from both leading and trailing sides").clicked() {
                     self.trim_silence(-45.0, now);
@@ -1746,9 +1749,9 @@ impl AudioPreviewState {
                                 egui::RichText::new(sel_str)
                                     .small()
                                     .strong()
-                                    .color(Color32::from_rgb(167, 243, 208)),
+                                    .color(hex_to_c32(&palette.harmonies.base)),
                             )
-                            .fill(Color32::from_rgb(6, 78, 59))
+                            .fill(hex_to_c32_alpha(&palette.harmonies.base, 40))
                             .stroke(Stroke::NONE)
                             .rounding(Rounding::same(4.0));
                             ui.add(sel_badge);
@@ -1756,9 +1759,9 @@ impl AudioPreviewState {
                             let clear_btn = egui::Button::new(
                                 egui::RichText::new("✕ Clear")
                                     .small()
-                                    .color(Color32::from_rgb(148, 163, 184)),
+                                    .color(hex_to_c32(&palette.theme.f_med)),
                             )
-                            .fill(Color32::from_rgb(30, 41, 59))
+                            .fill(hex_to_c32(&palette.theme.b_low))
                             .rounding(Rounding::same(4.0));
                             if ui.add(clear_btn).clicked() {
                                 self.selection = None;
@@ -1775,9 +1778,9 @@ impl AudioPreviewState {
                         let copy_btn = egui::Button::new(
                             egui::RichText::new(copy_label)
                                 .strong()
-                                .color(Color32::WHITE),
+                                .color(hex_to_c32(&palette.theme.f_high)),
                         )
-                        .fill(Color32::from_rgb(99, 102, 241))
+                        .fill(hex_to_c32(&palette.harmonies.base))
                         .rounding(Rounding::same(6.0));
 
                         if ui.add(copy_btn).on_hover_text("Copy selected segment with all original channels").clicked() {
@@ -1791,9 +1794,9 @@ impl AudioPreviewState {
                                 egui::RichText::new("◧ Left Only (Mono)")
                                     .small()
                                     .strong()
-                                    .color(Color32::from_rgb(125, 211, 252)),
+                                    .color(hex_to_c32(&palette.left_hand_border)),
                             )
-                            .fill(Color32::from_rgb(12, 74, 110))
+                            .fill(hex_to_c32_alpha(&palette.left_hand_border, 40))
                             .rounding(Rounding::same(4.0));
                             if ui.add(left_btn).on_hover_text("Copy only the Left channel as a mono audio file").clicked() {
                                 self.copy_selected_segment(now, ChannelCopyMode::LeftOnly);
@@ -1803,9 +1806,9 @@ impl AudioPreviewState {
                                 egui::RichText::new("◨ Right Only (Mono)")
                                     .small()
                                     .strong()
-                                    .color(Color32::from_rgb(196, 181, 253)),
+                                    .color(hex_to_c32(&palette.right_hand_border)),
                             )
-                            .fill(Color32::from_rgb(76, 29, 149))
+                            .fill(hex_to_c32_alpha(&palette.right_hand_border, 40))
                             .rounding(Rounding::same(4.0));
                             if ui.add(right_btn).on_hover_text("Copy only the Right channel as a mono audio file").clicked() {
                                 self.copy_selected_segment(now, ChannelCopyMode::RightOnly);
@@ -1821,9 +1824,9 @@ impl AudioPreviewState {
                         let save_btn = egui::Button::new(
                             egui::RichText::new(save_label)
                                 .strong()
-                                .color(Color32::WHITE),
+                                .color(hex_to_c32(&palette.theme.f_high)),
                         )
-                        .fill(Color32::from_rgb(16, 185, 129))
+                        .fill(hex_to_c32(&palette.diff_add))
                         .rounding(Rounding::same(6.0));
                         if ui.add(save_btn).on_hover_text("Save slice to disk formatted as original_name + timestamp + duration [Ctrl+S]").clicked() {
                             self.open_save_dialog();
@@ -1840,9 +1843,9 @@ impl AudioPreviewState {
                             egui::RichText::new(badge_text)
                                 .small()
                                 .strong()
-                                .color(Color32::from_rgb(167, 243, 208)),
+                                .color(hex_to_c32(&palette.harmonies.base)),
                         )
-                        .fill(Color32::from_rgb(6, 78, 59))
+                        .fill(hex_to_c32_alpha(&palette.harmonies.base, 40))
                         .stroke(Stroke::NONE)
                         .rounding(Rounding::same(4.0));
                         ui.add(count_badge);
@@ -1851,9 +1854,9 @@ impl AudioPreviewState {
                             let clear_all_btn = egui::Button::new(
                                 egui::RichText::new("🗑 Clear All")
                                     .small()
-                                    .color(Color32::from_rgb(248, 113, 113)),
+                                    .color(hex_to_c32(&palette.diff_del)),
                             )
-                            .fill(Color32::from_rgb(30, 41, 59))
+                            .fill(hex_to_c32(&palette.theme.b_low))
                             .rounding(Rounding::same(4.0));
                             if ui.add(clear_all_btn).on_hover_text("Remove all selected regions").clicked() {
                                 self.multi_selections.clear();
@@ -1870,9 +1873,9 @@ impl AudioPreviewState {
                         let copy_btn = egui::Button::new(
                             egui::RichText::new(copy_label)
                                 .strong()
-                                .color(Color32::WHITE),
+                                .color(hex_to_c32(&palette.theme.f_high)),
                         )
-                        .fill(Color32::from_rgb(99, 102, 241))
+                        .fill(hex_to_c32(&palette.harmonies.base))
                         .rounding(Rounding::same(6.0));
 
                         if ui.add(copy_btn).on_hover_text("Export and copy all selected regions to Clipboard & Left Hand").clicked() {
@@ -1886,9 +1889,9 @@ impl AudioPreviewState {
                                 egui::RichText::new(left_label)
                                     .small()
                                     .strong()
-                                    .color(Color32::from_rgb(125, 211, 252)),
+                                    .color(hex_to_c32(&palette.left_hand_border)),
                             )
-                            .fill(Color32::from_rgb(12, 74, 110))
+                            .fill(hex_to_c32_alpha(&palette.left_hand_border, 40))
                             .rounding(Rounding::same(4.0));
                             if ui.add(left_btn).on_hover_text("Export all regions isolating only the Left channel as mono").clicked() {
                                 self.copy_all_multi_segments(now, ChannelCopyMode::LeftOnly);
@@ -1899,9 +1902,9 @@ impl AudioPreviewState {
                                 egui::RichText::new(right_label)
                                     .small()
                                     .strong()
-                                    .color(Color32::from_rgb(196, 181, 253)),
+                                    .color(hex_to_c32(&palette.right_hand_border)),
                             )
-                            .fill(Color32::from_rgb(76, 29, 149))
+                            .fill(hex_to_c32_alpha(&palette.right_hand_border, 40))
                             .rounding(Rounding::same(4.0));
                             if ui.add(right_btn).on_hover_text("Export all regions isolating only the Right channel as mono").clicked() {
                                 self.copy_all_multi_segments(now, ChannelCopyMode::RightOnly);
@@ -1917,9 +1920,9 @@ impl AudioPreviewState {
                         let save_btn = egui::Button::new(
                             egui::RichText::new(save_label)
                                 .strong()
-                                .color(Color32::WHITE),
+                                .color(hex_to_c32(&palette.theme.f_high)),
                         )
-                        .fill(Color32::from_rgb(16, 185, 129))
+                        .fill(hex_to_c32(&palette.diff_add))
                         .rounding(Rounding::same(6.0));
                         if ui.add(save_btn).on_hover_text("Save all slices to disk formatted as original_name + timestamp + duration [Ctrl+S]").clicked() {
                             self.open_save_dialog();
@@ -1938,7 +1941,7 @@ impl AudioPreviewState {
                         egui::RichText::new("Slices:")
                             .small()
                             .strong()
-                            .color(Color32::from_rgb(148, 163, 184)),
+                            .color(hex_to_c32(&palette.theme.f_med)),
                     );
                     let mut seek_target = None;
                     let mut preview_target = None;
@@ -1952,9 +1955,9 @@ impl AudioPreviewState {
                             for (idx, &(s, e)) in slices_copy.iter().enumerate() {
                                 let is_active = active_idx == Some(idx);
                                 let (bg_col, border_col, text_col) = if is_active {
-                                    (Color32::from_rgb(6, 78, 59), Color32::from_rgb(52, 211, 153), Color32::from_rgb(167, 243, 208))
+                                    (hex_to_c32_alpha(&palette.harmonies.base, 40), hex_to_c32(&palette.harmonies.base), hex_to_c32(&palette.harmonies.base))
                                 } else {
-                                    (Color32::from_rgb(30, 41, 59), Color32::from_rgb(51, 65, 85), Color32::from_rgb(203, 213, 225))
+                                    (hex_to_c32(&palette.theme.b_low), hex_to_c32(&palette.theme.b_med), hex_to_c32(&palette.theme.f_med))
                                 };
 
                                 let label = format!("#{}: {:02}:{:04.1}-{:02}:{:04.1} ({:.2}s)", idx + 1, (s/60.0) as u32, s%60.0, (e/60.0) as u32, e%60.0, e - s);
@@ -1974,9 +1977,9 @@ impl AudioPreviewState {
                                 }
 
                                 let del_btn = egui::Button::new(
-                                    egui::RichText::new("✕").small().color(Color32::from_rgb(248, 113, 113)),
+                                    egui::RichText::new("✕").small().color(hex_to_c32(&palette.diff_del)),
                                 )
-                                .fill(Color32::from_rgb(20, 26, 42))
+                                .fill(hex_to_c32(&palette.theme.b_low))
                                 .rounding(Rounding::same(4.0));
                                 if ui.add(del_btn).on_hover_text(format!("Remove slice #{}", idx + 1)).clicked() {
                                     remove_slice_idx = Some(idx);
@@ -2018,7 +2021,7 @@ impl AudioPreviewState {
 
             ui.horizontal(|ui| {
                 ui.add_space(14.0);
-                self.render_waveform_canvas(ui, ctx, avail_w, avail_h);
+                self.render_waveform_canvas(ui, ctx, palette, avail_w, avail_h);
             });
 
             // 4. Footer Help Bar
@@ -2029,25 +2032,26 @@ impl AudioPreviewState {
                         egui::RichText::new("Navigation:")
                             .small()
                             .strong()
-                            .color(Color32::from_rgb(148, 163, 184)),
+                            .color(hex_to_c32(&palette.theme.f_med)),
                     );
                     ui.label(
                         egui::RichText::new("[Hold Middle-Mouse / Shift+Wheel] Pan • [Wheel / +/-] Zoom • [Drag] Select • [Z] Snap 0-Cross • [Space] Play • [Ctrl+C] Copy • [Ctrl+S] Save • [Right-Click / Del] Remove Slice")
                             .small()
-                            .color(Color32::from_rgb(100, 116, 139)),
+                            .color(hex_to_c32(&palette.theme.f_low)),
                     );
                 });
             });
         });
 
         // Render Save Dialog modal if open
-        self.render_save_dialog(ctx, now);
+        self.render_save_dialog(ctx, palette, now);
     }
 
     fn render_waveform_canvas(
         &mut self,
         ui: &mut egui::Ui,
         _ctx: &egui::Context,
+        palette: &AppPalette,
         width: f32,
         height: f32,
     ) {
@@ -2055,16 +2059,24 @@ impl AudioPreviewState {
             ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::click_and_drag());
         let painter = ui.painter_at(rect);
 
+        let bg_frame = crate::hex_to_c32(&palette.theme.b_low);
+        let border_frame = crate::hex_to_c32(&palette.theme.b_med);
+        let text_f_med = crate::hex_to_c32(&palette.theme.f_med);
+        let text_f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let accent_base = crate::hex_to_c32(&palette.harmonies.base);
+        let accent_playhead = crate::hex_to_c32(&palette.harmonies.complementary);
+        let transient_col = crate::hex_to_c32(&palette.diff_mod);
+
         // Frame border & background
         painter.rect_filled(
             rect,
             Rounding::same(8.0),
-            Color32::from_rgb(15, 20, 32),
+            bg_frame,
         );
         painter.rect_stroke(
             rect,
             Rounding::same(8.0),
-            Stroke::new(1.0, Color32::from_rgb(30, 41, 59)),
+            Stroke::new(1.0, border_frame),
         );
 
         if self.is_loading_analysis || self.analysis.is_none() {
@@ -2074,7 +2086,7 @@ impl AudioPreviewState {
                 egui::Align2::CENTER_CENTER,
                 format!("⏳ Decoding audio track & building waveform... ({:.1}s)", elapsed),
                 egui::FontId::proportional(15.0),
-                Color32::from_rgb(148, 163, 184),
+                text_f_med,
             );
             return;
         }
@@ -2545,11 +2557,11 @@ impl AudioPreviewState {
         painter.rect_filled(
             Rect::from_min_max(Pos2::new(rect.min.x, rect.min.y), Pos2::new(rect.max.x, ruler_rect.max.y)),
             Rounding { nw: 8.0, ne: 8.0, sw: 0.0, se: 0.0 },
-            Color32::from_rgb(20, 26, 42),
+            bg_frame,
         );
         painter.line_segment(
             [Pos2::new(rect.min.x, ruler_rect.max.y), Pos2::new(rect.max.x, ruler_rect.max.y)],
-            Stroke::new(1.0, Color32::from_rgb(38, 48, 70)),
+            Stroke::new(1.0, border_frame),
         );
 
         // Dynamic Time Ticks
@@ -2581,12 +2593,12 @@ impl AudioPreviewState {
                     // Grid line down through all views
                     painter.line_segment(
                         [Pos2::new(x, ruler_rect.max.y), Pos2::new(x, strip_rect.max.y)],
-                        Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 8)),
+                        Stroke::new(1.0, crate::hex_to_c32_alpha(&palette.theme.f_low, 20)),
                     );
                     // Ruler tick
                     painter.line_segment(
                         [Pos2::new(x, ruler_rect.min.y + 14.0), Pos2::new(x, ruler_rect.max.y)],
-                        Stroke::new(1.0, Color32::from_rgb(75, 85, 99)),
+                        Stroke::new(1.0, crate::hex_to_c32_alpha(&palette.theme.f_med, 80)),
                     );
                     // Label
                     let label = if interval_sec >= 1.0 {
@@ -2606,7 +2618,7 @@ impl AudioPreviewState {
                         egui::Align2::LEFT_CENTER,
                         label,
                         egui::FontId::monospace(9.0),
-                        Color32::from_rgb(148, 163, 184),
+                        text_f_med,
                     );
                 }
             }
@@ -2614,8 +2626,8 @@ impl AudioPreviewState {
         }
 
         // 2. VIEW 1: WAVEFORM (Audacity-style Stems or Peak Bars)
-        painter.rect_filled(wave_rect, Rounding::ZERO, Color32::from_rgb(13, 17, 28));
-        painter.rect_stroke(wave_rect, Rounding::ZERO, Stroke::new(1.0, Color32::from_rgb(30, 41, 59)));
+        painter.rect_filled(wave_rect, Rounding::ZERO, bg_frame);
+        painter.rect_stroke(wave_rect, Rounding::ZERO, Stroke::new(1.0, border_frame));
 
         let is_stereo = analysis.channels >= 2 && analysis.ch2_samples.is_some();
         let total_frames = analysis.total_frames;
@@ -2633,7 +2645,7 @@ impl AudioPreviewState {
 
             painter.line_segment(
                 [Pos2::new(track_min_x, wave_rect.min.y + half), Pos2::new(track_max_x, wave_rect.min.y + half)],
-                Stroke::new(1.0, Color32::from_rgb(38, 48, 70)),
+                Stroke::new(1.0, border_frame),
             );
 
             painter.text(
@@ -2641,14 +2653,14 @@ impl AudioPreviewState {
                 egui::Align2::RIGHT_CENTER,
                 "L",
                 egui::FontId::proportional(11.0),
-                Color32::from_rgb(56, 189, 248),
+                accent_base,
             );
             painter.text(
                 Pos2::new(track_min_x - 8.0, y_c2),
                 egui::Align2::RIGHT_CENTER,
                 "R",
                 egui::FontId::proportional(11.0),
-                Color32::from_rgb(129, 140, 248),
+                accent_base,
             );
         } else {
             painter.text(
@@ -2656,7 +2668,7 @@ impl AudioPreviewState {
                 egui::Align2::RIGHT_CENTER,
                 "Mono",
                 egui::FontId::proportional(11.0),
-                Color32::from_rgb(56, 189, 248),
+                accent_base,
             );
         }
 
@@ -2667,16 +2679,16 @@ impl AudioPreviewState {
                 let (y_base, max_def, samples, _col) = if ch_idx == 0 {
                     let half = if is_stereo { wave_h / 2.0 } else { wave_h };
                     let base = if is_stereo { wave_rect.min.y + wave_h / 4.0 } else { wave_rect.center().y };
-                    (base, half * 0.45, &analysis.ch1_samples, Color32::from_rgb(56, 189, 248))
+                    (base, half * 0.45, &analysis.ch1_samples, accent_base)
                 } else {
                     let half = wave_h / 2.0;
                     let base = wave_rect.min.y + 3.0 * wave_h / 4.0;
-                    (base, half * 0.45, analysis.ch2_samples.as_ref().unwrap(), Color32::from_rgb(129, 140, 248))
+                    (base, half * 0.45, analysis.ch2_samples.as_ref().unwrap(), accent_base)
                 };
 
                 painter.line_segment(
                     [Pos2::new(track_min_x, y_base), Pos2::new(track_max_x, y_base)],
-                    Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 20)),
+                    Stroke::new(1.0, border_frame),
                 );
 
                 let mut prev_pos: Option<Pos2> = None;
@@ -2689,7 +2701,7 @@ impl AudioPreviewState {
 
                     let in_sel = self.is_time_selected(t);
                     let point_col = if in_sel {
-                        Color32::from_rgb(52, 211, 153)
+                        accent_base
                     } else {
                         let c = analysis.query_sample_color(ch_idx, f);
                         Color32::from_rgb(c[0], c[1], c[2])
@@ -2708,7 +2720,7 @@ impl AudioPreviewState {
                     );
 
                     painter.circle_filled(pos, 3.0, point_col);
-                    painter.circle_stroke(pos, 3.0, Stroke::new(1.0, Color32::from_rgb(15, 23, 42)));
+                    painter.circle_stroke(pos, 3.0, Stroke::new(1.0, border_frame));
 
                     prev_pos = Some(pos);
                 }
@@ -2723,16 +2735,16 @@ impl AudioPreviewState {
                 let (y_base, max_def, _col) = if ch_idx == 0 {
                     let half = if is_stereo { wave_h / 2.0 } else { wave_h };
                     let base = if is_stereo { wave_rect.min.y + wave_h / 4.0 } else { wave_rect.center().y };
-                    (base, half * 0.45, Color32::from_rgb(56, 189, 248))
+                    (base, half * 0.45, accent_base)
                 } else {
                     let half = wave_h / 2.0;
                     let base = wave_rect.min.y + 3.0 * wave_h / 4.0;
-                    (base, half * 0.45, Color32::from_rgb(129, 140, 248))
+                    (base, half * 0.45, accent_base)
                 };
 
                 painter.line_segment(
                     [Pos2::new(track_min_x, y_base), Pos2::new(track_max_x, y_base)],
-                    Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 20)),
+                    Stroke::new(1.0, border_frame),
                 );
 
                 let mut mesh = egui::Mesh::default();
@@ -2749,7 +2761,7 @@ impl AudioPreviewState {
 
                     let in_sel = self.is_time_selected(t_mid);
                     let bar_col = if in_sel {
-                        Color32::from_rgb(52, 211, 153)
+                        accent_base
                     } else {
                         Color32::from_rgb(block_col[0], block_col[1], block_col[2])
                     };
@@ -2775,7 +2787,7 @@ impl AudioPreviewState {
                     // Draw vertical transient marker line
                     painter.line_segment(
                         [Pos2::new(tx, wave_rect.min.y), Pos2::new(tx, wave_rect.max.y)],
-                        Stroke::new(1.0, Color32::from_rgba_unmultiplied(251, 191, 36, 140)),
+                        Stroke::new(1.0, transient_col),
                     );
                     // Draw transient marker pip/diamond at top of waveform
                     let pip_top = Pos2::new(tx, wave_rect.min.y + 1.0);
@@ -2784,8 +2796,8 @@ impl AudioPreviewState {
                     let pip_bot = Pos2::new(tx, wave_rect.min.y + 10.0);
                     painter.add(egui::Shape::convex_polygon(
                         vec![pip_top, pip_right, pip_bot, pip_left],
-                        Color32::from_rgb(251, 191, 36),
-                        Stroke::new(0.5, Color32::from_rgb(120, 53, 15)),
+                        transient_col,
+                        Stroke::new(0.5, border_frame),
                     ));
                 }
             }
@@ -2806,11 +2818,11 @@ impl AudioPreviewState {
                 egui::Align2::RIGHT_CENTER,
                 lbl,
                 egui::FontId::monospace(9.0),
-                Color32::from_rgb(148, 163, 184),
+                text_f_med,
             );
             painter.line_segment(
                 [Pos2::new(track_min_x, y), Pos2::new(track_max_x, y)],
-                Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 12)),
+                Stroke::new(1.0, border_frame),
             );
         }
 
@@ -2821,16 +2833,16 @@ impl AudioPreviewState {
             let uv = Rect::from_min_max(Pos2::new(u_start, 0.0), Pos2::new(u_end, 1.0));
             painter.image(tex.id(), spec_rect, uv, Color32::WHITE);
         } else {
-            painter.rect_filled(spec_rect, Rounding::ZERO, Color32::from_rgb(15, 20, 32));
+            painter.rect_filled(spec_rect, Rounding::ZERO, bg_frame);
             painter.text(
                 spec_rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "⏳ Generating Spectrogram Heatmap...",
                 egui::FontId::proportional(12.0),
-                Color32::from_rgb(100, 116, 139),
+                text_f_low,
             );
         }
-        painter.rect_stroke(spec_rect, Rounding::ZERO, Stroke::new(1.0, Color32::from_rgb(38, 48, 70)));
+        painter.rect_stroke(spec_rect, Rounding::ZERO, Stroke::new(1.0, border_frame));
 
         // 4. VIEW 3: COLORCHORD 2-D MULTI-NOTE CHROMATIC RIBBON
         painter.text(
@@ -2838,7 +2850,7 @@ impl AudioPreviewState {
             egui::Align2::RIGHT_CENTER,
             "♫ Chord",
             egui::FontId::proportional(10.0),
-            Color32::from_rgb(203, 213, 225),
+            text_f_med,
         );
 
         if let Some(ref tex) = self.note_strip_texture {
@@ -2848,16 +2860,16 @@ impl AudioPreviewState {
             let uv = Rect::from_min_max(Pos2::new(u_start, 0.0), Pos2::new(u_end, 1.0));
             painter.image(tex.id(), strip_rect, uv, Color32::WHITE);
         } else {
-            painter.rect_filled(strip_rect, Rounding::ZERO, Color32::from_rgb(15, 20, 32));
+            painter.rect_filled(strip_rect, Rounding::ZERO, bg_frame);
             painter.text(
                 strip_rect.center(),
                 egui::Align2::CENTER_CENTER,
                 "⏳ Analyzing Multi-Note Chords...",
                 egui::FontId::proportional(12.0),
-                Color32::from_rgb(100, 116, 139),
+                text_f_low,
             );
         }
-        painter.rect_stroke(strip_rect, Rounding::ZERO, Stroke::new(1.0, Color32::from_rgb(38, 48, 70)));
+        painter.rect_stroke(strip_rect, Rounding::ZERO, Stroke::new(1.0, border_frame));
 
         // Hover tooltip over ColorChord note strip (multi-note chord display)
         if let Some(mouse_pos) = response.hover_pos() {
@@ -2880,23 +2892,23 @@ impl AudioPreviewState {
                         "🎵 Musical Note: — (Silence / Below Threshold)".to_string()
                     };
                     egui::show_tooltip(ui.ctx(), response.id.with("note_tt"), |ui| {
-                        ui.label(egui::RichText::new(text).strong().color(Color32::WHITE));
+                        ui.label(egui::RichText::new(text).strong().color(crate::hex_to_c32(&palette.theme.f_high)));
                     });
                 }
             }
         }
 
         // 5. HORIZONTAL VIEWPORT SCROLLBAR / PAN TRACK
-        painter.rect_filled(scroll_rect, Rounding::same(3.0), Color32::from_rgb(20, 26, 42));
-        painter.rect_stroke(scroll_rect, Rounding::same(3.0), Stroke::new(1.0, Color32::from_rgb(38, 48, 70)));
+        painter.rect_filled(scroll_rect, Rounding::same(3.0), bg_frame);
+        painter.rect_stroke(scroll_rect, Rounding::same(3.0), Stroke::new(1.0, border_frame));
 
         let total_dur = self.duration_sec.max(0.01);
         let thumb_x = scroll_rect.min.x + (v_start / total_dur) * scroll_rect.width();
         let thumb_w = ((v_dur / total_dur) * scroll_rect.width()).clamp(16.0, scroll_rect.width());
         let thumb_rect = Rect::from_min_size(Pos2::new(thumb_x, scroll_rect.min.y), Vec2::new(thumb_w, scroll_rect.height()));
 
-        painter.rect_filled(thumb_rect, Rounding::same(3.0), Color32::from_rgb(71, 85, 105));
-        painter.rect_stroke(thumb_rect, Rounding::same(3.0), Stroke::new(1.0, Color32::from_rgb(148, 163, 184)));
+        painter.rect_filled(thumb_rect, Rounding::same(3.0), border_frame);
+        painter.rect_stroke(thumb_rect, Rounding::same(3.0), Stroke::new(1.0, text_f_med));
 
         // 6. UNIFIED SELECTION OVERLAY ACROSS ALL 3 VIEWS
         let view_top_y = ruler_rect.max.y;
@@ -2916,29 +2928,29 @@ impl AudioPreviewState {
                         painter.rect_filled(
                             sel_rect,
                             Rounding::ZERO,
-                            Color32::from_rgba_unmultiplied(16, 185, 129, 40),
+                            crate::hex_to_c32_alpha(&palette.harmonies.base, 40),
                         );
 
                         if x_start >= track_min_x && x_start <= track_max_x {
                             painter.line_segment(
                                 [Pos2::new(x_start, ruler_rect.min.y), Pos2::new(x_start, view_bot_y)],
-                                Stroke::new(2.5, Color32::from_rgb(52, 211, 153)),
+                                Stroke::new(2.5, accent_base),
                             );
                             painter.circle_filled(
                                 Pos2::new(x_start, ruler_rect.center().y),
                                 5.0,
-                                Color32::from_rgb(52, 211, 153),
+                                accent_base,
                             );
                         }
                         if x_end >= track_min_x && x_end <= track_max_x {
                             painter.line_segment(
                                 [Pos2::new(x_end, ruler_rect.min.y), Pos2::new(x_end, view_bot_y)],
-                                Stroke::new(2.5, Color32::from_rgb(52, 211, 153)),
+                                Stroke::new(2.5, accent_base),
                             );
                             painter.circle_filled(
                                 Pos2::new(x_end, ruler_rect.center().y),
                                 5.0,
-                                Color32::from_rgb(52, 211, 153),
+                                accent_base,
                             );
                         }
                     }
@@ -2959,14 +2971,10 @@ impl AudioPreviewState {
                         painter.rect_filled(
                             sel_rect,
                             Rounding::ZERO,
-                            Color32::from_rgba_unmultiplied(16, 185, 129, alpha),
+                            crate::hex_to_c32_alpha(&palette.harmonies.base, alpha),
                         );
 
-                        let handle_color = if is_active {
-                            Color32::from_rgb(52, 211, 153)
-                        } else {
-                            Color32::from_rgba_unmultiplied(52, 211, 153, 160)
-                        };
+                        let handle_color = accent_base;
                         let stroke_width = if is_active { 2.5 } else { 1.5 };
 
                         if x_start >= track_min_x && x_start <= track_max_x {
@@ -3000,9 +3008,9 @@ impl AudioPreviewState {
                                 Vec2::new(26.0, 14.0),
                             );
                             let badge_bg = if is_active {
-                                Color32::from_rgb(6, 78, 59)
+                                border_frame
                             } else {
-                                Color32::from_rgba_unmultiplied(30, 41, 59, 210)
+                                bg_frame
                             };
                             painter.rect_filled(badge_rect, Rounding::same(3.0), badge_bg);
                             painter.text(
@@ -3010,7 +3018,7 @@ impl AudioPreviewState {
                                 egui::Align2::CENTER_CENTER,
                                 format!("#{}", idx + 1),
                                 egui::FontId::monospace(9.0),
-                                if is_active { Color32::from_rgb(167, 243, 208) } else { Color32::from_rgb(203, 213, 225) },
+                                if is_active { accent_base } else { text_f_med },
                             );
                         }
                     }
@@ -3023,7 +3031,7 @@ impl AudioPreviewState {
         if playhead_x >= track_min_x && playhead_x <= track_max_x {
             painter.line_segment(
                 [Pos2::new(playhead_x, ruler_rect.min.y), Pos2::new(playhead_x, view_bot_y)],
-                Stroke::new(2.0, Color32::from_rgb(248, 113, 113)),
+                Stroke::new(2.0, accent_playhead),
             );
             let head_top = Pos2::new(playhead_x, ruler_rect.min.y);
             let diamond = [
@@ -3034,7 +3042,7 @@ impl AudioPreviewState {
             ];
             painter.add(egui::Shape::convex_polygon(
                 diamond.to_vec(),
-                Color32::from_rgb(248, 113, 113),
+                accent_playhead,
                 Stroke::NONE,
             ));
         }

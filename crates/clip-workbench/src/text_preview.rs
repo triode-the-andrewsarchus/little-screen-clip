@@ -6,13 +6,70 @@
 use eframe::egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
 use little_clip_core::config::AppConfig;
 use little_clip_core::syntax::detect_language;
+use little_clip_core::theme::AppPalette;
+use crate::{hex_to_c32, hex_to_c32_alpha};
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{Theme, ThemeSet};
+use syntect::highlighting::ThemeSet;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
+
+/// Maps an RGB syntax highlighting token color from syntect into the active Hundred Rabbits theme harmonies.
+fn map_syntect_color_to_theme(style_fg: syntect::highlighting::Color, palette: &AppPalette) -> Color32 {
+    let r = style_fg.r as f32 / 255.0;
+    let g = style_fg.g as f32 / 255.0;
+    let b = style_fg.b as f32 / 255.0;
+
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+
+    // If low saturation (monochrome / gray)
+    if delta < 0.08 {
+        if max < 0.65 {
+            // Comment or muted punctuation
+            return hex_to_c32(&palette.theme.f_low);
+        } else {
+            // Standard high contrast text
+            return hex_to_c32(&palette.theme.f_high);
+        }
+    }
+
+    // Compute hue (0..360)
+    let mut h = if max == r {
+        60.0 * (((g - b) / delta) % 6.0)
+    } else if max == g {
+        60.0 * (((b - r) / delta) + 2.0)
+    } else {
+        60.0 * (((r - g) / delta) + 4.0)
+    };
+    if h < 0.0 {
+        h += 360.0;
+    }
+
+    // Map by hue angle to theme harmonies
+    if h < 45.0 {
+        // Red / Orange (constants, literals)
+        hex_to_c32(&palette.diff_mod)
+    } else if h < 90.0 {
+        // Amber / Yellow (strings)
+        hex_to_c32(&palette.harmonies.triadic_2)
+    } else if h < 165.0 {
+        // Green (strings, regex)
+        hex_to_c32(&palette.diff_add)
+    } else if h < 210.0 {
+        // Cyan (types, structures)
+        hex_to_c32(&palette.harmonies.split_comp_1)
+    } else if h < 275.0 {
+        // Blue (functions, identifiers)
+        hex_to_c32(&palette.harmonies.triadic_1)
+    } else {
+        // Purple / Magenta / Pink (keywords, control flow)
+        hex_to_c32(&palette.harmonies.base)
+    }
+}
 
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
@@ -337,8 +394,13 @@ impl TextPreviewState {
     }
 
     /// Renders the complete preview modal UI.
-    /// Renders the complete preview modal UI.
-    pub fn render_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, close: &mut bool) {
+    pub fn render_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: &AppPalette,
+        close: &mut bool,
+    ) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
@@ -347,14 +409,14 @@ impl TextPreviewState {
         self.handle_shortcuts(ctx, close);
 
         egui::Frame::none()
-            .fill(ui.visuals().window_fill())
+            .fill(hex_to_c32(&palette.theme.background))
             .inner_margin(egui::Margin::same(16.0))
             .show(ui, |ui| {
-                self.render_header(ui, ctx, close);
-                self.render_toast(ui, now);
+                self.render_header(ui, ctx, palette, close);
+                self.render_toast(ui, palette, now);
 
                 if self.show_find {
-                    self.render_search_toolbar(ui);
+                    self.render_search_toolbar(ui, palette);
                 }
 
                 ui.add_space(10.0);
@@ -363,10 +425,10 @@ impl TextPreviewState {
 
                 match self.view_mode {
                     TextViewMode::RenderedMarkdown => {
-                        self.render_markdown_view(ui);
+                        self.render_markdown_view(ui, palette);
                     }
                     TextViewMode::Raw => {
-                        self.render_raw_code_view(ui);
+                        self.render_raw_code_view(ui, palette);
                     }
                 }
             });
@@ -387,7 +449,13 @@ impl TextPreviewState {
         }
     }
 
-    fn render_header(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, close: &mut bool) {
+    fn render_header(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: &AppPalette,
+        close: &mut bool,
+    ) {
         let total_lines = self.content.lines().count().max(1);
         let total_chars = self.content.chars().count();
 
@@ -405,13 +473,13 @@ impl TextPreviewState {
                 egui::RichText::new(&self.title)
                     .strong()
                     .size(17.0)
-                    .color(ui.visuals().text_color()),
+                    .color(hex_to_c32(&palette.theme.f_high)),
             );
 
             ui.add_space(8.0);
             let lang_label = self.language.to_uppercase();
             egui::Frame::none()
-                .fill(ui.visuals().widgets.noninteractive.bg_fill)
+                .fill(hex_to_c32(&palette.theme.b_low))
                 .rounding(Rounding::same(4.0))
                 .inner_margin(egui::Margin::symmetric(6.0, 2.0))
                 .show(ui, |ui| {
@@ -419,7 +487,7 @@ impl TextPreviewState {
                         egui::RichText::new(lang_label)
                             .small()
                             .strong()
-                            .color(ui.visuals().hyperlink_color),
+                            .color(hex_to_c32(&palette.harmonies.base)),
                     );
                 });
 
@@ -428,22 +496,28 @@ impl TextPreviewState {
             ui.label(
                 egui::RichText::new(info_text)
                     .small()
-                    .color(Color32::from_rgb(148, 163, 184)),
+                    .color(hex_to_c32(&palette.theme.f_low)),
             );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.render_header_actions(ui, ctx, close);
+                self.render_header_actions(ui, ctx, palette, close);
             });
         });
     }
 
-    fn render_header_command_buttons(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, close: &mut bool) {
+    fn render_header_command_buttons(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: &AppPalette,
+        close: &mut bool,
+    ) {
         let close_btn = egui::Button::new(
             egui::RichText::new("✕ Close (Esc)")
-                .color(Color32::WHITE)
+                .color(hex_to_c32(&palette.theme.background))
                 .size(13.0),
         )
-        .fill(Color32::from_rgb(220, 38, 38))
+        .fill(hex_to_c32(&palette.diff_del))
         .rounding(Rounding::same(4.0));
         if ui.add(close_btn).clicked() {
             *close = true;
@@ -452,21 +526,25 @@ impl TextPreviewState {
         let editor_label = format!("📝 Open in {}", self.editor_cmd);
         let hatch_btn = egui::Button::new(
             egui::RichText::new(editor_label)
-                .color(Color32::WHITE)
+                .color(hex_to_c32(&palette.theme.background))
                 .size(13.0),
         )
-        .fill(Color32::from_rgb(37, 99, 235))
+        .fill(hex_to_c32(&palette.harmonies.base))
         .rounding(Rounding::same(4.0));
-        if ui.add(hatch_btn).on_hover_text("Open in configured external code editor").clicked() {
+        if ui
+            .add(hatch_btn)
+            .on_hover_text("Open in configured external code editor")
+            .clicked()
+        {
             self.trigger_escape_hatch();
         }
 
         let copy_btn = egui::Button::new(
             egui::RichText::new("📋 Copy All")
-                .color(Color32::WHITE)
+                .color(hex_to_c32(&palette.theme.f_high))
                 .size(13.0),
         )
-        .fill(Color32::from_rgb(51, 65, 85))
+        .fill(hex_to_c32(&palette.theme.b_med))
         .rounding(Rounding::same(4.0));
         if ui.add(copy_btn).clicked() {
             self.copy_all_to_clipboard(ctx);
@@ -474,10 +552,18 @@ impl TextPreviewState {
 
         let find_btn = egui::Button::new(
             egui::RichText::new("🔍 Find (Ctrl+F)")
-                .color(if self.show_find { Color32::from_rgb(250, 204, 21) } else { Color32::WHITE })
+                .color(if self.show_find {
+                    hex_to_c32(&palette.harmonies.complementary)
+                } else {
+                    hex_to_c32(&palette.theme.f_high)
+                })
                 .size(13.0),
         )
-        .fill(if self.show_find { Color32::from_rgb(71, 85, 105) } else { Color32::from_rgb(51, 65, 85) })
+        .fill(if self.show_find {
+            hex_to_c32(&palette.theme.b_high)
+        } else {
+            hex_to_c32(&palette.theme.b_med)
+        })
         .rounding(Rounding::same(4.0));
         if ui.add(find_btn).clicked() {
             self.show_find = !self.show_find;
@@ -487,27 +573,51 @@ impl TextPreviewState {
         }
     }
 
-    fn render_header_toggle_buttons(&mut self, ui: &mut egui::Ui) {
-        let wrap_label = if self.wrap_lines { "↩ Wrap: ON" } else { "➡ Wrap: OFF" };
+    fn render_header_toggle_buttons(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        let wrap_label = if self.wrap_lines {
+            "↩ Wrap: ON"
+        } else {
+            "➡ Wrap: OFF"
+        };
         let wrap_btn = egui::Button::new(
             egui::RichText::new(wrap_label)
-                .color(Color32::WHITE)
+                .color(if self.wrap_lines {
+                    hex_to_c32(&palette.theme.background)
+                } else {
+                    hex_to_c32(&palette.theme.f_high)
+                })
                 .size(13.0),
         )
-        .fill(if self.wrap_lines { Color32::from_rgb(16, 149, 193) } else { Color32::from_rgb(51, 65, 85) })
+        .fill(if self.wrap_lines {
+            hex_to_c32(&palette.harmonies.triadic_1)
+        } else {
+            hex_to_c32(&palette.theme.b_med)
+        })
         .rounding(Rounding::same(4.0));
         if ui.add(wrap_btn).on_hover_text("Toggle line-wrapping on/off").clicked() {
             self.wrap_lines = !self.wrap_lines;
         }
 
         if self.view_mode == TextViewMode::Raw {
-            let num_label = if self.show_line_numbers { "# Lines: ON" } else { "# Lines: OFF" };
+            let num_label = if self.show_line_numbers {
+                "# Lines: ON"
+            } else {
+                "# Lines: OFF"
+            };
             let num_btn = egui::Button::new(
                 egui::RichText::new(num_label)
-                    .color(Color32::WHITE)
+                    .color(if self.show_line_numbers {
+                        hex_to_c32(&palette.theme.background)
+                    } else {
+                        hex_to_c32(&palette.theme.f_high)
+                    })
                     .size(13.0),
             )
-            .fill(if self.show_line_numbers { Color32::from_rgb(100, 116, 139) } else { Color32::from_rgb(51, 65, 85) })
+            .fill(if self.show_line_numbers {
+                hex_to_c32(&palette.theme.b_high)
+            } else {
+                hex_to_c32(&palette.theme.b_med)
+            })
             .rounding(Rounding::same(4.0));
             if ui.add(num_btn).on_hover_text("Toggle line numbers gutter").clicked() {
                 self.show_line_numbers = !self.show_line_numbers;
@@ -521,12 +631,16 @@ impl TextPreviewState {
             };
             let mode_btn = egui::Button::new(
                 egui::RichText::new(mode_label)
-                    .color(Color32::WHITE)
+                    .color(hex_to_c32(&palette.theme.background))
                     .size(13.0),
             )
-            .fill(Color32::from_rgb(13, 148, 136))
+            .fill(hex_to_c32(&palette.harmonies.triadic_2))
             .rounding(Rounding::same(4.0));
-            if ui.add(mode_btn).on_hover_text("Switch between Rendered Markdown and Raw Code view").clicked() {
+            if ui
+                .add(mode_btn)
+                .on_hover_text("Switch between Rendered Markdown and Raw Code view")
+                .clicked()
+            {
                 self.view_mode = match self.view_mode {
                     TextViewMode::RenderedMarkdown => TextViewMode::Raw,
                     TextViewMode::Raw => TextViewMode::RenderedMarkdown,
@@ -535,32 +649,38 @@ impl TextPreviewState {
         }
     }
 
-    fn render_header_actions(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, close: &mut bool) {
-        self.render_header_command_buttons(ui, ctx, close);
-        self.render_header_toggle_buttons(ui);
+    fn render_header_actions(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: &AppPalette,
+        close: &mut bool,
+    ) {
+        self.render_header_command_buttons(ui, ctx, palette, close);
+        self.render_header_toggle_buttons(ui, palette);
     }
 
-    fn render_toast(&self, ui: &mut egui::Ui, now: f64) {
+    fn render_toast(&self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
         if let Some((msg, timestamp)) = &self.status_toast {
             if now - timestamp < 4.0 {
                 ui.add_space(4.0);
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(15, 23, 42))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(16, 185, 129)))
+                    .fill(hex_to_c32(&palette.theme.b_low))
+                    .stroke(Stroke::new(1.0, hex_to_c32(&palette.diff_add)))
                     .rounding(Rounding::same(4.0))
                     .inner_margin(egui::Margin::symmetric(8.0, 4.0))
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(msg)
                                 .size(11.0)
-                                .color(Color32::from_rgb(52, 211, 153)),
+                                .color(hex_to_c32(&palette.diff_add)),
                         );
                     });
             }
         }
     }
 
-    fn render_search_status_label(&self, ui: &mut egui::Ui) {
+    fn render_search_status_label(&self, ui: &mut egui::Ui, palette: &AppPalette) {
         if self.find_query.is_empty() {
             return;
         }
@@ -568,13 +688,13 @@ impl TextPreviewState {
             ui.label(
                 egui::RichText::new(format!("⚠ Regex error: {}", err))
                     .small()
-                    .color(Color32::from_rgb(239, 68, 68)),
+                    .color(hex_to_c32(&palette.diff_del)),
             );
         } else if self.matches.is_empty() {
             ui.label(
                 egui::RichText::new("No matches")
                     .small()
-                    .color(Color32::from_rgb(203, 213, 225)),
+                    .color(hex_to_c32(&palette.theme.f_low)),
             );
         } else {
             let count_text = format!(
@@ -586,19 +706,27 @@ impl TextPreviewState {
                 egui::RichText::new(count_text)
                     .small()
                     .strong()
-                    .color(Color32::from_rgb(250, 204, 21)),
+                    .color(hex_to_c32(&palette.harmonies.complementary)),
             );
         }
     }
 
-    fn render_search_options(&mut self, ui: &mut egui::Ui) {
+    fn render_search_options(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let case_btn = egui::Button::new(
             egui::RichText::new("Aa")
                 .size(13.0)
                 .strong()
-                .color(if self.case_sensitive { Color32::from_rgb(56, 189, 248) } else { Color32::from_rgb(148, 163, 184) }),
+                .color(if self.case_sensitive {
+                    hex_to_c32(&palette.harmonies.base)
+                } else {
+                    hex_to_c32(&palette.theme.f_low)
+                }),
         )
-        .fill(if self.case_sensitive { Color32::from_rgb(15, 23, 42) } else { Color32::TRANSPARENT });
+        .fill(if self.case_sensitive {
+            hex_to_c32(&palette.theme.b_med)
+        } else {
+            Color32::TRANSPARENT
+        });
         if ui.add(case_btn).on_hover_text("Match Case (Case Sensitive)").clicked() {
             self.case_sensitive = !self.case_sensitive;
             self.update_search_matches();
@@ -608,20 +736,28 @@ impl TextPreviewState {
             egui::RichText::new(".*")
                 .size(13.0)
                 .strong()
-                .color(if self.is_regex { Color32::from_rgb(56, 189, 248) } else { Color32::from_rgb(148, 163, 184) }),
+                .color(if self.is_regex {
+                    hex_to_c32(&palette.harmonies.base)
+                } else {
+                    hex_to_c32(&palette.theme.f_low)
+                }),
         )
-        .fill(if self.is_regex { Color32::from_rgb(15, 23, 42) } else { Color32::TRANSPARENT });
+        .fill(if self.is_regex {
+            hex_to_c32(&palette.theme.b_med)
+        } else {
+            Color32::TRANSPARENT
+        });
         if ui.add(regex_btn).on_hover_text("Use Regular Expression").clicked() {
             self.is_regex = !self.is_regex;
             self.update_search_matches();
         }
     }
 
-    fn render_search_toolbar(&mut self, ui: &mut egui::Ui) {
+    fn render_search_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         ui.add_space(8.0);
         egui::Frame::none()
-            .fill(Color32::from_rgb(30, 41, 59))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(71, 85, 105)))
+            .fill(hex_to_c32(&palette.theme.b_low))
+            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
             .rounding(Rounding::same(6.0))
             .inner_margin(egui::Margin::symmetric(10.0, 6.0))
             .show(ui, |ui| {
@@ -650,7 +786,7 @@ impl TextPreviewState {
                         }
                     }
 
-                    self.render_search_status_label(ui);
+                    self.render_search_status_label(ui, palette);
 
                     let prev_btn = egui::Button::new("▲ Prev").small();
                     if ui.add(prev_btn).clicked() {
@@ -663,13 +799,13 @@ impl TextPreviewState {
                     }
 
                     ui.add_space(8.0);
-                    self.render_search_options(ui);
+                    self.render_search_options(ui, palette);
                 });
             });
     }
 
     /// Renders styled markdown view.
-    fn render_markdown_view(&mut self, ui: &mut egui::Ui) {
+    fn render_markdown_view(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let parsed = little_clip_render::markdown::parse_markdown(&self.content);
 
         egui::ScrollArea::vertical()
@@ -688,27 +824,36 @@ impl TextPreviewState {
                         &mut in_code_block,
                         &mut code_block_buf,
                         &mut code_block_lang,
+                        palette,
                     );
                 }
 
-                flush_code_block(ui, &mut in_code_block, &mut code_block_buf, &mut code_block_lang);
+                flush_code_block(
+                    ui,
+                    &mut in_code_block,
+                    &mut code_block_buf,
+                    &mut code_block_lang,
+                    palette,
+                );
             });
     }
 
     /// Renders raw / code view with syntax highlighting, line numbers gutter, and search match highlighting.
-    fn render_raw_code_view(&mut self, ui: &mut egui::Ui) {
+    fn render_raw_code_view(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let syntax = find_syntax(self.language);
-        let theme = &THEME_SET.themes["base16-eighties.dark"];
 
         let show_gutter = self.show_line_numbers;
         let wrap = self.wrap_lines;
-        let query = if self.find_query.is_empty() { None } else { Some(self.find_query.as_str()) };
+        let query = if self.find_query.is_empty() {
+            None
+        } else {
+            Some(self.find_query.as_str())
+        };
         let is_regex = self.is_regex;
         let case_sensitive = self.case_sensitive;
         let active_match = self.matches.get(self.active_match_idx).copied();
 
-        let mut scroll_area = egui::ScrollArea::both()
-            .auto_shrink([false, false]);
+        let mut scroll_area = egui::ScrollArea::both().auto_shrink([false, false]);
 
         if let Some(target_line) = self.scroll_to_line.take() {
             let approx_y = (target_line.saturating_sub(5)) as f32 * 18.0;
@@ -717,8 +862,8 @@ impl TextPreviewState {
 
         // Unified editor surface frame
         egui::Frame::none()
-            .fill(ui.visuals().extreme_bg_color)
-            .stroke(ui.visuals().window_stroke())
+            .fill(hex_to_c32(&palette.theme.b_low))
+            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
             .rounding(Rounding::same(6.0))
             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
@@ -728,21 +873,28 @@ impl TextPreviewState {
                         if show_gutter {
                             let total_lines = self.content.lines().count().max(1);
                             let digits = total_lines.to_string().len().max(2);
-                            let mut line_numbers_text = String::with_capacity(total_lines * (digits + 2));
+                            let mut line_numbers_text =
+                                String::with_capacity(total_lines * (digits + 2));
                             for i in 1..=total_lines {
-                                line_numbers_text.push_str(&format!("{:>width$}\n", i, width = digits));
+                                line_numbers_text
+                                    .push_str(&format!("{:>width$}\n", i, width = digits));
                             }
 
                             ui.label(
                                 egui::RichText::new(line_numbers_text)
                                     .font(FontId::monospace(12.5))
-                                    .color(ui.visuals().weak_text_color()),
+                                    .color(hex_to_c32(&palette.theme.f_low)),
                             );
 
                             ui.add_space(8.0);
                             let h = (total_lines as f32 * 17.5).max(ui.available_height());
-                            let (div_rect, _) = ui.allocate_exact_size(Vec2::new(1.0, h), egui::Sense::hover());
-                            ui.painter().vline(div_rect.center().x, div_rect.y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
+                            let (div_rect, _) =
+                                ui.allocate_exact_size(Vec2::new(1.0, h), egui::Sense::hover());
+                            ui.painter().vline(
+                                div_rect.center().x,
+                                div_rect.y_range(),
+                                Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)),
+                            );
                             ui.add_space(8.0);
                         }
 
@@ -750,7 +902,7 @@ impl TextPreviewState {
                             let mut layout_job = build_highlighted_layout_job(
                                 text,
                                 syntax,
-                                theme,
+                                palette,
                                 query,
                                 is_regex,
                                 case_sensitive,
@@ -780,9 +932,15 @@ impl TextPreviewState {
     }
 }
 
-fn flush_code_block(ui: &mut egui::Ui, in_code: &mut bool, buf: &mut String, lang: &mut String) {
+fn flush_code_block(
+    ui: &mut egui::Ui,
+    in_code: &mut bool,
+    buf: &mut String,
+    lang: &mut String,
+    palette: &AppPalette,
+) {
     if *in_code {
-        render_styled_code_block(ui, buf, lang);
+        render_styled_code_block(ui, buf, lang, palette);
         buf.clear();
         lang.clear();
         *in_code = false;
@@ -795,11 +953,12 @@ fn render_markdown_element(
     in_code_block: &mut bool,
     code_block_buf: &mut String,
     code_block_lang: &mut String,
+    palette: &AppPalette,
 ) {
     match line {
         little_clip_render::markdown::MarkdownLine::CodeFence { language } => {
             if *in_code_block {
-                flush_code_block(ui, in_code_block, code_block_buf, code_block_lang);
+                flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
             } else {
                 *in_code_block = true;
                 *code_block_lang = language;
@@ -811,68 +970,105 @@ fn render_markdown_element(
                 code_block_buf.push('\n');
             }
         }
-        little_clip_render::markdown::MarkdownLine::Heading { level, text: _, spans } => {
-            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang);
+        little_clip_render::markdown::MarkdownLine::Heading {
+            level,
+            text: _,
+            spans,
+        } => {
+            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 let (size, color) = match level {
-                    1 => (20.0, Color32::from_rgb(248, 250, 252)),
-                    2 => (17.0, Color32::from_rgb(226, 232, 240)),
-                    _ => (15.0, Color32::from_rgb(203, 213, 225)),
+                    1 => (20.0, hex_to_c32(&palette.theme.f_high)),
+                    2 => (17.0, hex_to_c32(&palette.theme.f_high)),
+                    _ => (15.0, hex_to_c32(&palette.theme.f_med)),
                 };
                 for span in spans {
-                    render_markdown_span(ui, &span, size, color);
+                    render_markdown_span(ui, &span, size, color, palette);
                 }
             });
             ui.add_space(4.0);
         }
         little_clip_render::markdown::MarkdownLine::Bullet { indent, spans } => {
-            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang);
+            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
             ui.horizontal_wrapped(|ui| {
                 ui.add_space(indent as f32 * 16.0);
-                ui.label(egui::RichText::new("•").size(14.0).color(Color32::from_rgb(56, 189, 248)));
+                ui.label(
+                    egui::RichText::new("•")
+                        .size(14.0)
+                        .color(hex_to_c32(&palette.harmonies.base)),
+                );
                 ui.add_space(4.0);
                 for span in spans {
-                    render_markdown_span(ui, &span, 14.0, Color32::from_rgb(241, 245, 249));
+                    render_markdown_span(
+                        ui,
+                        &span,
+                        14.0,
+                        hex_to_c32(&palette.theme.f_high),
+                        palette,
+                    );
                 }
             });
         }
         little_clip_render::markdown::MarkdownLine::Numbered { number, spans } => {
-            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang);
+            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new(format!("{}.", number)).size(14.0).strong().color(Color32::from_rgb(56, 189, 248)));
+                ui.label(
+                    egui::RichText::new(format!("{}.", number))
+                        .size(14.0)
+                        .strong()
+                        .color(hex_to_c32(&palette.harmonies.base)),
+                );
                 ui.add_space(4.0);
                 for span in spans {
-                    render_markdown_span(ui, &span, 14.0, Color32::from_rgb(241, 245, 249));
+                    render_markdown_span(
+                        ui,
+                        &span,
+                        14.0,
+                        hex_to_c32(&palette.theme.f_high),
+                        palette,
+                    );
                 }
             });
         }
         little_clip_render::markdown::MarkdownLine::Quote { spans } => {
-            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang);
+            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
             egui::Frame::none()
-                .fill(Color32::from_rgb(30, 41, 59))
-                .stroke(Stroke::new(3.0, Color32::from_rgb(56, 189, 248)))
+                .fill(hex_to_c32(&palette.theme.b_low))
+                .stroke(Stroke::new(3.0, hex_to_c32(&palette.harmonies.base)))
                 .inner_margin(egui::Margin::symmetric(10.0, 4.0))
                 .rounding(Rounding::same(3.0))
                 .show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for span in spans {
-                            render_markdown_span(ui, &span, 13.5, Color32::from_rgb(203, 213, 225));
+                            render_markdown_span(
+                                ui,
+                                &span,
+                                13.5,
+                                hex_to_c32(&palette.theme.f_med),
+                                palette,
+                            );
                         }
                     });
                 });
         }
         little_clip_render::markdown::MarkdownLine::Rule => {
-            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang);
+            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
             ui.add_space(6.0);
             ui.separator();
             ui.add_space(6.0);
         }
         little_clip_render::markdown::MarkdownLine::Paragraph { spans } => {
-            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang);
+            flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
             ui.horizontal_wrapped(|ui| {
                 for span in spans {
-                    render_markdown_span(ui, &span, 14.0, Color32::from_rgb(241, 245, 249));
+                    render_markdown_span(
+                        ui,
+                        &span,
+                        14.0,
+                        hex_to_c32(&palette.theme.f_high),
+                        palette,
+                    );
                 }
             });
         }
@@ -915,13 +1111,23 @@ fn compute_highlight_matches(
         };
         if let Ok(re) = pattern {
             for m in re.find_iter(text) {
-                let is_active = active_match.map(|am| am.start_byte == m.start()).unwrap_or(false);
+                let is_active = active_match
+                    .map(|am| am.start_byte == m.start())
+                    .unwrap_or(false);
                 match_ranges.push((m.start(), m.end(), is_active));
             }
         }
     } else {
-        let q = if case_sensitive { query.to_string() } else { query.to_lowercase() };
-        let target = if case_sensitive { text.to_string() } else { text.to_lowercase() };
+        let q = if case_sensitive {
+            query.to_string()
+        } else {
+            query.to_lowercase()
+        };
+        let target = if case_sensitive {
+            text.to_string()
+        } else {
+            text.to_lowercase()
+        };
         let mut offset = 0;
         while let Some(found) = target[offset..].find(&q) {
             let start = offset + found;
@@ -938,20 +1144,22 @@ fn compute_highlight_matches(
     match_ranges
 }
 
-/// Builds an egui LayoutJob with Syntect syntax highlighting and search match background highlights.
+/// Builds an egui LayoutJob with theme syntax highlighting and search match background highlights.
 fn build_highlighted_layout_job(
     text: &str,
     syntax: &SyntaxReference,
-    theme: &Theme,
+    palette: &AppPalette,
     search_query: Option<&str>,
     is_regex: bool,
     case_sensitive: bool,
     active_match: Option<SearchMatch>,
 ) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    let mut highlighter = HighlightLines::new(syntax, theme);
+    let syn_theme = &THEME_SET.themes["base16-eighties.dark"];
+    let mut highlighter = HighlightLines::new(syntax, syn_theme);
 
-    let match_ranges = compute_highlight_matches(text, search_query, is_regex, case_sensitive, active_match);
+    let match_ranges =
+        compute_highlight_matches(text, search_query, is_regex, case_sensitive, active_match);
 
     let mut byte_offset = 0;
 
@@ -964,7 +1172,7 @@ fn build_highlighted_layout_job(
             let token_start = byte_offset;
             let token_end = token_start + token_str.len();
 
-            let fg = Color32::from_rgb(style.foreground.r, style.foreground.g, style.foreground.b);
+            let fg = map_syntect_color_to_theme(style.foreground, palette);
 
             // Check if this token intersects with any search matches
             let mut has_match = false;
@@ -979,15 +1187,15 @@ fn build_highlighted_layout_job(
             }
 
             let bg = if is_active {
-                Color32::from_rgb(202, 138, 4) // Amber active match highlight
+                hex_to_c32(&palette.harmonies.complementary)
             } else if has_match {
-                Color32::from_rgb(113, 63, 18) // Muted amber match highlight
+                hex_to_c32_alpha(&palette.diff_mod, 100)
             } else {
                 Color32::TRANSPARENT
             };
 
             let text_color = if is_active {
-                Color32::WHITE
+                hex_to_c32(&palette.theme.background)
             } else {
                 fg
             };
@@ -1016,6 +1224,7 @@ fn render_markdown_span(
     span: &little_clip_render::markdown::MarkdownSpan,
     size: f32,
     color: Color32,
+    palette: &AppPalette,
 ) {
     match span {
         little_clip_render::markdown::MarkdownSpan::Text(s) => {
@@ -1028,18 +1237,24 @@ fn render_markdown_span(
             ui.label(egui::RichText::new(s).size(size).italics().color(color));
         }
         little_clip_render::markdown::MarkdownSpan::BoldItalic(s) => {
-            ui.label(egui::RichText::new(s).size(size).strong().italics().color(color));
+            ui.label(
+                egui::RichText::new(s)
+                    .size(size)
+                    .strong()
+                    .italics()
+                    .color(color),
+            );
         }
         little_clip_render::markdown::MarkdownSpan::Code(s) => {
             egui::Frame::none()
-                .fill(Color32::from_rgb(30, 41, 59))
+                .fill(hex_to_c32(&palette.theme.b_med))
                 .inner_margin(egui::Margin::symmetric(4.0, 1.0))
                 .rounding(Rounding::same(3.0))
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(s)
                             .font(FontId::monospace(size * 0.9))
-                            .color(Color32::from_rgb(244, 114, 182)), // Pink
+                            .color(hex_to_c32(&palette.harmonies.triadic_2)),
                     );
                 });
         }
@@ -1047,7 +1262,7 @@ fn render_markdown_span(
             ui.hyperlink_to(
                 egui::RichText::new(label)
                     .size(size)
-                    .color(Color32::from_rgb(56, 189, 248))
+                    .color(hex_to_c32(&palette.harmonies.base))
                     .underline(),
                 url,
             );
@@ -1056,13 +1271,17 @@ fn render_markdown_span(
 }
 
 /// Renders a styled code block for markdown view.
-fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str) {
+fn render_styled_code_block(
+    ui: &mut egui::Ui,
+    code: &str,
+    lang: &str,
+    palette: &AppPalette,
+) {
     let syntax = find_syntax(lang);
-    let theme = &THEME_SET.themes["base16-eighties.dark"];
 
     egui::Frame::none()
-        .fill(Color32::from_rgb(15, 23, 42))
-        .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
+        .fill(hex_to_c32(&palette.theme.b_low))
+        .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
         .inner_margin(egui::Margin::same(10.0))
         .rounding(Rounding::same(4.0))
         .show(ui, |ui| {
@@ -1071,7 +1290,7 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str) {
                     ui.label(
                         egui::RichText::new(lang.to_uppercase())
                             .small()
-                            .color(Color32::from_rgb(148, 163, 184)),
+                            .color(hex_to_c32(&palette.theme.f_low)),
                     );
                 });
                 ui.add_space(4.0);
@@ -1081,7 +1300,7 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str) {
                 let mut layout_job = build_highlighted_layout_job(
                     text,
                     syntax,
-                    theme,
+                    palette,
                     None,
                     false,
                     false,
@@ -1196,12 +1415,12 @@ mod tests {
                     let gutter_resp = ui.label(egui::RichText::new("1\n2\n3").font(FontId::monospace(12.5)));
                     let mut text = "#include <stdio.h>\nint main() {}\n".to_string();
                     let syntax = find_syntax("c");
-                    let theme = &THEME_SET.themes["base16-eighties.dark"];
+                    let palette = AppPalette::default();
                     let mut layouter = |ui: &egui::Ui, text: &str, _wrap_width: f32| {
                         let layout_job = build_highlighted_layout_job(
                             text,
                             syntax,
-                            theme,
+                            &palette,
                             None,
                             false,
                             false,

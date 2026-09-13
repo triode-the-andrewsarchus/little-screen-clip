@@ -2,7 +2,7 @@
 //!
 //! Renders multi-sheet tabs, column auto-sizing, cell search filtering, and TSV clipboard exporting.
 
-use eframe::egui::{self, Color32, Rounding, Stroke, Vec2};
+use eframe::egui::{self, Rounding, Stroke, Vec2};
 use little_clip_ops::spreadsheet::{SpreadsheetData, SpreadsheetSheet};
 use std::path::PathBuf;
 
@@ -37,7 +37,13 @@ impl SpreadsheetViewerState {
         self.data.sheets.get(self.active_sheet_idx)
     }
 
-    pub fn render_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, close: &mut bool) {
+    pub fn render_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: &little_clip_core::theme::AppPalette,
+        close: &mut bool,
+    ) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
@@ -52,21 +58,27 @@ impl SpreadsheetViewerState {
         let total_rows = self.current_sheet().map(|s| s.total_rows).unwrap_or(0);
         let total_cols = self.current_sheet().map(|s| s.total_cols).unwrap_or(0);
 
+        let bg = crate::hex_to_c32(&palette.theme.background);
+        let f_high = crate::hex_to_c32(&palette.theme.f_high);
+        let f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let accent = crate::hex_to_c32(&palette.harmonies.base);
+        let warn_accent = crate::hex_to_c32(&palette.harmonies.warm_attention);
+        let success_accent = crate::hex_to_c32(&palette.diff_add);
+
         egui::Frame::none()
-            .fill(Color32::from_rgb(15, 23, 42)) // Slate 900
+            .fill(bg)
             .inner_margin(egui::Margin::same(16.0))
             .show(ui, |ui| {
                 // 1. Header Toolbar
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("📊")
-                            .size(24.0),
-                    );
+                    ui.label(egui::RichText::new("📊").size(24.0));
                     ui.label(
                         egui::RichText::new(&self.title)
                             .strong()
                             .size(18.0)
-                            .color(Color32::WHITE),
+                            .color(f_high),
                     );
 
                     ui.add_space(8.0);
@@ -74,7 +86,7 @@ impl SpreadsheetViewerState {
                     ui.label(
                         egui::RichText::new(info_badge)
                             .small()
-                            .color(Color32::from_rgb(148, 163, 184)),
+                            .color(f_low),
                     );
 
                     // Search box
@@ -91,21 +103,23 @@ impl SpreadsheetViewerState {
                         let close_btn = egui::Button::new(
                             egui::RichText::new("✕ Close (Esc)")
                                 .strong()
-                                .color(Color32::WHITE),
+                                .color(f_high),
                         )
-                        .fill(Color32::from_rgb(220, 38, 38))
+                        .fill(crate::hex_to_c32(&palette.undo_card_bg))
+                        .stroke(Stroke::new(1.0, crate::hex_to_c32(&palette.undo_border)))
                         .rounding(Rounding::same(6.0));
                         if ui.add(close_btn).clicked() {
                             *close = true;
                         }
 
-                        // Copy Table / Selected Cell button
+                        // Copy Table button
                         let copy_btn = egui::Button::new(
                             egui::RichText::new("📋 Copy Table")
                                 .small()
-                                .color(Color32::from_rgb(226, 232, 240)),
+                                .color(f_high),
                         )
-                        .fill(Color32::from_rgb(30, 41, 59))
+                        .fill(b_med)
+                        .stroke(Stroke::new(1.0, b_low))
                         .rounding(Rounding::same(4.0));
                         if ui.add(copy_btn).clicked() {
                             if let Some(sheet) = self.current_sheet() {
@@ -125,7 +139,7 @@ impl SpreadsheetViewerState {
                                 ui.label(
                                     egui::RichText::new(msg)
                                         .small()
-                                        .color(Color32::from_rgb(52, 211, 153)),
+                                        .color(success_accent),
                                 );
                             }
                         }
@@ -134,19 +148,19 @@ impl SpreadsheetViewerState {
 
                 ui.add_space(8.0);
 
-                // 2. Sheet Tabs (when > 1 sheet, or single sheet selector)
+                // 2. Sheet Tabs
                 if sheet_count > 1 {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(egui::RichText::new("Sheets:").small().color(Color32::from_rgb(148, 163, 184)));
+                        ui.label(egui::RichText::new("Sheets:").small().color(f_low));
                         for (idx, sheet) in self.data.sheets.iter().enumerate() {
                             let is_active = idx == self.active_sheet_idx;
                             let tab_btn = egui::Button::new(
                                 egui::RichText::new(&sheet.name)
                                     .small()
                                     .strong()
-                                    .color(if is_active { Color32::WHITE } else { Color32::from_rgb(148, 163, 184) }),
+                                    .color(if is_active { f_high } else { f_low }),
                             )
-                            .fill(if is_active { Color32::from_rgb(37, 99, 235) } else { Color32::from_rgb(30, 41, 59) })
+                            .fill(if is_active { accent } else { b_med })
                             .rounding(Rounding::same(4.0));
 
                             if ui.add(tab_btn).clicked() {
@@ -177,7 +191,6 @@ impl SpreadsheetViewerState {
                             return;
                         }
 
-                        // Calculate column widths based on cell content (min 80.0, max 280.0)
                         let col_count = sheet.total_cols;
                         let mut col_widths = vec![90.0f32; col_count];
                         for row in sheet.rows.iter().take(40) {
@@ -192,12 +205,10 @@ impl SpreadsheetViewerState {
                         }
 
                         let row_height = 26.0;
-
                         let mut clicked_cell: Option<(usize, usize, String)> = None;
 
                         ui.vertical(|ui| {
                             for (r_idx, row) in sheet.rows.iter().enumerate() {
-                                // Search filtering
                                 if !query.is_empty() {
                                     let matches_row = row.iter().any(|c| c.to_lowercase().contains(&query));
                                     if !matches_row && r_idx != 0 {
@@ -207,27 +218,25 @@ impl SpreadsheetViewerState {
 
                                 let is_header = r_idx == 0;
                                 let row_bg = if is_header {
-                                    Color32::from_rgb(30, 41, 59) // Slate 800
+                                    b_med
                                 } else if r_idx % 2 == 1 {
-                                    Color32::from_rgb(18, 26, 46)
+                                    b_low
                                 } else {
-                                    Color32::from_rgb(15, 23, 42)
+                                    bg
                                 };
 
                                 ui.horizontal(|ui| {
-                                    // Row index number column
                                     let row_label = if is_header { "#".to_string() } else { format!("{}", r_idx) };
                                     let idx_badge = egui::Button::new(
                                         egui::RichText::new(row_label)
                                             .small()
-                                            .color(Color32::from_rgb(100, 116, 139)),
+                                            .color(f_low),
                                     )
-                                    .fill(Color32::from_rgb(20, 29, 47))
+                                    .fill(b_low)
                                     .min_size(Vec2::new(36.0, row_height))
-                                    .stroke(Stroke::new(0.5, Color32::from_rgb(51, 65, 85)));
+                                    .stroke(Stroke::new(0.5, b_med));
                                     ui.add(idx_badge);
 
-                                    // Cells across columns
                                     for c_idx in 0..col_count {
                                         let cell_val = row.get(c_idx).map(|s| s.as_str()).unwrap_or("");
                                         let cell_w = col_widths.get(c_idx).copied().unwrap_or(90.0);
@@ -236,19 +245,19 @@ impl SpreadsheetViewerState {
                                         let is_match = !query.is_empty() && cell_val.to_lowercase().contains(&query);
 
                                         let cell_bg = if is_selected {
-                                            Color32::from_rgb(59, 130, 246) // Bright blue
+                                            accent
                                         } else if is_match {
-                                            Color32::from_rgb(120, 53, 15) // Amber highlight
+                                            warn_accent
                                         } else {
                                             row_bg
                                         };
 
                                         let text_color = if is_header {
-                                            Color32::from_rgb(56, 189, 248) // Sky blue
+                                            accent
                                         } else if is_selected {
-                                            Color32::WHITE
+                                            crate::hex_to_c32(&palette.theme.f_inv)
                                         } else {
-                                            Color32::from_rgb(226, 232, 240)
+                                            f_high
                                         };
 
                                         let btn = egui::Button::new(
@@ -259,7 +268,7 @@ impl SpreadsheetViewerState {
                                         )
                                         .fill(cell_bg)
                                         .min_size(Vec2::new(cell_w, row_height))
-                                        .stroke(Stroke::new(0.5, Color32::from_rgb(51, 65, 85)))
+                                        .stroke(Stroke::new(0.5, b_med))
                                         .rounding(Rounding::ZERO);
 
                                         let resp = ui.add(btn);

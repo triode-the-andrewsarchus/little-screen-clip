@@ -293,7 +293,7 @@ fn linear_to_srgb(c: f32) -> f32 {
 // -----------------------------------------------------------------------------
 
 /// Set of derived harmonic colors around a base accent color in Oklab space.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DerivedHarmonies {
     /// Base accent ($h_0$)
     pub base: String,
@@ -366,6 +366,8 @@ impl DerivedHarmonies {
 pub struct AppPalette {
     pub theme_name: String,
     pub is_dark: bool,
+    pub theme: Theme,
+    pub harmonies: DerivedHarmonies,
 
     // Core Canvas & Cards
     pub background: String,
@@ -465,6 +467,8 @@ impl AppPalette {
         Self {
             theme_name: theme.name.clone(),
             is_dark,
+            theme: theme.clone(),
+            harmonies: harmonies.clone(),
 
             background: ov("background", &theme.background),
             hero_card_bg: ov("hero_card_bg", &theme.b_high),

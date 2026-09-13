@@ -5,10 +5,12 @@
 
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use image::RgbaImage;
+use little_clip_core::theme::AppPalette;
 use little_clip_core::{AppConfig, ClipItem, HandSide, IpcRequest};
 use little_clip_ops::barcode::BarcodeDetection;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use crate::{hex_to_c32, hex_to_c32_alpha};
 
 /// Active image manipulation tool mode selected in the toolbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1922,7 +1924,7 @@ impl ImagePreviewState {
         }
     }
 
-    pub fn render_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, close: &mut bool) {
+    pub fn render_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, palette: &AppPalette, close: &mut bool) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
@@ -2146,20 +2148,20 @@ impl ImagePreviewState {
         }
 
         egui::Frame::none()
-            .fill(Color32::from_rgb(15, 17, 23))
+            .fill(hex_to_c32(&palette.theme.background))
             .show(ui, |ui| {
                 // 1. TOP HEADER & ESCAPE HATCHES
-                self.render_header(ui, ctx, close);
+                self.render_header(ui, ctx, palette, close);
 
                 ui.add_space(4.0);
 
                 // 2. TOOLBAR (Mode selection & Viewport controls)
-                self.render_toolbar(ui);
+                self.render_toolbar(ui, palette);
 
                 // 2b. Secondary tool-specific strip (Crop / Transforms / Redact / PickColor / Resize / Palette / RemoveBg / DepthMap)
                 if self.active_mode == ImageToolMode::Crop {
                     ui.add_space(2.0);
-                    self.render_crop_toolbar(ui);
+                    self.render_crop_toolbar(ui, palette);
                 } else if self.active_mode == ImageToolMode::Transform {
                     ui.add_space(2.0);
                     self.render_transform_toolbar(ui);
@@ -2195,31 +2197,31 @@ impl ImagePreviewState {
                 ui.add_space(4.0);
 
                 // 3. MAIN INTERACTIVE VIEWPORT
-                self.render_viewport(ui, ctx);
+                self.render_viewport(ui, ctx, palette);
 
                 // 4. BOTTOM STATUS / HELP BAR
-                self.render_footer(ui, now);
+                self.render_footer(ui, palette, now);
             });
     }
 
-    fn render_header(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, close: &mut bool) {
+    fn render_header(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, palette: &AppPalette, close: &mut bool) {
         egui::Frame::none()
-            .fill(Color32::from_rgb(20, 24, 34))
+            .fill(hex_to_c32(&palette.theme.b_low))
             .inner_margin(egui::Margin::symmetric(14.0, 8.0))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(45, 55, 75)))
+            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     // Title badge
                     ui.label(
                         egui::RichText::new("🖼 IMAGE STUDIO")
                             .strong()
-                            .color(Color32::from_rgb(168, 85, 247)),
+                            .color(hex_to_c32(&palette.harmonies.base)),
                     );
 
                     ui.label(
                         egui::RichText::new(&self.title)
                             .strong()
-                            .color(Color32::from_rgb(241, 245, 249)),
+                            .color(hex_to_c32(&palette.theme.f_high)),
                     );
 
                     ui.add_space(10.0);
@@ -2232,7 +2234,7 @@ impl ImagePreviewState {
                         self.current_rgba.height(),
                         aspect_str
                     );
-                    chip_badge(ui, &dim_text, Color32::from_rgb(56, 189, 248), Color32::from_rgb(15, 23, 42));
+                    chip_badge(ui, &dim_text, hex_to_c32(&palette.harmonies.split_comp_1), hex_to_c32(&palette.theme.b_med));
 
                     // Format chip
                     let fmt_str = if self.is_svg && self.undo_stack.is_empty() {
@@ -2240,11 +2242,11 @@ impl ImagePreviewState {
                     } else {
                         self.mime.replace("image/", "").to_uppercase()
                     };
-                    chip_badge(ui, &fmt_str, Color32::from_rgb(16, 185, 129), Color32::from_rgb(6, 78, 59));
+                    chip_badge(ui, &fmt_str, hex_to_c32(&palette.diff_add), hex_to_c32(&palette.theme.b_med));
 
                     // File size chip
                     let size_str = format_bytes_size(self.file_size_bytes);
-                    chip_badge(ui, &size_str, Color32::from_rgb(245, 158, 11), Color32::from_rgb(69, 26, 3));
+                    chip_badge(ui, &size_str, hex_to_c32(&palette.diff_mod), hex_to_c32(&palette.theme.b_med));
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Close button
@@ -2252,10 +2254,10 @@ impl ImagePreviewState {
                             egui::RichText::new("✕ Close (Esc)")
                                 .small()
                                 .strong()
-                                .color(Color32::from_rgb(248, 113, 113)),
+                                .color(hex_to_c32(&palette.diff_del)),
                         )
-                        .fill(Color32::from_rgb(30, 41, 59))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(71, 85, 105)))
+                        .fill(hex_to_c32(&palette.theme.b_med))
+                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_low)))
                         .rounding(Rounding::same(4.0));
                         if ui.add(close_btn).clicked() {
                             if self.ocr_state.in_progress {
@@ -2272,10 +2274,10 @@ impl ImagePreviewState {
                             egui::RichText::new(viewer_label)
                                 .small()
                                 .strong()
-                                .color(Color32::from_rgb(203, 213, 225)),
+                                .color(hex_to_c32(&palette.theme.f_med)),
                         )
-                        .fill(Color32::from_rgb(28, 35, 51))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
+                        .fill(hex_to_c32(&palette.theme.b_med))
+                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_low)))
                         .rounding(Rounding::same(4.0));
                         if ui.add(viewer_btn).on_hover_text(format!("Open in external viewer ({})", self.viewer)).clicked() {
                             let v = self.viewer.clone();
@@ -2289,10 +2291,10 @@ impl ImagePreviewState {
                             egui::RichText::new(inkscape_label)
                                 .small()
                                 .strong()
-                                .color(if is_primary_svg { Color32::WHITE } else { Color32::from_rgb(148, 163, 184) }),
+                                .color(if is_primary_svg { hex_to_c32(&palette.theme.f_high) } else { hex_to_c32(&palette.theme.f_low) }),
                         )
-                        .fill(if is_primary_svg { Color32::from_rgb(13, 148, 136) } else { Color32::from_rgb(24, 30, 44) })
-                        .stroke(Stroke::new(1.0, if is_primary_svg { Color32::from_rgb(45, 212, 191) } else { Color32::from_rgb(51, 65, 85) }))
+                        .fill(if is_primary_svg { hex_to_c32(&palette.harmonies.triadic_1) } else { hex_to_c32(&palette.theme.b_med) })
+                        .stroke(Stroke::new(1.0, if is_primary_svg { hex_to_c32(&palette.harmonies.triadic_1) } else { hex_to_c32(&palette.theme.b_low) }))
                         .rounding(Rounding::same(4.0));
                         if ui.add(inkscape_btn).on_hover_text("Open file in Inkscape (Vector Editor)").clicked() {
                             let ed = self.svg_editor.clone();
@@ -2306,10 +2308,10 @@ impl ImagePreviewState {
                             egui::RichText::new(krita_label)
                                 .small()
                                 .strong()
-                                .color(if is_primary_raster { Color32::WHITE } else { Color32::from_rgb(148, 163, 184) }),
+                                .color(if is_primary_raster { hex_to_c32(&palette.theme.f_high) } else { hex_to_c32(&palette.theme.f_low) }),
                         )
-                        .fill(if is_primary_raster { Color32::from_rgb(99, 102, 241) } else { Color32::from_rgb(24, 30, 44) })
-                        .stroke(Stroke::new(1.0, if is_primary_raster { Color32::from_rgb(129, 140, 248) } else { Color32::from_rgb(51, 65, 85) }))
+                        .fill(if is_primary_raster { hex_to_c32(&palette.harmonies.base) } else { hex_to_c32(&palette.theme.b_med) })
+                        .stroke(Stroke::new(1.0, if is_primary_raster { hex_to_c32(&palette.harmonies.base) } else { hex_to_c32(&palette.theme.b_low) }))
                         .rounding(Rounding::same(4.0));
                         if ui.add(krita_btn).on_hover_text("Open file in Krita (Full Photo & Painting Studio)").clicked() {
                             let ed = self.external_editor.clone();
@@ -2325,10 +2327,10 @@ impl ImagePreviewState {
                             egui::RichText::new("💾 Save As...")
                                 .small()
                                 .strong()
-                                .color(Color32::from_rgb(226, 232, 240)),
+                                .color(hex_to_c32(&palette.theme.f_high)),
                         )
-                        .fill(Color32::from_rgb(16, 78, 59))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(52, 211, 153)))
+                        .fill(hex_to_c32(&palette.diff_add))
+                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.diff_add)))
                         .rounding(Rounding::same(4.0));
                         if ui.add(save_btn).on_hover_text("Save current image to file (Ctrl+S)").clicked() {
                             self.open_save_dialog();
@@ -2339,10 +2341,10 @@ impl ImagePreviewState {
                             egui::RichText::new("📋 Copy (Ctrl+C)")
                                 .small()
                                 .strong()
-                                .color(Color32::from_rgb(241, 245, 249)),
+                                .color(hex_to_c32(&palette.theme.f_high)),
                         )
-                        .fill(Color32::from_rgb(88, 28, 135))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(192, 132, 252)))
+                        .fill(hex_to_c32(&palette.harmonies.base))
+                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.harmonies.base)))
                         .rounding(Rounding::same(4.0));
                         if ui.add(copy_btn).on_hover_text("Copy current image to Left Hand clipboard slot & OS clipboard (Ctrl+C)").clicked() {
                             self.copy_to_clipboard_slot();
@@ -2395,11 +2397,11 @@ impl ImagePreviewState {
         }
     }
 
-    fn render_toolbar(&mut self, ui: &mut egui::Ui) {
+    fn render_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         egui::Frame::none()
-            .fill(Color32::from_rgb(18, 22, 32))
+            .fill(hex_to_c32(&palette.theme.b_low))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(37, 45, 62)))
+            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     // Tool Modes
@@ -2420,9 +2422,9 @@ impl ImagePreviewState {
                     for mode in modes {
                         let is_active = self.active_mode == mode || (mode == ImageToolMode::PickColor && self.active_mode == ImageToolMode::Palette);
                         let (bg, border, text_col) = if is_active {
-                            (Color32::from_rgb(99, 102, 241), Color32::from_rgb(165, 180, 252), Color32::WHITE)
+                            (hex_to_c32(&palette.harmonies.base), hex_to_c32(&palette.theme.f_high), hex_to_c32(&palette.theme.f_high))
                         } else {
-                            (Color32::from_rgb(26, 32, 46), Color32::from_rgb(45, 55, 75), Color32::from_rgb(148, 163, 184))
+                            (hex_to_c32(&palette.theme.b_med), hex_to_c32(&palette.theme.b_low), hex_to_c32(&palette.theme.f_med))
                         };
 
                         let btn = egui::Button::new(
@@ -2441,9 +2443,9 @@ impl ImagePreviewState {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Reset View
                         let reset_btn = egui::Button::new(
-                            egui::RichText::new("⟲ Reset").small().color(Color32::from_rgb(203, 213, 225)),
+                            egui::RichText::new("⟲ Reset").small().color(hex_to_c32(&palette.theme.f_med)),
                         )
-                        .fill(Color32::from_rgb(28, 35, 51))
+                        .fill(hex_to_c32(&palette.theme.b_med))
                         .rounding(Rounding::same(4.0));
                         if ui.add(reset_btn).on_hover_text("Reset zoom and pan").clicked() {
                             self.zoom = 1.0;
@@ -2452,9 +2454,9 @@ impl ImagePreviewState {
 
                         // 1:1 Pixel Zoom
                         let pixel_btn = egui::Button::new(
-                            egui::RichText::new("1:1").small().strong().color(Color32::from_rgb(203, 213, 225)),
+                            egui::RichText::new("1:1").small().strong().color(hex_to_c32(&palette.theme.f_med)),
                         )
-                        .fill(Color32::from_rgb(28, 35, 51))
+                        .fill(hex_to_c32(&palette.theme.b_med))
                         .rounding(Rounding::same(4.0));
                         if ui.add(pixel_btn).on_hover_text("100% actual pixel size (1)").clicked() {
                             self.zoom = 1.0;
@@ -2462,9 +2464,9 @@ impl ImagePreviewState {
 
                         // Fit to window
                         let fit_btn = egui::Button::new(
-                            egui::RichText::new("⛶ Fit").small().strong().color(Color32::from_rgb(56, 189, 248)),
+                            egui::RichText::new("⛶ Fit").small().strong().color(hex_to_c32(&palette.harmonies.base)),
                         )
-                        .fill(Color32::from_rgb(28, 35, 51))
+                        .fill(hex_to_c32(&palette.theme.b_med))
                         .rounding(Rounding::same(4.0));
                         if ui.add(fit_btn).on_hover_text("Fit entire image into window (0 / F)").clicked() {
                             self.fit_to_view(ui.available_size());
@@ -2472,9 +2474,9 @@ impl ImagePreviewState {
 
                         // Zoom In (+)
                         let plus_btn = egui::Button::new(
-                            egui::RichText::new("+").small().strong().color(Color32::WHITE),
+                            egui::RichText::new("+").small().strong().color(hex_to_c32(&palette.theme.f_high)),
                         )
-                        .fill(Color32::from_rgb(37, 45, 62))
+                        .fill(hex_to_c32(&palette.theme.b_med))
                         .rounding(Rounding::same(4.0));
                         if ui.add(plus_btn).clicked() {
                             self.zoom = (self.zoom * 1.25).clamp(0.05, 50.0);
@@ -2484,14 +2486,14 @@ impl ImagePreviewState {
                         ui.label(
                             egui::RichText::new(format!("{:.0}%", self.zoom * 100.0))
                                 .small()
-                                .color(Color32::from_rgb(148, 163, 184)),
+                                .color(hex_to_c32(&palette.theme.f_low)),
                         );
 
                         // Zoom Out (-)
                         let minus_btn = egui::Button::new(
-                            egui::RichText::new("-").small().strong().color(Color32::WHITE),
+                            egui::RichText::new("-").small().strong().color(hex_to_c32(&palette.theme.f_high)),
                         )
-                        .fill(Color32::from_rgb(37, 45, 62))
+                        .fill(hex_to_c32(&palette.theme.b_med))
                         .rounding(Rounding::same(4.0));
                         if ui.add(minus_btn).clicked() {
                             self.zoom = (self.zoom / 1.25).clamp(0.05, 50.0);
@@ -2501,24 +2503,24 @@ impl ImagePreviewState {
             });
     }
 
-    fn render_crop_toolbar(&mut self, ui: &mut egui::Ui) {
+    fn render_crop_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         egui::Frame::none()
-            .fill(Color32::from_rgb(22, 27, 39))
+            .fill(hex_to_c32(&palette.theme.b_low))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(45, 55, 75)))
+            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("✂ Crop Mode:")
                             .strong()
-                            .color(Color32::from_rgb(52, 211, 153)),
+                            .color(hex_to_c32(&palette.harmonies.base)),
                     );
 
                     ui.add_space(8.0);
                     ui.label(
                         egui::RichText::new("Ratio:")
                             .small()
-                            .color(Color32::from_rgb(148, 163, 184)),
+                            .color(hex_to_c32(&palette.theme.f_med)),
                     );
 
                     let ratios = [
@@ -2531,9 +2533,9 @@ impl ImagePreviewState {
                     for r in ratios {
                         let is_sel = self.crop_state.ratio == r;
                         let (bg, border, text_col) = if is_sel {
-                            (Color32::from_rgb(16, 185, 129), Color32::from_rgb(52, 211, 153), Color32::WHITE)
+                            (hex_to_c32(&palette.harmonies.base), hex_to_c32(&palette.theme.f_high), hex_to_c32(&palette.theme.f_high))
                         } else {
-                            (Color32::from_rgb(30, 41, 59), Color32::from_rgb(51, 65, 85), Color32::from_rgb(203, 213, 225))
+                            (hex_to_c32(&palette.theme.b_med), hex_to_c32(&palette.theme.b_low), hex_to_c32(&palette.theme.f_med))
                         };
 
                         let btn = egui::Button::new(
@@ -2554,10 +2556,10 @@ impl ImagePreviewState {
                             egui::RichText::new("✓ Apply Crop (Enter)")
                                 .small()
                                 .strong()
-                                .color(Color32::WHITE),
+                                .color(hex_to_c32(&palette.theme.f_high)),
                         )
-                        .fill(Color32::from_rgb(16, 185, 129))
-                        .stroke(Stroke::new(1.0, Color32::from_rgb(52, 211, 153)))
+                        .fill(hex_to_c32(&palette.diff_add))
+                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.diff_add)))
                         .rounding(Rounding::same(4.0));
 
                         if ui.add(apply_btn).clicked() {
@@ -2566,9 +2568,9 @@ impl ImagePreviewState {
 
                         // Reset Crop Button
                         let reset_crop_btn = egui::Button::new(
-                            egui::RichText::new("✕ Full Image").small().color(Color32::from_rgb(203, 213, 225)),
+                            egui::RichText::new("✕ Full Image").small().color(hex_to_c32(&palette.theme.f_med)),
                         )
-                        .fill(Color32::from_rgb(30, 41, 59))
+                        .fill(hex_to_c32(&palette.theme.b_med))
                         .rounding(Rounding::same(4.0));
 
                         if ui.add(reset_crop_btn).clicked() {
@@ -4526,8 +4528,7 @@ impl ImagePreviewState {
         }
     }
 
-
-    fn render_viewport(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    fn render_viewport(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, palette: &AppPalette) {
         let avail_size = ui.available_size() - Vec2::new(0.0, 32.0);
         if !self.auto_fitted && avail_size.x > 50.0 && avail_size.y > 50.0 {
             self.fit_to_view(avail_size);
@@ -4538,7 +4539,7 @@ impl ImagePreviewState {
         let canvas_rect = response.rect;
 
         // Background canvas fill
-        painter.rect_filled(canvas_rect, Rounding::same(6.0), Color32::from_rgb(12, 14, 20));
+        painter.rect_filled(canvas_rect, Rounding::same(6.0), hex_to_c32(&palette.theme.background));
 
         // Panning interaction (drag) when in View, Resize, Palette, RemoveBg, DepthMap, Ocr, Barcode, or Convert mode (when not dragging split handle)
         let middle_drag = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
@@ -4584,7 +4585,7 @@ impl ImagePreviewState {
             let img_rect = Rect::from_center_size(center, Vec2::new(img_w, img_h));
 
             // Draw checkerboard under image for alpha transparency
-            draw_checkerboard(&painter, img_rect, self.zoom);
+            draw_checkerboard(&painter, img_rect, self.zoom, hex_to_c32(&palette.theme.b_low), hex_to_c32(&palette.theme.b_med));
 
             // Draw image mesh (or Squoosh-style split view in Convert mode)
             if self.active_mode == ImageToolMode::Convert {
@@ -4603,7 +4604,7 @@ impl ImagePreviewState {
             painter.rect_stroke(
                 img_rect,
                 Rounding::ZERO,
-                Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 255, 255, 40)),
+                Stroke::new(1.0, hex_to_c32_alpha(&palette.theme.f_med, 40)),
             );
 
             // Draw any placed redaction bars so they remain visible across all modes
@@ -4621,7 +4622,7 @@ impl ImagePreviewState {
 
             // Mode-specific on-canvas overlays
             if self.active_mode == ImageToolMode::Crop {
-                self.render_crop_overlay(ui, &painter, &response, img_rect);
+                self.render_crop_overlay(ui, &painter, &response, img_rect, palette);
             } else if self.active_mode == ImageToolMode::Redact {
                 self.render_redact_overlay(ui, &painter, &response, img_rect);
             } else if self.active_mode == ImageToolMode::PickColor {
@@ -4632,13 +4633,13 @@ impl ImagePreviewState {
         }
     }
 
-
     fn render_crop_overlay(
         &mut self,
         ui: &mut egui::Ui,
         painter: &egui::Painter,
         response: &egui::Response,
         img_rect: Rect,
+        palette: &AppPalette,
     ) {
         let norm = self.crop_state.normalized_rect;
         let crop_screen_min = Pos2::new(
@@ -4722,7 +4723,7 @@ impl ImagePreviewState {
         );
 
         // 3. Crisp Crop Outline
-        painter.rect_stroke(crop_screen_rect, Rounding::ZERO, Stroke::new(1.5, Color32::WHITE));
+        painter.rect_stroke(crop_screen_rect, Rounding::ZERO, Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)));
 
         // 4. Handles definitions & drawing
         let handle_radius = 5.0;
@@ -4739,8 +4740,8 @@ impl ImagePreviewState {
 
         for (_, pos, _) in &handles {
             let handle_rect = Rect::from_center_size(*pos, Vec2::splat(handle_radius * 2.0));
-            painter.rect_filled(handle_rect, Rounding::same(1.0), Color32::WHITE);
-            painter.rect_stroke(handle_rect, Rounding::same(1.0), Stroke::new(1.0, Color32::from_rgb(15, 23, 42)));
+            painter.rect_filled(handle_rect, Rounding::same(1.0), hex_to_c32(&palette.harmonies.base));
+            painter.rect_stroke(handle_rect, Rounding::same(1.0), Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)));
         }
 
         // 5. Floating Dimensions Badge
@@ -4754,12 +4755,12 @@ impl ImagePreviewState {
         let galley = ui.painter().layout_no_wrap(
             badge_str,
             egui::FontId::proportional(11.0),
-            Color32::from_rgb(241, 245, 249),
+            hex_to_c32(&palette.theme.f_high),
         );
         let badge_rect = Rect::from_center_size(badge_pos, galley.size() + Vec2::new(12.0, 4.0));
-        painter.rect_filled(badge_rect, Rounding::same(4.0), Color32::from_rgba_unmultiplied(15, 23, 42, 230));
-        painter.rect_stroke(badge_rect, Rounding::same(4.0), Stroke::new(1.0, Color32::from_rgb(52, 211, 153)));
-        painter.galley(badge_rect.min + Vec2::new(6.0, 2.0), galley, Color32::from_rgb(241, 245, 249));
+        painter.rect_filled(badge_rect, Rounding::same(4.0), hex_to_c32(&palette.theme.b_low));
+        painter.rect_stroke(badge_rect, Rounding::same(4.0), Stroke::new(1.0, hex_to_c32(&palette.harmonies.base)));
+        painter.galley(badge_rect.min + Vec2::new(6.0, 2.0), galley, hex_to_c32(&palette.theme.f_high));
 
         // 6. Interaction logic
         if let Some(ptr_pos) = response.hover_pos() {
@@ -5165,9 +5166,9 @@ impl ImagePreviewState {
         }
     }
 
-    fn render_footer(&mut self, ui: &mut egui::Ui, now: f64) {
+    fn render_footer(&mut self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
         egui::Frame::none()
-            .fill(Color32::from_rgb(18, 22, 32))
+            .fill(hex_to_c32(&palette.theme.b_low))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -5187,7 +5188,7 @@ impl ImagePreviewState {
                     ui.label(
                         egui::RichText::new(hint_text)
                             .small()
-                            .color(Color32::from_rgb(100, 116, 139)),
+                            .color(hex_to_c32(&palette.theme.f_low)),
                     );
 
                     // Toast message
@@ -5195,7 +5196,7 @@ impl ImagePreviewState {
                         let elapsed = now - toast_time;
                         if elapsed < 5.0 {
                             let alpha = ((5.0 - elapsed) / 1.0).clamp(0.0, 1.0);
-                            let col = Color32::from_rgba_unmultiplied(52, 211, 153, (alpha * 255.0) as u8);
+                            let col = hex_to_c32_alpha(&palette.diff_add, (alpha * 255.0) as u8);
                             ui.add_space(20.0);
                             ui.label(egui::RichText::new(msg).small().strong().color(col));
                         } else {
@@ -5234,10 +5235,8 @@ fn chip_badge(ui: &mut egui::Ui, text: &str, text_col: Color32, bg_col: Color32)
     });
 }
 
-fn draw_checkerboard(painter: &egui::Painter, rect: Rect, _zoom: f32) {
+fn draw_checkerboard(painter: &egui::Painter, rect: Rect, _zoom: f32, dark_col: Color32, light_col: Color32) {
     let cell_size = 16.0;
-    let dark_col = Color32::from_rgb(22, 26, 36);
-    let light_col = Color32::from_rgb(32, 38, 52);
 
     painter.rect_filled(rect, Rounding::ZERO, dark_col);
 

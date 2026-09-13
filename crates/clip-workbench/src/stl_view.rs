@@ -70,7 +70,7 @@ impl StlViewerState {
         self.pan_offset = Vec2::ZERO;
     }
 
-    pub fn render_ui(&mut self, ui: &mut egui::Ui, close: &mut bool) {
+    pub fn render_ui(&mut self, ui: &mut egui::Ui, palette: &little_clip_core::theme::AppPalette, close: &mut bool) {
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             *close = true;
             return;
@@ -86,8 +86,17 @@ impl StlViewerState {
             .unwrap()
             .as_secs_f64();
 
+        let bg = crate::hex_to_c32(&palette.theme.background);
+        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let f_high = crate::hex_to_c32(&palette.theme.f_high);
+        let f_med = crate::hex_to_c32(&palette.theme.f_med);
+        let f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let accent = crate::hex_to_c32(&palette.harmonies.base);
+        let success_accent = crate::hex_to_c32(&palette.diff_add);
+
         egui::Frame::none()
-            .fill(Color32::from_rgb(15, 23, 42)) // Slate 900
+            .fill(bg)
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 // 1. Top Control Bar
@@ -98,7 +107,7 @@ impl StlViewerState {
                         egui::RichText::new(&self.title)
                             .strong()
                             .size(18.0)
-                            .color(Color32::WHITE),
+                            .color(f_high),
                     );
 
                     ui.add_space(8.0);
@@ -112,7 +121,7 @@ impl StlViewerState {
                     ui.label(
                         egui::RichText::new(info_badge)
                             .small()
-                            .color(Color32::from_rgb(148, 163, 184)),
+                            .color(f_low),
                     );
 
                     ui.add_space(16.0);
@@ -121,9 +130,10 @@ impl StlViewerState {
                         egui::RichText::new(if self.auto_rotate { "⏸ Pause Rotation" } else { "▶ Auto-Rotate" })
                             .small()
                             .strong()
-                            .color(Color32::WHITE),
+                            .color(f_high),
                     )
-                    .fill(if self.auto_rotate { Color32::from_rgb(30, 41, 59) } else { Color32::from_rgb(37, 99, 235) })
+                    .fill(if self.auto_rotate { b_med } else { accent })
+                    .stroke(Stroke::new(1.0, b_low))
                     .rounding(Rounding::same(4.0));
                     if ui.add(auto_rot_btn).clicked() {
                         self.auto_rotate = !self.auto_rotate;
@@ -133,9 +143,10 @@ impl StlViewerState {
                         egui::RichText::new(if self.wireframe { "🎨 Shaded" } else { "📐 Wireframe" })
                             .small()
                             .strong()
-                            .color(Color32::WHITE),
+                            .color(f_high),
                     )
-                    .fill(Color32::from_rgb(51, 65, 85))
+                    .fill(if self.wireframe { accent } else { b_med })
+                    .stroke(Stroke::new(1.0, b_low))
                     .rounding(Rounding::same(4.0));
                     if ui.add(wire_btn).clicked() {
                         self.wireframe = !self.wireframe;
@@ -144,9 +155,10 @@ impl StlViewerState {
                     let reset_btn = egui::Button::new(
                         egui::RichText::new("↺ Reset View")
                             .small()
-                            .color(Color32::from_rgb(203, 213, 225)),
+                            .color(f_med),
                     )
-                    .fill(Color32::from_rgb(30, 41, 59))
+                    .fill(b_med)
+                    .stroke(Stroke::new(1.0, b_low))
                     .rounding(Rounding::same(4.0));
                     if ui.add(reset_btn).clicked() {
                         self.reset_view();
@@ -157,9 +169,10 @@ impl StlViewerState {
                         let close_btn = egui::Button::new(
                             egui::RichText::new("✕ Close (Esc)")
                                 .strong()
-                                .color(Color32::WHITE),
+                                .color(crate::hex_to_c32(&palette.undo_border)),
                         )
-                        .fill(Color32::from_rgb(220, 38, 38))
+                        .fill(crate::hex_to_c32(&palette.undo_card_bg))
+                        .stroke(Stroke::new(1.0, crate::hex_to_c32(&palette.undo_border)))
                         .rounding(Rounding::same(6.0));
                         if ui.add(close_btn).clicked() {
                             *close = true;
@@ -170,7 +183,7 @@ impl StlViewerState {
                                 ui.label(
                                     egui::RichText::new(msg)
                                         .small()
-                                        .color(Color32::from_rgb(52, 211, 153)),
+                                        .color(success_accent),
                                 );
                             }
                         }
@@ -186,9 +199,9 @@ impl StlViewerState {
                 let (canvas_rect, response) = ui.allocate_exact_size(available_size, egui::Sense::click_and_drag());
                 let painter = ui.painter_at(canvas_rect);
 
-                // Background gradient / dark canvas
-                painter.rect_filled(canvas_rect, Rounding::same(6.0), Color32::from_rgb(11, 15, 25));
-                painter.rect_stroke(canvas_rect, Rounding::same(6.0), Stroke::new(1.0, Color32::from_rgb(30, 41, 59)));
+                // Background dark canvas
+                painter.rect_filled(canvas_rect, Rounding::same(6.0), b_low);
+                painter.rect_stroke(canvas_rect, Rounding::same(6.0), Stroke::new(1.0, b_med));
 
                 // Handle mouse interaction
                 if response.dragged_by(egui::PointerButton::Primary) {
@@ -278,7 +291,7 @@ impl StlViewerState {
                 projected.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
                 if self.wireframe {
-                    let stroke = Stroke::new(1.0, Color32::from_rgb(56, 189, 248));
+                    let stroke = Stroke::new(1.0, accent);
                     for (_, _, pts) in projected {
                         painter.line_segment([pts[0], pts[1]], stroke);
                         painter.line_segment([pts[1], pts[2]], stroke);
@@ -290,9 +303,9 @@ impl StlViewerState {
                     mesh_shape.reserve_vertices(projected.len() * 3);
 
                     for (_, diff, pts) in projected {
-                        let r = (30.0 + diff * 180.0) as u8;
-                        let g = (80.0 + diff * 160.0) as u8;
-                        let b = (170.0 + diff * 85.0) as u8;
+                        let r = ((accent.r() as f32) * (0.2 + 0.8 * diff)).clamp(0.0, 255.0) as u8;
+                        let g = ((accent.g() as f32) * (0.2 + 0.8 * diff)).clamp(0.0, 255.0) as u8;
+                        let b = ((accent.b() as f32) * (0.2 + 0.8 * diff)).clamp(0.0, 255.0) as u8;
                         let face_color = Color32::from_rgb(r, g, b);
 
                         let idx = mesh_shape.vertices.len() as u32;
@@ -324,7 +337,7 @@ impl StlViewerState {
                     egui::Align2::LEFT_BOTTOM,
                     help_text,
                     egui::FontId::proportional(11.0),
-                    Color32::from_rgb(100, 116, 139),
+                    f_low,
                 );
             });
     }

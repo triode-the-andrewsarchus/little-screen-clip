@@ -3,7 +3,7 @@
 //! Renders visual page thumbnails with live rotation (90° increments), page deletion,
 //! and dirty state tracking.
 
-use eframe::egui::{self, Color32, Rounding, Stroke, Vec2};
+use eframe::egui::{self, Rounding, Stroke, Vec2};
 use little_clip_core::pdf::{delete_pdf_pages, get_pdf_info, render_pdf_page_preview, rotate_pdf_page};
 use std::path::PathBuf;
 
@@ -150,7 +150,13 @@ impl PdfEditorState {
         }
     }
 
-    pub fn render_ui(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, close: &mut bool) {
+    pub fn render_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: &little_clip_core::theme::AppPalette,
+        close: &mut bool,
+    ) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
@@ -185,8 +191,18 @@ impl PdfEditorState {
             }
         }
 
+        let bg = crate::hex_to_c32(&palette.theme.background);
+        let f_high = crate::hex_to_c32(&palette.theme.f_high);
+        let f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let accent = crate::hex_to_c32(&palette.harmonies.base);
+        let warn_accent = crate::hex_to_c32(&palette.undo_border);
+        let warn_bg = crate::hex_to_c32(&palette.undo_card_bg);
+        let success_accent = crate::hex_to_c32(&palette.diff_add);
+
         egui::Frame::none()
-            .fill(Color32::from_rgb(15, 23, 42)) // Slate 900
+            .fill(bg)
             .inner_margin(egui::Margin::same(16.0))
             .show(ui, |ui| {
                 // Header Toolbar
@@ -196,7 +212,7 @@ impl PdfEditorState {
                         egui::RichText::new(&self.title)
                             .strong()
                             .size(18.0)
-                            .color(Color32::WHITE),
+                            .color(f_high),
                     );
 
                     ui.add_space(8.0);
@@ -204,7 +220,7 @@ impl PdfEditorState {
                     ui.label(
                         egui::RichText::new(info_badge)
                             .small()
-                            .color(Color32::from_rgb(148, 163, 184)),
+                            .color(f_low),
                     );
 
                     ui.add_space(16.0);
@@ -214,10 +230,10 @@ impl PdfEditorState {
                         egui::RichText::new("↻ Rotate 90° [R]")
                             .small()
                             .strong()
-                            .color(Color32::from_rgb(226, 232, 240)),
+                            .color(f_high),
                     )
-                    .fill(Color32::from_rgb(30, 41, 59))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(71, 85, 105)))
+                    .fill(b_med)
+                    .stroke(Stroke::new(1.0, b_low))
                     .rounding(Rounding::same(4.0));
                     if ui.add(rot_btn).on_hover_text("Rotate selected page 90° clockwise (Hotkey: R)").clicked() {
                         self.rotate_current_page(ctx, 90, now);
@@ -228,10 +244,10 @@ impl PdfEditorState {
                         egui::RichText::new("🗑 Delete Page [Del]")
                             .small()
                             .strong()
-                            .color(Color32::from_rgb(248, 113, 113)),
+                            .color(warn_accent),
                     )
-                    .fill(Color32::from_rgb(69, 10, 10))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(220, 38, 38)))
+                    .fill(warn_bg)
+                    .stroke(Stroke::new(1.0, warn_accent))
                     .rounding(Rounding::same(4.0));
                     if ui.add(del_btn).on_hover_text("Delete selected page from PDF (Hotkey: Del)").clicked() {
                         self.delete_current_page(ctx, now);
@@ -242,9 +258,10 @@ impl PdfEditorState {
                         let close_btn = egui::Button::new(
                             egui::RichText::new("✕ Close (Esc)")
                                 .strong()
-                                .color(Color32::WHITE),
+                                .color(f_high),
                         )
-                        .fill(Color32::from_rgb(220, 38, 38))
+                        .fill(warn_bg)
+                        .stroke(Stroke::new(1.0, warn_accent))
                         .rounding(Rounding::same(6.0));
                         if ui.add(close_btn).clicked() {
                             *close = true;
@@ -255,7 +272,7 @@ impl PdfEditorState {
                                 ui.label(
                                     egui::RichText::new(msg)
                                         .small()
-                                        .color(Color32::from_rgb(52, 211, 153)),
+                                        .color(success_accent),
                                 );
                             }
                         }
@@ -280,15 +297,15 @@ impl PdfEditorState {
 
                             ui.vertical(|ui| {
                                 let border_col = if is_selected {
-                                    Color32::from_rgb(59, 130, 246) // Blue 500
+                                    accent
                                 } else {
-                                    Color32::from_rgb(51, 65, 85) // Slate 700
+                                    b_med
                                 };
 
                                 let stroke_w = if is_selected { 2.5 } else { 1.0 };
 
                                 egui::Frame::none()
-                                    .fill(Color32::from_rgb(30, 41, 59))
+                                    .fill(b_low)
                                     .stroke(Stroke::new(stroke_w, border_col))
                                     .rounding(Rounding::same(6.0))
                                     .inner_margin(egui::Margin::same(8.0))
@@ -317,7 +334,7 @@ impl PdfEditorState {
                                                 egui::RichText::new(format!("Page {}", page_num))
                                                     .small()
                                                     .strong()
-                                                    .color(if is_selected { Color32::from_rgb(96, 165, 250) } else { Color32::from_rgb(148, 163, 184) }),
+                                                    .color(if is_selected { accent } else { f_low }),
                                             );
                                         });
                                     });

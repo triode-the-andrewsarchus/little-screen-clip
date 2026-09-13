@@ -236,6 +236,7 @@ impl DiffViewerState {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
+        palette: &little_clip_core::theme::AppPalette,
         close_requested: &mut bool,
     ) {
         let now = ctx.input(|i| i.time);
@@ -281,9 +282,9 @@ impl DiffViewerState {
             }
 
             self.ensure_image_textures(ctx);
-            self.render_image_ui(ui, ctx, close_requested, now);
+            self.render_image_ui(ui, ctx, palette, close_requested, now);
         } else {
-            self.render_text_ui(ui, ctx, close_requested, now);
+            self.render_text_ui(ui, ctx, palette, close_requested, now);
         }
     }
 
@@ -291,9 +292,20 @@ impl DiffViewerState {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
+        palette: &little_clip_core::theme::AppPalette,
         close_requested: &mut bool,
         now: f64,
     ) {
+        let bg = crate::hex_to_c32(&palette.theme.background);
+        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let f_high = crate::hex_to_c32(&palette.theme.f_high);
+        let f_med = crate::hex_to_c32(&palette.theme.f_med);
+        let f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let accent = crate::hex_to_c32(&palette.harmonies.base);
+        let success_color = crate::hex_to_c32(&palette.diff_add);
+        let del_color = crate::hex_to_c32(&palette.diff_del);
+
         // Copy shortcut for image diff
         let copy_requested = ctx.input(|i| {
             i.events.iter().any(|e| matches!(e, egui::Event::Copy))
@@ -314,7 +326,7 @@ impl DiffViewerState {
             ui.painter().rect_filled(
                 full_rect,
                 Rounding::ZERO,
-                Color32::from_rgba_unmultiplied(15, 23, 42, 252),
+                bg,
             );
 
             ui.add_space(8.0);
@@ -327,7 +339,7 @@ impl DiffViewerState {
                     egui::RichText::new("⑂ Picture Diff Comparison")
                         .heading()
                         .strong()
-                        .color(Color32::WHITE),
+                        .color(f_high),
                 );
 
                 ui.add_space(8.0);
@@ -338,24 +350,24 @@ impl DiffViewerState {
                         egui::RichText::new(format!("⏳ Comparing... ({:.1}s)", elapsed))
                             .small()
                             .strong()
-                            .color(Color32::from_rgb(165, 180, 252)),
+                            .color(f_high),
                     )
-                    .fill(Color32::from_rgb(49, 46, 129))
-                    .stroke(Stroke::NONE)
+                    .fill(b_med)
+                    .stroke(Stroke::new(1.0, accent))
                     .rounding(Rounding::same(4.0));
                     ui.add(badge);
                 } else if let Some(res) = &self.image_result {
                     // Difference status badge
                     let (badge_bg, badge_fg, badge_text) = if res.is_identical {
                         (
-                            Color32::from_rgb(6, 78, 59),
-                            Color32::from_rgb(52, 211, 153),
+                            crate::hex_to_c32_alpha(&palette.diff_add, 45),
+                            success_color,
                             "✔ 0 diff pixels • Identical".to_string(),
                         )
                     } else {
                         (
-                            Color32::from_rgb(136, 19, 55),
-                            Color32::from_rgb(251, 113, 133),
+                            crate::hex_to_c32_alpha(&palette.diff_del, 45),
+                            del_color,
                             format!("⚡ {} diff pixels ({:.2}%)", res.diff_count, res.diff_percentage),
                         )
                     };
@@ -377,9 +389,9 @@ impl DiffViewerState {
                     let dim_badge = egui::Button::new(
                         egui::RichText::new(format!("⛶ {} × {}", res.width, res.height))
                             .small()
-                            .color(Color32::from_rgb(148, 163, 184)),
+                            .color(f_low),
                     )
-                    .fill(Color32::from_rgb(30, 41, 59))
+                    .fill(b_med)
                     .stroke(Stroke::NONE)
                     .rounding(Rounding::same(4.0));
                     ui.add(dim_badge);
@@ -399,9 +411,10 @@ impl DiffViewerState {
                         egui::RichText::new(mode.label())
                             .small()
                             .strong()
-                            .color(if is_active { Color32::WHITE } else { Color32::from_rgb(148, 163, 184) }),
+                            .color(if is_active { crate::hex_to_c32(&palette.theme.f_inv) } else { f_low }),
                     )
-                    .fill(if is_active { Color32::from_rgb(37, 99, 235) } else { Color32::from_rgb(30, 41, 59) })
+                    .fill(if is_active { accent } else { b_med })
+                    .stroke(Stroke::new(1.0, b_low))
                     .rounding(Rounding::same(4.0));
 
                     if ui.add(btn).clicked() {
@@ -412,7 +425,7 @@ impl DiffViewerState {
                 ui.add_space(8.0);
 
                 // Allowable Difference Threshold Slider & Quick Presets
-                ui.label(egui::RichText::new("Tolerance:").small().color(Color32::from_rgb(148, 163, 184)));
+                ui.label(egui::RichText::new("Tolerance:").small().color(f_low));
                 let slider = egui::Slider::new(&mut self.image_options.threshold, 0.00..=0.50)
                     .step_by(0.01)
                     .show_value(true);
@@ -425,9 +438,10 @@ impl DiffViewerState {
                     let t_btn = egui::Button::new(
                         egui::RichText::new(*label)
                             .small()
-                            .color(if is_cur { Color32::WHITE } else { Color32::from_rgb(148, 163, 184) }),
+                            .color(if is_cur { crate::hex_to_c32(&palette.theme.f_inv) } else { f_low }),
                     )
-                    .fill(if is_cur { Color32::from_rgb(79, 70, 229) } else { Color32::from_rgb(30, 41, 59) })
+                    .fill(if is_cur { accent } else { b_med })
+                    .stroke(Stroke::new(1.0, b_low))
                     .rounding(Rounding::same(4.0));
 
                     if ui.add(t_btn).clicked() && !is_cur {
@@ -442,9 +456,10 @@ impl DiffViewerState {
                 let swap_btn = egui::Button::new(
                     egui::RichText::new("⇄ Swap [S]")
                         .small()
-                        .color(Color32::from_rgb(226, 232, 240)),
+                        .color(f_high),
                 )
-                .fill(Color32::from_rgb(30, 41, 59))
+                .fill(b_med)
+                .stroke(Stroke::new(1.0, b_low))
                 .rounding(Rounding::same(4.0));
 
                 if ui.add(swap_btn).on_hover_text("Swap Left and Right images (Hotkey: S)").clicked() {
@@ -455,9 +470,10 @@ impl DiffViewerState {
                 let copy_btn = egui::Button::new(
                     egui::RichText::new("📋 Copy Diff Mask")
                         .small()
-                        .color(Color32::from_rgb(226, 232, 240)),
+                        .color(f_high),
                 )
-                .fill(Color32::from_rgb(30, 41, 59))
+                .fill(b_med)
+                .stroke(Stroke::new(1.0, b_low))
                 .rounding(Rounding::same(4.0));
 
                 if ui.add(copy_btn).clicked() {
@@ -470,9 +486,10 @@ impl DiffViewerState {
                     let close_btn = egui::Button::new(
                         egui::RichText::new("✕ Close (Esc)")
                             .strong()
-                            .color(Color32::WHITE),
+                            .color(crate::hex_to_c32(&palette.undo_border)),
                     )
-                    .fill(Color32::from_rgb(220, 38, 38))
+                    .fill(crate::hex_to_c32(&palette.undo_card_bg))
+                    .stroke(Stroke::new(1.0, crate::hex_to_c32(&palette.undo_border)))
                     .rounding(Rounding::same(6.0));
 
                     if ui.add(close_btn).clicked() {
@@ -483,7 +500,7 @@ impl DiffViewerState {
                         if now - ts < 3.5 {
                             ui.label(
                                 egui::RichText::new(msg)
-                                    .color(Color32::from_rgb(52, 211, 153))
+                                    .color(success_color)
                                     .small(),
                             );
                         }
@@ -495,7 +512,7 @@ impl DiffViewerState {
 
             // 2. Main Image Comparison Display Area
             if self.is_computing {
-                self.render_computing_ui(ui);
+                self.render_computing_ui(ui, palette);
             } else if let Some(res) = &self.image_result {
                 let aspect = (res.width as f32) / (res.height as f32).max(1.0);
 
@@ -518,9 +535,10 @@ impl DiffViewerState {
                             // Column 1: Base
                             self.render_image_column(
                                 ui,
+                                palette,
                                 "base",
                                 self.lhs.label(),
-                                Color32::from_rgb(226, 232, 240),
+                                f_high,
                                 self.base_texture.as_ref(),
                                 img_w,
                                 img_h,
@@ -531,9 +549,10 @@ impl DiffViewerState {
                             // Column 2: Comparison
                             self.render_image_column(
                                 ui,
+                                palette,
                                 "comparison",
                                 self.rhs.label(),
-                                Color32::from_rgb(226, 232, 240),
+                                f_high,
                                 self.comp_texture.as_ref(),
                                 img_w,
                                 img_h,
@@ -545,9 +564,10 @@ impl DiffViewerState {
                             let diff_sub = format!("{} diff pixels ({:.2}%)", res.diff_count, res.diff_percentage);
                             self.render_image_column(
                                 ui,
+                                palette,
                                 "diff",
                                 &diff_sub,
-                                Color32::from_rgb(251, 113, 133),
+                                del_color,
                                 self.mask_texture.as_ref(),
                                 img_w,
                                 img_h,
@@ -569,15 +589,15 @@ impl DiffViewerState {
                             ui.label(
                                 egui::RichText::new("Diff Overlay (Dimmed Base + Glowing Difference)")
                                     .strong()
-                                    .color(Color32::WHITE),
+                                    .color(f_high),
                             );
                             ui.add_space(4.0);
 
                             if let Some(tex) = &self.overlay_texture {
                                 egui::Frame::none()
-                                    .fill(Color32::BLACK)
+                                    .fill(b_low)
                                     .rounding(Rounding::same(6.0))
-                                    .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
+                                    .stroke(Stroke::new(1.0, b_med))
                                     .inner_margin(egui::Margin::same(4.0))
                                     .show(ui, |ui| {
                                         ui.image(egui::load::SizedTexture::new(tex.id(), Vec2::new(img_w, img_h)));
@@ -598,17 +618,17 @@ impl DiffViewerState {
 
                         ui.vertical_centered(|ui| {
                             ui.label(
-                                egui::RichText::new("Diff Mask (Black Canvas + Glowing Difference)")
+                                egui::RichText::new("Diff Mask (Dark Canvas + Glowing Difference)")
                                     .strong()
-                                    .color(Color32::from_rgb(251, 113, 133)),
+                                    .color(del_color),
                             );
                             ui.add_space(4.0);
 
                             if let Some(tex) = &self.mask_texture {
                                 egui::Frame::none()
-                                    .fill(Color32::BLACK)
+                                    .fill(b_low)
                                     .rounding(Rounding::same(6.0))
-                                    .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
+                                    .stroke(Stroke::new(1.0, b_med))
                                     .inner_margin(egui::Margin::same(4.0))
                                     .show(ui, |ui| {
                                         ui.image(egui::load::SizedTexture::new(tex.id(), Vec2::new(img_w, img_h)));
@@ -633,9 +653,10 @@ impl DiffViewerState {
 
                             self.render_image_column(
                                 ui,
+                                palette,
                                 "base",
                                 self.lhs.label(),
-                                Color32::from_rgb(226, 232, 240),
+                                f_high,
                                 self.base_texture.as_ref(),
                                 img_w,
                                 img_h,
@@ -646,9 +667,10 @@ impl DiffViewerState {
                             let diff_sub = format!("{} diff pixels ({:.2}%)", res.diff_count, res.diff_percentage);
                             self.render_image_column(
                                 ui,
+                                palette,
                                 "diff",
                                 &diff_sub,
-                                Color32::from_rgb(251, 113, 133),
+                                del_color,
                                 self.mask_texture.as_ref(),
                                 img_w,
                                 img_h,
@@ -661,7 +683,7 @@ impl DiffViewerState {
                     ui.vertical_centered(|ui| {
                         ui.label(
                             egui::RichText::new("⚠️ Unable to Compare Images")
-                                .color(Color32::from_rgb(248, 113, 113))
+                                .color(del_color)
                                 .heading(),
                         );
                         ui.add_space(8.0);
@@ -671,7 +693,7 @@ impl DiffViewerState {
                             .unwrap_or("Unable to decode one or both images for comparison");
                         ui.label(
                             egui::RichText::new(err_text)
-                                .color(Color32::from_rgb(226, 232, 240))
+                                .color(f_med)
                                 .size(14.0),
                         );
                     });
@@ -680,27 +702,32 @@ impl DiffViewerState {
         });
     }
 
-    fn render_computing_ui(&self, ui: &mut egui::Ui) {
+    fn render_computing_ui(&self, ui: &mut egui::Ui, palette: &little_clip_core::theme::AppPalette) {
         let elapsed = self.compute_start_time.elapsed().as_secs_f32();
         let progress = (elapsed * 0.75).fract();
+        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let f_high = crate::hex_to_c32(&palette.theme.f_high);
+        let f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let accent = crate::hex_to_c32(&palette.harmonies.base);
 
         ui.centered_and_justified(|ui| {
             egui::Frame::none()
-                .fill(Color32::from_rgb(30, 41, 59))
-                .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
+                .fill(b_med)
+                .stroke(Stroke::new(1.0, b_low))
                 .rounding(Rounding::same(12.0))
                 .inner_margin(egui::Margin::symmetric(36.0, 28.0))
                 .show(ui, |ui| {
                     ui.set_max_width(400.0);
                     ui.vertical_centered(|ui| {
-                        ui.add(egui::Spinner::new().size(40.0).color(Color32::from_rgb(99, 102, 241)));
+                        ui.add(egui::Spinner::new().size(40.0).color(accent));
                         ui.add_space(14.0);
 
                         ui.label(
                             egui::RichText::new("Comparing Images...")
                                 .heading()
                                 .strong()
-                                .color(Color32::WHITE),
+                                .color(f_high),
                         );
                         ui.add_space(8.0);
 
@@ -717,12 +744,12 @@ impl DiffViewerState {
                         ui.label(
                             egui::RichText::new(format!("Base: {}", self.lhs.label()))
                                 .small()
-                                .color(Color32::from_rgb(148, 163, 184)),
+                                .color(f_low),
                         );
                         ui.label(
                             egui::RichText::new(format!("Comp: {}", self.rhs.label()))
                                 .small()
-                                .color(Color32::from_rgb(148, 163, 184)),
+                                .color(f_low),
                         );
 
                         ui.add_space(8.0);
@@ -730,7 +757,7 @@ impl DiffViewerState {
                         ui.label(
                             egui::RichText::new(format!("{:.2}s elapsed • multithreaded SIMD comparison", elapsed))
                                 .small()
-                                .color(Color32::from_rgb(129, 140, 248)),
+                                .color(accent),
                         );
 
                         ui.add_space(10.0);
@@ -738,7 +765,7 @@ impl DiffViewerState {
                         ui.label(
                             egui::RichText::new("[Esc] Cancel / Close")
                                 .small()
-                                .color(Color32::from_rgb(100, 116, 139)),
+                                .color(f_low),
                         );
                     });
                 });
@@ -748,6 +775,7 @@ impl DiffViewerState {
     fn render_image_column(
         &self,
         ui: &mut egui::Ui,
+        palette: &little_clip_core::theme::AppPalette,
         title: &str,
         subtitle: &str,
         title_color: Color32,
@@ -755,6 +783,10 @@ impl DiffViewerState {
         w: f32,
         h: f32,
     ) {
+        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let f_low = crate::hex_to_c32(&palette.theme.f_low);
+
         ui.vertical(|ui| {
             ui.set_width(w);
 
@@ -768,7 +800,7 @@ impl DiffViewerState {
                 ui.label(
                     egui::RichText::new(format!("• {}", subtitle))
                         .small()
-                        .color(Color32::from_rgb(148, 163, 184)),
+                        .color(f_low),
                 );
             });
 
@@ -776,9 +808,9 @@ impl DiffViewerState {
 
             // Image Frame Box
             egui::Frame::none()
-                .fill(Color32::from_rgb(15, 23, 42))
+                .fill(b_low)
                 .rounding(Rounding::same(6.0))
-                .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
+                .stroke(Stroke::new(1.0, b_med))
                 .inner_margin(egui::Margin::same(2.0))
                 .show(ui, |ui| {
                     if let Some(tex) = texture {
@@ -808,9 +840,20 @@ impl DiffViewerState {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
+        palette: &little_clip_core::theme::AppPalette,
         close_requested: &mut bool,
         now: f64,
     ) {
+        let bg = crate::hex_to_c32(&palette.theme.background);
+        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let f_high = crate::hex_to_c32(&palette.theme.f_high);
+        let f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let accent = crate::hex_to_c32(&palette.harmonies.base);
+        let success_color = crate::hex_to_c32(&palette.diff_add);
+        let lhs_accent = crate::hex_to_c32(&palette.left_hand_border);
+        let rhs_accent = crate::hex_to_c32(&palette.right_hand_border);
+
         let copy_requested = ctx.input(|i| {
             i.events.iter().any(|e| matches!(e, egui::Event::Copy))
                 || i.raw.events.iter().any(|e| matches!(e, egui::Event::Copy))
@@ -831,7 +874,7 @@ impl DiffViewerState {
             ui.painter().rect_filled(
                 full_rect,
                 Rounding::ZERO,
-                Color32::from_rgba_unmultiplied(15, 23, 42, 250),
+                bg,
             );
 
             ui.add_space(8.0);
@@ -844,27 +887,19 @@ impl DiffViewerState {
                     egui::RichText::new("⑂ Diff Comparison")
                         .heading()
                         .strong()
-                        .color(Color32::WHITE),
+                        .color(f_high),
                 );
 
                 ui.add_space(8.0);
 
                 // Engine Badge
-                let (badge_bg, badge_fg) = if self.result.engine_name.contains("Difftastic") {
-                    (Color32::from_rgb(6, 78, 59), Color32::from_rgb(52, 211, 153))
-                } else if self.result.engine_name.contains("Unified") || self.result.engine_name.contains("Split") {
-                    (Color32::from_rgb(30, 58, 138), Color32::from_rgb(147, 197, 253))
-                } else {
-                    (Color32::from_rgb(30, 41, 59), Color32::from_rgb(148, 163, 184))
-                };
-
                 let badge = egui::Button::new(
                     egui::RichText::new(format!("⚡ {}", self.result.engine_name))
                         .small()
-                        .color(badge_fg),
+                        .color(accent),
                 )
-                .fill(badge_bg)
-                .stroke(Stroke::NONE)
+                .fill(b_med)
+                .stroke(Stroke::new(1.0, b_low))
                 .rounding(Rounding::same(4.0));
                 ui.add(badge);
 
@@ -876,9 +911,10 @@ impl DiffViewerState {
                     egui::RichText::new("⬌ Split (Side-by-Side)")
                         .small()
                         .strong()
-                        .color(if is_split { Color32::WHITE } else { Color32::from_rgb(148, 163, 184) }),
+                        .color(if is_split { crate::hex_to_c32(&palette.theme.f_inv) } else { f_low }),
                 )
-                .fill(if is_split { Color32::from_rgb(37, 99, 235) } else { Color32::from_rgb(30, 41, 59) })
+                .fill(if is_split { accent } else { b_med })
+                .stroke(Stroke::new(1.0, b_low))
                 .rounding(Rounding::same(4.0));
 
                 if ui.add(split_btn).clicked() && !is_split {
@@ -891,9 +927,10 @@ impl DiffViewerState {
                     egui::RichText::new("☰ Inline")
                         .small()
                         .strong()
-                        .color(if is_inline { Color32::WHITE } else { Color32::from_rgb(148, 163, 184) }),
+                        .color(if is_inline { crate::hex_to_c32(&palette.theme.f_inv) } else { f_low }),
                 )
-                .fill(if is_inline { Color32::from_rgb(37, 99, 235) } else { Color32::from_rgb(30, 41, 59) })
+                .fill(if is_inline { accent } else { b_med })
+                .stroke(Stroke::new(1.0, b_low))
                 .rounding(Rounding::same(4.0));
 
                 if ui.add(inline_btn).clicked() && !is_inline {
@@ -907,9 +944,10 @@ impl DiffViewerState {
                 let swap_btn = egui::Button::new(
                     egui::RichText::new("⇄ Swap Left/Right")
                         .small()
-                        .color(Color32::from_rgb(226, 232, 240)),
+                        .color(f_high),
                 )
-                .fill(Color32::from_rgb(30, 41, 59))
+                .fill(b_med)
+                .stroke(Stroke::new(1.0, b_low))
                 .rounding(Rounding::same(4.0));
 
                 if ui.add(swap_btn).on_hover_text("Swap LHS and RHS comparison operands (Hotkey: S)").clicked() {
@@ -920,9 +958,10 @@ impl DiffViewerState {
                 let copy_btn = egui::Button::new(
                     egui::RichText::new("📋 Copy Diff")
                         .small()
-                        .color(Color32::from_rgb(226, 232, 240)),
+                        .color(f_high),
                 )
-                .fill(Color32::from_rgb(30, 41, 59))
+                .fill(b_med)
+                .stroke(Stroke::new(1.0, b_low))
                 .rounding(Rounding::same(4.0));
 
                 if ui.add(copy_btn).clicked() {
@@ -936,9 +975,10 @@ impl DiffViewerState {
                     let close_btn = egui::Button::new(
                         egui::RichText::new("✕ Close (Esc)")
                             .strong()
-                            .color(Color32::WHITE),
+                            .color(crate::hex_to_c32(&palette.undo_border)),
                     )
-                    .fill(Color32::from_rgb(220, 38, 38))
+                    .fill(crate::hex_to_c32(&palette.undo_card_bg))
+                    .stroke(Stroke::new(1.0, crate::hex_to_c32(&palette.undo_border)))
                     .rounding(Rounding::same(6.0));
 
                     if ui.add(close_btn).clicked() {
@@ -949,7 +989,7 @@ impl DiffViewerState {
                         if now - ts < 3.0 {
                             ui.label(
                                 egui::RichText::new(msg)
-                                    .color(Color32::from_rgb(52, 211, 153))
+                                    .color(success_color)
                                     .small(),
                             );
                         }
@@ -968,9 +1008,9 @@ impl DiffViewerState {
 
                 // Left Operand Card
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(30, 41, 59))
+                    .fill(b_med)
                     .rounding(Rounding::same(6.0))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
+                    .stroke(Stroke::new(1.0, b_low))
                     .inner_margin(egui::Margin::symmetric(10.0, 6.0))
                     .show(ui, |ui| {
                         ui.set_width(half_w);
@@ -979,13 +1019,13 @@ impl DiffViewerState {
                                 egui::RichText::new("LHS (Original):")
                                     .small()
                                     .strong()
-                                    .color(Color32::from_rgb(248, 113, 113)),
+                                    .color(lhs_accent),
                             );
                             let lhs_type = if self.lhs.is_file() { "📄 File" } else { "📋 Clipboard Text" };
                             ui.label(
                                 egui::RichText::new(format!("{} • {} ({} lines)", lhs_type, self.lhs.label(), self.lhs.line_count()))
                                     .small()
-                                    .color(Color32::from_rgb(226, 232, 240)),
+                                    .color(f_high),
                             );
                         });
                     });
@@ -994,9 +1034,9 @@ impl DiffViewerState {
 
                 // Right Operand Card
                 egui::Frame::none()
-                    .fill(Color32::from_rgb(30, 41, 59))
+                    .fill(b_med)
                     .rounding(Rounding::same(6.0))
-                    .stroke(Stroke::new(1.0, Color32::from_rgb(51, 65, 85)))
+                    .stroke(Stroke::new(1.0, b_low))
                     .inner_margin(egui::Margin::symmetric(10.0, 6.0))
                     .show(ui, |ui| {
                         ui.set_width(half_w);
@@ -1005,13 +1045,13 @@ impl DiffViewerState {
                                 egui::RichText::new("RHS (Modified):")
                                     .small()
                                     .strong()
-                                    .color(Color32::from_rgb(74, 222, 128)),
+                                    .color(rhs_accent),
                             );
                             let rhs_type = if self.rhs.is_file() { "📄 File" } else { "📋 Clipboard Text" };
                             ui.label(
                                 egui::RichText::new(format!("{} • {} ({} lines)", rhs_type, self.rhs.label(), self.rhs.line_count()))
                                     .small()
-                                    .color(Color32::from_rgb(226, 232, 240)),
+                                    .color(f_high),
                             );
                         });
                     });
@@ -1021,8 +1061,8 @@ impl DiffViewerState {
 
             // 3. Diff View Content Area
             egui::Frame::none()
-                .fill(Color32::from_rgb(11, 15, 25))
-                .stroke(Stroke::new(1.0, Color32::from_rgb(30, 41, 59)))
+                .fill(b_low)
+                .stroke(Stroke::new(1.0, b_med))
                 .rounding(Rounding::same(8.0))
                 .inner_margin(egui::Margin::same(12.0))
                 .show(ui, |ui| {
@@ -1043,7 +1083,7 @@ impl DiffViewerState {
                     egui::RichText::new("Navigation: [Esc] Close • [Tab] Toggle Mode • [S] Swap Operands • [Ctrl+C] Copy Diff")
                         .weak()
                         .small()
-                        .color(Color32::from_rgb(100, 116, 139)),
+                        .color(f_low),
                 );
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1052,14 +1092,14 @@ impl DiffViewerState {
                         ui.label(
                             egui::RichText::new("✓ Identical: No differences detected")
                                 .strong()
-                                .color(Color32::from_rgb(74, 222, 128)),
+                                .color(success_color),
                         );
                     } else {
                         let lines_count = self.result.raw_ansi.lines().count();
                         ui.label(
                             egui::RichText::new(format!("{} lines in diff", lines_count))
                                 .small()
-                                .color(Color32::from_rgb(148, 163, 184)),
+                                .color(f_low),
                         );
                     }
                 });

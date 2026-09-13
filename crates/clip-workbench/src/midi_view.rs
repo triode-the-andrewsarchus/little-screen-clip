@@ -32,31 +32,38 @@ pub struct MidiViewerState {
     pub status_toast: Option<(String, f64)>,
 }
 
-/// Computes a distinct palette color for notes in a given MIDI track and channel.
-pub fn get_track_color(track_idx: usize, channel: u8, total_tracks: usize) -> Color32 {
+/// Computes a distinct palette color for notes in a given MIDI track and channel using theme harmonies.
+pub fn get_track_color(
+    track_idx: usize,
+    channel: u8,
+    total_tracks: usize,
+    palette: &little_clip_core::theme::AppPalette,
+) -> Color32 {
+    let drum_color = crate::hex_to_c32(&palette.harmonies.warm_attention);
+    let base_accent = crate::hex_to_c32(&palette.harmonies.base);
     if total_tracks <= 1 {
         if channel == 9 {
-            Color32::from_rgb(251, 146, 60) // Orange for drum channel
+            drum_color
         } else {
-            Color32::from_rgb(56, 189, 248) // Clean sky blue for single track
+            base_accent
         }
     } else {
-        const TRACK_PALETTE: [Color32; 10] = [
-            Color32::from_rgb(6, 182, 212),   // Cyan
-            Color32::from_rgb(245, 158, 11),  // Amber
-            Color32::from_rgb(168, 85, 247),  // Purple
-            Color32::from_rgb(244, 63, 94),   // Rose
-            Color32::from_rgb(34, 197, 94),   // Emerald green
-            Color32::from_rgb(59, 130, 246),  // Blue
-            Color32::from_rgb(234, 88, 12),   // Orange
-            Color32::from_rgb(236, 72, 153),  // Pink
-            Color32::from_rgb(20, 184, 166),  // Teal
-            Color32::from_rgb(132, 204, 22),  // Lime
+        let track_palette: [Color32; 10] = [
+            crate::hex_to_c32(&palette.harmonies.base),
+            crate::hex_to_c32(&palette.harmonies.complementary),
+            crate::hex_to_c32(&palette.harmonies.triadic_1),
+            crate::hex_to_c32(&palette.harmonies.triadic_2),
+            crate::hex_to_c32(&palette.harmonies.tetradic_1),
+            crate::hex_to_c32(&palette.harmonies.tetradic_2),
+            crate::hex_to_c32(&palette.diff_add),
+            crate::hex_to_c32(&palette.diff_mod),
+            crate::hex_to_c32(&palette.diff_del),
+            crate::hex_to_c32(&palette.harmonies.warm_attention),
         ];
         if channel == 9 {
-            Color32::from_rgb(249, 115, 22) // Distinct orange for drums
+            drum_color
         } else {
-            TRACK_PALETTE[track_idx % TRACK_PALETTE.len()]
+            track_palette[track_idx % track_palette.len()]
         }
     }
 }
@@ -266,7 +273,7 @@ impl MidiViewerState {
         }
     }
 
-    pub fn render_ui(&mut self, ui: &mut egui::Ui, close: &mut bool) {
+    pub fn render_ui(&mut self, ui: &mut egui::Ui, palette: &little_clip_core::theme::AppPalette, close: &mut bool) {
         self.update_playback();
         if self.is_playing {
             ui.ctx().request_repaint();
@@ -301,8 +308,19 @@ impl MidiViewerState {
             .unwrap()
             .as_secs_f64();
 
+        let bg = crate::hex_to_c32(&palette.theme.background);
+        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let f_high = crate::hex_to_c32(&palette.theme.f_high);
+        let f_med = crate::hex_to_c32(&palette.theme.f_med);
+        let f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let accent = crate::hex_to_c32(&palette.harmonies.base);
+        let playhead_color = crate::hex_to_c32(&palette.harmonies.complementary);
+        let success_color = crate::hex_to_c32(&palette.diff_add);
+        let pause_color = crate::hex_to_c32(&palette.harmonies.warm_attention);
+
         egui::Frame::none()
-            .fill(Color32::from_rgb(15, 23, 42)) // Slate 900
+            .fill(bg)
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 // 1. Top Control Bar
@@ -316,7 +334,7 @@ impl MidiViewerState {
                         egui::RichText::new(&self.title)
                             .strong()
                             .size(18.0)
-                            .color(Color32::WHITE),
+                            .color(f_high),
                     );
 
                     ui.add_space(10.0);
@@ -327,25 +345,25 @@ impl MidiViewerState {
                     ui.label(
                         egui::RichText::new(info_text)
                             .small()
-                            .color(Color32::from_rgb(148, 163, 184)),
+                            .color(f_low),
                     );
 
                     ui.add_space(14.0);
                     // Transport controls
                     if self.is_playing {
                         let pause_btn = egui::Button::new(
-                            egui::RichText::new("⏸ Pause (Space)").small().strong().color(Color32::WHITE),
+                            egui::RichText::new("⏸ Pause (Space)").small().strong().color(crate::hex_to_c32(&palette.theme.f_inv)),
                         )
-                        .fill(Color32::from_rgb(234, 88, 12)) // Amber
+                        .fill(pause_color)
                         .rounding(Rounding::same(4.0));
                         if ui.add(pause_btn).clicked() {
                             self.pause();
                         }
                     } else {
                         let play_btn = egui::Button::new(
-                            egui::RichText::new("▶ Play (Space)").small().strong().color(Color32::WHITE),
+                            egui::RichText::new("▶ Play (Space)").small().strong().color(crate::hex_to_c32(&palette.theme.f_inv)),
                         )
-                        .fill(Color32::from_rgb(22, 163, 74)) // Emerald green
+                        .fill(success_color)
                         .rounding(Rounding::same(4.0));
                         if ui.add(play_btn).clicked() {
                             self.play();
@@ -353,9 +371,10 @@ impl MidiViewerState {
                     }
 
                     let stop_btn = egui::Button::new(
-                        egui::RichText::new("⏹ Stop").small().strong().color(Color32::WHITE),
+                        egui::RichText::new("⏹ Stop").small().strong().color(f_high),
                     )
-                    .fill(Color32::from_rgb(51, 65, 85))
+                    .fill(b_med)
+                    .stroke(Stroke::new(1.0, b_low))
                     .rounding(Rounding::same(4.0));
                     if ui.add(stop_btn).clicked() {
                         self.stop();
@@ -368,33 +387,36 @@ impl MidiViewerState {
                             .monospace()
                             .small()
                             .strong()
-                            .color(Color32::from_rgb(56, 189, 248)),
+                            .color(accent),
                     );
 
                     ui.add_space(12.0);
                     // Zoom Toolbar Controls
                     let zoom_out_btn = egui::Button::new(
-                        egui::RichText::new("🔍 -").small().strong().color(Color32::WHITE),
+                        egui::RichText::new("🔍 -").small().strong().color(f_high),
                     )
-                    .fill(Color32::from_rgb(30, 41, 59))
+                    .fill(b_med)
+                    .stroke(Stroke::new(1.0, b_low))
                     .rounding(Rounding::same(4.0));
                     if ui.add(zoom_out_btn).on_hover_text("Zoom Out (- / Wheel Down)").clicked() {
                         self.zoom(1.25, self.playhead_sec);
                     }
 
                     let zoom_in_btn = egui::Button::new(
-                        egui::RichText::new("🔍 +").small().strong().color(Color32::WHITE),
+                        egui::RichText::new("🔍 +").small().strong().color(f_high),
                     )
-                    .fill(Color32::from_rgb(30, 41, 59))
+                    .fill(b_med)
+                    .stroke(Stroke::new(1.0, b_low))
                     .rounding(Rounding::same(4.0));
                     if ui.add(zoom_in_btn).on_hover_text("Zoom In (+ / Wheel Up)").clicked() {
                         self.zoom(0.8, self.playhead_sec);
                     }
 
                     let fit_btn = egui::Button::new(
-                        egui::RichText::new("Fit").small().color(Color32::from_rgb(203, 213, 225)),
+                        egui::RichText::new("Fit").small().color(f_med),
                     )
-                    .fill(Color32::from_rgb(30, 41, 59))
+                    .fill(b_med)
+                    .stroke(Stroke::new(1.0, b_low))
                     .rounding(Rounding::same(4.0));
                     if ui.add(fit_btn).on_hover_text("Reset Zoom / Fit Entire Track").clicked() {
                         self.reset_zoom();
@@ -405,7 +427,7 @@ impl MidiViewerState {
                         egui::RichText::new(format!("{}%", zoom_pct))
                             .monospace()
                             .small()
-                            .color(Color32::from_rgb(148, 163, 184)),
+                            .color(f_low),
                     );
 
                     // Right aligned Close button & toast
@@ -413,9 +435,10 @@ impl MidiViewerState {
                         let close_btn = egui::Button::new(
                             egui::RichText::new("✕ Close (Esc)")
                                 .strong()
-                                .color(Color32::WHITE),
+                                .color(crate::hex_to_c32(&palette.undo_border)),
                         )
-                        .fill(Color32::from_rgb(220, 38, 38))
+                        .fill(crate::hex_to_c32(&palette.undo_card_bg))
+                        .stroke(Stroke::new(1.0, crate::hex_to_c32(&palette.undo_border)))
                         .rounding(Rounding::same(6.0));
                         if ui.add(close_btn).clicked() {
                             self.stop();
@@ -427,7 +450,7 @@ impl MidiViewerState {
                                 ui.label(
                                     egui::RichText::new(msg)
                                         .small()
-                                        .color(Color32::from_rgb(52, 211, 153)),
+                                        .color(success_color),
                                 );
                             }
                         }
@@ -442,7 +465,7 @@ impl MidiViewerState {
                             egui::RichText::new("Tracks:")
                                 .small()
                                 .strong()
-                                .color(Color32::from_rgb(148, 163, 184)),
+                                .color(f_low),
                         );
                         for t_idx in 0..self.data.track_count {
                             let note_count = self.data.notes.iter().filter(|n| n.track == t_idx).count();
@@ -451,7 +474,7 @@ impl MidiViewerState {
                             }
                             let first_note = self.data.notes.iter().find(|n| n.track == t_idx);
                             let channel = first_note.map(|n| n.channel).unwrap_or(0);
-                            let t_color = get_track_color(t_idx, channel, self.data.track_count);
+                            let t_color = get_track_color(t_idx, channel, self.data.track_count, palette);
                             let t_name = self.data.track_names.get(t_idx).cloned().unwrap_or_else(|| format!("Track {}", t_idx + 1));
 
                             ui.label(
@@ -474,7 +497,7 @@ impl MidiViewerState {
                 let painter = ui.painter_at(canvas_rect);
 
                 // Background
-                painter.rect_filled(canvas_rect, Rounding::ZERO, Color32::from_rgb(11, 15, 25));
+                painter.rect_filled(canvas_rect, Rounding::ZERO, b_low);
 
                 let kb_width = 48.0f32;
                 let grid_rect = Rect::from_min_max(
@@ -502,29 +525,29 @@ impl MidiViewerState {
 
                     let black = is_black_key(k_int);
                     let lane_bg = if black {
-                        Color32::from_rgb(15, 20, 32)
+                        b_low
                     } else if (k_int % 12) == 0 {
-                        Color32::from_rgb(26, 36, 56) // C note emphasis
+                        b_med // C note emphasis
                     } else {
-                        Color32::from_rgb(18, 26, 42)
+                        bg
                     };
                     painter.rect_filled(lane_rect, Rounding::ZERO, lane_bg);
-                    painter.line_segment([lane_rect.left_bottom(), lane_rect.right_bottom()], Stroke::new(0.5, Color32::from_rgb(30, 41, 59)));
+                    painter.line_segment([lane_rect.left_bottom(), lane_rect.right_bottom()], Stroke::new(0.5, b_med));
 
                     // Left keyboard key
                     let key_rect = Rect::from_min_size(Pos2::new(canvas_rect.min.x, y_top), Vec2::new(kb_width, row_height));
                     let key_color = if black {
-                        Color32::from_rgb(30, 41, 59)
+                        b_med
                     } else {
-                        Color32::from_rgb(226, 232, 240)
+                        f_high
                     };
                     let key_text_color = if black {
-                        Color32::from_rgb(148, 163, 184)
+                        f_low
                     } else {
-                        Color32::from_rgb(15, 23, 42)
+                        bg
                     };
                     painter.rect_filled(key_rect, Rounding::same(2.0), key_color);
-                    painter.rect_stroke(key_rect, Rounding::same(2.0), Stroke::new(0.5, Color32::from_rgb(71, 85, 105)));
+                    painter.rect_stroke(key_rect, Rounding::same(2.0), Stroke::new(0.5, b_low));
 
                     let note_name = format!("{}{}", NOTE_NAMES[(k_int % 12) as usize], (k_int as i32 / 12) - 1);
                     if row_height >= 12.0 || (k_int % 12) == 0 {
@@ -641,9 +664,9 @@ impl MidiViewerState {
                         let x = grid_rect.min.x + norm_x * grid_rect.width();
                         let is_major = (s / (step * 5.0)).fract().abs() < 0.001 || ((s / step).round() as i64 % 5 == 0);
                         let stroke = if is_major {
-                            Stroke::new(1.0, Color32::from_rgb(71, 85, 105))
+                            Stroke::new(1.0, f_low)
                         } else {
-                            Stroke::new(0.5, Color32::from_rgb(30, 41, 59))
+                            Stroke::new(0.5, b_med)
                         };
                         painter.line_segment([Pos2::new(x, grid_rect.min.y), Pos2::new(x, grid_rect.max.y)], stroke);
 
@@ -657,7 +680,7 @@ impl MidiViewerState {
                             egui::Align2::LEFT_TOP,
                             label_text,
                             egui::FontId::monospace(9.0),
-                            Color32::from_rgb(100, 116, 139),
+                            f_low,
                         );
                     }
                     s += step;
@@ -695,10 +718,10 @@ impl MidiViewerState {
                         hovered = Some(note.clone());
                     }
 
-                    // Colored per track
-                    let base_track_color = get_track_color(note.track, note.channel, self.data.track_count);
+                    // Colored per track using palette harmonies
+                    let base_track_color = get_track_color(note.track, note.channel, self.data.track_count, palette);
                     let fill_color = if is_note_hovered {
-                        Color32::WHITE
+                        f_high
                     } else {
                         let vel_factor = (note.velocity as f32 / 127.0).clamp(0.5, 1.0);
                         Color32::from_rgb(
@@ -709,7 +732,7 @@ impl MidiViewerState {
                     };
 
                     painter.rect_filled(note_rect, Rounding::same(2.0), fill_color);
-                    painter.rect_stroke(note_rect, Rounding::same(2.0), Stroke::new(0.5, Color32::from_rgba_premultiplied(255, 255, 255, 50)));
+                    painter.rect_stroke(note_rect, Rounding::same(2.0), Stroke::new(0.5, b_low));
                 }
 
                 self.hovered_note = hovered;
@@ -720,7 +743,7 @@ impl MidiViewerState {
                     let px = grid_rect.min.x + playhead_norm * grid_rect.width();
                     painter.line_segment(
                         [Pos2::new(px, grid_rect.min.y), Pos2::new(px, grid_rect.max.y)],
-                        Stroke::new(2.0, Color32::from_rgb(239, 68, 68)), // Red playhead
+                        Stroke::new(2.0, playhead_color),
                     );
 
                     // Playhead triangle handle
@@ -730,7 +753,7 @@ impl MidiViewerState {
                             Pos2::new(px + 6.0, grid_rect.min.y),
                             Pos2::new(px, grid_rect.min.y + 10.0),
                         ],
-                        Color32::from_rgb(239, 68, 68),
+                        playhead_color,
                         Stroke::NONE,
                     ));
                 } else if self.is_playing {
@@ -742,7 +765,7 @@ impl MidiViewerState {
                                 Pos2::new(grid_rect.min.x + 2.0, grid_rect.min.y + 10.0),
                                 Pos2::new(grid_rect.min.x + 8.0, grid_rect.min.y + 16.0),
                             ],
-                            Color32::from_rgb(239, 68, 68),
+                            playhead_color,
                             Stroke::NONE,
                         ));
                     } else if self.playhead_sec > view_end {
@@ -752,7 +775,7 @@ impl MidiViewerState {
                                 Pos2::new(grid_rect.max.x - 2.0, grid_rect.min.y + 10.0),
                                 Pos2::new(grid_rect.max.x - 8.0, grid_rect.min.y + 16.0),
                             ],
-                            Color32::from_rgb(239, 68, 68),
+                            playhead_color,
                             Stroke::NONE,
                         ));
                     }
