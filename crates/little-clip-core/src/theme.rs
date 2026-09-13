@@ -90,24 +90,36 @@ impl Theme {
             return pref.to_string();
         }
 
-        // Try the bg color from other fg/bg pairs or f_inv / fg colors
         let candidates = [
+            &self.f_high,
             &self.f_inv,
             &self.background,
-            &self.b_low,
             &self.b_high,
             &self.b_med,
+            &self.b_low,
             &self.b_inv,
-            &self.f_high,
             &self.f_med,
             &self.f_low,
         ];
 
+        // Try the theme palette colors to find the one with the highest contrast (>= 4.5)
+        let mut best_theme_cand: Option<(&str, f32)> = None;
         for cand in candidates {
             let (cr, cg, cb, _) = parse_hex_color_rgba(cand);
-            if contrast_ratio(bg_rgb, (cr, cg, cb)) >= 4.5 {
-                return cand.clone();
+            let ratio = contrast_ratio(bg_rgb, (cr, cg, cb));
+            if ratio >= 4.5 {
+                if let Some((_, best_r)) = best_theme_cand {
+                    if ratio > best_r {
+                        best_theme_cand = Some((cand, ratio));
+                    }
+                } else {
+                    best_theme_cand = Some((cand, ratio));
+                }
             }
+        }
+
+        if let Some((best, _)) = best_theme_cand {
+            return best.to_string();
         }
 
         // Fallback: Pick between pure black and pure white
@@ -673,4 +685,46 @@ mod tests {
             assert!(apollo.is_some(), "apollo theme should exist");
         }
     }
+
+    #[test]
+    fn test_all_themes_button_contrast() {
+        let dir = find_themes_dir();
+        if !dir.exists() {
+            return;
+        }
+        let themes = load_themes_from_dir(&dir);
+        assert!(!themes.is_empty());
+
+        for theme in themes {
+            let palette = AppPalette::from_theme(&theme, &HashMap::new());
+            let surfaces = [
+                ("harmonies.base", &palette.harmonies.base),
+                ("harmonies.warm_attention", &palette.harmonies.warm_attention),
+                ("diff_add", &palette.diff_add),
+                ("diff_del", &palette.diff_del),
+                ("b_med", &palette.theme.b_med),
+                ("b_low", &palette.theme.b_low),
+                ("undo_card_bg", &palette.undo_card_bg),
+                ("hero_card_bg", &palette.hero_card_bg),
+                ("prior_card_bg", &palette.prior_card_bg),
+            ];
+
+            for (name, surf) in surfaces {
+                let fg = palette.contrast_pair_fg(surf, Some(&palette.theme.f_high));
+                let (br, bg, bb, _) = parse_hex_color_rgba(surf);
+                let (fr, fg_val, fb, _) = parse_hex_color_rgba(&fg);
+                let ratio = contrast_ratio((br, bg, bb), (fr, fg_val, fb));
+                assert!(
+                    ratio >= 4.5,
+                    "Theme '{}' on surface '{}' ({}) with fg '{}' has contrast ratio {:.2} < 4.5",
+                    theme.name,
+                    name,
+                    surf,
+                    fg,
+                    ratio
+                );
+            }
+        }
+    }
 }
+

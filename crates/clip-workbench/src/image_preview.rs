@@ -2250,13 +2250,15 @@ impl ImagePreviewState {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Close button
+                        let close_bg = hex_to_c32(&palette.theme.b_med);
+                        let close_fg = contrast_text_c32(close_bg, Some(hex_to_c32(&palette.diff_del)), palette);
                         let close_btn = egui::Button::new(
                             egui::RichText::new("✕ Close (Esc)")
                                 .small()
                                 .strong()
-                                .color(hex_to_c32(&palette.diff_del)),
+                                .color(close_fg),
                         )
-                        .fill(hex_to_c32(&palette.theme.b_med))
+                        .fill(close_bg)
                         .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_low)))
                         .rounding(Rounding::same(4.0));
                         if ui.add(close_btn).clicked() {
@@ -2270,15 +2272,8 @@ impl ImagePreviewState {
 
                         // Escape Hatch 3: Viewer (Nomacs / default)
                         let viewer_label = format!("👁 {}", self.viewer);
-                        let viewer_btn = egui::Button::new(
-                            egui::RichText::new(viewer_label)
-                                .small()
-                                .strong()
-                                .color(hex_to_c32(&palette.theme.f_med)),
-                        )
-                        .fill(hex_to_c32(&palette.theme.b_med))
-                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_low)))
-                        .rounding(Rounding::same(4.0));
+                        let viewer_btn = crate::secondary_button(viewer_label, hex_to_c32(&palette.theme.b_med), palette)
+                            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_low)));
                         if ui.add(viewer_btn).on_hover_text(format!("Open in external viewer ({})", self.viewer)).clicked() {
                             let v = self.viewer.clone();
                             self.launch_external_app(&v, ctx, close);
@@ -2287,15 +2282,10 @@ impl ImagePreviewState {
                         // Escape Hatch 2: Inkscape (SVG)
                         let inkscape_label = format!("✒ {}", self.svg_editor);
                         let is_primary_svg = self.is_svg && self.undo_stack.is_empty();
-                        let inkscape_btn = egui::Button::new(
-                            egui::RichText::new(inkscape_label)
-                                .small()
-                                .strong()
-                                .color(if is_primary_svg { hex_to_c32(&palette.theme.f_high) } else { hex_to_c32(&palette.theme.f_low) }),
-                        )
-                        .fill(if is_primary_svg { hex_to_c32(&palette.harmonies.triadic_1) } else { hex_to_c32(&palette.theme.b_med) })
-                        .stroke(Stroke::new(1.0, if is_primary_svg { hex_to_c32(&palette.harmonies.triadic_1) } else { hex_to_c32(&palette.theme.b_low) }))
-                        .rounding(Rounding::same(4.0));
+                        let ink_bg = if is_primary_svg { hex_to_c32(&palette.harmonies.triadic_1) } else { hex_to_c32(&palette.theme.b_med) };
+                        let ink_pref = if is_primary_svg { hex_to_c32(&palette.theme.f_high) } else { hex_to_c32(&palette.theme.f_low) };
+                        let inkscape_btn = crate::themed_button(inkscape_label, ink_bg, Some(ink_pref), palette)
+                            .stroke(Stroke::new(1.0, if is_primary_svg { hex_to_c32(&palette.harmonies.triadic_1) } else { hex_to_c32(&palette.theme.b_low) }));
                         if ui.add(inkscape_btn).on_hover_text("Open file in Inkscape (Vector Editor)").clicked() {
                             let ed = self.svg_editor.clone();
                             self.launch_external_app(&ed, ctx, close);
@@ -2304,15 +2294,10 @@ impl ImagePreviewState {
                         // Escape Hatch 1: Krita (Raster)
                         let krita_label = format!("🎨 {}", self.external_editor);
                         let is_primary_raster = !is_primary_svg;
-                        let krita_btn = egui::Button::new(
-                            egui::RichText::new(krita_label)
-                                .small()
-                                .strong()
-                                .color(if is_primary_raster { hex_to_c32(&palette.theme.f_high) } else { hex_to_c32(&palette.theme.f_low) }),
-                        )
-                        .fill(if is_primary_raster { hex_to_c32(&palette.harmonies.base) } else { hex_to_c32(&palette.theme.b_med) })
-                        .stroke(Stroke::new(1.0, if is_primary_raster { hex_to_c32(&palette.harmonies.base) } else { hex_to_c32(&palette.theme.b_low) }))
-                        .rounding(Rounding::same(4.0));
+                        let krita_bg = if is_primary_raster { hex_to_c32(&palette.harmonies.base) } else { hex_to_c32(&palette.theme.b_med) };
+                        let krita_pref = if is_primary_raster { hex_to_c32(&palette.theme.f_high) } else { hex_to_c32(&palette.theme.f_low) };
+                        let krita_btn = crate::themed_button(krita_label, krita_bg, Some(krita_pref), palette)
+                            .stroke(Stroke::new(1.0, if is_primary_raster { hex_to_c32(&palette.harmonies.base) } else { hex_to_c32(&palette.theme.b_low) }));
                         if ui.add(krita_btn).on_hover_text("Open file in Krita (Full Photo & Painting Studio)").clicked() {
                             let ed = self.external_editor.clone();
                             self.launch_external_app(&ed, ctx, close);
@@ -2323,29 +2308,15 @@ impl ImagePreviewState {
                         ui.add_space(8.0);
 
                         // Save As button
-                        let save_btn = egui::Button::new(
-                            egui::RichText::new("💾 Save As...")
-                                .small()
-                                .strong()
-                                .color(hex_to_c32(&palette.theme.f_high)),
-                        )
-                        .fill(hex_to_c32(&palette.diff_add))
-                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.diff_add)))
-                        .rounding(Rounding::same(4.0));
+                        let save_btn = crate::action_button("💾 Save As...", hex_to_c32(&palette.diff_add), palette)
+                            .stroke(Stroke::new(1.0, hex_to_c32(&palette.diff_add)));
                         if ui.add(save_btn).on_hover_text("Save current image to file (Ctrl+S)").clicked() {
                             self.open_save_dialog();
                         }
 
                         // Copy to Clipboard Slot button
-                        let copy_btn = egui::Button::new(
-                            egui::RichText::new("📋 Copy (Ctrl+C)")
-                                .small()
-                                .strong()
-                                .color(hex_to_c32(&palette.theme.f_high)),
-                        )
-                        .fill(hex_to_c32(&palette.harmonies.base))
-                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.harmonies.base)))
-                        .rounding(Rounding::same(4.0));
+                        let copy_btn = crate::action_button("📋 Copy (Ctrl+C)", hex_to_c32(&palette.harmonies.base), palette)
+                            .stroke(Stroke::new(1.0, hex_to_c32(&palette.harmonies.base)));
                         if ui.add(copy_btn).on_hover_text("Copy current image to Left Hand clipboard slot & OS clipboard (Ctrl+C)").clicked() {
                             self.copy_to_clipboard_slot();
                         }
@@ -2421,18 +2392,7 @@ impl ImagePreviewState {
 
                     for mode in modes {
                         let is_active = self.active_mode == mode || (mode == ImageToolMode::PickColor && self.active_mode == ImageToolMode::Palette);
-                        let (bg, border, text_col) = if is_active {
-                            (hex_to_c32(&palette.harmonies.base), hex_to_c32(&palette.theme.f_high), hex_to_c32(&palette.theme.f_high))
-                        } else {
-                            (hex_to_c32(&palette.theme.b_med), hex_to_c32(&palette.theme.b_low), hex_to_c32(&palette.theme.f_med))
-                        };
-
-                        let btn = egui::Button::new(
-                            egui::RichText::new(mode.label()).small().strong().color(text_col),
-                        )
-                        .fill(bg)
-                        .stroke(Stroke::new(1.0, border))
-                        .rounding(Rounding::same(4.0));
+                        let btn = crate::mode_tab_button(mode.label(), is_active, palette);
 
                         if ui.add(btn).clicked() {
                             self.set_tool_mode(mode);
@@ -2442,42 +2402,36 @@ impl ImagePreviewState {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Reset View
-                        let reset_btn = egui::Button::new(
-                            egui::RichText::new("⟲ Reset").small().color(hex_to_c32(&palette.theme.f_med)),
-                        )
-                        .fill(hex_to_c32(&palette.theme.b_med))
-                        .rounding(Rounding::same(4.0));
+                        let reset_btn = crate::secondary_button("⟲ Reset", hex_to_c32(&palette.theme.b_med), palette);
                         if ui.add(reset_btn).on_hover_text("Reset zoom and pan").clicked() {
                             self.zoom = 1.0;
                             self.pan = Vec2::ZERO;
                         }
 
                         // 1:1 Pixel Zoom
-                        let pixel_btn = egui::Button::new(
-                            egui::RichText::new("1:1").small().strong().color(hex_to_c32(&palette.theme.f_med)),
-                        )
-                        .fill(hex_to_c32(&palette.theme.b_med))
-                        .rounding(Rounding::same(4.0));
+                        let pixel_btn = crate::secondary_button("1:1", hex_to_c32(&palette.theme.b_med), palette);
                         if ui.add(pixel_btn).on_hover_text("100% actual pixel size (1)").clicked() {
                             self.zoom = 1.0;
                         }
 
                         // Fit to window
-                        let fit_btn = egui::Button::new(
-                            egui::RichText::new("⛶ Fit").small().strong().color(hex_to_c32(&palette.harmonies.base)),
-                        )
-                        .fill(hex_to_c32(&palette.theme.b_med))
-                        .rounding(Rounding::same(4.0));
+                        let fit_btn = crate::themed_button(
+                            "⛶ Fit",
+                            hex_to_c32(&palette.theme.b_med),
+                            Some(hex_to_c32(&palette.harmonies.base)),
+                            palette,
+                        );
                         if ui.add(fit_btn).on_hover_text("Fit entire image into window (0 / F)").clicked() {
                             self.fit_to_view(ui.available_size());
                         }
 
                         // Zoom In (+)
-                        let plus_btn = egui::Button::new(
-                            egui::RichText::new("+").small().strong().color(hex_to_c32(&palette.theme.f_high)),
-                        )
-                        .fill(hex_to_c32(&palette.theme.b_med))
-                        .rounding(Rounding::same(4.0));
+                        let plus_btn = crate::themed_button(
+                            "+",
+                            hex_to_c32(&palette.theme.b_med),
+                            Some(hex_to_c32(&palette.theme.f_high)),
+                            palette,
+                        );
                         if ui.add(plus_btn).clicked() {
                             self.zoom = (self.zoom * 1.25).clamp(0.05, 50.0);
                         }
@@ -2490,11 +2444,12 @@ impl ImagePreviewState {
                         );
 
                         // Zoom Out (-)
-                        let minus_btn = egui::Button::new(
-                            egui::RichText::new("-").small().strong().color(hex_to_c32(&palette.theme.f_high)),
-                        )
-                        .fill(hex_to_c32(&palette.theme.b_med))
-                        .rounding(Rounding::same(4.0));
+                        let minus_btn = crate::themed_button(
+                            "-",
+                            hex_to_c32(&palette.theme.b_med),
+                            Some(hex_to_c32(&palette.theme.f_high)),
+                            palette,
+                        );
                         if ui.add(minus_btn).clicked() {
                             self.zoom = (self.zoom / 1.25).clamp(0.05, 50.0);
                         }
@@ -2532,18 +2487,7 @@ impl ImagePreviewState {
 
                     for r in ratios {
                         let is_sel = self.crop_state.ratio == r;
-                        let (bg, border, text_col) = if is_sel {
-                            (hex_to_c32(&palette.harmonies.base), hex_to_c32(&palette.theme.f_high), hex_to_c32(&palette.theme.f_high))
-                        } else {
-                            (hex_to_c32(&palette.theme.b_med), hex_to_c32(&palette.theme.b_low), hex_to_c32(&palette.theme.f_med))
-                        };
-
-                        let btn = egui::Button::new(
-                            egui::RichText::new(r.label()).small().strong().color(text_col),
-                        )
-                        .fill(bg)
-                        .stroke(Stroke::new(1.0, border))
-                        .rounding(Rounding::same(4.0));
+                        let btn = crate::mode_tab_button(r.label(), is_sel, palette);
 
                         if ui.add(btn).clicked() {
                             self.crop_state.set_ratio(r, self.current_rgba.width(), self.current_rgba.height());
@@ -2552,26 +2496,14 @@ impl ImagePreviewState {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Apply Crop Button
-                        let apply_btn = egui::Button::new(
-                            egui::RichText::new("✓ Apply Crop (Enter)")
-                                .small()
-                                .strong()
-                                .color(hex_to_c32(&palette.theme.f_high)),
-                        )
-                        .fill(hex_to_c32(&palette.diff_add))
-                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.diff_add)))
-                        .rounding(Rounding::same(4.0));
+                        let apply_btn = crate::action_button("✓ Apply Crop (Enter)", hex_to_c32(&palette.diff_add), palette);
 
                         if ui.add(apply_btn).clicked() {
                             self.apply_crop();
                         }
 
                         // Reset Crop Button
-                        let reset_crop_btn = egui::Button::new(
-                            egui::RichText::new("✕ Full Image").small().color(hex_to_c32(&palette.theme.f_med)),
-                        )
-                        .fill(hex_to_c32(&palette.theme.b_med))
-                        .rounding(Rounding::same(4.0));
+                        let reset_crop_btn = crate::secondary_button("✕ Full Image", hex_to_c32(&palette.theme.b_med), palette);
 
                         if ui.add(reset_crop_btn).clicked() {
                             self.crop_state.normalized_rect = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
@@ -4582,11 +4514,8 @@ impl ImagePreviewState {
                                                     }
                                                 }
 
-                                                let copy_btn = egui::Button::new(
-                                                    egui::RichText::new("📋").small(),
-                                                )
-                                                .fill(b_med)
-                                                .rounding(Rounding::same(3.0));
+                                                let copy_btn = crate::secondary_button("📋", b_med, palette)
+                                                    .rounding(Rounding::same(3.0));
                                                 if ui.add(copy_btn).on_hover_text("Copy this code").clicked() {
                                                     ctx.output_mut(|o| o.copied_text = det.text.clone());
                                                     self.show_toast("📋 Copied code payload to clipboard!");

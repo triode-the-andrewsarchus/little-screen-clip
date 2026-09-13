@@ -1095,13 +1095,8 @@ impl AudioPreviewState {
                     } else {
                         format!("💾 Save All {} Files [Enter]", slice_count)
                     };
-                    let save_btn = egui::Button::new(
-                        egui::RichText::new(btn_text)
-                            .strong()
-                            .color(hex_to_c32(&palette.theme.f_high)),
-                    )
-                    .fill(hex_to_c32(&palette.diff_add))
-                    .rounding(Rounding::same(6.0));
+                    let save_btn = crate::action_button(btn_text, hex_to_c32(&palette.diff_add), palette)
+                        .rounding(Rounding::same(6.0));
 
                     let is_enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if ui.add(save_btn).clicked() || is_enter {
@@ -1428,13 +1423,15 @@ impl AudioPreviewState {
                     format!("{} • {:02}:{:04.1}", self.title, mins, secs)
                 };
 
+                let meta_bg = hex_to_c32(&palette.theme.b_low);
+                let meta_fg = crate::contrast_text_c32(meta_bg, Some(hex_to_c32(&palette.theme.f_med)), palette);
                 let meta_badge = egui::Button::new(
                     egui::RichText::new(meta_str)
                         .small()
                         .strong()
-                        .color(hex_to_c32(&palette.theme.f_med)),
+                        .color(meta_fg),
                 )
-                .fill(hex_to_c32(&palette.theme.b_low))
+                .fill(meta_bg)
                 .stroke(Stroke::NONE)
                 .rounding(Rounding::same(4.0));
                 ui.add(meta_badge);
@@ -1443,13 +1440,15 @@ impl AudioPreviewState {
                 if let Some(ref an) = self.analysis {
                     if an.channels > 2 {
                         ui.add_space(6.0);
+                        let warn_bg = hex_to_c32_alpha(&palette.diff_mod, 40);
+                        let warn_fg = crate::contrast_text_c32(warn_bg, Some(hex_to_c32(&palette.diff_mod)), palette);
                         let warn_badge = egui::Button::new(
                             egui::RichText::new(format!("⚠️ Multi-channel ({} ch) — Displaying L & R only", an.channels))
                                 .small()
                                 .strong()
-                                .color(hex_to_c32(&palette.diff_mod)),
+                                .color(warn_fg),
                         )
-                        .fill(hex_to_c32_alpha(&palette.diff_mod, 40))
+                        .fill(warn_bg)
                         .stroke(Stroke::NONE)
                         .rounding(Rounding::same(4.0));
                         ui.add(warn_badge).on_hover_text(format!(
@@ -1462,13 +1461,8 @@ impl AudioPreviewState {
                 // Right-aligned close button & toast
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(14.0);
-                    let close_btn = egui::Button::new(
-                        egui::RichText::new("✕ Close (Esc)")
-                            .strong()
-                            .color(hex_to_c32(&palette.theme.f_high)),
-                    )
-                    .fill(hex_to_c32(&palette.diff_del))
-                    .rounding(Rounding::same(6.0));
+                    let close_btn = crate::danger_button("✕ Close (Esc)", hex_to_c32(&palette.diff_del), palette)
+                        .rounding(Rounding::same(6.0));
 
                     if ui.add(close_btn).clicked() {
                         self.stop();
@@ -1478,15 +1472,9 @@ impl AudioPreviewState {
                     ui.add_space(6.0);
 
                     let audacity_label = format!("🔊 {}", if self.audio_editor.is_empty() { "Audacity" } else { &self.audio_editor });
-                    let audacity_btn = egui::Button::new(
-                        egui::RichText::new(audacity_label)
-                            .small()
-                            .strong()
-                            .color(hex_to_c32(&palette.theme.f_high)),
-                    )
-                    .fill(hex_to_c32(&palette.theme.b_low))
-                    .stroke(Stroke::new(1.0, hex_to_c32(&palette.harmonies.base)))
-                    .rounding(Rounding::same(6.0));
+                    let audacity_btn = crate::secondary_button(audacity_label, hex_to_c32(&palette.theme.b_low), palette)
+                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.harmonies.base)))
+                        .rounding(Rounding::same(6.0));
 
                     if ui.add(audacity_btn).on_hover_text(format!("Open audio file in external editor ({})", self.audio_editor)).clicked() {
                         self.launch_external_audio_editor(ctx, close_requested);
@@ -1521,13 +1509,8 @@ impl AudioPreviewState {
                     hex_to_c32(&palette.diff_add)
                 };
 
-                let play_btn = egui::Button::new(
-                    egui::RichText::new(play_icon)
-                        .strong()
-                        .color(hex_to_c32(&palette.theme.f_high)),
-                )
-                .fill(play_color)
-                .rounding(Rounding::same(6.0));
+                let play_btn = crate::action_button(play_icon, play_color, palette)
+                    .rounding(Rounding::same(6.0));
 
                 if ui.add(play_btn).clicked() {
                     self.toggle_play();
@@ -1536,12 +1519,15 @@ impl AudioPreviewState {
                 ui.add_space(3.0);
 
                 // Stop Button
+                let stop_bg = hex_to_c32(&palette.theme.b_low);
+                let stop_fg = crate::contrast_text_c32(stop_bg, Some(hex_to_c32(&palette.theme.f_med)), palette);
                 let stop_btn = egui::Button::new(
                     egui::RichText::new("⏹ Stop")
-                        .color(hex_to_c32(&palette.theme.f_high)),
+                        .small()
+                        .color(stop_fg),
                 )
-                .fill(hex_to_c32(&palette.theme.b_low))
-                .rounding(Rounding::same(6.0));
+                .fill(stop_bg)
+                .rounding(Rounding::same(4.0));
                 if ui.add(stop_btn).clicked() {
                     self.stop();
                 }
@@ -1549,10 +1535,11 @@ impl AudioPreviewState {
                 // Replay Button
                 let replay_btn = egui::Button::new(
                     egui::RichText::new("⟲ Start")
-                        .color(hex_to_c32(&palette.theme.f_high)),
+                        .small()
+                        .color(stop_fg),
                 )
-                .fill(hex_to_c32(&palette.theme.b_low))
-                .rounding(Rounding::same(6.0));
+                .fill(stop_bg)
+                .rounding(Rounding::same(4.0));
                 if ui.add(replay_btn).clicked() {
                     self.seek_to(self.active_selection_range().map(|(s, _)| s).unwrap_or(0.0));
                 }
@@ -1589,29 +1576,17 @@ impl AudioPreviewState {
                 ui.add_space(12.0);
 
                 // Zoom Controls (Audacity Style)
-                let zoom_in_btn = egui::Button::new(
-                    egui::RichText::new("🔍+").color(hex_to_c32(&palette.theme.f_high)),
-                )
-                .fill(hex_to_c32(&palette.theme.b_low))
-                .rounding(Rounding::same(4.0));
+                let zoom_in_btn = crate::secondary_button("🔍+", hex_to_c32(&palette.theme.b_low), palette);
                 if ui.add(zoom_in_btn).on_hover_text("Zoom In (+ / Ctrl+Wheel)").clicked() {
                     self.zoom(0.75, self.current_time_sec);
                 }
 
-                let zoom_out_btn = egui::Button::new(
-                    egui::RichText::new("🔍-").color(hex_to_c32(&palette.theme.f_high)),
-                )
-                .fill(hex_to_c32(&palette.theme.b_low))
-                .rounding(Rounding::same(4.0));
+                let zoom_out_btn = crate::secondary_button("🔍-", hex_to_c32(&palette.theme.b_low), palette);
                 if ui.add(zoom_out_btn).on_hover_text("Zoom Out (- / Ctrl+Wheel)").clicked() {
                     self.zoom(1.33, self.current_time_sec);
                 }
 
-                let fit_btn = egui::Button::new(
-                    egui::RichText::new("⟲ Fit").small().color(hex_to_c32(&palette.theme.f_med)),
-                )
-                .fill(hex_to_c32(&palette.theme.b_low))
-                .rounding(Rounding::same(4.0));
+                let fit_btn = crate::secondary_button("⟲ Fit", hex_to_c32(&palette.theme.b_low), palette);
                 if ui.add(fit_btn).on_hover_text("Fit Full Track (Ctrl+0)").clicked() {
                     self.fit_to_window();
                 }
@@ -1633,8 +1608,9 @@ impl AudioPreviewState {
                 } else {
                     ("▢ Single Region", hex_to_c32(&palette.theme.f_med), hex_to_c32(&palette.theme.b_low))
                 };
+                let mode_fg = crate::contrast_text_c32(mode_bg, Some(mode_col), palette);
                 let mode_btn = egui::Button::new(
-                    egui::RichText::new(mode_icon).small().strong().color(mode_col),
+                    egui::RichText::new(mode_icon).small().strong().color(mode_fg),
                 )
                 .fill(mode_bg)
                 .rounding(Rounding::same(4.0));
@@ -1649,8 +1625,9 @@ impl AudioPreviewState {
                 } else {
                     (hex_to_c32(&palette.theme.f_med), hex_to_c32(&palette.theme.b_low))
                 };
+                let snap_fg = crate::contrast_text_c32(snap_bg, Some(snap_col), palette);
                 let snap_btn = egui::Button::new(
-                    egui::RichText::new("∿ Snap 0-Cross [Z]").small().strong().color(snap_col),
+                    egui::RichText::new("∿ Snap 0-Cross [Z]").small().strong().color(snap_fg),
                 )
                 .fill(snap_bg)
                 .rounding(Rounding::same(4.0));
@@ -1670,13 +1647,14 @@ impl AudioPreviewState {
                 } else {
                     (hex_to_c32(&palette.theme.f_med), hex_to_c32(&palette.theme.b_low))
                 };
+                let trans_fg = crate::contrast_text_c32(trans_bg, Some(trans_col), palette);
                 let btn_label = if !transients_ready {
                     "⏳ Transients...".to_string()
                 } else {
                     "⚡ Transients [T]".to_string()
                 };
                 let trans_btn = egui::Button::new(
-                    egui::RichText::new(btn_label).small().strong().color(trans_col),
+                    egui::RichText::new(btn_label).small().strong().color(trans_fg),
                 )
                 .fill(trans_bg)
                 .rounding(Rounding::same(4.0));
@@ -1700,10 +1678,6 @@ impl AudioPreviewState {
                         if ui.add(sens_slider).on_hover_text("Adjust transient onset sensitivity (0.1 = sharp beats only, 3.0 = all soft attacks)").changed() {
                             if let Some(ref mut analysis) = self.analysis {
                                 analysis.recompute_transients(self.transient_sensitivity);
-                                self.status_toast = Some((
-                                    format!("⚡ Sensitivity {:.1}x ({} transients detected)", self.transient_sensitivity, analysis.transients.len()),
-                                    now,
-                                ));
                             }
                         }
                     }
@@ -1714,15 +1688,8 @@ impl AudioPreviewState {
                 ui.add_space(8.0);
 
                 // Trim Silence Button
-                let trim_btn = egui::Button::new(
-                    egui::RichText::new("✂ Trim Silence")
-                        .small()
-                        .strong()
-                        .color(hex_to_c32(&palette.theme.f_high)),
-                )
-                .fill(hex_to_c32(&palette.theme.b_low))
-                .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
-                .rounding(Rounding::same(4.0));
+                let trim_btn = crate::secondary_button("✂ Trim Silence", hex_to_c32(&palette.theme.b_low), palette)
+                    .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)));
                 if ui.add(trim_btn).on_hover_text("Trim silence (< -45 dB) from both leading and trailing sides").clicked() {
                     self.trim_silence(-45.0, now);
                 }
@@ -1731,204 +1698,186 @@ impl AudioPreviewState {
 
                 let channels_count = self.analysis.as_ref().map(|a| a.channels).unwrap_or(2);
 
-                match self.selection_mode {
-                    SelectionMode::Single => {
-                        // Selection Pill & Actions for Single Mode
-                        if let Some((start, end)) = self.selection {
-                            let sel_dur = end - start;
-                            let sel_str = format!(
-                                "⚡ Slice: {:02}:{:04.1} - {:02}:{:04.1} ({:.2}s)",
-                                (start / 60.0) as u32,
-                                start % 60.0,
-                                (end / 60.0) as u32,
-                                end % 60.0,
-                                sel_dur
-                            );
+                // Selection Actions Toolbar (Right Aligned)
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    match self.selection_mode {
+                        SelectionMode::Single => {
+                            if let Some((start, end)) = self.selection {
+                                let sel_dur = end - start;
+                                let sel_str = format!(
+                                    "⚡ Slice: {:02}:{:04.1} - {:02}:{:04.1} ({:.2}s)",
+                                    (start / 60.0) as u32,
+                                    start % 60.0,
+                                    (end / 60.0) as u32,
+                                    end % 60.0,
+                                    sel_dur
+                                );
 
-                            let sel_badge = egui::Button::new(
-                                egui::RichText::new(sel_str)
-                                    .small()
-                                    .strong()
-                                    .color(hex_to_c32(&palette.harmonies.base)),
-                            )
-                            .fill(hex_to_c32_alpha(&palette.harmonies.base, 40))
-                            .stroke(Stroke::NONE)
-                            .rounding(Rounding::same(4.0));
-                            ui.add(sel_badge);
+                                let b_low = hex_to_c32(&palette.theme.b_low);
+                                let sel_badge = egui::Button::new(
+                                    egui::RichText::new(sel_str)
+                                        .small()
+                                        .strong()
+                                        .color(crate::contrast_text_c32(b_low, Some(hex_to_c32(&palette.harmonies.base)), palette)),
+                                )
+                                .fill(b_low)
+                                .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+                                .rounding(Rounding::same(4.0));
+                                ui.add(sel_badge);
 
-                            let clear_btn = egui::Button::new(
-                                egui::RichText::new("✕ Clear")
-                                    .small()
-                                    .color(hex_to_c32(&palette.theme.f_med)),
-                            )
-                            .fill(hex_to_c32(&palette.theme.b_low))
-                            .rounding(Rounding::same(4.0));
-                            if ui.add(clear_btn).clicked() {
-                                self.selection = None;
+                                let clear_btn = crate::secondary_button("✕ Clear", b_low, palette);
+                                if ui.add(clear_btn).clicked() {
+                                    self.selection = None;
+                                }
                             }
-                        }
 
-                        // Copy Slice (Native) Button
-                        let copy_label = if self.selection.is_some() {
-                            "📋 Copy Slice [Ctrl+C]"
-                        } else {
-                            "📋 Copy Track [Ctrl+C]"
-                        };
+                            // Copy Slice (Native) Button
+                            let copy_label = if self.selection.is_some() {
+                                "📋 Copy Slice [Ctrl+C]"
+                            } else {
+                                "📋 Copy Track [Ctrl+C]"
+                            };
 
-                        let copy_btn = egui::Button::new(
-                            egui::RichText::new(copy_label)
-                                .strong()
-                                .color(hex_to_c32(&palette.theme.f_high)),
-                        )
-                        .fill(hex_to_c32(&palette.harmonies.base))
-                        .rounding(Rounding::same(6.0));
+                            let copy_btn = crate::action_button(copy_label, hex_to_c32(&palette.harmonies.base), palette)
+                                .rounding(Rounding::same(6.0));
 
-                        if ui.add(copy_btn).on_hover_text("Copy selected segment with all original channels").clicked() {
-                            self.copy_selected_segment(now, ChannelCopyMode::Native);
-                        }
+                            if ui.add(copy_btn).on_hover_text("Copy selected segment with all original channels").clicked() {
+                                self.copy_selected_segment(now, ChannelCopyMode::Native);
+                            }
 
-                        // Channel-Specific Copy Buttons (Left only mono, Right only mono)
-                        if channels_count >= 2 {
+                            // Channel-Specific Copy Buttons (Left only mono, Right only mono)
+                            if channels_count >= 2 {
+                                ui.add_space(4.0);
+                                let left_bg = hex_to_c32_alpha(&palette.left_hand_border, 40);
+                                let left_fg = crate::contrast_text_c32(left_bg, Some(hex_to_c32(&palette.left_hand_border)), palette);
+                                let left_btn = egui::Button::new(
+                                    egui::RichText::new("◧ Left Only (Mono)")
+                                        .small()
+                                        .strong()
+                                        .color(left_fg),
+                                )
+                                .fill(left_bg)
+                                .rounding(Rounding::same(4.0));
+                                if ui.add(left_btn).on_hover_text("Copy only the Left channel as a mono audio file").clicked() {
+                                    self.copy_selected_segment(now, ChannelCopyMode::LeftOnly);
+                                }
+
+                                let right_bg = hex_to_c32_alpha(&palette.right_hand_border, 40);
+                                let right_fg = crate::contrast_text_c32(right_bg, Some(hex_to_c32(&palette.right_hand_border)), palette);
+                                let right_btn = egui::Button::new(
+                                    egui::RichText::new("◨ Right Only (Mono)")
+                                        .small()
+                                        .strong()
+                                        .color(right_fg),
+                                )
+                                .fill(right_bg)
+                                .rounding(Rounding::same(4.0));
+                                if ui.add(right_btn).on_hover_text("Copy only the Right channel as a mono audio file").clicked() {
+                                    self.copy_selected_segment(now, ChannelCopyMode::RightOnly);
+                                }
+                            }
+
                             ui.add_space(4.0);
-                            let left_btn = egui::Button::new(
-                                egui::RichText::new("◧ Left Only (Mono)")
-                                    .small()
-                                    .strong()
-                                    .color(hex_to_c32(&palette.left_hand_border)),
-                            )
-                            .fill(hex_to_c32_alpha(&palette.left_hand_border, 40))
-                            .rounding(Rounding::same(4.0));
-                            if ui.add(left_btn).on_hover_text("Copy only the Left channel as a mono audio file").clicked() {
-                                self.copy_selected_segment(now, ChannelCopyMode::LeftOnly);
-                            }
-
-                            let right_btn = egui::Button::new(
-                                egui::RichText::new("◨ Right Only (Mono)")
-                                    .small()
-                                    .strong()
-                                    .color(hex_to_c32(&palette.right_hand_border)),
-                            )
-                            .fill(hex_to_c32_alpha(&palette.right_hand_border, 40))
-                            .rounding(Rounding::same(4.0));
-                            if ui.add(right_btn).on_hover_text("Copy only the Right channel as a mono audio file").clicked() {
-                                self.copy_selected_segment(now, ChannelCopyMode::RightOnly);
+                            let save_label = if self.selection.is_some() {
+                                "💾 Save File... [Ctrl+S]"
+                            } else {
+                                "💾 Save Track... [Ctrl+S]"
+                            };
+                            let save_btn = crate::action_button(save_label, hex_to_c32(&palette.diff_add), palette)
+                                .rounding(Rounding::same(6.0));
+                            if ui.add(save_btn).on_hover_text("Save slice to disk formatted as original_name + timestamp + duration [Ctrl+S]").clicked() {
+                                self.open_save_dialog();
                             }
                         }
+                        SelectionMode::Multi => {
+                            let count = self.multi_selections.len();
+                            let badge_text = if count == 0 {
+                                "☷ 0 Slices (Drag to add)".to_string()
+                            } else {
+                                format!("☷ {} Slices", count)
+                            };
 
-                        ui.add_space(4.0);
-                        let save_label = if self.selection.is_some() {
-                            "💾 Save File... [Ctrl+S]"
-                        } else {
-                            "💾 Save Track... [Ctrl+S]"
-                        };
-                        let save_btn = egui::Button::new(
-                            egui::RichText::new(save_label)
-                                .strong()
-                                .color(hex_to_c32(&palette.theme.f_high)),
-                        )
-                        .fill(hex_to_c32(&palette.diff_add))
-                        .rounding(Rounding::same(6.0));
-                        if ui.add(save_btn).on_hover_text("Save slice to disk formatted as original_name + timestamp + duration [Ctrl+S]").clicked() {
-                            self.open_save_dialog();
+                            let b_low = hex_to_c32(&palette.theme.b_low);
+                            let count_badge = egui::Button::new(
+                                egui::RichText::new(badge_text)
+                                    .small()
+                                    .strong()
+                                    .color(crate::contrast_text_c32(b_low, Some(hex_to_c32(&palette.harmonies.base)), palette)),
+                            )
+                            .fill(b_low)
+                            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+                            .rounding(Rounding::same(4.0));
+                            ui.add(count_badge);
+
+                            if count > 0 {
+                                ui.add_space(4.0);
+                                let clear_all_btn = crate::secondary_button("🗑 Clear All", b_low, palette);
+                                if ui.add(clear_all_btn).on_hover_text("Remove all selected regions").clicked() {
+                                    self.multi_selections.clear();
+                                    self.active_multi_index = None;
+                                }
+                            }
+
+                            let copy_label = if count > 0 {
+                                format!("📋 Copy All ({}) [Ctrl+C]", count)
+                            } else {
+                                "📋 Copy Track [Ctrl+C]".to_string()
+                            };
+
+                            let copy_btn = crate::action_button(copy_label, hex_to_c32(&palette.harmonies.base), palette)
+                                .rounding(Rounding::same(6.0));
+
+                            if ui.add(copy_btn).on_hover_text("Export and copy all selected regions to Clipboard & Left Hand").clicked() {
+                                self.copy_all_multi_segments(now, ChannelCopyMode::Native);
+                            }
+
+                            if channels_count >= 2 {
+                                ui.add_space(4.0);
+                                let left_label = if count > 0 { format!("◧ All Left ({})", count) } else { "◧ Left Only".to_string() };
+                                let left_bg = hex_to_c32_alpha(&palette.left_hand_border, 40);
+                                let left_fg = crate::contrast_text_c32(left_bg, Some(hex_to_c32(&palette.left_hand_border)), palette);
+                                let left_btn = egui::Button::new(
+                                    egui::RichText::new(left_label)
+                                        .small()
+                                        .strong()
+                                        .color(left_fg),
+                                )
+                                .fill(left_bg)
+                                .rounding(Rounding::same(4.0));
+                                if ui.add(left_btn).on_hover_text("Export all regions isolating only the Left channel as mono").clicked() {
+                                    self.copy_all_multi_segments(now, ChannelCopyMode::LeftOnly);
+                                }
+
+                                let right_label = if count > 0 { format!("◨ All Right ({})", count) } else { "◨ Right Only".to_string() };
+                                let right_bg = hex_to_c32_alpha(&palette.right_hand_border, 40);
+                                let right_fg = crate::contrast_text_c32(right_bg, Some(hex_to_c32(&palette.right_hand_border)), palette);
+                                let right_btn = egui::Button::new(
+                                    egui::RichText::new(right_label)
+                                        .small()
+                                        .strong()
+                                        .color(right_fg),
+                                )
+                                .fill(right_bg)
+                                .rounding(Rounding::same(4.0));
+                                if ui.add(right_btn).on_hover_text("Export all regions isolating only the Right channel as mono").clicked() {
+                                    self.copy_all_multi_segments(now, ChannelCopyMode::RightOnly);
+                                }
+                            }
+
+                            ui.add_space(4.0);
+                            let save_label = if count > 0 {
+                                format!("💾 Save All ({}) [Ctrl+S]", count)
+                            } else {
+                                "💾 Save Track [Ctrl+S]".to_string()
+                            };
+                            let save_btn = crate::action_button(save_label, hex_to_c32(&palette.diff_add), palette)
+                                .rounding(Rounding::same(6.0));
+                            if ui.add(save_btn).on_hover_text("Save all selected regions to individual audio files [Ctrl+S]").clicked() {
+                                self.open_save_dialog();
+                            }
                         }
                     }
-                    SelectionMode::Multi => {
-                        let count = self.multi_selections.len();
-                        let badge_text = if count == 0 {
-                            "☷ 0 Slices (Drag to add)".to_string()
-                        } else {
-                            format!("☷ {} Slices", count)
-                        };
-                        let count_badge = egui::Button::new(
-                            egui::RichText::new(badge_text)
-                                .small()
-                                .strong()
-                                .color(hex_to_c32(&palette.harmonies.base)),
-                        )
-                        .fill(hex_to_c32_alpha(&palette.harmonies.base, 40))
-                        .stroke(Stroke::NONE)
-                        .rounding(Rounding::same(4.0));
-                        ui.add(count_badge);
-
-                        if count > 0 {
-                            let clear_all_btn = egui::Button::new(
-                                egui::RichText::new("🗑 Clear All")
-                                    .small()
-                                    .color(hex_to_c32(&palette.diff_del)),
-                            )
-                            .fill(hex_to_c32(&palette.theme.b_low))
-                            .rounding(Rounding::same(4.0));
-                            if ui.add(clear_all_btn).on_hover_text("Remove all selected regions").clicked() {
-                                self.multi_selections.clear();
-                                self.active_multi_index = None;
-                            }
-                        }
-
-                        let copy_label = if count > 0 {
-                            format!("📋 Copy All ({}) [Ctrl+C]", count)
-                        } else {
-                            "📋 Copy Track [Ctrl+C]".to_string()
-                        };
-
-                        let copy_btn = egui::Button::new(
-                            egui::RichText::new(copy_label)
-                                .strong()
-                                .color(hex_to_c32(&palette.theme.f_high)),
-                        )
-                        .fill(hex_to_c32(&palette.harmonies.base))
-                        .rounding(Rounding::same(6.0));
-
-                        if ui.add(copy_btn).on_hover_text("Export and copy all selected regions to Clipboard & Left Hand").clicked() {
-                            self.copy_all_multi_segments(now, ChannelCopyMode::Native);
-                        }
-
-                        if channels_count >= 2 {
-                            ui.add_space(4.0);
-                            let left_label = if count > 0 { format!("◧ All Left ({})", count) } else { "◧ Left Only".to_string() };
-                            let left_btn = egui::Button::new(
-                                egui::RichText::new(left_label)
-                                    .small()
-                                    .strong()
-                                    .color(hex_to_c32(&palette.left_hand_border)),
-                            )
-                            .fill(hex_to_c32_alpha(&palette.left_hand_border, 40))
-                            .rounding(Rounding::same(4.0));
-                            if ui.add(left_btn).on_hover_text("Export all regions isolating only the Left channel as mono").clicked() {
-                                self.copy_all_multi_segments(now, ChannelCopyMode::LeftOnly);
-                            }
-
-                            let right_label = if count > 0 { format!("◨ All Right ({})", count) } else { "◨ Right Only".to_string() };
-                            let right_btn = egui::Button::new(
-                                egui::RichText::new(right_label)
-                                    .small()
-                                    .strong()
-                                    .color(hex_to_c32(&palette.right_hand_border)),
-                            )
-                            .fill(hex_to_c32_alpha(&palette.right_hand_border, 40))
-                            .rounding(Rounding::same(4.0));
-                            if ui.add(right_btn).on_hover_text("Export all regions isolating only the Right channel as mono").clicked() {
-                                self.copy_all_multi_segments(now, ChannelCopyMode::RightOnly);
-                            }
-                        }
-
-                        ui.add_space(4.0);
-                        let save_label = if count > 0 {
-                            format!("💾 Save All ({}) [Ctrl+S]", count)
-                        } else {
-                            "💾 Save Track [Ctrl+S]".to_string()
-                        };
-                        let save_btn = egui::Button::new(
-                            egui::RichText::new(save_label)
-                                .strong()
-                                .color(hex_to_c32(&palette.theme.f_high)),
-                        )
-                        .fill(hex_to_c32(&palette.diff_add))
-                        .rounding(Rounding::same(6.0));
-                        if ui.add(save_btn).on_hover_text("Save all slices to disk formatted as original_name + timestamp + duration [Ctrl+S]").clicked() {
-                            self.open_save_dialog();
-                        }
-                    }
-                }
+                });
             });
 
             // Multi-region slice pill list strip when in Multi mode
@@ -1954,11 +1903,12 @@ impl AudioPreviewState {
                         .show(ui, |ui| {
                             for (idx, &(s, e)) in slices_copy.iter().enumerate() {
                                 let is_active = active_idx == Some(idx);
-                                let (bg_col, border_col, text_col) = if is_active {
+                                let (bg_col, border_col, pref_col) = if is_active {
                                     (hex_to_c32_alpha(&palette.harmonies.base, 40), hex_to_c32(&palette.harmonies.base), hex_to_c32(&palette.harmonies.base))
                                 } else {
                                     (hex_to_c32(&palette.theme.b_low), hex_to_c32(&palette.theme.b_med), hex_to_c32(&palette.theme.f_med))
                                 };
+                                let text_col = crate::contrast_text_c32(bg_col, Some(pref_col), palette);
 
                                 let label = format!("#{}: {:02}:{:04.1}-{:02}:{:04.1} ({:.2}s)", idx + 1, (s/60.0) as u32, s%60.0, (e/60.0) as u32, e%60.0, e - s);
                                 let btn = egui::Button::new(
@@ -1976,10 +1926,12 @@ impl AudioPreviewState {
                                     preview_target = Some((idx, s, e));
                                 }
 
+                                let del_bg = hex_to_c32(&palette.theme.b_low);
+                                let del_fg = crate::contrast_text_c32(del_bg, Some(hex_to_c32(&palette.diff_del)), palette);
                                 let del_btn = egui::Button::new(
-                                    egui::RichText::new("✕").small().color(hex_to_c32(&palette.diff_del)),
+                                    egui::RichText::new("✕").small().color(del_fg),
                                 )
-                                .fill(hex_to_c32(&palette.theme.b_low))
+                                .fill(del_bg)
                                 .rounding(Rounding::same(4.0));
                                 if ui.add(del_btn).on_hover_text(format!("Remove slice #{}", idx + 1)).clicked() {
                                     remove_slice_idx = Some(idx);

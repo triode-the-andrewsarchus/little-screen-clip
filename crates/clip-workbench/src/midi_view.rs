@@ -312,7 +312,7 @@ impl MidiViewerState {
         let b_low = crate::hex_to_c32(&palette.theme.b_low);
         let b_med = crate::hex_to_c32(&palette.theme.b_med);
         let f_high = crate::hex_to_c32(&palette.theme.f_high);
-        let f_med = crate::hex_to_c32(&palette.theme.f_med);
+        let _f_med = crate::hex_to_c32(&palette.theme.f_med);
         let f_low = crate::hex_to_c32(&palette.theme.f_low);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
         let playhead_color = crate::hex_to_c32(&palette.harmonies.complementary);
@@ -351,31 +351,19 @@ impl MidiViewerState {
                     ui.add_space(14.0);
                     // Transport controls
                     if self.is_playing {
-                        let pause_btn = egui::Button::new(
-                            egui::RichText::new("⏸ Pause (Space)").small().strong().color(crate::hex_to_c32(&palette.theme.f_inv)),
-                        )
-                        .fill(pause_color)
-                        .rounding(Rounding::same(4.0));
+                        let pause_btn = crate::action_button("⏸ Pause (Space)", pause_color, palette);
                         if ui.add(pause_btn).clicked() {
                             self.pause();
                         }
                     } else {
-                        let play_btn = egui::Button::new(
-                            egui::RichText::new("▶ Play (Space)").small().strong().color(crate::hex_to_c32(&palette.theme.f_inv)),
-                        )
-                        .fill(success_color)
-                        .rounding(Rounding::same(4.0));
+                        let play_btn = crate::action_button("▶ Play (Space)", success_color, palette);
                         if ui.add(play_btn).clicked() {
                             self.play();
                         }
                     }
 
-                    let stop_btn = egui::Button::new(
-                        egui::RichText::new("⏹ Stop").small().strong().color(f_high),
-                    )
-                    .fill(b_med)
-                    .stroke(Stroke::new(1.0, b_low))
-                    .rounding(Rounding::same(4.0));
+                    let stop_btn = crate::secondary_button("⏹ Stop", b_med, palette)
+                        .stroke(Stroke::new(1.0, b_low));
                     if ui.add(stop_btn).clicked() {
                         self.stop();
                     }
@@ -392,32 +380,20 @@ impl MidiViewerState {
 
                     ui.add_space(12.0);
                     // Zoom Toolbar Controls
-                    let zoom_out_btn = egui::Button::new(
-                        egui::RichText::new("🔍 -").small().strong().color(f_high),
-                    )
-                    .fill(b_med)
-                    .stroke(Stroke::new(1.0, b_low))
-                    .rounding(Rounding::same(4.0));
+                    let zoom_out_btn = crate::secondary_button("🔍 -", b_med, palette)
+                        .stroke(Stroke::new(1.0, b_low));
                     if ui.add(zoom_out_btn).on_hover_text("Zoom Out (- / Wheel Down)").clicked() {
                         self.zoom(1.25, self.playhead_sec);
                     }
 
-                    let zoom_in_btn = egui::Button::new(
-                        egui::RichText::new("🔍 +").small().strong().color(f_high),
-                    )
-                    .fill(b_med)
-                    .stroke(Stroke::new(1.0, b_low))
-                    .rounding(Rounding::same(4.0));
+                    let zoom_in_btn = crate::secondary_button("🔍 +", b_med, palette)
+                        .stroke(Stroke::new(1.0, b_low));
                     if ui.add(zoom_in_btn).on_hover_text("Zoom In (+ / Wheel Up)").clicked() {
                         self.zoom(0.8, self.playhead_sec);
                     }
 
-                    let fit_btn = egui::Button::new(
-                        egui::RichText::new("Fit").small().color(f_med),
-                    )
-                    .fill(b_med)
-                    .stroke(Stroke::new(1.0, b_low))
-                    .rounding(Rounding::same(4.0));
+                    let fit_btn = crate::secondary_button("Fit", b_med, palette)
+                        .stroke(Stroke::new(1.0, b_low));
                     if ui.add(fit_btn).on_hover_text("Reset Zoom / Fit Entire Track").clicked() {
                         self.reset_zoom();
                     }
@@ -432,12 +408,11 @@ impl MidiViewerState {
 
                     // Right aligned Close button & toast
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let close_btn = egui::Button::new(
-                            egui::RichText::new("✕ Close (Esc)")
-                                .strong()
-                                .color(crate::hex_to_c32(&palette.undo_border)),
+                        let close_btn = crate::danger_button(
+                            "✕ Close (Esc)",
+                            crate::hex_to_c32(&palette.undo_card_bg),
+                            palette,
                         )
-                        .fill(crate::hex_to_c32(&palette.undo_card_bg))
                         .stroke(Stroke::new(1.0, crate::hex_to_c32(&palette.undo_border)))
                         .rounding(Rounding::same(6.0));
                         if ui.add(close_btn).clicked() {

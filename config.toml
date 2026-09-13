@@ -37,7 +37,7 @@ elision_color = "border"
 # Hundred Rabbits Theme name (from ./themes/*.svg, e.g. "apollo", "peppermint", "nord", "monokai", "dracula", etc.)
 # All UI elements, cards, accents, borders, and harmonies automatically derive from this theme.
 # Missing / accent colors are perceptually derived using Oklab harmonies (Complementary, Triadic, Tetradic, Split-Complementary).
-theme = "battlestation"
+theme = "zenburn"
 
 # Optional element color overrides:
 # Uncomment any field below to customize specific UI elements while retaining the theme base.

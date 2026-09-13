@@ -512,25 +512,13 @@ impl TextPreviewState {
         palette: &AppPalette,
         close: &mut bool,
     ) {
-        let close_btn = egui::Button::new(
-            egui::RichText::new("✕ Close (Esc)")
-                .color(hex_to_c32(&palette.theme.background))
-                .size(13.0),
-        )
-        .fill(hex_to_c32(&palette.diff_del))
-        .rounding(Rounding::same(4.0));
+        let close_btn = crate::danger_button("✕ Close (Esc)", hex_to_c32(&palette.diff_del), palette);
         if ui.add(close_btn).clicked() {
             *close = true;
         }
 
         let editor_label = format!("📝 Open in {}", self.editor_cmd);
-        let hatch_btn = egui::Button::new(
-            egui::RichText::new(editor_label)
-                .color(hex_to_c32(&palette.theme.background))
-                .size(13.0),
-        )
-        .fill(hex_to_c32(&palette.harmonies.base))
-        .rounding(Rounding::same(4.0));
+        let hatch_btn = crate::action_button(editor_label, hex_to_c32(&palette.harmonies.base), palette);
         if ui
             .add(hatch_btn)
             .on_hover_text("Open in configured external code editor")
@@ -539,32 +527,12 @@ impl TextPreviewState {
             self.trigger_escape_hatch();
         }
 
-        let copy_btn = egui::Button::new(
-            egui::RichText::new("📋 Copy All")
-                .color(hex_to_c32(&palette.theme.f_high))
-                .size(13.0),
-        )
-        .fill(hex_to_c32(&palette.theme.b_med))
-        .rounding(Rounding::same(4.0));
+        let copy_btn = crate::secondary_button("📋 Copy All", hex_to_c32(&palette.theme.b_med), palette);
         if ui.add(copy_btn).clicked() {
             self.copy_all_to_clipboard(ctx);
         }
 
-        let find_btn = egui::Button::new(
-            egui::RichText::new("🔍 Find (Ctrl+F)")
-                .color(if self.show_find {
-                    hex_to_c32(&palette.harmonies.complementary)
-                } else {
-                    hex_to_c32(&palette.theme.f_high)
-                })
-                .size(13.0),
-        )
-        .fill(if self.show_find {
-            hex_to_c32(&palette.theme.b_high)
-        } else {
-            hex_to_c32(&palette.theme.b_med)
-        })
-        .rounding(Rounding::same(4.0));
+        let find_btn = crate::mode_tab_button("🔍 Find (Ctrl+F)", self.show_find, palette);
         if ui.add(find_btn).clicked() {
             self.show_find = !self.show_find;
             if self.show_find {
@@ -579,21 +547,7 @@ impl TextPreviewState {
         } else {
             "➡ Wrap: OFF"
         };
-        let wrap_btn = egui::Button::new(
-            egui::RichText::new(wrap_label)
-                .color(if self.wrap_lines {
-                    hex_to_c32(&palette.theme.background)
-                } else {
-                    hex_to_c32(&palette.theme.f_high)
-                })
-                .size(13.0),
-        )
-        .fill(if self.wrap_lines {
-            hex_to_c32(&palette.harmonies.triadic_1)
-        } else {
-            hex_to_c32(&palette.theme.b_med)
-        })
-        .rounding(Rounding::same(4.0));
+        let wrap_btn = crate::mode_tab_button(wrap_label, self.wrap_lines, palette);
         if ui.add(wrap_btn).on_hover_text("Toggle line-wrapping on/off").clicked() {
             self.wrap_lines = !self.wrap_lines;
         }
@@ -604,21 +558,7 @@ impl TextPreviewState {
             } else {
                 "# Lines: OFF"
             };
-            let num_btn = egui::Button::new(
-                egui::RichText::new(num_label)
-                    .color(if self.show_line_numbers {
-                        hex_to_c32(&palette.theme.background)
-                    } else {
-                        hex_to_c32(&palette.theme.f_high)
-                    })
-                    .size(13.0),
-            )
-            .fill(if self.show_line_numbers {
-                hex_to_c32(&palette.theme.b_high)
-            } else {
-                hex_to_c32(&palette.theme.b_med)
-            })
-            .rounding(Rounding::same(4.0));
+            let num_btn = crate::mode_tab_button(num_label, self.show_line_numbers, palette);
             if ui.add(num_btn).on_hover_text("Toggle line numbers gutter").clicked() {
                 self.show_line_numbers = !self.show_line_numbers;
             }
@@ -629,13 +569,7 @@ impl TextPreviewState {
                 TextViewMode::RenderedMarkdown => "📖 Rendered MD",
                 TextViewMode::Raw => "💻 Raw / Code",
             };
-            let mode_btn = egui::Button::new(
-                egui::RichText::new(mode_label)
-                    .color(hex_to_c32(&palette.theme.background))
-                    .size(13.0),
-            )
-            .fill(hex_to_c32(&palette.harmonies.triadic_2))
-            .rounding(Rounding::same(4.0));
+            let mode_btn = crate::mode_tab_button(mode_label, self.view_mode == TextViewMode::RenderedMarkdown, palette);
             if ui
                 .add(mode_btn)
                 .on_hover_text("Switch between Rendered Markdown and Raw Code view")
@@ -712,41 +646,13 @@ impl TextPreviewState {
     }
 
     fn render_search_options(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        let case_btn = egui::Button::new(
-            egui::RichText::new("Aa")
-                .size(13.0)
-                .strong()
-                .color(if self.case_sensitive {
-                    hex_to_c32(&palette.harmonies.base)
-                } else {
-                    hex_to_c32(&palette.theme.f_low)
-                }),
-        )
-        .fill(if self.case_sensitive {
-            hex_to_c32(&palette.theme.b_med)
-        } else {
-            Color32::TRANSPARENT
-        });
+        let case_btn = crate::mode_tab_button("Aa", self.case_sensitive, palette);
         if ui.add(case_btn).on_hover_text("Match Case (Case Sensitive)").clicked() {
             self.case_sensitive = !self.case_sensitive;
             self.update_search_matches();
         }
 
-        let regex_btn = egui::Button::new(
-            egui::RichText::new(".*")
-                .size(13.0)
-                .strong()
-                .color(if self.is_regex {
-                    hex_to_c32(&palette.harmonies.base)
-                } else {
-                    hex_to_c32(&palette.theme.f_low)
-                }),
-        )
-        .fill(if self.is_regex {
-            hex_to_c32(&palette.theme.b_med)
-        } else {
-            Color32::TRANSPARENT
-        });
+        let regex_btn = crate::mode_tab_button(".*", self.is_regex, palette);
         if ui.add(regex_btn).on_hover_text("Use Regular Expression").clicked() {
             self.is_regex = !self.is_regex;
             self.update_search_matches();
@@ -788,12 +694,12 @@ impl TextPreviewState {
 
                     self.render_search_status_label(ui, palette);
 
-                    let prev_btn = egui::Button::new("▲ Prev").small();
+                    let prev_btn = crate::secondary_button("▲ Prev", hex_to_c32(&palette.theme.b_med), palette);
                     if ui.add(prev_btn).clicked() {
                         self.prev_match();
                     }
 
-                    let next_btn = egui::Button::new("▼ Next").small();
+                    let next_btn = crate::secondary_button("▼ Next", hex_to_c32(&palette.theme.b_med), palette);
                     if ui.add(next_btn).clicked() {
                         self.next_match();
                     }

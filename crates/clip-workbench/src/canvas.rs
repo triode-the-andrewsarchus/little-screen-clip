@@ -475,7 +475,7 @@ impl NodeCanvasState {
 
         // Save Recipe Modal
         if self.save_dialog_open {
-            self.render_save_window(ui);
+            self.render_save_window(ui, palette);
         }
 
         action
@@ -665,12 +665,11 @@ impl NodeCanvasState {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // RUN PIPELINE BUTTON (Themed hero accent)
-                let run_btn = egui::Button::new(
-                    egui::RichText::new("▶  RUN PIPELINE")
-                        .color(hex_to_c32(&palette.theme.background))
-                        .strong(),
+                let run_btn = crate::action_button(
+                    "▶  RUN PIPELINE",
+                    hex_to_c32(&palette.harmonies.base),
+                    palette,
                 )
-                .fill(hex_to_c32(&palette.harmonies.base))
                 .min_size(Vec2::new(140.0, 26.0));
 
                 if ui.add(run_btn).clicked() {
@@ -734,7 +733,12 @@ impl NodeCanvasState {
                                     .strong(),
                             );
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.button("✕").clicked() {
+                                let close_btn = crate::danger_button(
+                                    "✕",
+                                    hex_to_c32(&palette.undo_card_bg),
+                                    palette,
+                                );
+                                if ui.add(close_btn).clicked() {
                                     self.catalog_open = false;
                                 }
                             });
@@ -805,13 +809,12 @@ impl NodeCanvasState {
                                                 ui.with_layout(
                                                     egui::Layout::right_to_left(egui::Align::Center),
                                                     |ui| {
-                                                        if ui
-                                                            .button(
-                                                                egui::RichText::new("+ Add")
-                                                                    .color(hex_to_c32(&palette.harmonies.base)),
-                                                            )
-                                                            .clicked()
-                                                        {
+                                                        let add_btn = crate::action_button(
+                                                            "+ Add",
+                                                            hex_to_c32(&palette.harmonies.base),
+                                                            palette,
+                                                        );
+                                                        if ui.add(add_btn).clicked() {
                                                             let spawn_pos = self.spawn_node_pos.take().unwrap_or_else(|| {
                                                                 let center_world = screen_to_world(parent_rect, self.graph.pan, self.graph.zoom, parent_rect.center());
                                                                 [center_world.x, center_world.y]
@@ -854,7 +857,7 @@ impl NodeCanvasState {
             });
     }
 
-    fn render_save_window(&mut self, ui: &mut egui::Ui) {
+    fn render_save_window(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let title = if self.save_is_save_as {
             "Save Recipe As..."
         } else {
@@ -872,7 +875,8 @@ impl NodeCanvasState {
                 resp.request_focus();
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    if ui.button(egui::RichText::new("Save").strong()).clicked() && !self.save_name.trim().is_empty() {
+                    let save_btn = crate::action_button("Save", hex_to_c32(&palette.harmonies.base), palette);
+                    if ui.add_enabled(!self.save_name.trim().is_empty(), save_btn).clicked() {
                         let new_name = self.save_name.trim().to_string();
                         let duplicate_scripts = self.save_is_save_as;
                         let _ = sync_recipe_script_headers(&mut self.graph, &new_name, duplicate_scripts);
@@ -901,7 +905,8 @@ impl NodeCanvasState {
                         }
                         self.save_dialog_open = false;
                     }
-                    if ui.button("Cancel").clicked() {
+                    let cancel_btn = crate::secondary_button("Cancel", hex_to_c32(&palette.theme.b_med), palette);
+                    if ui.add(cancel_btn).clicked() {
                         self.save_dialog_open = false;
                     }
                 });
@@ -1335,13 +1340,19 @@ fn render_node_card(
                         .color(hex_to_c32(&palette.theme.f_low))
                         .small(),
                 );
+                let file_fill = hex_to_c32(&palette.theme.b_med);
+                let file_fg = crate::contrast_text_c32(
+                    file_fill,
+                    Some(hex_to_c32(&palette.harmonies.split_comp_1)),
+                    palette,
+                );
                 let file_btn = egui::Button::new(
                     egui::RichText::new(format!("📄 {}", script_file))
                         .monospace()
                         .small()
-                        .color(hex_to_c32(&palette.harmonies.split_comp_1)),
+                        .color(file_fg),
                 )
-                .fill(hex_to_c32(&palette.theme.b_med));
+                .fill(file_fill);
 
                 if ui.add(file_btn).on_hover_text("Click to open script in text editor").clicked() {
                     *script_to_open = Some(script_file.clone());
@@ -1350,13 +1361,11 @@ fn render_node_card(
 
             child_ui.add_space(2.0);
 
-            let edit_btn = egui::Button::new(
-                egui::RichText::new("✏  Open in Editor")
-                    .color(hex_to_c32(&palette.theme.background))
-                    .small()
-                    .strong(),
+            let edit_btn = crate::action_button(
+                "✏  Open in Editor",
+                hex_to_c32(&palette.harmonies.base),
+                palette,
             )
-            .fill(hex_to_c32(&palette.harmonies.base))
             .min_size(Vec2::new(child_ui.available_width(), 20.0 * zoom));
 
             if child_ui.add(edit_btn).clicked() {

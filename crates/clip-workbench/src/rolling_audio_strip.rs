@@ -409,8 +409,7 @@ impl RollingAudioStripState {
 
                 // Refresh Snapshot button
                 let refresh_btn = ui.add(
-                    egui::Button::new(egui::RichText::new("⟳ Refresh").small())
-                        .fill(hex_to_c32(&palette.theme.b_low))
+                    crate::secondary_button("⟳ Refresh", hex_to_c32(&palette.theme.b_low), palette)
                         .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med))),
                 );
                 if refresh_btn.clicked() {

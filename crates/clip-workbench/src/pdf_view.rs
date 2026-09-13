@@ -226,25 +226,19 @@ impl PdfEditorState {
                     ui.add_space(16.0);
 
                     // Rotate 90 CW Button
-                    let rot_btn = egui::Button::new(
-                        egui::RichText::new("↻ Rotate 90° [R]")
-                            .small()
-                            .strong()
-                            .color(f_high),
-                    )
-                    .fill(b_med)
-                    .stroke(Stroke::new(1.0, b_low))
-                    .rounding(Rounding::same(4.0));
+                    let rot_btn = crate::secondary_button("↻ Rotate 90° [R]", b_med, palette)
+                        .stroke(Stroke::new(1.0, b_low));
                     if ui.add(rot_btn).on_hover_text("Rotate selected page 90° clockwise (Hotkey: R)").clicked() {
                         self.rotate_current_page(ctx, 90, now);
                     }
 
                     // Delete Page Button
+                    let del_fg = crate::contrast_text_c32(warn_bg, Some(warn_accent), palette);
                     let del_btn = egui::Button::new(
                         egui::RichText::new("🗑 Delete Page [Del]")
                             .small()
                             .strong()
-                            .color(warn_accent),
+                            .color(del_fg),
                     )
                     .fill(warn_bg)
                     .stroke(Stroke::new(1.0, warn_accent))
@@ -255,10 +249,11 @@ impl PdfEditorState {
 
                     // Right-aligned close button & toast
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let close_fg = crate::contrast_text_c32(warn_bg, Some(f_high), palette);
                         let close_btn = egui::Button::new(
                             egui::RichText::new("✕ Close (Esc)")
                                 .strong()
-                                .color(f_high),
+                                .color(close_fg),
                         )
                         .fill(warn_bg)
                         .stroke(Stroke::new(1.0, warn_accent))

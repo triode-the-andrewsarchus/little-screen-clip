@@ -100,12 +100,11 @@ impl SpreadsheetViewerState {
 
                     // Right-aligned actions & close button
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let close_btn = egui::Button::new(
-                            egui::RichText::new("✕ Close (Esc)")
-                                .strong()
-                                .color(f_high),
+                        let close_btn = crate::secondary_button(
+                            "✕ Close (Esc)",
+                            crate::hex_to_c32(&palette.undo_card_bg),
+                            palette,
                         )
-                        .fill(crate::hex_to_c32(&palette.undo_card_bg))
                         .stroke(Stroke::new(1.0, crate::hex_to_c32(&palette.undo_border)))
                         .rounding(Rounding::same(6.0));
                         if ui.add(close_btn).clicked() {
@@ -113,14 +112,8 @@ impl SpreadsheetViewerState {
                         }
 
                         // Copy Table button
-                        let copy_btn = egui::Button::new(
-                            egui::RichText::new("📋 Copy Table")
-                                .small()
-                                .color(f_high),
-                        )
-                        .fill(b_med)
-                        .stroke(Stroke::new(1.0, b_low))
-                        .rounding(Rounding::same(4.0));
+                        let copy_btn = crate::secondary_button("📋 Copy Table", b_med, palette)
+                            .stroke(Stroke::new(1.0, b_low));
                         if ui.add(copy_btn).clicked() {
                             if let Some(sheet) = self.current_sheet() {
                                 let csv_str = sheet
@@ -154,14 +147,7 @@ impl SpreadsheetViewerState {
                         ui.label(egui::RichText::new("Sheets:").small().color(f_low));
                         for (idx, sheet) in self.data.sheets.iter().enumerate() {
                             let is_active = idx == self.active_sheet_idx;
-                            let tab_btn = egui::Button::new(
-                                egui::RichText::new(&sheet.name)
-                                    .small()
-                                    .strong()
-                                    .color(if is_active { f_high } else { f_low }),
-                            )
-                            .fill(if is_active { accent } else { b_med })
-                            .rounding(Rounding::same(4.0));
+                            let tab_btn = crate::mode_tab_button(&sheet.name, is_active, palette);
 
                             if ui.add(tab_btn).clicked() {
                                 self.active_sheet_idx = idx;
@@ -227,10 +213,11 @@ impl SpreadsheetViewerState {
 
                                 ui.horizontal(|ui| {
                                     let row_label = if is_header { "#".to_string() } else { format!("{}", r_idx) };
+                                    let badge_fg = crate::contrast_text_c32(b_low, Some(f_low), palette);
                                     let idx_badge = egui::Button::new(
                                         egui::RichText::new(row_label)
                                             .small()
-                                            .color(f_low),
+                                            .color(badge_fg),
                                     )
                                     .fill(b_low)
                                     .min_size(Vec2::new(36.0, row_height))
@@ -252,13 +239,14 @@ impl SpreadsheetViewerState {
                                             row_bg
                                         };
 
-                                        let text_color = if is_header {
+                                        let pref_text_color = if is_header {
                                             accent
                                         } else if is_selected {
                                             crate::hex_to_c32(&palette.theme.f_inv)
                                         } else {
                                             f_high
                                         };
+                                        let text_color = crate::contrast_text_c32(cell_bg, Some(pref_text_color), palette);
 
                                         let btn = egui::Button::new(
                                             egui::RichText::new(cell_val)

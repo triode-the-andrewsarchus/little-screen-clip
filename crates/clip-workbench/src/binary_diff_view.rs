@@ -317,8 +317,9 @@ impl BinaryDiffViewState {
                     );
 
                     // Swap button
+                    let swap_btn = crate::secondary_button("⇄", hex_to_c32(&palette.theme.b_med), palette);
                     if ui
-                        .button(egui::RichText::new("⇄").font(FontId::proportional(14.0)).color(hex_to_c32(&palette.theme.f_med)))
+                        .add(swap_btn)
                         .on_hover_text("Swap Left & Right operands (Shortcut: [S])")
                         .clicked()
                     {
@@ -347,20 +348,23 @@ impl BinaryDiffViewState {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Close button
-                        if ui
-                            .button(egui::RichText::new("✖ Close [Esc]").font(FontId::proportional(12.0)).color(hex_to_c32(&palette.diff_del)))
-                            .clicked()
-                        {
+                        let close_btn = crate::danger_button(
+                            "✖ Close [Esc]",
+                            hex_to_c32(&palette.undo_card_bg),
+                            palette,
+                        );
+                        if ui.add(close_btn).clicked() {
                             *close_requested = true;
                         }
 
                         // Mode toggle button
-                        let (mode_lbl, mode_color) = match self.mode {
-                            BinaryDiffMode::Aligned => ("Aligned (Myers LCS)", hex_to_c32(&palette.harmonies.base)),
-                            BinaryDiffMode::Raw => ("Raw (Unaligned)", hex_to_c32(&palette.diff_mod)),
+                        let mode_lbl = match self.mode {
+                            BinaryDiffMode::Aligned => "Aligned (Myers LCS)",
+                            BinaryDiffMode::Raw => "Raw (Unaligned)",
                         };
+                        let mode_btn = crate::mode_tab_button(format!("Mode: {} [Tab]", mode_lbl), true, palette);
                         if ui
-                            .button(egui::RichText::new(format!("Mode: {} [Tab]", mode_lbl)).font(FontId::proportional(12.0)).color(mode_color))
+                            .add(mode_btn)
                             .on_hover_text("Toggle between sequence-aligned LCS gap view and raw parallel offset view")
                             .clicked()
                         {
@@ -372,10 +376,8 @@ impl BinaryDiffViewState {
                             ui.label(egui::RichText::new("Width:").font(FontId::proportional(12.0)).color(hex_to_c32(&palette.theme.f_low)));
                             for &w in &[8, 16, 32] {
                                 let is_active = self.bytes_per_row == w;
-                                let btn = egui::RichText::new(format!("{}B", w))
-                                    .font(FontId::monospace(11.0))
-                                    .color(if is_active { hex_to_c32(&palette.harmonies.base) } else { hex_to_c32(&palette.theme.f_med) });
-                                if ui.button(btn).clicked() && self.bytes_per_row != w {
+                                let btn = crate::mode_tab_button(format!("{}B", w), is_active, palette);
+                                if ui.add(btn).clicked() && self.bytes_per_row != w {
                                     self.bytes_per_row = w;
                                     self.recompute();
                                 }
@@ -390,20 +392,16 @@ impl BinaryDiffViewState {
                                 (ByteColorMode::Background, "Background"),
                             ] {
                                 let is_active = self.color_mode == mode;
-                                let btn = egui::RichText::new(label)
-                                    .font(FontId::proportional(11.0))
-                                    .color(if is_active { hex_to_c32(&palette.harmonies.base) } else { hex_to_c32(&palette.theme.f_med) });
-                                if ui.button(btn).clicked() && self.color_mode != mode {
+                                let btn = crate::mode_tab_button(label, is_active, palette);
+                                if ui.add(btn).clicked() && self.color_mode != mode {
                                     self.color_mode = mode;
                                 }
                             }
                         });
 
                         // Copy summary button
-                        if ui
-                            .button(egui::RichText::new("📋 Copy Summary").font(FontId::proportional(12.0)).color(hex_to_c32(&palette.theme.f_high)))
-                            .clicked()
-                        {
+                        let copy_btn = crate::secondary_button("📋 Copy Summary", hex_to_c32(&palette.theme.b_med), palette);
+                        if ui.add(copy_btn).clicked() {
                             if let Some(ref res) = self.result {
                                 let summary = format!(
                                     "Binary Diff Summary:\nLeft: {} ({} bytes)\nRight: {} ({} bytes)\nSimilarity: {:.2}%\nMatches: {} B | Mismatches: {} B | Insertions: {} B | Deletions: {} B\nMode: {:?}",
@@ -477,16 +475,12 @@ impl BinaryDiffViewState {
                     render_stat_pill(ui, "Diff Blocks", diff_blocks_len, hex_to_c32(&palette.harmonies.warm_attention), palette);
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button(egui::RichText::new("Next Diff [J]").font(FontId::proportional(12.0)))
-                            .clicked()
-                        {
+                        let next_btn = crate::secondary_button("Next Diff [J]", hex_to_c32(&palette.theme.b_med), palette);
+                        if ui.add(next_btn).clicked() {
                             next_diff = true;
                         }
-                        if ui
-                            .button(egui::RichText::new("Prev Diff [K]").font(FontId::proportional(12.0)))
-                            .clicked()
-                        {
+                        let prev_btn = crate::secondary_button("Prev Diff [K]", hex_to_c32(&palette.theme.b_med), palette);
+                        if ui.add(prev_btn).clicked() {
                             prev_diff = true;
                         }
 
@@ -498,10 +492,12 @@ impl BinaryDiffViewState {
                                     .font(FontId::monospace(11.0))
                                     .color(hex_to_c32(&palette.harmonies.base)),
                             );
-                            if ui.button("▼").clicked() {
+                            let down_btn = crate::secondary_button("▼", hex_to_c32(&palette.theme.b_med), palette);
+                            if ui.add(down_btn).clicked() {
                                 next_search = true;
                             }
-                            if ui.button("▲").clicked() {
+                            let up_btn = crate::secondary_button("▲", hex_to_c32(&palette.theme.b_med), palette);
+                            if ui.add(up_btn).clicked() {
                                 prev_search = true;
                             }
                         }
@@ -978,15 +974,17 @@ impl BinaryDiffViewState {
                             );
 
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let next_btn = crate::secondary_button("▶", hex_to_c32(&palette.theme.b_med), palette);
                                 if ui
-                                    .button(egui::RichText::new("▶").font(FontId::proportional(10.5)))
+                                    .add(next_btn)
                                     .on_hover_text("Next Difference [J]")
                                     .clicked()
                                 {
                                     do_next = true;
                                 }
+                                let prev_btn = crate::secondary_button("◀", hex_to_c32(&palette.theme.b_med), palette);
                                 if ui
-                                    .button(egui::RichText::new("◀").font(FontId::proportional(10.5)))
+                                    .add(prev_btn)
                                     .on_hover_text("Previous Difference [K]")
                                     .clicked()
                                 {

@@ -30,6 +30,9 @@ mod pdf_view;
 mod midi_view;
 mod stl_view;
 mod text_preview;
+pub mod ui_ext;
+
+pub use ui_ext::*;
 use audio_preview::AudioPreviewState;
 use binary_diff_view::BinaryDiffViewState;
 use canvas::*;
@@ -75,24 +78,6 @@ pub(crate) fn hex_to_c32_alpha(hex: &str, alpha: u8) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(r, g, b, alpha)
 }
 
-pub(crate) fn contrast_text_c32(
-    bg: egui::Color32,
-    preferred_fg: Option<egui::Color32>,
-    palette: &AppPalette,
-) -> egui::Color32 {
-    let bg_rgb = (bg.r(), bg.g(), bg.b());
-    if let Some(pref) = preferred_fg {
-        let pref_rgb = (pref.r(), pref.g(), pref.b());
-        if little_clip_core::theme::contrast_ratio(bg_rgb, pref_rgb) >= 4.5 {
-            return pref;
-        }
-    }
-    let hex_bg = format!("#{:02x}{:02x}{:02x}", bg.r(), bg.g(), bg.b());
-    let pref_hex = preferred_fg.map(|c| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()));
-    let fg_hex = palette.contrast_pair_fg(&hex_bg, pref_hex.as_deref());
-    hex_to_c32(&fg_hex)
-}
-
 fn apply_theme_to_egui(ctx: &egui::Context, palette: &AppPalette) {
     let mut visuals = if palette.is_dark {
         egui::Visuals::dark()
@@ -104,22 +89,30 @@ fn apply_theme_to_egui(ctx: &egui::Context, palette: &AppPalette) {
     visuals.window_fill = hex_to_c32(&palette.prior_card_bg);
     visuals.extreme_bg_color = hex_to_c32(&palette.hero_card_bg);
 
-    visuals.widgets.noninteractive.bg_fill = hex_to_c32(&palette.prior_card_bg);
-    visuals.widgets.noninteractive.fg_stroke.color = hex_to_c32(&palette.title_color);
+    let noninter_bg = hex_to_c32(&palette.prior_card_bg);
+    visuals.widgets.noninteractive.bg_fill = noninter_bg;
+    visuals.widgets.noninteractive.fg_stroke.color = contrast_text_c32(noninter_bg, Some(hex_to_c32(&palette.title_color)), palette);
     visuals.widgets.noninteractive.bg_stroke.color = hex_to_c32(&palette.b_low);
 
-    visuals.widgets.inactive.bg_fill = hex_to_c32(&palette.undo_card_bg);
-    visuals.widgets.inactive.fg_stroke.color = hex_to_c32(&palette.subtitle_color);
+    let inactive_bg = hex_to_c32(&palette.undo_card_bg);
+    visuals.widgets.inactive.bg_fill = inactive_bg;
+    visuals.widgets.inactive.fg_stroke.color = contrast_text_c32(inactive_bg, Some(hex_to_c32(&palette.subtitle_color)), palette);
     visuals.widgets.inactive.bg_stroke.color = hex_to_c32(&palette.b_low);
 
-    visuals.widgets.hovered.bg_fill = hex_to_c32(&palette.prior_card_bg);
-    visuals.widgets.hovered.fg_stroke.color = hex_to_c32(&palette.title_color);
+    let hovered_bg = hex_to_c32(&palette.prior_card_bg);
+    visuals.widgets.hovered.bg_fill = hovered_bg;
+    visuals.widgets.hovered.fg_stroke.color = contrast_text_c32(hovered_bg, Some(hex_to_c32(&palette.title_color)), palette);
     visuals.widgets.hovered.bg_stroke.color = hex_to_c32(&palette.left_hand_border);
 
     let active_bg = hex_to_c32(&palette.hero_card_bg);
     visuals.widgets.active.bg_fill = active_bg;
     visuals.widgets.active.fg_stroke.color = contrast_text_c32(active_bg, Some(hex_to_c32(&palette.f_high)), palette);
     visuals.widgets.active.bg_stroke.color = hex_to_c32(&palette.cursor_border);
+
+    let open_bg = hex_to_c32(&palette.hero_card_bg);
+    visuals.widgets.open.bg_fill = open_bg;
+    visuals.widgets.open.fg_stroke.color = contrast_text_c32(open_bg, Some(hex_to_c32(&palette.f_high)), palette);
+    visuals.widgets.open.bg_stroke.color = hex_to_c32(&palette.cursor_border);
 
     let sel_bg = hex_to_c32(&palette.left_hand_border);
     visuals.selection.bg_fill = sel_bg;
@@ -1957,14 +1950,8 @@ impl WorkbenchApp {
                 });
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let reset_btn = egui::Button::new(
-                    egui::RichText::new("↺ Reset Overrides")
-                        .small()
-                        .color(hex_to_c32(&palette.title_color)),
-                )
-                .fill(hex_to_c32(&palette.undo_card_bg))
-                .stroke(egui::Stroke::new(1.0, hex_to_c32(&palette.undo_border)))
-                .rounding(4.0);
+                let reset_btn = secondary_button("↺ Reset Overrides", hex_to_c32(&palette.undo_card_bg), &palette)
+                    .stroke(egui::Stroke::new(1.0, hex_to_c32(&palette.undo_border)));
 
                 if ui
                     .add(reset_btn)
