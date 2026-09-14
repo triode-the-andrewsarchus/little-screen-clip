@@ -52,6 +52,9 @@ pub use metadata::*;
 pub mod perspective;
 pub use perspective::*;
 
+pub mod creative_fx;
+pub use creative_fx::*;
+
 /// Error encountered during transformation or diff execution.
 #[derive(Debug, Error)]
 pub enum OpError {

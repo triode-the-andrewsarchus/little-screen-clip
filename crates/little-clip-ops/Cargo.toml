@@ -24,4 +24,6 @@ calamine = "0.36.1"
 midly = "0.5"
 rxing = "0.9.2"
 kamadak-exif = "0.6.1"
+rayon = { workspace = true }
+ntsc-rs = { git = "https://github.com/ntsc-rs/ntsc-rs", package = "ntsc-rs", default-features = false, features = ["std", "rayon"] }
 
