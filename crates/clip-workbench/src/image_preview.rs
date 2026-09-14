@@ -20,6 +20,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use crate::{contrast_text_c32, hex_to_c32, hex_to_c32_alpha};
 
+// filmr physics-based film simulation engine
+use filmr::film::FilmStyle;
+use filmr::light_leak::{LightLeak, LightLeakConfig, LightLeakShape};
+use filmr::processor::{OutputMode, SimulationConfig, WhiteBalanceMode};
+
 /// Active image manipulation tool mode selected in the toolbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImageToolMode {
@@ -52,6 +57,8 @@ pub enum ImageToolMode {
     DepthMap,
     /// Decorrelation stretch (Alley / JPL 1996) color enhancement.
     DecorrelationStretch,
+    /// Physics-based film stock simulation (filmr engine).
+    FilmSim,
 }
 
 impl ImageToolMode {
@@ -72,6 +79,7 @@ impl ImageToolMode {
             ImageToolMode::RemoveBg => "✨ [R]emove BG",
             ImageToolMode::DepthMap => "🌊 [D]epth Map",
             ImageToolMode::DecorrelationStretch => "🌈 Decorrelation Stretch",
+            ImageToolMode::FilmSim => "🎞 Film [L]ook",
         }
     }
 }
@@ -804,6 +812,479 @@ impl Default for PaletteState {
     }
 }
 
+// ─── Film Simulation Types ─────────────────────────────────────────────────────
+
+/// Descriptor for one entry in the film stock picker list.
+#[derive(Clone)]
+pub struct FilmStockEntry {
+    pub brand: &'static str,
+    pub name: &'static str,
+    pub iso: u32,
+    /// "Color Neg", "Color Slide", "B&W"
+    pub film_type_label: &'static str,
+    pub build: fn() -> filmr::film::FilmStock,
+}
+
+/// All available film stock presets, grouped by brand in order.
+pub fn all_film_stocks() -> Vec<FilmStockEntry> {
+    vec![
+        // ── Kodak ──
+        FilmStockEntry { brand: "Kodak", name: "Portra 160",        iso: 160,  film_type_label: "Color Neg",   build: filmr::presets::kodak::KODAK_PORTRA_160 },
+        FilmStockEntry { brand: "Kodak", name: "Portra 400",        iso: 400,  film_type_label: "Color Neg",   build: filmr::presets::kodak::KODAK_PORTRA_400 },
+        FilmStockEntry { brand: "Kodak", name: "Portra 400 (Art)",  iso: 400,  film_type_label: "Color Neg",   build: filmr::presets::kodak::KODAK_PORTRA_400_ARTISTIC },
+        FilmStockEntry { brand: "Kodak", name: "Portra 800",        iso: 800,  film_type_label: "Color Neg",   build: filmr::presets::kodak::KODAK_PORTRA_800 },
+        FilmStockEntry { brand: "Kodak", name: "Gold 200",          iso: 200,  film_type_label: "Color Neg",   build: filmr::presets::kodak::KODAK_GOLD_200 },
+        FilmStockEntry { brand: "Kodak", name: "Ektar 100",         iso: 100,  film_type_label: "Color Neg",   build: filmr::presets::kodak::KODAK_EKTAR_100 },
+        FilmStockEntry { brand: "Kodak", name: "Ektachrome 100",    iso: 100,  film_type_label: "Color Slide", build: filmr::presets::kodak::KODAK_EKTACHROME_100 },
+        FilmStockEntry { brand: "Kodak", name: "Ektachrome 100VS",  iso: 100,  film_type_label: "Color Slide", build: filmr::presets::kodak::KODAK_EKTACHROME_100VS },
+        FilmStockEntry { brand: "Kodak", name: "Kodachrome 25",     iso: 25,   film_type_label: "Color Slide", build: filmr::presets::kodak::KODAK_KODACHROME_25 },
+        FilmStockEntry { brand: "Kodak", name: "Kodachrome 64",     iso: 64,   film_type_label: "Color Slide", build: filmr::presets::kodak::KODAK_KODACHROME_64 },
+        FilmStockEntry { brand: "Kodak", name: "Tri-X 400",         iso: 400,  film_type_label: "B&W",         build: filmr::presets::kodak::KODAK_TRI_X_400 },
+        FilmStockEntry { brand: "Kodak", name: "Tri-X 400 (Art)",   iso: 400,  film_type_label: "B&W",         build: filmr::presets::kodak::KODAK_TRI_X_400_ARTISTIC },
+        FilmStockEntry { brand: "Kodak", name: "Plus-X 125",        iso: 125,  film_type_label: "B&W",         build: filmr::presets::kodak::KODAK_PLUS_X_125 },
+        // ── Fujifilm ──
+        FilmStockEntry { brand: "Fujifilm", name: "Velvia 50",         iso: 50,   film_type_label: "Color Slide", build: filmr::presets::fujifilm::VELVIA_50 },
+        FilmStockEntry { brand: "Fujifilm", name: "Velvia 50 (Art)",    iso: 50,   film_type_label: "Color Slide", build: filmr::presets::fujifilm::VELVIA_50_ARTISTIC },
+        FilmStockEntry { brand: "Fujifilm", name: "Provia 100F",        iso: 100,  film_type_label: "Color Slide", build: filmr::presets::fujifilm::PROVIA_100F },
+        FilmStockEntry { brand: "Fujifilm", name: "Astia 100F",         iso: 100,  film_type_label: "Color Slide", build: filmr::presets::fujifilm::ASTIA_100F },
+        FilmStockEntry { brand: "Fujifilm", name: "Superia 100",        iso: 100,  film_type_label: "Color Neg",   build: filmr::presets::fujifilm::SUPERIA_100 },
+        FilmStockEntry { brand: "Fujifilm", name: "Superia 200",        iso: 200,  film_type_label: "Color Neg",   build: filmr::presets::fujifilm::SUPERIA_200 },
+        FilmStockEntry { brand: "Fujifilm", name: "Superia 400",        iso: 400,  film_type_label: "Color Neg",   build: filmr::presets::fujifilm::SUPERIA_400 },
+        FilmStockEntry { brand: "Fujifilm", name: "Neopan 100",         iso: 100,  film_type_label: "B&W",         build: filmr::presets::fujifilm::NEOPAN_100 },
+        FilmStockEntry { brand: "Fujifilm", name: "Neopan 400",         iso: 400,  film_type_label: "B&W",         build: filmr::presets::fujifilm::NEOPAN_400 },
+        // ── Ilford ──
+        FilmStockEntry { brand: "Ilford", name: "HP5 Plus 400",       iso: 400,  film_type_label: "B&W",         build: filmr::presets::ilford::HP5_PLUS_400 },
+        FilmStockEntry { brand: "Ilford", name: "HP5 Plus 400 (Art)", iso: 400,  film_type_label: "B&W",         build: filmr::presets::ilford::HP5_PLUS_400_ARTISTIC },
+        FilmStockEntry { brand: "Ilford", name: "FP4 Plus 125",       iso: 125,  film_type_label: "B&W",         build: filmr::presets::ilford::FP4_PLUS_125 },
+        FilmStockEntry { brand: "Ilford", name: "Pan F Plus 50",      iso: 50,   film_type_label: "B&W",         build: filmr::presets::ilford::PAN_F_PLUS_50 },
+        FilmStockEntry { brand: "Ilford", name: "Delta 100 Pro",      iso: 100,  film_type_label: "B&W",         build: filmr::presets::ilford::DELTA_100_PROFESSIONAL },
+        FilmStockEntry { brand: "Ilford", name: "Delta 400 Pro",      iso: 400,  film_type_label: "B&W",         build: filmr::presets::ilford::DELTA_400_PROFESSIONAL },
+        FilmStockEntry { brand: "Ilford", name: "XP2 Super 400",      iso: 400,  film_type_label: "B&W",         build: filmr::presets::ilford::XP2_SUPER_400 },
+        FilmStockEntry { brand: "Ilford", name: "SFX 200",            iso: 200,  film_type_label: "B&W",         build: filmr::presets::ilford::SFX_200 },
+        FilmStockEntry { brand: "Ilford", name: "Ortho Plus 80",      iso: 80,   film_type_label: "B&W",         build: filmr::presets::ilford::ORTHO_PLUS_80 },
+        // ── Agfa ──
+        FilmStockEntry { brand: "Agfa",  name: "Vista 100",   iso: 100,  film_type_label: "Color Neg",   build: filmr::presets::agfa::VISTA_100 },
+        FilmStockEntry { brand: "Agfa",  name: "Vista 200",   iso: 200,  film_type_label: "Color Neg",   build: filmr::presets::agfa::VISTA_200 },
+        FilmStockEntry { brand: "Agfa",  name: "Vista 400",   iso: 400,  film_type_label: "Color Neg",   build: filmr::presets::agfa::VISTA_400 },
+        FilmStockEntry { brand: "Agfa",  name: "APX 100",     iso: 100,  film_type_label: "B&W",         build: filmr::presets::agfa::APX_100 },
+        FilmStockEntry { brand: "Agfa",  name: "APX 400",     iso: 400,  film_type_label: "B&W",         build: filmr::presets::agfa::APX_400 },
+        FilmStockEntry { brand: "Agfa",  name: "Precisa 100", iso: 100,  film_type_label: "Color Slide", build: filmr::presets::agfa::PRECISA_100 },
+        FilmStockEntry { brand: "Agfa",  name: "Scala 200",   iso: 200,  film_type_label: "B&W",         build: filmr::presets::agfa::SCALA_200 },
+        FilmStockEntry { brand: "Agfa",  name: "Optima 200",  iso: 200,  film_type_label: "Color Neg",   build: filmr::presets::agfa::OPTIMA_200 },
+        // ── Polaroid ──
+        FilmStockEntry { brand: "Polaroid", name: "600 Color",    iso: 640,  film_type_label: "Color Neg",   build: filmr::presets::polaroid::POLAROID_600_COLOR },
+        FilmStockEntry { brand: "Polaroid", name: "SX-70 Color",  iso: 160,  film_type_label: "Color Neg",   build: filmr::presets::polaroid::POLAROID_SX70_COLOR },
+        FilmStockEntry { brand: "Polaroid", name: "i-Type Color", iso: 640,  film_type_label: "Color Neg",   build: filmr::presets::polaroid::POLAROID_I_TYPE_COLOR },
+        FilmStockEntry { brand: "Polaroid", name: "B&W 667",      iso: 3000, film_type_label: "B&W",         build: filmr::presets::polaroid::POLAROID_BW_667 },
+        FilmStockEntry { brand: "Polaroid", name: "Spectra Color", iso: 640, film_type_label: "Color Neg",   build: filmr::presets::polaroid::POLAROID_SPECTRA_COLOR },
+        FilmStockEntry { brand: "Polaroid", name: "100 Color",    iso: 100,  film_type_label: "Color Neg",   build: filmr::presets::polaroid::POLAROID_100_COLOR },
+        FilmStockEntry { brand: "Polaroid", name: "55 B&W",       iso: 50,   film_type_label: "B&W",         build: filmr::presets::polaroid::POLAROID_55_BW },
+        // ── CineStill / Lomography / Other ──
+        FilmStockEntry { brand: "CineStill",   name: "800T",              iso: 800,  film_type_label: "Color Neg",   build: filmr::presets::other::CINESTILL_800T },
+        FilmStockEntry { brand: "CineStill",   name: "50D",               iso: 50,   film_type_label: "Color Neg",   build: filmr::presets::other::CINESTILL_50D },
+        FilmStockEntry { brand: "Lomography",  name: "Color Chrome",      iso: 400,  film_type_label: "Color Neg",   build: filmr::presets::other::LOMOGRAPHY_COLOR_CHROME },
+        FilmStockEntry { brand: "Lomography",  name: "LomoChrome Purple", iso: 400,  film_type_label: "Color Neg",   build: filmr::presets::other::LOMOGRAPHY_LOMOCHROME_PURPLE },
+        FilmStockEntry { brand: "Ferrania",    name: "Solaris 100",       iso: 100,  film_type_label: "Color Neg",   build: filmr::presets::other::FERRANIA_SOLARIS_100 },
+        FilmStockEntry { brand: "Ferrania",    name: "Solaris 400",       iso: 400,  film_type_label: "Color Neg",   build: filmr::presets::other::FERRANIA_SOLARIS_400 },
+        FilmStockEntry { brand: "ORWO",        name: "UN54",              iso: 100,  film_type_label: "B&W",         build: filmr::presets::other::ORWO_UN54 },
+        FilmStockEntry { brand: "ORWO",        name: "UN64",              iso: 400,  film_type_label: "B&W",         build: filmr::presets::other::ORWO_UN64 },
+        FilmStockEntry { brand: "Ricoh",       name: "GR Street",         iso: 400,  film_type_label: "B&W",         build: filmr::presets::other::RICOH_GR_STREET },
+        FilmStockEntry { brand: "Lucky",       name: "Color 200",         iso: 200,  film_type_label: "Color Neg",   build: filmr::presets::other::LUCKY_COLOR_200 },
+        FilmStockEntry { brand: "Generic",     name: "Standard Daylight", iso: 400,  film_type_label: "Color Neg",   build: filmr::presets::other::STANDARD_DAYLIGHT },
+    ]
+}
+
+/// Helper: renders a slider with full visual context (start, center, end, and default tick marks,
+/// gauge fill line from default to current, and double-click to reset to default).
+fn render_context_slider(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    default_val: f32,
+    suffix: &str,
+    slider_width: f32,
+    palette: &AppPalette,
+) -> bool {
+    let mut changed = false;
+    let b_med  = hex_to_c32(&palette.theme.b_med);
+    let base_c = hex_to_c32(&palette.harmonies.base);
+    let f_med  = hex_to_c32(&palette.theme.f_med);
+    let f_low  = hex_to_c32(&palette.theme.f_low);
+
+    ui.vertical(|ui| {
+        ui.label(egui::RichText::new(label).small().color(f_med));
+
+        ui.spacing_mut().slider_width = slider_width;
+        let mut cur_val = *value;
+        let slider = egui::Slider::new(&mut cur_val, range.clone())
+            .show_value(true)
+            .min_decimals(2)
+            .max_decimals(2)
+            .custom_formatter(|n, _| {
+                if suffix.is_empty() {
+                    format!("{:.2}", n)
+                } else if suffix == "%" {
+                    format!("{:.0}%", n * 100.0)
+                } else {
+                    format!("{:.2}{}", n, suffix)
+                }
+            });
+
+        let response = ui.add(slider);
+        if response.changed() {
+            *value = cur_val;
+            changed = true;
+        }
+
+        if response.double_clicked() {
+            *value = default_val;
+            changed = true;
+        }
+
+        let def_display = if suffix == "%" {
+            format!("{:.0}%", default_val * 100.0)
+        } else if suffix.is_empty() {
+            format!("{:.2}", default_val)
+        } else {
+            format!("{:.2}{}", default_val, suffix)
+        };
+        response.on_hover_text(format!("Double-click to reset (default: {})", def_display));
+
+        // Background context track bar beneath slider
+        let min_val = *range.start();
+        let max_val = *range.end();
+        let span = (max_val - min_val).max(1e-5);
+
+        let (track_rect, _) = ui.allocate_exact_size(Vec2::new(slider_width, 6.0), egui::Sense::hover());
+        let painter = ui.painter();
+
+        let y_bar = track_rect.center().y;
+        let x_start = track_rect.min.x;
+        let x_end = track_rect.max.x;
+        let x_mid = (x_start + x_end) * 0.5;
+
+        // Baseline track
+        painter.line_segment(
+            [Pos2::new(x_start, y_bar), Pos2::new(x_end, y_bar)],
+            Stroke::new(1.0, b_med),
+        );
+
+        // Start tick (min)
+        painter.line_segment(
+            [Pos2::new(x_start, y_bar - 2.5), Pos2::new(x_start, y_bar + 2.5)],
+            Stroke::new(1.0, f_low),
+        );
+
+        // End tick (max)
+        painter.line_segment(
+            [Pos2::new(x_end, y_bar - 2.5), Pos2::new(x_end, y_bar + 2.5)],
+            Stroke::new(1.0, f_low),
+        );
+
+        // Center tick (midpoint of range)
+        painter.line_segment(
+            [Pos2::new(x_mid, y_bar - 2.0), Pos2::new(x_mid, y_bar + 2.0)],
+            Stroke::new(1.0, f_low),
+        );
+
+        // Default tick (in theme accent)
+        let def_norm = ((default_val - min_val) / span).clamp(0.0, 1.0);
+        let x_def = x_start + def_norm * (x_end - x_start);
+        painter.line_segment(
+            [Pos2::new(x_def, y_bar - 3.5), Pos2::new(x_def, y_bar + 3.5)],
+            Stroke::new(1.5, base_c),
+        );
+
+        // Gauge fill line from default to current value
+        let cur_norm = ((*value - min_val) / span).clamp(0.0, 1.0);
+        let x_cur = x_start + cur_norm * (x_end - x_start);
+
+        let (g_start, g_end) = if x_cur >= x_def {
+            (x_def, x_cur)
+        } else {
+            (x_cur, x_def)
+        };
+        if (g_end - g_start).abs() > 0.5 {
+            painter.line_segment(
+                [Pos2::new(g_start, y_bar), Pos2::new(g_end, y_bar)],
+                Stroke::new(2.0, base_c),
+            );
+        }
+
+        // Value indicator dot
+        painter.circle_filled(Pos2::new(x_cur, y_bar), 2.5, base_c);
+    });
+
+    changed
+}
+
+/// Applies post-processing photographic S-curve contrast and green/magenta tint.
+pub fn apply_film_sim_post_adjustments(
+    out_rgb: &image::RgbImage,
+    contrast: f32,
+    tint: f32,
+) -> image::RgbaImage {
+    let has_contrast = contrast.abs() > 0.001;
+    let has_tint = tint.abs() > 0.001;
+
+    if !has_contrast && !has_tint {
+        return image::RgbaImage::from_fn(out_rgb.width(), out_rgb.height(), |x, y| {
+            let p = out_rgb.get_pixel(x, y);
+            image::Rgba([p[0], p[1], p[2], 255])
+        });
+    }
+
+    // Precompute 256-entry S-curve LUT for contrast
+    let mut lut = [0u8; 256];
+    if has_contrast {
+        let k = if contrast >= 0.0 {
+            1.0 + contrast * 2.2
+        } else {
+            1.0 / (1.0 + contrast.abs() * 2.2)
+        };
+        for (i, slot) in lut.iter_mut().enumerate() {
+            let t = i as f32 / 255.0;
+            let curved = if t < 0.5 {
+                0.5 * (2.0 * t).powf(k)
+            } else {
+                1.0 - 0.5 * (2.0 * (1.0 - t)).powf(k)
+            };
+            *slot = (curved.clamp(0.0, 1.0) * 255.0).round() as u8;
+        }
+    } else {
+        for (i, slot) in lut.iter_mut().enumerate() {
+            *slot = i as u8;
+        }
+    }
+
+    // Tint multipliers (Green vs Magenta)
+    let (r_mult, g_mult, b_mult) = if has_tint {
+        if tint > 0.0 {
+            // Magenta: boost Red and Blue, slightly reduce Green
+            (1.0 + 0.18 * tint, 1.0 - 0.18 * tint, 1.0 + 0.18 * tint)
+        } else {
+            // Green: boost Green, slightly reduce Red and Blue
+            let t = tint.abs();
+            (1.0 - 0.18 * t, 1.0 + 0.18 * t, 1.0 - 0.18 * t)
+        }
+    } else {
+        (1.0, 1.0, 1.0)
+    };
+
+    image::RgbaImage::from_fn(out_rgb.width(), out_rgb.height(), |x, y| {
+        let p = out_rgb.get_pixel(x, y);
+        let r_c = lut[p[0] as usize] as f32;
+        let g_c = lut[p[1] as usize] as f32;
+        let b_c = lut[p[2] as usize] as f32;
+
+        let r_final = (r_c * r_mult).clamp(0.0, 255.0).round() as u8;
+        let g_final = (g_c * g_mult).clamp(0.0, 255.0).round() as u8;
+        let b_final = (b_c * b_mult).clamp(0.0, 255.0).round() as u8;
+        image::Rgba([r_final, g_final, b_final, 255])
+    })
+}
+
+/// Messages sent from the film sim background render thread.
+#[derive(Debug)]
+pub enum FilmSimMsg {
+    Done { rgba: RgbaImage, duration_ms: u128 },
+    Error(String),
+}
+
+/// Message streamed from the asynchronous film simulation thumbnail worker.
+pub struct FilmSimThumbnailMsg {
+    pub epoch: u64,
+    pub stock_idx: usize,
+    pub rgba: RgbaImage,
+}
+
+/// Creative light leak presets mapped to physics-based `filmr::light_leak::LightLeakConfig`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LightLeakPreset {
+    #[default]
+    None,
+    WarmCorner,
+    SunStreak,
+    SoftEdge,
+    OrganicBlob,
+}
+
+impl LightLeakPreset {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::WarmCorner => "Warm Corner",
+            Self::SunStreak => "Sun Streak",
+            Self::SoftEdge => "Soft Edge",
+            Self::OrganicBlob => "Organic",
+        }
+    }
+
+    pub fn to_config(&self) -> LightLeakConfig {
+        match self {
+            Self::None => LightLeakConfig {
+                enabled: false,
+                leaks: Vec::new(),
+            },
+            Self::WarmCorner => LightLeakConfig {
+                enabled: true,
+                leaks: vec![LightLeak {
+                    position: (0.9, 0.1),
+                    color: [1.0, 0.55, 0.2],
+                    radius: 0.45,
+                    intensity: 1.1,
+                    shape: LightLeakShape::Circle,
+                    rotation: 0.0,
+                    roughness: 0.4,
+                }],
+            },
+            Self::SunStreak => LightLeakConfig {
+                enabled: true,
+                leaks: vec![LightLeak {
+                    position: (0.15, 0.15),
+                    color: [1.0, 0.8, 0.35],
+                    radius: 0.6,
+                    intensity: 1.2,
+                    shape: LightLeakShape::Linear,
+                    rotation: 0.75,
+                    roughness: 0.3,
+                }],
+            },
+            Self::SoftEdge => LightLeakConfig {
+                enabled: true,
+                leaks: vec![LightLeak {
+                    position: (0.05, 0.5),
+                    color: [0.95, 0.4, 0.2],
+                    radius: 0.5,
+                    intensity: 0.9,
+                    shape: LightLeakShape::Circle,
+                    rotation: 0.0,
+                    roughness: 0.6,
+                }],
+            },
+            Self::OrganicBlob => LightLeakConfig {
+                enabled: true,
+                leaks: vec![LightLeak {
+                    position: (0.8, 0.8),
+                    color: [1.0, 0.45, 0.3],
+                    radius: 0.55,
+                    intensity: 1.15,
+                    shape: LightLeakShape::Organic,
+                    rotation: 0.3,
+                    roughness: 0.7,
+                }],
+            },
+        }
+    }
+}
+
+/// All state for the Film Simulation tab.
+pub struct FilmSimState {
+    // ── Exposure & Color Parameters ──
+    pub selected_stock_idx: usize,
+    /// Exposure multiplier: 0.1 .. 4.0, default 1.0
+    pub brightness: f32,
+    /// Post-process S-curve contrast: -1.0 .. +1.0, default 0.0
+    pub contrast: f32,
+    /// Warmth: -1.0 .. +1.0, default 0.0
+    pub warmth: f32,
+    /// Green vs Magenta tint: -1.0 .. +1.0, default 0.0 (negative = green, positive = magenta)
+    pub tint: f32,
+    /// Saturation intensity: 0.0 .. 2.0, default 1.0
+    pub intensity: f32,
+    /// White balance correction mode
+    pub wb_mode: WhiteBalanceMode,
+    /// White balance correction strength: 0.0 .. 1.0, default 1.0
+    pub wb_strength: f32,
+
+    // ── Optical & Creative Effects ──
+    /// Halation glow strength: 0.0 .. 1.0, default 0.25
+    pub halation: f32,
+    /// Vignette falloff strength: 0.0 .. 1.0, default 0.35
+    pub vignette: f32,
+    /// Creative light leak preset
+    pub light_leak: LightLeakPreset,
+    pub enable_grain: bool,
+    pub style: FilmStyle,
+
+    // ── Preview state ──
+    pub preview_rgba: Option<RgbaImage>,
+    pub preview_texture: Option<egui::TextureHandle>,
+    pub dirty_preview_texture: bool,
+    pub comparison_split: f32,
+    pub is_dragging_split: bool,
+    pub last_render_duration_ms: u128,
+
+    // ── Async render worker (Main image) ──
+    pub is_rendering: bool,
+    pub render_rx: Option<std::sync::mpsc::Receiver<FilmSimMsg>>,
+    pub render_error: Option<String>,
+
+    // ── Async thumbnail worker (Sidebar 42x28 mini-photos) ──
+    pub stock_thumbnails: std::collections::HashMap<usize, egui::TextureHandle>,
+    pub pending_thumbnails: Vec<(usize, image::RgbaImage)>,
+    pub thumbnail_rx: Option<std::sync::mpsc::Receiver<FilmSimThumbnailMsg>>,
+    pub thumbnail_epoch: u64,
+    pub thumbnail_dirty_at: Option<std::time::Instant>,
+    pub is_generating_thumbnails: bool,
+
+    // ── Debounce timer ──
+    /// Set to `Some(Instant)` whenever a parameter changes; cleared when render fires.
+    pub params_dirty_at: Option<std::time::Instant>,
+
+    // ── UI helpers ──
+    pub search_query: String,
+    pub auto_fitted: bool,
+}
+
+impl Default for FilmSimState {
+    fn default() -> Self {
+        Self {
+            selected_stock_idx: 1, // Default: Kodak Portra 400
+            brightness: 1.0,
+            contrast: 0.0,
+            warmth: 0.0,
+            tint: 0.0,
+            intensity: 1.0,
+            wb_mode: WhiteBalanceMode::Auto,
+            wb_strength: 1.0,
+            halation: 0.25,
+            vignette: 0.35,
+            light_leak: LightLeakPreset::None,
+            enable_grain: true,
+            style: FilmStyle::Accurate,
+            preview_rgba: None,
+            preview_texture: None,
+            dirty_preview_texture: false,
+            comparison_split: 0.50,
+            is_dragging_split: false,
+            last_render_duration_ms: 0,
+            is_rendering: false,
+            render_rx: None,
+            render_error: None,
+            stock_thumbnails: std::collections::HashMap::new(),
+            pending_thumbnails: Vec::new(),
+            thumbnail_rx: None,
+            thumbnail_epoch: 0,
+            thumbnail_dirty_at: None,
+            is_generating_thumbnails: false,
+            params_dirty_at: None,
+            search_query: String::new(),
+            auto_fitted: false,
+        }
+    }
+}
+
+impl FilmSimState {
+    /// Mark parameters as dirty (triggers debounced re-render for both main preview and thumbnails).
+    pub fn mark_dirty(&mut self) {
+        let now = std::time::Instant::now();
+        self.params_dirty_at = Some(now);
+        self.thumbnail_dirty_at = Some(now + std::time::Duration::from_millis(250));
+    }
+}
+
 pub struct ImagePreviewState {
     pub path: Option<PathBuf>,
     pub title: String,
@@ -888,6 +1369,9 @@ pub struct ImagePreviewState {
 
     // Decorrelation Stretch State
     pub dcs_state: DecorrelationStretchState,
+
+    // Film Simulation State
+    pub film_sim_state: FilmSimState,
 
     // EXIF & Image Metadata Inspector
     pub metadata: Option<ImageMetadataSummary>,
@@ -1028,6 +1512,7 @@ impl ImagePreviewState {
             ocr_child_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             barcode_state: BarcodeScanState::default(),
             dcs_state: DecorrelationStretchState::default(),
+            film_sim_state: FilmSimState::default(),
             metadata,
             show_metadata_drawer: false,
             deskew_state: DeskewState::default(),
@@ -2322,6 +2807,8 @@ impl ImagePreviewState {
                     self.set_tool_mode(ImageToolMode::RemoveBg);
                 } else if ui.input(|i| i.key_pressed(egui::Key::D)) {
                     self.set_tool_mode(ImageToolMode::DepthMap);
+                } else if ui.input(|i| i.key_pressed(egui::Key::L)) {
+                    self.set_tool_mode(ImageToolMode::FilmSim);
                 }
             }
         }
@@ -2336,6 +2823,32 @@ impl ImagePreviewState {
         self.poll_bg_removal();
         if self.bg_removal_in_progress {
             ctx.request_repaint();
+        }
+
+        // Poll film sim background render + debounce
+        self.poll_film_sim();
+        if self.active_mode == ImageToolMode::FilmSim {
+            // Debounce: fire render 400ms after last parameter change
+            if let Some(dirty_at) = self.film_sim_state.params_dirty_at {
+                if dirty_at.elapsed() >= std::time::Duration::from_millis(400)
+                    && !self.film_sim_state.is_rendering
+                {
+                    self.film_sim_state.params_dirty_at = None;
+                    self.run_film_sim_render();
+                }
+            }
+            // Debounce thumbnail batch: fire 500ms after last parameter change
+            if let Some(dirty_at) = self.film_sim_state.thumbnail_dirty_at {
+                if dirty_at.elapsed() >= std::time::Duration::from_millis(500)
+                    && !self.film_sim_state.is_generating_thumbnails
+                {
+                    self.film_sim_state.thumbnail_dirty_at = None;
+                    self.run_thumbnail_batch();
+                }
+            }
+            if self.film_sim_state.is_rendering || self.film_sim_state.is_generating_thumbnails {
+                ctx.request_repaint();
+            }
         }
 
         // Copy to clipboard slot (Ctrl+C / Cmd+C) at any point
@@ -2419,12 +2932,19 @@ impl ImagePreviewState {
                 } else if self.active_mode == ImageToolMode::DecorrelationStretch {
                     ui.add_space(2.0);
                     self.render_decorrelation_stretch_toolbar(ui, ctx, palette);
+                } else if self.active_mode == ImageToolMode::FilmSim {
+                    // Film sim has its own full-viewport layout — no secondary strip needed here;
+                    // the render_film_sim_viewport handles all three panels.
                 }
 
                 ui.add_space(4.0);
 
                 // 3. MAIN INTERACTIVE VIEWPORT
-                self.render_viewport(ui, ctx, palette);
+                if self.active_mode == ImageToolMode::FilmSim {
+                    self.render_film_sim_viewport(ui, ctx, palette);
+                } else {
+                    self.render_viewport(ui, ctx, palette);
+                }
 
                 // 4. BOTTOM STATUS / HELP BAR
                 self.render_footer(ui, palette, now);
@@ -2598,6 +3118,20 @@ impl ImagePreviewState {
                     self.run_barcode_scan();
                 }
             }
+            ImageToolMode::FilmSim => {
+                self.film_sim_state.auto_fitted = false;
+                // Trigger initial render if no preview yet.
+                if self.film_sim_state.preview_rgba.is_none() && !self.film_sim_state.is_rendering {
+                    self.run_film_sim_render();
+                }
+                // Trigger thumbnail batch if not generated yet.
+                if self.film_sim_state.stock_thumbnails.is_empty()
+                    && self.film_sim_state.pending_thumbnails.is_empty()
+                    && !self.film_sim_state.is_generating_thumbnails
+                {
+                    self.run_thumbnail_batch();
+                }
+            }
         }
     }
 
@@ -2623,6 +3157,7 @@ impl ImagePreviewState {
                         ImageToolMode::RemoveBg,
                         ImageToolMode::DepthMap,
                         ImageToolMode::DecorrelationStretch,
+                        ImageToolMode::FilmSim,
                     ];
 
                     for mode in modes {
@@ -5740,7 +6275,8 @@ impl ImagePreviewState {
             || self.active_mode == ImageToolMode::Ocr
             || self.active_mode == ImageToolMode::Barcode
             || (self.active_mode == ImageToolMode::Convert && !self.convert_state.is_dragging_split)
-            || (self.active_mode == ImageToolMode::DecorrelationStretch && !self.dcs_state.is_dragging_split);
+            || (self.active_mode == ImageToolMode::DecorrelationStretch && !self.dcs_state.is_dragging_split)
+            || (self.active_mode == ImageToolMode::FilmSim && !self.film_sim_state.is_dragging_split);
         if (can_drag_pan && response.dragged()) || middle_drag {
             self.pan += response.drag_delta();
         }
@@ -6679,6 +7215,988 @@ impl ImagePreviewState {
                     crate::ui_ext::StatusToast::render_opt(&self.status_toast, 5.0, ui, palette, now);
                 });
             });
+    }
+
+    // ─── Film Simulation Methods ───────────────────────────────────────────────────
+
+    /// Spawn a background thread that runs filmr's process_image() on the current
+    /// image with the current FilmSimState parameters, then sends the result back.
+    pub fn run_film_sim_render(&mut self) {
+        if self.film_sim_state.is_rendering || self.current_rgba.is_empty() {
+            return;
+        }
+        let stocks = all_film_stocks();
+        let idx = self.film_sim_state.selected_stock_idx.min(stocks.len().saturating_sub(1));
+        let entry = &stocks[idx];
+        let mut stock = (entry.build)().with_style(self.film_sim_state.style);
+        stock.halation_strength = self.film_sim_state.halation;
+        stock.vignette_strength = self.film_sim_state.vignette;
+
+        let config = SimulationConfig {
+            exposure_time: self.film_sim_state.brightness,
+            warmth: self.film_sim_state.warmth,
+            saturation: self.film_sim_state.intensity,
+            auto_levels: false,
+            white_balance_mode: self.film_sim_state.wb_mode,
+            white_balance_strength: self.film_sim_state.wb_strength,
+            output_mode: OutputMode::Positive,
+            enable_grain: self.film_sim_state.enable_grain,
+            light_leak: self.film_sim_state.light_leak.to_config(),
+            ..SimulationConfig::default()
+        };
+
+        // Convert RgbaImage → RgbImage for filmr
+        let rgba = self.current_rgba.clone();
+        let w = rgba.width();
+        let h = rgba.height();
+        let rgb_pixels: Vec<u8> = rgba
+            .pixels()
+            .flat_map(|p| [p[0], p[1], p[2]])
+            .collect();
+        let rgb_img = image::RgbImage::from_raw(w, h, rgb_pixels)
+            .expect("pixel buffer size mismatch");
+
+        let contrast = self.film_sim_state.contrast;
+        let tint = self.film_sim_state.tint;
+
+        let (tx, rx) = std::sync::mpsc::channel::<FilmSimMsg>();
+        self.film_sim_state.render_rx = Some(rx);
+        self.film_sim_state.is_rendering = true;
+        self.film_sim_state.render_error = None;
+
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let process_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                filmr::processor::process_image(&rgb_img, &stock, &config)
+            }));
+            match process_result {
+                Ok(out_rgb) => {
+                    let out_rgba = apply_film_sim_post_adjustments(&out_rgb, contrast, tint);
+                    let duration_ms = start.elapsed().as_millis();
+                    let _ = tx.send(FilmSimMsg::Done { rgba: out_rgba, duration_ms });
+                }
+                Err(e) => {
+                    let err_msg = if let Some(s) = e.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = e.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "Film simulation panicked".to_string()
+                    };
+                    let _ = tx.send(FilmSimMsg::Error(err_msg));
+                }
+            }
+        });
+    }
+
+    /// Spawn low-priority background thread to generate 42x28 thumbnail previews for all film stocks.
+    pub fn run_thumbnail_batch(&mut self) {
+        if self.current_rgba.is_empty() {
+            return;
+        }
+        self.film_sim_state.thumbnail_epoch += 1;
+        let epoch = self.film_sim_state.thumbnail_epoch;
+
+        // Downscale base image to 42x28 (sub-3ms per stock)
+        let thumb_base = image::imageops::resize(
+            &self.current_rgba,
+            42,
+            28,
+            image::imageops::FilterType::Nearest,
+        );
+        let rgb_pixels: Vec<u8> = thumb_base.pixels().flat_map(|p| [p[0], p[1], p[2]]).collect();
+        let thumb_rgb = match image::RgbImage::from_raw(42, 28, rgb_pixels) {
+            Some(img) => img,
+            None => return,
+        };
+
+        let brightness = self.film_sim_state.brightness;
+        let warmth = self.film_sim_state.warmth;
+        let intensity = self.film_sim_state.intensity;
+        let contrast = self.film_sim_state.contrast;
+        let tint = self.film_sim_state.tint;
+        let wb_mode = self.film_sim_state.wb_mode;
+        let wb_strength = self.film_sim_state.wb_strength;
+        let halation = self.film_sim_state.halation;
+        let vignette = self.film_sim_state.vignette;
+        let light_leak = self.film_sim_state.light_leak;
+        let style = self.film_sim_state.style;
+        let enable_grain = self.film_sim_state.enable_grain;
+
+        let (tx, rx) = std::sync::mpsc::channel::<FilmSimThumbnailMsg>();
+        self.film_sim_state.thumbnail_rx = Some(rx);
+        self.film_sim_state.is_generating_thumbnails = true;
+
+        std::thread::Builder::new()
+            .name("film_sim_thumbnails".to_string())
+            .spawn(move || {
+                let stocks = all_film_stocks();
+                for (idx, entry) in stocks.iter().enumerate() {
+                    let mut stock = (entry.build)().with_style(style);
+                    stock.halation_strength = halation;
+                    stock.vignette_strength = vignette;
+
+                    let config = SimulationConfig {
+                        exposure_time: brightness,
+                        warmth,
+                        saturation: intensity,
+                        auto_levels: false,
+                        white_balance_mode: wb_mode,
+                        white_balance_strength: wb_strength,
+                        output_mode: OutputMode::Positive,
+                        enable_grain,
+                        light_leak: light_leak.to_config(),
+                        ..SimulationConfig::default()
+                    };
+
+                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        filmr::processor::process_image(&thumb_rgb, &stock, &config)
+                    }));
+
+                    if let Ok(out_rgb) = res {
+                        let out_rgba = apply_film_sim_post_adjustments(&out_rgb, contrast, tint);
+                        if tx.send(FilmSimThumbnailMsg { epoch, stock_idx: idx, rgba: out_rgba }).is_err() {
+                            // Receiver dropped (new epoch started), terminate worker
+                            break;
+                        }
+                    }
+                }
+            })
+            .ok();
+    }
+
+    /// Drain any messages from the film sim background thread and thumbnail worker.
+    pub fn poll_film_sim(&mut self) {
+        if let Some(rx) = self.film_sim_state.render_rx.take() {
+            match rx.try_recv() {
+                Ok(FilmSimMsg::Done { rgba, duration_ms }) => {
+                    self.film_sim_state.preview_rgba = Some(rgba);
+                    self.film_sim_state.dirty_preview_texture = true;
+                    self.film_sim_state.last_render_duration_ms = duration_ms;
+                    self.film_sim_state.is_rendering = false;
+                    self.film_sim_state.render_error = None;
+                }
+                Ok(FilmSimMsg::Error(e)) => {
+                    self.film_sim_state.render_error = Some(e);
+                    self.film_sim_state.is_rendering = false;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.film_sim_state.render_rx = Some(rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.film_sim_state.is_rendering = false;
+                }
+            }
+        }
+
+        // Drain pending thumbnail messages
+        let mut thumbs_done = false;
+        if let Some(rx) = self.film_sim_state.thumbnail_rx.take() {
+            let mut keep = true;
+            loop {
+                match rx.try_recv() {
+                    Ok(msg) => {
+                        if msg.epoch == self.film_sim_state.thumbnail_epoch {
+                            self.film_sim_state.pending_thumbnails.push((msg.stock_idx, msg.rgba));
+                        }
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        keep = false;
+                        thumbs_done = true;
+                        break;
+                    }
+                }
+            }
+            if keep {
+                self.film_sim_state.thumbnail_rx = Some(rx);
+            }
+        }
+        if thumbs_done {
+            self.film_sim_state.is_generating_thumbnails = false;
+        }
+    }
+
+    /// Commit the film sim preview into current_rgba and push to undo stack.
+    pub fn apply_film_sim(&mut self) {
+        let preview = match self.film_sim_state.preview_rgba.take() {
+            Some(p) => p,
+            None => return,
+        };
+        self.undo_stack.push(self.current_rgba.clone());
+        self.redo_stack.clear();
+        self.current_rgba = preview;
+        self.dirty_texture = true;
+        self.resize_state.sync_from_image(&self.current_rgba);
+        self.palette_state.is_extracted = false;
+        // Reset sim state so re-entering the tab renders fresh.
+        self.film_sim_state.preview_rgba = None;
+        self.film_sim_state.preview_texture = None;
+        self.film_sim_state.dirty_preview_texture = false;
+        // Invalidate and regenerate thumbnails for updated image
+        self.film_sim_state.stock_thumbnails.clear();
+        self.film_sim_state.pending_thumbnails.clear();
+        self.run_thumbnail_batch();
+        self.show_toast("🎞 Film simulation applied");
+    }
+
+    /// Full 3-panel film simulation viewport (replaces the normal render_viewport when FilmSim is active).
+    fn render_film_sim_viewport(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, palette: &AppPalette) {
+        let b_low   = hex_to_c32(&palette.theme.b_low);
+        let b_med   = hex_to_c32(&palette.theme.b_med);
+        let base_c  = hex_to_c32(&palette.harmonies.base);
+        let f_high  = hex_to_c32(&palette.theme.f_high);
+        let f_med   = hex_to_c32(&palette.theme.f_med);
+        let f_low   = hex_to_c32(&palette.theme.f_low);
+        let diff_add = hex_to_c32(&palette.diff_add);
+        let diff_mod = hex_to_c32(&palette.diff_mod);
+
+        // Upload any newly received thumbnails into GPU textures
+        for (idx, rgba) in self.film_sim_state.pending_thumbnails.drain(..) {
+            let ci = egui::ColorImage::from_rgba_unmultiplied(
+                [rgba.width() as usize, rgba.height() as usize],
+                rgba.as_raw(),
+            );
+            let tex = ctx.load_texture(
+                format!("film_sim_thumb_{}", idx),
+                ci,
+                egui::TextureOptions::LINEAR,
+            );
+            self.film_sim_state.stock_thumbnails.insert(idx, tex);
+        }
+
+        // Kick off thumbnail generation if empty
+        if self.film_sim_state.stock_thumbnails.is_empty()
+            && !self.film_sim_state.is_generating_thumbnails
+            && !self.current_rgba.is_empty()
+        {
+            self.run_thumbnail_batch();
+        }
+
+        let avail = ui.available_size();
+        let bottom_h = 96.0_f32;
+        let main_h = (avail.y - bottom_h - 10.0).max(100.0);
+        let left_w   = 235.0_f32;
+        let right_w  = 210.0_f32;
+        let center_w = (avail.x - left_w - right_w - 16.0).max(100.0);
+
+        let stocks = all_film_stocks();
+
+        // Ensure fit-to-view is performed on the center canvas when first entering FilmSim
+        if !self.film_sim_state.auto_fitted && center_w > 50.0 && main_h > 50.0 {
+            self.fit_to_view(Vec2::new(center_w, main_h));
+            self.film_sim_state.auto_fitted = true;
+        }
+
+        // ── TOP ROW: LEFT PANEL + CENTER CANVAS + RIGHT PANEL ─────────────────────
+        ui.horizontal(|ui| {
+            ui.set_height(main_h);
+
+            // ── 1. LEFT PANEL: Film Stock Picker with Async 42x28 Mini-Photos ──
+            ui.allocate_ui_with_layout(
+                Vec2::new(left_w, main_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::Frame::none()
+                        .fill(b_low)
+                        .stroke(Stroke::new(1.0, b_med))
+                        .rounding(Rounding::same(4.0))
+                        .inner_margin(egui::Margin::same(8.0))
+                        .show(ui, |ui| {
+                            ui.set_width(left_w - 16.0);
+                            ui.set_height(main_h - 16.0);
+
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new("🎞 Film Stock")
+                                        .strong()
+                                        .small()
+                                        .color(base_c),
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!("({})", stocks.len()))
+                                        .small()
+                                        .color(f_low),
+                                );
+                                if self.film_sim_state.is_generating_thumbnails {
+                                    ui.label(
+                                        egui::RichText::new("⏳")
+                                            .small()
+                                            .color(f_low),
+                                    ).on_hover_text("Generating thumbnails in background…");
+                                }
+                            });
+                            ui.add_space(4.0);
+
+                            // Search box
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.film_sim_state.search_query)
+                                    .hint_text("🔍 Filter stocks...")
+                                    .desired_width(left_w - 24.0),
+                            );
+                            ui.add_space(4.0);
+                            ui.separator();
+                            ui.add_space(2.0);
+
+                            let search = self.film_sim_state.search_query.trim().to_lowercase();
+                            egui::ScrollArea::vertical()
+                                .id_source("film_sim_stock_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.set_width(left_w - 24.0);
+                                    let mut current_brand = "";
+                                    for (i, entry) in stocks.iter().enumerate() {
+                                        if !search.is_empty() {
+                                            let matches = entry.name.to_lowercase().contains(&search)
+                                                || entry.brand.to_lowercase().contains(&search)
+                                                || entry.film_type_label.to_lowercase().contains(&search);
+                                            if !matches {
+                                                continue;
+                                            }
+                                        }
+
+                                        // Brand separator heading
+                                        if entry.brand != current_brand {
+                                            if !current_brand.is_empty() {
+                                                ui.add_space(6.0);
+                                            }
+                                            ui.label(
+                                                egui::RichText::new(entry.brand.to_uppercase())
+                                                    .small()
+                                                    .strong()
+                                                    .color(base_c),
+                                            );
+                                            current_brand = entry.brand;
+                                        }
+
+                                        let selected = self.film_sim_state.selected_stock_idx == i;
+                                        let (row_bg, name_col, meta_col) = if selected {
+                                            (base_c, contrast_text_c32(base_c, None, palette), contrast_text_c32(base_c, None, palette))
+                                        } else {
+                                            (b_low, f_high, f_med)
+                                        };
+
+                                        let row_frame = egui::Frame::none()
+                                            .fill(row_bg)
+                                            .rounding(Rounding::same(4.0))
+                                            .inner_margin(egui::Margin::symmetric(4.0, 3.0));
+
+                                        let resp = row_frame.show(ui, |ui| {
+                                            ui.set_width(left_w - 32.0);
+                                            ui.horizontal(|ui| {
+                                                // 42x28 mini-photo thumbnail preview
+                                                if let Some(tex) = self.film_sim_state.stock_thumbnails.get(&i) {
+                                                    ui.image((tex.id(), Vec2::new(42.0, 28.0)));
+                                                } else {
+                                                    let (rect, _) = ui.allocate_exact_size(Vec2::new(42.0, 28.0), egui::Sense::hover());
+                                                    ui.painter().rect_filled(rect, Rounding::same(2.0), b_med);
+                                                }
+                                                ui.add_space(2.0);
+                                                ui.vertical(|ui| {
+                                                    ui.label(egui::RichText::new(entry.name).small().strong().color(name_col));
+                                                    ui.horizontal(|ui| {
+                                                        ui.label(egui::RichText::new(entry.film_type_label).monospace().color(meta_col).size(9.0));
+                                                        ui.label(egui::RichText::new(format!("ISO {}", entry.iso)).monospace().color(meta_col).size(9.0));
+                                                    });
+                                                });
+                                            });
+                                        }).response;
+
+                                        if resp.interact(egui::Sense::click()).clicked() && !selected {
+                                            self.film_sim_state.selected_stock_idx = i;
+                                            self.film_sim_state.mark_dirty();
+                                        }
+                                        ui.add_space(2.0);
+                                    }
+                                });
+                        });
+                },
+            );
+
+            ui.add_space(4.0);
+
+            // ── 2. CENTER PANEL: Split-view Comparison Canvas ──
+            ui.allocate_ui_with_layout(
+                Vec2::new(center_w, main_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::Frame::none()
+                        .fill(hex_to_c32(&palette.theme.background))
+                        .rounding(Rounding::same(4.0))
+                        .show(ui, |ui| {
+                            ui.set_width(center_w);
+                            ui.set_height(main_h);
+
+                            // Reload preview texture if dirty
+                            if self.film_sim_state.dirty_preview_texture {
+                                if let Some(ref rgba) = self.film_sim_state.preview_rgba {
+                                    let ci = egui::ColorImage::from_rgba_unmultiplied(
+                                        [rgba.width() as usize, rgba.height() as usize],
+                                        rgba.as_raw(),
+                                    );
+                                    self.film_sim_state.preview_texture = Some(
+                                        ctx.load_texture("film_sim_preview_tex", ci, egui::TextureOptions::LINEAR),
+                                    );
+                                }
+                                self.film_sim_state.dirty_preview_texture = false;
+                            }
+
+                            let (response, painter) = ui.allocate_painter(
+                                Vec2::new(center_w, main_h),
+                                egui::Sense::click_and_drag(),
+                            );
+                            let canvas_rect = response.rect;
+
+                            painter.rect_filled(canvas_rect, Rounding::same(4.0), hex_to_c32(&palette.theme.background));
+
+                            // Pan/zoom via this response
+                            let middle_drag = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+                            if (!self.film_sim_state.is_dragging_split && response.dragged()) || middle_drag {
+                                self.pan += response.drag_delta();
+                            }
+                            if response.hovered() {
+                                let scroll_delta = ui.input(|i| i.raw_scroll_delta.y);
+                                if scroll_delta.abs() > 0.0 {
+                                    let zoom_factor = (scroll_delta * 0.002).exp();
+                                    let old_zoom = self.zoom;
+                                    let new_zoom = (old_zoom * zoom_factor).clamp(0.05, 50.0);
+                                    if let Some(ptr_pos) = response.hover_pos() {
+                                        let center = canvas_rect.center() + self.pan;
+                                        let to_ptr = ptr_pos - center;
+                                        self.pan += to_ptr * (1.0 - new_zoom / old_zoom);
+                                    }
+                                    self.zoom = new_zoom;
+                                }
+                            }
+                            if !self.film_sim_state.is_dragging_split && response.double_clicked() {
+                                let avail_size = Vec2::new(center_w, main_h);
+                                self.fit_to_view(avail_size);
+                            }
+
+                            if let Some(orig_tex) = self.texture.clone() {
+                                let img_w = self.current_rgba.width() as f32 * self.zoom;
+                                let img_h = self.current_rgba.height() as f32 * self.zoom;
+                                let center_pt = canvas_rect.center() + self.pan;
+                                let img_rect = Rect::from_center_size(center_pt, Vec2::new(img_w, img_h));
+
+                                draw_checkerboard(&painter, img_rect, self.zoom, b_low, b_med);
+
+                                self.render_film_sim_comparison(
+                                    ui, &painter, &response, img_rect, canvas_rect, ctx, &orig_tex, palette
+                                );
+
+                                painter.rect_stroke(
+                                    img_rect,
+                                    Rounding::ZERO,
+                                    Stroke::new(1.0, hex_to_c32_alpha(&palette.theme.f_med, 40)),
+                                );
+                            }
+
+                            // Rendering spinner overlay
+                            if self.film_sim_state.is_rendering {
+                                let spinner_pos = canvas_rect.center();
+                                let spin_bg = hex_to_c32_alpha(&palette.theme.b_low, 210);
+                                let spin_rect = Rect::from_center_size(spinner_pos, Vec2::new(220.0, 36.0));
+                                painter.rect_filled(spin_rect, Rounding::same(8.0), spin_bg);
+                                painter.rect_stroke(spin_rect, Rounding::same(8.0), Stroke::new(1.0, b_med));
+                                painter.text(
+                                    spinner_pos,
+                                    egui::Align2::CENTER_CENTER,
+                                    "⏳ Rendering film simulation…",
+                                    egui::FontId::proportional(12.0),
+                                    f_med,
+                                );
+                            }
+
+                            // Error overlay
+                            if let Some(ref err) = self.film_sim_state.render_error.clone() {
+                                let err_pos = Pos2::new(canvas_rect.min.x + 10.0, canvas_rect.min.y + 10.0);
+                                painter.text(
+                                    err_pos,
+                                    egui::Align2::LEFT_TOP,
+                                    format!("⚠ {}", err),
+                                    egui::FontId::proportional(11.0),
+                                    hex_to_c32(&palette.diff_del),
+                                );
+                            }
+                        });
+                },
+            );
+
+            ui.add_space(4.0);
+
+            // ── 3. RIGHT PANEL: Style + Optical Effects + Stock Info ──
+            ui.allocate_ui_with_layout(
+                Vec2::new(right_w, main_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    egui::Frame::none()
+                        .fill(b_low)
+                        .stroke(Stroke::new(1.0, b_med))
+                        .rounding(Rounding::same(4.0))
+                        .inner_margin(egui::Margin::same(8.0))
+                        .show(ui, |ui| {
+                            ui.set_width(right_w - 16.0);
+                            ui.set_height(main_h - 16.0);
+
+                            egui::ScrollArea::vertical()
+                                .id_source("film_sim_right_scroll")
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.set_width(right_w - 24.0);
+
+                                    // 1. Style
+                                    ui.label(egui::RichText::new("✨ Style").strong().small().color(base_c));
+                                    ui.add_space(4.0);
+
+                                    let styles = [
+                                        (FilmStyle::Accurate,     "Accurate",  "Physics-faithful rendering"),
+                                        (FilmStyle::Artistic,     "Artistic",  "Boosted contrast & saturation"),
+                                        (FilmStyle::Vintage,      "Vintage",   "Warm, faded, nostalgic"),
+                                        (FilmStyle::HighContrast, "Hi-Con",    "High contrast, punchy"),
+                                        (FilmStyle::Pastel,       "Pastel",    "Low-contrast, soft tones"),
+                                    ];
+
+                                    for (style, label, tooltip) in &styles {
+                                        let sel = self.film_sim_state.style == *style;
+                                        let (s_bg, s_fg) = if sel {
+                                            (base_c, contrast_text_c32(base_c, None, palette))
+                                        } else {
+                                            (b_med, f_med)
+                                        };
+                                        let btn = egui::Button::new(
+                                            egui::RichText::new(*label).small().strong().color(s_fg),
+                                        )
+                                        .fill(s_bg)
+                                        .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                        .rounding(Rounding::same(4.0))
+                                        .min_size(Vec2::new(right_w - 28.0, 20.0));
+
+                                        if ui.add(btn).on_hover_text(*tooltip).clicked() && !sel {
+                                            self.film_sim_state.style = *style;
+                                            self.film_sim_state.mark_dirty();
+                                        }
+                                        ui.add_space(2.0);
+                                    }
+
+                                    ui.add_space(4.0);
+                                    ui.separator();
+                                    ui.add_space(4.0);
+
+                                    // 2. Optical Effects: Halation, Vignette, Light Leak, Grain
+                                    ui.label(egui::RichText::new("📸 Optics & Effects").strong().small().color(base_c));
+                                    ui.add_space(4.0);
+
+                                    let opt_slider_w = right_w - 32.0;
+
+                                    if render_context_slider(
+                                        ui,
+                                        "🌟 Halation",
+                                        &mut self.film_sim_state.halation,
+                                        0.0..=1.0,
+                                        0.25,
+                                        "%",
+                                        opt_slider_w,
+                                        palette,
+                                    ) {
+                                        self.film_sim_state.mark_dirty();
+                                    }
+                                    ui.add_space(4.0);
+
+                                    if render_context_slider(
+                                        ui,
+                                        "🔘 Vignette",
+                                        &mut self.film_sim_state.vignette,
+                                        0.0..=1.0,
+                                        0.35,
+                                        "%",
+                                        opt_slider_w,
+                                        palette,
+                                    ) {
+                                        self.film_sim_state.mark_dirty();
+                                    }
+                                    ui.add_space(4.0);
+
+                                    ui.label(egui::RichText::new("💡 Light Leak").small().color(f_med));
+                                    egui::ComboBox::from_id_source("film_sim_light_leak_combo")
+                                        .selected_text(self.film_sim_state.light_leak.label())
+                                        .width(opt_slider_w)
+                                        .show_ui(ui, |ui| {
+                                            let presets = [
+                                                LightLeakPreset::None,
+                                                LightLeakPreset::WarmCorner,
+                                                LightLeakPreset::SunStreak,
+                                                LightLeakPreset::SoftEdge,
+                                                LightLeakPreset::OrganicBlob,
+                                            ];
+                                            for p in presets {
+                                                let sel = self.film_sim_state.light_leak == p;
+                                                if ui.selectable_label(sel, p.label()).clicked() && !sel {
+                                                    self.film_sim_state.light_leak = p;
+                                                    self.film_sim_state.mark_dirty();
+                                                }
+                                            }
+                                        });
+                                    ui.add_space(4.0);
+
+                                    let mut grain_on = self.film_sim_state.enable_grain;
+                                    if ui.checkbox(&mut grain_on, egui::RichText::new("⟁ Grain emulation").small().color(f_med)).changed() {
+                                        self.film_sim_state.enable_grain = grain_on;
+                                        self.film_sim_state.mark_dirty();
+                                    }
+
+                                    ui.add_space(4.0);
+                                    ui.separator();
+                                    ui.add_space(4.0);
+
+                                    // 3. Stock metadata
+                                    let idx = self.film_sim_state.selected_stock_idx.min(stocks.len().saturating_sub(1));
+                                    let entry = &stocks[idx];
+                                    ui.label(egui::RichText::new("📋 Stock Info").strong().small().color(base_c));
+                                    ui.add_space(4.0);
+
+                                    let stock_built = (entry.build)();
+                                    egui::Grid::new("film_sim_stock_meta_grid")
+                                        .spacing(Vec2::new(6.0, 3.0))
+                                        .show(ui, |ui| {
+                                            ui.label(egui::RichText::new("Brand:").small().color(f_med));
+                                            ui.label(egui::RichText::new(entry.brand).small().color(f_high));
+                                            ui.end_row();
+
+                                            ui.label(egui::RichText::new("Film:").small().color(f_med));
+                                            ui.label(egui::RichText::new(entry.name).small().color(f_high));
+                                            ui.end_row();
+
+                                            ui.label(egui::RichText::new("ISO:").small().color(f_med));
+                                            ui.label(egui::RichText::new(format!("{}", entry.iso)).small().color(f_high));
+                                            ui.end_row();
+
+                                            ui.label(egui::RichText::new("Type:").small().color(f_med));
+                                            ui.label(egui::RichText::new(entry.film_type_label).small().color(f_high));
+                                            ui.end_row();
+
+                                            ui.label(egui::RichText::new("Res:").small().color(f_med));
+                                            ui.label(egui::RichText::new(format!("{:.0} lp/mm", stock_built.resolution_lp_mm)).small().color(f_low));
+                                            ui.end_row();
+                                        });
+
+                                    if self.film_sim_state.last_render_duration_ms > 0 {
+                                        ui.add_space(6.0);
+                                        ui.label(egui::RichText::new(
+                                            format!("⏱ {:.2}s", self.film_sim_state.last_render_duration_ms as f64 / 1000.0)
+                                        ).small().color(f_low));
+                                    }
+                                });
+                        });
+                },
+            );
+        });
+
+        // ── BOTTOM STRIP: Context Sliders + WB Controls + Action Buttons ───────────
+        ui.add_space(4.0);
+        egui::Frame::none()
+            .fill(b_low)
+            .stroke(Stroke::new(1.0, b_med))
+            .rounding(Rounding::same(4.0))
+            .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+            .show(ui, |ui| {
+                ui.set_width(avail.x - 24.0);
+                ui.vertical(|ui| {
+                    // Row 1: Exposure & Color Sliders with contextual start/center/end/default tracks
+                    ui.horizontal(|ui| {
+                        let slider_w = ((avail.x - 48.0) / 6.0 - 12.0).clamp(70.0, 115.0);
+
+                        // Brightness
+                        if render_context_slider(ui, "☀ Brightness", &mut self.film_sim_state.brightness, 0.1..=4.0, 1.0, "×", slider_w, palette) {
+                            self.film_sim_state.mark_dirty();
+                        }
+                        ui.add_space(3.0);
+
+                        // Contrast
+                        if render_context_slider(ui, "◑ Contrast", &mut self.film_sim_state.contrast, -1.0..=1.0, 0.0, "", slider_w, palette) {
+                            self.film_sim_state.mark_dirty();
+                        }
+                        ui.add_space(3.0);
+
+                        // Warmth
+                        if render_context_slider(ui, "🌡 Warmth", &mut self.film_sim_state.warmth, -1.0..=1.0, 0.0, "", slider_w, palette) {
+                            self.film_sim_state.mark_dirty();
+                        }
+                        ui.add_space(3.0);
+
+                        // Tint (Green ↔ Magenta)
+                        if render_context_slider(ui, "🧪 Tint", &mut self.film_sim_state.tint, -1.0..=1.0, 0.0, "", slider_w, palette) {
+                            self.film_sim_state.mark_dirty();
+                        }
+                        ui.add_space(3.0);
+
+                        // Saturation
+                        if render_context_slider(ui, "🎨 Saturation", &mut self.film_sim_state.intensity, 0.0..=2.0, 1.0, "", slider_w, palette) {
+                            self.film_sim_state.mark_dirty();
+                        }
+                        ui.add_space(3.0);
+
+                        // WB Strength
+                        if render_context_slider(ui, "⚖ WB Str", &mut self.film_sim_state.wb_strength, 0.0..=1.0, 1.0, "%", slider_w, palette) {
+                            self.film_sim_state.mark_dirty();
+                        }
+                    });
+
+                    ui.add_space(3.0);
+
+                    // Row 2: WB Mode Selector + Auto Presets + Actions
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("WB:").small().strong().color(base_c));
+                        let wb_modes = [
+                            (WhiteBalanceMode::Auto,  "Auto"),
+                            (WhiteBalanceMode::Gray,  "Gray"),
+                            (WhiteBalanceMode::White, "White"),
+                            (WhiteBalanceMode::Off,   "Off"),
+                        ];
+                        for (mode, label) in wb_modes {
+                            let sel = self.film_sim_state.wb_mode == mode;
+                            let (btn_bg, btn_fg) = if sel {
+                                (base_c, contrast_text_c32(base_c, None, palette))
+                            } else {
+                                (b_med, f_med)
+                            };
+                            let b = egui::Button::new(egui::RichText::new(label).small().strong().color(btn_fg))
+                                .fill(btn_bg)
+                                .stroke(Stroke::new(1.0, if sel { base_c } else { b_low }))
+                                .rounding(Rounding::same(3.0))
+                                .min_size(Vec2::new(36.0, 18.0));
+                            if ui.add(b).clicked() && !sel {
+                                self.film_sim_state.wb_mode = mode;
+                                self.film_sim_state.mark_dirty();
+                            }
+                        }
+
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.add_space(6.0);
+
+                        // Auto Levels
+                        let al_fg = contrast_text_c32(diff_mod, Some(f_high), palette);
+                        let al_btn = egui::Button::new(egui::RichText::new("⚡ Auto Levels").small().strong().color(al_fg))
+                            .fill(diff_mod)
+                            .stroke(Stroke::new(1.0, diff_mod))
+                            .rounding(Rounding::same(4.0));
+                        if ui.add(al_btn).on_hover_text("Reset brightness to neutral, warmth to 0, and tint to 0").clicked() {
+                            self.film_sim_state.brightness = 1.0;
+                            self.film_sim_state.warmth = 0.0;
+                            self.film_sim_state.tint = 0.0;
+                            self.film_sim_state.mark_dirty();
+                            self.show_toast("⚡ Auto levels applied");
+                        }
+
+                        ui.add_space(4.0);
+
+                        // Auto Enhance
+                        let ae_fg = contrast_text_c32(base_c, Some(f_high), palette);
+                        let ae_btn = egui::Button::new(egui::RichText::new("✨ Auto Enhance").small().strong().color(ae_fg))
+                            .fill(base_c)
+                            .stroke(Stroke::new(1.0, base_c))
+                            .rounding(Rounding::same(4.0));
+                        if ui.add(ae_btn).on_hover_text("Boost intensity, warmth, and contrast for a cinematic look").clicked() {
+                            self.film_sim_state.brightness = (self.film_sim_state.brightness * 1.05).min(4.0);
+                            self.film_sim_state.intensity  = (self.film_sim_state.intensity  + 0.15).min(2.0);
+                            self.film_sim_state.warmth     = (self.film_sim_state.warmth     + 0.05).min(1.0);
+                            self.film_sim_state.contrast   = (self.film_sim_state.contrast   + 0.08).min(1.0);
+                            self.film_sim_state.mark_dirty();
+                            self.show_toast("✨ Auto enhance applied");
+                        }
+
+                        // Right aligned: Apply, Reset, Undo
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let apply_fg = contrast_text_c32(diff_add, Some(f_high), palette);
+                            let apply_btn = egui::Button::new(
+                                egui::RichText::new("✓ Apply to Image").small().strong().color(apply_fg),
+                            )
+                            .fill(diff_add)
+                            .stroke(Stroke::new(1.0, diff_add))
+                            .rounding(Rounding::same(4.0));
+                            let apply_enabled = self.film_sim_state.preview_rgba.is_some();
+                            if ui.add_enabled(apply_enabled, apply_btn)
+                                .on_hover_text("Commit film simulation result to image (adds to undo stack)")
+                                .clicked()
+                            {
+                                self.apply_film_sim();
+                            }
+
+                            ui.add_space(4.0);
+
+                            let reset_fg = contrast_text_c32(b_med, Some(f_med), palette);
+                            let reset_btn = egui::Button::new(egui::RichText::new("⟲ Reset").small().strong().color(reset_fg))
+                                .fill(b_med)
+                                .stroke(Stroke::new(1.0, b_low))
+                                .rounding(Rounding::same(4.0));
+                            if ui.add(reset_btn).on_hover_text("Reset all film sim parameters to defaults").clicked() {
+                                self.film_sim_state.brightness = 1.0;
+                                self.film_sim_state.contrast   = 0.0;
+                                self.film_sim_state.warmth     = 0.0;
+                                self.film_sim_state.tint       = 0.0;
+                                self.film_sim_state.intensity  = 1.0;
+                                self.film_sim_state.wb_mode    = WhiteBalanceMode::Auto;
+                                self.film_sim_state.wb_strength = 1.0;
+                                self.film_sim_state.halation   = 0.25;
+                                self.film_sim_state.vignette   = 0.35;
+                                self.film_sim_state.light_leak = LightLeakPreset::None;
+                                self.film_sim_state.enable_grain = true;
+                                self.film_sim_state.style = FilmStyle::Accurate;
+                                self.film_sim_state.mark_dirty();
+                                self.show_toast("⟲ All parameters reset to defaults");
+                            }
+
+                            ui.add_space(4.0);
+
+                            if !self.undo_stack.is_empty() {
+                                let undo_fg = contrast_text_c32(b_med, Some(diff_mod), palette);
+                                let undo_btn = egui::Button::new(
+                                    egui::RichText::new("⟲ Undo (Ctrl+Z)").small().strong().color(undo_fg),
+                                )
+                                .fill(b_med)
+                                .rounding(Rounding::same(4.0));
+                                if ui.add(undo_btn).clicked() {
+                                    self.undo();
+                                    self.film_sim_state.preview_rgba = None;
+                                    self.film_sim_state.preview_texture = None;
+                                    self.film_sim_state.mark_dirty();
+                                }
+                            }
+                        });
+                    });
+                });
+            });
+    }
+
+    /// Split-view comparison painter for the Film Sim tab center canvas.
+    #[allow(clippy::too_many_arguments)]
+    fn render_film_sim_comparison(
+        &mut self,
+        ui: &mut egui::Ui,
+        painter: &egui::Painter,
+        response: &egui::Response,
+        img_rect: Rect,
+        _canvas_rect: Rect,
+        _ctx: &egui::Context,
+        orig_tex: &egui::TextureHandle,
+        palette: &AppPalette,
+    ) {
+        let b_low  = hex_to_c32(&palette.theme.b_low);
+        let b_med  = hex_to_c32(&palette.theme.b_med);
+        let base_c = hex_to_c32(&palette.harmonies.base);
+
+        // If no preview yet, just show original
+        let preview_tex_id = self.film_sim_state.preview_texture.as_ref().map(|t| t.id());
+
+        let split = self.film_sim_state.comparison_split.clamp(0.0, 1.0);
+        let split_x = img_rect.min.x + split * img_rect.width();
+
+        // Left side: original
+        {
+            let left_rect = Rect::from_min_max(img_rect.min, Pos2::new(split_x, img_rect.max.y));
+            let left_uv   = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(split, 1.0));
+            let mut mesh  = egui::Mesh::with_texture(orig_tex.id());
+            mesh.add_rect_with_uv(left_rect, left_uv, Color32::WHITE);
+            painter.add(egui::Shape::mesh(mesh));
+        }
+
+        // Right side: film simulation preview (or original if not ready)
+        {
+            let tex_id = preview_tex_id.unwrap_or_else(|| orig_tex.id());
+            let right_rect = Rect::from_min_max(Pos2::new(split_x, img_rect.min.y), img_rect.max);
+            let right_uv   = Rect::from_min_max(Pos2::new(split, 0.0), Pos2::new(1.0, 1.0));
+            let mut mesh   = egui::Mesh::with_texture(tex_id);
+            mesh.add_rect_with_uv(right_rect, right_uv, Color32::WHITE);
+            painter.add(egui::Shape::mesh(mesh));
+        }
+
+        // Divider line
+        painter.line_segment(
+            [Pos2::new(split_x, img_rect.min.y), Pos2::new(split_x, img_rect.max.y)],
+            Stroke::new(3.0, Color32::from_black_alpha(150)),
+        );
+        painter.line_segment(
+            [Pos2::new(split_x, img_rect.min.y), Pos2::new(split_x, img_rect.max.y)],
+            Stroke::new(1.5, Color32::WHITE),
+        );
+
+        // Draggable knob
+        let knob_center = Pos2::new(split_x, img_rect.center().y);
+        let knob_fg = contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_high)), palette);
+        painter.circle(knob_center, 16.0, b_low, Stroke::new(2.0, base_c));
+        painter.text(
+            knob_center,
+            egui::Align2::CENTER_CENTER,
+            "◀ ▶",
+            egui::FontId::monospace(10.0),
+            knob_fg,
+        );
+
+        // Drag logic
+        let ptr_pos = response.hover_pos();
+        let near_divider = ptr_pos.map_or(false, |pos| {
+            (pos.x - split_x).abs() <= 16.0 && pos.y >= img_rect.min.y && pos.y <= img_rect.max.y
+        });
+
+        if near_divider || self.film_sim_state.is_dragging_split {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        if near_divider && response.drag_started() {
+            self.film_sim_state.is_dragging_split = true;
+        }
+        if self.film_sim_state.is_dragging_split {
+            if response.dragged() {
+                if let Some(pos) = ptr_pos {
+                    self.film_sim_state.comparison_split =
+                        ((pos.x - img_rect.min.x) / img_rect.width()).clamp(0.01, 0.99);
+                }
+            }
+            if response.drag_stopped() {
+                self.film_sim_state.is_dragging_split = false;
+            }
+        }
+
+        // HUD badges
+        let badge_bg = hex_to_c32_alpha(&palette.theme.b_low, 210);
+
+        let orig_rect = Rect::from_min_size(
+            Pos2::new(img_rect.min.x + 10.0, img_rect.min.y + 10.0),
+            Vec2::new(100.0, 22.0),
+        );
+        painter.rect_filled(orig_rect, Rounding::same(4.0), badge_bg);
+        painter.rect_stroke(orig_rect, Rounding::same(4.0), Stroke::new(1.0, b_med));
+        painter.text(
+            orig_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "ORIGINAL",
+            egui::FontId::proportional(11.0),
+            hex_to_c32(&palette.theme.f_med),
+        );
+
+        let stocks = all_film_stocks();
+        let idx = self.film_sim_state.selected_stock_idx.min(stocks.len().saturating_sub(1));
+        let sim_label = if self.film_sim_state.is_rendering {
+            "⏳ Rendering…".to_string()
+        } else {
+            format!("🎞 {} ({:.1}s)", stocks[idx].name, self.film_sim_state.last_render_duration_ms as f64 / 1000.0)
+        };
+        let sim_badge_w = (sim_label.len() as f32 * 6.5).max(130.0);
+        let sim_rect = Rect::from_min_size(
+            Pos2::new(img_rect.max.x - sim_badge_w - 10.0, img_rect.min.y + 10.0),
+            Vec2::new(sim_badge_w, 22.0),
+        );
+        painter.rect_filled(sim_rect, Rounding::same(4.0), badge_bg);
+        painter.rect_stroke(sim_rect, Rounding::same(4.0), Stroke::new(1.0, base_c));
+        painter.text(
+            sim_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            sim_label,
+            egui::FontId::proportional(10.0),
+            base_c,
+        );
     }
 
     fn fit_to_view(&mut self, canvas_size: Vec2) {
@@ -8121,6 +9639,214 @@ mod tests {
         state.deskew_state.reset_quad();
         assert!(!state.deskew_state.corners_adjusted);
         assert_eq!(state.deskew_state.corners[0], Pos2::new(0.08, 0.08));
+    }
+
+    #[test]
+    fn test_film_sim_stocks_and_styles() {
+        let stocks = all_film_stocks();
+        assert_eq!(stocks.len(), 57, "Expected 57 presets across all brands");
+
+        // Verify key presets exist
+        assert!(stocks.iter().any(|s| s.name == "Portra 400" && s.brand == "Kodak"));
+        assert!(stocks.iter().any(|s| s.name == "Velvia 50" && s.brand == "Fujifilm"));
+        assert!(stocks.iter().any(|s| s.name == "HP5 Plus 400" && s.brand == "Ilford"));
+        assert!(stocks.iter().any(|s| s.name == "600 Color" && s.brand == "Polaroid"));
+        assert!(stocks.iter().any(|s| s.name == "800T" && s.brand == "CineStill"));
+        assert!(stocks.iter().any(|s| s.name == "Vista 200" && s.brand == "Agfa"));
+
+        // Verify each stock builds valid FilmStock
+        for entry in &stocks {
+            let stock = (entry.build)();
+            assert!(stock.resolution_lp_mm > 0.0);
+        }
+
+        // Test style enum variants
+        let styles = [
+            FilmStyle::Accurate,
+            FilmStyle::Artistic,
+            FilmStyle::Vintage,
+            FilmStyle::HighContrast,
+            FilmStyle::Pastel,
+        ];
+        assert_eq!(styles.len(), 5);
+    }
+
+    #[test]
+    fn test_film_sim_state_and_render_dispatch() {
+        let config = AppConfig::default();
+        let mut img = RgbaImage::new(16, 16);
+        for p in img.pixels_mut() {
+            *p = image::Rgba([120, 140, 160, 255]);
+        }
+        let mut png_bytes = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png).unwrap();
+        let item = ClipItem::from_image(png_bytes, 16, 16, "image/png");
+        let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
+
+        // Defaults
+        assert_eq!(state.film_sim_state.brightness, 1.0);
+        assert_eq!(state.film_sim_state.contrast, 0.0);
+        assert_eq!(state.film_sim_state.warmth, 0.0);
+        assert_eq!(state.film_sim_state.intensity, 1.0);
+        assert!(state.film_sim_state.enable_grain);
+        assert_eq!(state.film_sim_state.style, FilmStyle::Accurate);
+
+        // Switch to FilmSim mode
+        state.set_tool_mode(ImageToolMode::FilmSim);
+        assert_eq!(state.active_mode, ImageToolMode::FilmSim);
+
+        // Trigger render
+        state.run_film_sim_render();
+        assert!(state.film_sim_state.is_rendering);
+        assert!(state.film_sim_state.render_rx.is_some());
+
+        // Poll until background render finishes (should be sub-second for 16x16)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while state.film_sim_state.is_rendering && std::time::Instant::now() < deadline {
+            state.poll_film_sim();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        assert!(!state.film_sim_state.is_rendering);
+        assert!(state.film_sim_state.preview_rgba.is_some());
+        assert_eq!(state.film_sim_state.render_error, None);
+
+        // Apply film sim
+        let pre_undo_len = state.undo_stack.len();
+        state.apply_film_sim();
+        assert_eq!(state.undo_stack.len(), pre_undo_len + 1);
+        assert!(state.dirty_texture);
+        assert!(state.status_toast.is_some());
+    }
+
+    #[test]
+    fn test_film_sim_contrast_curve() {
+        let compute_lut = |contrast: f32| -> [u8; 256] {
+            let k = if contrast >= 0.0 {
+                1.0 + contrast * 2.2
+            } else {
+                1.0 / (1.0 + contrast.abs() * 2.2)
+            };
+            let mut lut = [0u8; 256];
+            for (i, slot) in lut.iter_mut().enumerate() {
+                let t = i as f32 / 255.0;
+                let curved = if t < 0.5 {
+                    0.5 * (2.0 * t).powf(k)
+                } else {
+                    1.0 - 0.5 * (2.0 * (1.0 - t)).powf(k)
+                };
+                *slot = (curved.clamp(0.0, 1.0) * 255.0).round() as u8;
+            }
+            lut
+        };
+
+        // Neutral
+        let lut_0 = compute_lut(0.0);
+        for i in 0..=255 {
+            assert_eq!(lut_0[i], i as u8);
+        }
+
+        // High contrast (e.g. +0.5): shadows darker, highlights brighter
+        let lut_pos = compute_lut(0.5);
+        assert!(lut_pos[64] < 64, "Shadows should be darkened for high contrast");
+        assert!(lut_pos[192] > 192, "Highlights should be brightened for high contrast");
+        assert!((lut_pos[128] as i32 - 128).abs() <= 1, "Midtones should remain anchored within 1 level");
+
+        // Low contrast (e.g. -0.5): shadows lifted, highlights softened
+        let lut_neg = compute_lut(-0.5);
+        assert!(lut_neg[64] > 64, "Shadows should be lifted for low contrast");
+        assert!(lut_neg[192] < 192, "Highlights should be softened for low contrast");
+        assert!((lut_neg[128] as i32 - 128).abs() <= 1, "Midtones should remain anchored within 1 level");
+    }
+
+    #[test]
+    fn test_film_sim_tint_and_post_adjustments() {
+        let mut img = image::RgbImage::new(4, 4);
+        for p in img.pixels_mut() {
+            *p = image::Rgb([128, 128, 128]);
+        }
+
+        // Neutral tint and neutral contrast: should be exact identity
+        let neutral = apply_film_sim_post_adjustments(&img, 0.0, 0.0);
+        assert_eq!(neutral.get_pixel(0, 0), &image::Rgba([128, 128, 128, 255]));
+
+        // Magenta tint (+0.5): Red and Blue boosted, Green attenuated
+        let magenta = apply_film_sim_post_adjustments(&img, 0.0, 0.5);
+        let p_mag = magenta.get_pixel(0, 0);
+        assert!(p_mag[0] > 128, "Red should be boosted for magenta tint");
+        assert!(p_mag[2] > 128, "Blue should be boosted for magenta tint");
+        assert!(p_mag[1] < 128, "Green should be reduced for magenta tint");
+
+        // Green tint (-0.5): Green boosted, Red and Blue attenuated
+        let green = apply_film_sim_post_adjustments(&img, 0.0, -0.5);
+        let p_grn = green.get_pixel(0, 0);
+        assert!(p_grn[1] > 128, "Green should be boosted for green tint");
+        assert!(p_grn[0] < 128, "Red should be reduced for green tint");
+        assert!(p_grn[2] < 128, "Blue should be reduced for green tint");
+    }
+
+    #[test]
+    fn test_film_sim_light_leak_presets() {
+        let presets = [
+            LightLeakPreset::None,
+            LightLeakPreset::WarmCorner,
+            LightLeakPreset::SunStreak,
+            LightLeakPreset::SoftEdge,
+            LightLeakPreset::OrganicBlob,
+        ];
+        for p in presets {
+            let config = p.to_config();
+            if p == LightLeakPreset::None {
+                assert!(!config.enabled);
+                assert!(config.leaks.is_empty());
+                assert_eq!(p.label(), "None");
+            } else {
+                assert!(config.enabled);
+                assert_eq!(config.leaks.len(), 1);
+                assert!(!p.label().is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn test_film_sim_thumbnail_batch_streaming() {
+        let config = AppConfig::default();
+        let mut img = RgbaImage::new(42, 28);
+        for p in img.pixels_mut() {
+            *p = image::Rgba([100, 120, 140, 255]);
+        }
+        let mut png_bytes = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png_bytes), image::ImageFormat::Png).unwrap();
+        let item = ClipItem::from_image(png_bytes, 42, 28, "image/png");
+        let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
+
+        // Defaults for expanded controls
+        assert_eq!(state.film_sim_state.tint, 0.0);
+        assert_eq!(state.film_sim_state.wb_mode, WhiteBalanceMode::Auto);
+        assert_eq!(state.film_sim_state.wb_strength, 1.0);
+        assert_eq!(state.film_sim_state.halation, 0.25);
+        assert_eq!(state.film_sim_state.vignette, 0.35);
+        assert_eq!(state.film_sim_state.light_leak, LightLeakPreset::None);
+
+        // Run thumbnail batch
+        state.run_thumbnail_batch();
+        assert!(state.film_sim_state.is_generating_thumbnails);
+        assert!(state.film_sim_state.thumbnail_rx.is_some());
+
+        // Wait for at least some thumbnails to stream in
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while state.film_sim_state.pending_thumbnails.is_empty() && std::time::Instant::now() < deadline {
+            state.poll_film_sim();
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+
+        assert!(
+            !state.film_sim_state.pending_thumbnails.is_empty(),
+            "Pending thumbnails should receive streamed items from worker"
+        );
+        let first_thumb = &state.film_sim_state.pending_thumbnails[0];
+        assert_eq!(first_thumb.1.width(), 42);
+        assert_eq!(first_thumb.1.height(), 28);
     }
 }
 
