@@ -9,6 +9,7 @@ use crate::{hex_to_c32, hex_to_c32_alpha};
 use little_clip_core::audio::{
     compute_audio_analysis_progressive, read_audio_metadata,
     AudioAnalysisProgress, AudioMetadata, FullAudioAnalysis,
+    DEFAULT_TRANSIENT_SENSITIVITY, MAX_TRANSIENT_SENSITIVITY, MIN_TRANSIENT_SENSITIVITY,
 };
 use little_clip_core::ipc::IpcRequest;
 use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
@@ -67,6 +68,27 @@ fn editor_stem_switch(
 
 fn waveform_scrub_time(pointer_x: f32, min_x: f32, width: f32, duration_sec: f32) -> f32 {
     ((pointer_x - min_x) / width.max(1.0)).clamp(0.0, 1.0) * duration_sec.max(0.0)
+}
+
+fn transient_sensitivity_from_slider(position: f32) -> f32 {
+    let midpoint = (DEFAULT_TRANSIENT_SENSITIVITY - MIN_TRANSIENT_SENSITIVITY)
+        / (MAX_TRANSIENT_SENSITIVITY - MIN_TRANSIENT_SENSITIVITY);
+    let exponent = midpoint.ln() / 0.5_f32.ln();
+    MIN_TRANSIENT_SENSITIVITY
+        + (MAX_TRANSIENT_SENSITIVITY - MIN_TRANSIENT_SENSITIVITY)
+            * position.clamp(0.0, 1.0).powf(exponent)
+}
+
+fn transient_sensitivity_to_slider(sensitivity: f32) -> f32 {
+    let midpoint = (DEFAULT_TRANSIENT_SENSITIVITY - MIN_TRANSIENT_SENSITIVITY)
+        / (MAX_TRANSIENT_SENSITIVITY - MIN_TRANSIENT_SENSITIVITY);
+    let exponent = midpoint.ln() / 0.5_f32.ln();
+    let normalized = (sensitivity.clamp(
+        MIN_TRANSIENT_SENSITIVITY,
+        MAX_TRANSIENT_SENSITIVITY,
+    ) - MIN_TRANSIENT_SENSITIVITY)
+        / (MAX_TRANSIENT_SENSITIVITY - MIN_TRANSIENT_SENSITIVITY);
+    normalized.powf(1.0 / exponent)
 }
 
 fn editor_is_audacity(editor: &str) -> bool {
@@ -388,7 +410,7 @@ impl AudioPreviewState {
             active_multi_index: None,
             snap_zero_crossings: false,
             show_transients: false,
-            transient_sensitivity: 1.0,
+            transient_sensitivity: DEFAULT_TRANSIENT_SENSITIVITY,
             audio_editor: "audacity".to_string(),
             active_drag: None,
             loop_selection: false,
@@ -493,7 +515,11 @@ impl AudioPreviewState {
                 // Magnetic snapping radius: ~12px in screen space converted to seconds
                 let snap_radius = (self.view_duration_sec / 800.0) * 12.0;
                 if let Some(t_transient) = analysis.find_nearest_transient(time_sec, snap_radius) {
-                    return t_transient;
+                    return if self.snap_zero_crossings {
+                        analysis.snap_to_zero_crossing(t_transient, 500)
+                    } else {
+                        t_transient
+                    };
                 }
             }
             if self.snap_zero_crossings {
@@ -2492,11 +2518,20 @@ impl AudioPreviewState {
                     // Transient sensitivity slider
                     if self.show_transients {
                         ui.add_space(4.0);
-                        let sens_slider = egui::Slider::new(&mut self.transient_sensitivity, 0.1..=3.0)
-                            .step_by(0.1)
+                        let mut sensitivity_position =
+                            transient_sensitivity_to_slider(self.transient_sensitivity);
+                        let sens_slider = egui::Slider::new(
+                            &mut sensitivity_position,
+                            0.0..=1.0,
+                        )
+                            .step_by(0.01)
                             .text("Sens")
-                            .show_value(true);
-                        if ui.add(sens_slider).on_hover_text("Adjust transient onset sensitivity (0.1 = sharp beats only, 3.0 = all soft attacks)").changed() {
+                            .show_value(false);
+                        if ui.add(sens_slider).on_hover_text(
+                            "Adjust transient detection from stronger attacks toward softer detail",
+                        ).changed() {
+                            self.transient_sensitivity =
+                                transient_sensitivity_from_slider(sensitivity_position);
                             if let Some(ref mut analysis) = self.analysis {
                                 analysis.recompute_transients(self.transient_sensitivity);
                             }
@@ -3941,6 +3976,21 @@ Separated track
     }
 
     #[test]
+    fn transient_sensitivity_slider_is_nonlinear_around_the_default() {
+        let tolerance = 0.000_01;
+        assert!((transient_sensitivity_from_slider(0.0) - 0.2).abs() < tolerance);
+        assert!((transient_sensitivity_from_slider(0.5) - 0.35).abs() < tolerance);
+        assert!((transient_sensitivity_from_slider(1.0) - 1.0).abs() < tolerance);
+
+        for sensitivity in [0.2, 0.25, 0.35, 0.6, 1.0] {
+            let round_trip = transient_sensitivity_from_slider(
+                transient_sensitivity_to_slider(sensitivity),
+            );
+            assert!((round_trip - sensitivity).abs() < tolerance);
+        }
+    }
+
+    #[test]
     fn audacity_stem_list_imports_each_file_as_a_track() {
         let paths = vec![
             PathBuf::from("/tmp/stems/vocals.wav"),
@@ -4246,14 +4296,23 @@ Separated track
             let snapped = state.snap_time(test_t, false);
             assert_eq!(snapped, target_t);
 
-            // Holding Shift or Ctrl bypasses snapping even when show_transients is ON
+            // With both modes enabled, choose the transient first and then refine it
+            // to the nearest zero crossing rather than snapping around the pointer.
+            state.snap_zero_crossings = true;
+            let expected_crossing = analysis.snap_to_zero_crossing(target_t, 500);
+            assert_eq!(state.snap_time(test_t, false), expected_crossing);
+
+            // Holding Shift or Ctrl bypasses snapping even when both modes are ON
             let bypassed = state.snap_time(test_t, true);
             assert_eq!(bypassed, test_t);
 
             // Toggle transients OFF -> should not snap to transient
             state.show_transients = false;
-            let not_snapped = state.snap_time(test_t, false);
-            assert_eq!(not_snapped, test_t);
+            let zero_crossing_only = state.snap_time(test_t, false);
+            assert_eq!(
+                zero_crossing_only,
+                analysis.snap_to_zero_crossing(test_t, 500),
+            );
         }
     }
 

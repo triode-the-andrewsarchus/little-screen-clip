@@ -182,7 +182,7 @@ impl FullAudioAnalysis {
         best_t
     }
 
-    /// Recompute transient detection points using an adjustable sensitivity factor (default: 1.0)
+    /// Recompute transient detection points using an adjustable sensitivity factor.
     pub fn recompute_transients(&mut self, sensitivity: f32) {
         if self.ch1_samples.is_empty() || self.sample_rate == 0 {
             return;
@@ -948,13 +948,20 @@ pub fn detect_pitch_yin(samples: &[f32], sample_rate: f32) -> Option<(f32, f32)>
     Some((freq, clarity))
 }
 
+/// Lowest sensitivity exposed by the audio editor control.
+pub const MIN_TRANSIENT_SENSITIVITY: f32 = 0.2;
+/// Initial sensitivity used by analysis and the audio editor control.
+pub const DEFAULT_TRANSIENT_SENSITIVITY: f32 = 0.35;
+/// Highest sensitivity exposed by the audio editor control.
+pub const MAX_TRANSIENT_SENSITIVITY: f32 = 1.0;
+
 /// Logarithmic spectral flux transient onset detector.
 /// Detects drum hits, attacks, and percussive transients across loud and quiet passages.
 pub fn detect_transients(samples: &[f32], sample_rate: f32) -> Vec<f32> {
-    detect_transients_with_sensitivity(samples, sample_rate, 1.0)
+    detect_transients_with_sensitivity(samples, sample_rate, DEFAULT_TRANSIENT_SENSITIVITY)
 }
 
-/// Logarithmic spectral flux transient onset detector with sensitivity control (0.1 .. 5.0, default 1.0).
+/// Logarithmic spectral flux transient onset detector with an adjustable sensitivity factor.
 pub fn detect_transients_with_sensitivity(samples: &[f32], sample_rate: f32, sensitivity: f32) -> Vec<f32> {
     if samples.is_empty() || sample_rate <= 0.0 {
         return Vec::new();
@@ -2689,5 +2696,26 @@ mod tests {
         // More sensitive should detect at least as many or more transients than lower sensitivity
         assert!(highly_sensitive.len() >= normal.len());
         assert!(normal.len() >= low_sensitive.len());
+    }
+
+    #[test]
+    fn test_default_transient_sensitivity_matches_editor_control() {
+        assert_eq!(MIN_TRANSIENT_SENSITIVITY, 0.2);
+        assert_eq!(DEFAULT_TRANSIENT_SENSITIVITY, 0.35);
+        assert_eq!(MAX_TRANSIENT_SENSITIVITY, 1.0);
+
+        let sample_rate = 48_000.0;
+        let mut samples = vec![0.0; 48_000];
+        for sample in &mut samples[12_000..12_100] {
+            *sample = 0.9;
+        }
+        assert_eq!(
+            detect_transients(&samples, sample_rate),
+            detect_transients_with_sensitivity(
+                &samples,
+                sample_rate,
+                DEFAULT_TRANSIENT_SENSITIVITY,
+            ),
+        );
     }
 }
