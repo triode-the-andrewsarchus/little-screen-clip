@@ -49,7 +49,10 @@ fn spawn_capture_child(target_device: Option<&str>) -> Option<Child> {
 
     match pw_res {
         Ok(child) => {
-            info!("Spawned pw-record for system audio capture on target '{}'", target);
+            info!(
+                "Spawned pw-record for system audio capture on target '{}'",
+                target
+            );
             return Some(child);
         }
         Err(e) => {
@@ -101,11 +104,13 @@ fn run_capture_loop(buffer: Arc<RwLock<RollingAudioBuffer>>, config: AudioConfig
         return;
     }
 
-    let dev_str = config.rolling_capture_device.as_deref().unwrap_or("@DEFAULT_SINK@");
+    let dev_str = config
+        .rolling_capture_device
+        .as_deref()
+        .unwrap_or("@DEFAULT_SINK@");
     info!(
         "Starting background rolling audio capture ({}s buffer on '{}')",
-        config.rolling_capture_duration_sec,
-        dev_str
+        config.rolling_capture_duration_sec, dev_str
     );
 
     let mut buf = [0u8; 4096];

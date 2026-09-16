@@ -54,26 +54,20 @@ pub enum IpcRequest {
         separator: Option<String>,
     },
     /// Executes a multi-step transformation recipe by name.
-    ExecuteRecipe {
-        recipe_name: String,
-    },
+    ExecuteRecipe { recipe_name: String },
     /// Executes a transformation recipe with an interactive user prompt.
     ExecuteRecipeWithPrompt {
         recipe_name: String,
         prompt_text: Option<String>,
     },
     /// Executes an ad-hoc pipeline defined in YAML.
-    ExecuteGraphYaml {
-        yaml: String,
-    },
+    ExecuteGraphYaml { yaml: String },
     /// Lists all available transformation recipe names.
     ListRecipes,
     /// Queries the last executed operation or recipe.
     GetLastAction,
     /// Re-runs the last executed action.
-    ExecuteLastAction {
-        prompt_text: Option<String>,
-    },
+    ExecuteLastAction { prompt_text: Option<String> },
     /// Forces a hardware refresh of the USB display.
     ForceRefreshDisplay,
     /// Reloads configuration from disk.
@@ -99,10 +93,7 @@ pub enum IpcRequest {
     /// Queries active automatic clipboard action toggles.
     GetAutoActions,
     /// Enables or disables an automatic clipboard action toggle.
-    SetAutoAction {
-        key: String,
-        enabled: bool,
-    },
+    SetAutoAction { key: String, enabled: bool },
 }
 
 /// Represents the most recently performed operation or recipe for quick re-execution.
@@ -116,9 +107,7 @@ pub enum LastAction {
         separator: Option<String>,
     },
     /// A named transformation recipe.
-    Recipe {
-        recipe_name: String,
-    },
+    Recipe { recipe_name: String },
 }
 
 fn default_left_hand() -> HandSide {
@@ -143,7 +132,10 @@ pub enum IpcResponse {
     /// Last action executed in the session.
     LastAction(Option<LastAction>),
     /// Indicates an operation needs additional user prompt input.
-    NeedsPrompt { message: String, default_text: String },
+    NeedsPrompt {
+        message: String,
+        default_text: String,
+    },
     /// Current display lock state (`true` if locked).
     LockStatus(bool),
     /// Rolling audio snapshot file path and metadata.
@@ -222,5 +214,3 @@ mod tests {
         }
     }
 }
-
-

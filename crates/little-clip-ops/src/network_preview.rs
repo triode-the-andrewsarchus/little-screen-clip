@@ -130,45 +130,89 @@ pub fn classify_ipv4(ip: Ipv4Addr) -> (&'static str, Option<&'static str>) {
     let [a, b, c, _d] = ip.octets();
 
     if a == 127 {
-        return ("RFC 1122 Loopback (localhost)", Some("Localhost inter-process loopback"));
+        return (
+            "RFC 1122 Loopback (localhost)",
+            Some("Localhost inter-process loopback"),
+        );
     }
     if a == 10 {
-        return ("RFC 1918 Private Network (10.0.0.0/8)", Some("Local Area Network / Private Intranet"));
+        return (
+            "RFC 1918 Private Network (10.0.0.0/8)",
+            Some("Local Area Network / Private Intranet"),
+        );
     }
     if a == 172 && (16..=31).contains(&b) {
-        return ("RFC 1918 Private Network (172.16.0.0/12)", Some("Local Area Network / Docker default"));
+        return (
+            "RFC 1918 Private Network (172.16.0.0/12)",
+            Some("Local Area Network / Docker default"),
+        );
     }
     if a == 192 && b == 168 {
-        return ("RFC 1918 Private Network (192.168.0.0/16)", Some("Home / Office Router LAN subnet"));
+        return (
+            "RFC 1918 Private Network (192.168.0.0/16)",
+            Some("Home / Office Router LAN subnet"),
+        );
     }
     if a == 169 && b == 254 {
-        return ("RFC 3927 Link-Local (APIPA autoconfig)", Some("Self-assigned IP without DHCP server"));
+        return (
+            "RFC 3927 Link-Local (APIPA autoconfig)",
+            Some("Self-assigned IP without DHCP server"),
+        );
     }
     if a == 100 && (64..=127).contains(&b) {
-        return ("RFC 6598 Shared Carrier-Grade NAT (CGNAT)", Some("ISP Carrier-Grade NAT pool"));
+        return (
+            "RFC 6598 Shared Carrier-Grade NAT (CGNAT)",
+            Some("ISP Carrier-Grade NAT pool"),
+        );
     }
-    if a == 192 && b == 0 && c == 2 || a == 198 && b == 51 && c == 100 || a == 203 && b == 0 && c == 113 {
-        return ("RFC 5737 Documentation Network", Some("Reserved for example docs & documentation"));
+    if a == 192 && b == 0 && c == 2
+        || a == 198 && b == 51 && c == 100
+        || a == 203 && b == 0 && c == 113
+    {
+        return (
+            "RFC 5737 Documentation Network",
+            Some("Reserved for example docs & documentation"),
+        );
     }
     if (224..=239).contains(&a) {
-        return ("RFC 1112 Multicast Address", Some("Multicast group broadcast"));
+        return (
+            "RFC 1112 Multicast Address",
+            Some("Multicast group broadcast"),
+        );
     }
     if a >= 240 {
         if a == 255 && b == 255 && c == 255 {
-            return ("Limited Broadcast (255.255.255.255)", Some("Local subnet broadcast"));
+            return (
+                "Limited Broadcast (255.255.255.255)",
+                Some("Local subnet broadcast"),
+            );
         }
         return ("RFC 1112 Reserved / Future Use", None);
     }
     if a == 0 {
-        return ("RFC 1122 Current Network (0.0.0.0/8)", Some("Unspecified / default bind route"));
+        return (
+            "RFC 1122 Current Network (0.0.0.0/8)",
+            Some("Unspecified / default bind route"),
+        );
     }
 
     // Well-known public IPs
     match (a, b, c, _d) {
-        (8, 8, 8, 8) | (8, 8, 4, 4) => ("Public Internet (Google Public DNS)", Some("Google Anycast Resolver")),
-        (1, 1, 1, 1) | (1, 0, 0, 1) => ("Public Internet (Cloudflare DNS)", Some("Cloudflare Privacy-First DNS")),
-        (9, 9, 9, 9) => ("Public Internet (Quad9 DNS)", Some("Quad9 Security-Blocking DNS")),
-        (208, 67, 222, 222) | (208, 67, 220, 220) => ("Public Internet (Cisco OpenDNS)", Some("OpenDNS Resolver")),
+        (8, 8, 8, 8) | (8, 8, 4, 4) => (
+            "Public Internet (Google Public DNS)",
+            Some("Google Anycast Resolver"),
+        ),
+        (1, 1, 1, 1) | (1, 0, 0, 1) => (
+            "Public Internet (Cloudflare DNS)",
+            Some("Cloudflare Privacy-First DNS"),
+        ),
+        (9, 9, 9, 9) => (
+            "Public Internet (Quad9 DNS)",
+            Some("Quad9 Security-Blocking DNS"),
+        ),
+        (208, 67, 222, 222) | (208, 67, 220, 220) => {
+            ("Public Internet (Cisco OpenDNS)", Some("OpenDNS Resolver"))
+        }
         _ => ("Public Internet (Unicast)", None),
     }
 }
@@ -179,20 +223,32 @@ pub fn classify_ipv6(ip: Ipv6Addr) -> (&'static str, Option<&'static str>) {
         return ("RFC 4291 IPv6 Loopback (::1)", Some("Localhost loopback"));
     }
     if ip.is_unspecified() {
-        return ("RFC 4291 IPv6 Unspecified (::)", Some("Unspecified / bind-all"));
+        return (
+            "RFC 4291 IPv6 Unspecified (::)",
+            Some("Unspecified / bind-all"),
+        );
     }
     let segments = ip.segments();
     if segments[0] & 0xffc0 == 0xfe80 {
-        return ("RFC 4291 Link-Local IPv6", Some("Automatic router/neighbor discovery"));
+        return (
+            "RFC 4291 Link-Local IPv6",
+            Some("Automatic router/neighbor discovery"),
+        );
     }
     if segments[0] & 0xfe00 == 0xfc00 {
-        return ("RFC 4193 Unique Local Address (ULA)", Some("IPv6 private intranet"));
+        return (
+            "RFC 4193 Unique Local Address (ULA)",
+            Some("IPv6 private intranet"),
+        );
     }
     if segments[0] & 0xff00 == 0xff00 {
         return ("RFC 4291 IPv6 Multicast", None);
     }
     if segments[0] == 0x2001 && segments[1] == 0xdb8 {
-        return ("RFC 3849 IPv6 Documentation", Some("Reserved for documentation"));
+        return (
+            "RFC 3849 IPv6 Documentation",
+            Some("Reserved for documentation"),
+        );
     }
 
     ("Global Unicast IPv6", None)
@@ -206,13 +262,18 @@ pub fn lookup_mac_vendor(oui: &[u8; 3]) -> &'static str {
             "Raspberry Pi Foundation"
         }
         // Espressif (ESP32/ESP8266 IoT)
-        [0x24, 0x0a, 0xc4] | [0x30, 0xae, 0xa4] | [0x84, 0xf3, 0xeb] | [0xa4, 0xcf, 0x12] | [0xc4, 0x4f, 0x33] => {
-            "Espressif Systems (ESP32/ESP8266)"
-        }
+        [0x24, 0x0a, 0xc4]
+        | [0x30, 0xae, 0xa4]
+        | [0x84, 0xf3, 0xeb]
+        | [0xa4, 0xcf, 0x12]
+        | [0xc4, 0x4f, 0x33] => "Espressif Systems (ESP32/ESP8266)",
         // Apple
-        [0x00, 0x17, 0xf2] | [0xac, 0xde, 0x48] | [0xf0, 0x18, 0x98] | [0x3c, 0x06, 0x30] | [0xb8, 0x78, 0x26] | [0xf4, 0xd4, 0x88] => {
-            "Apple, Inc."
-        }
+        [0x00, 0x17, 0xf2]
+        | [0xac, 0xde, 0x48]
+        | [0xf0, 0x18, 0x98]
+        | [0x3c, 0x06, 0x30]
+        | [0xb8, 0x78, 0x26]
+        | [0xf4, 0xd4, 0x88] => "Apple, Inc.",
         // Intel
         [0x00, 0x1b, 0x21] | [0x00, 0x15, 0x00] | [0x34, 0x13, 0xe8] | [0xa4, 0x4c, 0xc8] => {
             "Intel Corporate"
@@ -251,10 +312,7 @@ pub fn lookup_mac_vendor(oui: &[u8; 3]) -> &'static str {
 
 /// Parses a string into 6 MAC bytes if formatted as colon/dash/dot delimited hex.
 pub fn parse_mac_address(text: &str) -> Option<[u8; 6]> {
-    let clean: String = text
-        .chars()
-        .filter(|c| c.is_ascii_hexdigit())
-        .collect();
+    let clean: String = text.chars().filter(|c| c.is_ascii_hexdigit()).collect();
 
     if clean.len() != 12 {
         return None;
@@ -366,7 +424,11 @@ mod tests {
 
         let google_dns = detect_network_preview("8.8.8.8").expect("8.8.8.8");
         match google_dns {
-            NetworkPreview::Ip { rfc_class, description, .. } => {
+            NetworkPreview::Ip {
+                rfc_class,
+                description,
+                ..
+            } => {
                 assert!(rfc_class.contains("Google Public DNS"));
                 assert_eq!(description, Some("Google Anycast Resolver".to_string()));
             }
@@ -378,7 +440,9 @@ mod tests {
     fn test_network_preview_mac() {
         let rpi_mac = detect_network_preview("B8:27:EB:12:34:56").expect("Raspberry Pi MAC");
         match rpi_mac {
-            NetworkPreview::Mac { formatted, vendor, .. } => {
+            NetworkPreview::Mac {
+                formatted, vendor, ..
+            } => {
                 assert_eq!(formatted, "B8:27:EB:12:34:56");
                 assert_eq!(vendor, "Raspberry Pi Foundation");
             }

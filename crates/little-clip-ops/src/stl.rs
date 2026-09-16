@@ -114,8 +114,8 @@ pub fn is_stl_file<P: AsRef<Path>>(path: P) -> bool {
 impl StlMesh {
     /// Reads and parses an STL 3D model file from disk.
     pub fn parse_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
-        let mut file = File::open(path.as_ref())
-            .map_err(|e| format!("Failed to open STL file: {}", e))?;
+        let mut file =
+            File::open(path.as_ref()).map_err(|e| format!("Failed to open STL file: {}", e))?;
         let name = path
             .as_ref()
             .file_stem()
@@ -153,7 +153,8 @@ impl StlMesh {
         let expected_binary_len = 84 + declared_count * 50;
 
         let is_ascii = starts_with_solid
-            && (buffer.len() != expected_binary_len || buffer.iter().take(512).all(|&b| b.is_ascii()));
+            && (buffer.len() != expected_binary_len
+                || buffer.iter().take(512).all(|&b| b.is_ascii()));
 
         if is_ascii {
             Self::parse_ascii(buffer, default_name)
@@ -167,22 +168,40 @@ impl StlMesh {
             return Err("Invalid binary STL".to_string());
         }
 
-        let num_triangles = u32::from_le_bytes([buffer[80], buffer[81], buffer[82], buffer[83]]) as usize;
+        let num_triangles =
+            u32::from_le_bytes([buffer[80], buffer[81], buffer[82], buffer[83]]) as usize;
         let mut triangles = Vec::with_capacity(num_triangles.min(100_000));
 
         let mut offset = 84;
         while offset + 50 <= buffer.len() {
             let read_f32 = |off: usize| -> f32 {
-                f32::from_le_bytes([buffer[off], buffer[off + 1], buffer[off + 2], buffer[off + 3]])
+                f32::from_le_bytes([
+                    buffer[off],
+                    buffer[off + 1],
+                    buffer[off + 2],
+                    buffer[off + 3],
+                ])
             };
 
             let nx = read_f32(offset);
             let ny = read_f32(offset + 4);
             let nz = read_f32(offset + 8);
 
-            let v1 = Vec3::new(read_f32(offset + 12), read_f32(offset + 16), read_f32(offset + 20));
-            let v2 = Vec3::new(read_f32(offset + 24), read_f32(offset + 28), read_f32(offset + 32));
-            let v3 = Vec3::new(read_f32(offset + 36), read_f32(offset + 40), read_f32(offset + 44));
+            let v1 = Vec3::new(
+                read_f32(offset + 12),
+                read_f32(offset + 16),
+                read_f32(offset + 20),
+            );
+            let v2 = Vec3::new(
+                read_f32(offset + 24),
+                read_f32(offset + 28),
+                read_f32(offset + 32),
+            );
+            let v3 = Vec3::new(
+                read_f32(offset + 36),
+                read_f32(offset + 40),
+                read_f32(offset + 44),
+            );
 
             let mut normal = Vec3::new(nx, ny, nz);
             if normal.length() < 1e-4 {
@@ -255,7 +274,12 @@ impl StlMesh {
                         if norm.length() < 1e-4 {
                             norm = v2.sub(v1).cross(v3.sub(v1)).normalize();
                         }
-                        triangles.push(Triangle { normal: norm, v1, v2, v3 });
+                        triangles.push(Triangle {
+                            normal: norm,
+                            v1,
+                            v2,
+                            v3,
+                        });
                     }
                     current_vertices.clear();
                 }
@@ -280,12 +304,24 @@ impl StlMesh {
 
         for t in &triangles {
             for v in &[t.v1, t.v2, t.v3] {
-                if v.x < min_x { min_x = v.x; }
-                if v.x > max_x { max_x = v.x; }
-                if v.y < min_y { min_y = v.y; }
-                if v.y > max_y { max_y = v.y; }
-                if v.z < min_z { min_z = v.z; }
-                if v.z > max_z { max_z = v.z; }
+                if v.x < min_x {
+                    min_x = v.x;
+                }
+                if v.x > max_x {
+                    max_x = v.x;
+                }
+                if v.y < min_y {
+                    min_y = v.y;
+                }
+                if v.y > max_y {
+                    max_y = v.y;
+                }
+                if v.z < min_z {
+                    min_z = v.z;
+                }
+                if v.z > max_z {
+                    max_z = v.z;
+                }
             }
         }
 
@@ -296,11 +332,7 @@ impl StlMesh {
             (min_y + max_y) * 0.5,
             (min_z + max_z) * 0.5,
         );
-        let size = Vec3::new(
-            max_x - min_x,
-            max_y - min_y,
-            max_z - min_z,
-        );
+        let size = Vec3::new(max_x - min_x, max_y - min_y, max_z - min_z);
         let max_dimension = size.x.max(size.y).max(size.z).max(0.001);
 
         Ok(Self {
@@ -370,10 +402,30 @@ endsolid simple_triangle
         let v3 = Vec3::new(5.0, 5.0, 10.0);
 
         let triangles = vec![
-            Triangle { normal: Vec3::new(0.0, 0.0, -1.0), v1: v0, v2: v1, v3: v2 },
-            Triangle { normal: Vec3::new(0.0, -0.894, 0.447), v1: v0, v2: v1, v3: v3 },
-            Triangle { normal: Vec3::new(0.894, 0.447, 0.447), v1: v1, v2: v2, v3: v3 },
-            Triangle { normal: Vec3::new(-0.894, 0.447, 0.447), v1: v2, v2: v0, v3: v3 },
+            Triangle {
+                normal: Vec3::new(0.0, 0.0, -1.0),
+                v1: v0,
+                v2: v1,
+                v3: v2,
+            },
+            Triangle {
+                normal: Vec3::new(0.0, -0.894, 0.447),
+                v1: v0,
+                v2: v1,
+                v3: v3,
+            },
+            Triangle {
+                normal: Vec3::new(0.894, 0.447, 0.447),
+                v1: v1,
+                v2: v2,
+                v3: v3,
+            },
+            Triangle {
+                normal: Vec3::new(-0.894, 0.447, 0.447),
+                v1: v2,
+                v2: v0,
+                v3: v3,
+            },
         ];
 
         let mesh = StlMesh::build_mesh("Tetrahedron".to_string(), triangles).unwrap();

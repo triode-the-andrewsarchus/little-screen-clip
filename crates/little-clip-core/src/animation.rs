@@ -3,9 +3,9 @@
 //! Provides decoders for animated GIF, animated WebP, and common video formats (via `ffmpeg`/`ffprobe`),
 //! compiling them into compact MJPEG frame sequences for display playback.
 
+use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
 
 /// Lightweight animation preview containing downsampled JPEG frames and frame delays.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -179,7 +179,9 @@ pub fn extract_animated_frames_via_ffmpeg(
         return None;
     }
 
-    let (tw, th) = if let Ok(reader) = image::ImageReader::new(Cursor::new(&frames_jpeg[0])).with_guessed_format() {
+    let (tw, th) = if let Ok(reader) =
+        image::ImageReader::new(Cursor::new(&frames_jpeg[0])).with_guessed_format()
+    {
         reader.into_dimensions().unwrap_or((max_w, max_h))
     } else {
         (max_w, max_h)
@@ -208,9 +210,9 @@ pub fn decode_animated_bytes(
     max_h: u32,
     max_frames: usize,
 ) -> Option<AnimationThumbnail> {
+    use image::AnimationDecoder;
     use image::codecs::gif::GifDecoder;
     use image::codecs::webp::WebPDecoder;
-    use image::AnimationDecoder;
 
     // 1. Try GIF decoder
     if let Ok(decoder) = GifDecoder::new(Cursor::new(bytes)) {
@@ -291,7 +293,10 @@ fn process_image_frames(
         let rgb = resized.to_rgb8();
 
         let mut jpeg_buf = Cursor::new(Vec::new());
-        if rgb.write_to(&mut jpeg_buf, image::ImageFormat::Jpeg).is_ok() {
+        if rgb
+            .write_to(&mut jpeg_buf, image::ImageFormat::Jpeg)
+            .is_ok()
+        {
             frames_jpeg.push(jpeg_buf.into_inner());
             frame_delays_ms.push(eff_delay);
             total_dur_ms += eff_delay as u64;
@@ -381,7 +386,9 @@ pub fn extract_video_preview_frames(
     }
 
     // Determine actual thumbnail dimensions from first JPEG frame
-    let (tw, th) = if let Ok(reader) = image::ImageReader::new(Cursor::new(&frames_jpeg[0])).with_guessed_format() {
+    let (tw, th) = if let Ok(reader) =
+        image::ImageReader::new(Cursor::new(&frames_jpeg[0])).with_guessed_format()
+    {
         reader.into_dimensions().unwrap_or((max_w, max_h))
     } else {
         (max_w, max_h)
@@ -504,7 +511,9 @@ mod tests {
         let mut gif_bytes = Vec::new();
         {
             let mut encoder = GifEncoder::new(&mut gif_bytes);
-            encoder.set_repeat(image::codecs::gif::Repeat::Infinite).unwrap();
+            encoder
+                .set_repeat(image::codecs::gif::Repeat::Infinite)
+                .unwrap();
 
             let frame1 = Frame::from_parts(
                 RgbaImage::from_pixel(10, 10, image::Rgba([255, 0, 0, 255])),

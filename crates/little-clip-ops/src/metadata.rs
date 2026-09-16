@@ -46,14 +46,23 @@ impl ImageMetadataSummary {
         let lon = self.gps_longitude?;
         let lat_dir = if lat >= 0.0 { 'N' } else { 'S' };
         let lon_dir = if lon >= 0.0 { 'E' } else { 'W' };
-        Some(format!("{:.4}° {}, {:.4}° {}", lat.abs(), lat_dir, lon.abs(), lon_dir))
+        Some(format!(
+            "{:.4}° {}, {:.4}° {}",
+            lat.abs(),
+            lat_dir,
+            lon.abs(),
+            lon_dir
+        ))
     }
 
     /// URL to view location on OpenStreetMap.
     pub fn osm_url(&self) -> Option<String> {
         let lat = self.gps_latitude?;
         let lon = self.gps_longitude?;
-        Some(format!("https://www.openstreetmap.org/?mlat={:.6}&mlon={:.6}&zoom=16", lat, lon))
+        Some(format!(
+            "https://www.openstreetmap.org/?mlat={:.6}&mlon={:.6}&zoom=16",
+            lat, lon
+        ))
     }
 
     /// Exposure summary string, e.g. "f/2.8 · 1/250s · ISO 100 · 50mm".
@@ -121,17 +130,41 @@ pub fn extract_image_metadata(bytes: &[u8]) -> ImageMetadataSummary {
     for field in exif_data.fields() {
         match field.tag {
             exif::Tag::Make => {
-                summary.make = Some(field.display_value().to_string().trim_matches('"').to_string());
+                summary.make = Some(
+                    field
+                        .display_value()
+                        .to_string()
+                        .trim_matches('"')
+                        .to_string(),
+                );
             }
             exif::Tag::Model => {
-                summary.model = Some(field.display_value().to_string().trim_matches('"').to_string());
+                summary.model = Some(
+                    field
+                        .display_value()
+                        .to_string()
+                        .trim_matches('"')
+                        .to_string(),
+                );
             }
             exif::Tag::LensModel => {
-                summary.lens_model = Some(field.display_value().to_string().trim_matches('"').to_string());
+                summary.lens_model = Some(
+                    field
+                        .display_value()
+                        .to_string()
+                        .trim_matches('"')
+                        .to_string(),
+                );
             }
             exif::Tag::DateTimeOriginal | exif::Tag::DateTime => {
                 if summary.date_time.is_none() {
-                    summary.date_time = Some(field.display_value().to_string().trim_matches('"').to_string());
+                    summary.date_time = Some(
+                        field
+                            .display_value()
+                            .to_string()
+                            .trim_matches('"')
+                            .to_string(),
+                    );
                 }
             }
             exif::Tag::PhotographicSensitivity => {
@@ -161,21 +194,37 @@ pub fn extract_image_metadata(bytes: &[u8]) -> ImageMetadataSummary {
                 }
             }
             exif::Tag::Software => {
-                summary.software = Some(field.display_value().to_string().trim_matches('"').to_string());
+                summary.software = Some(
+                    field
+                        .display_value()
+                        .to_string()
+                        .trim_matches('"')
+                        .to_string(),
+                );
             }
             _ => {}
         }
     }
 
     // Parse GPS latitude and longitude
-    summary.gps_latitude = parse_gps_coord(&exif_data, exif::Tag::GPSLatitude, exif::Tag::GPSLatitudeRef);
-    summary.gps_longitude = parse_gps_coord(&exif_data, exif::Tag::GPSLongitude, exif::Tag::GPSLongitudeRef);
+    summary.gps_latitude = parse_gps_coord(
+        &exif_data,
+        exif::Tag::GPSLatitude,
+        exif::Tag::GPSLatitudeRef,
+    );
+    summary.gps_longitude = parse_gps_coord(
+        &exif_data,
+        exif::Tag::GPSLongitude,
+        exif::Tag::GPSLongitudeRef,
+    );
     if let Some(alt_field) = exif_data.get_field(exif::Tag::GPSAltitude, exif::In::PRIMARY) {
         if let exif::Value::Rational(ref rats) = alt_field.value {
             if let Some(r) = rats.first() {
                 if r.denom != 0 {
                     let mut alt = r.num as f64 / r.denom as f64;
-                    if let Some(ref_field) = exif_data.get_field(exif::Tag::GPSAltitudeRef, exif::In::PRIMARY) {
+                    if let Some(ref_field) =
+                        exif_data.get_field(exif::Tag::GPSAltitudeRef, exif::In::PRIMARY)
+                    {
                         if let Some(1) = ref_field.value.get_uint(0) {
                             alt = -alt; // Below sea level
                         }
@@ -195,9 +244,21 @@ fn parse_gps_coord(exif: &exif::Exif, coord_tag: exif::Tag, ref_tag: exif::Tag) 
 
     let (d, m, s) = match field.value {
         exif::Value::Rational(ref rats) if rats.len() >= 3 => {
-            let deg = if rats[0].denom != 0 { rats[0].num as f64 / rats[0].denom as f64 } else { 0.0 };
-            let min = if rats[1].denom != 0 { rats[1].num as f64 / rats[1].denom as f64 } else { 0.0 };
-            let sec = if rats[2].denom != 0 { rats[2].num as f64 / rats[2].denom as f64 } else { 0.0 };
+            let deg = if rats[0].denom != 0 {
+                rats[0].num as f64 / rats[0].denom as f64
+            } else {
+                0.0
+            };
+            let min = if rats[1].denom != 0 {
+                rats[1].num as f64 / rats[1].denom as f64
+            } else {
+                0.0
+            };
+            let sec = if rats[2].denom != 0 {
+                rats[2].num as f64 / rats[2].denom as f64
+            } else {
+                0.0
+            };
             (deg, min, sec)
         }
         _ => return None,
@@ -207,7 +268,11 @@ fn parse_gps_coord(exif: &exif::Exif, coord_tag: exif::Tag, ref_tag: exif::Tag) 
 
     if let Some(rf) = ref_field {
         let ref_str = rf.display_value().to_string();
-        if ref_str.starts_with('S') || ref_str.starts_with('s') || ref_str.starts_with('W') || ref_str.starts_with('w') {
+        if ref_str.starts_with('S')
+            || ref_str.starts_with('s')
+            || ref_str.starts_with('W')
+            || ref_str.starts_with('w')
+        {
             decimal = -decimal;
         }
     }
@@ -218,7 +283,9 @@ fn parse_gps_coord(exif: &exif::Exif, coord_tag: exif::Tag, ref_tag: exif::Tag) 
 /// Strip all EXIF, GPS, device, and auxiliary metadata by re-encoding pristine pixels into PNG or JPEG.
 pub fn strip_metadata(img: &RgbaImage, format_hint: &str) -> Result<Vec<u8>, String> {
     let mut clean_bytes = Vec::new();
-    let is_jpeg = format_hint.eq_ignore_ascii_case("jpg") || format_hint.eq_ignore_ascii_case("jpeg") || format_hint.eq_ignore_ascii_case("image/jpeg");
+    let is_jpeg = format_hint.eq_ignore_ascii_case("jpg")
+        || format_hint.eq_ignore_ascii_case("jpeg")
+        || format_hint.eq_ignore_ascii_case("image/jpeg");
 
     if is_jpeg {
         let mut rgb = image::RgbImage::new(img.width(), img.height());
@@ -247,7 +314,9 @@ mod tests {
     fn test_empty_metadata() {
         let clean_img = RgbaImage::new(10, 10);
         let mut bytes = Vec::new();
-        clean_img.write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png).unwrap();
+        clean_img
+            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+            .unwrap();
 
         let summary = extract_image_metadata(&bytes);
         assert!(!summary.has_any_metadata());

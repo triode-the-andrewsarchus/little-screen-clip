@@ -148,7 +148,11 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
             let p = Path::new(trimmed);
             if p.is_file() {
                 if let Ok(bytes) = std::fs::read(p) {
-                    let label = p.file_name().and_then(|n| n.to_str()).unwrap_or(trimmed).to_string();
+                    let label = p
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(trimmed)
+                        .to_string();
                     return (label, bytes);
                 }
             }
@@ -158,7 +162,11 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
         ClipPayload::FileBatch(paths) => {
             if let Some(first) = paths.first() {
                 if let Ok(bytes) = std::fs::read(first) {
-                    let label = first.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
+                    let label = first
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("file")
+                        .to_string();
                     return (label, bytes);
                 }
             }
@@ -193,7 +201,11 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
         ClipPayload::MultiImage { paths, .. } => {
             if let Some(first) = paths.first() {
                 if let Ok(bytes) = std::fs::read(first) {
-                    let label = first.file_name().and_then(|n| n.to_str()).unwrap_or("image").to_string();
+                    let label = first
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("image")
+                        .to_string();
                     return (label, bytes);
                 }
             }
@@ -213,32 +225,62 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
 }
 
 /// Checks if a ClipItem represents two files (e.g. FileBatch with 2+ files or newline-separated paths).
-pub fn resolve_two_files_from_single_item(item: &ClipItem) -> Option<((String, Vec<u8>), (String, Vec<u8>))> {
+pub fn resolve_two_files_from_single_item(
+    item: &ClipItem,
+) -> Option<((String, Vec<u8>), (String, Vec<u8>))> {
     match &item.payload {
         ClipPayload::FileBatch(paths) if paths.len() >= 2 => {
             let b1 = std::fs::read(&paths[0]).ok()?;
             let b2 = std::fs::read(&paths[1]).ok()?;
-            let l1 = paths[0].file_name().and_then(|n| n.to_str()).unwrap_or("file_a").to_string();
-            let l2 = paths[1].file_name().and_then(|n| n.to_str()).unwrap_or("file_b").to_string();
+            let l1 = paths[0]
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file_a")
+                .to_string();
+            let l2 = paths[1]
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file_b")
+                .to_string();
             Some(((l1, b1), (l2, b2)))
         }
         ClipPayload::MultiImage { paths, .. } if paths.len() >= 2 => {
             let b1 = std::fs::read(&paths[0]).ok()?;
             let b2 = std::fs::read(&paths[1]).ok()?;
-            let l1 = paths[0].file_name().and_then(|n| n.to_str()).unwrap_or("image_a").to_string();
-            let l2 = paths[1].file_name().and_then(|n| n.to_str()).unwrap_or("image_b").to_string();
+            let l1 = paths[0]
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image_a")
+                .to_string();
+            let l2 = paths[1]
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("image_b")
+                .to_string();
             Some(((l1, b1), (l2, b2)))
         }
         ClipPayload::Text(text) => {
-            let lines: Vec<&str> = text.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+            let lines: Vec<&str> = text
+                .lines()
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .collect();
             if lines.len() == 2 {
                 let p1 = Path::new(lines[0]);
                 let p2 = Path::new(lines[1]);
                 if p1.is_file() && p2.is_file() {
                     let b1 = std::fs::read(p1).ok()?;
                     let b2 = std::fs::read(p2).ok()?;
-                    let l1 = p1.file_name().and_then(|n| n.to_str()).unwrap_or(lines[0]).to_string();
-                    let l2 = p2.file_name().and_then(|n| n.to_str()).unwrap_or(lines[1]).to_string();
+                    let l1 = p1
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(lines[0])
+                        .to_string();
+                    let l2 = p2
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(lines[1])
+                        .to_string();
                     return Some(((l1, b1), (l2, b2)));
                 }
             }
@@ -509,22 +551,30 @@ fn build_diff_block(
                 DiffKind::Mismatch => {
                     mismatch_count += 1;
                     if left_preview.len() < 4 {
-                        if let Some(b) = lc.byte_val { left_preview.push(b); }
+                        if let Some(b) = lc.byte_val {
+                            left_preview.push(b);
+                        }
                     }
                     if right_preview.len() < 4 {
-                        if let Some(b) = rc.byte_val { right_preview.push(b); }
+                        if let Some(b) = rc.byte_val {
+                            right_preview.push(b);
+                        }
                     }
                 }
                 DiffKind::LeftOnly => {
                     left_only_count += 1;
                     if left_preview.len() < 4 {
-                        if let Some(b) = lc.byte_val { left_preview.push(b); }
+                        if let Some(b) = lc.byte_val {
+                            left_preview.push(b);
+                        }
                     }
                 }
                 DiffKind::RightOnly => {
                     right_only_count += 1;
                     if right_preview.len() < 4 {
-                        if let Some(b) = rc.byte_val { right_preview.push(b); }
+                        if let Some(b) = rc.byte_val {
+                            right_preview.push(b);
+                        }
                     }
                 }
                 DiffKind::Match => {}
@@ -551,7 +601,11 @@ fn build_diff_block(
     } else if left_preview.iter().all(|&b| b.is_ascii_graphic()) {
         String::from_utf8_lossy(&left_preview).to_string()
     } else {
-        left_preview.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(" ")
+        left_preview
+            .iter()
+            .map(|b| format!("{:02X}", b))
+            .collect::<Vec<_>>()
+            .join(" ")
     };
 
     let r_str = if right_preview.is_empty() {
@@ -559,7 +613,11 @@ fn build_diff_block(
     } else if right_preview.iter().all(|&b| b.is_ascii_graphic()) {
         String::from_utf8_lossy(&right_preview).to_string()
     } else {
-        right_preview.iter().map(|b| format!("{:02X}", b)).collect::<Vec<_>>().join(" ")
+        right_preview
+            .iter()
+            .map(|b| format!("{:02X}", b))
+            .collect::<Vec<_>>()
+            .join(" ")
     };
 
     let preview = format!("{} ≠ {}", l_str, r_str);
@@ -589,7 +647,11 @@ fn compute_aligned_stream(
 
     for op in diff_ops {
         match op {
-            similar::DiffOp::Equal { old_index, new_index, len } => {
+            similar::DiffOp::Equal {
+                old_index,
+                new_index,
+                len,
+            } => {
                 for i in 0..len {
                     flat_left.push(AlignedCell {
                         byte_val: Some(left_bytes[old_index + i]),
@@ -603,12 +665,21 @@ fn compute_aligned_stream(
                     });
                 }
             }
-            similar::DiffOp::Replace { old_index, old_len, new_index, new_len } => {
+            similar::DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
                 let common = old_len.min(new_len);
                 for i in 0..common {
                     let b1 = left_bytes[old_index + i];
                     let b2 = right_bytes[new_index + i];
-                    let kind = if b1 == b2 { DiffKind::Match } else { DiffKind::Mismatch };
+                    let kind = if b1 == b2 {
+                        DiffKind::Match
+                    } else {
+                        DiffKind::Mismatch
+                    };
                     flat_left.push(AlignedCell {
                         byte_val: Some(b1),
                         offset: Some(old_index + i),
@@ -649,7 +720,9 @@ fn compute_aligned_stream(
                     }
                 }
             }
-            similar::DiffOp::Delete { old_index, old_len, .. } => {
+            similar::DiffOp::Delete {
+                old_index, old_len, ..
+            } => {
                 for i in 0..old_len {
                     flat_left.push(AlignedCell {
                         byte_val: Some(left_bytes[old_index + i]),
@@ -663,7 +736,9 @@ fn compute_aligned_stream(
                     });
                 }
             }
-            similar::DiffOp::Insert { new_index, new_len, .. } => {
+            similar::DiffOp::Insert {
+                new_index, new_len, ..
+            } => {
                 for i in 0..new_len {
                     flat_left.push(AlignedCell {
                         byte_val: None,
@@ -744,10 +819,7 @@ pub fn parse_search_query(q: &str) -> Vec<Vec<u8>> {
     let mut candidates = Vec::new();
 
     // 1. Try interpreting as hex string: "48 65 6c" or "0x48, 0x65" or "48656c"
-    let hex_chars: String = q_clean
-        .chars()
-        .filter(|c| c.is_ascii_hexdigit())
-        .collect();
+    let hex_chars: String = q_clean.chars().filter(|c| c.is_ascii_hexdigit()).collect();
     if hex_chars.len() >= 2 && hex_chars.len() % 2 == 0 {
         if let Ok(bytes) = (0..hex_chars.len())
             .step_by(2)
@@ -794,8 +866,12 @@ pub fn search_rows(result: &BinaryDiffResult, query: &str) -> Vec<usize> {
             if pattern.is_empty() {
                 return false;
             }
-            left_bytes.windows(pattern.len()).any(|w| w == pattern.as_slice())
-                || right_bytes.windows(pattern.len()).any(|w| w == pattern.as_slice())
+            left_bytes
+                .windows(pattern.len())
+                .any(|w| w == pattern.as_slice())
+                || right_bytes
+                    .windows(pattern.len())
+                    .any(|w| w == pattern.as_slice())
         });
 
         if matched {

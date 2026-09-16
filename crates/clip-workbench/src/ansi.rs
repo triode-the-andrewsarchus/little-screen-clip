@@ -53,7 +53,6 @@ pub fn ansi_to_layout_job(ansi_text: &str, font_size: f32) -> egui::text::Layout
                             ..Default::default()
                         },
                     );
-
                 }
             }
 
@@ -195,7 +194,6 @@ pub fn ansi_to_layout_job(ansi_text: &str, font_size: f32) -> egui::text::Layout
                     ..Default::default()
                 },
             );
-
         }
     }
 
@@ -250,8 +248,14 @@ mod tests {
         let job = ansi_to_layout_job(text, 12.0);
         assert_eq!(job.text, "removed and added");
         assert_eq!(job.sections.len(), 3);
-        assert_eq!(job.sections[0].format.color, Color32::from_rgb(248, 113, 113));
-        assert_eq!(job.sections[2].format.color, Color32::from_rgb(74, 222, 128));
+        assert_eq!(
+            job.sections[0].format.color,
+            Color32::from_rgb(248, 113, 113)
+        );
+        assert_eq!(
+            job.sections[2].format.color,
+            Color32::from_rgb(74, 222, 128)
+        );
     }
 
     #[test]
@@ -263,4 +267,3 @@ mod tests {
         assert_eq!(job.sections[0].format.color, Color32::from_rgb(123, 45, 67));
     }
 }
-

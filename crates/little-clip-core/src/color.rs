@@ -63,8 +63,14 @@ mod tests {
 
     #[test]
     fn test_parse_hex_color() {
-        assert_eq!(parse_hex_color("#ff0000"), Some((255, 0, 0, "#FF0000".to_string())));
-        assert_eq!(parse_hex_color("#0f0"), Some((0, 255, 0, "#0F0".to_string())));
+        assert_eq!(
+            parse_hex_color("#ff0000"),
+            Some((255, 0, 0, "#FF0000".to_string()))
+        );
+        assert_eq!(
+            parse_hex_color("#0f0"),
+            Some((0, 255, 0, "#0F0".to_string()))
+        );
         assert_eq!(parse_hex_color("invalid"), None);
         assert_eq!(parse_hex_color("#12345"), None);
     }

@@ -88,7 +88,10 @@ pub fn clean_url_tracking(input: &str) -> Option<String> {
     if retained_pairs.is_empty() {
         cleaned.set_query(None);
     } else {
-        cleaned.query_pairs_mut().clear().extend_pairs(retained_pairs);
+        cleaned
+            .query_pairs_mut()
+            .clear()
+            .extend_pairs(retained_pairs);
     }
 
     Some(cleaned.to_string())
@@ -102,7 +105,10 @@ mod tests {
     fn test_clean_utm_parameters() {
         let url = "https://example.com/article?utm_source=twitter&utm_medium=social&utm_campaign=launch&id=42";
         let cleaned = clean_url_tracking(url);
-        assert_eq!(cleaned, Some("https://example.com/article?id=42".to_string()));
+        assert_eq!(
+            cleaned,
+            Some("https://example.com/article?id=42".to_string())
+        );
     }
 
     #[test]

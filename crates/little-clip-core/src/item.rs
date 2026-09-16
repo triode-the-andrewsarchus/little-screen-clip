@@ -153,7 +153,10 @@ pub fn read_svg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
         if quote == '"' || quote == '\'' {
             let end = after[1..].find(quote)?;
             let val = &after[1..=end];
-            let num: String = val.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+            let num: String = val
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '.')
+                .collect();
             let f: f32 = num.parse().ok()?;
             Some(f.round() as u32)
         } else {
@@ -238,12 +241,7 @@ pub enum ClipPayload {
     /// Filesystem directory reference.
     Directory(PathBuf),
     /// Hex and RGB color definition.
-    Color {
-        hex: String,
-        r: u8,
-        g: u8,
-        b: u8,
-    },
+    Color { hex: String, r: u8, g: u8, b: u8 },
 }
 
 /// Represents a single clipboard entry stored in a slot, including metadata and display labels.
@@ -287,9 +285,7 @@ impl ClipItem {
                     .collect::<Vec<_>>()
                     .join("\n"),
             ),
-            ClipPayload::AudioRef { path, .. } => {
-                Some(path.to_string_lossy().to_string())
-            }
+            ClipPayload::AudioRef { path, .. } => Some(path.to_string_lossy().to_string()),
             _ => None,
         }
     }
@@ -330,7 +326,11 @@ impl ClipItem {
         } else {
             "Image".to_string()
         };
-        let subtitle = format!("{:.1} KB • {}", size_kb, mime.replace("image/", "").to_uppercase());
+        let subtitle = format!(
+            "{:.1} KB • {}",
+            size_kb,
+            mime.replace("image/", "").to_uppercase()
+        );
 
         let ext = if mime.contains("png") {
             "png"
@@ -541,8 +541,13 @@ impl ClipItem {
             .extension()
             .map(|e| e.to_string_lossy().to_uppercase())
             .unwrap_or_else(|| "RAW".to_string());
-        let file_size_mb = std::fs::metadata(path).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
-        let subtitle = format!("Camera RAW ({}×{}) • {:.1} MB • {}", w, h, file_size_mb, ext);
+        let file_size_mb = std::fs::metadata(path)
+            .map(|m| m.len() as f64 / (1024.0 * 1024.0))
+            .unwrap_or(0.0);
+        let subtitle = format!(
+            "Camera RAW ({}×{}) • {:.1} MB • {}",
+            w, h, file_size_mb, ext
+        );
         let thumbnail = ImageThumbnail::generate(&preview_bytes, 320, 220);
 
         Some(Self {
@@ -569,8 +574,12 @@ impl ClipItem {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "document.pdf".to_string());
-        let page_count = crate::pdf::get_pdf_info(path).map(|i| i.page_count).unwrap_or(1);
-        let file_size_kb = std::fs::metadata(path).map(|m| m.len() as f64 / 1024.0).unwrap_or(0.0);
+        let page_count = crate::pdf::get_pdf_info(path)
+            .map(|i| i.page_count)
+            .unwrap_or(1);
+        let file_size_kb = std::fs::metadata(path)
+            .map(|m| m.len() as f64 / 1024.0)
+            .unwrap_or(0.0);
         let subtitle = format!("PDF ({} pg) • {:.1} KB", page_count, file_size_kb);
         let thumbnail = ImageThumbnail::generate(&page1_bytes, 320, 220);
 
@@ -593,7 +602,11 @@ impl ClipItem {
     }
 
     fn from_text_or_code_file(path: &Path) -> Option<Self> {
-        let ext_lower = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        let ext_lower = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
         let size_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
         let size_str = format_bytes(size_bytes);
 
@@ -632,8 +645,25 @@ impl ClipItem {
 
         if matches!(
             ext_lower.as_str(),
-            "txt" | "text" | "log" | "ini" | "yaml" | "yml" | "toml" | "rs" | "py" | "c"
-                | "cpp" | "h" | "js" | "ts" | "html" | "css" | "sh" | "conf" | "env"
+            "txt"
+                | "text"
+                | "log"
+                | "ini"
+                | "yaml"
+                | "yml"
+                | "toml"
+                | "rs"
+                | "py"
+                | "c"
+                | "cpp"
+                | "h"
+                | "js"
+                | "ts"
+                | "html"
+                | "css"
+                | "sh"
+                | "conf"
+                | "env"
         ) {
             let file_name = path
                 .file_name()
@@ -707,7 +737,6 @@ impl ClipItem {
         })
     }
 
-
     fn from_markdown_text(text: String) -> Self {
         let lines_count = text.lines().count();
         let chars_count = text.chars().count();
@@ -718,7 +747,11 @@ impl ClipItem {
             payload: ClipPayload::Markdown(text),
             title,
             subtitle: format!("Markdown • {} lines • {}", lines_count, chars_count),
-            details: vec!["Markdown".to_string(), format!("{} lines", lines_count), format!("{}c", chars_count)],
+            details: vec![
+                "Markdown".to_string(),
+                format!("{} lines", lines_count),
+                format!("{}c", chars_count),
+            ],
             handler_tag: "MARKDOWN".to_string(),
         }
     }
@@ -836,7 +869,10 @@ impl ClipItem {
         };
 
         let khz = meta.sample_rate as f64 / 1000.0;
-        let subtitle = format!("{} • {:.1} kHz • {} ({})", dur_str, khz, ch_str, meta.format);
+        let subtitle = format!(
+            "{} • {:.1} kHz • {} ({})",
+            dur_str, khz, ch_str, meta.format
+        );
 
         Some(Self {
             id: Uuid::new_v4(),
@@ -867,8 +903,8 @@ impl ClipItem {
             .map(|e| e.to_string_lossy().to_uppercase())
             .unwrap_or_else(|| "VIDEO".to_string());
 
-        let (width, height, duration_ms) = crate::animation::read_video_metadata(&path)
-            .unwrap_or((0, 0, 0));
+        let (width, height, duration_ms) =
+            crate::animation::read_video_metadata(&path).unwrap_or((0, 0, 0));
 
         let mins = duration_ms / 60_000;
         let secs = (duration_ms % 60_000) / 1000;
@@ -907,8 +943,8 @@ impl ClipItem {
             .unwrap_or_else(|| "ANIM".to_string());
 
         let is_anim = if ext == "GIF" {
-            use image::codecs::gif::GifDecoder;
             use image::AnimationDecoder;
+            use image::codecs::gif::GifDecoder;
             if let Ok(decoder) = GifDecoder::new(std::io::Cursor::new(&bytes)) {
                 let mut iter = decoder.into_frames();
                 iter.next().is_some() && iter.next().is_some()
@@ -1118,7 +1154,10 @@ impl ClipItem {
             },
             title,
             subtitle,
-            details: vec![format!("{} pictures", total_count), format_bytes(total_size)],
+            details: vec![
+                format!("{} pictures", total_count),
+                format_bytes(total_size),
+            ],
             handler_tag: "MULTI-PICTURE".to_string(),
         }
     }
@@ -1143,7 +1182,9 @@ impl ClipItem {
     pub fn audio_path(&self) -> Option<PathBuf> {
         match &self.payload {
             ClipPayload::AudioRef { path, .. } => Some(path.clone()),
-            ClipPayload::FileBatch(files) if files.len() == 1 && crate::audio::is_audio_path(&files[0]) => {
+            ClipPayload::FileBatch(files)
+                if files.len() == 1 && crate::audio::is_audio_path(&files[0]) =>
+            {
                 Some(files[0].clone())
             }
             ClipPayload::Text(text) => {
@@ -1163,7 +1204,9 @@ impl ClipItem {
     pub fn image_path(&self) -> Option<PathBuf> {
         match &self.payload {
             ClipPayload::Image { path: Some(p), .. } if p.is_file() => Some(p.clone()),
-            ClipPayload::FileBatch(files) if files.len() == 1 && is_image_path(&files[0]) && files[0].is_file() => {
+            ClipPayload::FileBatch(files)
+                if files.len() == 1 && is_image_path(&files[0]) && files[0].is_file() =>
+            {
                 Some(files[0].clone())
             }
             ClipPayload::Text(text) => {
@@ -1195,7 +1238,9 @@ impl ClipItem {
     /// Resolves the raw image bytes, MIME type string, and optional source path.
     pub fn resolve_image_data(&self) -> Option<(Vec<u8>, String, Option<PathBuf>)> {
         match &self.payload {
-            ClipPayload::Image { bytes, path, mime, .. } => {
+            ClipPayload::Image {
+                bytes, path, mime, ..
+            } => {
                 let actual_bytes = if !bytes.is_empty() {
                     bytes.clone()
                 } else if let Some(p) = path {
@@ -1317,11 +1362,7 @@ fn resolve_candidate_path(s: &str, home: Option<&str>, is_sole_input: bool) -> O
 
     let raw = parse_raw_path_string(clean, home)?;
     let p = PathBuf::from(raw);
-    if p.exists() {
-        Some(p)
-    } else {
-        None
-    }
+    if p.exists() { Some(p) } else { None }
 }
 
 fn is_disallowed_path_string(clean: &str, is_sole_input: bool) -> bool {
@@ -1349,7 +1390,9 @@ fn parse_raw_path_string(clean: &str, home: Option<&str>) -> Option<String> {
     } else if clean.starts_with('/') {
         Some(clean.to_string())
     } else if let Some(h) = home {
-        clean.strip_prefix("~/").map(|rest| format!("{}/{}", h, rest))
+        clean
+            .strip_prefix("~/")
+            .map(|rest| format!("{}/{}", h, rest))
     } else {
         None
     }
@@ -1357,6 +1400,25 @@ fn parse_raw_path_string(clean: &str, home: Option<&str>) -> Option<String> {
 
 fn parse_hex_color(s: &str) -> Option<(u8, u8, u8, String)> {
     crate::color::parse_hex_color(s)
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+fn current_unix_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -1373,8 +1435,14 @@ mod tests {
         let p6 = PathBuf::from("img6.png");
 
         // Test <= 4 files (all 4 selected)
-        let item_4 = ClipItem::from_multi_image(vec![p1.clone(), p2.clone(), p3.clone(), p4.clone()]);
-        if let ClipPayload::MultiImage { total_count, preview_indices, .. } = item_4.payload {
+        let item_4 =
+            ClipItem::from_multi_image(vec![p1.clone(), p2.clone(), p3.clone(), p4.clone()]);
+        if let ClipPayload::MultiImage {
+            total_count,
+            preview_indices,
+            ..
+        } = item_4.payload
+        {
             assert_eq!(total_count, 4);
             assert_eq!(preview_indices, vec![0, 1, 2, 3]);
         } else {
@@ -1383,7 +1451,12 @@ mod tests {
 
         // Test > 4 files (first 2 and last 2 selected)
         let item_6 = ClipItem::from_multi_image(vec![p1, p2, p3, p4, p5, p6]);
-        if let ClipPayload::MultiImage { total_count, preview_indices, .. } = item_6.payload {
+        if let ClipPayload::MultiImage {
+            total_count,
+            preview_indices,
+            ..
+        } = item_6.payload
+        {
             assert_eq!(total_count, 6);
             assert_eq!(preview_indices, vec![0, 1, 4, 5]); // First 2 (0, 1) and last 2 (4, 5)
         } else {
@@ -1400,7 +1473,14 @@ mod tests {
 
         let item = ClipItem::from_text(svg_markup);
         assert_eq!(item.handler_tag, "SVG (CLIPBOARD)");
-        if let ClipPayload::Image { width, height, thumbnail, mime, .. } = item.payload {
+        if let ClipPayload::Image {
+            width,
+            height,
+            thumbnail,
+            mime,
+            ..
+        } = item.payload
+        {
             assert_eq!(width, 200);
             assert_eq!(height, 100);
             assert_eq!(mime, "image/svg+xml");
@@ -1515,7 +1595,10 @@ mod tests {
             }
             other => panic!("Expected FileBatch payload, got: {:?}", other),
         }
-        assert_eq!(item.to_clipboard_text(), Some(file_path.to_string_lossy().to_string()));
+        assert_eq!(
+            item.to_clipboard_text(),
+            Some(file_path.to_string_lossy().to_string())
+        );
 
         let _ = std::fs::remove_file(&file_path);
     }
@@ -1545,23 +1628,4 @@ mod tests {
 
         let _ = std::fs::remove_file(&file_path);
     }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{} B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
-    }
-}
-
-fn current_unix_timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }

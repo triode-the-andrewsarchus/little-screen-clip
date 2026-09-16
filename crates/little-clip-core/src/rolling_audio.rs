@@ -144,9 +144,7 @@ impl RollingAudioBuffer {
 
         let ch = self.channels as usize;
         if ch <= 1 {
-            raw.into_iter()
-                .map(|s| s as f32 / 32768.0)
-                .collect()
+            raw.into_iter().map(|s| s as f32 / 32768.0).collect()
         } else {
             let num_frames = raw.len() / ch;
             let mut mono = Vec::with_capacity(num_frames);
@@ -186,7 +184,7 @@ impl RollingAudioBuffer {
         // "fmt " chunk
         writer.write_all(b"fmt ")?;
         writer.write_all(&16u32.to_le_bytes())?; // Subchunk1Size for PCM
-        writer.write_all(&1u16.to_le_bytes())?;  // AudioFormat 1 = PCM
+        writer.write_all(&1u16.to_le_bytes())?; // AudioFormat 1 = PCM
         writer.write_all(&channels.to_le_bytes())?;
         writer.write_all(&sample_rate.to_le_bytes())?;
         writer.write_all(&byte_rate.to_le_bytes())?;
@@ -213,7 +211,12 @@ impl RollingAudioBuffer {
 }
 
 /// Slices a sub-region `[start_sec, end_sec]` from a 16-bit PCM WAV file and writes it to `out_path`.
-pub fn slice_wav(source: &Path, start_sec: f32, end_sec: f32, out_path: &Path) -> Result<(), std::io::Error> {
+pub fn slice_wav(
+    source: &Path,
+    start_sec: f32,
+    end_sec: f32,
+    out_path: &Path,
+) -> Result<(), std::io::Error> {
     let mut file = BufReader::new(File::open(source)?);
 
     let mut riff_header = [0u8; 12];
@@ -280,7 +283,10 @@ pub fn slice_wav(source: &Path, start_sec: f32, end_sec: f32, out_path: &Path) -
         std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing fmt chunk in WAV")
     })?;
     let sample_rate = sample_rate.ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing sample rate in WAV")
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Missing sample rate in WAV",
+        )
     })?;
     let bits_per_sample = bits_per_sample.unwrap_or(16);
     let bytes_per_sample = (bits_per_sample / 8) as u32;

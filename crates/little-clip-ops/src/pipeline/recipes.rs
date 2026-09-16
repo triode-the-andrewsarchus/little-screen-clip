@@ -36,7 +36,11 @@ pub fn ensure_recipes_dir_and_defaults() -> Result<PathBuf, std::io::Error> {
         // If directory exists but is empty, initialize default recipes
         let is_empty = fs::read_dir(&dir)?
             .filter_map(Result::ok)
-            .filter(|e| e.path().extension().map_or(false, |ext| ext == "yaml" || ext == "yml"))
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map_or(false, |ext| ext == "yaml" || ext == "yml")
+            })
             .count()
             == 0;
         if is_empty {
@@ -60,7 +64,10 @@ pub fn load_all_recipes() -> Vec<Recipe> {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.extension().map_or(false, |ext| ext == "yaml" || ext == "yml") {
+            if path
+                .extension()
+                .map_or(false, |ext| ext == "yaml" || ext == "yml")
+            {
                 if let Ok(content) = fs::read_to_string(&path) {
                     match serde_yaml::from_str::<Recipe>(&content) {
                         Ok(recipe) => recipes.push(recipe),
@@ -86,7 +93,13 @@ pub fn save_recipe(recipe: &Recipe) -> Result<PathBuf, std::io::Error> {
     let safe_name: String = recipe
         .name
         .chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     let filename = format!("{}.yaml", safe_name.to_lowercase());
     let path = dir.join(filename);
@@ -122,7 +135,13 @@ fn init_default_recipes(dir: &Path) -> Result<(), std::io::Error> {
         let safe_name: String = r
             .name
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         let path = dir.join(format!("{}.yaml", safe_name.to_lowercase()));
         if !path.exists() {
@@ -138,7 +157,8 @@ fn init_default_recipes(dir: &Path) -> Result<(), std::io::Error> {
 /// Left Hand (Picture) + Right Hand (Text) -> Pad with frame -> Add caption -> Set in Left Hand
 pub fn make_pad_and_caption_recipe() -> Recipe {
     let t_lh = find_template("source_lh").unwrap();
-    let t_caption_source = find_template("source_prompt_or_hand").unwrap_or_else(|| find_template("source_rh").unwrap());
+    let t_caption_source = find_template("source_prompt_or_hand")
+        .unwrap_or_else(|| find_template("source_rh").unwrap());
     let t_pad = find_template("img_pad_frame").unwrap();
     let t_caption = find_template("img_add_title").unwrap();
     let t_sink = find_template("sink_lh").unwrap();
@@ -254,9 +274,12 @@ pub fn make_clean_and_slugify_recipe() -> Recipe {
 
     let node_lh = instantiate_template(t_lh, [80.0, 140.0]);
     let mut node_regex = instantiate_template(t_regex, [320.0, 140.0]);
-    node_regex.props.insert("pattern".to_string(), r"[-_\s]+".to_string());
-    node_regex.props.insert("replacement".to_string(), " ".to_string());
-
+    node_regex
+        .props
+        .insert("pattern".to_string(), r"[-_\s]+".to_string());
+    node_regex
+        .props
+        .insert("replacement".to_string(), " ".to_string());
 
     let node_slug = instantiate_template(t_slug, [580.0, 140.0]);
     let node_sink = instantiate_template(t_sink, [820.0, 140.0]);
@@ -334,7 +357,10 @@ pub fn make_basic_template_recipe() -> Recipe {
 
 /// Generates a unique script file in the recipes directory pre-populated with
 /// scaffolding to receive input from STDIN and emit output to STDOUT.
-pub fn create_script_file_scaffold(recipe_name: &str, is_python: bool) -> Result<String, std::io::Error> {
+pub fn create_script_file_scaffold(
+    recipe_name: &str,
+    is_python: bool,
+) -> Result<String, std::io::Error> {
     let dir = ensure_recipes_dir_and_defaults()?;
     let safe_recipe: String = recipe_name
         .chars()
@@ -478,7 +504,8 @@ pub fn sync_recipe_script_headers(
                     use std::os::unix::fs::PermissionsExt;
                     let _ = fs::set_permissions(&target_path, fs::Permissions::from_mode(0o755));
                 }
-                node.props.insert("script_file".to_string(), target_filename);
+                node.props
+                    .insert("script_file".to_string(), target_filename);
             }
 
             // Update the `# Recipe:` header comment in target_path
@@ -565,7 +592,8 @@ mod tests {
 
         // Test sync headers without duplicating
         let mut node = instantiate_template(find_template("script_python").unwrap(), [0.0, 0.0]);
-        node.props.insert("script_file".to_string(), py_file.clone());
+        node.props
+            .insert("script_file".to_string(), py_file.clone());
         let mut graph = NodeGraph {
             nodes: vec![node],
             connections: vec![],
@@ -582,5 +610,3 @@ mod tests {
         let _ = fs::remove_file(sh_path);
     }
 }
-
-

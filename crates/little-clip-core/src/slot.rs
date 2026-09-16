@@ -311,7 +311,11 @@ impl SlotManager {
     }
 
     /// Updates the pre-rendered thumbnail for an item anywhere in the manager's slots.
-    pub fn update_thumbnail(&mut self, item_id: uuid::Uuid, thumb: crate::item::ImageThumbnail) -> bool {
+    pub fn update_thumbnail(
+        &mut self,
+        item_id: uuid::Uuid,
+        thumb: crate::item::ImageThumbnail,
+    ) -> bool {
         let mut updated = false;
         let slots = [
             &mut self.undo,
@@ -326,7 +330,10 @@ impl SlotManager {
         for slot in slots {
             if let Some(item) = slot {
                 if item.id == item_id {
-                    if let crate::item::ClipPayload::Image { ref mut thumbnail, .. } = item.payload {
+                    if let crate::item::ClipPayload::Image {
+                        ref mut thumbnail, ..
+                    } = item.payload
+                    {
                         *thumbnail = Some(thumb.clone());
                         updated = true;
                     }
@@ -356,7 +363,10 @@ impl SlotManager {
         for slot in slots {
             if let Some(item) = slot {
                 if item.id == item_id {
-                    if let crate::item::ClipPayload::MultiImage { ref mut thumbnails, .. } = item.payload {
+                    if let crate::item::ClipPayload::MultiImage {
+                        ref mut thumbnails, ..
+                    } = item.payload
+                    {
                         *thumbnails = thumbs.clone();
                         updated = true;
                     }
@@ -367,7 +377,11 @@ impl SlotManager {
     }
 
     /// Updates the pre-rendered audio waveform for an item anywhere in the manager's slots.
-    pub fn update_audio_waveform(&mut self, item_id: uuid::Uuid, waveform: crate::audio::AudioWaveform) -> bool {
+    pub fn update_audio_waveform(
+        &mut self,
+        item_id: uuid::Uuid,
+        waveform: crate::audio::AudioWaveform,
+    ) -> bool {
         let mut updated = false;
         let slots = [
             &mut self.undo,
@@ -388,7 +402,8 @@ impl SlotManager {
                         ref mut channels,
                         waveform: ref mut wf,
                         ..
-                    } = item.payload {
+                    } = item.payload
+                    {
                         *duration_ms = waveform.duration_ms;
                         *sample_rate = waveform.sample_rate;
                         *channels = waveform.channels;
@@ -402,7 +417,11 @@ impl SlotManager {
     }
 
     /// Attaches Phase 2 spectral frequency colors to an existing waveform.
-    pub fn attach_audio_spectral_colors(&mut self, item_id: uuid::Uuid, colors: Vec<[u8; 3]>) -> bool {
+    pub fn attach_audio_spectral_colors(
+        &mut self,
+        item_id: uuid::Uuid,
+        colors: Vec<[u8; 3]>,
+    ) -> bool {
         let mut updated = false;
         let slots = [
             &mut self.undo,
@@ -417,7 +436,11 @@ impl SlotManager {
         for slot in slots {
             if let Some(item) = slot {
                 if item.id == item_id {
-                    if let crate::item::ClipPayload::AudioRef { waveform: Some(ref mut wf), .. } = item.payload {
+                    if let crate::item::ClipPayload::AudioRef {
+                        waveform: Some(ref mut wf),
+                        ..
+                    } = item.payload
+                    {
                         wf.spectral_colors = Some(colors.clone());
                         updated = true;
                     }
@@ -583,15 +606,13 @@ mod tests {
             premultiplied_rgba: vec![255; 100 * 100 * 4],
         };
         // Replace payload in left_prior3 with multi-image
-        if let Some(slot) = mgr.get_mut(SlotId::LeftPrior3) {
-            if let Some(it) = slot {
-                it.payload = crate::item::ClipPayload::MultiImage {
-                    paths: vec![std::path::PathBuf::from("a.png")],
-                    total_count: 1,
-                    preview_indices: vec![0],
-                    thumbnails: Vec::new(),
-                };
-            }
+        if let Some(Some(it)) = mgr.get_mut(SlotId::LeftPrior3) {
+            it.payload = crate::item::ClipPayload::MultiImage {
+                paths: vec![std::path::PathBuf::from("a.png")],
+                total_count: 1,
+                preview_indices: vec![0],
+                thumbnails: Vec::new(),
+            };
         }
         assert!(mgr.update_multi_image_thumbnails(item_id, vec![thumb]));
         if let Some(crate::item::ClipPayload::MultiImage { thumbnails, .. }) =
@@ -621,4 +642,3 @@ mod tests {
         assert!(mgr.get(SlotId::LeftPrior2).is_some());
     }
 }
-

@@ -11,7 +11,18 @@ pub fn is_raw_image_path(p: &Path) -> bool {
     if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
         matches!(
             ext.to_lowercase().as_str(),
-            "raw" | "cr2" | "cr3" | "nef" | "arw" | "dng" | "raf" | "orf" | "rw2" | "pef" | "srw" | "srf"
+            "raw"
+                | "cr2"
+                | "cr3"
+                | "nef"
+                | "arw"
+                | "dng"
+                | "raf"
+                | "orf"
+                | "rw2"
+                | "pef"
+                | "srw"
+                | "srf"
         )
     } else {
         false
@@ -54,7 +65,10 @@ pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), Str
         }
     }
 
-    Err(format!("Could not extract camera RAW preview from {:?}", path))
+    Err(format!(
+        "Could not extract camera RAW preview from {:?}",
+        path
+    ))
 }
 
 #[cfg(test)]

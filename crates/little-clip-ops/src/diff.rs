@@ -119,21 +119,20 @@ impl DiffTarget {
     pub fn ext_hint(&self) -> Option<&str> {
         match self {
             DiffTarget::File { path, .. } => path.extension().and_then(|s| s.to_str()),
-            DiffTarget::Image { path, mime, .. } => {
-                path.as_ref()
-                    .and_then(|p| p.extension().and_then(|s| s.to_str()))
-                    .or_else(|| {
-                        if mime.contains("png") {
-                            Some("png")
-                        } else if mime.contains("jpeg") || mime.contains("jpg") {
-                            Some("jpg")
-                        } else if mime.contains("webp") {
-                            Some("webp")
-                        } else {
-                            None
-                        }
-                    })
-            }
+            DiffTarget::Image { path, mime, .. } => path
+                .as_ref()
+                .and_then(|p| p.extension().and_then(|s| s.to_str()))
+                .or_else(|| {
+                    if mime.contains("png") {
+                        Some("png")
+                    } else if mime.contains("jpeg") || mime.contains("jpg") {
+                        Some("jpg")
+                    } else if mime.contains("webp") {
+                        Some("webp")
+                    } else {
+                        None
+                    }
+                }),
             DiffTarget::ClipboardText { ext_hint, .. } => ext_hint.as_deref(),
         }
     }
@@ -183,7 +182,11 @@ pub fn find_difft_bin() -> Option<PathBuf> {
     }
 
     // 2. Check standard system locations
-    for p in &["/usr/bin/difft", "/usr/local/bin/difft", "/opt/homebrew/bin/difft"] {
+    for p in &[
+        "/usr/bin/difft",
+        "/usr/local/bin/difft",
+        "/opt/homebrew/bin/difft",
+    ] {
         let path = PathBuf::from(p);
         if path.is_file() {
             return Some(path);
@@ -238,13 +241,24 @@ pub fn guess_extension_from_content(content: &str) -> Option<&'static str> {
 
 /// Returns `true` if the path has a known image file extension.
 pub fn is_image_path(p: &Path) -> bool {
-    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
-    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "bmp" | "svg" | "gif" | "tiff" | "tif")
+    let ext = p
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "webp" | "bmp" | "svg" | "gif" | "tiff" | "tif"
+    )
 }
 
 /// Infers the MIME type for an image file path based on its extension.
 pub fn guess_image_mime(p: &Path) -> String {
-    let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+    let ext = p
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
     match ext.as_str() {
         "png" => "image/png".to_string(),
         "jpg" | "jpeg" => "image/jpeg".to_string(),
@@ -264,7 +278,8 @@ pub fn resolve_diff_target_from_path(p: &Path) -> Option<DiffTarget> {
 
     if is_image_path(p) {
         if let Ok(bytes) = std::fs::read(p) {
-            let (width, height) = little_clip_core::item::read_image_dimensions(&bytes).unwrap_or((0, 0));
+            let (width, height) =
+                little_clip_core::item::read_image_dimensions(&bytes).unwrap_or((0, 0));
             let mime = guess_image_mime(p);
             let label = p
                 .file_name()
@@ -339,7 +354,14 @@ pub fn resolve_diff_pair(item: &ClipItem) -> Option<(DiffTarget, DiffTarget)> {
 /// Extracts a `DiffTarget` from any `ClipItem`.
 pub fn resolve_diff_target(item: &ClipItem) -> Option<DiffTarget> {
     match &item.payload {
-        ClipPayload::Image { bytes, path, width, height, mime, .. } => {
+        ClipPayload::Image {
+            bytes,
+            path,
+            width,
+            height,
+            mime,
+            ..
+        } => {
             let mut actual_path = path.clone();
             let mut actual_bytes = if !bytes.is_empty() {
                 bytes.clone()
@@ -419,9 +441,13 @@ pub fn resolve_diff_target(item: &ClipItem) -> Option<DiffTarget> {
             if path_candidate.is_file() {
                 if is_image_path(path_candidate) {
                     if let Ok(bytes) = std::fs::read(path_candidate) {
-                        let (width, height) = little_clip_core::item::read_image_dimensions(&bytes).unwrap_or((0, 0));
+                        let (width, height) =
+                            little_clip_core::item::read_image_dimensions(&bytes).unwrap_or((0, 0));
                         let mime = guess_image_mime(path_candidate);
-                        let label = path_candidate.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Image File".to_string());
+                        let label = path_candidate
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "Image File".to_string());
                         return Some(DiffTarget::Image {
                             label,
                             path: Some(path_candidate.to_path_buf()),
@@ -504,13 +530,18 @@ pub fn run_difft(
     width: usize,
 ) -> std::io::Result<DiffResult> {
     let run_id = Uuid::new_v4();
-    let temp_dir = std::env::temp_dir().join(format!("little_clip_diff_{}", &run_id.to_string()[..8]));
+    let temp_dir =
+        std::env::temp_dir().join(format!("little_clip_diff_{}", &run_id.to_string()[..8]));
     let _ = std::fs::create_dir_all(&temp_dir);
 
     // Determine extension to assist tree-sitter language detection
     let ext_hint = lhs.ext_hint().or_else(|| rhs.ext_hint());
     let ext = little_clip_core::syntax::detect_language(
-        if !lhs.content().is_empty() { lhs.content() } else { rhs.content() },
+        if !lhs.content().is_empty() {
+            lhs.content()
+        } else {
+            rhs.content()
+        },
         ext_hint,
     );
 
@@ -606,7 +637,11 @@ pub fn generate_unified_inline_diff(lhs: &DiffTarget, rhs: &DiffTarget) -> DiffR
 
     let ext_hint = lhs.ext_hint().or_else(|| rhs.ext_hint());
     let lang_id = little_clip_core::syntax::detect_language(
-        if !lhs.content().is_empty() { lhs.content() } else { rhs.content() },
+        if !lhs.content().is_empty() {
+            lhs.content()
+        } else {
+            rhs.content()
+        },
         ext_hint,
     );
     let lang_name = little_clip_core::syntax::language_display_name(lang_id);
@@ -655,7 +690,11 @@ pub fn generate_unified_inline_diff(lhs: &DiffTarget, rhs: &DiffTarget) -> DiffR
 
         for op in group {
             match op {
-                similar::DiffOp::Equal { old_index, new_index, len } => {
+                similar::DiffOp::Equal {
+                    old_index,
+                    new_index,
+                    len,
+                } => {
                     for offset in 0..*len {
                         let o_num = old_index + offset + 1;
                         let n_num = new_index + offset + 1;
@@ -670,7 +709,9 @@ pub fn generate_unified_inline_diff(lhs: &DiffTarget, rhs: &DiffTarget) -> DiffR
                         ));
                     }
                 }
-                similar::DiffOp::Delete { old_index, old_len, .. } => {
+                similar::DiffOp::Delete {
+                    old_index, old_len, ..
+                } => {
                     for offset in 0..*old_len {
                         let o_num = old_index + offset + 1;
                         let line = old_lines.get(old_index + offset).copied().unwrap_or("");
@@ -684,7 +725,9 @@ pub fn generate_unified_inline_diff(lhs: &DiffTarget, rhs: &DiffTarget) -> DiffR
                         ));
                     }
                 }
-                similar::DiffOp::Insert { new_index, new_len, .. } => {
+                similar::DiffOp::Insert {
+                    new_index, new_len, ..
+                } => {
                     for offset in 0..*new_len {
                         let n_num = new_index + offset + 1;
                         let line = new_lines.get(new_index + offset).copied().unwrap_or("");
@@ -698,7 +741,12 @@ pub fn generate_unified_inline_diff(lhs: &DiffTarget, rhs: &DiffTarget) -> DiffR
                         ));
                     }
                 }
-                similar::DiffOp::Replace { old_index, old_len, new_index, new_len } => {
+                similar::DiffOp::Replace {
+                    old_index,
+                    old_len,
+                    new_index,
+                    new_len,
+                } => {
                     let min_len = (*old_len).min(*new_len);
 
                     // Print deleted lines (all '-' lines)
@@ -707,7 +755,8 @@ pub fn generate_unified_inline_diff(lhs: &DiffTarget, rhs: &DiffTarget) -> DiffR
                         let old_line = old_lines.get(old_index + offset).copied().unwrap_or("");
                         let hl_old = if offset < min_len {
                             let new_line = new_lines.get(new_index + offset).copied().unwrap_or("");
-                            let (h_old, _) = format_word_diff_syntax(old_line, new_line, &mut highlighter);
+                            let (h_old, _) =
+                                format_word_diff_syntax(old_line, new_line, &mut highlighter);
                             h_old
                         } else {
                             highlight_line_ansi(old_line, &mut highlighter, Some("\x1b[41m"))
@@ -727,7 +776,8 @@ pub fn generate_unified_inline_diff(lhs: &DiffTarget, rhs: &DiffTarget) -> DiffR
                         let new_line = new_lines.get(new_index + offset).copied().unwrap_or("");
                         let hl_new = if offset < min_len {
                             let old_line = old_lines.get(old_index + offset).copied().unwrap_or("");
-                            let (_, h_new) = format_word_diff_syntax(old_line, new_line, &mut highlighter);
+                            let (_, h_new) =
+                                format_word_diff_syntax(old_line, new_line, &mut highlighter);
                             h_new
                         } else {
                             highlight_line_ansi(new_line, &mut highlighter, Some("\x1b[42m"))
@@ -770,10 +820,7 @@ fn format_hunk_header(group: &[similar::DiffOp]) -> Option<String> {
 }
 
 /// Appends syntax highlighted tokens as 24-bit TrueColor ANSI escape sequences.
-fn append_highlighted_tokens(
-    out: &mut String,
-    ranges: &[(syntect::highlighting::Style, &str)],
-) {
+fn append_highlighted_tokens(out: &mut String, ranges: &[(syntect::highlighting::Style, &str)]) {
     for (style, token_str) in ranges {
         let (r, g, b) = (style.foreground.r, style.foreground.g, style.foreground.b);
         out.push_str(&format!("\x1b[38;2;{};{};{}m{}", r, g, b, token_str));
@@ -815,7 +862,9 @@ fn highlight_line_ansi(
     highlighter: &mut HighlightLines,
     line_bg_ansi: Option<&str>,
 ) -> String {
-    let ranges = highlighter.highlight_line(line, &SYNTAX_SET).unwrap_or_default();
+    let ranges = highlighter
+        .highlight_line(line, &SYNTAX_SET)
+        .unwrap_or_default();
     let mut out = String::new();
 
     if let Some(bg) = line_bg_ansi {
@@ -837,7 +886,11 @@ fn highlight_line_ansi_fixed(
 ) -> String {
     let clean = line.replace('\t', "    ");
     let (truncated, char_count) = if clean.chars().count() > target_w {
-        let s: String = clean.chars().take(target_w.saturating_sub(1)).chain(['…']).collect();
+        let s: String = clean
+            .chars()
+            .take(target_w.saturating_sub(1))
+            .chain(['…'])
+            .collect();
         let c = s.chars().count();
         (s, c)
     } else {
@@ -845,7 +898,9 @@ fn highlight_line_ansi_fixed(
         (clean, c)
     };
 
-    let ranges = highlighter.highlight_line(&truncated, &SYNTAX_SET).unwrap_or_default();
+    let ranges = highlighter
+        .highlight_line(&truncated, &SYNTAX_SET)
+        .unwrap_or_default();
     let mut out = String::new();
 
     if let Some(bg) = line_bg_ansi {
@@ -931,7 +986,9 @@ fn format_word_diff_syntax(
 
     let (old_spans, new_spans) = compute_word_diff_spans(&word_diff);
 
-    let old_ranges = highlighter.highlight_line(old_line, &SYNTAX_SET).unwrap_or_default();
+    let old_ranges = highlighter
+        .highlight_line(old_line, &SYNTAX_SET)
+        .unwrap_or_default();
     let mut hl_old = render_syntax_with_badges(
         old_line,
         &old_spans,
@@ -941,7 +998,9 @@ fn format_word_diff_syntax(
     );
     hl_old.push_str("\x1b[0m");
 
-    let new_ranges = highlighter.highlight_line(new_line, &SYNTAX_SET).unwrap_or_default();
+    let new_ranges = highlighter
+        .highlight_line(new_line, &SYNTAX_SET)
+        .unwrap_or_default();
     let mut hl_new = render_syntax_with_badges(
         new_line,
         &new_spans,
@@ -966,7 +1025,11 @@ fn format_word_diff_split(
     let new_clean = new_line.replace('\t', "    ");
 
     let (old_trunc, old_char_count) = if old_clean.chars().count() > target_w {
-        let s: String = old_clean.chars().take(target_w.saturating_sub(1)).chain(['…']).collect();
+        let s: String = old_clean
+            .chars()
+            .take(target_w.saturating_sub(1))
+            .chain(['…'])
+            .collect();
         let c = s.chars().count();
         (s, c)
     } else {
@@ -975,7 +1038,11 @@ fn format_word_diff_split(
     };
 
     let (new_trunc, new_char_count) = if new_clean.chars().count() > target_w {
-        let s: String = new_clean.chars().take(target_w.saturating_sub(1)).chain(['…']).collect();
+        let s: String = new_clean
+            .chars()
+            .take(target_w.saturating_sub(1))
+            .chain(['…'])
+            .collect();
         let c = s.chars().count();
         (s, c)
     } else {
@@ -994,7 +1061,9 @@ fn format_word_diff_split(
 
     let (old_spans, new_spans) = compute_word_diff_spans(&word_diff);
 
-    let old_ranges = highlighter_lhs.highlight_line(&old_trunc, &SYNTAX_SET).unwrap_or_default();
+    let old_ranges = highlighter_lhs
+        .highlight_line(&old_trunc, &SYNTAX_SET)
+        .unwrap_or_default();
     let mut hl_old = render_syntax_with_badges(
         &old_trunc,
         &old_spans,
@@ -1007,7 +1076,9 @@ fn format_word_diff_split(
     }
     hl_old.push_str("\x1b[0m");
 
-    let new_ranges = highlighter_rhs.highlight_line(&new_trunc, &SYNTAX_SET).unwrap_or_default();
+    let new_ranges = highlighter_rhs
+        .highlight_line(&new_trunc, &SYNTAX_SET)
+        .unwrap_or_default();
     let mut hl_new = render_syntax_with_badges(
         &new_trunc,
         &new_spans,
@@ -1024,11 +1095,7 @@ fn format_word_diff_split(
 }
 
 /// Generates a split side-by-side diff with syntax highlighting, column alignment, and word diff badges.
-pub fn generate_split_diff(
-    lhs: &DiffTarget,
-    rhs: &DiffTarget,
-    width: usize,
-) -> DiffResult {
+pub fn generate_split_diff(lhs: &DiffTarget, rhs: &DiffTarget, width: usize) -> DiffResult {
     let old_lines: Vec<&str> = lhs.content().lines().collect();
     let new_lines: Vec<&str> = rhs.content().lines().collect();
 
@@ -1095,12 +1162,20 @@ pub fn generate_split_diff(
     let rhs_hdr = format!("RHS: {} [{}]", rhs.label(), lang_name_rhs);
 
     let lhs_hdr_trunc: String = if lhs_hdr.chars().count() > col_w {
-        lhs_hdr.chars().take(col_w.saturating_sub(1)).chain(['…']).collect()
+        lhs_hdr
+            .chars()
+            .take(col_w.saturating_sub(1))
+            .chain(['…'])
+            .collect()
     } else {
         lhs_hdr
     };
     let rhs_hdr_trunc: String = if rhs_hdr.chars().count() > col_w {
-        rhs_hdr.chars().take(col_w.saturating_sub(1)).chain(['…']).collect()
+        rhs_hdr
+            .chars()
+            .take(col_w.saturating_sub(1))
+            .chain(['…'])
+            .collect()
     } else {
         rhs_hdr
     };
@@ -1127,14 +1202,20 @@ pub fn generate_split_diff(
 
         for op in group {
             match op {
-                similar::DiffOp::Equal { old_index, new_index, len } => {
+                similar::DiffOp::Equal {
+                    old_index,
+                    new_index,
+                    len,
+                } => {
                     for offset in 0..*len {
                         let o_num = old_index + offset + 1;
                         let n_num = new_index + offset + 1;
                         let old_line = old_lines.get(old_index + offset).copied().unwrap_or("");
                         let new_line = new_lines.get(new_index + offset).copied().unwrap_or("");
-                        let hl_lhs = highlight_line_ansi_fixed(old_line, &mut highlighter_lhs, None, code_w);
-                        let hl_rhs = highlight_line_ansi_fixed(new_line, &mut highlighter_rhs, None, code_w);
+                        let hl_lhs =
+                            highlight_line_ansi_fixed(old_line, &mut highlighter_lhs, None, code_w);
+                        let hl_rhs =
+                            highlight_line_ansi_fixed(new_line, &mut highlighter_rhs, None, code_w);
 
                         out.push_str(&format!(
                             "\x1b[2;90m{:>w$}\x1b[0m   {} │ \x1b[2;90m{:>w$}\x1b[0m   {}\n",
@@ -1146,11 +1227,18 @@ pub fn generate_split_diff(
                         ));
                     }
                 }
-                similar::DiffOp::Delete { old_index, old_len, .. } => {
+                similar::DiffOp::Delete {
+                    old_index, old_len, ..
+                } => {
                     for offset in 0..*old_len {
                         let o_num = old_index + offset + 1;
                         let old_line = old_lines.get(old_index + offset).copied().unwrap_or("");
-                        let hl = highlight_line_ansi_fixed(old_line, &mut highlighter_lhs, Some("\x1b[41m"), code_w);
+                        let hl = highlight_line_ansi_fixed(
+                            old_line,
+                            &mut highlighter_lhs,
+                            Some("\x1b[41m"),
+                            code_w,
+                        );
                         let blank = " ".repeat(code_w);
 
                         out.push_str(&format!(
@@ -1163,11 +1251,18 @@ pub fn generate_split_diff(
                         ));
                     }
                 }
-                similar::DiffOp::Insert { new_index, new_len, .. } => {
+                similar::DiffOp::Insert {
+                    new_index, new_len, ..
+                } => {
                     for offset in 0..*new_len {
                         let n_num = new_index + offset + 1;
                         let new_line = new_lines.get(new_index + offset).copied().unwrap_or("");
-                        let hl = highlight_line_ansi_fixed(new_line, &mut highlighter_rhs, Some("\x1b[42m"), code_w);
+                        let hl = highlight_line_ansi_fixed(
+                            new_line,
+                            &mut highlighter_rhs,
+                            Some("\x1b[42m"),
+                            code_w,
+                        );
                         let blank = " ".repeat(code_w);
 
                         out.push_str(&format!(
@@ -1180,7 +1275,12 @@ pub fn generate_split_diff(
                         ));
                     }
                 }
-                similar::DiffOp::Replace { old_index, old_len, new_index, new_len } => {
+                similar::DiffOp::Replace {
+                    old_index,
+                    old_len,
+                    new_index,
+                    new_len,
+                } => {
                     let max_len = (*old_len).max(*new_len);
                     for offset in 0..max_len {
                         let has_old = offset < *old_len;
@@ -1189,15 +1289,31 @@ pub fn generate_split_diff(
                         let (code_lhs, code_rhs) = if has_old && has_new {
                             let old_line = old_lines.get(old_index + offset).copied().unwrap_or("");
                             let new_line = new_lines.get(new_index + offset).copied().unwrap_or("");
-                            format_word_diff_split(old_line, new_line, &mut highlighter_lhs, &mut highlighter_rhs, code_w)
+                            format_word_diff_split(
+                                old_line,
+                                new_line,
+                                &mut highlighter_lhs,
+                                &mut highlighter_rhs,
+                                code_w,
+                            )
                         } else if has_old {
                             let old_line = old_lines.get(old_index + offset).copied().unwrap_or("");
-                            let hl = highlight_line_ansi_fixed(old_line, &mut highlighter_lhs, Some("\x1b[41m"), code_w);
+                            let hl = highlight_line_ansi_fixed(
+                                old_line,
+                                &mut highlighter_lhs,
+                                Some("\x1b[41m"),
+                                code_w,
+                            );
                             let blank = " ".repeat(code_w);
                             (hl, blank)
                         } else {
                             let new_line = new_lines.get(new_index + offset).copied().unwrap_or("");
-                            let hl = highlight_line_ansi_fixed(new_line, &mut highlighter_rhs, Some("\x1b[42m"), code_w);
+                            let hl = highlight_line_ansi_fixed(
+                                new_line,
+                                &mut highlighter_rhs,
+                                Some("\x1b[42m"),
+                                code_w,
+                            );
                             let blank = " ".repeat(code_w);
                             (blank, hl)
                         };
@@ -1205,7 +1321,12 @@ pub fn generate_split_diff(
                         // LHS gutter
                         if has_old {
                             let o_num = old_index + offset + 1;
-                            out.push_str(&format!("\x1b[91m{:>w$}\x1b[0m \x1b[91m-\x1b[0m {}", o_num, code_lhs, w = num_w));
+                            out.push_str(&format!(
+                                "\x1b[91m{:>w$}\x1b[0m \x1b[91m-\x1b[0m {}",
+                                o_num,
+                                code_lhs,
+                                w = num_w
+                            ));
                         } else {
                             out.push_str(&format!("{0:>w$}   {1}", "", code_lhs, w = num_w));
                         }
@@ -1215,7 +1336,12 @@ pub fn generate_split_diff(
                         // RHS gutter
                         if has_new {
                             let n_num = new_index + offset + 1;
-                            out.push_str(&format!("\x1b[92m{:>w$}\x1b[0m \x1b[92m+\x1b[0m {}\n", n_num, code_rhs, w = num_w));
+                            out.push_str(&format!(
+                                "\x1b[92m{:>w$}\x1b[0m \x1b[92m+\x1b[0m {}\n",
+                                n_num,
+                                code_rhs,
+                                w = num_w
+                            ));
                         } else {
                             out.push_str(&format!("{0:>w$}   {1}\n", "", code_rhs, w = num_w));
                         }
@@ -1233,7 +1359,6 @@ pub fn generate_split_diff(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1241,9 +1366,18 @@ mod tests {
     #[test]
     fn test_guess_extension() {
         assert_eq!(guess_extension_from_content("{\"key\": 123}"), Some("json"));
-        assert_eq!(guess_extension_from_content("fn main() { println!(); }"), Some("rs"));
-        assert_eq!(guess_extension_from_content("def foo():\n    pass"), Some("py"));
-        assert_eq!(guess_extension_from_content("plain text with no keywords"), None);
+        assert_eq!(
+            guess_extension_from_content("fn main() { println!(); }"),
+            Some("rs")
+        );
+        assert_eq!(
+            guess_extension_from_content("def foo():\n    pass"),
+            Some("py")
+        );
+        assert_eq!(
+            guess_extension_from_content("plain text with no keywords"),
+            None
+        );
     }
 
     #[test]
@@ -1339,7 +1473,10 @@ mod tests {
         };
 
         let res = compute_diff(&t1, &t2, DiffDisplayMode::Inline, 120);
-        println!("\n=== USER SCREENSHOT CASE INLINE DIFF ===\n{}", res.raw_ansi);
+        println!(
+            "\n=== USER SCREENSHOT CASE INLINE DIFF ===\n{}",
+            res.raw_ansi
+        );
         assert!(!res.raw_ansi.contains("/tmp/"));
         assert!(res.raw_ansi.contains("--- LHS: Left Hand"));
         assert!(res.raw_ansi.contains("+++ RHS: Right Hand"));
@@ -1349,12 +1486,14 @@ mod tests {
     fn test_diff_syntax_highlighted_python() {
         let t1 = DiffTarget::ClipboardText {
             label: "Left Hand".to_string(),
-            content: "def calculate(x):\n    print('Calculating...')\n    return x * 2\n".to_string(),
+            content: "def calculate(x):\n    print('Calculating...')\n    return x * 2\n"
+                .to_string(),
             ext_hint: None, // No extension hint, must infer Python!
         };
         let t2 = DiffTarget::ClipboardText {
             label: "Right Hand".to_string(),
-            content: "def calculate(x):\n    print('Processing...')\n    return x * 3\n".to_string(),
+            content: "def calculate(x):\n    print('Processing...')\n    return x * 3\n"
+                .to_string(),
             ext_hint: None, // No extension hint, must infer Python!
         };
 
@@ -1456,7 +1595,10 @@ mod tests {
                 }
             }
         }
-        assert!(expected_divider_pos.is_some(), "Expected divider to be found");
+        assert!(
+            expected_divider_pos.is_some(),
+            "Expected divider to be found"
+        );
     }
 
     #[test]
@@ -1481,7 +1623,10 @@ mod tests {
         // 1. Test FileBatch with 2 image paths
         let batch_item = ClipItem::from_files(vec![img1_path.clone(), img2_path.clone()]);
         let pair = resolve_diff_pair(&batch_item);
-        assert!(pair.is_some(), "FileBatch with 2 images should resolve to diff pair");
+        assert!(
+            pair.is_some(),
+            "FileBatch with 2 images should resolve to diff pair"
+        );
         let (t1, t2) = pair.unwrap();
         assert!(t1.is_image(), "Target 1 must be image");
         assert!(t2.is_image(), "Target 2 must be image");
@@ -1489,17 +1634,26 @@ mod tests {
         // 2. Test MultiImage with 2 paths
         let multi_item = ClipItem::from_multi_image(vec![img1_path.clone(), img2_path.clone()]);
         let pair_multi = resolve_diff_pair(&multi_item);
-        assert!(pair_multi.is_some(), "MultiImage with 2 images should resolve to diff pair");
+        assert!(
+            pair_multi.is_some(),
+            "MultiImage with 2 images should resolve to diff pair"
+        );
 
         // 3. Test Text with 2 file paths
         let text_content = format!("{}\n{}", img1_path.display(), img2_path.display());
         let text_item = ClipItem::from_text(text_content);
         let pair_text = resolve_diff_pair(&text_item);
-        assert!(pair_text.is_some(), "Text with 2 image paths should resolve to diff pair");
+        assert!(
+            pair_text.is_some(),
+            "Text with 2 image paths should resolve to diff pair"
+        );
 
         // Check get_applicable_ops for single item with 2 images
         let ops = crate::get_applicable_ops(&[&batch_item]);
-        assert!(ops.iter().any(|op| op.name == "diff" && !op.is_binary), "Applicable ops should include diff op for single item containing 2 images");
+        assert!(
+            ops.iter().any(|op| op.name == "diff" && !op.is_binary),
+            "Applicable ops should include diff op for single item containing 2 images"
+        );
 
         // Cleanup
         let _ = std::fs::remove_file(&img1_path);
@@ -1507,6 +1661,3 @@ mod tests {
         let _ = std::fs::remove_dir(&temp_dir);
     }
 }
-
-
-

@@ -17,7 +17,12 @@ pub struct QuadCorners {
 }
 
 impl QuadCorners {
-    pub fn new(top_left: [f32; 2], top_right: [f32; 2], bottom_right: [f32; 2], bottom_left: [f32; 2]) -> Self {
+    pub fn new(
+        top_left: [f32; 2],
+        top_right: [f32; 2],
+        bottom_right: [f32; 2],
+        bottom_left: [f32; 2],
+    ) -> Self {
         Self {
             top_left,
             top_right,
@@ -40,7 +45,12 @@ impl QuadCorners {
 
     /// Array of 4 points in order: TL, TR, BR, BL.
     pub fn as_array(&self) -> [[f32; 2]; 4] {
-        [self.top_left, self.top_right, self.bottom_right, self.bottom_left]
+        [
+            self.top_left,
+            self.top_right,
+            self.bottom_right,
+            self.bottom_left,
+        ]
     }
 
     /// Set corner by index (0: TL, 1: TR, 2: BR, 3: BL).
@@ -164,7 +174,16 @@ impl UnitToQuadHomography {
             (a, b, c, d, e, f, g, h)
         };
 
-        Some(Self { a, b, c, d, e, f, g, h })
+        Some(Self {
+            a,
+            b,
+            c,
+            d,
+            e,
+            f,
+            g,
+            h,
+        })
     }
 
     /// Map unit square coordinate (s, t) in [0, 1]^2 to source image pixel coordinate (x, y).
@@ -227,7 +246,8 @@ impl UnitToQuadHomography {
 
         for &(sx, sy) in &sample_pts {
             if let Some((s, t)) = self.map_inverse(sx, sy) {
-                if s.is_finite() && t.is_finite() && s >= -5.0 && s <= 6.0 && t >= -5.0 && t <= 6.0 {
+                if s.is_finite() && t.is_finite() && s >= -5.0 && s <= 6.0 && t >= -5.0 && t <= 6.0
+                {
                     s_min = s_min.min(s);
                     s_max = s_max.max(s);
                     t_min = t_min.min(t);
@@ -293,7 +313,8 @@ pub fn rectify_perspective_with_mode(
     let (s_min, s_max, t_min, t_max, out_w, out_h) = match mode {
         DeskewCropMode::CropToQuad => (0.0, 1.0, 0.0, 1.0, target_w, target_h),
         DeskewCropMode::MinimalCrop => {
-            let (s_min, s_max, t_min, t_max) = homography.minimal_crop_unit_bounds(src.width(), src.height());
+            let (s_min, s_max, t_min, t_max) =
+                homography.minimal_crop_unit_bounds(src.width(), src.height());
             let span_s = (s_max - s_min).max(1.0);
             let span_t = (t_max - t_min).max(1.0);
             let w = ((span_s * target_w as f64).round() as u32).clamp(target_w, 8192);
@@ -313,9 +334,17 @@ pub fn rectify_perspective_with_mode(
     let src_h_f = src.height() as f32;
 
     for v in 0..out_h {
-        let t = if max_v <= 0.0 { t_min } else { t_min + (v as f64 / max_v) * span_t };
+        let t = if max_v <= 0.0 {
+            t_min
+        } else {
+            t_min + (v as f64 / max_v) * span_t
+        };
         for u in 0..out_w {
-            let s = if max_u <= 0.0 { s_min } else { s_min + (u as f64 / max_u) * span_s };
+            let s = if max_u <= 0.0 {
+                s_min
+            } else {
+                s_min + (u as f64 / max_u) * span_s
+            };
             let (src_x, src_y) = homography.map(s, t);
 
             if src_x >= 0.0 && src_x <= src_w_f - 1.0 && src_y >= 0.0 && src_y <= src_h_f - 1.0 {
@@ -351,12 +380,7 @@ mod tests {
             *p = Rgba([(x * 2) as u8, (y * 3) as u8, 128, 255]);
         }
 
-        let corners = QuadCorners::new(
-            [0.0, 0.0],
-            [99.0, 0.0],
-            [99.0, 79.0],
-            [0.0, 79.0],
-        );
+        let corners = QuadCorners::new([0.0, 0.0], [99.0, 0.0], [99.0, 79.0], [0.0, 79.0]);
 
         let (w, h) = corners.estimate_dimensions();
         assert_eq!(w, 100);
@@ -384,10 +408,10 @@ mod tests {
 
         // Draw a trapezoid simulating an angled document
         let corners = QuadCorners::new(
-            [40.0, 20.0],  // TL
-            [160.0, 20.0], // TR
-            [190.0, 180.0],// BR
-            [10.0, 180.0], // BL
+            [40.0, 20.0],   // TL
+            [160.0, 20.0],  // TR
+            [190.0, 180.0], // BR
+            [10.0, 180.0],  // BL
         );
 
         let (w, h) = corners.estimate_dimensions();

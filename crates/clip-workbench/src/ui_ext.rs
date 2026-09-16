@@ -1,6 +1,6 @@
-use eframe::egui::{self, Color32, Response, RichText, Rounding, Stroke, Ui, Vec2};
-use little_clip_core::theme::{contrast_ratio, AppPalette};
 use crate::hex_to_c32;
+use eframe::egui::{self, Color32, Response, RichText, Rounding, Stroke, Ui, Vec2};
+use little_clip_core::theme::{AppPalette, contrast_ratio};
 
 /// Calculates an effective foreground Color32 that meets WCAG 2.1 4.5:1 contrast
 /// against `bg`. If `bg` is semi-transparent, it is alpha-composited against
@@ -29,7 +29,10 @@ pub fn contrast_text_c32(
         }
     }
 
-    let hex_bg = format!("#{:02x}{:02x}{:02x}", effective_bg.0, effective_bg.1, effective_bg.2);
+    let hex_bg = format!(
+        "#{:02x}{:02x}{:02x}",
+        effective_bg.0, effective_bg.1, effective_bg.2
+    );
     let pref_hex = preferred_fg.map(|c| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()));
     let fg_hex = palette.contrast_pair_fg(&hex_bg, pref_hex.as_deref());
     hex_to_c32(&fg_hex)
@@ -114,6 +117,18 @@ pub fn secondary_button<'a>(
         .rounding(Rounding::same(4.0))
 }
 
+/// Compact toolbar control with the same contrast and minimum hit target as the
+/// rest of the workbench buttons. Use this instead of ad-hoc tiny buttons.
+pub fn compact_toolbar_button<'a>(
+    label: impl Into<String>,
+    fill: Color32,
+    palette: &AppPalette,
+) -> egui::Button<'a> {
+    secondary_button(label, fill, palette)
+        .min_size(Vec2::new(0.0, 26.0))
+        .rounding(Rounding::same(4.0))
+}
+
 /// Standard danger / escape / dismiss button (e.g. Close, Delete, Burn) with guaranteed WCAG contrast.
 pub fn danger_button<'a>(
     label: impl Into<String>,
@@ -128,31 +143,83 @@ pub fn danger_button<'a>(
 
 /// Trait providing high-level, contrast-safe button widgets directly on `egui::Ui`.
 pub trait UiThemedExt {
-    fn mode_tab(&mut self, label: impl Into<String>, is_active: bool, palette: &AppPalette) -> Response;
-    fn action_btn(&mut self, label: impl Into<String>, fill: Color32, palette: &AppPalette) -> Response;
-    fn secondary_btn(&mut self, label: impl Into<String>, fill: Color32, palette: &AppPalette) -> Response;
-    fn danger_btn(&mut self, label: impl Into<String>, fill: Color32, palette: &AppPalette) -> Response;
-    fn contrast_btn(&mut self, label: impl Into<String>, fill: Color32, preferred_fg: Option<Color32>, palette: &AppPalette) -> Response;
+    fn mode_tab(
+        &mut self,
+        label: impl Into<String>,
+        is_active: bool,
+        palette: &AppPalette,
+    ) -> Response;
+    fn action_btn(
+        &mut self,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> Response;
+    fn secondary_btn(
+        &mut self,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> Response;
+    fn danger_btn(
+        &mut self,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> Response;
+    fn contrast_btn(
+        &mut self,
+        label: impl Into<String>,
+        fill: Color32,
+        preferred_fg: Option<Color32>,
+        palette: &AppPalette,
+    ) -> Response;
 }
 
 impl UiThemedExt for Ui {
-    fn mode_tab(&mut self, label: impl Into<String>, is_active: bool, palette: &AppPalette) -> Response {
+    fn mode_tab(
+        &mut self,
+        label: impl Into<String>,
+        is_active: bool,
+        palette: &AppPalette,
+    ) -> Response {
         self.add(mode_tab_button(label, is_active, palette))
     }
 
-    fn action_btn(&mut self, label: impl Into<String>, fill: Color32, palette: &AppPalette) -> Response {
+    fn action_btn(
+        &mut self,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> Response {
         self.add(action_button(label, fill, palette))
     }
 
-    fn secondary_btn(&mut self, label: impl Into<String>, fill: Color32, palette: &AppPalette) -> Response {
+    fn secondary_btn(
+        &mut self,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> Response {
         self.add(secondary_button(label, fill, palette))
     }
 
-    fn danger_btn(&mut self, label: impl Into<String>, fill: Color32, palette: &AppPalette) -> Response {
+    fn danger_btn(
+        &mut self,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> Response {
         self.add(danger_button(label, fill, palette))
     }
 
-    fn contrast_btn(&mut self, label: impl Into<String>, fill: Color32, preferred_fg: Option<Color32>, palette: &AppPalette) -> Response {
+    fn contrast_btn(
+        &mut self,
+        label: impl Into<String>,
+        fill: Color32,
+        preferred_fg: Option<Color32>,
+        palette: &AppPalette,
+    ) -> Response {
         self.add(themed_button(label, fill, preferred_fg, palette))
     }
 }
@@ -194,7 +261,9 @@ impl StatusToast {
     }
 
     pub fn is_active(&self, now: f64) -> bool {
-        self.toast.as_ref().map_or(false, |(_, ts)| now - ts < self.duration)
+        self.toast
+            .as_ref()
+            .map_or(false, |(_, ts)| now - ts < self.duration)
     }
 
     pub fn message(&self, now: f64) -> Option<&str> {
@@ -262,7 +331,12 @@ pub fn badge_pill(
         .inner_margin(egui::Margin::symmetric(6.0, 2.0));
     frame
         .show(ui, |ui| {
-            ui.label(egui::RichText::new(text.as_ref()).small().strong().color(fg))
+            ui.label(
+                egui::RichText::new(text.as_ref())
+                    .small()
+                    .strong()
+                    .color(fg),
+            )
         })
         .response
 }
@@ -308,15 +382,27 @@ pub fn zoom_control_bar(
 ) -> Option<ZoomAction> {
     let mut action = None;
     let zoom_in_btn = secondary_button("🔍+", hex_to_c32(&palette.theme.b_low), palette);
-    if ui.add(zoom_in_btn).on_hover_text("Zoom In (+ / Ctrl+Wheel)").clicked() {
+    if ui
+        .add(zoom_in_btn)
+        .on_hover_text("Zoom In (+ / Ctrl+Wheel)")
+        .clicked()
+    {
         action = Some(ZoomAction::ZoomIn);
     }
     let zoom_out_btn = secondary_button("🔍-", hex_to_c32(&palette.theme.b_low), palette);
-    if ui.add(zoom_out_btn).on_hover_text("Zoom Out (- / Ctrl+Wheel)").clicked() {
+    if ui
+        .add(zoom_out_btn)
+        .on_hover_text("Zoom Out (- / Ctrl+Wheel)")
+        .clicked()
+    {
         action = Some(ZoomAction::ZoomOut);
     }
     let fit_btn = secondary_button("⟲ Fit", hex_to_c32(&palette.theme.b_low), palette);
-    if ui.add(fit_btn).on_hover_text("Fit Track / Window (Ctrl+0)").clicked() {
+    if ui
+        .add(fit_btn)
+        .on_hover_text("Fit Track / Window (Ctrl+0)")
+        .clicked()
+    {
         action = Some(ZoomAction::Fit);
     }
     ui.label(
@@ -352,9 +438,10 @@ pub fn render_view_header<R>(
         badges(ui);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let close_bg = hex_to_c32(&palette.theme.b_med);
-            let close_fg = contrast_text_c32(close_bg, Some(hex_to_c32(&palette.diff_del)), palette);
+            let close_fg =
+                contrast_text_c32(close_bg, Some(hex_to_c32(&palette.diff_del)), palette);
             let close_btn = egui::Button::new(
-                egui::RichText::new("✕ Close (Esc)")
+                egui::RichText::new("Close (Esc)")
                     .small()
                     .strong()
                     .color(close_fg),
@@ -366,8 +453,10 @@ pub fn render_view_header<R>(
                 *close = true;
             }
             right_actions(ui)
-        }).inner
-    }).inner
+        })
+        .inner
+    })
+    .inner
 }
 
 #[cfg(test)]
@@ -384,14 +473,28 @@ mod tests {
         // Test active mode tab fill (harmonies.base)
         let base_bg = hex_to_c32(&palette.harmonies.base);
         let fg = contrast_text_c32(base_bg, Some(hex_to_c32(&palette.theme.f_high)), &palette);
-        let ratio = contrast_ratio((base_bg.r(), base_bg.g(), base_bg.b()), (fg.r(), fg.g(), fg.b()));
+        let ratio = contrast_ratio(
+            (base_bg.r(), base_bg.g(), base_bg.b()),
+            (fg.r(), fg.g(), fg.b()),
+        );
         assert!(ratio >= 4.5, "Contrast ratio {} must be >= 4.5:1", ratio);
 
         // Test diff_add fill
         let diff_add_bg = hex_to_c32(&palette.diff_add);
-        let fg_add = contrast_text_c32(diff_add_bg, Some(hex_to_c32(&palette.theme.f_high)), &palette);
-        let ratio_add = contrast_ratio((diff_add_bg.r(), diff_add_bg.g(), diff_add_bg.b()), (fg_add.r(), fg_add.g(), fg_add.b()));
-        assert!(ratio_add >= 4.5, "Contrast ratio {} must be >= 4.5:1", ratio_add);
+        let fg_add = contrast_text_c32(
+            diff_add_bg,
+            Some(hex_to_c32(&palette.theme.f_high)),
+            &palette,
+        );
+        let ratio_add = contrast_ratio(
+            (diff_add_bg.r(), diff_add_bg.g(), diff_add_bg.b()),
+            (fg_add.r(), fg_add.g(), fg_add.b()),
+        );
+        assert!(
+            ratio_add >= 4.5,
+            "Contrast ratio {} must be >= 4.5:1",
+            ratio_add
+        );
     }
 
     #[test]
@@ -415,22 +518,66 @@ mod tests {
             return;
         }
         let themes = little_clip_core::theme::load_themes_from_dir(&dir);
-        assert!(themes.len() >= 40, "Expected at least 40 themes, found {}", themes.len());
+        assert!(
+            themes.len() >= 40,
+            "Expected at least 40 themes, found {}",
+            themes.len()
+        );
 
         for theme in &themes {
             let palette = AppPalette::from_theme(theme, &HashMap::new());
 
             let test_cases: Vec<(&str, Color32, Option<Color32>)> = vec![
-                ("mode_tab_active (harmonies.base)", hex_to_c32(&palette.harmonies.base), Some(hex_to_c32(&palette.theme.f_high))),
-                ("mode_tab_inactive (b_med)", hex_to_c32(&palette.theme.b_med), Some(hex_to_c32(&palette.theme.f_med))),
-                ("action_btn (harmonies.base)", hex_to_c32(&palette.harmonies.base), Some(hex_to_c32(&palette.theme.f_high))),
-                ("action_btn (diff_add)", hex_to_c32(&palette.diff_add), Some(hex_to_c32(&palette.theme.f_high))),
-                ("secondary_btn (b_low)", hex_to_c32(&palette.theme.b_low), Some(hex_to_c32(&palette.theme.f_med))),
-                ("secondary_btn (b_med)", hex_to_c32(&palette.theme.b_med), Some(hex_to_c32(&palette.theme.f_med))),
-                ("danger_btn (undo_card_bg)", hex_to_c32(&palette.undo_card_bg), Some(hex_to_c32(&palette.theme.f_high))),
-                ("danger_btn (diff_del)", hex_to_c32(&palette.diff_del), Some(hex_to_c32(&palette.theme.f_high))),
-                ("alpha_fill (harmonies.base alpha 40)", crate::hex_to_c32_alpha(&palette.harmonies.base, 40), Some(hex_to_c32(&palette.harmonies.base))),
-                ("alpha_fill (left_border alpha 40)", crate::hex_to_c32_alpha(&palette.left_hand_border, 40), Some(hex_to_c32(&palette.left_hand_border))),
+                (
+                    "mode_tab_active (harmonies.base)",
+                    hex_to_c32(&palette.harmonies.base),
+                    Some(hex_to_c32(&palette.theme.f_high)),
+                ),
+                (
+                    "mode_tab_inactive (b_med)",
+                    hex_to_c32(&palette.theme.b_med),
+                    Some(hex_to_c32(&palette.theme.f_med)),
+                ),
+                (
+                    "action_btn (harmonies.base)",
+                    hex_to_c32(&palette.harmonies.base),
+                    Some(hex_to_c32(&palette.theme.f_high)),
+                ),
+                (
+                    "action_btn (diff_add)",
+                    hex_to_c32(&palette.diff_add),
+                    Some(hex_to_c32(&palette.theme.f_high)),
+                ),
+                (
+                    "secondary_btn (b_low)",
+                    hex_to_c32(&palette.theme.b_low),
+                    Some(hex_to_c32(&palette.theme.f_med)),
+                ),
+                (
+                    "secondary_btn (b_med)",
+                    hex_to_c32(&palette.theme.b_med),
+                    Some(hex_to_c32(&palette.theme.f_med)),
+                ),
+                (
+                    "danger_btn (undo_card_bg)",
+                    hex_to_c32(&palette.undo_card_bg),
+                    Some(hex_to_c32(&palette.theme.f_high)),
+                ),
+                (
+                    "danger_btn (diff_del)",
+                    hex_to_c32(&palette.diff_del),
+                    Some(hex_to_c32(&palette.theme.f_high)),
+                ),
+                (
+                    "alpha_fill (harmonies.base alpha 40)",
+                    crate::hex_to_c32_alpha(&palette.harmonies.base, 40),
+                    Some(hex_to_c32(&palette.harmonies.base)),
+                ),
+                (
+                    "alpha_fill (left_border alpha 40)",
+                    crate::hex_to_c32_alpha(&palette.left_hand_border, 40),
+                    Some(hex_to_c32(&palette.left_hand_border)),
+                ),
             ];
 
             for (name, bg, pref) in test_cases {

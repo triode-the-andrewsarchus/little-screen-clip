@@ -21,3 +21,4 @@ symphonia.workspace = true
 rustchord = "0.6.0"
 realfft = "3.5.0"
 rayon.workspace = true
+lopdf = "0.38"

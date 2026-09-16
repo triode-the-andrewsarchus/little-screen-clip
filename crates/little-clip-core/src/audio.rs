@@ -4,6 +4,10 @@
 //! spectrogram generation, logarithmic spectral flux for beat/transient onset detection,
 //! YIN algorithm for pitch detection, and Serato/ColorChord harmonic color mapping.
 
+use crate::config::{AudioConfig, AudioSamplePosition};
+use rayon::prelude::*;
+use realfft::RealFftPlanner;
+use rustchord::cc_to_rgb;
 use std::path::Path;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
@@ -12,10 +16,6 @@ use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
-use realfft::RealFftPlanner;
-use rustchord::cc_to_rgb;
-use rayon::prelude::*;
-use crate::config::{AudioConfig, AudioSamplePosition};
 
 /// Downsampled audio waveform peaks and optional spectral frequency coloring for UI display.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -196,7 +196,8 @@ impl FullAudioAnalysis {
                 .collect(),
             None => self.ch1_samples.clone(),
         };
-        self.transients = detect_transients_with_sensitivity(&mixed, self.sample_rate as f32, sensitivity);
+        self.transients =
+            detect_transients_with_sensitivity(&mixed, self.sample_rate as f32, sensitivity);
         self.is_transients_ready = true;
     }
 
@@ -214,7 +215,11 @@ impl FullAudioAnalysis {
 
         for i in 0..n {
             let s1 = self.ch1_samples[i].abs();
-            let s2 = self.ch2_samples.as_ref().map(|ch2| ch2[i].abs()).unwrap_or(0.0);
+            let s2 = self
+                .ch2_samples
+                .as_ref()
+                .map(|ch2| ch2[i].abs())
+                .unwrap_or(0.0);
             if s1 >= lin_thresh || s2 >= lin_thresh {
                 first_frame = Some(i);
                 break;
@@ -228,7 +233,11 @@ impl FullAudioAnalysis {
 
         for i in (first..n).rev() {
             let s1 = self.ch1_samples[i].abs();
-            let s2 = self.ch2_samples.as_ref().map(|ch2| ch2[i].abs()).unwrap_or(0.0);
+            let s2 = self
+                .ch2_samples
+                .as_ref()
+                .map(|ch2| ch2[i].abs())
+                .unwrap_or(0.0);
             if s1 >= lin_thresh || s2 >= lin_thresh {
                 last_frame = Some(i);
                 break;
@@ -248,7 +257,12 @@ impl FullAudioAnalysis {
     }
 
     #[inline]
-    pub fn query_peaks(&self, ch: usize, start_frame: usize, end_frame: usize) -> (f32, f32, [u8; 3]) {
+    pub fn query_peaks(
+        &self,
+        ch: usize,
+        start_frame: usize,
+        end_frame: usize,
+    ) -> (f32, f32, [u8; 3]) {
         if start_frame >= end_frame || start_frame >= self.total_frames {
             return (0.0, 0.0, [56, 189, 248]);
         }
@@ -256,7 +270,12 @@ impl FullAudioAnalysis {
         let span = end - start_frame;
 
         let (lvl0, lvl1, lvl2, raw) = if ch == 0 {
-            (&self.peaks_lvl0_ch1, &self.peaks_lvl1_ch1, &self.peaks_lvl2_ch1, &self.ch1_samples)
+            (
+                &self.peaks_lvl0_ch1,
+                &self.peaks_lvl1_ch1,
+                &self.peaks_lvl2_ch1,
+                &self.ch1_samples,
+            )
         } else if let (Some(l0), Some(l1), Some(l2), Some(r)) = (
             &self.peaks_lvl0_ch2,
             &self.peaks_lvl1_ch2,
@@ -265,7 +284,12 @@ impl FullAudioAnalysis {
         ) {
             (l0, l1, l2, r)
         } else {
-            (&self.peaks_lvl0_ch1, &self.peaks_lvl1_ch1, &self.peaks_lvl2_ch1, &self.ch1_samples)
+            (
+                &self.peaks_lvl0_ch1,
+                &self.peaks_lvl1_ch1,
+                &self.peaks_lvl2_ch1,
+                &self.ch1_samples,
+            )
         };
 
         if span >= 16384 && !lvl2.is_empty() {
@@ -278,15 +302,23 @@ impl FullAudioAnalysis {
             let mut b_sum = 0u32;
             let mut count = 0u32;
             for b in &lvl2[b_start..b_end] {
-                if b.min < mn { mn = b.min; }
-                if b.max > mx { mx = b.max; }
+                if b.min < mn {
+                    mn = b.min;
+                }
+                if b.max > mx {
+                    mx = b.max;
+                }
                 r_sum += b.rgb[0] as u32;
                 g_sum += b.rgb[1] as u32;
                 b_sum += b.rgb[2] as u32;
                 count += 1;
             }
             let col = if count > 0 {
-                [(r_sum / count) as u8, (g_sum / count) as u8, (b_sum / count) as u8]
+                [
+                    (r_sum / count) as u8,
+                    (g_sum / count) as u8,
+                    (b_sum / count) as u8,
+                ]
             } else {
                 [56, 189, 248]
             };
@@ -301,15 +333,23 @@ impl FullAudioAnalysis {
             let mut b_sum = 0u32;
             let mut count = 0u32;
             for b in &lvl1[b_start..b_end] {
-                if b.min < mn { mn = b.min; }
-                if b.max > mx { mx = b.max; }
+                if b.min < mn {
+                    mn = b.min;
+                }
+                if b.max > mx {
+                    mx = b.max;
+                }
                 r_sum += b.rgb[0] as u32;
                 g_sum += b.rgb[1] as u32;
                 b_sum += b.rgb[2] as u32;
                 count += 1;
             }
             let col = if count > 0 {
-                [(r_sum / count) as u8, (g_sum / count) as u8, (b_sum / count) as u8]
+                [
+                    (r_sum / count) as u8,
+                    (g_sum / count) as u8,
+                    (b_sum / count) as u8,
+                ]
             } else {
                 [56, 189, 248]
             };
@@ -324,15 +364,23 @@ impl FullAudioAnalysis {
             let mut b_sum = 0u32;
             let mut count = 0u32;
             for b in &lvl0[b_start..b_end] {
-                if b.min < mn { mn = b.min; }
-                if b.max > mx { mx = b.max; }
+                if b.min < mn {
+                    mn = b.min;
+                }
+                if b.max > mx {
+                    mx = b.max;
+                }
                 r_sum += b.rgb[0] as u32;
                 g_sum += b.rgb[1] as u32;
                 b_sum += b.rgb[2] as u32;
                 count += 1;
             }
             let col = if count > 0 {
-                [(r_sum / count) as u8, (g_sum / count) as u8, (b_sum / count) as u8]
+                [
+                    (r_sum / count) as u8,
+                    (g_sum / count) as u8,
+                    (b_sum / count) as u8,
+                ]
             } else {
                 [56, 189, 248]
             };
@@ -341,8 +389,12 @@ impl FullAudioAnalysis {
             let mut mn = 0.0f32;
             let mut mx = 0.0f32;
             for &s in &raw[start_frame..end] {
-                if s < mn { mn = s; }
-                if s > mx { mx = s; }
+                if s < mn {
+                    mn = s;
+                }
+                if s > mx {
+                    mx = s;
+                }
             }
             let col = if !lvl0.is_empty() {
                 let b_idx = (start_frame / 64).min(lvl0.len().saturating_sub(1));
@@ -383,7 +435,8 @@ impl FullAudioAnalysis {
         let target_frame = target_frame.min(self.total_frames.saturating_sub(1));
 
         let start_frame = target_frame.saturating_sub(search_radius_frames);
-        let end_frame = (target_frame + search_radius_frames).min(self.total_frames.saturating_sub(1));
+        let end_frame =
+            (target_frame + search_radius_frames).min(self.total_frames.saturating_sub(1));
 
         if start_frame >= end_frame {
             return target_frame as f32 / self.sample_rate as f32;
@@ -412,9 +465,14 @@ impl FullAudioAnalysis {
             }
 
             // Zero-crossing check on ch1
-            let is_crossing = (s1_cur <= 0.0 && s1_next >= 0.0) || (s1_cur >= 0.0 && s1_next <= 0.0);
+            let is_crossing =
+                (s1_cur <= 0.0 && s1_next >= 0.0) || (s1_cur >= 0.0 && s1_next <= 0.0);
             if is_crossing {
-                let frame_cand = if s1_cur.abs() <= s1_next.abs() { i } else { i + 1 };
+                let frame_cand = if s1_cur.abs() <= s1_next.abs() {
+                    i
+                } else {
+                    i + 1
+                };
                 let is_pos_going = s1_cur <= 0.0 && s1_next >= 0.0;
                 let pos_bonus = if is_pos_going { 0.0 } else { 5.0 };
                 let cost = dist + pos_bonus;
@@ -445,8 +503,10 @@ pub fn is_audio_path(path: &Path) -> bool {
         .map(|e| e.to_lowercase());
 
     match ext.as_deref() {
-        Some("mp3" | "wav" | "wave" | "flac" | "ogg" | "oga" | "m4a" | "aac" | "alac"
-        | "aiff" | "aif" | "opus" | "wma") => true,
+        Some(
+            "mp3" | "wav" | "wave" | "flac" | "ogg" | "oga" | "m4a" | "aac" | "alac" | "aiff"
+            | "aif" | "opus" | "wma",
+        ) => true,
         _ => false,
     }
 }
@@ -471,9 +531,7 @@ pub fn read_audio_metadata(path: &Path) -> Option<AudioMetadata> {
         .ok()?;
 
     let format = probed.format;
-    let track = format
-        .default_track()
-        .or_else(|| format.tracks().first())?;
+    let track = format.default_track().or_else(|| format.tracks().first())?;
 
     let sample_rate = track.codec_params.sample_rate.unwrap_or(44100);
     let channels = track
@@ -822,22 +880,38 @@ pub fn inferno_colormap(t: f32) -> [u8; 4] {
     let lerp = |a: f32, b: f32, f: f32| a + (b - a) * f;
     let (r, g, b) = if t < 0.25 {
         let f = t / 0.25;
-        (lerp(10.0, 50.0, f), lerp(12.0, 15.0, f), lerp(26.0, 95.0, f))
+        (
+            lerp(10.0, 50.0, f),
+            lerp(12.0, 15.0, f),
+            lerp(26.0, 95.0, f),
+        )
     } else if t < 0.50 {
         let f = (t - 0.25) / 0.25;
-        (lerp(50.0, 180.0, f), lerp(15.0, 30.0, f), lerp(95.0, 70.0, f))
+        (
+            lerp(50.0, 180.0, f),
+            lerp(15.0, 30.0, f),
+            lerp(95.0, 70.0, f),
+        )
     } else if t < 0.75 {
         let f = (t - 0.50) / 0.25;
-        (lerp(180.0, 245.0, f), lerp(30.0, 130.0, f), lerp(70.0, 15.0, f))
+        (
+            lerp(180.0, 245.0, f),
+            lerp(30.0, 130.0, f),
+            lerp(70.0, 15.0, f),
+        )
     } else {
         let f = (t - 0.75) / 0.25;
-        (lerp(245.0, 255.0, f), lerp(130.0, 255.0, f), lerp(15.0, 200.0, f))
+        (
+            lerp(245.0, 255.0, f),
+            lerp(130.0, 255.0, f),
+            lerp(15.0, 200.0, f),
+        )
     };
     [r as u8, g as u8, b as u8, 255]
 }
 
 pub const CHROMATIC_NOTE_NAMES: [&str; 12] = [
-    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
 ];
 
 pub fn freq_to_note(freq: f32) -> (&'static str, i32, f32) {
@@ -962,7 +1036,11 @@ pub fn detect_transients(samples: &[f32], sample_rate: f32) -> Vec<f32> {
 }
 
 /// Logarithmic spectral flux transient onset detector with an adjustable sensitivity factor.
-pub fn detect_transients_with_sensitivity(samples: &[f32], sample_rate: f32, sensitivity: f32) -> Vec<f32> {
+pub fn detect_transients_with_sensitivity(
+    samples: &[f32],
+    sample_rate: f32,
+    sensitivity: f32,
+) -> Vec<f32> {
     if samples.is_empty() || sample_rate <= 0.0 {
         return Vec::new();
     }
@@ -1101,7 +1179,10 @@ pub fn detect_chord_from_fft(
     }
 
     let max_chroma = chroma.iter().cloned().fold(0.0f32, f32::max);
-    if max_chroma < 0.1 || total_note_energy < 1e-4 || (total_full_energy > 1e-4 && total_note_energy / total_full_energy < 0.25) {
+    if max_chroma < 0.1
+        || total_note_energy < 1e-4
+        || (total_full_energy > 1e-4 && total_note_energy / total_full_energy < 0.25)
+    {
         return Vec::new();
     }
 
@@ -1167,7 +1248,11 @@ pub fn detect_chord_from_fft(
             d.amplitude *= coeff;
         }
     }
-    dists.sort_by(|a, b| b.amplitude.partial_cmp(&a.amplitude).unwrap_or(std::cmp::Ordering::Equal));
+    dists.sort_by(|a, b| {
+        b.amplitude
+            .partial_cmp(&a.amplitude)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // ColorChord Step 4: Combine note peaks that are within MinNoteCombineDistance (0.5 bins)
     fn circular_dist(a: f32, b: f32, length: f32) -> f32 {
@@ -1178,7 +1263,13 @@ pub fn detect_chord_from_fft(
         d
     }
 
-    fn circular_weighted_avg(pos_a: f32, weight_a: f32, pos_b: f32, weight_b: f32, length: f32) -> f32 {
+    fn circular_weighted_avg(
+        pos_a: f32,
+        weight_a: f32,
+        pos_b: f32,
+        weight_b: f32,
+        length: f32,
+    ) -> f32 {
         let weight_sum = weight_a + weight_b;
         if weight_sum <= 1e-9 {
             return pos_a % length;
@@ -1198,8 +1289,17 @@ pub fn detect_chord_from_fft(
 
     let mut combined: Vec<RawDist> = Vec::new();
     for d in dists {
-        if let Some(existing) = combined.iter_mut().find(|e| circular_dist(e.mean, d.mean, BINS_PER_OCTAVE as f32) < MIN_NOTE_COMBINE_DIST) {
-            existing.mean = circular_weighted_avg(existing.mean, existing.amplitude, d.mean, d.amplitude, BINS_PER_OCTAVE as f32);
+        if let Some(existing) = combined
+            .iter_mut()
+            .find(|e| circular_dist(e.mean, d.mean, BINS_PER_OCTAVE as f32) < MIN_NOTE_COMBINE_DIST)
+        {
+            existing.mean = circular_weighted_avg(
+                existing.mean,
+                existing.amplitude,
+                d.mean,
+                d.amplitude,
+                BINS_PER_OCTAVE as f32,
+            );
             existing.amplitude += d.amplitude;
         } else {
             combined.push(d);
@@ -1234,8 +1334,10 @@ pub fn detect_chord_from_fft(
             let b0 = (b_float.floor() as usize).min(num_bins - 1);
             let b1 = (b0 + 1).min(num_bins - 1);
             let frac = b_float - b_float.floor();
-            let mag0 = (out_data[b0].re * out_data[b0].re + out_data[b0].im * out_data[b0].im).sqrt();
-            let mag1 = (out_data[b1].re * out_data[b1].re + out_data[b1].im * out_data[b1].im).sqrt();
+            let mag0 =
+                (out_data[b0].re * out_data[b0].re + out_data[b0].im * out_data[b0].im).sqrt();
+            let mag1 =
+                (out_data[b1].re * out_data[b1].re + out_data[b1].im * out_data[b1].im).sqrt();
             let interp_mag = mag0 * (1.0 - frac) + mag1 * frac;
             if interp_mag > best_oct_mag {
                 best_oct_mag = interp_mag;
@@ -1278,7 +1380,11 @@ pub fn detect_chord_from_fft(
         });
     }
 
-    detected.sort_by(|a, b| b.amplitude.partial_cmp(&a.amplitude).unwrap_or(std::cmp::Ordering::Equal));
+    detected.sort_by(|a, b| {
+        b.amplitude
+            .partial_cmp(&a.amplitude)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     detected.truncate(6);
     detected
 }
@@ -1298,7 +1404,9 @@ where
     let meta = match read_audio_metadata(path) {
         Some(m) => m,
         None => {
-            on_progress(AudioAnalysisProgress::Failed("Could not read audio metadata".to_string()));
+            on_progress(AudioAnalysisProgress::Failed(
+                "Could not read audio metadata".to_string(),
+            ));
             return None;
         }
     };
@@ -1307,7 +1415,10 @@ where
     let file = match std::fs::File::open(path) {
         Ok(f) => f,
         Err(e) => {
-            on_progress(AudioAnalysisProgress::Failed(format!("Could not open file: {}", e)));
+            on_progress(AudioAnalysisProgress::Failed(format!(
+                "Could not open file: {}",
+                e
+            )));
             return None;
         }
     };
@@ -1326,7 +1437,10 @@ where
     ) {
         Ok(p) => p,
         Err(e) => {
-            on_progress(AudioAnalysisProgress::Failed(format!("Audio probe failed: {}", e)));
+            on_progress(AudioAnalysisProgress::Failed(format!(
+                "Audio probe failed: {}",
+                e
+            )));
             return None;
         }
     };
@@ -1335,7 +1449,9 @@ where
     let track = match format.default_track().or_else(|| format.tracks().first()) {
         Some(t) => t.clone(),
         None => {
-            on_progress(AudioAnalysisProgress::Failed("No audio tracks found in file".to_string()));
+            on_progress(AudioAnalysisProgress::Failed(
+                "No audio tracks found in file".to_string(),
+            ));
             return None;
         }
     };
@@ -1345,7 +1461,10 @@ where
     {
         Ok(d) => d,
         Err(e) => {
-            on_progress(AudioAnalysisProgress::Failed(format!("Decoder init failed: {}", e)));
+            on_progress(AudioAnalysisProgress::Failed(format!(
+                "Decoder init failed: {}",
+                e
+            )));
             return None;
         }
     };
@@ -1365,7 +1484,11 @@ where
     let alloc_cap = est_frames.min(max_frames).max(44100);
 
     let mut ch1_samples: Vec<f32> = Vec::with_capacity(alloc_cap);
-    let mut ch2_samples: Option<Vec<f32>> = if is_stereo { Some(Vec::with_capacity(alloc_cap)) } else { None };
+    let mut ch2_samples: Option<Vec<f32>> = if is_stereo {
+        Some(Vec::with_capacity(alloc_cap))
+    } else {
+        None
+    };
 
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
 
@@ -1410,13 +1533,18 @@ where
     }
     let is_truncated = ch1_samples.len() >= max_frames;
     if is_truncated {
-        tracing::warn!("Audio decoding truncated at max frame cap of {} frames", max_frames);
+        tracing::warn!(
+            "Audio decoding truncated at max frame cap of {} frames",
+            max_frames
+        );
     }
     let t_decode_elapsed = t_decode_start.elapsed();
 
     let total_frames = ch1_samples.len();
     if total_frames == 0 {
-        on_progress(AudioAnalysisProgress::Failed("Decoded 0 audio frames".to_string()));
+        on_progress(AudioAnalysisProgress::Failed(
+            "Decoded 0 audio frames".to_string(),
+        ));
         return None;
     }
 
@@ -1424,24 +1552,30 @@ where
 
     // Concurrently build multi-scale min/max peak pyramids with Serato DJ 3-band crossover colors
     let t_pyramid_start = std::time::Instant::now();
-    let ((peaks_lvl0_ch1, peaks_lvl1_ch1, peaks_lvl2_ch1), (peaks_lvl0_ch2, peaks_lvl1_ch2, peaks_lvl2_ch2)) =
-        rayon::join(
-            || build_peak_pyramid(&ch1_samples, sample_rate as f32),
-            || {
-                if let Some(ref ch2) = ch2_samples {
-                    let (l0, l1, l2) = build_peak_pyramid(ch2, sample_rate as f32);
-                    (Some(l0), Some(l1), Some(l2))
-                } else {
-                    (None, None, None)
-                }
-            },
-        );
+    let (
+        (peaks_lvl0_ch1, peaks_lvl1_ch1, peaks_lvl2_ch1),
+        (peaks_lvl0_ch2, peaks_lvl1_ch2, peaks_lvl2_ch2),
+    ) = rayon::join(
+        || build_peak_pyramid(&ch1_samples, sample_rate as f32),
+        || {
+            if let Some(ref ch2) = ch2_samples {
+                let (l0, l1, l2) = build_peak_pyramid(ch2, sample_rate as f32);
+                (Some(l0), Some(l1), Some(l2))
+            } else {
+                (None, None, None)
+            }
+        },
+    );
     let t_pyramid_elapsed = t_pyramid_start.elapsed();
 
     // 1. Overview Peaks
     let t_overview_start = std::time::Instant::now();
     let mut overview_peaks1 = Vec::with_capacity(num_cols);
-    let mut overview_peaks2 = if is_stereo { Some(Vec::with_capacity(num_cols)) } else { None };
+    let mut overview_peaks2 = if is_stereo {
+        Some(Vec::with_capacity(num_cols))
+    } else {
+        None
+    };
 
     for c in 0..num_cols {
         let f_start = (c * total_frames) / num_cols;
@@ -1454,13 +1588,17 @@ where
             let mut mx1 = 0.0f32;
             for b in &peaks_lvl1_ch1[b_start..b_end] {
                 let m = b.min.abs().max(b.max.abs());
-                if m > mx1 { mx1 = m; }
+                if m > mx1 {
+                    mx1 = m;
+                }
             }
             let mx2 = if let Some(ref l1) = peaks_lvl1_ch2 {
                 let mut m2 = 0.0f32;
                 for b in &l1[b_start..b_end] {
                     let m = b.min.abs().max(b.max.abs());
-                    if m > m2 { m2 = m; }
+                    if m > m2 {
+                        m2 = m;
+                    }
                 }
                 m2
             } else {
@@ -1472,10 +1610,14 @@ where
             let mut mx2 = 0.0f32;
             for f in f_start..f_end {
                 let s1 = ch1_samples[f].abs();
-                if s1 > mx1 { mx1 = s1; }
+                if s1 > mx1 {
+                    mx1 = s1;
+                }
                 if is_stereo {
                     let s2 = ch2_samples.as_ref().unwrap()[f].abs();
-                    if s2 > mx2 { mx2 = s2; }
+                    if s2 > mx2 {
+                        mx2 = s2;
+                    }
                 }
             }
             (mx1, mx2)
@@ -1492,7 +1634,11 @@ where
     let t_mix_start = std::time::Instant::now();
     let mixed_samples: Vec<f32> = if is_stereo {
         let ch2 = ch2_samples.as_ref().unwrap();
-        ch1_samples.iter().zip(ch2.iter()).map(|(&s1, &s2)| 0.5 * (s1 + s2)).collect()
+        ch1_samples
+            .iter()
+            .zip(ch2.iter())
+            .map(|(&s1, &s2)| 0.5 * (s1 + s2))
+            .collect()
     } else {
         ch1_samples.clone()
     };
@@ -1527,12 +1673,18 @@ where
         is_spectrogram_ready: false,
         is_truncated,
         truncation_warning: if is_truncated {
-            Some(format!("Audio track exceeded decoding frame limit of {} frames (~{:.1} min) and was truncated", max_frames, (max_frames as f64 / sample_rate as f64) / 60.0))
+            Some(format!(
+                "Audio track exceeded decoding frame limit of {} frames (~{:.1} min) and was truncated",
+                max_frames,
+                (max_frames as f64 / sample_rate as f64) / 60.0
+            ))
         } else {
             None
         },
     };
-    on_progress(AudioAnalysisProgress::WaveformReady(Box::new(analysis.clone())));
+    on_progress(AudioAnalysisProgress::WaveformReady(Box::new(
+        analysis.clone(),
+    )));
 
     // Emit Stage 2: Transients detection
     let t_transients_start = std::time::Instant::now();
@@ -1550,7 +1702,9 @@ where
     let r2c = planner.plan_fft_forward(window_size);
 
     let hann: Vec<f32> = (0..window_size)
-        .map(|i| 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (window_size - 1) as f32).cos()))
+        .map(|i| {
+            0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (window_size - 1) as f32).cos())
+        })
         .collect();
 
     let spectrogram_width = num_cols;
@@ -1587,7 +1741,9 @@ where
             // Spectrogram column (Audacity-style Inferno heatmap)
             let mut spec_col_rgba = vec![0u8; num_freq_bins * 4];
             for b in 0..num_freq_bins {
-                let mag = (out_data[b].re * out_data[b].re + out_data[b].im * out_data[b].im).sqrt() / (window_size as f32 * 0.5);
+                let mag = (out_data[b].re * out_data[b].re + out_data[b].im * out_data[b].im)
+                    .sqrt()
+                    / (window_size as f32 * 0.5);
                 let db = 20.0 * (mag + 1e-6).log10();
                 let norm_db = ((db + 80.0) / 80.0).clamp(0.0, 1.0);
                 let col = inferno_colormap(norm_db);
@@ -1604,7 +1760,8 @@ where
             let mut e_high = 0.0f32;
             for b in 1..num_freq_bins {
                 let freq = b as f32 * sample_rate as f32 / window_size as f32;
-                let mag = (out_data[b].re * out_data[b].re + out_data[b].im * out_data[b].im).sqrt();
+                let mag =
+                    (out_data[b].re * out_data[b].re + out_data[b].im * out_data[b].im).sqrt();
                 let energy = mag * mag;
                 if freq < 250.0 {
                     e_bass += energy;
@@ -1644,13 +1801,19 @@ where
             for &s in win_slice {
                 sum_sq += s * s;
             }
-            let rms = if !win_slice.is_empty() { (sum_sq / win_slice.len() as f32).sqrt() } else { 0.0 };
+            let rms = if !win_slice.is_empty() {
+                (sum_sq / win_slice.len() as f32).sqrt()
+            } else {
+                0.0
+            };
 
             let mut chord_notes = detect_chord_from_fft(&out_data, sample_rate as f32, window_size);
 
             // Sub-cent pitch refinement via fast early-exit YIN
             if rms > 0.005 && win_slice.len() >= 256 {
-                if let Some((detected_freq, clarity)) = detect_pitch_yin(win_slice, sample_rate as f32) {
+                if let Some((detected_freq, clarity)) =
+                    detect_pitch_yin(win_slice, sample_rate as f32)
+                {
                     if detected_freq < 65.0 && clarity >= 0.35 {
                         // Fundamental is below 65 Hz (sub-bass / rumble / ~40Hz). Ignore as non-musical.
                         chord_notes.clear();
@@ -1676,7 +1839,9 @@ where
                             chord_notes = vec![yin_note];
                         } else {
                             let class_idx = (midi.round() as i32).rem_euclid(12) as usize;
-                            if let Some(pos) = chord_notes.iter().position(|n| n.note_name.starts_with(CHROMATIC_NOTE_NAMES[class_idx])) {
+                            if let Some(pos) = chord_notes.iter().position(|n| {
+                                n.note_name.starts_with(CHROMATIC_NOTE_NAMES[class_idx])
+                            }) {
                                 chord_notes[pos] = yin_note.clone();
                                 if pos > 0 {
                                     chord_notes.swap(0, pos);
@@ -1716,7 +1881,8 @@ where
                         if num_notes > 1 && row == row_start && k > 0 {
                             note_strip_col_rgba[idx..idx + 4].copy_from_slice(&[0, 0, 0, 160]);
                         } else {
-                            note_strip_col_rgba[idx..idx + 4].copy_from_slice(&[n.rgb[0], n.rgb[1], n.rgb[2], 255]);
+                            note_strip_col_rgba[idx..idx + 4]
+                                .copy_from_slice(&[n.rgb[0], n.rgb[1], n.rgb[2], 255]);
                         }
                     }
                 }
@@ -1749,12 +1915,14 @@ where
         for row in 0..spectrogram_height {
             let src_idx = row * 4;
             let dst_idx = (row * spectrogram_width + c) * 4;
-            spectrogram_rgba[dst_idx..dst_idx + 4].copy_from_slice(&res.spec_col_rgba[src_idx..src_idx + 4]);
+            spectrogram_rgba[dst_idx..dst_idx + 4]
+                .copy_from_slice(&res.spec_col_rgba[src_idx..src_idx + 4]);
         }
         for row in 0..note_strip_height {
             let src_idx = row * 4;
             let dst_idx = (row * note_strip_width + c) * 4;
-            note_strip_rgba[dst_idx..dst_idx + 4].copy_from_slice(&res.note_strip_col_rgba[src_idx..src_idx + 4]);
+            note_strip_rgba[dst_idx..dst_idx + 4]
+                .copy_from_slice(&res.note_strip_col_rgba[src_idx..src_idx + 4]);
         }
         spectral_colors.push(res.spectral_color);
         note_strip_info.push(res.note_info);
@@ -1763,7 +1931,12 @@ where
 
     println!(
         "[AUDIO ANALYSIS TIMING] Decode: {:?} | Pyramid: {:?} | Overview: {:?} | Mix: {:?} | Transients: {:?} | Spectrogram/Notes (Rayon): {:?}",
-        t_decode_elapsed, t_pyramid_elapsed, t_overview_elapsed, t_mix_elapsed, t_transients_elapsed, t_fft_loop_elapsed
+        t_decode_elapsed,
+        t_pyramid_elapsed,
+        t_overview_elapsed,
+        t_mix_elapsed,
+        t_transients_elapsed,
+        t_fft_loop_elapsed
     );
 
     on_progress(AudioAnalysisProgress::SpectrogramAndNotesReady {
@@ -1792,10 +1965,7 @@ where
 }
 
 /// Decodes the full audio track and computes complete audio analysis synchronously.
-pub fn compute_full_audio_analysis(
-    path: &Path,
-    num_cols: usize,
-) -> Option<FullAudioAnalysis> {
+pub fn compute_full_audio_analysis(path: &Path, num_cols: usize) -> Option<FullAudioAnalysis> {
     compute_audio_analysis_progressive(path, num_cols, |_| {})
 }
 
@@ -1811,8 +1981,10 @@ pub fn build_peak_pyramid(
     // Lowpass cutoff: 250 Hz (Red/Orange bass)
     // Highpass cutoff: 2500 Hz (Cyan/Blue highs)
     // Bandpass 250-2500 Hz (Green/Yellow mids)
-    let alpha_bass = (1.0 - (-2.0 * std::f32::consts::PI * 250.0 / sample_rate.max(1.0)).exp()).clamp(0.001, 0.999);
-    let alpha_mid = (1.0 - (-2.0 * std::f32::consts::PI * 2500.0 / sample_rate.max(1.0)).exp()).clamp(0.001, 0.999);
+    let alpha_bass = (1.0 - (-2.0 * std::f32::consts::PI * 250.0 / sample_rate.max(1.0)).exp())
+        .clamp(0.001, 0.999);
+    let alpha_mid = (1.0 - (-2.0 * std::f32::consts::PI * 2500.0 / sample_rate.max(1.0)).exp())
+        .clamp(0.001, 0.999);
     let mut lp_bass = 0.0f32;
     let mut lp_mid = 0.0f32;
 
@@ -1827,8 +1999,12 @@ pub fn build_peak_pyramid(
         let mut e_treble = 0.0f32;
 
         for &s in chunk {
-            if s < mn { mn = s; }
-            if s > mx { mx = s; }
+            if s < mn {
+                mn = s;
+            }
+            if s > mx {
+                mx = s;
+            }
             lp_bass += alpha_bass * (s - lp_bass);
             lp_mid += alpha_mid * (s - lp_mid);
             let bass = lp_bass;
@@ -1857,7 +2033,11 @@ pub fn build_peak_pyramid(
             [56, 189, 248]
         };
 
-        lvl0.push(PeakBlock { min: mn, max: mx, rgb });
+        lvl0.push(PeakBlock {
+            min: mn,
+            max: mx,
+            rgb,
+        });
     }
 
     // Level 1: 1024 samples per block (16 lvl0 blocks)
@@ -1870,19 +2050,31 @@ pub fn build_peak_pyramid(
         let mut g_sum = 0u32;
         let mut b_sum = 0u32;
         for b in chunk {
-            if b.min < mn { mn = b.min; }
-            if b.max > mx { mx = b.max; }
+            if b.min < mn {
+                mn = b.min;
+            }
+            if b.max > mx {
+                mx = b.max;
+            }
             r_sum += b.rgb[0] as u32;
             g_sum += b.rgb[1] as u32;
             b_sum += b.rgb[2] as u32;
         }
         let count = chunk.len() as u32;
         let rgb = if count > 0 {
-            [(r_sum / count) as u8, (g_sum / count) as u8, (b_sum / count) as u8]
+            [
+                (r_sum / count) as u8,
+                (g_sum / count) as u8,
+                (b_sum / count) as u8,
+            ]
         } else {
             [56, 189, 248]
         };
-        lvl1.push(PeakBlock { min: mn, max: mx, rgb });
+        lvl1.push(PeakBlock {
+            min: mn,
+            max: mx,
+            rgb,
+        });
     }
 
     // Level 2: 16384 samples per block (16 lvl1 blocks)
@@ -1895,19 +2087,31 @@ pub fn build_peak_pyramid(
         let mut g_sum = 0u32;
         let mut b_sum = 0u32;
         for b in chunk {
-            if b.min < mn { mn = b.min; }
-            if b.max > mx { mx = b.max; }
+            if b.min < mn {
+                mn = b.min;
+            }
+            if b.max > mx {
+                mx = b.max;
+            }
             r_sum += b.rgb[0] as u32;
             g_sum += b.rgb[1] as u32;
             b_sum += b.rgb[2] as u32;
         }
         let count = chunk.len() as u32;
         let rgb = if count > 0 {
-            [(r_sum / count) as u8, (g_sum / count) as u8, (b_sum / count) as u8]
+            [
+                (r_sum / count) as u8,
+                (g_sum / count) as u8,
+                (b_sum / count) as u8,
+            ]
         } else {
             [56, 189, 248]
         };
-        lvl2.push(PeakBlock { min: mn, max: mx, rgb });
+        lvl2.push(PeakBlock {
+            min: mn,
+            max: mx,
+            rgb,
+        });
     }
 
     (lvl0, lvl1, lvl2)
@@ -2200,7 +2404,7 @@ mod tests {
         // fmt subchunk
         file.write_all(b"fmt ").unwrap();
         file.write_all(&16u32.to_le_bytes()).unwrap(); // Subchunk1Size (16 for PCM)
-        file.write_all(&1u16.to_le_bytes()).unwrap();  // AudioFormat (1 = PCM)
+        file.write_all(&1u16.to_le_bytes()).unwrap(); // AudioFormat (1 = PCM)
         file.write_all(&num_channels.to_le_bytes()).unwrap();
         file.write_all(&sample_rate.to_le_bytes()).unwrap();
         file.write_all(&byte_rate.to_le_bytes()).unwrap();
@@ -2240,8 +2444,8 @@ mod tests {
         assert_eq!(meta.format, "WAV");
 
         let cfg = AudioConfig::default();
-        let waveform = compute_plain_waveform(&wav_path, 60, &cfg)
-            .expect("Failed to compute plain waveform");
+        let waveform =
+            compute_plain_waveform(&wav_path, 60, &cfg).expect("Failed to compute plain waveform");
         assert_eq!(waveform.channels, 2);
         assert_eq!(waveform.ch1_peaks.len(), 60);
         assert!(waveform.ch2_peaks.is_some());
@@ -2279,23 +2483,35 @@ mod tests {
     #[test]
     fn test_shapeforms_sample() {
         let cfg = AudioConfig::default();
-        let path = std::path::Path::new("/home/vega/Downloads/Shapeforms CASSETTE/Shapeforms CASSETTE/AUDIO/EMF AND NOISE/EMF_TAPE_RECORDING_05.wav");
+        let path = std::path::Path::new(
+            "/home/vega/Downloads/Shapeforms CASSETTE/Shapeforms CASSETTE/AUDIO/EMF AND NOISE/EMF_TAPE_RECORDING_05.wav",
+        );
         if path.exists() {
             let meta = read_audio_metadata(path).expect("failed to read metadata of 24-bit wav");
-            println!("EMF_TAPE_RECORDING_05: {} ms, {} Hz, {} channels", meta.duration_ms, meta.sample_rate, meta.channels);
+            println!(
+                "EMF_TAPE_RECORDING_05: {} ms, {} Hz, {} channels",
+                meta.duration_ms, meta.sample_rate, meta.channels
+            );
             assert_eq!(meta.channels, 2);
             assert_eq!(meta.sample_rate, 96000);
 
-            let wf = compute_plain_waveform(path, 100, &cfg).expect("failed to compute plain waveform of 24-bit wav");
+            let wf = compute_plain_waveform(path, 100, &cfg)
+                .expect("failed to compute plain waveform of 24-bit wav");
             assert_eq!(wf.ch1_peaks.len(), 100);
             assert!(wf.ch2_peaks.is_some());
 
-            let colors = compute_spectral_colors(path, 100, &cfg).expect("failed to compute spectral colors of 24-bit wav");
+            let colors = compute_spectral_colors(path, 100, &cfg)
+                .expect("failed to compute spectral colors of 24-bit wav");
             assert_eq!(colors.len(), 100);
-            println!("First 5 spectral colors of EMF recording: {:?}", &colors[..5]);
+            println!(
+                "First 5 spectral colors of EMF recording: {:?}",
+                &colors[..5]
+            );
         }
 
-        let noise_path = std::path::Path::new("/home/vega/Downloads/Shapeforms CASSETTE/Shapeforms CASSETTE/AUDIO/EMF AND NOISE/TAPE_NOISE_01.wav");
+        let noise_path = std::path::Path::new(
+            "/home/vega/Downloads/Shapeforms CASSETTE/Shapeforms CASSETTE/AUDIO/EMF AND NOISE/TAPE_NOISE_01.wav",
+        );
         if noise_path.exists() {
             let colors = compute_spectral_colors(noise_path, 100, &cfg).expect("failed on noise");
             println!("First 5 spectral colors of TAPE NOISE: {:?}", &colors[..5]);
@@ -2314,9 +2530,11 @@ mod tests {
         assert_eq!(wf.snippet_start_ms, 0);
         let _ = std::fs::remove_file(&wav_path);
 
-        let mp3_path = std::path::Path::new("/home/vega/Documents/type_testing/Computer Error Song.mp3");
+        let mp3_path =
+            std::path::Path::new("/home/vega/Documents/type_testing/Computer Error Song.mp3");
         if mp3_path.is_file() {
-            let full_wf = compute_full_waveform(mp3_path, 200).expect("failed to decode mp3 full waveform");
+            let full_wf =
+                compute_full_waveform(mp3_path, 200).expect("failed to decode mp3 full waveform");
             assert!(!full_wf.is_snippet);
             assert!(full_wf.duration_ms > 350_000);
             assert_eq!(full_wf.ch1_peaks.len(), 200);
@@ -2360,7 +2578,8 @@ mod tests {
 
         for i in 0..window_size {
             let t = i as f32 / sample_rate;
-            let w = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (window_size - 1) as f32).cos());
+            let w = 0.5
+                * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (window_size - 1) as f32).cos());
             let s = ((t * c4 * 2.0 * std::f32::consts::PI).sin()
                 + (t * e4 * 2.0 * std::f32::consts::PI).sin()
                 + (t * g4 * 2.0 * std::f32::consts::PI).sin())
@@ -2371,11 +2590,21 @@ mod tests {
 
         let notes = detect_chord_from_fft(&out_data, sample_rate, window_size);
         println!("C Major detected notes: {:?}", notes);
-        assert!(notes.len() >= 3, "Expected at least 3 chord components, got {}", notes.len());
+        assert!(
+            notes.len() >= 3,
+            "Expected at least 3 chord components, got {}",
+            notes.len()
+        );
 
-        let has_c = notes.iter().any(|n| n.note_name.starts_with('C') && (n.frequency_hz - c4).abs() / c4 < 0.04);
-        let has_e = notes.iter().any(|n| n.note_name.starts_with('E') && (n.frequency_hz - e4).abs() / e4 < 0.04);
-        let has_g = notes.iter().any(|n| n.note_name.starts_with('G') && (n.frequency_hz - g4).abs() / g4 < 0.04);
+        let has_c = notes
+            .iter()
+            .any(|n| n.note_name.starts_with('C') && (n.frequency_hz - c4).abs() / c4 < 0.04);
+        let has_e = notes
+            .iter()
+            .any(|n| n.note_name.starts_with('E') && (n.frequency_hz - e4).abs() / e4 < 0.04);
+        let has_g = notes
+            .iter()
+            .any(|n| n.note_name.starts_with('G') && (n.frequency_hz - g4).abs() / g4 < 0.04);
         assert!(has_c, "C Major missing C note component");
         assert!(has_e, "C Major missing E note component");
         assert!(has_g, "C Major missing G note component");
@@ -2384,7 +2613,8 @@ mod tests {
         let a3 = 220.00f32;
         for i in 0..window_size {
             let t = i as f32 / sample_rate;
-            let w = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (window_size - 1) as f32).cos());
+            let w = 0.5
+                * (1.0 - (2.0 * std::f32::consts::PI * i as f32 / (window_size - 1) as f32).cos());
             let s = ((t * a3 * 2.0 * std::f32::consts::PI).sin()
                 + (t * c4 * 2.0 * std::f32::consts::PI).sin()
                 + (t * e4 * 2.0 * std::f32::consts::PI).sin())
@@ -2395,10 +2625,19 @@ mod tests {
 
         let aminor_notes = detect_chord_from_fft(&out_data, sample_rate, window_size);
         println!("A Minor detected notes: {:?}", aminor_notes);
-        assert!(aminor_notes.len() >= 3, "Expected at least 3 chord components in A Minor");
-        let has_a = aminor_notes.iter().any(|n| n.note_name.starts_with('A') && (n.frequency_hz - a3).abs() / a3 < 0.04);
-        let has_am_c = aminor_notes.iter().any(|n| n.note_name.starts_with('C') && (n.frequency_hz - c4).abs() / c4 < 0.04);
-        let has_am_e = aminor_notes.iter().any(|n| n.note_name.starts_with('E') && (n.frequency_hz - e4).abs() / e4 < 0.04);
+        assert!(
+            aminor_notes.len() >= 3,
+            "Expected at least 3 chord components in A Minor"
+        );
+        let has_a = aminor_notes
+            .iter()
+            .any(|n| n.note_name.starts_with('A') && (n.frequency_hz - a3).abs() / a3 < 0.04);
+        let has_am_c = aminor_notes
+            .iter()
+            .any(|n| n.note_name.starts_with('C') && (n.frequency_hz - c4).abs() / c4 < 0.04);
+        let has_am_e = aminor_notes
+            .iter()
+            .any(|n| n.note_name.starts_with('E') && (n.frequency_hz - e4).abs() / e4 < 0.04);
         assert!(has_a, "A Minor missing A note component");
         assert!(has_am_c, "A Minor missing C note component");
         assert!(has_am_e, "A Minor missing E note component");
@@ -2414,7 +2653,10 @@ mod tests {
         assert!(analysis.total_frames > 0);
         assert_eq!(analysis.ch1_samples.len(), analysis.total_frames);
         assert!(analysis.ch2_samples.is_some());
-        assert_eq!(analysis.ch2_samples.as_ref().unwrap().len(), analysis.total_frames);
+        assert_eq!(
+            analysis.ch2_samples.as_ref().unwrap().len(),
+            analysis.total_frames
+        );
 
         assert_eq!(analysis.overview_peaks1.len(), 150);
         assert_eq!(analysis.overview_peaks2.as_ref().unwrap().len(), 150);
@@ -2429,13 +2671,18 @@ mod tests {
         assert_eq!(analysis.note_strip_info.len(), 150);
 
         // Check that active notes were detected
-        let active_notes: Vec<_> = analysis.note_strip_info.iter().filter(|n| n.active).collect();
+        let active_notes: Vec<_> = analysis
+            .note_strip_info
+            .iter()
+            .filter(|n| n.active)
+            .collect();
         println!("Detected active notes count: {}", active_notes.len());
         assert!(!active_notes.is_empty());
 
         let _ = std::fs::remove_file(&wav_path);
 
-        let noise_path = std::path::Path::new("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
+        let noise_path =
+            std::path::Path::new("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
         if noise_path.is_file() {
             let noise_analysis = compute_full_audio_analysis(noise_path, 200)
                 .expect("failed to analyze TAPE_NOISE_04.wav");
@@ -2445,7 +2692,8 @@ mod tests {
             assert_eq!(noise_analysis.note_strip_width, 200);
         }
 
-        let mp3_path = std::path::Path::new("/home/vega/Documents/type_testing/Computer Error Song.mp3");
+        let mp3_path =
+            std::path::Path::new("/home/vega/Documents/type_testing/Computer Error Song.mp3");
         if mp3_path.is_file() {
             let t0 = std::time::Instant::now();
             let mp3_analysis = compute_full_audio_analysis(mp3_path, 1200)
@@ -2468,7 +2716,10 @@ mod tests {
                 assert!(mn2 <= mx2);
             }
             let q_elapsed = q_start.elapsed();
-            println!("1400 bar queries across 15.8M samples took: {:?}", q_elapsed);
+            println!(
+                "1400 bar queries across 15.8M samples took: {:?}",
+                q_elapsed
+            );
             // Must execute in well under 5ms (typically ~50 microseconds)
             assert!(q_elapsed.as_millis() < 5);
         }
@@ -2477,7 +2728,8 @@ mod tests {
     #[test]
     fn test_snap_to_zero_crossing() {
         let wav_path = generate_test_wav();
-        let analysis = compute_full_audio_analysis(&wav_path, 100).expect("failed to analyze test wav");
+        let analysis =
+            compute_full_audio_analysis(&wav_path, 100).expect("failed to analyze test wav");
 
         // The test wav has a 100Hz sine wave on Ch1, period = 441 samples (sample_rate = 44100).
         // Zero crossings occur at frames: 0, 220, 441, 661, 882, etc.
@@ -2559,7 +2811,7 @@ mod tests {
         assert_eq!(analysis.duration_ms, 61000);
 
         let note_names = [
-            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+            "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
         ];
 
         // Check each note ~500ms into the note
@@ -2588,19 +2840,31 @@ mod tests {
                 let freq_err_ratio = (info.frequency_hz - expected_freq).abs() / expected_freq;
                 println!(
                     "MISMATCH: Note {} (MIDI {}, expected {} at {:.2} Hz) -> got active={}, name='{}', freq={:.2} Hz (err={:.1}%)",
-                    note_idx, midi, expected_name, expected_freq, info.active, info.note_name, info.frequency_hz, freq_err_ratio * 100.0
+                    note_idx,
+                    midi,
+                    expected_name,
+                    expected_freq,
+                    info.active,
+                    info.note_name,
+                    info.frequency_hz,
+                    freq_err_ratio * 100.0
                 );
                 all_correct = false;
             }
         }
 
         let _ = std::fs::remove_file(&wav_path);
-        assert!(all_correct, "Not all notes from C1 to C6 were correctly identified!");
+        assert!(
+            all_correct,
+            "Not all notes from C1 to C6 were correctly identified!"
+        );
     }
 
     #[test]
     fn test_profile_deadmau5() {
-        let p = std::path::Path::new("/mnt/rust/data/MusicJelly/Deadmau5/Some Chords (Single)/Deadmau5 - Some Chords.mp3");
+        let p = std::path::Path::new(
+            "/mnt/rust/data/MusicJelly/Deadmau5/Some Chords (Single)/Deadmau5 - Some Chords.mp3",
+        );
         if !p.is_file() {
             println!("Deadmau5 file not found, skipping profile test.");
             return;
@@ -2609,7 +2873,13 @@ mod tests {
         let meta = read_audio_metadata(p).expect("metadata");
         println!("\n=== PROFILING DEADMAU5 TRACK ===");
         println!("File: {:?}", p);
-        println!("Duration: {} ms ({:.2} min), Sample rate: {} Hz, Channels: {}", meta.duration_ms, meta.duration_ms as f64 / 60000.0, meta.sample_rate, meta.channels);
+        println!(
+            "Duration: {} ms ({:.2} min), Sample rate: {} Hz, Channels: {}",
+            meta.duration_ms,
+            meta.duration_ms as f64 / 60000.0,
+            meta.sample_rate,
+            meta.channels
+        );
 
         let t_total_start = std::time::Instant::now();
         let analysis = compute_full_audio_analysis(p, 1200).expect("analysis failed");
@@ -2619,7 +2889,10 @@ mod tests {
         println!("Total frames: {}", analysis.total_frames);
         println!("Transients: {}", analysis.transients.len());
         println!("Overview peaks: {}", analysis.overview_peaks1.len());
-        println!("Spectrogram RGBA bytes: {}", analysis.spectrogram_rgba.len());
+        println!(
+            "Spectrogram RGBA bytes: {}",
+            analysis.spectrogram_rgba.len()
+        );
         println!("Note strip info count: {}", analysis.note_strip_info.len());
     }
 

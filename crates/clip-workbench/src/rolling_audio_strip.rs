@@ -3,12 +3,12 @@
 //! Provides waveform peak pyramid visualization, scrub playback, slice selection,
 //! and routing to left/right slots.
 
-use egui::{Color32, Pos2, Rect, Rounding, Stroke, Vec2};
-use little_clip_core::theme::AppPalette;
 use crate::{hex_to_c32, hex_to_c32_alpha};
-use little_clip_core::audio::{build_peak_pyramid, PeakBlock};
+use egui::{Color32, Pos2, Rect, Rounding, Stroke, Vec2};
+use little_clip_core::audio::{PeakBlock, build_peak_pyramid};
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::slot::HandSide;
+use little_clip_core::theme::AppPalette;
 use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
 use rodio::{Decoder, Player};
 use std::fs::File;
@@ -49,6 +49,53 @@ pub struct RollingAudioStripState {
 }
 
 impl RollingAudioStripState {
+    /// Materializes a selected rolling-buffer region for the full editor. The
+    /// editor must never receive the entire rolling capture when a region was
+    /// explicitly selected. ffmpeg's silence filter is used when available;
+    /// the already-trimmed time slice remains a safe fallback otherwise.
+    pub fn materialize_editor_selection(
+        &self,
+        start_sec: f32,
+        end_sec: f32,
+    ) -> Result<PathBuf, String> {
+        let source = self
+            .path
+            .as_ref()
+            .ok_or_else(|| "No rolling audio snapshot is loaded".to_string())?;
+        let (start_sec, end_sec) = (start_sec.min(end_sec), start_sec.max(end_sec));
+        if end_sec - start_sec < 0.05 {
+            return Err("Select at least 50ms of audio before opening the editor".to_string());
+        }
+        let directory = std::env::temp_dir().join("little-screen-clip/rolling_editor_slices");
+        std::fs::create_dir_all(&directory)
+            .map_err(|error| format!("Could not create audio slice directory: {error}"))?;
+        let id = uuid::Uuid::new_v4();
+        let sliced = directory.join(format!("rolling-{id}-selected.wav"));
+        little_clip_core::rolling_audio::slice_wav(source, start_sec, end_sec, &sliced)
+            .map_err(|error| format!("Could not materialize selected audio: {error}"))?;
+
+        let trimmed = directory.join(format!("rolling-{id}-trimmed.wav"));
+        let status = std::process::Command::new("ffmpeg")
+            .args(["-y", "-i"])
+            .arg(&sliced)
+            .args([
+                "-af",
+                // Trim each edge independently. `stop_periods` is unreliable
+                // across ffmpeg builds for short WAVs; reverse-and-trim gives
+                // the same deterministic leading-silence operation on the tail.
+                "silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB,areverse",
+            ])
+            .arg(&trimmed)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false);
+        if status && trimmed.is_file() {
+            let _ = std::fs::remove_file(&sliced);
+            Ok(trimmed)
+        } else {
+            Ok(sliced)
+        }
+    }
     /// Creates a new rolling audio strip state and loads the latest daemon snapshot.
     pub fn new() -> Self {
         let mut sink = DeviceSinkBuilder::open_default_sink().ok();
@@ -159,7 +206,10 @@ impl RollingAudioStripState {
                         self.error_msg = None;
 
                         let peak = self.max_amplitude();
-                        info!("Decoded snapshot: {:.2}s, peak amplitude: {:.4}", duration_secs, peak);
+                        info!(
+                            "Decoded snapshot: {:.2}s, peak amplitude: {:.4}",
+                            duration_secs, peak
+                        );
                     }
                     Err(e) => {
                         error!("Failed to decode snapshot WAV: {}", e);
@@ -217,7 +267,8 @@ impl RollingAudioStripState {
         let sel_peak = self.selected_region_peak();
         if sel_peak < 0.001 {
             self.status_toast = Some((
-                "⚠️ Selected region is silence — drag over colored waveform peaks to hear audio".to_string(),
+                "⚠️ Selected region is silence — drag over colored waveform peaks to hear audio"
+                    .to_string(),
                 now,
             ));
         }
@@ -228,14 +279,18 @@ impl RollingAudioStripState {
         };
 
         let slice_dir = if let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") {
-            PathBuf::from(rt).join("little-screen-clip").join("rolling_slices")
+            PathBuf::from(rt)
+                .join("little-screen-clip")
+                .join("rolling_slices")
         } else {
             PathBuf::from("/tmp/little-screen-clip/rolling_slices")
         };
         let _ = std::fs::create_dir_all(&slice_dir);
         let preview_path = slice_dir.join("preview.wav");
 
-        if let Err(err) = little_clip_core::rolling_audio::slice_wav(&source_path, s, e, &preview_path) {
+        if let Err(err) =
+            little_clip_core::rolling_audio::slice_wav(&source_path, s, e, &preview_path)
+        {
             eprintln!("play_selection: slice_wav failed: {}", err);
             return;
         }
@@ -315,7 +370,9 @@ impl RollingAudioStripState {
         };
 
         let slice_dir = if let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") {
-            PathBuf::from(rt).join("little-screen-clip").join("rolling_slices")
+            PathBuf::from(rt)
+                .join("little-screen-clip")
+                .join("rolling_slices")
         } else {
             PathBuf::from("/tmp/little-screen-clip/rolling_slices")
         };
@@ -339,7 +396,8 @@ impl RollingAudioStripState {
                     ));
                     true
                 } else {
-                    self.status_toast = Some(("Failed to push slice to Left Hand".to_string(), now));
+                    self.status_toast =
+                        Some(("Failed to push slice to Left Hand".to_string(), now));
                     false
                 }
             }
@@ -357,15 +415,21 @@ impl RollingAudioStripState {
         }
         if span >= 16384 && !self.peaks_lvl2.is_empty() {
             let b_start = (frame_start / 16384).min(self.peaks_lvl2.len() - 1);
-            let b_end = ((frame_end + 16383) / 16384).min(self.peaks_lvl2.len()).max(b_start + 1);
+            let b_end = ((frame_end + 16383) / 16384)
+                .min(self.peaks_lvl2.len())
+                .max(b_start + 1);
             aggregate_blocks(&self.peaks_lvl2[b_start..b_end])
         } else if span >= 1024 && !self.peaks_lvl1.is_empty() {
             let b_start = (frame_start / 1024).min(self.peaks_lvl1.len() - 1);
-            let b_end = ((frame_end + 1023) / 1024).min(self.peaks_lvl1.len()).max(b_start + 1);
+            let b_end = ((frame_end + 1023) / 1024)
+                .min(self.peaks_lvl1.len())
+                .max(b_start + 1);
             aggregate_blocks(&self.peaks_lvl1[b_start..b_end])
         } else {
             let b_start = (frame_start / 64).min(self.peaks_lvl0.len() - 1);
-            let b_end = ((frame_end + 63) / 64).min(self.peaks_lvl0.len()).max(b_start + 1);
+            let b_end = ((frame_end + 63) / 64)
+                .min(self.peaks_lvl0.len())
+                .max(b_start + 1);
             aggregate_blocks(&self.peaks_lvl0[b_start..b_end])
         }
     }
@@ -741,23 +805,15 @@ fn load_pcm16_samples(path: &Path) -> Result<(Vec<f32>, u32, u16), std::io::Erro
             break;
         }
         let chunk_id = &chunk_hdr[0..4];
-        let chunk_len = u32::from_le_bytes([
-            chunk_hdr[4],
-            chunk_hdr[5],
-            chunk_hdr[6],
-            chunk_hdr[7],
-        ]);
+        let chunk_len =
+            u32::from_le_bytes([chunk_hdr[4], chunk_hdr[5], chunk_hdr[6], chunk_hdr[7]]);
         if chunk_id == b"fmt " {
             let mut fmt_bytes = vec![0u8; chunk_len as usize];
             file.read_exact(&mut fmt_bytes)?;
             if fmt_bytes.len() >= 16 {
                 channels = u16::from_le_bytes([fmt_bytes[2], fmt_bytes[3]]);
-                sample_rate = u32::from_le_bytes([
-                    fmt_bytes[4],
-                    fmt_bytes[5],
-                    fmt_bytes[6],
-                    fmt_bytes[7],
-                ]);
+                sample_rate =
+                    u32::from_le_bytes([fmt_bytes[4], fmt_bytes[5], fmt_bytes[6], fmt_bytes[7]]);
                 bits_per_sample = u16::from_le_bytes([fmt_bytes[14], fmt_bytes[15]]);
             }
         } else if chunk_id == b"data" {
@@ -975,13 +1031,13 @@ mod tests {
         // Create 2 seconds of mono audio at 48000 Hz = 96000 frames
         let sr = 48000u32;
         let mut mono = vec![0.0f32; 96000];
-        
+
         // Put a burst of sound at 1.0s (frame 48000)
         mono[48000] = 0.8;
         mono[48001] = 0.9;
-        
+
         let (l0, l1, l2) = build_peak_pyramid(&mono, sr as f32);
-        
+
         let strip = RollingAudioStripState {
             path: None,
             duration_sec: 2.0,
@@ -1009,12 +1065,18 @@ mod tests {
         // At frame 48000 (1.0s):
         // Querying around 47500..48500 (span = 1000 => lvl0 blocks):
         let (_, mx0, _) = strip.query_peaks(47500, 48500);
-        assert!((mx0 - 0.9).abs() < 0.01, "Level 0 must see peak at frame 48000");
+        assert!(
+            (mx0 - 0.9).abs() < 0.01,
+            "Level 0 must see peak at frame 48000"
+        );
 
         // Querying around 47000..49000 (span = 2000 => lvl1 blocks of 1024 frames):
         // Frame 48000 / 1024 = block 46
         let (_, mx1, _) = strip.query_peaks(47000, 49000);
-        assert!((mx1 - 0.9).abs() < 0.01, "Level 1 must see peak at frame 48000");
+        assert!(
+            (mx1 - 0.9).abs() < 0.01,
+            "Level 1 must see peak at frame 48000"
+        );
 
         // Querying earlier range 10000..20000 (0.2s..0.4s) should be silence
         let (_, mx_early, _) = strip.query_peaks(10000, 20000);
@@ -1027,13 +1089,18 @@ mod tests {
 
     #[test]
     fn test_pcm16_sync() {
-        let path = PathBuf::from("/run/user/1000/little-screen-clip/rolling_snapshots/current_snapshot.wav");
+        let path = PathBuf::from(
+            "/run/user/1000/little-screen-clip/rolling_snapshots/current_snapshot.wav",
+        );
         if !path.exists() {
             return;
         }
         let (mono, sr, _ch) = load_pcm16_samples(&path).unwrap();
         let first_active = mono.iter().position(|&s| s.abs() > 0.1);
-        println!("Rust load_pcm16_samples first active: {:?} ({:.3}s)", first_active, first_active.map(|i| i as f32 / sr as f32).unwrap_or(0.0));
+        println!(
+            "Rust load_pcm16_samples first active: {:?} ({:.3}s)",
+            first_active,
+            first_active.map(|i| i as f32 / sr as f32).unwrap_or(0.0)
+        );
     }
 }
-

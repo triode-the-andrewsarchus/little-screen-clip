@@ -82,7 +82,6 @@ enum Commands {
     RollingAudio,
 }
 
-
 /// Subcommands for inspecting and executing pipeline recipes.
 #[derive(Subcommand)]
 enum RecipeAction {
@@ -167,7 +166,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let start = tokio::time::Instant::now();
             while start.elapsed() < std::time::Duration::from_millis(350) {
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
-                if let Ok(out) = tokio::process::Command::new("wl-paste").arg("-n").output().await {
+                if let Ok(out) = tokio::process::Command::new("wl-paste")
+                    .arg("-n")
+                    .output()
+                    .await
+                {
                     if out.status.success() && !out.stdout.is_empty() {
                         if let Ok(text) = String::from_utf8(out.stdout) {
                             if text != initial_cb {
@@ -180,11 +183,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if captured {
-                println!("{}: Captured selection to {:?}", "Success".green().bold(), hand_side);
+                println!(
+                    "{}: Captured selection to {:?}",
+                    "Success".green().bold(),
+                    hand_side
+                );
                 return Ok(());
             }
 
-            if let Ok(out) = tokio::process::Command::new("wl-paste").arg("--primary").arg("-n").output().await {
+            if let Ok(out) = tokio::process::Command::new("wl-paste")
+                .arg("--primary")
+                .arg("-n")
+                .output()
+                .await
+            {
                 if out.status.success() && !out.stdout.is_empty() {
                     if let Ok(text) = String::from_utf8(out.stdout) {
                         let push_req = IpcRequest::PushText {
@@ -192,13 +204,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             hand: hand_side,
                         };
                         let _ = send_ipc_req(&mut writer, &mut lines, &push_req).await?;
-                        println!("{}: Captured primary selection to {:?}", "Success".green().bold(), hand_side);
+                        println!(
+                            "{}: Captured primary selection to {:?}",
+                            "Success".green().bold(),
+                            hand_side
+                        );
                         return Ok(());
                     }
                 }
             }
 
-            println!("{}: No selection detected in active window.", "Notice".yellow().bold());
+            println!(
+                "{}: No selection detected in active window.",
+                "Notice".yellow().bold()
+            );
             return Ok(());
         }
         Commands::Paste { hand } => {
@@ -221,7 +240,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         let _ = child.wait().await;
                     }
-                } else if let little_clip_core::ClipPayload::Image { ref bytes, ref mime, .. } = item.payload {
+                } else if let little_clip_core::ClipPayload::Image {
+                    ref bytes,
+                    ref mime,
+                    ..
+                } = item.payload
+                {
                     if let Ok(mut child) = tokio::process::Command::new("wl-copy")
                         .arg("-t")
                         .arg(mime)
@@ -244,9 +268,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if slot == SlotId::RightHand {
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     let left_req = IpcRequest::GetSlotItem(SlotId::LeftHand);
-                    if let Ok(IpcResponse::SlotItem(Some(left_item))) = send_ipc_req(&mut writer, &mut lines, &left_req).await {
+                    if let Ok(IpcResponse::SlotItem(Some(left_item))) =
+                        send_ipc_req(&mut writer, &mut lines, &left_req).await
+                    {
                         if let Some(left_text) = left_item.to_clipboard_text() {
-                            let _ = tokio::process::Command::new("wl-copy").arg(left_text).status().await;
+                            let _ = tokio::process::Command::new("wl-copy")
+                                .arg(left_text)
+                                .status()
+                                .await;
                         }
                     }
                 }
@@ -296,7 +325,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             RecipeAction::List => IpcRequest::ListRecipes,
             RecipeAction::Run { name } => IpcRequest::ExecuteRecipe { recipe_name: name },
         },
-        Commands::Last { prompt } => IpcRequest::ExecuteLastAction { prompt_text: prompt },
+        Commands::Last { prompt } => IpcRequest::ExecuteLastAction {
+            prompt_text: prompt,
+        },
         Commands::Refresh => IpcRequest::ForceRefreshDisplay,
         Commands::Reload => IpcRequest::ReloadConfig,
         Commands::Lock => IpcRequest::Lock,
@@ -362,8 +393,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("{}", "UNLOCKED (Screen active)".green().bold());
                 }
             }
-            IpcResponse::RollingAudio { path, duration_secs, sample_rate, channels } => {
-                println!("{}: {:.2}s ({}Hz, {}ch) -> {}", "Rolling Audio Snapshot".cyan().bold(), duration_secs, sample_rate, channels, path.display());
+            IpcResponse::RollingAudio {
+                path,
+                duration_secs,
+                sample_rate,
+                channels,
+            } => {
+                println!(
+                    "{}: {:.2}s ({}Hz, {}ch) -> {}",
+                    "Rolling Audio Snapshot".cyan().bold(),
+                    duration_secs,
+                    sample_rate,
+                    channels,
+                    path.display()
+                );
             }
             IpcResponse::SlotItem(item) => {
                 if let Some(i) = item {
@@ -375,7 +418,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             IpcResponse::AutoActions(actions) => {
                 println!("{}", "=== AUTO-ACTIONS ===".cyan().bold());
                 for (k, v) in actions {
-                    let st = if v { "ENABLED".green().bold() } else { "DISABLED".yellow() };
+                    let st = if v {
+                        "ENABLED".green().bold()
+                    } else {
+                        "DISABLED".yellow()
+                    };
                     println!("  {} : {}", k.bold(), st);
                 }
             }
@@ -386,8 +433,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-
-
     Ok(())
 }
 
@@ -396,13 +441,22 @@ fn print_slot(slot: SlotId, item: Option<&little_clip_core::ClipItem>) {
     let lbl_str = match slot {
         SlotId::Undo => format!("[{:^10}]", slot.label()).bold().yellow(),
         SlotId::LeftHand => format!("[{:^10}]", slot.label()).bold().bright_magenta(),
-        SlotId::LeftPrior1 | SlotId::LeftPrior2 | SlotId::LeftPrior3 => format!("[{:^10}]", slot.label()).bold().bright_cyan(),
-        SlotId::RightPrior2 | SlotId::RightPrior1 => format!("[{:^10}]", slot.label()).bold().bright_blue(),
+        SlotId::LeftPrior1 | SlotId::LeftPrior2 | SlotId::LeftPrior3 => {
+            format!("[{:^10}]", slot.label()).bold().bright_cyan()
+        }
+        SlotId::RightPrior2 | SlotId::RightPrior1 => {
+            format!("[{:^10}]", slot.label()).bold().bright_blue()
+        }
         SlotId::RightHand => format!("[{:^10}]", slot.label()).bold().bright_green(),
     };
 
     if let Some(item) = item {
-        println!("{} {} ({})", lbl_str, item.title.bold(), item.subtitle.dimmed());
+        println!(
+            "{} {} ({})",
+            lbl_str,
+            item.title.bold(),
+            item.subtitle.dimmed()
+        );
     } else {
         println!("{} {}", lbl_str, "<EMPTY>".dimmed());
     }

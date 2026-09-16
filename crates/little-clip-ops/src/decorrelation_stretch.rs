@@ -93,11 +93,7 @@ pub fn auto_stride(width: u32, height: u32) -> usize {
     let total_pixels = (width as usize) * (height as usize);
     let s = ((total_pixels as f64 / 100_000.0).sqrt().floor() as usize).clamp(1, 8);
     let sample_count = ((width as usize + s - 1) / s) * ((height as usize + s - 1) / s);
-    if sample_count < 1000 {
-        1
-    } else {
-        s
-    }
+    if sample_count < 1000 { 1 } else { s }
 }
 
 /// Sample statistics from strided inspection of an image.
@@ -112,7 +108,11 @@ pub struct DecorrelationStats {
 }
 
 /// Compute band statistics from an RGBA image.
-pub fn compute_stats(img: &RgbaImage, stride: usize, max_samples: Option<usize>) -> DecorrelationStats {
+pub fn compute_stats(
+    img: &RgbaImage,
+    stride: usize,
+    max_samples: Option<usize>,
+) -> DecorrelationStats {
     let w = img.width() as usize;
     let h = img.height() as usize;
     let stride = stride.max(1);
@@ -218,11 +218,7 @@ pub struct EigenSym3 {
 /// Cyclic Jacobi eigen-decomposition of a symmetric 3x3 matrix.
 pub fn eigen_sym3(m: [[f64; 3]; 3]) -> EigenSym3 {
     let mut a = m;
-    let mut v = [
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0],
-    ];
+    let mut v = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
     for _sweep in 0..60 {
         let off = a[0][1].abs() + a[0][2].abs() + a[1][2].abs();
@@ -236,7 +232,8 @@ pub fn eigen_sym3(m: [[f64; 3]; 3]) -> EigenSym3 {
                     continue;
                 }
                 let theta = (a[q][q] - a[p][p]) / (2.0 * a[p][q]);
-                let t = (if theta >= 0.0 { 1.0 } else { -1.0 }) / (theta.abs() + (theta * theta + 1.0).sqrt());
+                let t = (if theta >= 0.0 { 1.0 } else { -1.0 })
+                    / (theta.abs() + (theta * theta + 1.0).sqrt());
                 let c = 1.0 / (t * t + 1.0).sqrt();
                 let s = t * c;
 
@@ -292,7 +289,10 @@ pub struct DecorrelationTransform {
 }
 
 /// Build the 3x3 transform matrix `T` and offset vector from sampled stats and parameters.
-pub fn build_transform(stats: &DecorrelationStats, params: &DecorrelationStretchParams) -> DecorrelationTransform {
+pub fn build_transform(
+    stats: &DecorrelationStats,
+    params: &DecorrelationStretchParams,
+) -> DecorrelationTransform {
     let mode = params.mode;
     let mut warnings = Vec::new();
     let eps = 1e-9;
@@ -310,7 +310,10 @@ pub fn build_transform(stats: &DecorrelationStats, params: &DecorrelationStretch
                         1 => 'G',
                         _ => 'B',
                     };
-                    warnings.push(format!("Band {} has zero variance; it cannot be stretched.", band_name));
+                    warnings.push(format!(
+                        "Band {} has zero variance; it cannot be stretched.",
+                        band_name
+                    ));
                 }
             }
             stats.corr
@@ -323,7 +326,10 @@ pub fn build_transform(stats: &DecorrelationStats, params: &DecorrelationStretch
                         1 => 'G',
                         _ => 'B',
                     };
-                    warnings.push(format!("Band {} has zero variance; it cannot be stretched.", band_name));
+                    warnings.push(format!(
+                        "Band {} has zero variance; it cannot be stretched.",
+                        band_name
+                    ));
                 }
             }
             stats.cov
@@ -514,11 +520,7 @@ mod tests {
 
     #[test]
     fn test_eigen_sym3_diagonal() {
-        let diag = [
-            [4.0, 0.0, 0.0],
-            [0.0, 2.0, 0.0],
-            [0.0, 0.0, 1.0],
-        ];
+        let diag = [[4.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 1.0]];
         let eig = eigen_sym3(diag);
         assert!((eig.values[0] - 4.0).abs() < 1e-7);
         assert!((eig.values[1] - 2.0).abs() < 1e-7);
@@ -527,11 +529,7 @@ mod tests {
 
     #[test]
     fn test_eigen_sym3_symmetric_matrix() {
-        let m = [
-            [2.0, 1.0, 0.0],
-            [1.0, 2.0, 1.0],
-            [0.0, 1.0, 2.0],
-        ];
+        let m = [[2.0, 1.0, 0.0], [1.0, 2.0, 1.0], [0.0, 1.0, 2.0]];
         let eig = eigen_sym3(m);
         // Trace of symmetric matrix must equal sum of eigenvalues
         let trace_m = m[0][0] + m[1][1] + m[2][2];

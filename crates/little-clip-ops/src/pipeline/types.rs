@@ -39,11 +39,11 @@ impl PortType {
     /// Returns the RGBA color used to render pin dots and wires in the workbench UI.
     pub fn color_rgba(&self) -> [u8; 4] {
         match self {
-            PortType::Any => [203, 213, 225, 255],     // Slate
-            PortType::Text => [251, 191, 36, 255],    // Amber
-            PortType::Image => [56, 189, 248, 255],   // Sky blue
-            PortType::Audio => [168, 85, 247, 255],   // Purple
-            PortType::FilePath => [52, 211, 153, 255],// Emerald
+            PortType::Any => [203, 213, 225, 255],       // Slate
+            PortType::Text => [251, 191, 36, 255],       // Amber
+            PortType::Image => [56, 189, 248, 255],      // Sky blue
+            PortType::Audio => [168, 85, 247, 255],      // Purple
+            PortType::FilePath => [52, 211, 153, 255],   // Emerald
             PortType::FileBatch => [244, 114, 182, 255], // Pink
         }
     }
@@ -174,9 +174,8 @@ impl PortValue {
                 }
                 ClipItem::from_single_file(&path)
             }
-            PortValue::AudioPath(path) => {
-                ClipItem::from_audio(path.clone()).unwrap_or_else(|| ClipItem::from_single_file(&path))
-            }
+            PortValue::AudioPath(path) => ClipItem::from_audio(path.clone())
+                .unwrap_or_else(|| ClipItem::from_single_file(&path)),
             PortValue::FilePath(path) => {
                 if let Ok(bytes) = std::fs::read(&path) {
                     let ext = path
@@ -184,7 +183,12 @@ impl PortValue {
                         .and_then(|e| e.to_str())
                         .unwrap_or("")
                         .to_lowercase();
-                    if ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "webp" || ext == "svg" {
+                    if ext == "png"
+                        || ext == "jpg"
+                        || ext == "jpeg"
+                        || ext == "webp"
+                        || ext == "svg"
+                    {
                         let mime = if ext == "jpg" || ext == "jpeg" {
                             "image/jpeg"
                         } else if ext == "webp" {
@@ -226,7 +230,11 @@ pub enum RecipeInputType {
     #[default]
     Any,
     Text,
-    #[serde(rename = "text | prompt", alias = "text_or_prompt", alias = "text_prompt")]
+    #[serde(
+        rename = "text | prompt",
+        alias = "text_or_prompt",
+        alias = "text_prompt"
+    )]
     TextOrPrompt,
     Image,
     Audio,
@@ -408,19 +416,13 @@ impl Recipe {
         match self.input_type {
             RecipeInputType::Any => !items.is_empty(),
             RecipeInputType::None => true,
-            RecipeInputType::Text => {
-                items.len() == 1 && is_text_like(items[0])
-            }
+            RecipeInputType::Text => items.len() == 1 && is_text_like(items[0]),
             RecipeInputType::TextOrPrompt => {
                 // Applicable if single text item, or if slot is empty / non-text (which triggers popup prompt)
                 items.len() <= 1
             }
-            RecipeInputType::Image => {
-                items.len() == 1 && is_image_like(items[0])
-            }
-            RecipeInputType::Audio => {
-                items.len() == 1 && is_audio_like(items[0])
-            }
+            RecipeInputType::Image => items.len() == 1 && is_image_like(items[0]),
+            RecipeInputType::Audio => items.len() == 1 && is_audio_like(items[0]),
             RecipeInputType::MultiText => {
                 items.len() >= 2 && items.iter().all(|it| is_text_like(it))
             }
@@ -448,5 +450,3 @@ fn is_image_like(item: &ClipItem) -> bool {
 fn is_audio_like(item: &ClipItem) -> bool {
     matches!(item.payload, ClipPayload::AudioRef { .. })
 }
-
-

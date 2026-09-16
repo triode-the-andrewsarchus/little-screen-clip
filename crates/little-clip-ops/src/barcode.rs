@@ -35,7 +35,9 @@ pub fn detect_barcodes(img: &RgbaImage) -> Vec<BarcodeDetection> {
     // 1. Try rxing pure Rust multi-barcode reader
     if let Ok(rxing_results) = rxing_detect(&dyn_img, width, height) {
         for res in rxing_results {
-            if !results.iter().any(|existing: &BarcodeDetection| existing.text == res.text && existing.format == res.format) {
+            if !results.iter().any(|existing: &BarcodeDetection| {
+                existing.text == res.text && existing.format == res.format
+            }) {
                 results.push(res);
             }
         }
@@ -45,7 +47,10 @@ pub fn detect_barcodes(img: &RgbaImage) -> Vec<BarcodeDetection> {
     if results.is_empty() {
         if let Ok(zbar_results) = zbar_detect(img) {
             for res in zbar_results {
-                if !results.iter().any(|existing: &BarcodeDetection| existing.text == res.text) {
+                if !results
+                    .iter()
+                    .any(|existing: &BarcodeDetection| existing.text == res.text)
+                {
                     results.push(res);
                 }
             }
@@ -55,10 +60,17 @@ pub fn detect_barcodes(img: &RgbaImage) -> Vec<BarcodeDetection> {
     results
 }
 
-fn rxing_detect(dyn_img: &DynamicImage, width: u32, height: u32) -> Result<Vec<BarcodeDetection>, String> {
+fn rxing_detect(
+    dyn_img: &DynamicImage,
+    width: u32,
+    height: u32,
+) -> Result<Vec<BarcodeDetection>, String> {
     use rxing::common::HybridBinarizer;
     use rxing::multi::{GenericMultipleBarcodeReader, MultipleBarcodeReader};
-    use rxing::{BarcodeFormat, BinaryBitmap, BufferedImageLuminanceSource, DecodeHints, MultiFormatReader, Reader};
+    use rxing::{
+        BarcodeFormat, BinaryBitmap, BufferedImageLuminanceSource, DecodeHints, MultiFormatReader,
+        Reader,
+    };
     use std::collections::HashSet;
 
     let lum_source = BufferedImageLuminanceSource::new(dyn_img.clone());
@@ -90,7 +102,9 @@ fn rxing_detect(dyn_img: &DynamicImage, width: u32, height: u32) -> Result<Vec<B
         .decode_multiple_with_hints(&mut bitmap, &hints)
         .or_else(|_| {
             let mut single_reader = MultiFormatReader::default();
-            single_reader.decode_with_hints(&mut bitmap, &hints).map(|r| vec![r])
+            single_reader
+                .decode_with_hints(&mut bitmap, &hints)
+                .map(|r| vec![r])
         })
         .map_err(|e| format!("rxing decoding error: {:?}", e))?;
 
@@ -209,9 +223,8 @@ fn zbar_detect(img: &RgbaImage) -> Result<Vec<BarcodeDetection>, String> {
         return Ok(Vec::new());
     }
 
-    let is_url = text.starts_with("http://")
-        || text.starts_with("https://")
-        || text.starts_with("www.");
+    let is_url =
+        text.starts_with("http://") || text.starts_with("https://") || text.starts_with("www.");
 
     Ok(vec![BarcodeDetection {
         format: "Barcode / QR (zbar)".to_string(),
@@ -235,11 +248,16 @@ mod tests {
 
     #[test]
     fn test_qr_code_detection() {
-        use rxing::qrcode::QRCodeWriter;
         use rxing::Writer;
+        use rxing::qrcode::QRCodeWriter;
         let writer = QRCodeWriter {};
         let bit_matrix = writer
-            .encode("https://example.com/little-clip", &rxing::BarcodeFormat::QR_CODE, 100, 100)
+            .encode(
+                "https://example.com/little-clip",
+                &rxing::BarcodeFormat::QR_CODE,
+                100,
+                100,
+            )
             .expect("Failed to encode test QR");
 
         let w = bit_matrix.getWidth();
@@ -264,11 +282,16 @@ mod tests {
 
     #[test]
     fn test_datamatrix_detection() {
-        use rxing::datamatrix::DataMatrixWriter;
         use rxing::Writer;
+        use rxing::datamatrix::DataMatrixWriter;
         let writer = DataMatrixWriter {};
         let bit_matrix = writer
-            .encode("DATAMATRIX-TEST-12345", &rxing::BarcodeFormat::DATA_MATRIX, 64, 64)
+            .encode(
+                "DATAMATRIX-TEST-12345",
+                &rxing::BarcodeFormat::DATA_MATRIX,
+                64,
+                64,
+            )
             .expect("Failed to encode test DataMatrix");
 
         let w = bit_matrix.getWidth();
@@ -286,7 +309,10 @@ mod tests {
         }
 
         let results = detect_barcodes(&img);
-        assert!(!results.is_empty(), "Expected at least 1 DataMatrix detection");
+        assert!(
+            !results.is_empty(),
+            "Expected at least 1 DataMatrix detection"
+        );
         assert_eq!(results[0].text, "DATAMATRIX-TEST-12345");
         assert_eq!(results[0].format, "Data Matrix");
     }

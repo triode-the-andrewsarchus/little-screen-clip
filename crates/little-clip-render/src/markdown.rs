@@ -34,11 +34,21 @@ pub enum MarkdownSpan {
 #[derive(Debug, Clone, PartialEq)]
 pub enum MarkdownLine {
     /// Section heading with level 1..=3.
-    Heading { level: usize, text: String, spans: Vec<MarkdownSpan> },
+    Heading {
+        level: usize,
+        text: String,
+        spans: Vec<MarkdownSpan>,
+    },
     /// Bulleted list item with indentation level.
-    Bullet { indent: usize, spans: Vec<MarkdownSpan> },
+    Bullet {
+        indent: usize,
+        spans: Vec<MarkdownSpan>,
+    },
     /// Numbered list item with number prefix.
-    Numbered { number: String, spans: Vec<MarkdownSpan> },
+    Numbered {
+        number: String,
+        spans: Vec<MarkdownSpan>,
+    },
     /// Blockquote line.
     Quote { spans: Vec<MarkdownSpan> },
     /// Horizontal divider rule (`---`, `***`, `___`).
@@ -134,7 +144,8 @@ pub fn parse_markdown(input: &str) -> Vec<MarkdownLine> {
 
         // Bulleted lists
         let indent = raw_line.len() - trimmed_start.len();
-        if let Some(rest) = trimmed_start.strip_prefix("- ")
+        if let Some(rest) = trimmed_start
+            .strip_prefix("- ")
             .or_else(|| trimmed_start.strip_prefix("* "))
             .or_else(|| trimmed_start.strip_prefix("+ "))
         {
@@ -223,7 +234,8 @@ pub fn parse_markdown_spans(text: &str) -> Vec<MarkdownSpan> {
 
         // Bold: **text** or __text__
         if i + 1 < len
-            && ((chars[i] == '*' && chars[i + 1] == '*') || (chars[i] == '_' && chars[i + 1] == '_'))
+            && ((chars[i] == '*' && chars[i + 1] == '*')
+                || (chars[i] == '_' && chars[i + 1] == '_'))
         {
             let delim = if chars[i] == '*' { "**" } else { "__" };
             if let Some(close_idx) = text[i + 2..].find(delim) {
@@ -271,7 +283,8 @@ mod tests {
 
     #[test]
     fn test_parse_markdown_spans() {
-        let sample = "This has **bold text**, *italic*, `code()` and [Docs](https://example.com) end";
+        let sample =
+            "This has **bold text**, *italic*, `code()` and [Docs](https://example.com) end";
         let spans = parse_markdown_spans(sample);
         assert_eq!(
             spans,

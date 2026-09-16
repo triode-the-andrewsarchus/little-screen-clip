@@ -4,7 +4,7 @@
 //! tabular clipboard detection that guards against prose punctuation false-positives, and workbook
 //! loading for Excel / OpenDocument formats (`.xlsx`, `.xls`, `.xlsb`, `.ods`) using `calamine`.
 
-use calamine::{open_workbook_auto, Reader};
+use calamine::{Reader, open_workbook_auto};
 use std::path::Path;
 
 /// A single tabular sheet containing rows and columns of cell string values.
@@ -70,7 +70,10 @@ pub fn parse_csv_string(csv_text: &str) -> Vec<Vec<String>> {
     }
 
     let comma_count: usize = first_few_lines.iter().map(|l| l.matches(',').count()).sum();
-    let tab_count: usize = first_few_lines.iter().map(|l| l.matches('\t').count()).sum();
+    let tab_count: usize = first_few_lines
+        .iter()
+        .map(|l| l.matches('\t').count())
+        .sum();
     let semi_count: usize = first_few_lines.iter().map(|l| l.matches(';').count()).sum();
 
     let delimiter = if tab_count > comma_count && tab_count > semi_count {
@@ -120,7 +123,11 @@ pub fn parse_csv_string(csv_text: &str) -> Vec<Vec<String>> {
 /// Detects if raw clipboard text is genuinely a formatted CSV / TSV table
 pub fn detect_csv_text(text: &str) -> Option<SpreadsheetData> {
     let trimmed = text.trim();
-    let lines: Vec<&str> = trimmed.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = trimmed
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
     if lines.len() < 2 {
         return None;
     }
@@ -221,7 +228,8 @@ pub fn load_spreadsheet(path: &Path) -> Result<SpreadsheetData, String> {
     }
 
     if ext == "xlsx" || ext == "xls" || ext == "xlsb" || ext == "ods" {
-        let mut workbook = open_workbook_auto(path).map_err(|e| format!("Failed to open workbook: {}", e))?;
+        let mut workbook =
+            open_workbook_auto(path).map_err(|e| format!("Failed to open workbook: {}", e))?;
         let sheet_names = workbook.sheet_names();
         let mut sheets = Vec::new();
 
@@ -229,7 +237,10 @@ pub fn load_spreadsheet(path: &Path) -> Result<SpreadsheetData, String> {
             if let Ok(range) = workbook.worksheet_range(&name) {
                 let mut rows = Vec::new();
                 for r in range.rows() {
-                    let row_str: Vec<String> = r.iter().map(|cell| cell.to_string().trim().to_string()).collect();
+                    let row_str: Vec<String> = r
+                        .iter()
+                        .map(|cell| cell.to_string().trim().to_string())
+                        .collect();
                     rows.push(row_str);
                 }
                 sheets.push(SpreadsheetSheet::new(name, rows));
@@ -253,7 +264,10 @@ pub fn is_spreadsheet_file(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
-    matches!(ext.as_str(), "csv" | "tsv" | "xlsx" | "xls" | "xlsb" | "ods")
+    matches!(
+        ext.as_str(),
+        "csv" | "tsv" | "xlsx" | "xls" | "xlsb" | "ods"
+    )
 }
 
 #[cfg(test)]

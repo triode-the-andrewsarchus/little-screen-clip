@@ -135,17 +135,17 @@ impl ImageConfig {
             }
         }
         // Check relative project script
-        let candidates = [
-            "scripts/remove_bg.py",
-            "./scripts/remove_bg.py",
-        ];
+        let candidates = ["scripts/remove_bg.py", "./scripts/remove_bg.py"];
         for path in &candidates {
             if std::path::Path::new(path).exists() {
                 return (path.to_string(), Vec::new());
             }
         }
         // Fall back to python3 scripts/remove_bg.py
-        ("python3".to_string(), vec!["scripts/remove_bg.py".to_string()])
+        (
+            "python3".to_string(),
+            vec!["scripts/remove_bg.py".to_string()],
+        )
     }
 }
 
@@ -232,7 +232,6 @@ impl TextConfig {
         "code".to_string()
     }
 }
-
 
 /// Preferred position for sampling a preview snippet in long audio tracks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -443,28 +442,68 @@ impl ColorConfig {
         };
 
         let mut overrides = std::collections::HashMap::new();
-        if let Some(v) = &self.background { overrides.insert("background".to_string(), v.clone()); }
-        if let Some(v) = &self.hero_card_bg { overrides.insert("hero_card_bg".to_string(), v.clone()); }
-        if let Some(v) = &self.prior_card_bg { overrides.insert("prior_card_bg".to_string(), v.clone()); }
-        if let Some(v) = &self.undo_card_bg { overrides.insert("undo_card_bg".to_string(), v.clone()); }
+        if let Some(v) = &self.background {
+            overrides.insert("background".to_string(), v.clone());
+        }
+        if let Some(v) = &self.hero_card_bg {
+            overrides.insert("hero_card_bg".to_string(), v.clone());
+        }
+        if let Some(v) = &self.prior_card_bg {
+            overrides.insert("prior_card_bg".to_string(), v.clone());
+        }
+        if let Some(v) = &self.undo_card_bg {
+            overrides.insert("undo_card_bg".to_string(), v.clone());
+        }
 
-        if let Some(v) = &self.undo_border { overrides.insert("undo_border".to_string(), v.clone()); }
-        if let Some(v) = &self.left_hand_border { overrides.insert("left_hand_border".to_string(), v.clone()); }
-        if let Some(v) = &self.left_prior1_border { overrides.insert("left_prior1_border".to_string(), v.clone()); }
-        if let Some(v) = &self.left_prior2_border { overrides.insert("left_prior2_border".to_string(), v.clone()); }
-        if let Some(v) = &self.left_prior3_border { overrides.insert("left_prior3_border".to_string(), v.clone()); }
-        if let Some(v) = &self.right_prior2_border { overrides.insert("right_prior2_border".to_string(), v.clone()); }
-        if let Some(v) = &self.right_prior1_border { overrides.insert("right_prior1_border".to_string(), v.clone()); }
-        if let Some(v) = &self.right_hand_border { overrides.insert("right_hand_border".to_string(), v.clone()); }
-        if let Some(v) = &self.cursor_border { overrides.insert("cursor_border".to_string(), v.clone()); }
-        if let Some(v) = &self.selected_border { overrides.insert("selected_border".to_string(), v.clone()); }
+        if let Some(v) = &self.undo_border {
+            overrides.insert("undo_border".to_string(), v.clone());
+        }
+        if let Some(v) = &self.left_hand_border {
+            overrides.insert("left_hand_border".to_string(), v.clone());
+        }
+        if let Some(v) = &self.left_prior1_border {
+            overrides.insert("left_prior1_border".to_string(), v.clone());
+        }
+        if let Some(v) = &self.left_prior2_border {
+            overrides.insert("left_prior2_border".to_string(), v.clone());
+        }
+        if let Some(v) = &self.left_prior3_border {
+            overrides.insert("left_prior3_border".to_string(), v.clone());
+        }
+        if let Some(v) = &self.right_prior2_border {
+            overrides.insert("right_prior2_border".to_string(), v.clone());
+        }
+        if let Some(v) = &self.right_prior1_border {
+            overrides.insert("right_prior1_border".to_string(), v.clone());
+        }
+        if let Some(v) = &self.right_hand_border {
+            overrides.insert("right_hand_border".to_string(), v.clone());
+        }
+        if let Some(v) = &self.cursor_border {
+            overrides.insert("cursor_border".to_string(), v.clone());
+        }
+        if let Some(v) = &self.selected_border {
+            overrides.insert("selected_border".to_string(), v.clone());
+        }
 
-        if let Some(v) = &self.title_color { overrides.insert("title_color".to_string(), v.clone()); }
-        if let Some(v) = &self.subtitle_color { overrides.insert("subtitle_color".to_string(), v.clone()); }
-        if let Some(v) = &self.body_color { overrides.insert("body_color".to_string(), v.clone()); }
-        if let Some(v) = &self.url_color { overrides.insert("url_color".to_string(), v.clone()); }
-        if let Some(v) = &self.debug_badge_bg { overrides.insert("debug_badge_bg".to_string(), v.clone()); }
-        if let Some(v) = &self.debug_badge_text { overrides.insert("debug_badge_text".to_string(), v.clone()); }
+        if let Some(v) = &self.title_color {
+            overrides.insert("title_color".to_string(), v.clone());
+        }
+        if let Some(v) = &self.subtitle_color {
+            overrides.insert("subtitle_color".to_string(), v.clone());
+        }
+        if let Some(v) = &self.body_color {
+            overrides.insert("body_color".to_string(), v.clone());
+        }
+        if let Some(v) = &self.url_color {
+            overrides.insert("url_color".to_string(), v.clone());
+        }
+        if let Some(v) = &self.debug_badge_bg {
+            overrides.insert("debug_badge_bg".to_string(), v.clone());
+        }
+        if let Some(v) = &self.debug_badge_text {
+            overrides.insert("debug_badge_text".to_string(), v.clone());
+        }
 
         crate::theme::AppPalette::from_theme(&theme, &overrides)
     }
@@ -522,7 +561,6 @@ impl Default for ColorConfig {
     }
 }
 
-
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -566,7 +604,10 @@ impl AppConfig {
                 }
                 if let Ok(toml_str) = toml::to_string_pretty(&default_cfg) {
                     let _ = std::fs::write(&user_path, toml_str);
-                    info!("Created default configuration file at {}", user_path.display());
+                    info!(
+                        "Created default configuration file at {}",
+                        user_path.display()
+                    );
                 }
                 return default_cfg;
             }

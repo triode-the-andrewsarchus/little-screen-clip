@@ -35,7 +35,10 @@ impl UnitConversion {
 }
 
 static PATTERN_FEET_INCHES: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)^\s*(\d+(?:\.\d+)?)\s*(?:'|ft|feet)\s*(\d+(?:\.\d+)?)\s*(?:"|in|inches)?\s*$"#).unwrap()
+    Regex::new(
+        r#"(?i)^\s*(\d+(?:\.\d+)?)\s*(?:'|ft|feet)\s*(\d+(?:\.\d+)?)\s*(?:"|in|inches)?\s*$"#,
+    )
+    .unwrap()
 });
 
 static PATTERN_SINGLE_VALUE: LazyLock<Regex> = LazyLock::new(|| {
@@ -87,7 +90,10 @@ pub fn detect_unit_conversion(text: &str) -> Option<UnitConversion> {
                     Some(format!("{} ft {} in", feet, rem_in)),
                 )
             } else {
-                (format!("{:.1} cm", cm), Some(format!("{:.2} m", cm / 100.0)))
+                (
+                    format!("{:.1} cm", cm),
+                    Some(format!("{:.2} m", cm / 100.0)),
+                )
             };
             Some(UnitConversion {
                 original: format!("{} in", val),
@@ -183,7 +189,11 @@ pub fn detect_unit_conversion(text: &str) -> Option<UnitConversion> {
             Some(UnitConversion {
                 original: format!("{} oz", val),
                 primary_conversion: format!("{:.1} g", g),
-                secondary_conversion: if lbs >= 1.0 { Some(format!("{:.2} lbs", lbs)) } else { None },
+                secondary_conversion: if lbs >= 1.0 {
+                    Some(format!("{:.2} lbs", lbs))
+                } else {
+                    None
+                },
                 rule_of_thumb: None,
             })
         }
@@ -203,7 +213,11 @@ pub fn detect_unit_conversion(text: &str) -> Option<UnitConversion> {
             Some(UnitConversion {
                 original: format!("{} g", val),
                 primary_conversion: format!("{:.2} oz", oz),
-                secondary_conversion: if lbs >= 0.5 { Some(format!("{:.2} lbs", lbs)) } else { None },
+                secondary_conversion: if lbs >= 0.5 {
+                    Some(format!("{:.2} lbs", lbs))
+                } else {
+                    None
+                },
                 rule_of_thumb: None,
             })
         }
@@ -371,7 +385,10 @@ mod tests {
 
         let c_conv = detect_unit_conversion("100°C").expect("100°C");
         assert_eq!(c_conv.primary_conversion, "212.0 °F");
-        assert_eq!(c_conv.rule_of_thumb, Some("water boiling point".to_string()));
+        assert_eq!(
+            c_conv.rule_of_thumb,
+            Some("water boiling point".to_string())
+        );
 
         let ft_in = detect_unit_conversion("5' 11\"").expect("5' 11\"");
         assert_eq!(ft_in.primary_conversion, "180.3 cm");

@@ -1,10 +1,10 @@
 //! Hundred Rabbits Theme parser, Oklab perceptual color space calculations,
 //! and full application palette derivation with user overrides.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
 
 use crate::color::parse_hex_color_rgba;
 
@@ -542,7 +542,10 @@ impl AppPalette {
 
         // Helper to pick override or fallback
         let ov = |key: &str, fallback: &str| -> String {
-            overrides.get(key).cloned().unwrap_or_else(|| fallback.to_string())
+            overrides
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| fallback.to_string())
         };
 
         Self {
@@ -810,7 +813,11 @@ mod tests {
         let dir = find_themes_dir();
         if dir.exists() {
             let themes = load_themes_from_dir(&dir);
-            assert!(themes.len() >= 40, "Expected at least 40 themes, found {}", themes.len());
+            assert!(
+                themes.len() >= 40,
+                "Expected at least 40 themes, found {}",
+                themes.len()
+            );
             // Verify 'apollo' exists
             let apollo = themes.iter().find(|t| t.name == "apollo");
             assert!(apollo.is_some(), "apollo theme should exist");
@@ -830,7 +837,10 @@ mod tests {
             let palette = AppPalette::from_theme(&theme, &HashMap::new());
             let surfaces = [
                 ("harmonies.base", &palette.harmonies.base),
-                ("harmonies.warm_attention", &palette.harmonies.warm_attention),
+                (
+                    "harmonies.warm_attention",
+                    &palette.harmonies.warm_attention,
+                ),
                 ("diff_add", &palette.diff_add),
                 ("diff_del", &palette.diff_del),
                 ("b_med", &palette.theme.b_med),
@@ -878,17 +888,29 @@ mod tests {
 
         // Convert t0 to Oklch and check chroma
         let oklch0 = Oklab::from_rgb(t0.0, t0.1, t0.2).to_oklch();
-        assert!(oklch0.c >= 0.16, "Zenburn track 0 chroma should be vibrant (>= 0.16), got {:.3}", oklch0.c);
+        assert!(
+            oklch0.c >= 0.16,
+            "Zenburn track 0 chroma should be vibrant (>= 0.16), got {:.3}",
+            oklch0.c
+        );
 
         // Check contrast against b_low (canvas background)
         let (br, bg, bb, _) = parse_hex_color_rgba(&palette.theme.b_low);
         let cr0 = contrast_ratio((br, bg, bb), t0);
-        assert!(cr0 >= 3.0, "Zenburn note should have >= 3.0:1 contrast against b_low, got {:.2}", cr0);
+        assert!(
+            cr0 >= 3.0,
+            "Zenburn note should have >= 3.0:1 contrast against b_low, got {:.2}",
+            cr0
+        );
 
         // Test soft velocity note is still legible
         let soft_note = palette.midi_note_color(0, 0, 4, 60, 25);
         let cr_soft = contrast_ratio((br, bg, bb), soft_note);
-        assert!(cr_soft >= 2.5, "Soft velocity note should remain legible, got {:.2}", cr_soft);
+        assert!(
+            cr_soft >= 2.5,
+            "Soft velocity note should remain legible, got {:.2}",
+            cr_soft
+        );
     }
 
     #[test]
@@ -901,12 +923,21 @@ mod tests {
         let e4 = palette.midi_note_color(0, 0, 1, 64, 100);
         let g4 = palette.midi_note_color(0, 0, 1, 67, 100);
 
-        assert_ne!(c4, e4, "C4 and E4 should have different colors in single-track");
-        assert_ne!(e4, g4, "E4 and G4 should have different colors in single-track");
+        assert_ne!(
+            c4, e4,
+            "C4 and E4 should have different colors in single-track"
+        );
+        assert_ne!(
+            e4, g4,
+            "E4 and G4 should have different colors in single-track"
+        );
 
         // Octaves of same pitch class should share hue
         let c5 = palette.midi_note_color(0, 0, 1, 72, 100);
-        assert_eq!(c4, c5, "Octaves (C4 and C5) should share the same pitch-class color");
+        assert_eq!(
+            c4, c5,
+            "Octaves (C4 and C5) should share the same pitch-class color"
+        );
     }
 
     #[test]
@@ -947,4 +978,3 @@ mod tests {
         }
     }
 }
-

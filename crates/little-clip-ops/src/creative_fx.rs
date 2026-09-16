@@ -277,9 +277,21 @@ impl Default for TrichromaticParams {
         Self {
             mode: TrichromaticMode::Rgb,
             channels: [
-                ChannelTransform { offset_x: -3.0, offset_y: 0.0, zoom: 1.00 },
-                ChannelTransform { offset_x: 0.0, offset_y: 0.0, zoom: 1.00 },
-                ChannelTransform { offset_x: 3.0, offset_y: 0.0, zoom: 1.00 },
+                ChannelTransform {
+                    offset_x: -3.0,
+                    offset_y: 0.0,
+                    zoom: 1.00,
+                },
+                ChannelTransform {
+                    offset_x: 0.0,
+                    offset_y: 0.0,
+                    zoom: 1.00,
+                },
+                ChannelTransform {
+                    offset_x: 3.0,
+                    offset_y: 0.0,
+                    zoom: 1.00,
+                },
             ],
             auto_crop: true,
         }
@@ -349,54 +361,68 @@ pub fn apply_trichromatic(img: &RgbaImage, params: &TrichromaticParams) -> RgbaI
 
     let mut out = RgbaImage::new(out_w, out_h);
 
-    out.enumerate_rows_mut().par_bridge().for_each(|(out_y, row)| {
-        let orig_y = (start_y + out_y) as f32;
-        for (out_x, _, pixel) in row {
-            let orig_x = (start_x + out_x) as f32;
+    out.enumerate_rows_mut()
+        .par_bridge()
+        .for_each(|(out_y, row)| {
+            let orig_y = (start_y + out_y) as f32;
+            for (out_x, _, pixel) in row {
+                let orig_x = (start_x + out_x) as f32;
 
-            // Compute source coordinates for all 3 channels
-            let mut src_coords = [(0.0_f32, 0.0_f32); 3];
-            for i in 0..3 {
-                let ch = &params.channels[i];
-                let z = ch.zoom.clamp(0.2, 5.0);
-                let xs = cx + (orig_x - cx - ch.offset_x) / z;
-                let ys = cy + (orig_y - cy - ch.offset_y) / z;
-                src_coords[i] = (xs, ys);
-            }
-
-            match params.mode {
-                TrichromaticMode::Rgb => {
-                    let r = sample_bilinear_channel(img, src_coords[0].0, src_coords[0].1, 0);
-                    let g = sample_bilinear_channel(img, src_coords[1].0, src_coords[1].1, 1);
-                    let b = sample_bilinear_channel(img, src_coords[2].0, src_coords[2].1, 2);
-                    let a = sample_bilinear_channel(img, src_coords[1].0, src_coords[1].1, 3);
-                    *pixel = Rgba([r, g, b, a]);
+                // Compute source coordinates for all 3 channels
+                let mut src_coords = [(0.0_f32, 0.0_f32); 3];
+                for i in 0..3 {
+                    let ch = &params.channels[i];
+                    let z = ch.zoom.clamp(0.2, 5.0);
+                    let xs = cx + (orig_x - cx - ch.offset_x) / z;
+                    let ys = cy + (orig_y - cy - ch.offset_y) / z;
+                    src_coords[i] = (xs, ys);
                 }
-                TrichromaticMode::OkLab => {
-                    // Channel 0 -> Lightness (L)
-                    let p0 = sample_bilinear_pixel(img, src_coords[0].0, src_coords[0].1);
-                    let (l0, _, _) = srgb_to_oklab(p0[0] as f32 / 255.0, p0[1] as f32 / 255.0, p0[2] as f32 / 255.0);
 
-                    // Channel 1 -> Green-Red (a)
-                    let p1 = sample_bilinear_pixel(img, src_coords[1].0, src_coords[1].1);
-                    let (_, a1, _) = srgb_to_oklab(p1[0] as f32 / 255.0, p1[1] as f32 / 255.0, p1[2] as f32 / 255.0);
+                match params.mode {
+                    TrichromaticMode::Rgb => {
+                        let r = sample_bilinear_channel(img, src_coords[0].0, src_coords[0].1, 0);
+                        let g = sample_bilinear_channel(img, src_coords[1].0, src_coords[1].1, 1);
+                        let b = sample_bilinear_channel(img, src_coords[2].0, src_coords[2].1, 2);
+                        let a = sample_bilinear_channel(img, src_coords[1].0, src_coords[1].1, 3);
+                        *pixel = Rgba([r, g, b, a]);
+                    }
+                    TrichromaticMode::OkLab => {
+                        // Channel 0 -> Lightness (L)
+                        let p0 = sample_bilinear_pixel(img, src_coords[0].0, src_coords[0].1);
+                        let (l0, _, _) = srgb_to_oklab(
+                            p0[0] as f32 / 255.0,
+                            p0[1] as f32 / 255.0,
+                            p0[2] as f32 / 255.0,
+                        );
 
-                    // Channel 2 -> Blue-Yellow (b)
-                    let p2 = sample_bilinear_pixel(img, src_coords[2].0, src_coords[2].1);
-                    let (_, _, b2) = srgb_to_oklab(p2[0] as f32 / 255.0, p2[1] as f32 / 255.0, p2[2] as f32 / 255.0);
+                        // Channel 1 -> Green-Red (a)
+                        let p1 = sample_bilinear_pixel(img, src_coords[1].0, src_coords[1].1);
+                        let (_, a1, _) = srgb_to_oklab(
+                            p1[0] as f32 / 255.0,
+                            p1[1] as f32 / 255.0,
+                            p1[2] as f32 / 255.0,
+                        );
 
-                    let (r, g, b) = oklab_to_srgb(l0, a1, b2);
-                    let a = p1[3];
-                    *pixel = Rgba([
-                        (r * 255.0).round().clamp(0.0, 255.0) as u8,
-                        (g * 255.0).round().clamp(0.0, 255.0) as u8,
-                        (b * 255.0).round().clamp(0.0, 255.0) as u8,
-                        a,
-                    ]);
+                        // Channel 2 -> Blue-Yellow (b)
+                        let p2 = sample_bilinear_pixel(img, src_coords[2].0, src_coords[2].1);
+                        let (_, _, b2) = srgb_to_oklab(
+                            p2[0] as f32 / 255.0,
+                            p2[1] as f32 / 255.0,
+                            p2[2] as f32 / 255.0,
+                        );
+
+                        let (r, g, b) = oklab_to_srgb(l0, a1, b2);
+                        let a = p1[3];
+                        *pixel = Rgba([
+                            (r * 255.0).round().clamp(0.0, 255.0) as u8,
+                            (g * 255.0).round().clamp(0.0, 255.0) as u8,
+                            (b * 255.0).round().clamp(0.0, 255.0) as u8,
+                            a,
+                        ]);
+                    }
                 }
             }
-        }
-    });
+        });
 
     out
 }
@@ -522,11 +548,7 @@ pub fn pixel_metric(pixel: Rgba<u8>, criteria: PixelSortCriteria) -> f32 {
         PixelSortCriteria::Saturation => {
             let max = r.max(g).max(b);
             let min = r.min(g).min(b);
-            if max < 1e-5 {
-                0.0
-            } else {
-                (max - min) / max
-            }
+            if max < 1e-5 { 0.0 } else { (max - min) / max }
         }
     }
 }
@@ -633,7 +655,8 @@ pub fn apply_pixel_sort(img: &RgbaImage, params: &PixelSortParams) -> RgbaImage 
                     continue;
                 }
 
-                let mut diag_pixels: Vec<Rgba<u8>> = coords.iter().map(|&(x, y)| *out.get_pixel(x, y)).collect();
+                let mut diag_pixels: Vec<Rgba<u8>> =
+                    coords.iter().map(|&(x, y)| *out.get_pixel(x, y)).collect();
                 let len = diag_pixels.len();
                 let mut start = 0;
                 while start < len {
@@ -676,7 +699,12 @@ pub enum PaperTint {
 
 impl PaperTint {
     pub fn all() -> &'static [PaperTint] {
-        &[PaperTint::White, PaperTint::Newsprint, PaperTint::Kraft, PaperTint::Cream]
+        &[
+            PaperTint::White,
+            PaperTint::Newsprint,
+            PaperTint::Kraft,
+            PaperTint::Cream,
+        ]
     }
 
     pub fn label(&self) -> &'static str {
@@ -797,23 +825,55 @@ pub fn apply_cmyk_halftone(img: &RgbaImage, params: &CmykHalftoneParams) -> Rgba
             let x_f = x as f32;
 
             // Sample Cyan plate with its displacement
-            let c_pix = sample_bilinear_pixel(img, x_f - params.cyan_offset[0], y_f - params.cyan_offset[1]);
-            let (c_ink, _, _, _) = rgb_to_cmyk(c_pix[0] as f32 / 255.0, c_pix[1] as f32 / 255.0, c_pix[2] as f32 / 255.0);
+            let c_pix = sample_bilinear_pixel(
+                img,
+                x_f - params.cyan_offset[0],
+                y_f - params.cyan_offset[1],
+            );
+            let (c_ink, _, _, _) = rgb_to_cmyk(
+                c_pix[0] as f32 / 255.0,
+                c_pix[1] as f32 / 255.0,
+                c_pix[2] as f32 / 255.0,
+            );
             let c_cov = compute_coverage(x_f, y_f, c_cos, c_sin, c_ink);
 
             // Sample Magenta plate with its displacement
-            let m_pix = sample_bilinear_pixel(img, x_f - params.magenta_offset[0], y_f - params.magenta_offset[1]);
-            let (_, m_ink, _, _) = rgb_to_cmyk(m_pix[0] as f32 / 255.0, m_pix[1] as f32 / 255.0, m_pix[2] as f32 / 255.0);
+            let m_pix = sample_bilinear_pixel(
+                img,
+                x_f - params.magenta_offset[0],
+                y_f - params.magenta_offset[1],
+            );
+            let (_, m_ink, _, _) = rgb_to_cmyk(
+                m_pix[0] as f32 / 255.0,
+                m_pix[1] as f32 / 255.0,
+                m_pix[2] as f32 / 255.0,
+            );
             let m_cov = compute_coverage(x_f, y_f, m_cos, m_sin, m_ink);
 
             // Sample Yellow plate with its displacement
-            let y_pix = sample_bilinear_pixel(img, x_f - params.yellow_offset[0], y_f - params.yellow_offset[1]);
-            let (_, _, y_ink, _) = rgb_to_cmyk(y_pix[0] as f32 / 255.0, y_pix[1] as f32 / 255.0, y_pix[2] as f32 / 255.0);
+            let y_pix = sample_bilinear_pixel(
+                img,
+                x_f - params.yellow_offset[0],
+                y_f - params.yellow_offset[1],
+            );
+            let (_, _, y_ink, _) = rgb_to_cmyk(
+                y_pix[0] as f32 / 255.0,
+                y_pix[1] as f32 / 255.0,
+                y_pix[2] as f32 / 255.0,
+            );
             let y_cov = compute_coverage(x_f, y_f, y_cos, y_sin, y_ink);
 
             // Sample Black plate with its displacement
-            let k_pix = sample_bilinear_pixel(img, x_f - params.black_offset[0], y_f - params.black_offset[1]);
-            let (_, _, _, k_ink) = rgb_to_cmyk(k_pix[0] as f32 / 255.0, k_pix[1] as f32 / 255.0, k_pix[2] as f32 / 255.0);
+            let k_pix = sample_bilinear_pixel(
+                img,
+                x_f - params.black_offset[0],
+                y_f - params.black_offset[1],
+            );
+            let (_, _, _, k_ink) = rgb_to_cmyk(
+                k_pix[0] as f32 / 255.0,
+                k_pix[1] as f32 / 255.0,
+                k_pix[2] as f32 / 255.0,
+            );
             let k_cov = compute_coverage(x_f, y_f, k_cos, k_sin, k_ink);
 
             // Subtractive ink absorption on paper
@@ -879,72 +939,69 @@ impl RetroPalette {
     pub fn colors(&self) -> &'static [[u8; 3]] {
         match self {
             Self::GameBoy => &[
-                [15, 56, 15],     // darkest olive
-                [48, 98, 48],     // dark olive
-                [139, 172, 15],   // light olive
-                [155, 188, 15],   // lightest olive
+                [15, 56, 15],   // darkest olive
+                [48, 98, 48],   // dark olive
+                [139, 172, 15], // light olive
+                [155, 188, 15], // lightest olive
             ],
-            Self::Macintosh1Bit => &[
-                [0, 0, 0],
-                [255, 255, 255],
-            ],
+            Self::Macintosh1Bit => &[[0, 0, 0], [255, 255, 255]],
             Self::CgaMode1 => &[
-                [0, 0, 0],         // Black
-                [85, 255, 255],    // Cyan
-                [255, 85, 255],    // Magenta
-                [255, 255, 255],   // White
+                [0, 0, 0],       // Black
+                [85, 255, 255],  // Cyan
+                [255, 85, 255],  // Magenta
+                [255, 255, 255], // White
             ],
             Self::CgaMode2 => &[
-                [0, 0, 0],         // Black
-                [85, 255, 85],     // Green
-                [255, 85, 85],     // Red
-                [255, 255, 85],    // Yellow
+                [0, 0, 0],      // Black
+                [85, 255, 85],  // Green
+                [255, 85, 85],  // Red
+                [255, 255, 85], // Yellow
             ],
             Self::Pico8 => &[
-                [0, 0, 0],         // Black
-                [29, 43, 83],      // Storm
-                [126, 37, 83],     // Wine
-                [0, 135, 81],      // Moss
-                [171, 82, 54],     // Tan
-                [95, 87, 79],      // Slate
-                [194, 195, 199],   // Silver
-                [255, 241, 232],   // White
-                [255, 0, 77],      // Red
-                [255, 163, 0],     // Orange
-                [255, 236, 39],    // Yellow
-                [0, 228, 54],      // Green
-                [41, 173, 255],    // Blue
-                [131, 118, 156],   // Indigo
-                [255, 119, 168],   // Pink
-                [255, 204, 170],   // Peach
+                [0, 0, 0],       // Black
+                [29, 43, 83],    // Storm
+                [126, 37, 83],   // Wine
+                [0, 135, 81],    // Moss
+                [171, 82, 54],   // Tan
+                [95, 87, 79],    // Slate
+                [194, 195, 199], // Silver
+                [255, 241, 232], // White
+                [255, 0, 77],    // Red
+                [255, 163, 0],   // Orange
+                [255, 236, 39],  // Yellow
+                [0, 228, 54],    // Green
+                [41, 173, 255],  // Blue
+                [131, 118, 156], // Indigo
+                [255, 119, 168], // Pink
+                [255, 204, 170], // Peach
             ],
             Self::Commodore64 => &[
-                [0, 0, 0],         // Black
-                [255, 255, 255],   // White
-                [136, 0, 0],       // Red
-                [170, 255, 238],   // Cyan
-                [204, 68, 204],    // Purple
-                [0, 204, 85],      // Green
-                [0, 0, 170],       // Blue
-                [238, 238, 119],   // Yellow
-                [221, 136, 85],    // Orange
-                [102, 68, 0],      // Brown
-                [255, 119, 119],   // Light Red
-                [51, 51, 51],      // Dark Grey
-                [119, 119, 119],   // Grey
-                [170, 255, 102],   // Light Green
-                [0, 136, 255],     // Light Blue
-                [187, 187, 187],   // Light Grey
+                [0, 0, 0],       // Black
+                [255, 255, 255], // White
+                [136, 0, 0],     // Red
+                [170, 255, 238], // Cyan
+                [204, 68, 204],  // Purple
+                [0, 204, 85],    // Green
+                [0, 0, 170],     // Blue
+                [238, 238, 119], // Yellow
+                [221, 136, 85],  // Orange
+                [102, 68, 0],    // Brown
+                [255, 119, 119], // Light Red
+                [51, 51, 51],    // Dark Grey
+                [119, 119, 119], // Grey
+                [170, 255, 102], // Light Green
+                [0, 136, 255],   // Light Blue
+                [187, 187, 187], // Light Grey
             ],
             Self::Cyberpunk => &[
-                [13, 2, 33],       // Deep Obsidian
-                [15, 8, 75],       // Midnight Blue
-                [38, 64, 139],     // Electric Blue
-                [166, 0, 103],     // Neon Magenta
-                [255, 0, 127],     // Hot Pink
-                [0, 240, 255],     // Acid Cyan
-                [255, 230, 0],     // Laser Yellow
-                [255, 255, 255],   // Glitch White
+                [13, 2, 33],     // Deep Obsidian
+                [15, 8, 75],     // Midnight Blue
+                [38, 64, 139],   // Electric Blue
+                [166, 0, 103],   // Neon Magenta
+                [255, 0, 127],   // Hot Pink
+                [0, 240, 255],   // Acid Cyan
+                [255, 230, 0],   // Laser Yellow
+                [255, 255, 255], // Glitch White
             ],
         }
     }
@@ -1008,12 +1065,7 @@ impl Default for DitherPaletteParams {
     }
 }
 
-const BAYER_4X4: [[u8; 4]; 4] = [
-    [0, 8, 2, 10],
-    [12, 4, 14, 6],
-    [3, 11, 1, 9],
-    [15, 7, 13, 5],
-];
+const BAYER_4X4: [[u8; 4]; 4] = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 
 const BAYER_8X8: [[u8; 8]; 8] = [
     [0, 32, 8, 40, 2, 34, 10, 42],
@@ -1027,22 +1079,54 @@ const BAYER_8X8: [[u8; 8]; 8] = [
 ];
 
 const BLUE_NOISE_16X16: [[u8; 16]; 16] = [
-    [0, 192, 48, 240, 12, 204, 60, 252, 3, 195, 51, 243, 15, 207, 63, 255],
-    [128, 64, 176, 112, 140, 76, 188, 124, 131, 67, 179, 115, 143, 79, 191, 127],
-    [32, 224, 16, 208, 44, 236, 28, 220, 35, 227, 19, 211, 47, 239, 31, 223],
-    [160, 96, 144, 80, 172, 108, 156, 92, 163, 99, 147, 83, 175, 111, 159, 95],
-    [8, 200, 56, 248, 4, 196, 52, 244, 11, 203, 59, 251, 7, 199, 55, 247],
-    [136, 72, 184, 120, 132, 68, 180, 116, 139, 75, 187, 123, 135, 71, 183, 119],
-    [40, 232, 24, 216, 36, 228, 20, 212, 43, 235, 27, 219, 39, 231, 23, 215],
-    [168, 104, 152, 88, 164, 100, 148, 84, 171, 107, 155, 91, 167, 103, 151, 87],
-    [2, 194, 50, 242, 14, 206, 62, 254, 1, 193, 49, 241, 13, 205, 61, 253],
-    [130, 66, 178, 114, 142, 78, 190, 126, 129, 65, 177, 113, 141, 77, 189, 125],
-    [34, 226, 18, 210, 46, 238, 30, 222, 33, 225, 17, 209, 45, 237, 29, 221],
-    [162, 98, 146, 82, 174, 110, 158, 94, 161, 97, 145, 81, 173, 109, 157, 93],
-    [10, 202, 58, 250, 6, 198, 54, 246, 9, 201, 57, 249, 5, 197, 53, 245],
-    [138, 74, 186, 122, 134, 70, 182, 118, 137, 73, 185, 121, 133, 69, 181, 117],
-    [42, 234, 26, 218, 38, 230, 22, 214, 41, 233, 25, 217, 37, 229, 21, 213],
-    [170, 106, 154, 90, 166, 102, 150, 86, 169, 105, 153, 89, 165, 101, 149, 85],
+    [
+        0, 192, 48, 240, 12, 204, 60, 252, 3, 195, 51, 243, 15, 207, 63, 255,
+    ],
+    [
+        128, 64, 176, 112, 140, 76, 188, 124, 131, 67, 179, 115, 143, 79, 191, 127,
+    ],
+    [
+        32, 224, 16, 208, 44, 236, 28, 220, 35, 227, 19, 211, 47, 239, 31, 223,
+    ],
+    [
+        160, 96, 144, 80, 172, 108, 156, 92, 163, 99, 147, 83, 175, 111, 159, 95,
+    ],
+    [
+        8, 200, 56, 248, 4, 196, 52, 244, 11, 203, 59, 251, 7, 199, 55, 247,
+    ],
+    [
+        136, 72, 184, 120, 132, 68, 180, 116, 139, 75, 187, 123, 135, 71, 183, 119,
+    ],
+    [
+        40, 232, 24, 216, 36, 228, 20, 212, 43, 235, 27, 219, 39, 231, 23, 215,
+    ],
+    [
+        168, 104, 152, 88, 164, 100, 148, 84, 171, 107, 155, 91, 167, 103, 151, 87,
+    ],
+    [
+        2, 194, 50, 242, 14, 206, 62, 254, 1, 193, 49, 241, 13, 205, 61, 253,
+    ],
+    [
+        130, 66, 178, 114, 142, 78, 190, 126, 129, 65, 177, 113, 141, 77, 189, 125,
+    ],
+    [
+        34, 226, 18, 210, 46, 238, 30, 222, 33, 225, 17, 209, 45, 237, 29, 221,
+    ],
+    [
+        162, 98, 146, 82, 174, 110, 158, 94, 161, 97, 145, 81, 173, 109, 157, 93,
+    ],
+    [
+        10, 202, 58, 250, 6, 198, 54, 246, 9, 201, 57, 249, 5, 197, 53, 245,
+    ],
+    [
+        138, 74, 186, 122, 134, 70, 182, 118, 137, 73, 185, 121, 133, 69, 181, 117,
+    ],
+    [
+        42, 234, 26, 218, 38, 230, 22, 214, 41, 233, 25, 217, 37, 229, 21, 213,
+    ],
+    [
+        170, 106, 154, 90, 166, 102, 150, 86, 169, 105, 153, 89, 165, 101, 149, 85,
+    ],
 ];
 
 #[inline]
@@ -1162,7 +1246,9 @@ pub fn apply_dither_palette(img: &RgbaImage, params: &DitherPaletteParams) -> Rg
                         v * params.dither_strength * 64.0
                     }
                     DitherMethod::BlueNoise => {
-                        let v = BLUE_NOISE_16X16[(dy % 16) as usize][(dx % 16) as usize] as f32 / 255.0 - 0.5;
+                        let v = BLUE_NOISE_16X16[(dy % 16) as usize][(dx % 16) as usize] as f32
+                            / 255.0
+                            - 0.5;
                         v * params.dither_strength * 64.0
                     }
                     DitherMethod::None | DitherMethod::FloydSteinberg => 0.0,
@@ -1275,7 +1361,12 @@ pub enum NtscPhaseShift {
 
 impl NtscPhaseShift {
     pub fn all() -> &'static [Self] {
-        &[Self::Degrees0, Self::Degrees90, Self::Degrees180, Self::Degrees270]
+        &[
+            Self::Degrees0,
+            Self::Degrees90,
+            Self::Degrees180,
+            Self::Degrees270,
+        ]
     }
 
     pub fn label(&self) -> &'static str {
@@ -1414,8 +1505,12 @@ pub fn params_to_ntsc_effect(params: &NtscParams) -> ntsc_rs::NtscEffect {
 
     effect.chroma_demodulation = match params.demodulation {
         NtscDemodulation::Notch => ntsc_rs::settings::standard::ChromaDemodulationFilter::Notch,
-        NtscDemodulation::OneLineComb => ntsc_rs::settings::standard::ChromaDemodulationFilter::OneLineComb,
-        NtscDemodulation::TwoLineComb => ntsc_rs::settings::standard::ChromaDemodulationFilter::TwoLineComb,
+        NtscDemodulation::OneLineComb => {
+            ntsc_rs::settings::standard::ChromaDemodulationFilter::OneLineComb
+        }
+        NtscDemodulation::TwoLineComb => {
+            ntsc_rs::settings::standard::ChromaDemodulationFilter::TwoLineComb
+        }
         NtscDemodulation::Box => ntsc_rs::settings::standard::ChromaDemodulationFilter::Box,
     };
 
@@ -1568,9 +1663,21 @@ pub fn default_preset_for_fx(fx_type: CreativeFxType) -> CreativeFxPreset {
             params: CreativeFxParams::Trichromatic(TrichromaticParams {
                 mode: TrichromaticMode::Rgb,
                 channels: [
-                    ChannelTransform { offset_x: -8.0, offset_y: -2.0, zoom: 1.02 },
-                    ChannelTransform { offset_x: 0.0, offset_y: 0.0, zoom: 1.00 },
-                    ChannelTransform { offset_x: 8.0, offset_y: 2.0, zoom: 0.98 },
+                    ChannelTransform {
+                        offset_x: -8.0,
+                        offset_y: -2.0,
+                        zoom: 1.02,
+                    },
+                    ChannelTransform {
+                        offset_x: 0.0,
+                        offset_y: 0.0,
+                        zoom: 1.00,
+                    },
+                    ChannelTransform {
+                        offset_x: 8.0,
+                        offset_y: 2.0,
+                        zoom: 0.98,
+                    },
                 ],
                 auto_crop: true,
             }),
@@ -1712,9 +1819,21 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                 params: CreativeFxParams::Trichromatic(TrichromaticParams {
                     mode: TrichromaticMode::Rgb,
                     channels: [
-                        ChannelTransform { offset_x: -6.0, offset_y: 0.0, zoom: 1.00 },
-                        ChannelTransform { offset_x: 0.0, offset_y: 0.0, zoom: 1.00 },
-                        ChannelTransform { offset_x: 6.0, offset_y: 0.0, zoom: 1.00 },
+                        ChannelTransform {
+                            offset_x: -6.0,
+                            offset_y: 0.0,
+                            zoom: 1.00,
+                        },
+                        ChannelTransform {
+                            offset_x: 0.0,
+                            offset_y: 0.0,
+                            zoom: 1.00,
+                        },
+                        ChannelTransform {
+                            offset_x: 6.0,
+                            offset_y: 0.0,
+                            zoom: 1.00,
+                        },
                     ],
                     auto_crop: true,
                 }),
@@ -1725,9 +1844,21 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                 params: CreativeFxParams::Trichromatic(TrichromaticParams {
                     mode: TrichromaticMode::Rgb,
                     channels: [
-                        ChannelTransform { offset_x: -4.0, offset_y: -3.0, zoom: 1.015 },
-                        ChannelTransform { offset_x: 0.0, offset_y: 0.0, zoom: 1.00 },
-                        ChannelTransform { offset_x: 5.0, offset_y: 3.0, zoom: 0.985 },
+                        ChannelTransform {
+                            offset_x: -4.0,
+                            offset_y: -3.0,
+                            zoom: 1.015,
+                        },
+                        ChannelTransform {
+                            offset_x: 0.0,
+                            offset_y: 0.0,
+                            zoom: 1.00,
+                        },
+                        ChannelTransform {
+                            offset_x: 5.0,
+                            offset_y: 3.0,
+                            zoom: 0.985,
+                        },
                     ],
                     auto_crop: true,
                 }),
@@ -1738,9 +1869,21 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                 params: CreativeFxParams::Trichromatic(TrichromaticParams {
                     mode: TrichromaticMode::OkLab,
                     channels: [
-                        ChannelTransform { offset_x: 0.0, offset_y: 0.0, zoom: 1.00 },
-                        ChannelTransform { offset_x: -8.0, offset_y: 4.0, zoom: 1.02 },
-                        ChannelTransform { offset_x: 8.0, offset_y: -4.0, zoom: 0.98 },
+                        ChannelTransform {
+                            offset_x: 0.0,
+                            offset_y: 0.0,
+                            zoom: 1.00,
+                        },
+                        ChannelTransform {
+                            offset_x: -8.0,
+                            offset_y: 4.0,
+                            zoom: 1.02,
+                        },
+                        ChannelTransform {
+                            offset_x: 8.0,
+                            offset_y: -4.0,
+                            zoom: 0.98,
+                        },
                     ],
                     auto_crop: true,
                 }),
@@ -1751,9 +1894,21 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                 params: CreativeFxParams::Trichromatic(TrichromaticParams {
                     mode: TrichromaticMode::OkLab,
                     channels: [
-                        ChannelTransform { offset_x: 10.0, offset_y: 6.0, zoom: 1.03 },
-                        ChannelTransform { offset_x: 0.0, offset_y: 0.0, zoom: 1.00 },
-                        ChannelTransform { offset_x: 0.0, offset_y: 0.0, zoom: 1.00 },
+                        ChannelTransform {
+                            offset_x: 10.0,
+                            offset_y: 6.0,
+                            zoom: 1.03,
+                        },
+                        ChannelTransform {
+                            offset_x: 0.0,
+                            offset_y: 0.0,
+                            zoom: 1.00,
+                        },
+                        ChannelTransform {
+                            offset_x: 0.0,
+                            offset_y: 0.0,
+                            zoom: 1.00,
+                        },
                     ],
                     auto_crop: true,
                 }),
@@ -1764,9 +1919,21 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                 params: CreativeFxParams::Trichromatic(TrichromaticParams {
                     mode: TrichromaticMode::Rgb,
                     channels: [
-                        ChannelTransform { offset_x: -28.0, offset_y: -14.0, zoom: 1.12 },
-                        ChannelTransform { offset_x: 0.0, offset_y: 0.0, zoom: 1.00 },
-                        ChannelTransform { offset_x: 28.0, offset_y: 14.0, zoom: 0.88 },
+                        ChannelTransform {
+                            offset_x: -28.0,
+                            offset_y: -14.0,
+                            zoom: 1.12,
+                        },
+                        ChannelTransform {
+                            offset_x: 0.0,
+                            offset_y: 0.0,
+                            zoom: 1.00,
+                        },
+                        ChannelTransform {
+                            offset_x: 28.0,
+                            offset_y: 14.0,
+                            zoom: 0.88,
+                        },
                     ],
                     auto_crop: true,
                 }),
@@ -2444,18 +2611,24 @@ mod tests {
         assert_eq!(res.height(), 40);
 
         // Test with color balance +50 (blue/yellow) and -50 (red/blue)
-        let res_by = apply_lens_aberration(&img, &LensAberrationParams {
-            strength: 50.0,
-            falloff: 0.0,
-            color_balance: 50.0,
-        });
+        let res_by = apply_lens_aberration(
+            &img,
+            &LensAberrationParams {
+                strength: 50.0,
+                falloff: 0.0,
+                color_balance: 50.0,
+            },
+        );
         assert_eq!(res_by.width(), 40);
 
-        let res_rb = apply_lens_aberration(&img, &LensAberrationParams {
-            strength: 50.0,
-            falloff: 100.0,
-            color_balance: -50.0,
-        });
+        let res_rb = apply_lens_aberration(
+            &img,
+            &LensAberrationParams {
+                strength: 50.0,
+                falloff: 100.0,
+                color_balance: -50.0,
+            },
+        );
         assert_eq!(res_rb.width(), 40);
     }
 
@@ -2471,9 +2644,21 @@ mod tests {
         let params_rgb = TrichromaticParams {
             mode: TrichromaticMode::Rgb,
             channels: [
-                ChannelTransform { offset_x: -2.0, offset_y: 0.0, zoom: 1.0 },
-                ChannelTransform { offset_x: 0.0, offset_y: 0.0, zoom: 1.0 },
-                ChannelTransform { offset_x: 2.0, offset_y: 0.0, zoom: 1.0 },
+                ChannelTransform {
+                    offset_x: -2.0,
+                    offset_y: 0.0,
+                    zoom: 1.0,
+                },
+                ChannelTransform {
+                    offset_x: 0.0,
+                    offset_y: 0.0,
+                    zoom: 1.0,
+                },
+                ChannelTransform {
+                    offset_x: 2.0,
+                    offset_y: 0.0,
+                    zoom: 1.0,
+                },
             ],
             auto_crop: true,
         };
@@ -2487,9 +2672,21 @@ mod tests {
         let params_oklab = TrichromaticParams {
             mode: TrichromaticMode::OkLab,
             channels: [
-                ChannelTransform { offset_x: 0.0, offset_y: -2.0, zoom: 1.0 },
-                ChannelTransform { offset_x: 0.0, offset_y: 0.0, zoom: 1.0 },
-                ChannelTransform { offset_x: 0.0, offset_y: 2.0, zoom: 1.0 },
+                ChannelTransform {
+                    offset_x: 0.0,
+                    offset_y: -2.0,
+                    zoom: 1.0,
+                },
+                ChannelTransform {
+                    offset_x: 0.0,
+                    offset_y: 0.0,
+                    zoom: 1.0,
+                },
+                ChannelTransform {
+                    offset_x: 0.0,
+                    offset_y: 2.0,
+                    zoom: 1.0,
+                },
             ],
             auto_crop: true,
         };
@@ -2507,40 +2704,49 @@ mod tests {
         }
 
         // Test vertical sort
-        let res_v = apply_pixel_sort(&img, &PixelSortParams {
-            direction: PixelSortDirection::Vertical,
-            criteria: PixelSortCriteria::Brightness,
-            order: PixelSortOrder::Ascending,
-            min_threshold: 0.2,
-            max_threshold: 0.8,
-            min_span: 4,
-            invert_mask: false,
-        });
+        let res_v = apply_pixel_sort(
+            &img,
+            &PixelSortParams {
+                direction: PixelSortDirection::Vertical,
+                criteria: PixelSortCriteria::Brightness,
+                order: PixelSortOrder::Ascending,
+                min_threshold: 0.2,
+                max_threshold: 0.8,
+                min_span: 4,
+                invert_mask: false,
+            },
+        );
         assert_eq!(res_v.width(), 30);
         assert_eq!(res_v.height(), 30);
 
         // Test horizontal sort
-        let res_h = apply_pixel_sort(&img, &PixelSortParams {
-            direction: PixelSortDirection::Horizontal,
-            criteria: PixelSortCriteria::Hue,
-            order: PixelSortOrder::Descending,
-            min_threshold: 0.1,
-            max_threshold: 0.9,
-            min_span: 4,
-            invert_mask: false,
-        });
+        let res_h = apply_pixel_sort(
+            &img,
+            &PixelSortParams {
+                direction: PixelSortDirection::Horizontal,
+                criteria: PixelSortCriteria::Hue,
+                order: PixelSortOrder::Descending,
+                min_threshold: 0.1,
+                max_threshold: 0.9,
+                min_span: 4,
+                invert_mask: false,
+            },
+        );
         assert_eq!(res_h.width(), 30);
 
         // Test diagonal sort
-        let res_d = apply_pixel_sort(&img, &PixelSortParams {
-            direction: PixelSortDirection::Diagonal,
-            criteria: PixelSortCriteria::Saturation,
-            order: PixelSortOrder::Ascending,
-            min_threshold: 0.0,
-            max_threshold: 1.0,
-            min_span: 3,
-            invert_mask: false,
-        });
+        let res_d = apply_pixel_sort(
+            &img,
+            &PixelSortParams {
+                direction: PixelSortDirection::Diagonal,
+                criteria: PixelSortCriteria::Saturation,
+                order: PixelSortOrder::Ascending,
+                min_threshold: 0.0,
+                max_threshold: 1.0,
+                min_span: 3,
+                invert_mask: false,
+            },
+        );
         assert_eq!(res_d.width(), 30);
     }
 
@@ -2586,35 +2792,44 @@ mod tests {
         }
 
         // Test Game Boy Bayer 4x4
-        let res_gb = apply_dither_palette(&img, &DitherPaletteParams {
-            palette: RetroPalette::GameBoy,
-            method: DitherMethod::Bayer4x4,
-            pixel_scale: 2,
-            dither_strength: 0.8,
-            contrast: 0.0,
-        });
+        let res_gb = apply_dither_palette(
+            &img,
+            &DitherPaletteParams {
+                palette: RetroPalette::GameBoy,
+                method: DitherMethod::Bayer4x4,
+                pixel_scale: 2,
+                dither_strength: 0.8,
+                contrast: 0.0,
+            },
+        );
         assert_eq!(res_gb.width(), 32);
         assert_eq!(res_gb.height(), 32);
 
         // Test Mac 1-bit Floyd Steinberg
-        let res_mac = apply_dither_palette(&img, &DitherPaletteParams {
-            palette: RetroPalette::Macintosh1Bit,
-            method: DitherMethod::FloydSteinberg,
-            pixel_scale: 1,
-            dither_strength: 0.9,
-            contrast: 10.0,
-        });
+        let res_mac = apply_dither_palette(
+            &img,
+            &DitherPaletteParams {
+                palette: RetroPalette::Macintosh1Bit,
+                method: DitherMethod::FloydSteinberg,
+                pixel_scale: 1,
+                dither_strength: 0.9,
+                contrast: 10.0,
+            },
+        );
         assert_eq!(res_mac.width(), 32);
         assert_eq!(res_mac.height(), 32);
 
         // Test PICO-8 Blue Noise
-        let res_pico = apply_dither_palette(&img, &DitherPaletteParams {
-            palette: RetroPalette::Pico8,
-            method: DitherMethod::BlueNoise,
-            pixel_scale: 2,
-            dither_strength: 0.7,
-            contrast: -5.0,
-        });
+        let res_pico = apply_dither_palette(
+            &img,
+            &DitherPaletteParams {
+                palette: RetroPalette::Pico8,
+                method: DitherMethod::BlueNoise,
+                pixel_scale: 2,
+                dither_strength: 0.7,
+                contrast: -5.0,
+            },
+        );
         assert_eq!(res_pico.width(), 32);
     }
 

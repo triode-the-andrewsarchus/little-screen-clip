@@ -140,8 +140,6 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
             ("default_text", ""),
         ],
     },
-
-
     // -------------------------------------------------------------
     // Text Operators (CLI / External Python / jq)
     // -------------------------------------------------------------
@@ -233,7 +231,6 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         outputs: &[("Out", PortType::Text)],
         default_props: &[("mode", "encode")],
     },
-
     // -------------------------------------------------------------
     // Image Operators (ImageMagick CLI: magick / convert)
     // -------------------------------------------------------------
@@ -315,7 +312,10 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         description: "Stitch two images horizontally (+append) (ImageMagick)",
         tags: &["image", "stitch", "append", "dual", "magick"],
         kind: NodeKind::ImageStitch,
-        inputs: &[("Left Image", PortType::Image), ("Right Image", PortType::Image)],
+        inputs: &[
+            ("Left Image", PortType::Image),
+            ("Right Image", PortType::Image),
+        ],
         outputs: &[("Combined", PortType::Image)],
         default_props: &[],
     },
@@ -337,11 +337,13 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         description: "Perceptual pixel comparison highlighting differences (ODiff-style)",
         tags: &["image", "diff", "compare", "odiff", "mask", "visual"],
         kind: NodeKind::ImageDiff,
-        inputs: &[("Base Image", PortType::Image), ("Compare Image", PortType::Image)],
+        inputs: &[
+            ("Base Image", PortType::Image),
+            ("Compare Image", PortType::Image),
+        ],
         outputs: &[("Mask", PortType::Image), ("Overlay", PortType::Image)],
         default_props: &[("threshold", "0.10")],
     },
-
     // -------------------------------------------------------------
     // Audio Operators (FFmpeg CLI)
     // -------------------------------------------------------------
@@ -389,7 +391,6 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         outputs: &[("Audio Out", PortType::Audio)],
         default_props: &[],
     },
-
     // -------------------------------------------------------------
     // File Operators
     // -------------------------------------------------------------
@@ -426,7 +427,6 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         outputs: &[("Filename", PortType::Text)],
         default_props: &[],
     },
-
     // -------------------------------------------------------------
     // Scripting Escape Hatch (Python / Bash)
     // -------------------------------------------------------------
@@ -439,12 +439,10 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         kind: NodeKind::PythonScript,
         inputs: &[("Input", PortType::Any)],
         outputs: &[("Output", PortType::Any)],
-        default_props: &[
-            (
-                "script",
-                "import sys\ndata = sys.stdin.read()\nsys.stdout.write(data.upper())",
-            ),
-        ],
+        default_props: &[(
+            "script",
+            "import sys\ndata = sys.stdin.read()\nsys.stdout.write(data.upper())",
+        )],
     },
     NodeTemplate {
         id: "script_bash",
@@ -457,7 +455,6 @@ pub const NODE_CATALOG: &[NodeTemplate] = &[
         outputs: &[("Output", PortType::Any)],
         default_props: &[("command", "tr '[:lower:]' '[:upper:]'")],
     },
-
     // -------------------------------------------------------------
     // Sinks / Actions
     // -------------------------------------------------------------

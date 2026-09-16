@@ -380,7 +380,11 @@ pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
                 category: "Compare",
             });
 
-            if base64::engine::general_purpose::STANDARD.decode(trimmed).is_ok() && trimmed.len() > 3 {
+            if base64::engine::general_purpose::STANDARD
+                .decode(trimmed)
+                .is_ok()
+                && trimmed.len() > 3
+            {
                 ops.push(OpDescriptor {
                     name: "base64-decode",
                     label: "Base64 Decode",
@@ -409,7 +413,10 @@ pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
                     category: "Compare",
                 });
             }
-        } else if resolve_diff_target(item).map(|t| t.is_image()).unwrap_or(false) {
+        } else if resolve_diff_target(item)
+            .map(|t| t.is_image())
+            .unwrap_or(false)
+        {
             ops.push(OpDescriptor {
                 name: "diff",
                 label: "Diff Comparison (Picture Diff)",
@@ -437,16 +444,17 @@ pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
 
         let t0 = resolve_diff_target(items[0]);
         let t1 = resolve_diff_target(items[1]);
-        if let (Some(t0), Some(t1)) = (t0, t1) {
-            if t0.is_image() && t1.is_image() {
-                ops.push(OpDescriptor {
-                    name: "diff",
-                    label: "Picture Diff Comparison",
-                    description: "ODiff-style perceptual visual diff highlighting changed pixels",
-                    is_binary: true,
-                    category: "Compare",
-                });
-            }
+        if let (Some(t0), Some(t1)) = (t0, t1)
+            && t0.is_image()
+            && t1.is_image()
+        {
+            ops.push(OpDescriptor {
+                name: "diff",
+                label: "Picture Diff Comparison",
+                description: "ODiff-style perceptual visual diff highlighting changed pixels",
+                is_binary: true,
+                category: "Compare",
+            });
         }
 
         let all_text = items.iter().all(|i| get_item_text(i).is_ok());
@@ -573,7 +581,10 @@ pub fn execute_unary_op(op_name: &str, item: &ClipItem) -> Result<ClipItem, OpEr
         "base64-decode" => op_base64_decode(item),
         "diff" => op_diff_unary(item),
         "binary-diff" => op_binary_diff_unary(item),
-        _ => Err(OpError::ExecutionFailed(format!("Unknown unary operation: {}", op_name))),
+        _ => Err(OpError::ExecutionFailed(format!(
+            "Unknown unary operation: {}",
+            op_name
+        ))),
     }
 }
 
@@ -581,29 +592,47 @@ fn op_diff_unary(item: &ClipItem) -> Result<ClipItem, OpError> {
     if let Some((lhs, rhs)) = resolve_diff_pair(item) {
         if lhs.is_image() && rhs.is_image() {
             let options = ImageDiffOptions::default();
-            let b1 = lhs.image_bytes().ok_or_else(|| OpError::ExecutionFailed("Left image bytes missing".to_string()))?;
-            let b2 = rhs.image_bytes().ok_or_else(|| OpError::ExecutionFailed("Right image bytes missing".to_string()))?;
+            let b1 = lhs
+                .image_bytes()
+                .ok_or_else(|| OpError::ExecutionFailed("Left image bytes missing".to_string()))?;
+            let b2 = rhs
+                .image_bytes()
+                .ok_or_else(|| OpError::ExecutionFailed("Right image bytes missing".to_string()))?;
             let res = compare_image_bytes(b1, b2, &options)
                 .map_err(|e| OpError::ExecutionFailed(format!("Picture diff failed: {}", e)))?;
-            let mask_png = res.encode_mask_png()
-                .map_err(|e| OpError::ExecutionFailed(format!("Encoding diff mask PNG failed: {}", e)))?;
-            ClipItem::from_image_bytes(mask_png, "image/png")
-                .ok_or_else(|| OpError::ExecutionFailed("Failed to create ClipItem from diff mask PNG".to_string()))
+            let mask_png = res.encode_mask_png().map_err(|e| {
+                OpError::ExecutionFailed(format!("Encoding diff mask PNG failed: {}", e))
+            })?;
+            ClipItem::from_image_bytes(mask_png, "image/png").ok_or_else(|| {
+                OpError::ExecutionFailed("Failed to create ClipItem from diff mask PNG".to_string())
+            })
         } else {
             let res = compute_diff(&lhs, &rhs, DiffDisplayMode::Inline, 120);
             Ok(ClipItem::from_text(res.raw_ansi))
         }
     } else {
-        Err(OpError::ExecutionFailed("Item does not contain two files or images to diff".to_string()))
+        Err(OpError::ExecutionFailed(
+            "Item does not contain two files or images to diff".to_string(),
+        ))
     }
 }
 
 fn op_binary_diff_unary(item: &ClipItem) -> Result<ClipItem, OpError> {
     if let Some(((l_lbl, l_bytes), (r_lbl, r_bytes))) = resolve_two_files_from_single_item(item) {
-        let res = compute_binary_diff(&l_lbl, &l_bytes, &r_lbl, &r_bytes, BinaryDiffMode::Aligned, 16);
+        let res = compute_binary_diff(
+            &l_lbl,
+            &l_bytes,
+            &r_lbl,
+            &r_bytes,
+            BinaryDiffMode::Aligned,
+            16,
+        );
         let summary = format!(
             "Binary Diff: {} ({} B) vs {} ({} B)\nSimilarity: {:.1}%\nMatches: {} B | Mismatches: {} B | Insertions: {} B | Deletions: {} B",
-            l_lbl, l_bytes.len(), r_lbl, r_bytes.len(),
+            l_lbl,
+            l_bytes.len(),
+            r_lbl,
+            r_bytes.len(),
             res.stats.similarity_pct,
             res.stats.match_count,
             res.stats.mismatch_count,
@@ -612,11 +641,17 @@ fn op_binary_diff_unary(item: &ClipItem) -> Result<ClipItem, OpError> {
         );
         let mut out = ClipItem::from_text(summary);
         out.title = format!("Binary Diff: {} vs {}", l_lbl, r_lbl);
-        out.subtitle = format!("{:.1}% match • {} diff rows", res.stats.similarity_pct, res.diff_row_indices.len());
+        out.subtitle = format!(
+            "{:.1}% match • {} diff rows",
+            res.stats.similarity_pct,
+            res.diff_row_indices.len()
+        );
         out.handler_tag = "BINARY-DIFF".to_string();
         Ok(out)
     } else {
-        Err(OpError::ExecutionFailed("Item does not contain two files or paths to diff".to_string()))
+        Err(OpError::ExecutionFailed(
+            "Item does not contain two files or paths to diff".to_string(),
+        ))
     }
 }
 
@@ -634,17 +669,30 @@ pub fn execute_binary_op(
         "concat-reversed" => op_concat(slot, hand, separator.unwrap_or("\n")),
         "diff" => op_diff(hand, slot),
         "binary-diff" => op_binary_diff(hand, slot),
-        _ => Err(OpError::ExecutionFailed(format!("Unknown binary operation: {}", op_name))),
+        _ => Err(OpError::ExecutionFailed(format!(
+            "Unknown binary operation: {}",
+            op_name
+        ))),
     }
 }
 
 fn op_binary_diff(a: &ClipItem, b: &ClipItem) -> Result<ClipItem, OpError> {
     let (l_lbl, l_bytes) = get_item_binary_bytes(a);
     let (r_lbl, r_bytes) = get_item_binary_bytes(b);
-    let res = compute_binary_diff(&l_lbl, &l_bytes, &r_lbl, &r_bytes, BinaryDiffMode::Aligned, 16);
+    let res = compute_binary_diff(
+        &l_lbl,
+        &l_bytes,
+        &r_lbl,
+        &r_bytes,
+        BinaryDiffMode::Aligned,
+        16,
+    );
     let summary = format!(
         "Binary Diff: {} ({} B) vs {} ({} B)\nSimilarity: {:.1}%\nMatches: {} B | Mismatches: {} B | Insertions: {} B | Deletions: {} B",
-        l_lbl, l_bytes.len(), r_lbl, r_bytes.len(),
+        l_lbl,
+        l_bytes.len(),
+        r_lbl,
+        r_bytes.len(),
         res.stats.similarity_pct,
         res.stats.match_count,
         res.stats.mismatch_count,
@@ -653,7 +701,11 @@ fn op_binary_diff(a: &ClipItem, b: &ClipItem) -> Result<ClipItem, OpError> {
     );
     let mut item = ClipItem::from_text(summary);
     item.title = format!("Binary Diff: {} vs {}", l_lbl, r_lbl);
-    item.subtitle = format!("{:.1}% match • {} diff rows", res.stats.similarity_pct, res.diff_row_indices.len());
+    item.subtitle = format!(
+        "{:.1}% match • {} diff rows",
+        res.stats.similarity_pct,
+        res.diff_row_indices.len()
+    );
     item.handler_tag = "BINARY-DIFF".to_string();
     Ok(item)
 }
@@ -670,7 +722,14 @@ pub fn execute_multi_op(
     if items.len() == 1 {
         return execute_unary_op(op_name, items[0]);
     }
-    if items.len() == 2 && (op_name == "concat" || op_name == "concat-space" || op_name == "concat-comma" || op_name == "concat-reversed" || op_name == "diff" || op_name == "binary-diff") {
+    if items.len() == 2
+        && (op_name == "concat"
+            || op_name == "concat-space"
+            || op_name == "concat-comma"
+            || op_name == "concat-reversed"
+            || op_name == "diff"
+            || op_name == "binary-diff")
+    {
         return execute_binary_op(op_name, items[0], items[1], separator);
     }
 
@@ -725,7 +784,10 @@ pub fn execute_multi_op(
             }
             Ok(ClipItem::from_text(unique_lines.join("\n")))
         }
-        _ => Err(OpError::ExecutionFailed(format!("Unknown multi-item operation: {}", op_name))),
+        _ => Err(OpError::ExecutionFailed(format!(
+            "Unknown multi-item operation: {}",
+            op_name
+        ))),
     }
 }
 
@@ -844,8 +906,16 @@ fn op_case_transform(item: &ClipItem, case: Case) -> Result<ClipItem, OpError> {
     let transformed = match case {
         Case::Upper => text.to_uppercase(),
         Case::Lower => text.to_lowercase(),
-        Case::Snake => words.iter().map(|w| w.to_lowercase()).collect::<Vec<_>>().join("_"),
-        Case::Kebab => words.iter().map(|w| w.to_lowercase()).collect::<Vec<_>>().join("-"),
+        Case::Snake => words
+            .iter()
+            .map(|w| w.to_lowercase())
+            .collect::<Vec<_>>()
+            .join("_"),
+        Case::Kebab => words
+            .iter()
+            .map(|w| w.to_lowercase())
+            .collect::<Vec<_>>()
+            .join("-"),
         Case::Camel => {
             let mut res = String::new();
             for (i, w) in words.iter().enumerate() {
@@ -935,10 +1005,14 @@ fn op_concat(hand: &ClipItem, slot: &ClipItem, sep: &str) -> Result<ClipItem, Op
 
 fn op_diff(hand: &ClipItem, slot: &ClipItem) -> Result<ClipItem, OpError> {
     let lhs = resolve_diff_target(slot).ok_or_else(|| {
-        OpError::IncompatiblePayload("Secondary slot payload is not readable text, file, or image".to_string())
+        OpError::IncompatiblePayload(
+            "Secondary slot payload is not readable text, file, or image".to_string(),
+        )
     })?;
     let rhs = resolve_diff_target(hand).ok_or_else(|| {
-        OpError::IncompatiblePayload("Left Hand payload is not readable text, file, or image".to_string())
+        OpError::IncompatiblePayload(
+            "Left Hand payload is not readable text, file, or image".to_string(),
+        )
     })?;
 
     if lhs.is_image() && rhs.is_image() {
@@ -947,14 +1021,19 @@ fn op_diff(hand: &ClipItem, slot: &ClipItem) -> Result<ClipItem, OpError> {
         let b2 = rhs.image_bytes().unwrap();
         let res = compare_image_bytes(b1, b2, &options)
             .map_err(|e| OpError::ExecutionFailed(format!("Picture diff failed: {}", e)))?;
-        let mask_png = res.encode_mask_png()
-            .map_err(|e| OpError::ExecutionFailed(format!("Encoding diff mask PNG failed: {}", e)))?;
-        return ClipItem::from_image_bytes(mask_png, "image/png")
-            .ok_or_else(|| OpError::ExecutionFailed("Failed to create ClipItem from diff mask PNG".to_string()));
+        let mask_png = res.encode_mask_png().map_err(|e| {
+            OpError::ExecutionFailed(format!("Encoding diff mask PNG failed: {}", e))
+        })?;
+        return ClipItem::from_image_bytes(mask_png, "image/png").ok_or_else(|| {
+            OpError::ExecutionFailed("Failed to create ClipItem from diff mask PNG".to_string())
+        });
     }
 
     if lhs.is_image() != rhs.is_image() {
-        return Err(OpError::IncompatiblePayload("Both operands must be the same type (either both text/code or both images)".to_string()));
+        return Err(OpError::IncompatiblePayload(
+            "Both operands must be the same type (either both text/code or both images)"
+                .to_string(),
+        ));
     }
 
     let res = compute_diff(&lhs, &rhs, DiffDisplayMode::Inline, 120);
@@ -994,7 +1073,10 @@ pub fn is_text_file<P: AsRef<std::path::Path>>(path: P) -> bool {
 }
 
 /// Reads the contents of a text file up to `max_bytes` (or full if smaller).
-pub fn read_text_file_preview<P: AsRef<std::path::Path>>(path: P, max_bytes: usize) -> Option<String> {
+pub fn read_text_file_preview<P: AsRef<std::path::Path>>(
+    path: P,
+    max_bytes: usize,
+) -> Option<String> {
     let p = path.as_ref();
     if !is_text_file(p) {
         return None;
@@ -1028,9 +1110,14 @@ mod tests {
 
     #[test]
     fn test_clean_url() {
-        let item = ClipItem::from_text("https://example.com/watch?v=123&utm_source=twitter&fbclid=xyz&si=abc");
+        let item = ClipItem::from_text(
+            "https://example.com/watch?v=123&utm_source=twitter&fbclid=xyz&si=abc",
+        );
         let res = execute_unary_op("clean-url", &item).unwrap();
-        assert_eq!(get_item_text(&res).unwrap(), "https://example.com/watch?v=123");
+        assert_eq!(
+            get_item_text(&res).unwrap(),
+            "https://example.com/watch?v=123"
+        );
     }
 
     #[test]
@@ -1047,7 +1134,10 @@ mod tests {
     fn test_slugify() {
         let item = ClipItem::from_text("This is an Awesome Blog Post! (2026)");
         let res = execute_unary_op("slugify", &item).unwrap();
-        assert_eq!(get_item_text(&res).unwrap(), "this-is-an-awesome-blog-post-2026");
+        assert_eq!(
+            get_item_text(&res).unwrap(),
+            "this-is-an-awesome-blog-post-2026"
+        );
     }
 
     #[test]
@@ -1093,7 +1183,12 @@ mod tests {
         // Execute diff operation
         let diff_item = execute_binary_op("diff", &item2, &item1, None).unwrap();
         match diff_item.payload {
-            ClipPayload::Image { width, height, mime, .. } => {
+            ClipPayload::Image {
+                width,
+                height,
+                mime,
+                ..
+            } => {
                 assert_eq!(width, 20);
                 assert_eq!(height, 20);
                 assert_eq!(mime, "image/png");
@@ -1108,7 +1203,11 @@ mod tests {
         let txt_path = tmp_dir.join("little_clip_test_sample.txt");
         let bin_path = tmp_dir.join("little_clip_test_sample.bin");
 
-        std::fs::write(&txt_path, "Hello, world! This is a UTF-8 text file.\nWith multiple lines.").unwrap();
+        std::fs::write(
+            &txt_path,
+            "Hello, world! This is a UTF-8 text file.\nWith multiple lines.",
+        )
+        .unwrap();
         std::fs::write(&bin_path, b"\x00\x01\x02\xFF\xFE\x00BinaryDataHere").unwrap();
 
         assert!(is_text_file(&txt_path));
@@ -1121,5 +1220,3 @@ mod tests {
         let _ = std::fs::remove_file(&bin_path);
     }
 }
-
-

@@ -1,8 +1,9 @@
 //! PDF inspection, preview rendering via `pdftoppm`, page deletion, and rotation.
 //!
-//! Wraps poppler utilities (`pdfinfo`, `pdftoppm`, `pdfseparate`, `pdfunite`) and `magick`
-//! for manipulation of multi-page PDF documents.
+//! Wraps Poppler utilities (`pdfinfo`, `pdftoppm`) for inspection and previews,
+//! and uses `lopdf` for lossless page manipulation.
 
+use lopdf::{Document, Object};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -71,8 +72,13 @@ pub fn get_pdf_info(path: &Path) -> Result<PdfInfo, String> {
 }
 
 /// Renders a single page of a PDF file to PNG bytes
-pub fn render_pdf_page_preview(path: &Path, page: usize, max_dim: u32) -> Result<(Vec<u8>, u32, u32), String> {
-    let temp_prefix = std::env::temp_dir().join(format!("pdf_preview_{}_{}", uuid::Uuid::new_v4(), page));
+pub fn render_pdf_page_preview(
+    path: &Path,
+    page: usize,
+    max_dim: u32,
+) -> Result<(Vec<u8>, u32, u32), String> {
+    let temp_prefix =
+        std::env::temp_dir().join(format!("pdf_preview_{}_{}", uuid::Uuid::new_v4(), page));
     let page_str = page.to_string();
 
     let output = Command::new("pdftoppm")
@@ -98,7 +104,10 @@ pub fn render_pdf_page_preview(path: &Path, page: usize, max_dim: u32) -> Result
     if !out_png.is_file() {
         // Sometimes pdftoppm outputs with 0-padded digits or 1 digit
         let _glob_pattern = format!("{}-*.png", temp_prefix.to_string_lossy());
-        return Err(format!("Expected output PNG at {:?} but not found", out_png));
+        return Err(format!(
+            "Expected output PNG at {:?} but not found",
+            out_png
+        ));
     }
 
     let png_bytes = std::fs::read(&out_png).map_err(|e| e.to_string())?;
@@ -114,7 +123,10 @@ pub fn render_pdf_page_preview(path: &Path, page: usize, max_dim: u32) -> Result
 }
 
 /// Renders thumbnails for all pages of a PDF
-pub fn render_all_pdf_page_thumbnails(path: &Path, thumb_w: u32) -> Result<Vec<(usize, Vec<u8>)>, String> {
+pub fn render_all_pdf_page_thumbnails(
+    path: &Path,
+    thumb_w: u32,
+) -> Result<Vec<(usize, Vec<u8>)>, String> {
     let info = get_pdf_info(path)?;
     let mut pages = Vec::new();
     for page_num in 1..=info.page_count {
@@ -126,120 +138,209 @@ pub fn render_all_pdf_page_thumbnails(path: &Path, thumb_w: u32) -> Result<Vec<(
 }
 
 /// Deletes specified pages from a PDF and writes the remaining pages to `output`
-pub fn delete_pdf_pages(input: &Path, pages_to_delete: &[usize], output: &Path) -> Result<(), String> {
-    let info = get_pdf_info(input)?;
-    if info.page_count == 0 {
+pub fn delete_pdf_pages(
+    input: &Path,
+    pages_to_delete: &[usize],
+    output: &Path,
+) -> Result<(), String> {
+    if let Ok(()) = qpdf_edit(input, pages_to_delete, None, output) {
+        return Ok(());
+    }
+    if let Ok(()) = rebuild_pages(input, pages_to_delete, None, output) {
+        return Ok(());
+    }
+    let mut document = Document::load(input)
+        .map_err(|error| format!("Could not parse PDF for page deletion: {error}"))?;
+    let pages = document.get_pages();
+    if pages.is_empty() {
         return Err("PDF is empty".to_string());
     }
-
-    let temp_dir = std::env::temp_dir().join(format!("pdf_sep_{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
-
-    let pattern = temp_dir.join("page-%d.pdf");
-    let sep_status = Command::new("pdfseparate")
-        .arg(input)
-        .arg(pattern.to_string_lossy().to_string())
-        .status()
-        .map_err(|e| format!("Failed to separate PDF: {}", e))?;
-
-    if !sep_status.success() {
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        return Err("pdfseparate failed".to_string());
+    if pages_to_delete.is_empty() {
+        return Err("No pages selected for deletion".to_string());
     }
-
-    let mut remaining_files = Vec::new();
-    for p in 1..=info.page_count {
-        if !pages_to_delete.contains(&p) {
-            let page_path = temp_dir.join(format!("page-{}.pdf", p));
-            if page_path.is_file() {
-                remaining_files.push(page_path);
-            }
-        }
-    }
-
-    if remaining_files.is_empty() {
-        let _ = std::fs::remove_dir_all(&temp_dir);
+    if pages_to_delete.len() >= pages.len() {
         return Err("Cannot delete all pages from PDF".to_string());
     }
-
-    let mut unite_cmd = Command::new("pdfunite");
-    for f in &remaining_files {
-        unite_cmd.arg(f);
+    for &page in pages_to_delete {
+        if !pages.contains_key(&(page as u32)) {
+            return Err(format!("PDF page {page} does not exist"));
+        }
     }
-    unite_cmd.arg(output);
-
-    let unite_status = unite_cmd.status().map_err(|e| format!("pdfunite failed: {}", e))?;
-    let _ = std::fs::remove_dir_all(&temp_dir);
-
-    if !unite_status.success() {
-        return Err("pdfunite failed to create output file".to_string());
+    let mut unique_pages = pages_to_delete
+        .iter()
+        .map(|&page| page as u32)
+        .collect::<Vec<_>>();
+    unique_pages.sort_unstable();
+    unique_pages.dedup();
+    if unique_pages.len() >= pages.len() {
+        return Err("Cannot delete all pages from PDF".to_string());
     }
-
-    Ok(())
+    document.delete_pages(&unique_pages);
+    document.prune_objects();
+    document
+        .save(output)
+        .map(|_| ())
+        .map_err(|error| format!("Could not write edited PDF: {error}"))
 }
 
 /// Rotates a specific page by specified degrees (90, 180, 270)
-pub fn rotate_pdf_page(input: &Path, page_to_rotate: usize, degrees: u32, output: &Path) -> Result<(), String> {
-    let info = get_pdf_info(input)?;
-    let temp_dir = std::env::temp_dir().join(format!("pdf_rot_{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
+pub fn rotate_pdf_page(
+    input: &Path,
+    page_to_rotate: usize,
+    degrees: u32,
+    output: &Path,
+) -> Result<(), String> {
+    if !matches!(degrees, 90 | 180 | 270) {
+        return Err("Rotation must be 90, 180, or 270 degrees".to_string());
+    }
+    if let Ok(()) = qpdf_edit(input, &[], Some((page_to_rotate, degrees)), output) {
+        return Ok(());
+    }
+    if let Ok(()) = rebuild_pages(input, &[], Some((page_to_rotate, degrees)), output) {
+        return Ok(());
+    }
+    let mut document = Document::load(input)
+        .map_err(|error| format!("Could not parse PDF for rotation: {error}"))?;
+    let pages = document.get_pages();
+    let page_id = pages
+        .get(&(page_to_rotate as u32))
+        .copied()
+        .ok_or_else(|| format!("PDF page {page_to_rotate} does not exist"))?;
+    let page = document
+        .get_object_mut(page_id)
+        .map_err(|error| format!("Could not access PDF page {page_to_rotate}: {error}"))?
+        .as_dict_mut()
+        .map_err(|error| format!("PDF page {page_to_rotate} is not a page dictionary: {error}"))?;
+    let existing = page
+        .get(b"Rotate")
+        .ok()
+        .and_then(|value| value.as_i64().ok())
+        .unwrap_or(0);
+    page.set(
+        "Rotate",
+        Object::Integer((existing + degrees as i64).rem_euclid(360)),
+    );
+    document
+        .save(output)
+        .map(|_| ())
+        .map_err(|error| format!("Could not write rotated PDF: {error}"))
+}
 
-    let pattern = temp_dir.join("page-%d.pdf");
-    let sep_status = Command::new("pdfseparate")
+/// qpdf rewrites page trees without decoding/re-encoding page contents, making
+/// it the preferred path for encrypted and object-stream-heavy manuals.
+fn qpdf_edit(
+    input: &Path,
+    pages_to_delete: &[usize],
+    rotation: Option<(usize, u32)>,
+    output: &Path,
+) -> Result<(), String> {
+    if rotation.is_none() && pages_to_delete.is_empty() {
+        return Err("No PDF edit requested".into());
+    }
+    let mut command = Command::new("qpdf");
+    if let Some((page, degrees)) = rotation {
+        command.arg(format!("--rotate=+{degrees}:{page}"));
+        command.arg(input).arg(output);
+    } else {
+        let count = get_pdf_info(input)?.page_count;
+        let kept = (1..=count)
+            .filter(|page| !pages_to_delete.contains(page))
+            .map(|page| page.to_string())
+            .collect::<Vec<_>>();
+        if kept.is_empty() {
+            return Err("Cannot delete all pages".into());
+        }
+        command
+            .arg(input)
+            .arg("--pages")
+            .arg(input)
+            .arg(kept.join(","))
+            .arg("--")
+            .arg(output);
+    }
+    let result = command
+        .output()
+        .map_err(|e| format!("qpdf unavailable: {e}"))?;
+    if result.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "qpdf failed: {}",
+            String::from_utf8_lossy(&result.stderr).trim()
+        ))
+    }
+}
+
+/// Use Poppler to isolate pages and Ghostscript only for the page that needs
+/// rotation. This preserves page resources in PDFs that `lopdf` cannot safely
+/// rewrite (notably object-stream-heavy firmware manuals).
+fn rebuild_pages(
+    input: &Path,
+    pages_to_delete: &[usize],
+    rotation: Option<(usize, u32)>,
+    output: &Path,
+) -> Result<(), String> {
+    let page_count = get_pdf_info(input)?.page_count;
+    let temp = std::env::temp_dir().join(format!("little-clip-pdf-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&temp).map_err(|e| e.to_string())?;
+    let pattern = temp.join("page-%d.pdf");
+    let separated = Command::new("pdfseparate")
         .arg(input)
-        .arg(pattern.to_string_lossy().to_string())
+        .arg(&pattern)
         .status()
-        .map_err(|e| format!("Failed to separate PDF: {}", e))?;
-
-    if !sep_status.success() {
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        return Err("pdfseparate failed".to_string());
+        .map_err(|e| format!("pdfseparate unavailable: {e}"))?;
+    if !separated.success() {
+        let _ = std::fs::remove_dir_all(&temp);
+        return Err("pdfseparate failed".into());
     }
-
-    let target_page = temp_dir.join(format!("page-{}.pdf", page_to_rotate));
-    if !target_page.is_file() {
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        return Err(format!("PDF page {} does not exist", page_to_rotate));
-    }
-    let rotated_page = temp_dir.join(format!("page-{}-rot.pdf", page_to_rotate));
-    let rot_status = Command::new("magick")
-        .arg(&target_page)
-        .arg("-rotate")
-        .arg(degrees.to_string())
-        .arg(&rotated_page)
-        .status()
-        .map_err(|e| {
-            let _ = std::fs::remove_dir_all(&temp_dir);
-            format!("Failed to spawn magick for page rotation: {}", e)
-        })?;
-
-    if !rot_status.success() || !rotated_page.is_file() {
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        return Err(format!("magick failed to rotate page {} by {} degrees", page_to_rotate, degrees));
-    }
-
-    if let Err(e) = std::fs::rename(&rotated_page, &target_page) {
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        return Err(format!("Failed to replace rotated page: {}", e));
-    }
-
-    let mut unite_cmd = Command::new("pdfunite");
-    for p in 1..=info.page_count {
-        let page_path = temp_dir.join(format!("page-{}.pdf", p));
-        if page_path.is_file() {
-            unite_cmd.arg(page_path);
+    let mut inputs = Vec::new();
+    for page in 1..=page_count {
+        if pages_to_delete.contains(&page) {
+            continue;
+        }
+        let source = temp.join(format!("page-{page}.pdf"));
+        if rotation.map(|(target, _)| target) == Some(page) {
+            let degrees = rotation.map(|(_, d)| d).unwrap_or(0);
+            let rotated = temp.join(format!("rotated-{page}.pdf"));
+            let orientation = match degrees {
+                90 => 3,
+                180 => 2,
+                270 => 1,
+                _ => 0,
+            };
+            let status = Command::new("gs")
+                .args(["-q", "-dNOPAUSE", "-dBATCH", "-sDEVICE=pdfwrite"])
+                .arg(format!("-sOutputFile={}", rotated.display()))
+                .arg("-c")
+                .arg(format!("<</Orientation {orientation}>> setpagedevice"))
+                .arg("-f")
+                .arg(&source)
+                .status()
+                .map_err(|e| format!("Ghostscript unavailable: {e}"))?;
+            if !status.success() {
+                let _ = std::fs::remove_dir_all(&temp);
+                return Err("Ghostscript rotation failed".into());
+            }
+            inputs.push(rotated);
+        } else {
+            inputs.push(source);
         }
     }
-    unite_cmd.arg(output);
-
-    let unite_status = unite_cmd.status().map_err(|e| format!("pdfunite failed: {}", e))?;
-    let _ = std::fs::remove_dir_all(&temp_dir);
-
-    if !unite_status.success() {
-        return Err("pdfunite failed to assemble rotated PDF".to_string());
+    if inputs.is_empty() {
+        let _ = std::fs::remove_dir_all(&temp);
+        return Err("Cannot delete all pages".into());
     }
-
-    Ok(())
+    let status = Command::new("pdfunite")
+        .args(&inputs)
+        .arg(output)
+        .status()
+        .map_err(|e| format!("pdfunite unavailable: {e}"))?;
+    let _ = std::fs::remove_dir_all(&temp);
+    if status.success() {
+        Ok(())
+    } else {
+        Err("pdfunite failed".into())
+    }
 }
 
 #[cfg(test)]
@@ -251,5 +352,21 @@ mod tests {
         assert!(is_pdf_path(Path::new("doc.pdf")));
         assert!(is_pdf_path(Path::new("DOC.PDF")));
         assert!(!is_pdf_path(Path::new("image.png")));
+    }
+
+    #[test]
+    fn test_delete_and_rotate_pdf() {
+        let input = Path::new("/tmp/test_multi.pdf");
+        if input.is_file() {
+            let del_out = Path::new("/tmp/test_del_out.pdf");
+            let del_res = delete_pdf_pages(input, &[1], del_out);
+            println!("del_res: {:?}", del_res);
+            assert!(del_res.is_ok());
+
+            let rot_out = Path::new("/tmp/test_rot_out.pdf");
+            let rot_res = rotate_pdf_page(input, 1, 90, rot_out);
+            println!("rot_res: {:?}", rot_res);
+            assert!(rot_res.is_ok());
+        }
     }
 }

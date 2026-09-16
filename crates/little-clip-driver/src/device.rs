@@ -90,7 +90,10 @@ pub struct TrofeoDriver {
 impl TrofeoDriver {
     /// Discovers and opens the Trofeo Vision 9.16 device.
     pub fn open() -> Result<Self, DriverError> {
-        info!("Searching for Trofeo Vision USB device ({:04x}:{:04x})...", VID_WINBOND, PID_TROFEO);
+        info!(
+            "Searching for Trofeo Vision USB device ({:04x}:{:04x})...",
+            VID_WINBOND, PID_TROFEO
+        );
 
         let handle = rusb::open_device_with_vid_pid(VID_WINBOND, PID_TROFEO)
             .ok_or(DriverError::DeviceNotFound)?;
@@ -146,10 +149,16 @@ impl TrofeoDriver {
 
         // Read 512-byte response from EP_IN
         let mut response = vec![0u8; 512];
-        let read = self.handle.read_bulk(EP_IN, &mut response, TIMEOUT_HANDSHAKE)?;
+        let read = self
+            .handle
+            .read_bulk(EP_IN, &mut response, TIMEOUT_HANDSHAKE)?;
         debug!("Read {} handshake response bytes", read);
 
-        if read < 37 || response[0] != 3 || response[1] != 0xFF || (response[8] != 1 && response[8] != 2) {
+        if read < 37
+            || response[0] != 3
+            || response[1] != 0xFF
+            || (response[8] != 1 && response[8] != 2)
+        {
             return Err(DriverError::HandshakeFailed(format!(
                 "Validation mismatch (read={}, [0]={:#x}, [1]={:#x}, [8]={:#x})",
                 read, response[0], response[1], response[8]
@@ -205,7 +214,7 @@ impl TrofeoDriver {
                     rusb::RequestType::Standard,
                     rusb::Recipient::Device,
                 ),
-                0x06, // GET_DESCRIPTOR
+                0x06,   // GET_DESCRIPTOR
                 0x0100, // Device descriptor
                 0,
                 &mut buf,
@@ -269,11 +278,8 @@ impl TrofeoDriver {
                 remaining.min(2048)
             };
 
-            self.handle.write_bulk(
-                EP_OUT,
-                &buffer[pos..pos + write_size],
-                TIMEOUT_WRITE,
-            )?;
+            self.handle
+                .write_bulk(EP_OUT, &buffer[pos..pos + write_size], TIMEOUT_WRITE)?;
             pos += USB_BURST_WRITE_SIZE;
         }
 
@@ -284,7 +290,10 @@ impl TrofeoDriver {
             .read_bulk(EP_IN, &mut ack, TIMEOUT_READ)
             .map_err(|e| DriverError::WriteFailed(format!("ACK read failed: {e}")))?;
 
-        debug!("Frame sent successfully ({} bytes, {} chunks)", total_size, num_chunks);
+        debug!(
+            "Frame sent successfully ({} bytes, {} chunks)",
+            total_size, num_chunks
+        );
         Ok(())
     }
 }

@@ -151,7 +151,11 @@ fn parse_month_name(s: &str) -> Option<u32> {
 /// Parses day number with optional ordinal suffix (e.g. "2nd", "25th").
 fn parse_day_number(s: &str) -> Option<u32> {
     let lower = s.to_ascii_lowercase();
-    let clean = if lower.ends_with("st") || lower.ends_with("nd") || lower.ends_with("rd") || lower.ends_with("th") {
+    let clean = if lower.ends_with("st")
+        || lower.ends_with("nd")
+        || lower.ends_with("rd")
+        || lower.ends_with("th")
+    {
         if lower.len() <= 2 {
             return None;
         }
@@ -160,11 +164,7 @@ fn parse_day_number(s: &str) -> Option<u32> {
         &lower[..]
     };
     let d: u32 = clean.parse().ok()?;
-    if (1..=31).contains(&d) {
-        Some(d)
-    } else {
-        None
-    }
+    if (1..=31).contains(&d) { Some(d) } else { None }
 }
 
 /// Parses 2-digit or 4-digit year string.
@@ -201,11 +201,36 @@ fn parse_time_component(s: &str) -> Option<(u32, u32, u32, TimePrecision)> {
 
     let parts: Vec<&str> = core.split(':').collect();
     let (h_raw, m, sec, precision) = match (is_12hr, parts.len()) {
-        (true, 1) => (parts[0].trim().parse::<u32>().ok()?, 0, 0, TimePrecision::Hour),
-        (true, 2) => (parts[0].trim().parse::<u32>().ok()?, parts[1].trim().parse::<u32>().ok()?, 0, TimePrecision::Minute),
-        (true, 3) => (parts[0].trim().parse::<u32>().ok()?, parts[1].trim().parse::<u32>().ok()?, parts[2].trim().parse::<u32>().ok()?, TimePrecision::Second),
-        (false, 2) => (parts[0].trim().parse::<u32>().ok()?, parts[1].trim().parse::<u32>().ok()?, 0, TimePrecision::Minute),
-        (false, 3) => (parts[0].trim().parse::<u32>().ok()?, parts[1].trim().parse::<u32>().ok()?, parts[2].trim().parse::<u32>().ok()?, TimePrecision::Second),
+        (true, 1) => (
+            parts[0].trim().parse::<u32>().ok()?,
+            0,
+            0,
+            TimePrecision::Hour,
+        ),
+        (true, 2) => (
+            parts[0].trim().parse::<u32>().ok()?,
+            parts[1].trim().parse::<u32>().ok()?,
+            0,
+            TimePrecision::Minute,
+        ),
+        (true, 3) => (
+            parts[0].trim().parse::<u32>().ok()?,
+            parts[1].trim().parse::<u32>().ok()?,
+            parts[2].trim().parse::<u32>().ok()?,
+            TimePrecision::Second,
+        ),
+        (false, 2) => (
+            parts[0].trim().parse::<u32>().ok()?,
+            parts[1].trim().parse::<u32>().ok()?,
+            0,
+            TimePrecision::Minute,
+        ),
+        (false, 3) => (
+            parts[0].trim().parse::<u32>().ok()?,
+            parts[1].trim().parse::<u32>().ok()?,
+            parts[2].trim().parse::<u32>().ok()?,
+            TimePrecision::Second,
+        ),
         _ => return None,
     };
 
@@ -337,7 +362,10 @@ fn parse_textual_date(input: &str) -> Option<(DateTime<Utc>, TimePrecision)> {
         if used_indices.contains(&idx) {
             continue;
         }
-        if word.eq_ignore_ascii_case("of") || word.eq_ignore_ascii_case("at") || word.eq_ignore_ascii_case("on") {
+        if word.eq_ignore_ascii_case("of")
+            || word.eq_ignore_ascii_case("at")
+            || word.eq_ignore_ascii_case("on")
+        {
             used_indices.push(idx);
             continue;
         }
@@ -354,7 +382,10 @@ fn parse_textual_date(input: &str) -> Option<(DateTime<Utc>, TimePrecision)> {
     // Remaining tokens may form time
     let mut remaining_words = Vec::new();
     for (idx, word) in words.iter().enumerate() {
-        if !used_indices.contains(&idx) && !word.eq_ignore_ascii_case("at") && !word.eq_ignore_ascii_case("on") {
+        if !used_indices.contains(&idx)
+            && !word.eq_ignore_ascii_case("at")
+            && !word.eq_ignore_ascii_case("on")
+        {
             remaining_words.push(*word);
         }
     }
@@ -438,13 +469,25 @@ pub fn detect_timestamp(text: &str) -> Option<TimestampPreview> {
         } else if let Ok(parsed) = DateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S") {
             dt_opt = Some((parsed.with_timezone(&Utc), TimePrecision::Second));
         } else if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M:%S") {
-            dt_opt = Some((DateTime::from_naive_utc_and_offset(naive, Utc), TimePrecision::Second));
+            dt_opt = Some((
+                DateTime::from_naive_utc_and_offset(naive, Utc),
+                TimePrecision::Second,
+            ));
         } else if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S") {
-            dt_opt = Some((DateTime::from_naive_utc_and_offset(naive, Utc), TimePrecision::Second));
+            dt_opt = Some((
+                DateTime::from_naive_utc_and_offset(naive, Utc),
+                TimePrecision::Second,
+            ));
         } else if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M") {
-            dt_opt = Some((DateTime::from_naive_utc_and_offset(naive, Utc), TimePrecision::Minute));
+            dt_opt = Some((
+                DateTime::from_naive_utc_and_offset(naive, Utc),
+                TimePrecision::Minute,
+            ));
         } else if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M") {
-            dt_opt = Some((DateTime::from_naive_utc_and_offset(naive, Utc), TimePrecision::Minute));
+            dt_opt = Some((
+                DateTime::from_naive_utc_and_offset(naive, Utc),
+                TimePrecision::Minute,
+            ));
         }
     }
 
@@ -533,26 +576,41 @@ mod tests {
     fn test_parse_slash_dates() {
         let ts1 = detect_timestamp("02/05/25").expect("02/05/25");
         assert_eq!(ts1.precision, TimePrecision::Day);
-        assert!(ts1.human_readable.contains("Feb 05, 2025") || ts1.human_readable.contains("Feb 5, 2025"));
+        assert!(
+            ts1.human_readable.contains("Feb 05, 2025")
+                || ts1.human_readable.contains("Feb 5, 2025")
+        );
 
         let ts2 = detect_timestamp("02/05/2025").expect("02/05/2025");
         assert_eq!(ts2.precision, TimePrecision::Day);
-        assert!(ts2.human_readable.contains("Feb 05, 2025") || ts2.human_readable.contains("Feb 5, 2025"));
+        assert!(
+            ts2.human_readable.contains("Feb 05, 2025")
+                || ts2.human_readable.contains("Feb 5, 2025")
+        );
     }
 
     #[test]
     fn test_parse_textual_dates() {
         let ts1 = detect_timestamp("May 2nd, 2025").expect("May 2nd, 2025");
         assert_eq!(ts1.precision, TimePrecision::Day);
-        assert!(ts1.human_readable.contains("May 02, 2025") || ts1.human_readable.contains("May 2, 2025"));
+        assert!(
+            ts1.human_readable.contains("May 02, 2025")
+                || ts1.human_readable.contains("May 2, 2025")
+        );
 
         let ts2 = detect_timestamp("May 2 2025").expect("May 2 2025");
         assert_eq!(ts2.precision, TimePrecision::Day);
-        assert!(ts2.human_readable.contains("May 02, 2025") || ts2.human_readable.contains("May 2, 2025"));
+        assert!(
+            ts2.human_readable.contains("May 02, 2025")
+                || ts2.human_readable.contains("May 2, 2025")
+        );
 
         let ts3 = detect_timestamp("2nd May 2025").expect("2nd May 2025");
         assert_eq!(ts3.precision, TimePrecision::Day);
-        assert!(ts3.human_readable.contains("May 02, 2025") || ts3.human_readable.contains("May 2, 2025"));
+        assert!(
+            ts3.human_readable.contains("May 02, 2025")
+                || ts3.human_readable.contains("May 2, 2025")
+        );
     }
 
     #[test]
@@ -607,4 +665,3 @@ mod tests {
         assert_eq!(rel, "+45D");
     }
 }
-

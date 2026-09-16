@@ -6,16 +6,18 @@
 use eframe::egui;
 use little_clip_core::color::parse_hex_color_rgba;
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
-use little_clip_core::theme::{find_themes_dir, load_themes_from_dir, AppPalette, DerivedHarmonies, Theme};
+use little_clip_core::theme::{
+    AppPalette, DerivedHarmonies, Theme, find_themes_dir, load_themes_from_dir,
+};
 use little_clip_core::{AppConfig, ClipItem, SlotId, SlotManager};
 use little_clip_ops::pipeline::recipes::{find_recipe_by_name, load_all_recipes};
 use little_clip_ops::pipeline::types::{NodeKind, Recipe};
-use little_clip_ops::{get_applicable_ops, OpDescriptor};
-use little_clip_render::{ScreenRenderer, SCREEN_HEIGHT, SCREEN_WIDTH};
+use little_clip_ops::{OpDescriptor, get_applicable_ops};
+use little_clip_render::{SCREEN_HEIGHT, SCREEN_WIDTH, ScreenRenderer};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 use std::time::Duration;
 
 mod ansi;
@@ -24,28 +26,30 @@ mod binary_diff_view;
 mod canvas;
 mod diff_view;
 mod image_preview;
-mod rolling_audio_strip;
-mod spreadsheet_view;
-mod pdf_view;
 mod midi_view;
+mod pdf_view;
+mod rolling_audio_strip;
+pub mod shell;
+mod spreadsheet_view;
 mod stl_view;
 mod text_preview;
 pub mod ui_ext;
 
-pub use ui_ext::*;
 use audio_preview::AudioPreviewState;
 use binary_diff_view::BinaryDiffViewState;
 use canvas::*;
 use diff_view::DiffViewerState;
 use image_preview::ImagePreviewState;
-use rolling_audio_strip::RollingAudioStripState;
-use spreadsheet_view::SpreadsheetViewerState;
-use pdf_view::PdfEditorState;
+use little_clip_ops::binary_diff::resolve_binary_diff_pair;
+use little_clip_ops::diff::{DiffDisplayMode, resolve_diff_pair, resolve_diff_target};
 use midi_view::MidiViewerState;
+use pdf_view::PdfEditorState;
+use rolling_audio_strip::RollingAudioStripState;
+pub use shell::*;
+use spreadsheet_view::SpreadsheetViewerState;
 use stl_view::StlViewerState;
 use text_preview::TextPreviewState;
-use little_clip_ops::binary_diff::resolve_binary_diff_pair;
-use little_clip_ops::diff::{resolve_diff_pair, resolve_diff_target, DiffDisplayMode};
+pub use ui_ext::*;
 
 /// Filter category for theme selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,38 +95,46 @@ fn apply_theme_to_egui(ctx: &egui::Context, palette: &AppPalette) {
 
     let noninter_bg = hex_to_c32(&palette.prior_card_bg);
     visuals.widgets.noninteractive.bg_fill = noninter_bg;
-    visuals.widgets.noninteractive.fg_stroke.color = contrast_text_c32(noninter_bg, Some(hex_to_c32(&palette.title_color)), palette);
+    visuals.widgets.noninteractive.fg_stroke.color =
+        contrast_text_c32(noninter_bg, Some(hex_to_c32(&palette.title_color)), palette);
     visuals.widgets.noninteractive.bg_stroke.color = hex_to_c32(&palette.b_low);
 
     let inactive_bg = hex_to_c32(&palette.undo_card_bg);
     visuals.widgets.inactive.bg_fill = inactive_bg;
-    visuals.widgets.inactive.fg_stroke.color = contrast_text_c32(inactive_bg, Some(hex_to_c32(&palette.subtitle_color)), palette);
+    visuals.widgets.inactive.fg_stroke.color = contrast_text_c32(
+        inactive_bg,
+        Some(hex_to_c32(&palette.subtitle_color)),
+        palette,
+    );
     visuals.widgets.inactive.bg_stroke.color = hex_to_c32(&palette.b_low);
 
     let hovered_bg = hex_to_c32(&palette.prior_card_bg);
     visuals.widgets.hovered.bg_fill = hovered_bg;
-    visuals.widgets.hovered.fg_stroke.color = contrast_text_c32(hovered_bg, Some(hex_to_c32(&palette.title_color)), palette);
+    visuals.widgets.hovered.fg_stroke.color =
+        contrast_text_c32(hovered_bg, Some(hex_to_c32(&palette.title_color)), palette);
     visuals.widgets.hovered.bg_stroke.color = hex_to_c32(&palette.left_hand_border);
 
     let active_bg = hex_to_c32(&palette.hero_card_bg);
     visuals.widgets.active.bg_fill = active_bg;
-    visuals.widgets.active.fg_stroke.color = contrast_text_c32(active_bg, Some(hex_to_c32(&palette.f_high)), palette);
+    visuals.widgets.active.fg_stroke.color =
+        contrast_text_c32(active_bg, Some(hex_to_c32(&palette.f_high)), palette);
     visuals.widgets.active.bg_stroke.color = hex_to_c32(&palette.cursor_border);
 
     let open_bg = hex_to_c32(&palette.hero_card_bg);
     visuals.widgets.open.bg_fill = open_bg;
-    visuals.widgets.open.fg_stroke.color = contrast_text_c32(open_bg, Some(hex_to_c32(&palette.f_high)), palette);
+    visuals.widgets.open.fg_stroke.color =
+        contrast_text_c32(open_bg, Some(hex_to_c32(&palette.f_high)), palette);
     visuals.widgets.open.bg_stroke.color = hex_to_c32(&palette.cursor_border);
 
     let sel_bg = hex_to_c32(&palette.left_hand_border);
     visuals.selection.bg_fill = sel_bg;
-    visuals.selection.stroke.color = contrast_text_c32(sel_bg, Some(hex_to_c32(&palette.f_high)), palette);
+    visuals.selection.stroke.color =
+        contrast_text_c32(sel_bg, Some(hex_to_c32(&palette.f_high)), palette);
 
     visuals.hyperlink_color = hex_to_c32(&palette.url_color);
 
     ctx.set_visuals(visuals);
 }
-
 
 /// Action item displayed in the command palette search list.
 #[derive(Clone)]
@@ -234,9 +246,8 @@ impl WorkbenchApp {
             AudioPreviewState::new(p, title).with_editor(config.audio.editor.clone())
         });
 
-        let image_preview = initial_image.and_then(|p| {
-            ImagePreviewState::from_path(p, &config).ok()
-        });
+        let image_preview =
+            initial_image.and_then(|p| ImagePreviewState::from_path(p, &config).ok());
 
         let rolling_audio_strip = Some(RollingAudioStripState::new());
 
@@ -288,11 +299,29 @@ impl WorkbenchApp {
 
     fn open_diff_viewer(&mut self) {
         let (lhs_target, rhs_target) = if self.selected_slots.len() >= 2 {
-            let items: Vec<&ClipItem> = self.selected_slots.iter().filter_map(|s| self.state.get(*s)).collect();
-            let img_items: Vec<&ClipItem> = items.iter().filter(|i| resolve_diff_target(i).map(|t| t.is_image()).unwrap_or(false)).copied().collect();
+            let items: Vec<&ClipItem> = self
+                .selected_slots
+                .iter()
+                .filter_map(|s| self.state.get(*s))
+                .collect();
+            let img_items: Vec<&ClipItem> = items
+                .iter()
+                .filter(|i| {
+                    resolve_diff_target(i)
+                        .map(|t| t.is_image())
+                        .unwrap_or(false)
+                })
+                .copied()
+                .collect();
             if img_items.len() >= 2 {
-                (resolve_diff_target(img_items[0]), resolve_diff_target(img_items[1]))
-            } else if let Some((t1, t2)) = items.iter().find_map(|i| resolve_diff_pair(i).filter(|(a, b)| a.is_image() && b.is_image())) {
+                (
+                    resolve_diff_target(img_items[0]),
+                    resolve_diff_target(img_items[1]),
+                )
+            } else if let Some((t1, t2)) = items
+                .iter()
+                .find_map(|i| resolve_diff_pair(i).filter(|(a, b)| a.is_image() && b.is_image()))
+            {
                 (Some(t1), Some(t2))
             } else if items.len() >= 2 {
                 (resolve_diff_target(items[0]), resolve_diff_target(items[1]))
@@ -312,13 +341,17 @@ impl WorkbenchApp {
                     (Some(t1), Some(t2))
                 } else {
                     let other = if self.selected_slots[0] == SlotId::LeftHand {
-                        self.state.right_hand()
+                        self.state
+                            .right_hand()
                             .or_else(|| self.state.get(SlotId::LeftPrior1))
                             .or_else(|| self.state.get(SlotId::Undo))
                     } else {
                         self.state.left_hand()
                     };
-                    (resolve_diff_target(item), other.and_then(resolve_diff_target))
+                    (
+                        resolve_diff_target(item),
+                        other.and_then(resolve_diff_target),
+                    )
                 }
             } else {
                 (None, None)
@@ -327,8 +360,13 @@ impl WorkbenchApp {
             let left = self.state.left_hand();
             let right = self.state.right_hand();
             if let (Some(l), Some(r)) = (left, right) {
-                if let Some((t1, t2)) = resolve_diff_pair(l).filter(|(a, b)| a.is_image() && b.is_image()) {
-                    if !resolve_diff_target(r).map(|t| t.is_image()).unwrap_or(false) {
+                if let Some((t1, t2)) =
+                    resolve_diff_pair(l).filter(|(a, b)| a.is_image() && b.is_image())
+                {
+                    if !resolve_diff_target(r)
+                        .map(|t| t.is_image())
+                        .unwrap_or(false)
+                    {
                         (Some(t1), Some(t2))
                     } else {
                         (resolve_diff_target(l), resolve_diff_target(r))
@@ -355,18 +393,30 @@ impl WorkbenchApp {
         match (lhs_target, rhs_target) {
             (Some(lhs), Some(rhs)) => {
                 if lhs.is_image() && !rhs.is_image() {
-                    self.status_msg = Some("Comparison target is not an image (both targets must be images or text)".to_string());
+                    self.status_msg = Some(
+                        "Comparison target is not an image (both targets must be images or text)"
+                            .to_string(),
+                    );
                 } else if !lhs.is_image() && rhs.is_image() {
-                    self.status_msg = Some("Left target is not an image (both targets must be images or text)".to_string());
+                    self.status_msg = Some(
+                        "Left target is not an image (both targets must be images or text)"
+                            .to_string(),
+                    );
                 } else {
-                    self.diff_viewer = Some(DiffViewerState::new(lhs, rhs, DiffDisplayMode::SideBySide));
+                    self.diff_viewer =
+                        Some(DiffViewerState::new(lhs, rhs, DiffDisplayMode::SideBySide));
                 }
             }
             (Some(_), None) => {
-                self.status_msg = Some("Diff requires two items. Copy a second item to Right Hand or select 2 slots.".to_string());
+                self.status_msg = Some(
+                    "Diff requires two items. Copy a second item to Right Hand or select 2 slots."
+                        .to_string(),
+                );
             }
             (None, _) => {
-                self.status_msg = Some("No item selected or slot is empty. Push or copy content first.".to_string());
+                self.status_msg = Some(
+                    "No item selected or slot is empty. Push or copy content first.".to_string(),
+                );
             }
         }
     }
@@ -379,12 +429,10 @@ impl WorkbenchApp {
             self.binary_diff_viewer =
                 Some(BinaryDiffViewState::new(l_lbl, l_bytes, r_lbl, r_bytes));
         } else {
-            self.status_msg = Some(
-                "Binary diff requires 2 slots or 1 slot with 2 files/paths.".to_string(),
-            );
+            self.status_msg =
+                Some("Binary diff requires 2 slots or 1 slot with 2 files/paths.".to_string());
         }
     }
-
 
     fn get_selected_items(&self) -> Vec<&ClipItem> {
         self.selected_slots
@@ -494,7 +542,6 @@ impl WorkbenchApp {
         }
     }
 
-
     fn update_mirror_texture(&mut self, ctx: &egui::Context) {
         let mut render_state = self.state.clone();
         render_state.selected = self.selected_slots.clone();
@@ -511,11 +558,8 @@ impl WorkbenchApp {
                 pixels,
             };
 
-            self.mirror_texture = Some(ctx.load_texture(
-                "ambient-mirror",
-                color_image,
-                egui::TextureOptions::LINEAR,
-            ));
+            self.mirror_texture =
+                Some(ctx.load_texture("ambient-mirror", color_image, egui::TextureOptions::LINEAR));
             self.dirty_mirror = false;
         }
     }
@@ -524,19 +568,28 @@ impl WorkbenchApp {
 fn recipe_needs_prompt(recipe: &Recipe, state: &SlotManager) -> Option<(String, String)> {
     for node in &recipe.graph.nodes {
         if let NodeKind::PromptOrHandText = node.kind {
-            let hand_prop = node.props.get("hand").map(|s| s.as_str()).unwrap_or("right");
+            let hand_prop = node
+                .props
+                .get("hand")
+                .map(|s| s.as_str())
+                .unwrap_or("right");
             let item = if hand_prop.eq_ignore_ascii_case("left") {
                 state.left_hand()
             } else {
                 state.right_hand()
             };
             let has_text = item.map_or(false, |it| match &it.payload {
-                little_clip_core::ClipPayload::Text(t) | little_clip_core::ClipPayload::Markdown(t) => !t.trim().is_empty(),
+                little_clip_core::ClipPayload::Text(t)
+                | little_clip_core::ClipPayload::Markdown(t) => !t.trim().is_empty(),
                 little_clip_core::ClipPayload::Url(_) => true,
                 _ => false,
             });
             if !has_text {
-                let msg = node.props.get("prompt_message").cloned().unwrap_or_else(|| format!("Enter text for {}:", recipe.name));
+                let msg = node
+                    .props
+                    .get("prompt_message")
+                    .cloned()
+                    .unwrap_or_else(|| format!("Enter text for {}:", recipe.name));
                 let def = node.props.get("default_text").cloned().unwrap_or_default();
                 return Some((msg, def));
             }
@@ -598,8 +651,7 @@ impl eframe::App for WorkbenchApp {
                             .strong(),
                     );
                     ui.label(
-                        egui::RichText::new("— Ambient Dual-Hand Live Mirror")
-                            .color(sub_color),
+                        egui::RichText::new("— Ambient Dual-Hand Live Mirror").color(sub_color),
                     );
 
                     // View Mode Switcher Tabs on the Right
@@ -629,11 +681,7 @@ impl eframe::App for WorkbenchApp {
                             is_pal,
                             egui::RichText::new("📋 Quick Palette [F2]")
                                 .strong()
-                                .color(if is_pal {
-                                    tab_selected_fg
-                                } else {
-                                    brand_color
-                                }),
+                                .color(if is_pal { tab_selected_fg } else { brand_color }),
                         );
                         if pal_tab.clicked() {
                             self.view = WorkbenchView::Palette;
@@ -681,7 +729,6 @@ impl eframe::App for WorkbenchApp {
                     });
                 });
 
-
                 ui.add_space(8.0);
 
                 // Re-render mirror if dirty
@@ -691,25 +738,7 @@ impl eframe::App for WorkbenchApp {
 
                 let left_priors = self.config.slots.left_priors;
                 let get_slot_from_rel_x = |rel_x: f32| -> SlotId {
-                    if rel_x < 240.0 {
-                        SlotId::Undo
-                    } else if rel_x < 600.0 {
-                        SlotId::LeftHand
-                    } else if rel_x < 840.0 {
-                        SlotId::LeftPrior1
-                    } else if rel_x < 1080.0 {
-                        SlotId::LeftPrior2
-                    } else if rel_x < 1320.0 {
-                        if left_priors >= 3 {
-                            SlotId::LeftPrior3
-                        } else {
-                            SlotId::RightPrior2
-                        }
-                    } else if rel_x < 1560.0 {
-                        SlotId::RightPrior1
-                    } else {
-                        SlotId::RightHand
-                    }
+                    crate::shell::screen_mirror::slot_at_x(rel_x, left_priors)
                 };
 
                 // Draw Full-Width Pixel-Perfect Mirror Texture
@@ -739,9 +768,16 @@ impl eframe::App for WorkbenchApp {
                     if response.dragged() {
                         if let Some(source) = self.dragging_slot {
                             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-                            egui::show_tooltip_at_pointer(ctx, egui::Id::new("slot_drag_tip"), |ui| {
-                                ui.label(format!("Dragging {} (drop on another slot to swap)", source.label()));
-                            });
+                            egui::show_tooltip_at_pointer(
+                                ctx,
+                                egui::Id::new("slot_drag_tip"),
+                                |ui| {
+                                    ui.label(format!(
+                                        "Dragging {} (drop on another slot to swap)",
+                                        source.label()
+                                    ));
+                                },
+                            );
                         }
                     }
 
@@ -750,13 +786,20 @@ impl eframe::App for WorkbenchApp {
                             if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
                                 let rect = response.rect;
                                 if rect.contains(pos) {
-                                    let rel_x = (pos.x - rect.min.x) / rect.width() * SCREEN_WIDTH as f32;
+                                    let rel_x =
+                                        (pos.x - rect.min.x) / rect.width() * SCREEN_WIDTH as f32;
                                     let target = get_slot_from_rel_x(rel_x);
                                     if target != source && target != SlotId::Undo {
-                                        let _ = send_ipc_request(&IpcRequest::SwapSlots(source, target));
+                                        let _ = send_ipc_request(&IpcRequest::SwapSlots(
+                                            source, target,
+                                        ));
                                         self.state.swap_slots(source, target);
                                         self.dirty_mirror = true;
-                                        self.status_msg = Some(format!("Swapped {} and {}", source.label(), target.label()));
+                                        self.status_msg = Some(format!(
+                                            "Swapped {} and {}",
+                                            source.label(),
+                                            target.label()
+                                        ));
                                     }
                                 }
                             }
@@ -771,7 +814,9 @@ impl eframe::App for WorkbenchApp {
                             let clicked_slot = get_slot_from_rel_x(rel_x);
 
                             if clicked_slot != SlotId::Undo {
-                                if let Some(p) = self.selected_slots.iter().position(|&s| s == clicked_slot) {
+                                if let Some(p) =
+                                    self.selected_slots.iter().position(|&s| s == clicked_slot)
+                                {
                                     if self.selected_slots.len() > 1 {
                                         self.selected_slots.remove(p);
                                     }
@@ -805,7 +850,10 @@ impl eframe::App for WorkbenchApp {
                     egui::Frame::none()
                         .fill(crate::hex_to_c32(&self.renderer.palette.theme.background))
                         .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-                        .stroke(egui::Stroke::new(1.0, crate::hex_to_c32(&self.renderer.palette.theme.b_med))),
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            crate::hex_to_c32(&self.renderer.palette.theme.b_med),
+                        )),
                 )
                 .show(ctx, |ui| {
                     strip.render_ui(ui, ctx, &self.renderer.palette, &mut open_full_editor);
@@ -813,10 +861,21 @@ impl eframe::App for WorkbenchApp {
         }
 
         if let Some((path, sel)) = open_full_editor {
-            let mut editor = AudioPreviewState::new(path, "Rolling Audio Snapshot".to_string()).with_editor(self.config.audio.editor.clone());
-            if let Some(region) = sel {
-                editor.selection = Some(region);
-            }
+            let prepared_path = sel
+                .and_then(|(start, end)| {
+                    self.rolling_audio_strip
+                        .as_ref()
+                        .and_then(|strip| strip.materialize_editor_selection(start, end).ok())
+                })
+                .unwrap_or(path);
+            let title = if sel.is_some() {
+                "Rolling Audio Selection"
+            } else {
+                "Rolling Audio Snapshot"
+            };
+            // A materialized selection is now the whole source timeline.
+            let editor = AudioPreviewState::new(prepared_path, title.to_string())
+                .with_editor(self.config.audio.editor.clone());
             self.audio_preview = Some(editor);
         }
 
@@ -1439,12 +1498,17 @@ impl WorkbenchApp {
                         prompt.first_frame = false;
                     }
 
-                    let enter = edit_resp.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter));
+                    let enter =
+                        edit_resp.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter));
 
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
                         let sub_bg = hex_to_c32(&self.renderer.palette.harmonies.base);
-                        let sub_fg = contrast_text_c32(sub_bg, Some(hex_to_c32(&self.renderer.palette.theme.f_high)), &self.renderer.palette);
+                        let sub_fg = contrast_text_c32(
+                            sub_bg,
+                            Some(hex_to_c32(&self.renderer.palette.theme.f_high)),
+                            &self.renderer.palette,
+                        );
                         let submit_btn = ui.add(
                             egui::Button::new(
                                 egui::RichText::new("Execute & Run [Enter]")
@@ -1455,13 +1519,14 @@ impl WorkbenchApp {
                         );
 
                         let can_bg = hex_to_c32(&self.renderer.palette.theme.b_med);
-                        let can_fg = contrast_text_c32(can_bg, Some(hex_to_c32(&self.renderer.palette.theme.f_med)), &self.renderer.palette);
+                        let can_fg = contrast_text_c32(
+                            can_bg,
+                            Some(hex_to_c32(&self.renderer.palette.theme.f_med)),
+                            &self.renderer.palette,
+                        );
                         let cancel_btn = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new("Cancel [Esc]")
-                                    .color(can_fg),
-                            )
-                            .fill(can_bg),
+                            egui::Button::new(egui::RichText::new("Cancel [Esc]").color(can_fg))
+                                .fill(can_bg),
                         );
 
                         if submit_btn.clicked() || enter {
@@ -1509,7 +1574,12 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    binary_diff_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_binary_diff);
+                    binary_diff_state.render_ui(
+                        ui,
+                        ctx,
+                        &self.renderer.palette,
+                        &mut close_binary_diff,
+                    );
                 });
 
             if close_binary_diff {
@@ -1638,7 +1708,12 @@ impl WorkbenchApp {
     }
 
     fn open_slot_file_preview(&mut self, fp: &std::path::Path, is_image: bool) {
-        if fp.extension().and_then(|s| s.to_str()).map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")).unwrap_or(false) {
+        if fp
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
+            .unwrap_or(false)
+        {
             if let Ok(st) = MidiViewerState::from_file(fp.to_path_buf()) {
                 self.midi_viewer = Some(st);
             }
@@ -1650,7 +1725,8 @@ impl WorkbenchApp {
             self.pdf_viewer = Some(PdfEditorState::new(fp.to_path_buf()));
         } else if little_clip_ops::is_spreadsheet_file(fp) {
             if let Ok(data) = little_clip_ops::load_spreadsheet(fp) {
-                self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, Some(fp.to_path_buf())));
+                self.spreadsheet_viewer =
+                    Some(SpreadsheetViewerState::new(data, Some(fp.to_path_buf())));
             }
         } else if is_image || little_clip_ops::is_image_path(fp) {
             if let Ok(editor) = ImagePreviewState::from_path(fp.to_path_buf(), &self.config) {
@@ -1672,13 +1748,20 @@ impl WorkbenchApp {
         if let Some(data) = little_clip_ops::detect_csv_text(text.trim()) {
             self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, None));
         } else {
-            self.text_preview = Some(TextPreviewState::from_text(text.to_string(), Some(title.to_string()), &self.config));
+            self.text_preview = Some(TextPreviewState::from_text(
+                text.to_string(),
+                Some(title.to_string()),
+                &self.config,
+            ));
         }
     }
 
     fn open_slot_preview_modal(&mut self, item: &ClipItem) {
         if let Some(audio_path) = item.audio_path() {
-            self.audio_preview = Some(AudioPreviewState::new(audio_path, item.title.clone()).with_editor(self.config.audio.editor.clone()));
+            self.audio_preview = Some(
+                AudioPreviewState::new(audio_path, item.title.clone())
+                    .with_editor(self.config.audio.editor.clone()),
+            );
             return;
         }
         if let Some(fp) = item.file_path() {
@@ -1696,24 +1779,27 @@ impl WorkbenchApp {
         selected_slots: &[SlotId],
         state: &SlotManager,
     ) -> Option<(Option<String>, Option<PathBuf>, bool)> {
-        let (raw_txt, file_p): (Option<String>, Option<PathBuf>) = selected_slots.iter().find_map(|s| {
-            let it = state.get(*s)?;
-            if let Some(p) = it.file_path().filter(|p| little_clip_ops::is_text_file(p)) {
-                Some((None, Some(p)))
-            } else if let Some(txt) = it.to_clipboard_text() {
-                let p = std::path::Path::new(txt.trim());
-                if p.is_file() && little_clip_ops::is_text_file(p) {
-                    Some((None, Some(p.to_path_buf())))
+        let (raw_txt, file_p): (Option<String>, Option<PathBuf>) =
+            selected_slots.iter().find_map(|s| {
+                let it = state.get(*s)?;
+                if let Some(p) = it.file_path().filter(|p| little_clip_ops::is_text_file(p)) {
+                    Some((None, Some(p)))
+                } else if let Some(txt) = it.to_clipboard_text() {
+                    let p = std::path::Path::new(txt.trim());
+                    if p.is_file() && little_clip_ops::is_text_file(p) {
+                        Some((None, Some(p.to_path_buf())))
+                    } else {
+                        Some((Some(txt), None))
+                    }
                 } else {
-                    Some((Some(txt), None))
+                    None
                 }
-            } else {
-                None
-            }
-        })?;
+            })?;
 
         let is_md = if let Some(p) = &file_p {
-            p.extension().map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown")).unwrap_or(false)
+            p.extension()
+                .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+                .unwrap_or(false)
         } else if let Some(txt) = &raw_txt {
             text_preview::detect_markdown_text(txt)
         } else {
@@ -1738,7 +1824,8 @@ impl WorkbenchApp {
                     strip.selected_region = None;
                     strip.stop();
                 }
-            } else if self.view == WorkbenchView::AutoActions || self.view == WorkbenchView::Themes {
+            } else if self.view == WorkbenchView::AutoActions || self.view == WorkbenchView::Themes
+            {
                 self.view = WorkbenchView::Palette;
             } else {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1785,7 +1872,9 @@ impl WorkbenchApp {
     }
 
     fn handle_audio_strip_refresh(&mut self, ctx: &egui::Context) {
-        let refresh_pressed = ctx.input(|i| i.key_pressed(egui::Key::F5) || (i.modifiers.command && i.key_pressed(egui::Key::R)));
+        let refresh_pressed = ctx.input(|i| {
+            i.key_pressed(egui::Key::F5) || (i.modifiers.command && i.key_pressed(egui::Key::R))
+        });
         if !refresh_pressed {
             return;
         }
@@ -1796,7 +1885,11 @@ impl WorkbenchApp {
             let toast_msg = if peak < 0.001 {
                 "⟳ Snapshot refreshed: buffer is currently silence".to_string()
             } else {
-                format!("⟳ Snapshot refreshed ({:.1}s, peak: {:.0}%)", strip.duration_sec, peak * 100.0)
+                format!(
+                    "⟳ Snapshot refreshed ({:.1}s, peak: {:.0}%)",
+                    strip.duration_sec,
+                    peak * 100.0
+                )
             };
             strip.status_toast = Some((toast_msg, now));
         }
@@ -1809,7 +1902,9 @@ impl WorkbenchApp {
         if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
             self.view = match self.view {
                 WorkbenchView::Palette => WorkbenchView::NodeMachine,
-                WorkbenchView::NodeMachine | WorkbenchView::AutoActions | WorkbenchView::Themes => WorkbenchView::Palette,
+                WorkbenchView::NodeMachine | WorkbenchView::AutoActions | WorkbenchView::Themes => {
+                    WorkbenchView::Palette
+                }
             };
         }
         if ctx.input(|i| i.key_pressed(egui::Key::F3)) {
@@ -1850,10 +1945,16 @@ impl WorkbenchApp {
         } else if ctx.input(|i| i.key_pressed(egui::Key::Num2)) {
             self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::LeftPrior2]);
         } else if ctx.input(|i| i.key_pressed(egui::Key::Num3)) {
-            self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::LeftPrior1, SlotId::LeftPrior2]);
+            self.apply_quick_slot_selection(vec![
+                SlotId::LeftHand,
+                SlotId::LeftPrior1,
+                SlotId::LeftPrior2,
+            ]);
         } else if ctx.input(|i| i.key_pressed(egui::Key::Num0)) {
             self.apply_quick_slot_selection(vec![SlotId::LeftHand]);
-        } else if (ctx.input(|i| i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::X))) && self.selected_slots.len() == 2 {
+        } else if (ctx.input(|i| i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::X)))
+            && self.selected_slots.len() == 2
+        {
             self.swap_selected_slots();
         }
     }
@@ -1886,12 +1987,20 @@ impl WorkbenchApp {
             self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::LeftPrior2]);
             self.search_query.clear();
         } else if self.search_query == "3" {
-            self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::LeftPrior1, SlotId::LeftPrior2]);
+            self.apply_quick_slot_selection(vec![
+                SlotId::LeftHand,
+                SlotId::LeftPrior1,
+                SlotId::LeftPrior2,
+            ]);
             self.search_query.clear();
         } else if self.search_query == "0" || self.search_query == "`" {
             self.apply_quick_slot_selection(vec![SlotId::LeftHand]);
             self.search_query.clear();
-        } else if (self.search_query.trim() == "swap" || ((self.search_query == "s" || self.search_query == "x") && self.selected_slots.len() == 2)) && self.selected_slots.len() == 2 {
+        } else if (self.search_query.trim() == "swap"
+            || ((self.search_query == "s" || self.search_query == "x")
+                && self.selected_slots.len() == 2))
+            && self.selected_slots.len() == 2
+        {
             self.swap_selected_slots();
             self.search_query.clear();
         }
@@ -1987,19 +2096,28 @@ impl WorkbenchApp {
 
             // Filter chips
             let all_sel = self.theme_filter == ThemeFilter::All;
-            if ui.selectable_label(all_sel, format!("All ({})", self.available_themes.len())).clicked() {
+            if ui
+                .selectable_label(all_sel, format!("All ({})", self.available_themes.len()))
+                .clicked()
+            {
                 self.theme_filter = ThemeFilter::All;
             }
 
             let dark_count = self.available_themes.iter().filter(|t| t.is_dark()).count();
             let dark_sel = self.theme_filter == ThemeFilter::Dark;
-            if ui.selectable_label(dark_sel, format!("🌙 Dark ({})", dark_count)).clicked() {
+            if ui
+                .selectable_label(dark_sel, format!("🌙 Dark ({})", dark_count))
+                .clicked()
+            {
                 self.theme_filter = ThemeFilter::Dark;
             }
 
             let light_count = self.available_themes.len().saturating_sub(dark_count);
             let light_sel = self.theme_filter == ThemeFilter::Light;
-            if ui.selectable_label(light_sel, format!("☀️ Light ({})", light_count)).clicked() {
+            if ui
+                .selectable_label(light_sel, format!("☀️ Light ({})", light_count))
+                .clicked()
+            {
                 self.theme_filter = ThemeFilter::Light;
             }
         });
@@ -2045,7 +2163,8 @@ impl WorkbenchApp {
                     hex_to_c32(&theme.b_low)
                 };
 
-                let card_stroke = egui::Stroke::new(if is_active { 2.0 } else { 1.0 }, border_color);
+                let card_stroke =
+                    egui::Stroke::new(if is_active { 2.0 } else { 1.0 }, border_color);
 
                 let frame_resp = egui::Frame::none()
                     .fill(card_bg)
@@ -2066,82 +2185,140 @@ impl WorkbenchApp {
                             );
 
                             ui.label(
-                                egui::RichText::new(if theme.is_dark() { "🌙 Dark" } else { "☀️ Light" })
-                                    .size(11.0)
-                                    .color(hex_to_c32(&theme.f_low)),
+                                egui::RichText::new(if theme.is_dark() {
+                                    "🌙 Dark"
+                                } else {
+                                    "☀️ Light"
+                                })
+                                .size(11.0)
+                                .color(hex_to_c32(&theme.f_low)),
                             );
 
                             // Right side: Active badge, harmonies, swatches
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if is_active {
-                                    egui::Frame::none()
-                                        .fill(hex_to_c32(&palette.b_low))
-                                        .stroke(egui::Stroke::new(1.0, hex_to_c32(&palette.cursor_border)))
-                                        .rounding(egui::Rounding::same(4.0))
-                                        .inner_margin(egui::Margin::symmetric(8.0, 3.0))
-                                        .show(ui, |ui| {
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if is_active {
+                                        egui::Frame::none()
+                                            .fill(hex_to_c32(&palette.b_low))
+                                            .stroke(egui::Stroke::new(
+                                                1.0,
+                                                hex_to_c32(&palette.cursor_border),
+                                            ))
+                                            .rounding(egui::Rounding::same(4.0))
+                                            .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+                                            .show(ui, |ui| {
+                                                ui.label(
+                                                    egui::RichText::new("✓ ACTIVE")
+                                                        .size(11.0)
+                                                        .strong()
+                                                        .color(hex_to_c32(&palette.cursor_border)),
+                                                );
+                                            });
+                                    }
+
+                                    ui.add_space(8.0);
+
+                                    // 5 Harmony dots
+                                    let harmonies = DerivedHarmonies::from_base_hex(
+                                        &theme.f_med,
+                                        theme.is_dark(),
+                                    );
+                                    let harm_swatches = [
+                                        ("Cur", &harmonies.tetradic_2, "Cursor (Tetradic Accent)"),
+                                        ("Tri2", &harmonies.triadic_2, "Prior Slot (Triadic 2)"),
+                                        ("Tri1", &harmonies.triadic_1, "Prior Slot (Triadic 1)"),
+                                        (
+                                            "RH",
+                                            &harmonies.complementary,
+                                            "Right Hand (Complementary)",
+                                        ),
+                                        ("LH", &harmonies.base, "Left Hand (Base Accent)"),
+                                    ];
+
+                                    for (_id, hex, label) in harm_swatches {
+                                        let c = hex_to_c32(hex);
+                                        let (rect, resp) = ui.allocate_exact_size(
+                                            egui::vec2(12.0, 12.0),
+                                            egui::Sense::hover(),
+                                        );
+                                        ui.painter().circle_filled(rect.center(), 4.5, c);
+                                        ui.painter().circle_stroke(
+                                            rect.center(),
+                                            4.5,
+                                            egui::Stroke::new(
+                                                0.5,
+                                                hex_to_c32_alpha(&theme.f_high, 60),
+                                            ),
+                                        );
+                                        resp.on_hover_ui(|ui| {
                                             ui.label(
-                                                egui::RichText::new("✓ ACTIVE")
-                                                    .size(11.0)
-                                                    .strong()
-                                                    .color(hex_to_c32(&palette.cursor_border)),
+                                                egui::RichText::new(format!("{}: {}", label, hex))
+                                                    .small(),
                                             );
                                         });
-                                }
+                                    }
 
-                                ui.add_space(8.0);
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        egui::RichText::new("•")
+                                            .size(10.0)
+                                            .color(hex_to_c32(&theme.f_low)),
+                                    );
+                                    ui.add_space(6.0);
 
-                                // 5 Harmony dots
-                                let harmonies = DerivedHarmonies::from_base_hex(&theme.f_med, theme.is_dark());
-                                let harm_swatches = [
-                                    ("Cur", &harmonies.tetradic_2, "Cursor (Tetradic Accent)"),
-                                    ("Tri2", &harmonies.triadic_2, "Prior Slot (Triadic 2)"),
-                                    ("Tri1", &harmonies.triadic_1, "Prior Slot (Triadic 1)"),
-                                    ("RH", &harmonies.complementary, "Right Hand (Complementary)"),
-                                    ("LH", &harmonies.base, "Left Hand (Base Accent)"),
-                                ];
+                                    // 9 Theme swatches (displayed right-to-left: b_inv down to background)
+                                    let swatches = [
+                                        ("b_inv", &theme.b_inv, "Background Inverted (Badges)"),
+                                        ("b_low", &theme.b_low, "Background Low (Undo / Recessed)"),
+                                        (
+                                            "b_med",
+                                            &theme.b_med,
+                                            "Background Medium (History Cards)",
+                                        ),
+                                        ("b_high", &theme.b_high, "Background High (Hero Cards)"),
+                                        ("f_inv", &theme.f_inv, "Foreground Inverted (Overlays)"),
+                                        ("f_low", &theme.f_low, "Foreground Low (Muted Subtitles)"),
+                                        (
+                                            "f_med",
+                                            &theme.f_med,
+                                            "Foreground Medium (Primary Accent)",
+                                        ),
+                                        ("f_high", &theme.f_high, "Foreground High (Headlines)"),
+                                        ("background", &theme.background, "Canvas Background"),
+                                    ];
 
-                                for (_id, hex, label) in harm_swatches {
-                                    let c = hex_to_c32(hex);
-                                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-                                    ui.painter().circle_filled(rect.center(), 4.5, c);
-                                    ui.painter().circle_stroke(rect.center(), 4.5, egui::Stroke::new(0.5, hex_to_c32_alpha(&theme.f_high, 60)));
-                                    resp.on_hover_ui(|ui| {
-                                        ui.label(egui::RichText::new(format!("{}: {}", label, hex)).small());
-                                    });
-                                }
-
-                                ui.add_space(6.0);
-                                ui.label(egui::RichText::new("•").size(10.0).color(hex_to_c32(&theme.f_low)));
-                                ui.add_space(6.0);
-
-                                // 9 Theme swatches (displayed right-to-left: b_inv down to background)
-                                let swatches = [
-                                    ("b_inv", &theme.b_inv, "Background Inverted (Badges)"),
-                                    ("b_low", &theme.b_low, "Background Low (Undo / Recessed)"),
-                                    ("b_med", &theme.b_med, "Background Medium (History Cards)"),
-                                    ("b_high", &theme.b_high, "Background High (Hero Cards)"),
-                                    ("f_inv", &theme.f_inv, "Foreground Inverted (Overlays)"),
-                                    ("f_low", &theme.f_low, "Foreground Low (Muted Subtitles)"),
-                                    ("f_med", &theme.f_med, "Foreground Medium (Primary Accent)"),
-                                    ("f_high", &theme.f_high, "Foreground High (Headlines)"),
-                                    ("background", &theme.background, "Canvas Background"),
-                                ];
-
-                                for (_id, hex, label) in swatches {
-                                    let c = hex_to_c32(hex);
-                                    let (rect, resp) = ui.allocate_exact_size(egui::vec2(15.0, 13.0), egui::Sense::hover());
-                                    ui.painter().rect(rect, 2.0, c, egui::Stroke::new(0.5, hex_to_c32_alpha(&theme.f_high, 40)));
-                                    resp.on_hover_ui(|ui| {
-                                        ui.label(egui::RichText::new(format!("{}: {}", label, hex)).small().strong());
-                                    });
-                                }
-                            });
+                                    for (_id, hex, label) in swatches {
+                                        let c = hex_to_c32(hex);
+                                        let (rect, resp) = ui.allocate_exact_size(
+                                            egui::vec2(15.0, 13.0),
+                                            egui::Sense::hover(),
+                                        );
+                                        ui.painter().rect(
+                                            rect,
+                                            2.0,
+                                            c,
+                                            egui::Stroke::new(
+                                                0.5,
+                                                hex_to_c32_alpha(&theme.f_high, 40),
+                                            ),
+                                        );
+                                        resp.on_hover_ui(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(format!("{}: {}", label, hex))
+                                                    .small()
+                                                    .strong(),
+                                            );
+                                        });
+                                    }
+                                },
+                            );
                         });
                     });
 
                 // Make the entire frame clickable
-                let mut card_resp = ui.interact(frame_resp.response.rect, card_id, egui::Sense::click());
+                let mut card_resp =
+                    ui.interact(frame_resp.response.rect, card_id, egui::Sense::click());
                 if !is_active {
                     card_resp = card_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
                     if card_resp.hovered() {
@@ -2169,8 +2346,9 @@ impl WorkbenchApp {
     }
 }
 
-
-pub(crate) fn send_ipc_request(req: &IpcRequest) -> Result<IpcResponse, Box<dyn std::error::Error>> {
+pub(crate) fn send_ipc_request(
+    req: &IpcRequest,
+) -> Result<IpcResponse, Box<dyn std::error::Error>> {
     let sock_path = get_socket_path();
     let mut stream = UnixStream::connect(&sock_path)?;
 
@@ -2204,7 +2382,13 @@ struct PromptApp {
 }
 
 impl PromptApp {
-    pub fn new(title: String, message: String, default_text: String, recipe_name: Option<String>, palette: AppPalette) -> Self {
+    pub fn new(
+        title: String,
+        message: String,
+        default_text: String,
+        recipe_name: Option<String>,
+        palette: AppPalette,
+    ) -> Self {
         Self {
             title,
             message,
@@ -2266,12 +2450,17 @@ impl eframe::App for PromptApp {
                     self.first_frame = false;
                 }
 
-                let enter = edit_resp.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter));
+                let enter =
+                    edit_resp.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter));
 
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
                     let sub_bg = hex_to_c32(&self.palette.harmonies.base);
-                    let sub_fg = contrast_text_c32(sub_bg, Some(hex_to_c32(&self.palette.theme.f_high)), &self.palette);
+                    let sub_fg = contrast_text_c32(
+                        sub_bg,
+                        Some(hex_to_c32(&self.palette.theme.f_high)),
+                        &self.palette,
+                    );
                     let submit_btn = ui.add(
                         egui::Button::new(
                             egui::RichText::new("Execute & Run [Enter]")
@@ -2283,14 +2472,15 @@ impl eframe::App for PromptApp {
                     );
 
                     let can_bg = hex_to_c32(&self.palette.theme.b_med);
-                    let can_fg = contrast_text_c32(can_bg, Some(hex_to_c32(&self.palette.theme.f_med)), &self.palette);
+                    let can_fg = contrast_text_c32(
+                        can_bg,
+                        Some(hex_to_c32(&self.palette.theme.f_med)),
+                        &self.palette,
+                    );
                     let cancel_btn = ui.add(
-                        egui::Button::new(
-                            egui::RichText::new("Cancel [Esc]")
-                                .color(can_fg),
-                        )
-                        .fill(can_bg)
-                        .min_size(egui::vec2(80.0, 32.0)),
+                        egui::Button::new(egui::RichText::new("Cancel [Esc]").color(can_fg))
+                            .fill(can_bg)
+                            .min_size(egui::vec2(80.0, 32.0)),
                     );
 
                     if submit_btn.clicked() || enter {
@@ -2340,7 +2530,15 @@ fn run_prompt_modal(
     eframe::run_native(
         "clip-prompt",
         options,
-        Box::new(move |_cc| Box::new(PromptApp::new(title, message, default_text, recipe_name, palette))),
+        Box::new(move |_cc| {
+            Box::new(PromptApp::new(
+                title,
+                message,
+                default_text,
+                recipe_name,
+                palette,
+            ))
+        }),
     )
 }
 
@@ -2361,7 +2559,9 @@ fn main() -> Result<(), eframe::Error> {
 
     let is_last = args.iter().any(|a| a == "--last" || a == "-l");
     let is_diff = args.iter().any(|a| a == "--diff" || a == "-d");
-    let is_binary_diff = args.iter().any(|a| a == "--binary-diff" || a == "--binary" || a == "-b");
+    let is_binary_diff = args
+        .iter()
+        .any(|a| a == "--binary-diff" || a == "--binary" || a == "-b");
     let initial_audio = args
         .iter()
         .position(|a| a == "--audio" || a == "-a")
@@ -2379,7 +2579,9 @@ fn main() -> Result<(), eframe::Error> {
             _ => SlotManager::default(),
         };
 
-        if let Ok(IpcResponse::LastAction(Some(action))) = send_ipc_request(&IpcRequest::GetLastAction) {
+        if let Ok(IpcResponse::LastAction(Some(action))) =
+            send_ipc_request(&IpcRequest::GetLastAction)
+        {
             match action {
                 little_clip_core::ipc::LastAction::Recipe { recipe_name } => {
                     if let Some(recipe) = find_recipe_by_name(&recipe_name) {
@@ -2426,7 +2628,14 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "clip-workbench",
         options,
-        Box::new(move |_cc| Box::new(WorkbenchApp::new(state, is_diff, is_binary_diff, initial_audio, initial_image))),
+        Box::new(move |_cc| {
+            Box::new(WorkbenchApp::new(
+                state,
+                is_diff,
+                is_binary_diff,
+                initial_audio,
+                initial_image,
+            ))
+        }),
     )
 }
-

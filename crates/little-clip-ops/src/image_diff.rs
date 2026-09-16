@@ -76,9 +76,11 @@ impl ImageDiffResult {
     /// Encodes the diff mask image (black background + red diff pixels) as PNG bytes
     pub fn encode_mask_png(&self) -> Result<Vec<u8>, image::ImageError> {
         let img: RgbaImage = ImageBuffer::from_raw(self.width, self.height, self.mask_rgba.clone())
-            .ok_or_else(|| image::ImageError::Parameter(image::error::ParameterError::from_kind(
-                image::error::ParameterErrorKind::DimensionMismatch,
-            )))?;
+            .ok_or_else(|| {
+                image::ImageError::Parameter(image::error::ParameterError::from_kind(
+                    image::error::ParameterErrorKind::DimensionMismatch,
+                ))
+            })?;
         let mut buf = std::io::Cursor::new(Vec::new());
         img.write_to(&mut buf, image::ImageFormat::Png)?;
         Ok(buf.into_inner())
@@ -86,10 +88,14 @@ impl ImageDiffResult {
 
     /// Encodes the diff overlay image (dimmed base + red diff pixels) as PNG bytes
     pub fn encode_overlay_png(&self) -> Result<Vec<u8>, image::ImageError> {
-        let img: RgbaImage = ImageBuffer::from_raw(self.width, self.height, self.overlay_rgba.clone())
-            .ok_or_else(|| image::ImageError::Parameter(image::error::ParameterError::from_kind(
-                image::error::ParameterErrorKind::DimensionMismatch,
-            )))?;
+        let img: RgbaImage =
+            ImageBuffer::from_raw(self.width, self.height, self.overlay_rgba.clone()).ok_or_else(
+                || {
+                    image::ImageError::Parameter(image::error::ParameterError::from_kind(
+                        image::error::ParameterErrorKind::DimensionMismatch,
+                    ))
+                },
+            )?;
         let mut buf = std::io::Cursor::new(Vec::new());
         img.write_to(&mut buf, image::ImageFormat::Png)?;
         Ok(buf.into_inner())
@@ -120,14 +126,7 @@ fn write_diff_pixel(
 
 /// Writes matching pixel as black in mask and dimmed grayscale in overlay at `idx`.
 #[inline(always)]
-fn write_identical_pixel(
-    m_chunk: &mut [u8],
-    o_chunk: &mut [u8],
-    idx: usize,
-    r: u8,
-    g: u8,
-    b: u8,
-) {
+fn write_identical_pixel(m_chunk: &mut [u8], o_chunk: &mut [u8], idx: usize, r: u8, g: u8, b: u8) {
     m_chunk[idx] = 0;
     m_chunk[idx + 1] = 0;
     m_chunk[idx + 2] = 0;
@@ -206,7 +205,11 @@ pub fn compare_rgba_images(
                 .chunks_mut(rows_per_thread * width as usize * 4)
                 .collect();
 
-            for (i, (m_chunk, o_chunk)) in mask_chunks.into_iter().zip(overlay_chunks.into_iter()).enumerate() {
+            for (i, (m_chunk, o_chunk)) in mask_chunks
+                .into_iter()
+                .zip(overlay_chunks.into_iter())
+                .enumerate()
+            {
                 let start_row = i * rows_per_thread;
                 let start_byte = start_row * width as usize * 4;
                 let len = m_chunk.len();
@@ -235,7 +238,10 @@ pub fn compare_rgba_images(
                 }));
             }
 
-            handles.into_iter().map(|h| h.join().unwrap()).sum::<usize>()
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .sum::<usize>()
         });
 
         (base_rgba, comp_rgba, mask_rgba, overlay_rgba, diff_count)
@@ -307,13 +313,17 @@ pub fn compare_rgba_images(
                             }
 
                             let is_different = match (p1, p2) {
-                                (Some(b), Some(c)) => is_pixel_different_fast(&b.0, &c.0, threshold_sq),
+                                (Some(b), Some(c)) => {
+                                    is_pixel_different_fast(&b.0, &c.0, threshold_sq)
+                                }
                                 _ => true,
                             };
 
                             if is_different {
                                 local_diff += 1;
-                                write_diff_pixel(m_chunk, o_chunk, idx, diff_r, diff_g, diff_b, diff_a);
+                                write_diff_pixel(
+                                    m_chunk, o_chunk, idx, diff_r, diff_g, diff_b, diff_a,
+                                );
                             } else if let Some(b) = p1 {
                                 write_identical_pixel(m_chunk, o_chunk, idx, b[0], b[1], b[2]);
                             } else {
@@ -334,7 +344,10 @@ pub fn compare_rgba_images(
                 }));
             }
 
-            handles.into_iter().map(|h| h.join().unwrap()).sum::<usize>()
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .sum::<usize>()
         });
 
         (base_rgba, comp_rgba, mask_rgba, overlay_rgba, diff_count)
@@ -454,8 +467,8 @@ pub fn load_rgba_from_bytes(bytes: &[u8]) -> Result<RgbaImage, ImageDiffError> {
 
 /// Loads an `RgbaImage` from a filesystem path.
 pub fn load_rgba_from_path(path: &Path) -> Result<RgbaImage, ImageDiffError> {
-    let bytes = std::fs::read(path)
-        .map_err(|e| ImageDiffError::IoError(path.display().to_string(), e))?;
+    let bytes =
+        std::fs::read(path).map_err(|e| ImageDiffError::IoError(path.display().to_string(), e))?;
     load_rgba_from_bytes(&bytes)
 }
 
@@ -550,7 +563,10 @@ fn render_svg_to_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
     } else {
         let err_msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
         Err(if err_msg.is_empty() {
-            format!("'rsvg-convert' exited with status {:?}", output.status.code())
+            format!(
+                "'rsvg-convert' exited with status {:?}",
+                output.status.code()
+            )
         } else {
             err_msg
         })

@@ -3,11 +3,12 @@
 //! Provides syntax-highlighted code inspection, rendered Markdown viewing, text selection and copying,
 //! toggleable line-wrapping, line numbers gutter, regex find toolbar, and external editor escape hatches.
 
+use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
+use crate::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
 use little_clip_core::config::AppConfig;
 use little_clip_core::syntax::detect_language;
 use little_clip_core::theme::AppPalette;
-use crate::{hex_to_c32, hex_to_c32_alpha};
 use regex::Regex;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,7 +18,10 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
 /// Maps an RGB syntax highlighting token color from syntect into the active Hundred Rabbits theme harmonies.
-fn map_syntect_color_to_theme(style_fg: syntect::highlighting::Color, palette: &AppPalette) -> Color32 {
+fn map_syntect_color_to_theme(
+    style_fg: syntect::highlighting::Color,
+    palette: &AppPalette,
+) -> Color32 {
     let r = style_fg.r as f32 / 255.0;
     let g = style_fg.g as f32 / 255.0;
     let b = style_fg.b as f32 / 255.0;
@@ -118,6 +122,16 @@ pub struct TextPreviewState {
 
     // Scroll state
     pub scroll_to_line: Option<usize>,
+    /// Byte offsets for each line. This is built once when the preview opens so
+    /// large files do not allocate/scan all lines every repaint.
+    line_starts: Vec<usize>,
+    pub minimap_fraction: f32,
+}
+
+fn line_start_offsets(text: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    starts.extend(text.match_indices('\n').map(|(index, _)| index + 1));
+    starts
 }
 
 pub use little_clip_core::syntax::detect_markdown_text;
@@ -125,6 +139,7 @@ pub use little_clip_core::syntax::detect_markdown_text;
 impl TextPreviewState {
     /// Creates a new text preview from in-memory text.
     pub fn from_text(text: String, title: Option<String>, config: &AppConfig) -> Self {
+        let line_starts = line_start_offsets(&text);
         let is_md = detect_markdown_text(&text);
         let lang = if is_md {
             "md"
@@ -167,6 +182,8 @@ impl TextPreviewState {
             focus_find_input: false,
             status_toast: crate::ui_ext::StatusToast::new(),
             scroll_to_line: None,
+            line_starts,
+            minimap_fraction: 0.0,
         }
     }
 
@@ -174,10 +191,13 @@ impl TextPreviewState {
     pub fn from_file<P: AsRef<Path>>(path: P, config: &AppConfig) -> Option<Self> {
         let path_ref = path.as_ref();
         let content = little_clip_ops::read_text_file_preview(path_ref, 2 * 1024 * 1024)?;
+        let line_starts = line_start_offsets(&content);
         let ext = path_ref.extension().and_then(|e| e.to_str());
         let lang = detect_language(&content, ext);
         // Only actual .md / .markdown files default to markdown preview
-        let is_md = ext.map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown")).unwrap_or(false);
+        let is_md = ext
+            .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+            .unwrap_or(false);
         let title = path_ref
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -209,6 +229,8 @@ impl TextPreviewState {
             focus_find_input: false,
             status_toast: crate::ui_ext::StatusToast::new(),
             scroll_to_line: None,
+            line_starts,
+            minimap_fraction: 0.0,
         })
     }
 
@@ -340,57 +362,47 @@ impl TextPreviewState {
                 _ => "txt",
             };
 
-            let temp_name = format!("little_clip_preview_{}.{}", uuid::Uuid::new_v4().simple(), ext);
+            let temp_name = format!(
+                "little_clip_preview_{}.{}",
+                uuid::Uuid::new_v4().simple(),
+                ext
+            );
             let temp_path = std::env::temp_dir().join(temp_name);
             if let Err(e) = std::fs::write(&temp_path, &self.content) {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs_f64())
                     .unwrap_or(0.0);
-                self.status_toast.set(format!("Failed to write temporary file: {}", e), now);
+                self.status_toast
+                    .set(format!("Failed to write temporary file: {}", e), now);
                 return;
             }
             temp_path
         };
 
-        match Command::new(editor).arg(&target_path).spawn() {
-            Ok(_) => {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs_f64())
-                    .unwrap_or(0.0);
-                self.status_toast.set(format!("Opened in {}", editor), now);
-            }
-            Err(e) => {
-                // Try xdg-open fallback
-                if Command::new("xdg-open").arg(&target_path).spawn().is_ok() {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs_f64())
-                        .unwrap_or(0.0);
-                    self.status_toast.set("Opened in system default editor", now);
-                } else {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs_f64())
-                        .unwrap_or(0.0);
-                    self.status_toast.set(format!("Failed to launch {}: {}", editor, e), now);
-                }
-            }
-        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+
+        EscapeHatchLauncher::launch(editor, editor, &target_path, &mut self.status_toast, now);
     }
 
     /// Copies the full text content to the system clipboard.
     pub fn copy_all_to_clipboard(&mut self, ctx: &egui::Context) {
         ctx.output_mut(|o| o.copied_text = self.content.clone());
         let _ = Command::new("wl-copy").arg(&self.content).output();
-        let _ = Command::new("xclip").args(["-selection", "clipboard"]).arg(&self.content).output();
+        let _ = Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .arg(&self.content)
+            .output();
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
-                    .unwrap_or(0.0);
-        self.status_toast.set("Copied full text to clipboard! 📋", now);
+            .unwrap_or(0.0);
+        self.status_toast
+            .set("Copied full text to clipboard! 📋", now);
     }
 
     /// Renders the complete preview modal UI.
@@ -408,29 +420,79 @@ impl TextPreviewState {
 
         self.handle_shortcuts(ctx, close);
 
+        let total_lines = self.content.lines().count().max(1);
+        let total_chars = self.content.chars().count();
+        let icon = if self.is_markdown {
+            "📖"
+        } else if self.language != "txt" {
+            "📝"
+        } else {
+            "📄"
+        };
+        let lang_label = self.language.to_uppercase();
+        let title = self.title.clone();
+
+        let editor_hatch = EscapeHatch::new(
+            format!("📝 Open in {}", self.editor_cmd),
+            self.editor_cmd.clone(),
+            format!("Open in {}", self.editor_cmd),
+        );
+
+        let mut shell = StudioShell::new(title, icon, palette, close)
+            .with_badge(lang_label, Some(hex_to_c32(&palette.harmonies.base)))
+            .with_badge(format!("{} lines", total_lines), None)
+            .with_badge(format!("{} chars", total_chars), None)
+            .with_escape_hatch(editor_hatch)
+            .with_footer_hints("Ctrl+F: Find • Esc: Close/Dismiss")
+            .with_footer_readout(format!("{} lines • {} chars", total_lines, total_chars));
+
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.background))
-            .inner_margin(egui::Margin::same(16.0))
+            .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
-                self.render_header(ui, ctx, palette, close);
-                self.render_toast(ui, palette, now);
+                // Header (Zone 1)
+                let clicked_hatch = shell.render_header(ui, |ui| {
+                    self.render_header_actions(ui, ctx, palette);
+                });
 
+                if clicked_hatch.is_some() {
+                    self.trigger_escape_hatch();
+                }
+
+                if shell.is_closed() {
+                    return;
+                }
+
+                // Zone 2b: Find Toolbar (if open)
                 if self.show_find {
                     self.render_search_toolbar(ui, palette);
                 }
 
-                ui.add_space(10.0);
-                ui.separator();
-                ui.add_space(6.0);
+                ui.add_space(4.0);
 
-                match self.view_mode {
-                    TextViewMode::RenderedMarkdown => {
-                        self.render_markdown_view(ui, palette);
-                    }
-                    TextViewMode::Raw => {
-                        self.render_raw_code_view(ui, palette);
-                    }
-                }
+                // Zone 3: Main text viewport
+                let footer_h = 28.0;
+                let avail = ui.available_size();
+                let viewport_h = (avail.y - footer_h - 6.0).max(100.0);
+
+                ui.allocate_ui_with_layout(
+                    Vec2::new(avail.x, viewport_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| match self.view_mode {
+                        TextViewMode::RenderedMarkdown => {
+                            self.render_markdown_view(ui, palette);
+                        }
+                        TextViewMode::Raw => {
+                            self.render_raw_code_view(ui, palette);
+                        }
+                    },
+                );
+
+                ui.add_space(4.0);
+
+                // Zone 5: Footer
+                let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
+                shell.render_footer(ui, &toast_tuple, now);
             });
     }
 
@@ -449,65 +511,14 @@ impl TextPreviewState {
         }
     }
 
-    fn render_header(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        palette: &AppPalette,
-        close: &mut bool,
-    ) {
-        let total_lines = self.content.lines().count().max(1);
-        let total_chars = self.content.chars().count();
-        let icon = if self.is_markdown {
-            "📖"
-        } else if self.language != "txt" {
-            "📝"
-        } else {
-            "📄"
-        };
-        let lang_label = self.language.to_uppercase();
-        let title = self.title.clone();
-
-        crate::ui_ext::render_view_header(
-            ui,
-            icon,
-            &title,
-            palette,
-            close,
-            |ui| {
-                ui.add_space(8.0);
-                crate::ui_ext::badge_pill(ui, lang_label, Some(hex_to_c32(&palette.harmonies.base)), palette);
-                ui.add_space(4.0);
-                let info_text = format!("{} lines  •  {} chars", total_lines, total_chars);
-                ui.label(
-                    egui::RichText::new(info_text)
-                        .small()
-                        .color(hex_to_c32(&palette.theme.f_low)),
-                );
-            },
-            |ui| {
-                self.render_header_actions(ui, ctx, palette);
-            },
-        );
-    }
-
     fn render_header_command_buttons(
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        let editor_label = format!("📝 Open in {}", self.editor_cmd);
-        let hatch_btn = crate::action_button(editor_label, hex_to_c32(&palette.harmonies.base), palette);
-        if ui
-            .add(hatch_btn)
-            .on_hover_text("Open in configured external code editor")
-            .clicked()
-        {
-            self.trigger_escape_hatch();
-        }
-
-        let copy_btn = crate::secondary_button("📋 Copy All", hex_to_c32(&palette.theme.b_med), palette);
+        let copy_btn =
+            crate::secondary_button("📋 Copy All", hex_to_c32(&palette.theme.b_med), palette);
         if ui.add(copy_btn).clicked() {
             self.copy_all_to_clipboard(ctx);
         }
@@ -528,7 +539,11 @@ impl TextPreviewState {
             "➡ Wrap: OFF"
         };
         let wrap_btn = crate::mode_tab_button(wrap_label, self.wrap_lines, palette);
-        if ui.add(wrap_btn).on_hover_text("Toggle line-wrapping on/off").clicked() {
+        if ui
+            .add(wrap_btn)
+            .on_hover_text("Toggle line-wrapping on/off")
+            .clicked()
+        {
             self.wrap_lines = !self.wrap_lines;
         }
 
@@ -539,7 +554,11 @@ impl TextPreviewState {
                 "# Lines: OFF"
             };
             let num_btn = crate::mode_tab_button(num_label, self.show_line_numbers, palette);
-            if ui.add(num_btn).on_hover_text("Toggle line numbers gutter").clicked() {
+            if ui
+                .add(num_btn)
+                .on_hover_text("Toggle line numbers gutter")
+                .clicked()
+            {
                 self.show_line_numbers = !self.show_line_numbers;
             }
         }
@@ -549,7 +568,11 @@ impl TextPreviewState {
                 TextViewMode::RenderedMarkdown => "📖 Rendered MD",
                 TextViewMode::Raw => "💻 Raw / Code",
             };
-            let mode_btn = crate::mode_tab_button(mode_label, self.view_mode == TextViewMode::RenderedMarkdown, palette);
+            let mode_btn = crate::mode_tab_button(
+                mode_label,
+                self.view_mode == TextViewMode::RenderedMarkdown,
+                palette,
+            );
             if ui
                 .add(mode_btn)
                 .on_hover_text("Switch between Rendered Markdown and Raw Code view")
@@ -571,10 +594,6 @@ impl TextPreviewState {
     ) {
         self.render_header_command_buttons(ui, ctx, palette);
         self.render_header_toggle_buttons(ui, palette);
-    }
-
-    fn render_toast(&self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
-        self.status_toast.render_pill(ui, palette, now);
     }
 
     fn render_search_status_label(&self, ui: &mut egui::Ui, palette: &AppPalette) {
@@ -610,13 +629,21 @@ impl TextPreviewState {
 
     fn render_search_options(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let case_btn = crate::mode_tab_button("Aa", self.case_sensitive, palette);
-        if ui.add(case_btn).on_hover_text("Match Case (Case Sensitive)").clicked() {
+        if ui
+            .add(case_btn)
+            .on_hover_text("Match Case (Case Sensitive)")
+            .clicked()
+        {
             self.case_sensitive = !self.case_sensitive;
             self.update_search_matches();
         }
 
         let regex_btn = crate::mode_tab_button(".*", self.is_regex, palette);
-        if ui.add(regex_btn).on_hover_text("Use Regular Expression").clicked() {
+        if ui
+            .add(regex_btn)
+            .on_hover_text("Use Regular Expression")
+            .clicked()
+        {
             self.is_regex = !self.is_regex;
             self.update_search_matches();
         }
@@ -657,12 +684,20 @@ impl TextPreviewState {
 
                     self.render_search_status_label(ui, palette);
 
-                    let prev_btn = crate::secondary_button("▲ Prev", hex_to_c32(&palette.theme.b_med), palette);
+                    let prev_btn = crate::secondary_button(
+                        "▲ Prev",
+                        hex_to_c32(&palette.theme.b_med),
+                        palette,
+                    );
                     if ui.add(prev_btn).clicked() {
                         self.prev_match();
                     }
 
-                    let next_btn = crate::secondary_button("▼ Next", hex_to_c32(&palette.theme.b_med), palette);
+                    let next_btn = crate::secondary_button(
+                        "▼ Next",
+                        hex_to_c32(&palette.theme.b_med),
+                        palette,
+                    );
                     if ui.add(next_btn).clicked() {
                         self.next_match();
                     }
@@ -712,7 +747,6 @@ impl TextPreviewState {
         let syntax = find_syntax(self.language);
 
         let show_gutter = self.show_line_numbers;
-        let wrap = self.wrap_lines;
         let query = if self.find_query.is_empty() {
             None
         } else {
@@ -722,7 +756,10 @@ impl TextPreviewState {
         let case_sensitive = self.case_sensitive;
         let active_match = self.matches.get(self.active_match_idx).copied();
 
-        let mut scroll_area = egui::ScrollArea::both().auto_shrink([false, false]);
+        let mut scroll_area = egui::ScrollArea::vertical()
+            .id_source("text_code_virtual_scroll")
+            .auto_shrink([false, false])
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
 
         if let Some(target_line) = self.scroll_to_line.take() {
             let approx_y = (target_line.saturating_sub(5)) as f32 * 18.0;
@@ -736,66 +773,105 @@ impl TextPreviewState {
             .rounding(Rounding::same(6.0))
             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
-                scroll_area.show(ui, |ui| {
-                    ui.horizontal_top(|ui| {
-                        // Line numbers gutter inside editor surface
-                        if show_gutter {
-                            let total_lines = self.content.lines().count().max(1);
-                            let digits = total_lines.to_string().len().max(2);
-                            let mut line_numbers_text =
-                                String::with_capacity(total_lines * (digits + 2));
-                            for i in 1..=total_lines {
-                                line_numbers_text
-                                    .push_str(&format!("{:>width$}\n", i, width = digits));
-                            }
-
-                            ui.label(
-                                egui::RichText::new(line_numbers_text)
-                                    .font(FontId::monospace(12.5))
-                                    .color(hex_to_c32(&palette.theme.f_low)),
-                            );
-
-                            ui.add_space(8.0);
-                            let h = (total_lines as f32 * 17.5).max(ui.available_height());
-                            let (div_rect, _) =
-                                ui.allocate_exact_size(Vec2::new(1.0, h), egui::Sense::hover());
-                            ui.painter().vline(
-                                div_rect.center().x,
-                                div_rect.y_range(),
-                                Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)),
-                            );
-                            ui.add_space(8.0);
-                        }
-
-                        let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
-                            let mut layout_job = build_highlighted_layout_job(
-                                text,
-                                syntax,
-                                palette,
-                                query,
-                                is_regex,
-                                case_sensitive,
-                                active_match,
-                            );
-                            if wrap {
-                                layout_job.wrap.max_width = wrap_width;
-                            } else {
-                                layout_job.wrap.max_width = f32::INFINITY;
-                            }
-                            ui.fonts(|f| f.layout_job(layout_job))
-                        };
-
-                        let text_edit = egui::TextEdit::multiline(&mut self.content)
-                            .font(FontId::monospace(12.5))
-                            .layouter(&mut layouter)
-                            .desired_width(f32::INFINITY)
-                            .lock_focus(false)
-                            .interactive(true)
-                            .frame(false)
-                            .margin(egui::Margin::ZERO);
-
-                        ui.add(text_edit);
-                    });
+                let total_lines = self.line_starts.len().max(1);
+                let digits = total_lines.to_string().len().max(2);
+                let line_height = 18.0;
+                // A horizontal layout shrink-wraps children by default.  That left the
+                // virtual ScrollArea with a one-row-high clip rect on some egui backends.
+                // Reserve the viewport explicitly before asking it to virtualize rows.
+                let surface_size = ui.available_size();
+                let minimap_width = 14.0;
+                let editor_width = (surface_size.x - minimap_width - 6.0).max(64.0);
+                let mut minimap_metrics = (0.0_f32, surface_size.y.max(1.0));
+                ui.horizontal(|ui| {
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(editor_width, surface_size.y.max(1.0)),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            let output =
+                                scroll_area.show_rows(ui, line_height, total_lines, |ui, rows| {
+                                    for line_index in rows {
+                                        let start = self.line_starts[line_index];
+                                        let end = self
+                                            .line_starts
+                                            .get(line_index + 1)
+                                            .copied()
+                                            .unwrap_or(self.content.len());
+                                        let line = self.content[start..end].trim_end_matches('\n');
+                                        ui.horizontal(|ui| {
+                                            if show_gutter {
+                                                ui.add_sized(
+                                                    [((digits + 1) * 8) as f32, line_height],
+                                                    egui::Label::new(
+                                                        egui::RichText::new(format!(
+                                                            "{:>width$}",
+                                                            line_index + 1,
+                                                            width = digits
+                                                        ))
+                                                        .font(FontId::monospace(12.5))
+                                                        .color(hex_to_c32(&palette.theme.f_low)),
+                                                    ),
+                                                );
+                                                ui.separator();
+                                            }
+                                            let mut job = build_highlighted_layout_job(
+                                                line,
+                                                syntax,
+                                                palette,
+                                                query,
+                                                is_regex,
+                                                case_sensitive,
+                                                active_match,
+                                            );
+                                            job.wrap.max_width = if self.wrap_lines {
+                                                ui.available_width()
+                                            } else {
+                                                f32::INFINITY
+                                            };
+                                            // `add_sized(available_width)` inside a horizontal
+                                            // row makes egui align the galley to the far edge of
+                                            // that oversized allocation.  Let the label occupy its
+                                            // natural, left-anchored layout space instead.
+                                            ui.add(egui::Label::new(job).wrap(self.wrap_lines));
+                                        });
+                                    }
+                                });
+                            self.minimap_fraction = (output.state.offset.y
+                                / (output.content_size.y - output.inner_rect.height()).max(1.0))
+                            .clamp(0.0, 1.0);
+                            minimap_metrics = (output.inner_rect.height(), output.content_size.y);
+                        },
+                    );
+                    let (map_rect, response) = ui.allocate_exact_size(
+                        Vec2::new(minimap_width, surface_size.y.max(1.0)),
+                        egui::Sense::click_and_drag(),
+                    );
+                    ui.painter().rect_filled(
+                        map_rect,
+                        Rounding::same(2.0),
+                        hex_to_c32(&palette.theme.b_med),
+                    );
+                    let thumb_h = (map_rect.height() * minimap_metrics.0
+                        / minimap_metrics.1.max(1.0))
+                    .clamp(12.0, map_rect.height());
+                    let thumb_y =
+                        map_rect.top() + (map_rect.height() - thumb_h) * self.minimap_fraction;
+                    ui.painter().rect_filled(
+                        egui::Rect::from_min_size(
+                            egui::pos2(map_rect.left(), thumb_y),
+                            Vec2::new(map_rect.width(), thumb_h),
+                        ),
+                        Rounding::same(2.0),
+                        hex_to_c32(&palette.harmonies.base),
+                    );
+                    if let Some(pointer) = response
+                        .interact_pointer_pos()
+                        .filter(|_| response.clicked() || response.dragged())
+                    {
+                        let fraction = ((pointer.y - map_rect.top()) / map_rect.height().max(1.0))
+                            .clamp(0.0, 1.0);
+                        self.scroll_to_line = Some((fraction * total_lines as f32) as usize);
+                    }
                 });
             });
     }
@@ -1001,7 +1077,9 @@ fn compute_highlight_matches(
         while let Some(found) = target[offset..].find(&q) {
             let start = offset + found;
             let end = start + q.len();
-            let is_active = active_match.map(|am| am.start_byte == start).unwrap_or(false);
+            let is_active = active_match
+                .map(|am| am.start_byte == start)
+                .unwrap_or(false);
             match_ranges.push((start, end, is_active));
             offset = end;
             if offset >= target.len() {
@@ -1140,12 +1218,7 @@ fn render_markdown_span(
 }
 
 /// Renders a styled code block for markdown view.
-fn render_styled_code_block(
-    ui: &mut egui::Ui,
-    code: &str,
-    lang: &str,
-    palette: &AppPalette,
-) {
+fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: &AppPalette) {
     let syntax = find_syntax(lang);
 
     egui::Frame::none()
@@ -1166,15 +1239,8 @@ fn render_styled_code_block(
             }
 
             let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
-                let mut layout_job = build_highlighted_layout_job(
-                    text,
-                    syntax,
-                    palette,
-                    None,
-                    false,
-                    false,
-                    None,
-                );
+                let mut layout_job =
+                    build_highlighted_layout_job(text, syntax, palette, None, false, false, None);
                 layout_job.wrap.max_width = wrap_width;
                 ui.fonts(|f| f.layout_job(layout_job))
             };
@@ -1198,7 +1264,8 @@ mod tests {
     #[test]
     fn test_text_preview_creation_and_search() {
         let config = AppConfig::default();
-        let content = "fn main() {\n    let answer = 42;\n    println!(\"{}\", answer);\n}".to_string();
+        let content =
+            "fn main() {\n    let answer = 42;\n    println!(\"{}\", answer);\n}".to_string();
         let mut state = TextPreviewState::from_text(content, None, &config);
 
         assert_eq!(state.language, "rs");
@@ -1266,7 +1333,8 @@ mod tests {
     #[test]
     fn test_python_code_not_markdown() {
         let config = AppConfig::default();
-        let content = "# A python script\nimport math\n\ndef calculate(n):\n    return math.pi * n".to_string();
+        let content = "# A python script\nimport math\n\ndef calculate(n):\n    return math.pi * n"
+            .to_string();
         let state = TextPreviewState::from_text(content, None, &config);
 
         assert_eq!(state.language, "py");
@@ -1281,19 +1349,14 @@ mod tests {
         let output = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.horizontal_top(|ui| {
-                    let gutter_resp = ui.label(egui::RichText::new("1\n2\n3").font(FontId::monospace(12.5)));
+                    let gutter_resp =
+                        ui.label(egui::RichText::new("1\n2\n3").font(FontId::monospace(12.5)));
                     let mut text = "#include <stdio.h>\nint main() {}\n".to_string();
                     let syntax = find_syntax("c");
                     let palette = AppPalette::default();
                     let mut layouter = |ui: &egui::Ui, text: &str, _wrap_width: f32| {
                         let layout_job = build_highlighted_layout_job(
-                            text,
-                            syntax,
-                            &palette,
-                            None,
-                            false,
-                            false,
-                            None,
+                            text, syntax, &palette, None, false, false, None,
                         );
                         ui.fonts(|f| f.layout_job(layout_job))
                     };
@@ -1316,16 +1379,35 @@ mod tests {
                 text_shapes.push(t);
             }
         }
-        assert_eq!(text_shapes.len(), 2, "Expected gutter text and code text shapes");
+        assert_eq!(
+            text_shapes.len(),
+            2,
+            "Expected gutter text and code text shapes"
+        );
         let gutter_text = text_shapes[0];
         let code_text = text_shapes[1];
 
-        assert_eq!(gutter_text.pos.y, code_text.pos.y, "Gutter and code must align on identical Y coordinate");
-        assert_eq!(gutter_text.galley.rows.len(), code_text.galley.rows.len(), "Same number of rows");
-        for (g_row, c_row) in gutter_text.galley.rows.iter().zip(code_text.galley.rows.iter()) {
+        assert_eq!(
+            gutter_text.pos.y, code_text.pos.y,
+            "Gutter and code must align on identical Y coordinate"
+        );
+        assert_eq!(
+            gutter_text.galley.rows.len(),
+            code_text.galley.rows.len(),
+            "Same number of rows"
+        );
+        for (g_row, c_row) in gutter_text
+            .galley
+            .rows
+            .iter()
+            .zip(code_text.galley.rows.iter())
+        {
             assert_eq!(g_row.rect.min.y, c_row.rect.min.y, "Row min Y must align");
-            assert_eq!(g_row.rect.height(), c_row.rect.height(), "Row heights must be identical");
+            assert_eq!(
+                g_row.rect.height(),
+                c_row.rect.height(),
+                "Row heights must be identical"
+            );
         }
     }
 }
-

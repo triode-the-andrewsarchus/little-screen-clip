@@ -97,9 +97,12 @@ impl<'a> PipelineExecutor<'a> {
         for node in ordered_nodes {
             let mut inputs = HashMap::new();
             for pin in &node.inputs {
-                if let Some(conn) = self.graph.connections.iter().find(|c| {
-                    c.to_node == node.id && c.to_pin.eq_ignore_ascii_case(&pin.name)
-                }) {
+                if let Some(conn) = self
+                    .graph
+                    .connections
+                    .iter()
+                    .find(|c| c.to_node == node.id && c.to_pin.eq_ignore_ascii_case(&pin.name))
+                {
                     if let Some(val) = outputs.get(&(conn.from_node, conn.from_pin.clone())) {
                         inputs.insert(pin.name.clone(), val.clone());
                     }
@@ -168,9 +171,9 @@ impl<'a> PipelineExecutor<'a> {
         let in_val = inputs.values().next().cloned();
         match in_val {
             Some(PortValue::Text(t)) => t,
-            Some(PortValue::FilePath(p)) | Some(PortValue::ImagePath(p)) | Some(PortValue::AudioPath(p)) => {
-                p.display().to_string()
-            }
+            Some(PortValue::FilePath(p))
+            | Some(PortValue::ImagePath(p))
+            | Some(PortValue::AudioPath(p)) => p.display().to_string(),
             Some(PortValue::FileBatch(paths)) => paths
                 .iter()
                 .map(|p| p.display().to_string())
@@ -199,7 +202,6 @@ impl<'a> PipelineExecutor<'a> {
         #[allow(unused_assignments)]
         let mut preview = None;
 
-
         match &node.kind {
             NodeKind::LeftHandSource => {
                 if let Some(item) = self.slot_mgr.left_hand() {
@@ -207,7 +209,9 @@ impl<'a> PipelineExecutor<'a> {
                     preview = Some(item.title.clone());
                     out.push(("Out".to_string(), val));
                 } else {
-                    return Err(PipelineError::MissingInput("Left Hand is empty".to_string()));
+                    return Err(PipelineError::MissingInput(
+                        "Left Hand is empty".to_string(),
+                    ));
                 }
             }
             NodeKind::RightHandSource => {
@@ -216,7 +220,9 @@ impl<'a> PipelineExecutor<'a> {
                     preview = Some(item.title.clone());
                     out.push(("Out".to_string(), val));
                 } else {
-                    return Err(PipelineError::MissingInput("Right Hand is empty".to_string()));
+                    return Err(PipelineError::MissingInput(
+                        "Right Hand is empty".to_string(),
+                    ));
                 }
             }
             NodeKind::SlotSource(slot_id) => {
@@ -232,11 +238,7 @@ impl<'a> PipelineExecutor<'a> {
                 }
             }
             NodeKind::ConstantText => {
-                let text = node
-                    .props
-                    .get("text")
-                    .cloned()
-                    .unwrap_or_default();
+                let text = node.props.get("text").cloned().unwrap_or_default();
                 preview = Some(text.clone());
                 out.push(("Text".to_string(), PortValue::Text(text)));
             }
@@ -250,9 +252,21 @@ impl<'a> PipelineExecutor<'a> {
                 out.push(("Value".to_string(), PortValue::Text(val)));
             }
             NodeKind::PromptOrHandText => {
-                let hand_prop = node.props.get("hand").map(|s| s.as_str()).unwrap_or("right");
-                let msg = node.props.get("prompt_message").map(|s| s.as_str()).unwrap_or("Enter text:");
-                let def = node.props.get("default_text").map(|s| s.as_str()).unwrap_or("");
+                let hand_prop = node
+                    .props
+                    .get("hand")
+                    .map(|s| s.as_str())
+                    .unwrap_or("right");
+                let msg = node
+                    .props
+                    .get("prompt_message")
+                    .map(|s| s.as_str())
+                    .unwrap_or("Enter text:");
+                let def = node
+                    .props
+                    .get("default_text")
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
 
                 let text = if let Some(t) = self.prompt_overrides.get(&node.id) {
                     t.clone()
@@ -268,11 +282,12 @@ impl<'a> PipelineExecutor<'a> {
                     };
 
                     let hand_text = hand_item.and_then(|item| match &item.payload {
-                        ClipPayload::Text(t) | ClipPayload::Markdown(t) if !t.trim().is_empty() => Some(t.clone()),
+                        ClipPayload::Text(t) | ClipPayload::Markdown(t) if !t.trim().is_empty() => {
+                            Some(t.clone())
+                        }
                         ClipPayload::Url(u) => Some(u.to_string()),
                         _ => None,
                     });
-
 
                     if let Some(t) = hand_text {
                         t
@@ -285,7 +300,6 @@ impl<'a> PipelineExecutor<'a> {
                 preview = Some(text.clone());
                 out.push(("Text".to_string(), PortValue::Text(text)));
             }
-
 
             // --- Text Operators ---
             NodeKind::TextTrim => {
@@ -357,12 +371,12 @@ else:
                     .map(|s| s.as_str())
                     .unwrap_or(" ");
                 let script = "import re, sys; sys.stdout.write(re.sub(sys.argv[1], sys.argv[2], sys.stdin.read()))";
-                let res = run_command_with_stdin("python3", &["-c", script, pattern, replacement], &text)
-                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                let res =
+                    run_command_with_stdin("python3", &["-c", script, pattern, replacement], &text)
+                        .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
                 preview = Some(res.clone());
                 out.push(("Out".to_string(), PortValue::Text(res)));
             }
-
 
             NodeKind::TextSplitLines => {
                 let text = self.get_input_text(inputs, &["In"])?;
@@ -391,11 +405,7 @@ else:
             }
             NodeKind::TextJsonQuery => {
                 let text = self.get_input_text(inputs, &["JSON In", "In"])?;
-                let filter = node
-                    .props
-                    .get("filter")
-                    .map(|s| s.as_str())
-                    .unwrap_or(".");
+                let filter = node.props.get("filter").map(|s| s.as_str()).unwrap_or(".");
                 let res = run_command_with_stdin("jq", &[filter], &text)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
                 preview = Some(res.clone());
@@ -411,16 +421,24 @@ else:
                 let res = if mode.eq_ignore_ascii_case("decode") {
                     let bytes = base64::engine::general_purpose::STANDARD
                         .decode(text.trim().as_bytes())
-                        .map_err(|e| PipelineError::NodeFailed(node.title.clone(), format!("Base64 decode error: {}", e)))?;
-                    String::from_utf8(bytes)
-                        .map_err(|e| PipelineError::NodeFailed(node.title.clone(), format!("Invalid UTF-8: {}", e)))?
+                        .map_err(|e| {
+                            PipelineError::NodeFailed(
+                                node.title.clone(),
+                                format!("Base64 decode error: {}", e),
+                            )
+                        })?;
+                    String::from_utf8(bytes).map_err(|e| {
+                        PipelineError::NodeFailed(
+                            node.title.clone(),
+                            format!("Invalid UTF-8: {}", e),
+                        )
+                    })?
                 } else {
                     base64::engine::general_purpose::STANDARD.encode(text.as_bytes())
                 };
                 preview = Some(res.clone());
                 out.push(("Out".to_string(), PortValue::Text(res)));
             }
-
 
             // --- Image Transforms (ImageMagick) ---
             NodeKind::ImagePadFrame => {
@@ -513,7 +531,9 @@ else:
                     .get("geometry")
                     .map(|s| s.as_str())
                     .unwrap_or("1000x1000+0+0");
-                let out_path = self.temp_dir.join(format!("cropped_{}.png", Uuid::new_v4()));
+                let out_path = self
+                    .temp_dir
+                    .join(format!("cropped_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
                     in_path.to_str().unwrap(),
@@ -539,7 +559,9 @@ else:
                     .get("max_height")
                     .map(|s| s.as_str())
                     .unwrap_or("1080");
-                let out_path = self.temp_dir.join(format!("resized_{}.png", Uuid::new_v4()));
+                let out_path = self
+                    .temp_dir
+                    .join(format!("resized_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
                     in_path.to_str().unwrap(),
@@ -554,7 +576,11 @@ else:
             }
             NodeKind::ImageConvertWebp => {
                 let in_path = self.get_input_file(inputs, &["Image In", "In"])?;
-                let q = node.props.get("quality").map(|s| s.as_str()).unwrap_or("90");
+                let q = node
+                    .props
+                    .get("quality")
+                    .map(|s| s.as_str())
+                    .unwrap_or("90");
                 let out_path = self.temp_dir.join(format!("{}.webp", Uuid::new_v4()));
 
                 run_magick(&[
@@ -570,8 +596,14 @@ else:
             }
             NodeKind::ImageRotate => {
                 let in_path = self.get_input_file(inputs, &["Image In", "In"])?;
-                let deg = node.props.get("degrees").map(|s| s.as_str()).unwrap_or("90");
-                let out_path = self.temp_dir.join(format!("rotated_{}.png", Uuid::new_v4()));
+                let deg = node
+                    .props
+                    .get("degrees")
+                    .map(|s| s.as_str())
+                    .unwrap_or("90");
+                let out_path = self
+                    .temp_dir
+                    .join(format!("rotated_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
                     in_path.to_str().unwrap(),
@@ -587,7 +619,9 @@ else:
             NodeKind::ImageStitch => {
                 let left_path = self.get_input_file(inputs, &["Left Image", "In 1", "In"])?;
                 let right_path = self.get_input_file(inputs, &["Right Image", "In 2"])?;
-                let out_path = self.temp_dir.join(format!("stitched_{}.png", Uuid::new_v4()));
+                let out_path = self
+                    .temp_dir
+                    .join(format!("stitched_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
                     left_path.to_str().unwrap(),
@@ -602,7 +636,9 @@ else:
             }
             NodeKind::ImageStripExif => {
                 let in_path = self.get_input_file(inputs, &["Image In", "In"])?;
-                let out_path = self.temp_dir.join(format!("stripped_{}.png", Uuid::new_v4()));
+                let out_path = self
+                    .temp_dir
+                    .join(format!("stripped_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
                     in_path.to_str().unwrap(),
@@ -615,9 +651,15 @@ else:
                 out.push(("Image Out".to_string(), PortValue::ImagePath(out_path)));
             }
             NodeKind::ImageDiff => {
-                let left_path = self.get_input_file(inputs, &["Base Image", "Left", "In 1", "In"])?;
-                let right_path = self.get_input_file(inputs, &["Compare Image", "Right", "In 2"])?;
-                let threshold: f32 = node.props.get("threshold").and_then(|s| s.parse().ok()).unwrap_or(0.10);
+                let left_path =
+                    self.get_input_file(inputs, &["Base Image", "Left", "In 1", "In"])?;
+                let right_path =
+                    self.get_input_file(inputs, &["Compare Image", "Right", "In 2"])?;
+                let threshold: f32 = node
+                    .props
+                    .get("threshold")
+                    .and_then(|s| s.parse().ok())
+                    .unwrap_or(0.10);
                 let b1 = std::fs::read(&left_path)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
                 let b2 = std::fs::read(&right_path)
@@ -628,19 +670,28 @@ else:
                 };
                 let res = crate::image_diff::compare_image_bytes(&b1, &b2, &opts)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
-                let mask_png = res.encode_mask_png()
+                let mask_png = res
+                    .encode_mask_png()
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
-                let out_mask = self.temp_dir.join(format!("diff_mask_{}.png", Uuid::new_v4()));
+                let out_mask = self
+                    .temp_dir
+                    .join(format!("diff_mask_{}.png", Uuid::new_v4()));
                 std::fs::write(&out_mask, mask_png)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
 
-                let overlay_png = res.encode_overlay_png()
+                let overlay_png = res
+                    .encode_overlay_png()
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
-                let out_overlay = self.temp_dir.join(format!("diff_overlay_{}.png", Uuid::new_v4()));
+                let out_overlay = self
+                    .temp_dir
+                    .join(format!("diff_overlay_{}.png", Uuid::new_v4()));
                 std::fs::write(&out_overlay, overlay_png)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e.to_string()))?;
 
-                preview = Some(format!("Diff: {} altered pixels ({:.2}%)", res.diff_count, res.diff_percentage));
+                preview = Some(format!(
+                    "Diff: {} altered pixels ({:.2}%)",
+                    res.diff_count, res.diff_percentage
+                ));
                 out.push(("Mask".to_string(), PortValue::ImagePath(out_mask)));
                 out.push(("Overlay".to_string(), PortValue::ImagePath(out_overlay)));
             }
@@ -680,7 +731,9 @@ else:
                     .get("threshold_db")
                     .map(|s| s.as_str())
                     .unwrap_or("-50");
-                let out_path = self.temp_dir.join(format!("trimmed_{}.wav", Uuid::new_v4()));
+                let out_path = self
+                    .temp_dir
+                    .join(format!("trimmed_{}.wav", Uuid::new_v4()));
 
                 let filter = format!(
                     "silenceremove=start_periods=1:start_duration=0.1:start_threshold={}dB:stop_periods=1:stop_duration=0.1:stop_threshold={}dB",
@@ -704,7 +757,11 @@ else:
             }
             NodeKind::AudioAdjustGain => {
                 let in_path = self.get_input_file(inputs, &["Audio In", "In"])?;
-                let db = node.props.get("gain_db").map(|s| s.as_str()).unwrap_or("3.0");
+                let db = node
+                    .props
+                    .get("gain_db")
+                    .map(|s| s.as_str())
+                    .unwrap_or("3.0");
                 let out_path = self.temp_dir.join(format!("gain_{}.wav", Uuid::new_v4()));
 
                 let filter = format!("volume={}dB", db);
@@ -761,18 +818,12 @@ else:
                     PortValue::FilePath(p) | PortValue::ImagePath(p) | PortValue::AudioPath(p) => {
                         let out = run_command("sha256sum", &[p.to_str().unwrap()])
                             .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
-                        out.split_whitespace()
-                            .next()
-                            .unwrap_or("")
-                            .to_string()
+                        out.split_whitespace().next().unwrap_or("").to_string()
                     }
                     PortValue::Text(t) => {
                         let out = run_command_with_stdin("sha256sum", &[], t)
                             .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
-                        out.split_whitespace()
-                            .next()
-                            .unwrap_or("")
-                            .to_string()
+                        out.split_whitespace().next().unwrap_or("").to_string()
                     }
                     PortValue::FileBatch(paths) => {
                         let mut hashes = Vec::new();
@@ -791,7 +842,9 @@ else:
             NodeKind::FileZip => {
                 let paths = match inputs.values().next() {
                     Some(PortValue::FileBatch(p)) => p.clone(),
-                    Some(PortValue::FilePath(p)) | Some(PortValue::ImagePath(p)) | Some(PortValue::AudioPath(p)) => vec![p.clone()],
+                    Some(PortValue::FilePath(p))
+                    | Some(PortValue::ImagePath(p))
+                    | Some(PortValue::AudioPath(p)) => vec![p.clone()],
                     _ => return Err(PipelineError::MissingInput("Files In".to_string())),
                 };
                 let archive_name = node
@@ -1012,8 +1065,12 @@ fn shellexpand(path: &str) -> PathBuf {
 
 fn prompt_desktop_entry(title: &str, message: &str, default_val: &str) -> Option<String> {
     // Only attempt GUI dialogs if an X11 or Wayland display session is active
-    let has_display = std::env::var("DISPLAY").map(|v| !v.is_empty()).unwrap_or(false)
-        || std::env::var("WAYLAND_DISPLAY").map(|v| !v.is_empty()).unwrap_or(false);
+    let has_display = std::env::var("DISPLAY")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+        || std::env::var("WAYLAND_DISPLAY")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
 
     if !has_display {
         return None;
@@ -1058,7 +1115,6 @@ fn prompt_desktop_entry(title: &str, message: &str, default_val: &str) -> Option
     None
 }
 
-
 fn run_command(cmd: &str, args: &[&str]) -> Result<String, String> {
     let output = Command::new(cmd)
         .args(args)
@@ -1067,7 +1123,12 @@ fn run_command(cmd: &str, args: &[&str]) -> Result<String, String> {
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("{} error (exit {:?}): {}", cmd, output.status.code(), err));
+        return Err(format!(
+            "{} error (exit {:?}): {}",
+            cmd,
+            output.status.code(),
+            err
+        ));
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
@@ -1139,7 +1200,9 @@ mod tests {
 
         let mgr = SlotManager::default();
         let executor = PipelineExecutor::new(&graph, &mgr);
-        let sorted = executor.topological_sort().expect("Should sort DAG cleanly");
+        let sorted = executor
+            .topological_sort()
+            .expect("Should sort DAG cleanly");
         assert_eq!(sorted[0].id, n1.id);
         assert_eq!(sorted[1].id, n2.id);
 
@@ -1164,7 +1227,10 @@ mod tests {
         };
 
         let cyclic_executor = PipelineExecutor::new(&cyclic_graph, &mgr);
-        assert!(matches!(cyclic_executor.topological_sort(), Err(PipelineError::CycleDetected)));
+        assert!(matches!(
+            cyclic_executor.topological_sort(),
+            Err(PipelineError::CycleDetected)
+        ));
     }
 
     #[test]
@@ -1181,7 +1247,6 @@ mod tests {
         assert_eq!(deserialized.graph.connections.len(), 4);
     }
 
-
     #[test]
     fn test_python_script_execution() {
         let t_const = find_template("source_const_text").unwrap();
@@ -1189,7 +1254,9 @@ mod tests {
         let t_sink = find_template("sink_lh").unwrap();
 
         let mut n_const = instantiate_template(t_const, [0.0, 0.0]);
-        n_const.props.insert("text".to_string(), "hello world".to_string());
+        n_const
+            .props
+            .insert("text".to_string(), "hello world".to_string());
 
         let mut n_py = instantiate_template(t_py, [150.0, 0.0]);
         n_py.props.insert(
@@ -1230,8 +1297,9 @@ mod tests {
     #[test]
     fn test_clean_and_slugify_execution() {
         let mut mgr = SlotManager::default();
-        mgr.push_left(ClipItem::from_text("  Rust Edition 2024 -- Little Screen Clip!  "));
-
+        mgr.push_left(ClipItem::from_text(
+            "  Rust Edition 2024 -- Little Screen Clip!  ",
+        ));
 
         let recipe = make_clean_and_slugify_recipe();
         let executor = PipelineExecutor::new(&recipe.graph, &mgr);
@@ -1315,13 +1383,17 @@ printf "%s!BASH!" "$data"
         let t_sink = find_template("sink_lh").unwrap();
 
         let mut n_const = instantiate_template(t_const, [0.0, 0.0]);
-        n_const.props.insert("text".to_string(), "hello".to_string());
+        n_const
+            .props
+            .insert("text".to_string(), "hello".to_string());
 
         let mut n_py = instantiate_template(t_py, [150.0, 0.0]);
-        n_py.props.insert("script_file".to_string(), py_fname.clone());
+        n_py.props
+            .insert("script_file".to_string(), py_fname.clone());
 
         let mut n_sh = instantiate_template(t_sh, [300.0, 0.0]);
-        n_sh.props.insert("script_file".to_string(), sh_fname.clone());
+        n_sh.props
+            .insert("script_file".to_string(), sh_fname.clone());
 
         let n_sink = instantiate_template(t_sink, [450.0, 0.0]);
 
@@ -1353,7 +1425,9 @@ printf "%s!BASH!" "$data"
 
         let mgr = SlotManager::default();
         let executor = PipelineExecutor::new(&graph, &mgr);
-        let res = executor.execute().expect("Script file execution pipeline failed");
+        let res = executor
+            .execute()
+            .expect("Script file execution pipeline failed");
 
         assert!(res.left_hand_item.is_some());
         let item = res.left_hand_item.unwrap();
@@ -1397,18 +1471,29 @@ printf "%s!BASH!" "$data"
         let t_sink = find_template("sink_lh").unwrap();
 
         let mut n_src1 = instantiate_template(t_const, [0.0, 0.0]);
-        n_src1.props.insert("text".to_string(), img1_path.to_str().unwrap().to_string());
+        n_src1
+            .props
+            .insert("text".to_string(), img1_path.to_str().unwrap().to_string());
 
         let mut n_src2 = instantiate_template(t_const, [0.0, 100.0]);
-        n_src2.props.insert("text".to_string(), img2_path.to_str().unwrap().to_string());
+        n_src2
+            .props
+            .insert("text".to_string(), img2_path.to_str().unwrap().to_string());
 
         let mut n_diff = instantiate_template(t_diff, [200.0, 50.0]);
-        n_diff.props.insert("threshold".to_string(), "0.10".to_string());
+        n_diff
+            .props
+            .insert("threshold".to_string(), "0.10".to_string());
 
         let n_sink = instantiate_template(t_sink, [400.0, 50.0]);
 
         let graph = NodeGraph {
-            nodes: vec![n_src1.clone(), n_src2.clone(), n_diff.clone(), n_sink.clone()],
+            nodes: vec![
+                n_src1.clone(),
+                n_src2.clone(),
+                n_diff.clone(),
+                n_sink.clone(),
+            ],
             connections: vec![
                 Connection {
                     from_node: n_src1.id,
@@ -1434,12 +1519,19 @@ printf "%s!BASH!" "$data"
 
         let mgr = SlotManager::default();
         let executor = PipelineExecutor::new(&graph, &mgr);
-        let res = executor.execute().expect("ImageDiff pipeline execution failed");
+        let res = executor
+            .execute()
+            .expect("ImageDiff pipeline execution failed");
 
         assert!(res.left_hand_item.is_some());
         let item = res.left_hand_item.unwrap();
         match item.payload {
-            ClipPayload::Image { width, height, mime, .. } => {
+            ClipPayload::Image {
+                width,
+                height,
+                mime,
+                ..
+            } => {
                 assert_eq!(width, 16);
                 assert_eq!(height, 16);
                 assert_eq!(mime, "image/png");
@@ -1452,5 +1544,3 @@ printf "%s!BASH!" "$data"
         let _ = fs::remove_dir_all(temp_dir);
     }
 }
-
-

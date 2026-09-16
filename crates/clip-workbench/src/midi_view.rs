@@ -3,6 +3,8 @@
 //! Renders multi-track MIDI piano rolls, measure grid lines, note inspection,
 //! and live audio synthesis playback via Rodio.
 
+use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
+use crate::ui_ext::{self, StatusToast, ZoomAction};
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_ops::{MidiData, MidiNote};
 use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
@@ -10,7 +12,6 @@ use rodio::{Decoder, Player};
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Instant;
-use crate::ui_ext::{self, StatusToast, ZoomAction};
 
 /// Interactive UI state for piano roll inspection and MIDI playback.
 pub struct MidiViewerState {
@@ -193,14 +194,22 @@ impl MidiViewerState {
                         self.playback_start_offset = self.playhead_sec;
                     }
                     Err(e) => {
-                        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
-                        self.status_toast.set(format!("Audio decode error: {}", e), now);
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs_f64();
+                        self.status_toast
+                            .set(format!("Audio decode error: {}", e), now);
                     }
                 }
             }
             Err(e) => {
-                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64();
-                self.status_toast.set(format!("Audio device error: {}", e), now);
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64();
+                self.status_toast
+                    .set(format!("Audio device error: {}", e), now);
             }
         }
     }
@@ -236,11 +245,16 @@ impl MidiViewerState {
                     self.stop();
                 } else {
                     // Auto-follow playhead when zoomed in, UNLESS user actively panned away during playback
-                    if !self.user_panned_during_playback && self.view_duration_sec < self.data.duration_sec {
+                    if !self.user_panned_during_playback
+                        && self.view_duration_sec < self.data.duration_sec
+                    {
                         let view_end = self.view_start_sec + self.view_duration_sec;
                         if self.playhead_sec > view_end || self.playhead_sec < self.view_start_sec {
                             let new_start = (self.playhead_sec - 0.1 * self.view_duration_sec)
-                                .clamp(0.0, (self.data.duration_sec - self.view_duration_sec).max(0.0));
+                                .clamp(
+                                    0.0,
+                                    (self.data.duration_sec - self.view_duration_sec).max(0.0),
+                                );
                             self.view_start_sec = new_start;
                         }
                     }
@@ -249,7 +263,12 @@ impl MidiViewerState {
         }
     }
 
-    pub fn render_ui(&mut self, ui: &mut egui::Ui, palette: &little_clip_core::theme::AppPalette, close: &mut bool) {
+    pub fn render_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::theme::AppPalette,
+        close: &mut bool,
+    ) {
         self.update_playback();
         if self.is_playing {
             ui.ctx().request_repaint();
@@ -299,7 +318,6 @@ impl MidiViewerState {
             .fill(bg)
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
-                let title = self.title.clone();
                 let total_notes = self.data.total_notes;
                 let duration_sec = self.data.duration_sec;
                 let bpm = self.data.bpm;
@@ -313,60 +331,85 @@ impl MidiViewerState {
                 let mut stop_clicked = false;
                 let mut zoom_action = None;
 
-                // 1. Top Control Bar
-                ui_ext::render_view_header(
-                    ui,
-                    "🎹",
-                    &title,
-                    palette,
-                    close,
-                    |ui| {
-                        ui.add_space(8.0);
-                        let info_text = format!(
-                            "{} notes • {:.1}s • {:.0} BPM • {} tracks",
-                            total_notes, duration_sec, bpm, track_count
-                        );
-                        ui_ext::badge_pill(ui, info_text, None, palette);
-
-                        ui.add_space(14.0);
-                        // Transport controls
-                        if is_playing {
-                            let pause_btn = crate::action_button("⏸ Pause (Space)", pause_color, palette);
-                            if ui.add(pause_btn).clicked() {
-                                pause_clicked = true;
-                            }
-                        } else {
-                            let play_btn = crate::action_button("▶ Play (Space)", success_color, palette);
-                            if ui.add(play_btn).clicked() {
-                                play_clicked = true;
-                            }
-                        }
-
-                        let stop_btn = crate::secondary_button("⏹ Stop", b_med, palette)
-                            .stroke(Stroke::new(1.0, b_low));
-                        if ui.add(stop_btn).clicked() {
-                            stop_clicked = true;
-                        }
-
-                        ui.add_space(6.0);
-                        let time_text = format!("{:.1}s / {:.1}s", playhead_sec, duration_sec);
-                        ui.label(
-                            egui::RichText::new(time_text)
-                                .monospace()
-                                .small()
-                                .strong()
-                                .color(accent),
-                        );
-
-                        ui.add_space(12.0);
-                        zoom_action = ui_ext::zoom_control_bar(ui, zoom_pct, palette);
-                    },
-                    |ui| {
-                        self.status_toast.render(ui, palette, now);
-                    },
+                let info_text = format!(
+                    "{} notes • {:.1}s • {:.0} BPM • {} tracks",
+                    total_notes, duration_sec, bpm, track_count
                 );
 
-                if *close {
+                let mut shell = StudioShell::new(&self.title, "🎹", palette, close)
+                    .with_badge(info_text, None)
+                    .with_escape_hatch(EscapeHatch::primary(
+                        "🎹 MuseScore",
+                        "mscore",
+                        "Open MIDI composition in MuseScore",
+                    ))
+                    .with_footer_hints("🖱 Click grid: Seek playhead | Scroll: Pan | +/-: Zoom | Space: Play/Pause | Esc: Close");
+
+                if let Some(ref note) = self.hovered_note {
+                    shell = shell.with_footer_readout(format!(
+                        "Note: {} (MIDI {}) • Velocity: {} • Time: {:.2}s",
+                        note.full_name(),
+                        note.key,
+                        note.velocity,
+                        note.start_sec
+                    ));
+                }
+
+                let clicked_hatch = shell.render_header(ui, |_ui| {});
+                if let Some(0) = clicked_hatch {
+                    if let Some(ref p) = self.path {
+                        EscapeHatchLauncher::launch("MuseScore", "mscore", p, &mut self.status_toast, now);
+                    } else {
+                        self.status_toast.set("⚠️ No on-disk file path for this MIDI stream", now);
+                    }
+                }
+
+                ui.add_space(4.0);
+
+                // Zone 2: Transport & Zoom Bar
+                egui::Frame::none()
+                    .fill(b_low)
+                    .stroke(Stroke::new(1.0, b_med))
+                    .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            // Transport controls
+                            if is_playing {
+                                let pause_btn = crate::action_button("Pause [Space]", pause_color, palette);
+                                if ui.add(pause_btn).clicked() {
+                                    pause_clicked = true;
+                                }
+                            } else {
+                                let play_btn = crate::action_button("Play [Space]", success_color, palette);
+                                if ui.add(play_btn).clicked() {
+                                    play_clicked = true;
+                                }
+                            }
+
+                            let stop_btn = crate::action_button("Stop", b_med, palette)
+                                .min_size(egui::Vec2::new(0.0, 26.0))
+                                .stroke(Stroke::new(1.0, b_low));
+                            if ui.add(stop_btn).clicked() {
+                                stop_clicked = true;
+                            }
+
+                            ui.add_space(8.0);
+                            let time_text = format!("{:.1}s / {:.1}s", playhead_sec, duration_sec);
+                            ui.label(
+                                egui::RichText::new(time_text)
+                                    .monospace()
+                                    .small()
+                                    .strong()
+                                    .color(accent),
+                            );
+
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                zoom_action = ui_ext::zoom_control_bar(ui, zoom_pct, palette);
+                            });
+                        });
+                    });
+
+                if shell.is_closed() {
                     self.stop();
                 }
                 if play_clicked {
@@ -422,7 +465,8 @@ impl MidiViewerState {
                 ui.add_space(6.0);
 
                 // 3. Interactive Piano Roll Area
-                let available_size = ui.available_size();
+                let mut available_size = ui.available_size();
+                available_size.y = (available_size.y - 32.0).max(100.0);
                 let (canvas_rect, response) = ui.allocate_exact_size(available_size, egui::Sense::click_and_drag());
                 let painter = ui.painter_at(canvas_rect);
 
@@ -733,6 +777,10 @@ impl MidiViewerState {
                     );
                     response.on_hover_text(tip);
                 }
+
+                // 4. Footer
+                let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
+                shell.render_footer(ui, &toast_tuple, now);
             });
     }
 }
@@ -740,7 +788,7 @@ impl MidiViewerState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use little_clip_core::theme::{find_themes_dir, AppPalette, Theme};
+    use little_clip_core::theme::{AppPalette, Theme, find_themes_dir};
     use std::collections::HashMap;
 
     #[test]
@@ -772,7 +820,11 @@ mod tests {
         assert_ne!(note_c, note_d);
         // Ensure note_c is not dark or muted (r + g + b should indicate good brightness)
         let brightness = note_c.0 as u32 + note_c.1 as u32 + note_c.2 as u32;
-        assert!(brightness >= 350, "Note brightness should be vibrant in Zenburn, got {}", brightness);
+        assert!(
+            brightness >= 350,
+            "Note brightness should be vibrant in Zenburn, got {}",
+            brightness
+        );
     }
 
     #[test]
@@ -782,7 +834,9 @@ mod tests {
 
         let c4 = palette.midi_note_color(0, 0, 1, 60, 100);
         let g4 = palette.midi_note_color(0, 0, 1, 67, 100);
-        assert_ne!(c4, g4, "Single-track C4 and G4 must have different chromatic hues");
+        assert_ne!(
+            c4, g4,
+            "Single-track C4 and G4 must have different chromatic hues"
+        );
     }
 }
-

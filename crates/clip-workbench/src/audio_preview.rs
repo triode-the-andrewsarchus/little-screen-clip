@@ -3,21 +3,22 @@
 //! Provides spectral waterfall analysis, zero-crossing snapping, multi-slice region selection,
 //! audio playback with Rodio, and export/split capabilities.
 
-use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
-use little_clip_core::theme::AppPalette;
+use crate::shell::{EscapeHatch, StudioShell};
 use crate::{hex_to_c32, hex_to_c32_alpha};
+use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::audio::{
-    compute_audio_analysis_progressive, read_audio_metadata,
-    AudioAnalysisProgress, AudioMetadata, FullAudioAnalysis,
-    DEFAULT_TRANSIENT_SENSITIVITY, MAX_TRANSIENT_SENSITIVITY, MIN_TRANSIENT_SENSITIVITY,
+    AudioAnalysisProgress, AudioMetadata, DEFAULT_TRANSIENT_SENSITIVITY, FullAudioAnalysis,
+    MAX_TRANSIENT_SENSITIVITY, MIN_TRANSIENT_SENSITIVITY, compute_audio_analysis_progressive,
+    read_audio_metadata,
 };
 use little_clip_core::ipc::IpcRequest;
+use little_clip_core::theme::AppPalette;
 use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
 use rodio::{Decoder, Player};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
 /// Top-level audio workbench modes. Future audio tools should be added here.
@@ -31,20 +32,26 @@ pub enum AudioToolMode {
 impl AudioToolMode {
     fn label(self) -> &'static str {
         match self {
-            Self::Inspect => "🎵 Inspect & Slice",
-            Self::StemSeparation => "✂ Stem Separation",
+            Self::Inspect => "[I]nspect & Slice",
+            Self::StemSeparation => "[S]tem Separation",
         }
     }
 }
 
 fn parse_stem_manifest(stdout: &[u8]) -> Result<Vec<(String, PathBuf)>, String> {
     let text = String::from_utf8_lossy(stdout);
-    let json = text.lines().rev()
+    let json = text
+        .lines()
+        .rev()
         .find_map(|line| serde_json::from_str::<serde_json::Value>(line.trim()).ok())
         .ok_or_else(|| "Stem worker returned no result manifest.".to_string())?;
-    let stems = ["vocals", "drums", "bass", "other"].iter()
-        .filter_map(|name| json.get(name).and_then(|path| path.as_str())
-            .map(|path| ((*name).to_string(), PathBuf::from(path))))
+    let stems = ["vocals", "drums", "bass", "other"]
+        .iter()
+        .filter_map(|name| {
+            json.get(name)
+                .and_then(|path| path.as_str())
+                .map(|path| ((*name).to_string(), PathBuf::from(path)))
+        })
         .collect::<Vec<_>>();
     if stems.len() == 4 {
         Ok(stems)
@@ -83,16 +90,15 @@ fn transient_sensitivity_to_slider(sensitivity: f32) -> f32 {
     let midpoint = (DEFAULT_TRANSIENT_SENSITIVITY - MIN_TRANSIENT_SENSITIVITY)
         / (MAX_TRANSIENT_SENSITIVITY - MIN_TRANSIENT_SENSITIVITY);
     let exponent = midpoint.ln() / 0.5_f32.ln();
-    let normalized = (sensitivity.clamp(
-        MIN_TRANSIENT_SENSITIVITY,
-        MAX_TRANSIENT_SENSITIVITY,
-    ) - MIN_TRANSIENT_SENSITIVITY)
+    let normalized = (sensitivity.clamp(MIN_TRANSIENT_SENSITIVITY, MAX_TRANSIENT_SENSITIVITY)
+        - MIN_TRANSIENT_SENSITIVITY)
         / (MAX_TRANSIENT_SENSITIVITY - MIN_TRANSIENT_SENSITIVITY);
     normalized.powf(1.0 / exponent)
 }
 
 fn editor_is_audacity(editor: &str) -> bool {
-    Path::new(editor).file_stem()
+    Path::new(editor)
+        .file_stem()
         .is_some_and(|name| name.to_string_lossy().eq_ignore_ascii_case("audacity"))
 }
 
@@ -101,7 +107,9 @@ fn audacity_lof_contents(paths: &[PathBuf]) -> Result<String, String> {
     for path in paths {
         let path = path.to_string_lossy();
         if path.contains(['\n', '\r', '"']) {
-            return Err("A stem path contains characters Audacity cannot import safely.".to_string());
+            return Err(
+                "A stem path contains characters Audacity cannot import safely.".to_string(),
+            );
         }
         contents.push_str(&format!("file \"{path}\"\n"));
     }
@@ -128,15 +136,15 @@ fn prepare_isolated_audacity_command(
         &cache_home,
         &empty_plugins,
     ] {
-        std::fs::create_dir_all(directory).map_err(|error| {
-            format!("Could not create isolated Audacity profile: {error}")
-        })?;
+        std::fs::create_dir_all(directory)
+            .map_err(|error| format!("Could not create isolated Audacity profile: {error}"))?;
     }
 
     std::fs::write(
         audacity_config_dir.join("audacity.cfg"),
         "[GUI]\nShowSplashScreen=0\n[Effects]\nSkipEffectsScanAtStartup=1\n",
-    ).map_err(|error| format!("Could not configure isolated Audacity profile: {error}"))?;
+    )
+    .map_err(|error| format!("Could not configure isolated Audacity profile: {error}"))?;
 
     let lof_path = workspace.join("separated-stems.lof");
     std::fs::write(&lof_path, audacity_lof_contents(stem_paths)?)
@@ -247,7 +255,13 @@ pub fn format_sample_duration(sec: f32) -> String {
 }
 
 /// Generates a descriptive filename for an extracted audio slice containing timestamp and duration metadata.
-pub fn format_sample_filename(original_stem: &str, start_sec: f32, duration_sec: f32, suffix: &str, ext: &str) -> String {
+pub fn format_sample_filename(
+    original_stem: &str,
+    start_sec: f32,
+    duration_sec: f32,
+    suffix: &str,
+    ext: &str,
+) -> String {
     let ts_str = format_sample_timestamp(start_sec);
     let dur_str = format_sample_duration(duration_sec);
     if suffix.is_empty() {
@@ -260,8 +274,12 @@ pub fn format_sample_filename(original_stem: &str, start_sec: f32, duration_sec:
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum DragAction {
     ScrubRuler,
-    DragLeftHandle { other_anchor: f32 },
-    DragRightHandle { other_anchor: f32 },
+    DragLeftHandle {
+        other_anchor: f32,
+    },
+    DragRightHandle {
+        other_anchor: f32,
+    },
     CreateSelection {
         start_time: f32,
         start_pos_x: f32,
@@ -325,6 +343,11 @@ pub struct AudioPreviewState {
     pub selection: Option<(f32, f32)>, // (start_sec, end_sec) for Single mode
     pub multi_selections: Vec<(f32, f32)>, // (start_sec, end_sec) list for Multi mode
     pub active_multi_index: Option<usize>,
+    /// Non-destructive gain offsets keyed to multi-region selection indices.
+    /// Source samples remain untouched until an export/editor handoff.
+    pub region_gain_db: Vec<f32>,
+    /// Non-destructive gain for the single selected region.
+    pub single_region_gain_db: f32,
     pub snap_zero_crossings: bool,
     pub show_transients: bool,
     pub transient_sensitivity: f32,
@@ -350,6 +373,56 @@ pub struct AudioPreviewState {
 }
 
 impl AudioPreviewState {
+    pub fn adjust_active_region_gain(&mut self, delta_db: f32) {
+        match self.selection_mode {
+            SelectionMode::Single if self.selection.is_some() => {
+                self.single_region_gain_db =
+                    (self.single_region_gain_db + delta_db).clamp(-60.0, 24.0);
+            }
+            SelectionMode::Multi => {
+                if let Some(index) = self.active_multi_index {
+                    if self.region_gain_db.len() < self.multi_selections.len() {
+                        self.region_gain_db.resize(self.multi_selections.len(), 0.0);
+                    }
+                    if let Some(gain) = self.region_gain_db.get_mut(index) {
+                        *gain = (*gain + delta_db).clamp(-60.0, 24.0);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn active_region_gain_db(&self) -> f32 {
+        match self.selection_mode {
+            SelectionMode::Single if self.selection.is_some() => self.single_region_gain_db,
+            SelectionMode::Multi => self
+                .active_multi_index
+                .and_then(|idx| self.region_gain_db.get(idx).copied())
+                .unwrap_or(0.0),
+            _ => 0.0,
+        }
+    }
+
+    /// Returns the non-destructive gain to visualize at a timeline position.
+    /// This is deliberately separate from export: wheel changes must be
+    /// immediately legible in the waveform without touching source samples.
+    fn gain_at_time_db(&self, time: f32) -> f32 {
+        match self.selection_mode {
+            SelectionMode::Single => self
+                .selection
+                .filter(|(start, end)| time >= *start && time <= *end)
+                .map(|_| self.single_region_gain_db)
+                .unwrap_or(0.0),
+            SelectionMode::Multi => self
+                .multi_selections
+                .iter()
+                .enumerate()
+                .find(|(_, (start, end))| time >= *start && time <= *end)
+                .and_then(|(index, _)| self.region_gain_db.get(index).copied())
+                .unwrap_or(0.0),
+        }
+    }
     /// Initializes an audio workbench viewer for the given audio file path.
     pub fn new(path: PathBuf, title: String) -> Self {
         let default_save_dir = path
@@ -408,6 +481,8 @@ impl AudioPreviewState {
             selection: None,
             multi_selections: Vec::new(),
             active_multi_index: None,
+            region_gain_db: Vec::new(),
+            single_region_gain_db: 0.0,
             snap_zero_crossings: false,
             show_transients: false,
             transient_sensitivity: DEFAULT_TRANSIENT_SENSITIVITY,
@@ -438,15 +513,106 @@ impl AudioPreviewState {
             self.selection = Some((start_sec, end_sec));
             self.current_time_sec = start_sec;
             self.status_toast = Some((
-                format!("✂ Trimmed silence: {:.2}s - {:.2}s ({:.2}s duration)", start_sec, end_sec, dur),
+                format!(
+                    "✂ Trimmed silence: {:.2}s - {:.2}s ({:.2}s duration)",
+                    start_sec, end_sec, dur
+                ),
                 now,
             ));
         } else {
             self.status_toast = Some((
-                format!("⚠️ No audio signal detected above silence threshold ({:.0}dB)", threshold_db),
+                format!(
+                    "⚠️ No audio signal detected above silence threshold ({:.0}dB)",
+                    threshold_db
+                ),
                 now,
             ));
         }
+    }
+
+    /// Removes the active slice into a private session WAV. The original file is
+    /// never changed; subsequent playback, waveform analysis, export and the
+    /// Audacity escape hatch all operate on the squished session timeline.
+    fn delete_active_slice_from_session(&mut self, now: f64) {
+        let Some((start, end)) = self.active_selection_range() else {
+            self.status_toast = Some(("Hover/select a slice before deleting it".into(), now));
+            return;
+        };
+        let start = start.min(end).max(0.0);
+        let end = end.max(start).min(self.duration_sec);
+        if end - start < 0.001 || end >= self.duration_sec && start <= 0.0 {
+            self.status_toast = Some(("Cannot delete the entire session".into(), now));
+            return;
+        }
+        let out = std::env::temp_dir()
+            .join("little_clip_audio_sessions")
+            .join(format!("edited-{}.wav", uuid::Uuid::new_v4()));
+        if let Some(parent) = out.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let mut filters = Vec::new();
+        let mut labels = Vec::new();
+        if start > 0.001 {
+            filters.push(format!("[0:a]atrim=0:{start:.6},asetpts=PTS-STARTPTS[a0]"));
+            labels.push("[a0]");
+        }
+        if end < self.duration_sec - 0.001 {
+            filters.push(format!("[0:a]atrim={end:.6},asetpts=PTS-STARTPTS[a1]"));
+            labels.push("[a1]");
+        }
+        let filter = if labels.len() == 2 {
+            format!(
+                "{};{}concat=n=2:v=0:a=1[out]",
+                filters.join(";"),
+                labels.join("")
+            )
+        } else {
+            format!("{};{}anull[out]", filters.join(";"), labels[0])
+        };
+        let ok = std::process::Command::new("ffmpeg")
+            .args(["-y", "-i"])
+            .arg(&self.path)
+            .args([
+                "-filter_complex",
+                &filter,
+                "-map",
+                "[out]",
+                "-c:a",
+                "pcm_s16le",
+            ])
+            .arg(&out)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !ok || !out.is_file() {
+            self.status_toast = Some(("Failed to create edited audio session".into(), now));
+            return;
+        }
+        self.stop();
+        self.path = out;
+        self.duration_sec = (self.duration_sec - (end - start)).max(0.0);
+        self.view_start_sec = 0.0;
+        self.view_duration_sec = self.duration_sec;
+        self.current_time_sec = start.min(self.duration_sec);
+        self.selection = None;
+        self.multi_selections.clear();
+        self.region_gain_db.clear();
+        self.single_region_gain_db = 0.0;
+        self.active_multi_index = None;
+        self.analysis = None;
+        self.is_loading_analysis = true;
+        let (tx, rx) = channel();
+        let path = self.path.clone();
+        std::thread::spawn(move || {
+            compute_audio_analysis_progressive(&path, 1200, |p| {
+                let _ = tx.send(p);
+            })
+        });
+        self.analysis_rx = Some(rx);
+        self.status_toast = Some((
+            format!("Deleted {:.2}s; waveform recomputing", end - start),
+            now,
+        ));
     }
 
     pub fn with_editor(mut self, editor: String) -> Self {
@@ -456,33 +622,96 @@ impl AudioPreviewState {
         self
     }
 
+    fn editor_handoff_path(&self) -> PathBuf {
+        let gain_db = self.active_region_gain_db();
+        let Some((start, end)) = self.active_selection_range() else {
+            return self.path.clone();
+        };
+        if gain_db == 0.0 {
+            return self.path.clone();
+        }
+        let out = std::env::temp_dir()
+            .join("little_clip_audio_sessions")
+            .join(format!("audacity-handoff-{}.wav", uuid::Uuid::new_v4()));
+        if let Some(parent) = out.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let ok = std::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-ss",
+                &format!("{start:.6}"),
+                "-to",
+                &format!("{end:.6}"),
+                "-i",
+            ])
+            .arg(&self.path)
+            .args(["-af", &format!("volume={gain_db}dB"), "-c:a", "pcm_s16le"])
+            .arg(&out)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok && out.is_file() {
+            out
+        } else {
+            self.path.clone()
+        }
+    }
+
     /// Launches an external audio editor (e.g. Audacity) for the current file.
-    pub fn launch_external_audio_editor(&mut self, ctx: &egui::Context, close_requested: &mut bool) {
+    pub fn launch_external_audio_editor(
+        &mut self,
+        _ctx: &egui::Context,
+        _close_requested: &mut bool,
+    ) {
         let editor = if self.audio_editor.is_empty() {
             "audacity"
         } else {
             &self.audio_editor
         };
+        let handoff_path = self.editor_handoff_path();
         let mut cmd = std::process::Command::new(editor);
-        cmd.arg(&self.path);
+        cmd.arg(&handoff_path);
         match cmd.spawn() {
             Ok(_) => {
-                let filename = self.path.file_name()
+                let filename = self
+                    .path
+                    .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "file".to_string());
                 self.status_toast = Some((
                     format!("🚀 Opened {} in {}", filename, editor),
-                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64(),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs_f64(),
                 ));
                 self.stop();
-                *close_requested = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             Err(e) => {
-                self.status_toast = Some((
-                    format!("⚠️ Failed to launch '{}': {}", editor, e),
-                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs_f64(),
-                ));
+                // Try xdg-open fallback
+                if std::process::Command::new("xdg-open")
+                    .arg(&self.path)
+                    .spawn()
+                    .is_ok()
+                {
+                    self.status_toast = Some((
+                        "🚀 Opened audio in default application via xdg-open".to_string(),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs_f64(),
+                    ));
+                    self.stop();
+                } else {
+                    self.status_toast = Some((
+                        format!("⚠️ Failed to launch '{}': {}", editor, e),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs_f64(),
+                    ));
+                }
             }
         }
     }
@@ -490,8 +719,14 @@ impl AudioPreviewState {
     #[inline]
     pub fn is_time_selected(&self, t: f32) -> bool {
         match self.selection_mode {
-            SelectionMode::Single => self.selection.map(|(s, e)| t >= s && t <= e).unwrap_or(false),
-            SelectionMode::Multi => self.multi_selections.iter().any(|(s, e)| t >= *s && t <= *e),
+            SelectionMode::Single => self
+                .selection
+                .map(|(s, e)| t >= s && t <= e)
+                .unwrap_or(false),
+            SelectionMode::Multi => self
+                .multi_selections
+                .iter()
+                .any(|(s, e)| t >= *s && t <= *e),
         }
     }
 
@@ -530,7 +765,9 @@ impl AudioPreviewState {
     }
 
     pub fn snap_active_selection_to_zero_crossings(&mut self, now: f64) {
-        let Some(ref analysis) = self.analysis else { return; };
+        let Some(ref analysis) = self.analysis else {
+            return;
+        };
         match self.selection_mode {
             SelectionMode::Single => {
                 if let Some((s, e)) = self.selection {
@@ -539,7 +776,10 @@ impl AudioPreviewState {
                     let (s_new, e_new) = (s_snapped.min(e_snapped), s_snapped.max(e_snapped));
                     self.selection = Some((s_new, e_new));
                     self.status_toast = Some((
-                        format!("∿ Snapped selection to 0-crossings: {:.4}s - {:.4}s", s_new, e_new),
+                        format!(
+                            "∿ Snapped selection to 0-crossings: {:.4}s - {:.4}s",
+                            s_new, e_new
+                        ),
                         now,
                     ));
                 }
@@ -553,7 +793,12 @@ impl AudioPreviewState {
                         let (s_new, e_new) = (s_snapped.min(e_snapped), s_snapped.max(e_snapped));
                         self.multi_selections[idx] = (s_new, e_new);
                         self.status_toast = Some((
-                            format!("∿ Snapped region #{} to 0-crossings: {:.4}s - {:.4}s", idx + 1, s_new, e_new),
+                            format!(
+                                "∿ Snapped region #{} to 0-crossings: {:.4}s - {:.4}s",
+                                idx + 1,
+                                s_new,
+                                e_new
+                            ),
                             now,
                         ));
                     }
@@ -564,7 +809,10 @@ impl AudioPreviewState {
                         *region = (s_snapped.min(e_snapped), s_snapped.max(e_snapped));
                     }
                     self.status_toast = Some((
-                        format!("∿ Snapped all {} regions to 0-crossings", self.multi_selections.len()),
+                        format!(
+                            "∿ Snapped all {} regions to 0-crossings",
+                            self.multi_selections.len()
+                        ),
                         now,
                     ));
                 }
@@ -785,6 +1033,7 @@ impl AudioPreviewState {
         };
         let out_filename = format_sample_filename(base_name, start, duration, mode_suffix, "wav");
         let out_path = staging_dir.join(out_filename);
+        let gain_db = self.active_region_gain_db();
 
         let mut cmd = std::process::Command::new("ffmpeg");
         cmd.arg("-y")
@@ -797,13 +1046,22 @@ impl AudioPreviewState {
 
         match mode {
             ChannelCopyMode::Native => {
+                if gain_db != 0.0 {
+                    cmd.arg("-af").arg(format!("volume={gain_db}dB"));
+                }
                 cmd.arg("-c:a").arg("pcm_s16le");
             }
             ChannelCopyMode::LeftOnly => {
-                cmd.arg("-af").arg("pan=mono|c0=c0").arg("-c:a").arg("pcm_s16le");
+                cmd.arg("-af")
+                    .arg(format!("pan=mono|c0=c0,volume={gain_db}dB"))
+                    .arg("-c:a")
+                    .arg("pcm_s16le");
             }
             ChannelCopyMode::RightOnly => {
-                cmd.arg("-af").arg("pan=mono|c0=c1").arg("-c:a").arg("pcm_s16le");
+                cmd.arg("-af")
+                    .arg(format!("pan=mono|c0=c1,volume={gain_db}dB"))
+                    .arg("-c:a")
+                    .arg("pcm_s16le");
             }
         }
 
@@ -850,7 +1108,10 @@ impl AudioPreviewState {
                     now,
                 ));
             } else {
-                self.status_toast = Some(("⚠️ Failed to extract audio segment via ffmpeg".to_string(), now));
+                self.status_toast = Some((
+                    "⚠️ Failed to extract audio segment via ffmpeg".to_string(),
+                    now,
+                ));
             }
         } else {
             self.status_toast = Some(("⚠️ ffmpeg process failed to execute".to_string(), now));
@@ -880,11 +1141,16 @@ impl AudioPreviewState {
 
         let mut out_paths: Vec<PathBuf> = Vec::new();
 
-        for (_i, &(start, end)) in self.multi_selections.iter().enumerate() {
-            let (s, e) = if start < end { (start, end) } else { (end, start) };
+        for (i, &(start, end)) in self.multi_selections.iter().enumerate() {
+            let (s, e) = if start < end {
+                (start, end)
+            } else {
+                (end, start)
+            };
             let duration = (e - s).max(0.001);
             let out_filename = format_sample_filename(base_name, s, duration, mode_suffix, "wav");
             let out_path = staging_dir.join(out_filename);
+            let gain_db = self.region_gain_db.get(i).copied().unwrap_or(0.0);
 
             let mut cmd = std::process::Command::new("ffmpeg");
             cmd.arg("-y")
@@ -897,13 +1163,22 @@ impl AudioPreviewState {
 
             match mode {
                 ChannelCopyMode::Native => {
+                    if gain_db != 0.0 {
+                        cmd.arg("-af").arg(format!("volume={gain_db}dB"));
+                    }
                     cmd.arg("-c:a").arg("pcm_s16le");
                 }
                 ChannelCopyMode::LeftOnly => {
-                    cmd.arg("-af").arg("pan=mono|c0=c0").arg("-c:a").arg("pcm_s16le");
+                    cmd.arg("-af")
+                        .arg(format!("pan=mono|c0=c0,volume={gain_db}dB"))
+                        .arg("-c:a")
+                        .arg("pcm_s16le");
                 }
                 ChannelCopyMode::RightOnly => {
-                    cmd.arg("-af").arg("pan=mono|c0=c1").arg("-c:a").arg("pcm_s16le");
+                    cmd.arg("-af")
+                        .arg(format!("pan=mono|c0=c1,volume={gain_db}dB"))
+                        .arg("-c:a")
+                        .arg("pcm_s16le");
                 }
             }
 
@@ -945,9 +1220,7 @@ impl AudioPreviewState {
                     .arg("text/uri-list")
                     .arg(&uri_list)
                     .spawn();
-                let _ = std::process::Command::new("wl-copy")
-                    .arg(&uri_list)
-                    .spawn();
+                let _ = std::process::Command::new("wl-copy").arg(&uri_list).spawn();
             }
 
             let mode_desc = match mode {
@@ -965,7 +1238,10 @@ impl AudioPreviewState {
                 now,
             ));
         } else {
-            self.status_toast = Some(("⚠️ Failed to extract multi-region slices via ffmpeg".to_string(), now));
+            self.status_toast = Some((
+                "⚠️ Failed to extract multi-region slices via ffmpeg".to_string(),
+                now,
+            ));
         }
     }
 
@@ -1097,7 +1373,11 @@ impl AudioPreviewState {
                 .cloned()
                 .filter(|name| !name.trim().is_empty())
                 .unwrap_or_else(|| {
-                    let base_name = self.path.file_stem().and_then(|s| s.to_str()).unwrap_or("audio");
+                    let base_name = self
+                        .path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("audio");
                     let dur = (end - start).max(0.001);
                     format_sample_filename(base_name, start, dur, "", "wav")
                 });
@@ -1142,15 +1422,12 @@ impl AudioPreviewState {
 
         if !saved_paths.is_empty() {
             let count = saved_paths.len();
-            let dest_name = dest_dir.file_name().and_then(|s| s.to_str()).unwrap_or("folder");
-            self.status_toast = Some((
-                format!(
-                    "💾 Saved {} file(s) to {}/",
-                    count,
-                    dest_name
-                ),
-                now,
-            ));
+            let dest_name = dest_dir
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("folder");
+            self.status_toast =
+                Some((format!("💾 Saved {} file(s) to {}/", count, dest_name), now));
 
             if self.open_folder_after_save {
                 let _ = std::process::Command::new("xdg-open")
@@ -1330,7 +1607,8 @@ impl AudioPreviewState {
                         spectral_colors,
                     } => {
                         let spec_img = egui::ColorImage::from_rgba_unmultiplied(
-                            [spectrogram_width, spectrogram_height], &spectrogram_rgba,
+                            [spectrogram_width, spectrogram_height],
+                            &spectrogram_rgba,
                         );
                         self.spectrogram_texture = Some(ctx.load_texture(
                             format!("spectrogram:{}", self.path.display()),
@@ -1338,7 +1616,8 @@ impl AudioPreviewState {
                             egui::TextureOptions::LINEAR,
                         ));
                         let note_img = egui::ColorImage::from_rgba_unmultiplied(
-                            [note_strip_width, note_strip_height], &note_strip_rgba,
+                            [note_strip_width, note_strip_height],
+                            &note_strip_rgba,
                         );
                         self.note_strip_texture = Some(ctx.load_texture(
                             format!("note_strip:{}", self.path.display()),
@@ -1455,22 +1734,26 @@ impl AudioPreviewState {
                     if let Some(sink) = &mut group_sink {
                         sink.log_on_drop(false);
                     }
-                    self.stem_separation.stems = stems.into_iter().map(|(name, path)| {
-                        let group_player = group_sink.as_ref().map(|sink| {
-                            let player = Player::connect_new(sink.mixer());
-                            player.set_volume(0.8);
-                            player
-                        });
-                        SeparatedStem {
-                            preview: AudioPreviewState::new(
-                                path,
-                                format!("{} stem — {}", name.to_uppercase(), self.title),
-                            ).with_editor(editor.clone()),
-                            name,
-                            group_player,
-                            muted: false,
-                        }
-                    }).collect();
+                    self.stem_separation.stems = stems
+                        .into_iter()
+                        .map(|(name, path)| {
+                            let group_player = group_sink.as_ref().map(|sink| {
+                                let player = Player::connect_new(sink.mixer());
+                                player.set_volume(0.8);
+                                player
+                            });
+                            SeparatedStem {
+                                preview: AudioPreviewState::new(
+                                    path,
+                                    format!("{} stem — {}", name.to_uppercase(), self.title),
+                                )
+                                .with_editor(editor.clone()),
+                                name,
+                                group_player,
+                                muted: false,
+                            }
+                        })
+                        .collect();
                     self.stem_separation.group_sink = group_sink;
                     self.stem_separation.group_current_time_sec = 0.0;
                     self.stem_separation.group_is_playing = false;
@@ -1484,14 +1767,18 @@ impl AudioPreviewState {
     }
 
     fn group_duration(&self) -> f32 {
-        self.stem_separation.stems.iter()
+        self.stem_separation
+            .stems
+            .iter()
             .map(|stem| stem.preview.duration_sec)
             .fold(self.duration_sec, f32::max)
             .max(0.01)
     }
 
     fn load_group_stem(stem: &SeparatedStem, offset: f32) {
-        let Some(player) = &stem.group_player else { return; };
+        let Some(player) = &stem.group_player else {
+            return;
+        };
         player.clear();
         if let Ok(file) = File::open(&stem.preview.path) {
             if let Ok(decoder) = Decoder::new(BufReader::new(file)) {
@@ -1525,11 +1812,13 @@ impl AudioPreviewState {
     }
 
     fn update_group_playback(&mut self, ctx: &egui::Context) {
-        if !self.stem_separation.group_is_playing { return; }
+        if !self.stem_separation.group_is_playing {
+            return;
+        }
         ctx.request_repaint();
         if let Some(started) = self.stem_separation.group_playback_start {
-            let current = self.stem_separation.group_playback_offset_sec
-                + started.elapsed().as_secs_f32();
+            let current =
+                self.stem_separation.group_playback_offset_sec + started.elapsed().as_secs_f32();
             let duration = self.group_duration();
             if current >= duration {
                 self.stop_group_playback();
@@ -1544,11 +1833,14 @@ impl AudioPreviewState {
         if self.stem_separation.group_is_playing {
             if let Some(started) = self.stem_separation.group_playback_start {
                 self.stem_separation.group_current_time_sec =
-                    self.stem_separation.group_playback_offset_sec + started.elapsed().as_secs_f32();
+                    self.stem_separation.group_playback_offset_sec
+                        + started.elapsed().as_secs_f32();
             }
         }
         for stem in &self.stem_separation.stems {
-            if let Some(player) = &stem.group_player { player.pause(); }
+            if let Some(player) = &stem.group_player {
+                player.pause();
+            }
         }
         self.stem_separation.group_is_playing = false;
         self.stem_separation.group_playback_start = None;
@@ -1556,7 +1848,9 @@ impl AudioPreviewState {
 
     fn stop_group_playback(&mut self) {
         for stem in &self.stem_separation.stems {
-            if let Some(player) = &stem.group_player { player.stop(); }
+            if let Some(player) = &stem.group_player {
+                player.stop();
+            }
         }
         self.stem_separation.group_is_playing = false;
         self.stem_separation.group_playback_start = None;
@@ -1580,7 +1874,9 @@ impl AudioPreviewState {
     }
 
     fn refresh_group_routing(&mut self) {
-        if !self.stem_separation.group_is_playing { return; }
+        if !self.stem_separation.group_is_playing {
+            return;
+        }
         let target = self.stem_separation.group_current_time_sec;
         let solo = self.stem_separation.solo_stem;
         for (index, stem) in self.stem_separation.stems.iter().enumerate() {
@@ -1608,13 +1904,20 @@ impl AudioPreviewState {
         self.stem_separation.selected_stem = next_index;
     }
 
-    fn launch_stems_in_external_editor(&mut self, ctx: &egui::Context, close_requested: &mut bool) {
+    fn launch_stems_in_external_editor(
+        &mut self,
+        _ctx: &egui::Context,
+        _close_requested: &mut bool,
+    ) {
         let editor = if self.audio_editor.is_empty() {
             "audacity".to_string()
         } else {
             self.audio_editor.clone()
         };
-        let stem_paths = self.stem_separation.stems.iter()
+        let stem_paths = self
+            .stem_separation
+            .stems
+            .iter()
             .map(|stem| stem.preview.path.clone())
             .collect::<Vec<_>>();
         let mut command = std::process::Command::new(&editor);
@@ -1624,11 +1927,9 @@ impl AudioPreviewState {
                     Some("The temporary stem workspace is no longer available.".to_string());
                 return;
             };
-            if let Err(error) = prepare_isolated_audacity_command(
-                &mut command,
-                workspace,
-                &stem_paths,
-            ) {
+            if let Err(error) =
+                prepare_isolated_audacity_command(&mut command, workspace, &stem_paths)
+            {
                 self.stem_separation.error = Some(error);
                 return;
             }
@@ -1638,9 +1939,16 @@ impl AudioPreviewState {
         match command.spawn() {
             Ok(_) => {
                 self.stop_group_playback();
-                for stem in &mut self.stem_separation.stems { stem.preview.stop(); }
-                *close_requested = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                for stem in &mut self.stem_separation.stems {
+                    stem.preview.stop();
+                }
+                self.status_toast = Some((
+                    format!("🚀 Opened stems in {}", editor),
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs_f64(),
+                ));
             }
             Err(error) => {
                 self.stem_separation.error = Some(format!(
@@ -1679,7 +1987,8 @@ impl AudioPreviewState {
                 egui::FontId::proportional(12.0),
                 accent,
             );
-            return response.interact_pointer_pos()
+            return response
+                .interact_pointer_pos()
                 .filter(|_| response.clicked() || response.dragged())
                 .map(|pos| waveform_scrub_time(pos.x, rect.min.x, rect.width(), duration_sec));
         };
@@ -1713,19 +2022,29 @@ impl AudioPreviewState {
             };
             painter.line_segment(
                 [
-                    Pos2::new(rect.min.x + x as f32, mid - max.clamp(-1.0, 1.0) * rect.height() * 0.42),
-                    Pos2::new(rect.min.x + x as f32, mid - min.clamp(-1.0, 1.0) * rect.height() * 0.42),
+                    Pos2::new(
+                        rect.min.x + x as f32,
+                        mid - max.clamp(-1.0, 1.0) * rect.height() * 0.42,
+                    ),
+                    Pos2::new(
+                        rect.min.x + x as f32,
+                        mid - min.clamp(-1.0, 1.0) * rect.height() * 0.42,
+                    ),
                 ],
                 Stroke::new(1.0, color),
             );
         }
-        let playhead_x = rect.min.x
-            + (playhead_sec / duration_sec.max(0.001)).clamp(0.0, 1.0) * rect.width();
+        let playhead_x =
+            rect.min.x + (playhead_sec / duration_sec.max(0.001)).clamp(0.0, 1.0) * rect.width();
         painter.line_segment(
-            [Pos2::new(playhead_x, rect.min.y), Pos2::new(playhead_x, rect.max.y)],
+            [
+                Pos2::new(playhead_x, rect.min.y),
+                Pos2::new(playhead_x, rect.max.y),
+            ],
             Stroke::new(1.5, hex_to_c32(&palette.harmonies.complementary)),
         );
-        response.interact_pointer_pos()
+        response
+            .interact_pointer_pos()
             .filter(|_| response.clicked() || response.dragged())
             .map(|pos| waveform_scrub_time(pos.x, rect.min.x, rect.width(), duration_sec))
     }
@@ -1770,88 +2089,56 @@ impl AudioPreviewState {
         palette: &AppPalette,
         close_requested: &mut bool,
     ) {
-        ui.horizontal(|ui| {
-            ui.add_space(14.0);
-            ui.label(
-                egui::RichText::new("🎵 Audio Studio")
-                    .heading()
-                    .strong()
-                    .color(hex_to_c32(&palette.harmonies.base)),
-            );
-            ui.add_space(10.0);
-            let mins = (self.duration_sec / 60.0) as u32;
-            let secs = self.duration_sec % 60.0;
-            let meta = self.metadata.as_ref().map_or_else(
-                || format!("{} • {:02}:{:04.1}", self.title, mins, secs),
-                |meta| {
-                    format!(
-                        "{} • {:02}:{:04.1} • {:.1} kHz • {}",
-                        self.title,
-                        mins,
-                        secs,
-                        meta.sample_rate as f32 / 1000.0,
-                        meta.format
-                    )
-                },
-            );
-            crate::ui_ext::badge_pill(ui, meta, Some(hex_to_c32(&palette.theme.f_med)), palette);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.add_space(14.0);
-                if ui
-                    .add(
-                        crate::danger_button(
-                            "✕ Close (Esc)",
-                            hex_to_c32(&palette.diff_del),
-                            palette,
-                        )
-                        .rounding(Rounding::same(6.0)),
-                    )
-                    .clicked()
-                {
-                    self.stop();
-                    for stem in &mut self.stem_separation.stems {
-                        stem.preview.stop();
-                    }
-                    *close_requested = true;
-                }
-                ui.add_space(6.0);
-                let editor = if self.audio_editor.is_empty() { "Audacity" } else { &self.audio_editor };
-                let has_separated_stems = self.active_mode == AudioToolMode::StemSeparation
-                    && !self.stem_separation.stems.is_empty();
-                let editor_tooltip = if has_separated_stems {
-                    format!("Open all four stems as separate tracks in {editor}")
-                } else {
-                    format!("Open the source audio in {editor}")
-                };
-                if ui
-                    .add(
-                        crate::secondary_button(
-                            format!("🔊 {editor}"),
-                            hex_to_c32(&palette.theme.b_low),
-                            palette,
-                        )
-                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.harmonies.base)))
-                        .rounding(Rounding::same(6.0)),
-                    )
-                    .on_hover_text(editor_tooltip)
-                    .clicked()
-                {
-                    if has_separated_stems {
-                        self.launch_stems_in_external_editor(ctx, close_requested);
-                    } else {
-                        self.launch_external_audio_editor(ctx, close_requested);
-                    }
-                }
-                ui.add_space(8.0);
-                crate::ui_ext::StatusToast::render_opt(
-                    &self.status_toast,
-                    4.5,
-                    ui,
-                    palette,
-                    ctx.input(|input| input.time),
-                );
-            });
-        });
+        let mins = (self.duration_sec / 60.0) as u32;
+        let secs = self.duration_sec % 60.0;
+        let editor = if self.audio_editor.is_empty() {
+            "audacity"
+        } else {
+            &self.audio_editor
+        };
+        let has_separated_stems = self.active_mode == AudioToolMode::StemSeparation
+            && !self.stem_separation.stems.is_empty();
+        let editor_tooltip = if has_separated_stems {
+            format!("Open all four stems as separate tracks in {editor}")
+        } else {
+            format!("Open the source audio in {editor}")
+        };
+        let hatch_label = format!(
+            "🔊 {}",
+            if editor.eq_ignore_ascii_case("audacity") {
+                "Audacity"
+            } else {
+                editor
+            }
+        );
+        let hatch = EscapeHatch::primary(hatch_label, editor, editor_tooltip);
+
+        let mut shell = StudioShell::new("Audio Studio", "🎵", palette, close_requested)
+            .with_badge(format!("{:02}:{:04.1}", mins, secs), None)
+            .with_escape_hatch(hatch);
+
+        if let Some(ref meta) = self.metadata {
+            shell = shell
+                .with_badge(format!("{:.1} kHz", meta.sample_rate as f32 / 1000.0), None)
+                .with_badge(&meta.format, Some(hex_to_c32(&palette.harmonies.base)));
+        }
+
+        let clicked = shell.render_header(ui, |_ui| {});
+
+        if clicked.is_some() {
+            if has_separated_stems {
+                self.launch_stems_in_external_editor(ctx, close_requested);
+            } else {
+                self.launch_external_audio_editor(ctx, close_requested);
+            }
+        }
+
+        if *close_requested {
+            self.stop();
+            for stem in &mut self.stem_separation.stems {
+                stem.preview.stop();
+            }
+        }
     }
 
     fn render_audio_tool_bar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
@@ -2121,8 +2408,12 @@ impl AudioPreviewState {
                         cancel = ui.button("Cancel").clicked();
                     });
                 });
-            if save { self.save_all_stems(); }
-            if cancel { self.stem_separation.save_dialog_open = false; }
+            if save {
+                self.save_all_stems();
+            }
+            if cancel {
+                self.stem_separation.save_dialog_open = false;
+            }
         }
     }
 
@@ -2134,6 +2425,19 @@ impl AudioPreviewState {
         palette: &AppPalette,
         close_requested: &mut bool,
     ) {
+        // Tool-level shortcuts must win over nested stem editors.
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.stop();
+            *close_requested = true;
+            return;
+        }
+        if self.active_mode == AudioToolMode::StemSeparation
+            && ctx.input(|i| i.key_pressed(egui::Key::Space))
+            && self.stem_separation.stems.is_empty()
+            && !self.stem_separation.in_progress
+        {
+            self.start_stem_separation();
+        }
         match self.active_mode {
             AudioToolMode::Inspect => {
                 self.render_standard_ui(ui, ctx, palette, close_requested, true)
@@ -2143,7 +2447,6 @@ impl AudioPreviewState {
             }
         }
     }
-
 
     fn render_standard_ui(
         &mut self,
@@ -2197,9 +2500,11 @@ impl AudioPreviewState {
                 let v_end = self.view_start_sec + self.view_duration_sec;
                 if self.current_time_sec >= v_end {
                     let max_start = (self.duration_sec - self.view_duration_sec).max(0.0);
-                    self.view_start_sec = (self.current_time_sec - self.view_duration_sec * 0.1).clamp(0.0, max_start);
+                    self.view_start_sec = (self.current_time_sec - self.view_duration_sec * 0.1)
+                        .clamp(0.0, max_start);
                 } else if self.current_time_sec < self.view_start_sec {
-                    self.view_start_sec = (self.current_time_sec - self.view_duration_sec * 0.1).max(0.0);
+                    self.view_start_sec =
+                        (self.current_time_sec - self.view_duration_sec * 0.1).max(0.0);
                 }
             }
         }
@@ -2212,12 +2517,38 @@ impl AudioPreviewState {
         });
 
         // Global Keybindings for Audio Preview
+        let accepts_tool_shortcuts = !ctx.wants_keyboard_input();
+        if accepts_tool_shortcuts && ctx.input(|i| i.key_pressed(egui::Key::I)) {
+            self.active_mode = AudioToolMode::Inspect;
+        }
+        if accepts_tool_shortcuts
+            && ctx.input(|i| i.key_pressed(egui::Key::S))
+            && !ctx.input(|i| i.modifiers.command || i.modifiers.ctrl)
+        {
+            self.active_mode = AudioToolMode::StemSeparation;
+        }
+        if accepts_tool_shortcuts
+            && self.active_mode == AudioToolMode::Inspect
+            && ctx.input(|i| i.key_pressed(egui::Key::M))
+        {
+            self.selection_mode = match self.selection_mode {
+                SelectionMode::Single => SelectionMode::Multi,
+                SelectionMode::Multi => SelectionMode::Single,
+            };
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.stop();
             *close_requested = true;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
-            self.toggle_play();
+            if self.active_mode == AudioToolMode::StemSeparation
+                && self.stem_separation.stems.is_empty()
+                && !self.stem_separation.in_progress
+            {
+                self.start_stem_separation();
+            } else {
+                self.toggle_play();
+            }
         }
 
         // Poll asynchronous folder browsing dialog if running
@@ -2233,7 +2564,8 @@ impl AudioPreviewState {
         let copy_requested = ctx.input(|i| {
             i.events.iter().any(|e| matches!(e, egui::Event::Copy))
                 || i.raw.events.iter().any(|e| matches!(e, egui::Event::Copy))
-                || (i.key_pressed(egui::Key::C) && (i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd))
+                || (i.key_pressed(egui::Key::C)
+                    && (i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd))
         }) || ctx.input_mut(|i| {
             i.consume_key(egui::Modifiers::COMMAND, egui::Key::C)
                 || i.consume_key(egui::Modifiers::CTRL, egui::Key::C)
@@ -2247,7 +2579,8 @@ impl AudioPreviewState {
         }
 
         let save_requested = ctx.input(|i| {
-            i.key_pressed(egui::Key::S) && (i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd)
+            i.key_pressed(egui::Key::S)
+                && (i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd)
         }) || ctx.input_mut(|i| {
             i.consume_key(egui::Modifiers::COMMAND, egui::Key::S)
                 || i.consume_key(egui::Modifiers::CTRL, egui::Key::S)
@@ -2261,48 +2594,78 @@ impl AudioPreviewState {
             }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowLeft)) {
-            let step = if ctx.input(|i| i.modifiers.shift) { 5.0 } else { 1.0 };
+            let step = if ctx.input(|i| i.modifiers.shift) {
+                5.0
+            } else {
+                1.0
+            };
             self.seek_to(self.current_time_sec - step);
         }
         if ctx.input(|i| i.key_pressed(egui::Key::ArrowRight)) {
-            let step = if ctx.input(|i| i.modifiers.shift) { 5.0 } else { 1.0 };
+            let step = if ctx.input(|i| i.modifiers.shift) {
+                5.0
+            } else {
+                1.0
+            };
             self.seek_to(self.current_time_sec + step);
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Home) || i.key_pressed(egui::Key::Num0)) {
             self.seek_to(0.0);
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::Delete)) {
-            match self.selection_mode {
-                SelectionMode::Single => {
-                    self.selection = None;
-                }
-                SelectionMode::Multi => {
-                    if let Some(idx) = self.active_multi_index {
-                        if idx < self.multi_selections.len() {
-                            self.multi_selections.remove(idx);
-                            self.active_multi_index = None;
-                            self.status_toast = Some((format!("Removed selection #{}", idx + 1), now));
-                        }
+            self.delete_active_slice_from_session(now);
+        }
+
+        // 'Z' key: Snap selection to zero-crossings / Toggle zero-crossing snap mode
+        if ctx.input(|i| {
+            i.key_pressed(egui::Key::Z)
+                && !i.modifiers.ctrl
+                && !i.modifiers.command
+                && !i.modifiers.alt
+        }) {
+            self.snap_zero_crossings = !self.snap_zero_crossings;
+            let status = if self.snap_zero_crossings {
+                "ON"
+            } else {
+                "OFF"
+            };
+            if self.snap_zero_crossings {
+                let has_sel = match self.selection_mode {
+                    SelectionMode::Single => self.selection.is_some(),
+                    SelectionMode::Multi => {
+                        self.active_multi_index.is_some() && !self.multi_selections.is_empty()
                     }
+                };
+                if has_sel {
+                    self.snap_active_selection_to_zero_crossings(now);
+                } else {
+                    self.status_toast = Some((format!("∿ Snap to Zero-Crossing: {}", status), now));
                 }
+            } else {
+                self.status_toast = Some((format!("∿ Snap to Zero-Crossing: {}", status), now));
             }
         }
 
-        // 'Z' key: Snap selection to zero-crossings
-        if ctx.input(|i| i.key_pressed(egui::Key::Z) && !i.modifiers.ctrl && !i.modifiers.command) {
-            self.snap_active_selection_to_zero_crossings(now);
-        }
-
         // 'T' key: Toggle transient detection markers & snapping (when transients are ready)
-        if ctx.input(|i| i.key_pressed(egui::Key::T) && !i.modifiers.ctrl && !i.modifiers.command && !i.modifiers.alt) {
-            let transients_ready = self.analysis.as_ref().map(|a| a.is_transients_ready).unwrap_or(false);
+        if ctx.input(|i| {
+            i.key_pressed(egui::Key::T)
+                && !i.modifiers.ctrl
+                && !i.modifiers.command
+                && !i.modifiers.alt
+        }) {
+            let transients_ready = self
+                .analysis
+                .as_ref()
+                .map(|a| a.is_transients_ready)
+                .unwrap_or(false);
             if transients_ready {
                 self.show_transients = !self.show_transients;
-                let status = if self.show_transients { "ON (Snapping Enabled)" } else { "OFF" };
-                self.status_toast = Some((
-                    format!("⚡ Transients: {}", status),
-                    now,
-                ));
+                let status = if self.show_transients {
+                    "ON (Snapping Enabled)"
+                } else {
+                    "OFF"
+                };
+                self.status_toast = Some((format!("⚡ Transients: {}", status), now));
             }
         }
 
@@ -2313,25 +2676,45 @@ impl AudioPreviewState {
         if ctx.input(|i| i.key_pressed(egui::Key::Minus)) {
             self.zoom(1.136, self.current_time_sec);
         }
-        if ctx.input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Num0)) {
+        if ctx
+            .input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Num0))
+        {
             self.fit_to_window();
         }
 
         // Number keys 1..9: preview corresponding slice from start to stop
         if self.selection_mode == SelectionMode::Multi && !self.multi_selections.is_empty() {
             let num_keys = [
-                egui::Key::Num1, egui::Key::Num2, egui::Key::Num3,
-                egui::Key::Num4, egui::Key::Num5, egui::Key::Num6,
-                egui::Key::Num7, egui::Key::Num8, egui::Key::Num9,
+                egui::Key::Num1,
+                egui::Key::Num2,
+                egui::Key::Num3,
+                egui::Key::Num4,
+                egui::Key::Num5,
+                egui::Key::Num6,
+                egui::Key::Num7,
+                egui::Key::Num8,
+                egui::Key::Num9,
             ];
             for (idx, &k) in num_keys.iter().enumerate() {
-                if ctx.input(|i| i.key_pressed(k) && !i.modifiers.ctrl && !i.modifiers.command && !i.modifiers.alt) {
+                if ctx.input(|i| {
+                    i.key_pressed(k)
+                        && !i.modifiers.ctrl
+                        && !i.modifiers.command
+                        && !i.modifiers.alt
+                }) {
                     if idx < self.multi_selections.len() {
                         let (s, e) = self.multi_selections[idx];
                         self.active_multi_index = Some(idx);
                         self.play_slice_preview(s, e);
                         self.status_toast = Some((
-                            format!("▶ Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})", idx + 1, (s / 60.0) as u32, s % 60.0, (e / 60.0) as u32, e % 60.0),
+                            format!(
+                                "▶ Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
+                                idx + 1,
+                                (s / 60.0) as u32,
+                                s % 60.0,
+                                (e / 60.0) as u32,
+                                e % 60.0
+                            ),
                             now,
                         ));
                         break;
@@ -2544,7 +2927,7 @@ impl AudioPreviewState {
                 ui.add_space(8.0);
 
                 // Trim Silence Button
-                let trim_btn = crate::secondary_button("✂ Trim Silence", hex_to_c32(&palette.theme.b_low), palette)
+                let trim_btn = crate::compact_toolbar_button("Trim Silence", hex_to_c32(&palette.theme.b_low), palette)
                     .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)));
                 if ui.add(trim_btn).on_hover_text("Trim silence (< -45 dB) from both leading and trailing sides").clicked() {
                     self.trim_silence(-45.0, now);
@@ -2554,8 +2937,10 @@ impl AudioPreviewState {
 
                 let channels_count = self.analysis.as_ref().map(|a| a.channels).unwrap_or(2);
 
-                // Selection Actions Toolbar (Right Aligned)
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Selection actions must wrap rather than spilling beyond a
+                // narrow studio window (the previous right-to-left layout
+                // pushed Copy Track off-screen).
+                ui.horizontal_wrapped(|ui| {
                     match self.selection_mode {
                         SelectionMode::Single => {
                             if let Some((start, end)) = self.selection {
@@ -2606,28 +2991,16 @@ impl AudioPreviewState {
                                 ui.add_space(4.0);
                                 let left_bg = hex_to_c32_alpha(&palette.left_hand_border, 40);
                                 let left_fg = crate::contrast_text_c32(left_bg, Some(hex_to_c32(&palette.left_hand_border)), palette);
-                                let left_btn = egui::Button::new(
-                                    egui::RichText::new("◧ Left Only (Mono)")
-                                        .small()
-                                        .strong()
-                                        .color(left_fg),
-                                )
-                                .fill(left_bg)
-                                .rounding(Rounding::same(4.0));
+                                let left_btn = crate::compact_toolbar_button("Left Only (Mono)", left_bg, palette)
+                                    .stroke(Stroke::new(1.0, left_fg));
                                 if ui.add(left_btn).on_hover_text("Copy only the Left channel as a mono audio file").clicked() {
                                     self.copy_selected_segment(now, ChannelCopyMode::LeftOnly);
                                 }
 
                                 let right_bg = hex_to_c32_alpha(&palette.right_hand_border, 40);
                                 let right_fg = crate::contrast_text_c32(right_bg, Some(hex_to_c32(&palette.right_hand_border)), palette);
-                                let right_btn = egui::Button::new(
-                                    egui::RichText::new("◨ Right Only (Mono)")
-                                        .small()
-                                        .strong()
-                                        .color(right_fg),
-                                )
-                                .fill(right_bg)
-                                .rounding(Rounding::same(4.0));
+                                let right_btn = crate::compact_toolbar_button("Right Only (Mono)", right_bg, palette)
+                                    .stroke(Stroke::new(1.0, right_fg));
                                 if ui.add(right_btn).on_hover_text("Copy only the Right channel as a mono audio file").clicked() {
                                     self.copy_selected_segment(now, ChannelCopyMode::RightOnly);
                                 }
@@ -2689,32 +3062,20 @@ impl AudioPreviewState {
 
                             if channels_count >= 2 {
                                 ui.add_space(4.0);
-                                let left_label = if count > 0 { format!("◧ All Left ({})", count) } else { "◧ Left Only".to_string() };
+                                let left_label = if count > 0 { format!("All Left ({})", count) } else { "Left Only".to_string() };
                                 let left_bg = hex_to_c32_alpha(&palette.left_hand_border, 40);
                                 let left_fg = crate::contrast_text_c32(left_bg, Some(hex_to_c32(&palette.left_hand_border)), palette);
-                                let left_btn = egui::Button::new(
-                                    egui::RichText::new(left_label)
-                                        .small()
-                                        .strong()
-                                        .color(left_fg),
-                                )
-                                .fill(left_bg)
-                                .rounding(Rounding::same(4.0));
+                                let left_btn = crate::compact_toolbar_button(left_label, left_bg, palette)
+                                    .stroke(Stroke::new(1.0, left_fg));
                                 if ui.add(left_btn).on_hover_text("Export all regions isolating only the Left channel as mono").clicked() {
                                     self.copy_all_multi_segments(now, ChannelCopyMode::LeftOnly);
                                 }
 
-                                let right_label = if count > 0 { format!("◨ All Right ({})", count) } else { "◨ Right Only".to_string() };
+                                let right_label = if count > 0 { format!("All Right ({})", count) } else { "Right Only".to_string() };
                                 let right_bg = hex_to_c32_alpha(&palette.right_hand_border, 40);
                                 let right_fg = crate::contrast_text_c32(right_bg, Some(hex_to_c32(&palette.right_hand_border)), palette);
-                                let right_btn = egui::Button::new(
-                                    egui::RichText::new(right_label)
-                                        .small()
-                                        .strong()
-                                        .color(right_fg),
-                                )
-                                .fill(right_bg)
-                                .rounding(Rounding::same(4.0));
+                                let right_btn = crate::compact_toolbar_button(right_label, right_bg, palette)
+                                    .stroke(Stroke::new(1.0, right_fg));
                                 if ui.add(right_btn).on_hover_text("Export all regions isolating only the Right channel as mono").clicked() {
                                     self.copy_all_multi_segments(now, ChannelCopyMode::RightOnly);
                                 }
@@ -2876,23 +3237,18 @@ impl AudioPreviewState {
         let transient_col = crate::hex_to_c32(&palette.diff_mod);
 
         // Frame border & background
-        painter.rect_filled(
-            rect,
-            Rounding::same(8.0),
-            bg_frame,
-        );
-        painter.rect_stroke(
-            rect,
-            Rounding::same(8.0),
-            Stroke::new(1.0, border_frame),
-        );
+        painter.rect_filled(rect, Rounding::same(8.0), bg_frame);
+        painter.rect_stroke(rect, Rounding::same(8.0), Stroke::new(1.0, border_frame));
 
         if self.is_loading_analysis || self.analysis.is_none() {
             let elapsed = self.loading_start_time.elapsed().as_secs_f32();
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                format!("⏳ Decoding audio track & building waveform... ({:.1}s)", elapsed),
+                format!(
+                    "⏳ Decoding audio track & building waveform... ({:.1}s)",
+                    elapsed
+                ),
                 egui::FontId::proportional(15.0),
                 text_f_med,
             );
@@ -2985,9 +3341,17 @@ impl AudioPreviewState {
 
             if raw_scroll.y.abs() > 0.1 {
                 if ui.input(|i| i.modifiers.shift) {
-                    // Shift+Wheel pans horizontally
-                    let dt = -(raw_scroll.y / 50.0) * self.view_duration_sec * 0.12;
-                    self.pan(dt);
+                    let has_selected_region = match self.selection_mode {
+                        SelectionMode::Single => self.selection.is_some(),
+                        SelectionMode::Multi => self.active_multi_index.is_some(),
+                    };
+                    if has_selected_region {
+                        self.adjust_active_region_gain((raw_scroll.y / 50.0).clamp(-4.0, 4.0));
+                    } else {
+                        // Shift+Wheel pans horizontally when no region is active.
+                        let dt = -(raw_scroll.y / 50.0) * self.view_duration_sec * 0.12;
+                        self.pan(dt);
+                    }
                 } else {
                     // Consistent, fine-grained exponential zoom curve:
                     // Standard step is ~5.5% per wheel notch (50 pt in egui-winit).
@@ -3030,8 +3394,9 @@ impl AudioPreviewState {
                             initial_start_sec: self.view_start_sec,
                         });
                     } else {
-                        let mouse_t = x_to_t(mouse_pos.x, self.view_start_sec, self.view_duration_sec)
-                            .clamp(0.0, self.duration_sec);
+                        let mouse_t =
+                            x_to_t(mouse_pos.x, self.view_start_sec, self.view_duration_sec)
+                                .clamp(0.0, self.duration_sec);
                         let is_in_ruler = mouse_pos.y <= ruler_rect.max.y;
 
                         if is_in_ruler {
@@ -3044,13 +3409,20 @@ impl AudioPreviewState {
                             match self.selection_mode {
                                 SelectionMode::Single => {
                                     if let Some((s, e)) = self.selection {
-                                        let xs = t_to_x(s, self.view_start_sec, self.view_duration_sec);
-                                        let xe = t_to_x(e, self.view_start_sec, self.view_duration_sec);
+                                        let xs =
+                                            t_to_x(s, self.view_start_sec, self.view_duration_sec);
+                                        let xe =
+                                            t_to_x(e, self.view_start_sec, self.view_duration_sec);
                                         if (mouse_pos.x - xs).abs() <= handle_grab_radius_px {
-                                            self.active_drag = Some(DragAction::DragLeftHandle { other_anchor: e });
+                                            self.active_drag = Some(DragAction::DragLeftHandle {
+                                                other_anchor: e,
+                                            });
                                             captured = true;
-                                        } else if (mouse_pos.x - xe).abs() <= handle_grab_radius_px {
-                                            self.active_drag = Some(DragAction::DragRightHandle { other_anchor: s });
+                                        } else if (mouse_pos.x - xe).abs() <= handle_grab_radius_px
+                                        {
+                                            self.active_drag = Some(DragAction::DragRightHandle {
+                                                other_anchor: s,
+                                            });
                                             captured = true;
                                         }
                                     }
@@ -3067,21 +3439,26 @@ impl AudioPreviewState {
                                 SelectionMode::Multi => {
                                     // Check handles of existing multi-selections
                                     for (idx, &(s, e)) in self.multi_selections.iter().enumerate() {
-                                        let xs = t_to_x(s, self.view_start_sec, self.view_duration_sec);
-                                        let xe = t_to_x(e, self.view_start_sec, self.view_duration_sec);
+                                        let xs =
+                                            t_to_x(s, self.view_start_sec, self.view_duration_sec);
+                                        let xe =
+                                            t_to_x(e, self.view_start_sec, self.view_duration_sec);
                                         if (mouse_pos.x - xs).abs() <= handle_grab_radius_px {
-                                            self.active_drag = Some(DragAction::DragMultiLeftHandle {
-                                                index: idx,
-                                                other_anchor: e,
-                                            });
+                                            self.active_drag =
+                                                Some(DragAction::DragMultiLeftHandle {
+                                                    index: idx,
+                                                    other_anchor: e,
+                                                });
                                             self.active_multi_index = Some(idx);
                                             captured = true;
                                             break;
-                                        } else if (mouse_pos.x - xe).abs() <= handle_grab_radius_px {
-                                            self.active_drag = Some(DragAction::DragMultiRightHandle {
-                                                index: idx,
-                                                other_anchor: s,
-                                            });
+                                        } else if (mouse_pos.x - xe).abs() <= handle_grab_radius_px
+                                        {
+                                            self.active_drag =
+                                                Some(DragAction::DragMultiRightHandle {
+                                                    index: idx,
+                                                    other_anchor: s,
+                                                });
                                             self.active_multi_index = Some(idx);
                                             captured = true;
                                             break;
@@ -3090,7 +3467,9 @@ impl AudioPreviewState {
 
                                     if !captured {
                                         // Check if clicking inside an existing multi-selection slice to select it
-                                        for (idx, &(s, e)) in self.multi_selections.iter().enumerate() {
+                                        for (idx, &(s, e)) in
+                                            self.multi_selections.iter().enumerate()
+                                        {
                                             if mouse_t >= s && mouse_t <= e {
                                                 self.active_multi_index = Some(idx);
                                                 captured = true;
@@ -3122,9 +3501,13 @@ impl AudioPreviewState {
                 if let Some(mouse_pos) = response.interact_pointer_pos() {
                     let cur_t = x_to_t(mouse_pos.x, self.view_start_sec, self.view_duration_sec)
                         .clamp(0.0, self.duration_sec);
-                    let bypass = ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command);
+                    let bypass =
+                        ui.input(|i| i.modifiers.shift || i.modifiers.ctrl || i.modifiers.command);
                     match drag {
-                        DragAction::PanMiddle { start_x, initial_start_sec } => {
+                        DragAction::PanMiddle {
+                            start_x,
+                            initial_start_sec,
+                        } => {
                             let dx = mouse_pos.x - start_x;
                             let dt = (dx / track_width) * self.view_duration_sec;
                             let max_start = (self.duration_sec - self.view_duration_sec).max(0.0);
@@ -3134,7 +3517,10 @@ impl AudioPreviewState {
                         DragAction::ScrubRuler => {
                             self.seek_to(cur_t);
                         }
-                        DragAction::PanScrollbar { start_x, initial_start_sec } => {
+                        DragAction::PanScrollbar {
+                            start_x,
+                            initial_start_sec,
+                        } => {
                             let dx = mouse_pos.x - start_x;
                             let dt = (dx / scroll_rect.width()) * self.duration_sec;
                             let max_start = (self.duration_sec - self.view_duration_sec).max(0.0);
@@ -3173,7 +3559,10 @@ impl AudioPreviewState {
                             }
                             self.active_drag = Some(drag);
                         }
-                        DragAction::DragMultiLeftHandle { index, other_anchor } => {
+                        DragAction::DragMultiLeftHandle {
+                            index,
+                            other_anchor,
+                        } => {
                             ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
                             if index < self.multi_selections.len() {
                                 let snapped_t = self.snap_time(cur_t, bypass);
@@ -3183,7 +3572,10 @@ impl AudioPreviewState {
                                 self.seek_to(snapped_t);
                             }
                         }
-                        DragAction::DragMultiRightHandle { index, other_anchor } => {
+                        DragAction::DragMultiRightHandle {
+                            index,
+                            other_anchor,
+                        } => {
                             ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::ResizeHorizontal);
                             if index < self.multi_selections.len() {
                                 let snapped_t = self.snap_time(cur_t, bypass);
@@ -3224,7 +3616,9 @@ impl AudioPreviewState {
                             self.selection = None;
                         }
                     }
-                    DragAction::CreateMultiSelection { has_moved, index, .. } => {
+                    DragAction::CreateMultiSelection {
+                        has_moved, index, ..
+                    } => {
                         if !has_moved {
                             if index < self.multi_selections.len() {
                                 self.multi_selections.remove(index);
@@ -3234,8 +3628,13 @@ impl AudioPreviewState {
                             let (s, e) = self.multi_selections[index];
                             let (s_fix, e_fix) = (s.min(e), s.max(e));
                             self.multi_selections[index] = (s_fix, e_fix);
-                            self.multi_selections.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-                            self.active_multi_index = self.multi_selections.iter().position(|r| *r == (s_fix, e_fix));
+                            self.multi_selections.sort_by(|a, b| {
+                                a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            self.active_multi_index = self
+                                .multi_selections
+                                .iter()
+                                .position(|r| *r == (s_fix, e_fix));
                         }
                     }
                     _ => {}
@@ -3262,13 +3661,23 @@ impl AudioPreviewState {
                             if let Some((idx, _, _)) = clicked_slice {
                                 self.multi_selections.remove(idx);
                                 self.active_multi_index = None;
-                                self.status_toast = Some((format!("Removed slice #{}", idx + 1), ui.input(|i| i.time)));
+                                self.status_toast = Some((
+                                    format!("Removed slice #{}", idx + 1),
+                                    ui.input(|i| i.time),
+                                ));
                             }
                         } else if let Some((idx, s, e)) = clicked_slice {
                             self.active_multi_index = Some(idx);
                             self.play_slice_preview(s, e);
                             self.status_toast = Some((
-                                format!("▶ Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})", idx + 1, (s / 60.0) as u32, s % 60.0, (e / 60.0) as u32, e % 60.0),
+                                format!(
+                                    "▶ Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
+                                    idx + 1,
+                                    (s / 60.0) as u32,
+                                    s % 60.0,
+                                    (e / 60.0) as u32,
+                                    e % 60.0
+                                ),
                                 ui.input(|i| i.time),
                             ));
                         } else if let Some(idx) = self.active_multi_index {
@@ -3276,7 +3685,14 @@ impl AudioPreviewState {
                                 let (s, e) = self.multi_selections[idx];
                                 self.play_slice_preview(s, e);
                                 self.status_toast = Some((
-                                    format!("▶ Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})", idx + 1, (s / 60.0) as u32, s % 60.0, (e / 60.0) as u32, e % 60.0),
+                                    format!(
+                                        "▶ Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
+                                        idx + 1,
+                                        (s / 60.0) as u32,
+                                        s % 60.0,
+                                        (e / 60.0) as u32,
+                                        e % 60.0
+                                    ),
                                     ui.input(|i| i.time),
                                 ));
                             }
@@ -3288,11 +3704,18 @@ impl AudioPreviewState {
                             let is_inside = clicked_t >= s_min && clicked_t <= s_max;
                             if shift_down && is_inside {
                                 self.selection = None;
-                                self.status_toast = Some(("Cleared selection".to_string(), ui.input(|i| i.time)));
+                                self.status_toast =
+                                    Some(("Cleared selection".to_string(), ui.input(|i| i.time)));
                             } else {
                                 self.play_slice_preview(s_min, s_max);
                                 self.status_toast = Some((
-                                    format!("▶ Previewing slice ({:02}:{:04.1} - {:02}:{:04.1})", (s_min / 60.0) as u32, s_min % 60.0, (s_max / 60.0) as u32, s_max % 60.0),
+                                    format!(
+                                        "▶ Previewing slice ({:02}:{:04.1} - {:02}:{:04.1})",
+                                        (s_min / 60.0) as u32,
+                                        s_min % 60.0,
+                                        (s_max / 60.0) as u32,
+                                        s_max % 60.0
+                                    ),
                                     ui.input(|i| i.time),
                                 ));
                             }
@@ -3317,7 +3740,11 @@ impl AudioPreviewState {
                                 self.selection = None;
                             }
                             SelectionMode::Multi => {
-                                if let Some(idx) = self.multi_selections.iter().position(|(s, e)| clicked_t >= *s && clicked_t <= *e) {
+                                if let Some(idx) = self
+                                    .multi_selections
+                                    .iter()
+                                    .position(|(s, e)| clicked_t >= *s && clicked_t <= *e)
+                                {
                                     self.active_multi_index = Some(idx);
                                 } else {
                                     self.active_multi_index = None;
@@ -3352,23 +3779,32 @@ impl AudioPreviewState {
         // --- PAINTING PHASE: ALL MUTATIONS COMPLETED ---
         let v_start = self.view_start_sec;
         let v_dur = self.view_duration_sec.max(0.0001);
-        let time_to_x = move |t: f32| -> f32 {
-            track_min_x + ((t - v_start) / v_dur) * track_width
-        };
-        let x_to_time = move |x: f32| -> f32 {
-            v_start + ((x - track_min_x) / track_width) * v_dur
-        };
+        let time_to_x =
+            move |t: f32| -> f32 { track_min_x + ((t - v_start) / v_dur) * track_width };
+        let x_to_time =
+            move |x: f32| -> f32 { v_start + ((x - track_min_x) / track_width) * v_dur };
 
         let analysis = self.analysis.as_ref().unwrap();
 
         // 1. RULER
         painter.rect_filled(
-            Rect::from_min_max(Pos2::new(rect.min.x, rect.min.y), Pos2::new(rect.max.x, ruler_rect.max.y)),
-            Rounding { nw: 8.0, ne: 8.0, sw: 0.0, se: 0.0 },
+            Rect::from_min_max(
+                Pos2::new(rect.min.x, rect.min.y),
+                Pos2::new(rect.max.x, ruler_rect.max.y),
+            ),
+            Rounding {
+                nw: 8.0,
+                ne: 8.0,
+                sw: 0.0,
+                se: 0.0,
+            },
             bg_frame,
         );
         painter.line_segment(
-            [Pos2::new(rect.min.x, ruler_rect.max.y), Pos2::new(rect.max.x, ruler_rect.max.y)],
+            [
+                Pos2::new(rect.min.x, ruler_rect.max.y),
+                Pos2::new(rect.max.x, ruler_rect.max.y),
+            ],
             Stroke::new(1.0, border_frame),
         );
 
@@ -3400,12 +3836,18 @@ impl AudioPreviewState {
                 if x >= track_min_x && x <= track_max_x {
                     // Grid line down through all views
                     painter.line_segment(
-                        [Pos2::new(x, ruler_rect.max.y), Pos2::new(x, strip_rect.max.y)],
+                        [
+                            Pos2::new(x, ruler_rect.max.y),
+                            Pos2::new(x, strip_rect.max.y),
+                        ],
                         Stroke::new(1.0, crate::hex_to_c32_alpha(&palette.theme.f_low, 20)),
                     );
                     // Ruler tick
                     painter.line_segment(
-                        [Pos2::new(x, ruler_rect.min.y + 14.0), Pos2::new(x, ruler_rect.max.y)],
+                        [
+                            Pos2::new(x, ruler_rect.min.y + 14.0),
+                            Pos2::new(x, ruler_rect.max.y),
+                        ],
                         Stroke::new(1.0, crate::hex_to_c32_alpha(&palette.theme.f_med, 80)),
                     );
                     // Label
@@ -3452,7 +3894,10 @@ impl AudioPreviewState {
             let y_c2 = wave_rect.min.y + half * 1.5;
 
             painter.line_segment(
-                [Pos2::new(track_min_x, wave_rect.min.y + half), Pos2::new(track_max_x, wave_rect.min.y + half)],
+                [
+                    Pos2::new(track_min_x, wave_rect.min.y + half),
+                    Pos2::new(track_max_x, wave_rect.min.y + half),
+                ],
                 Stroke::new(1.0, border_frame),
             );
 
@@ -3486,16 +3931,26 @@ impl AudioPreviewState {
             for ch_idx in 0..ch_count {
                 let (y_base, max_def, samples, _col) = if ch_idx == 0 {
                     let half = if is_stereo { wave_h / 2.0 } else { wave_h };
-                    let base = if is_stereo { wave_rect.min.y + wave_h / 4.0 } else { wave_rect.center().y };
+                    let base = if is_stereo {
+                        wave_rect.min.y + wave_h / 4.0
+                    } else {
+                        wave_rect.center().y
+                    };
                     (base, half * 0.45, &analysis.ch1_samples, accent_base)
                 } else {
                     let half = wave_h / 2.0;
                     let base = wave_rect.min.y + 3.0 * wave_h / 4.0;
-                    (base, half * 0.45, analysis.ch2_samples.as_ref().unwrap(), accent_base)
+                    let Some(ch2) = analysis.ch2_samples.as_ref() else {
+                        continue;
+                    };
+                    (base, half * 0.45, ch2, accent_base)
                 };
 
                 painter.line_segment(
-                    [Pos2::new(track_min_x, y_base), Pos2::new(track_max_x, y_base)],
+                    [
+                        Pos2::new(track_min_x, y_base),
+                        Pos2::new(track_max_x, y_base),
+                    ],
                     Stroke::new(1.0, border_frame),
                 );
 
@@ -3503,7 +3958,8 @@ impl AudioPreviewState {
                 for f in start_frame..=end_frame.min(total_frames.saturating_sub(1)) {
                     let t = f as f32 / sample_rate;
                     let x = time_to_x(t);
-                    let val = samples[f].clamp(-1.0, 1.0);
+                    let gain = 10.0_f32.powf(self.gain_at_time_db(t) / 20.0);
+                    let val = (samples[f] * gain).clamp(-1.0, 1.0);
                     let y = y_base - val * max_def;
                     let pos = Pos2::new(x, y);
 
@@ -3523,7 +3979,12 @@ impl AudioPreviewState {
                         [Pos2::new(x, y_base), pos],
                         Stroke::new(
                             1.0,
-                            Color32::from_rgba_unmultiplied(point_col.r(), point_col.g(), point_col.b(), 120),
+                            Color32::from_rgba_unmultiplied(
+                                point_col.r(),
+                                point_col.g(),
+                                point_col.b(),
+                                120,
+                            ),
                         ),
                     );
 
@@ -3542,7 +4003,11 @@ impl AudioPreviewState {
             for ch_idx in 0..ch_count {
                 let (y_base, max_def, _col) = if ch_idx == 0 {
                     let half = if is_stereo { wave_h / 2.0 } else { wave_h };
-                    let base = if is_stereo { wave_rect.min.y + wave_h / 4.0 } else { wave_rect.center().y };
+                    let base = if is_stereo {
+                        wave_rect.min.y + wave_h / 4.0
+                    } else {
+                        wave_rect.center().y
+                    };
                     (base, half * 0.45, accent_base)
                 } else {
                     let half = wave_h / 2.0;
@@ -3551,7 +4016,10 @@ impl AudioPreviewState {
                 };
 
                 painter.line_segment(
-                    [Pos2::new(track_min_x, y_base), Pos2::new(track_max_x, y_base)],
+                    [
+                        Pos2::new(track_min_x, y_base),
+                        Pos2::new(track_max_x, y_base),
+                    ],
                     Stroke::new(1.0, border_frame),
                 );
 
@@ -3566,6 +4034,9 @@ impl AudioPreviewState {
                     let f_e = (((t_end * sample_rate) as usize) + 1).min(total_frames);
 
                     let (min_s, max_s, block_col) = analysis.query_peaks(ch_idx, f_s, f_e);
+                    let gain = 10.0_f32.powf(self.gain_at_time_db(t_mid) / 20.0);
+                    let min_s = (min_s * gain).clamp(-1.0, 1.0);
+                    let max_s = (max_s * gain).clamp(-1.0, 1.0);
 
                     let in_sel = self.is_time_selected(t_mid);
                     let bar_col = if in_sel {
@@ -3594,7 +4065,10 @@ impl AudioPreviewState {
                     let tx = time_to_x(t_trans);
                     // Draw vertical transient marker line
                     painter.line_segment(
-                        [Pos2::new(tx, wave_rect.min.y), Pos2::new(tx, wave_rect.max.y)],
+                        [
+                            Pos2::new(tx, wave_rect.min.y),
+                            Pos2::new(tx, wave_rect.max.y),
+                        ],
                         Stroke::new(1.0, transient_col),
                     );
                     // Draw transient marker pip/diamond at top of waveform
@@ -3686,23 +4160,47 @@ impl AudioPreviewState {
             if strip_rect.contains(mouse_pos) {
                 let mouse_t = x_to_time(mouse_pos.x);
                 let total_dur = self.duration_sec.max(0.01);
-                let col_idx = (((mouse_t / total_dur) * (analysis.note_strip_width as f32)).floor() as usize)
+                let col_idx = (((mouse_t / total_dur) * (analysis.note_strip_width as f32)).floor()
+                    as usize)
                     .min(analysis.note_strip_info.len().saturating_sub(1));
                 if let Some(info) = analysis.note_strip_info.get(col_idx) {
                     let text = if !info.chord_notes.is_empty() {
                         if info.chord_notes.len() > 1 {
-                            let names = info.chord_notes.iter().map(|n| n.note_name.as_str()).collect::<Vec<_>>().join(" + ");
-                            format!("🎵 Detected Chord: {} • Energy: {:.0}%", names, info.amplitude * 100.0)
+                            let names = info
+                                .chord_notes
+                                .iter()
+                                .map(|n| n.note_name.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" + ");
+                            format!(
+                                "🎵 Detected Chord: {} • Energy: {:.0}%",
+                                names,
+                                info.amplitude * 100.0
+                            )
                         } else {
-                            format!("🎵 Musical Note: {} ({:.1} Hz) • Energy: {:.0}%", info.note_name, info.frequency_hz, info.amplitude * 100.0)
+                            format!(
+                                "🎵 Musical Note: {} ({:.1} Hz) • Energy: {:.0}%",
+                                info.note_name,
+                                info.frequency_hz,
+                                info.amplitude * 100.0
+                            )
                         }
                     } else if info.active {
-                        format!("🎵 Musical Note: {} ({:.1} Hz) • Energy: {:.0}%", info.note_name, info.frequency_hz, info.amplitude * 100.0)
+                        format!(
+                            "🎵 Musical Note: {} ({:.1} Hz) • Energy: {:.0}%",
+                            info.note_name,
+                            info.frequency_hz,
+                            info.amplitude * 100.0
+                        )
                     } else {
                         "🎵 Musical Note: — (Silence / Below Threshold)".to_string()
                     };
                     egui::show_tooltip(ui.ctx(), response.id.with("note_tt"), |ui| {
-                        ui.label(egui::RichText::new(text).strong().color(crate::hex_to_c32(&palette.theme.f_high)));
+                        ui.label(
+                            egui::RichText::new(text)
+                                .strong()
+                                .color(crate::hex_to_c32(&palette.theme.f_high)),
+                        );
                     });
                 }
             }
@@ -3710,15 +4208,26 @@ impl AudioPreviewState {
 
         // 5. HORIZONTAL VIEWPORT SCROLLBAR / PAN TRACK
         painter.rect_filled(scroll_rect, Rounding::same(3.0), bg_frame);
-        painter.rect_stroke(scroll_rect, Rounding::same(3.0), Stroke::new(1.0, border_frame));
+        painter.rect_stroke(
+            scroll_rect,
+            Rounding::same(3.0),
+            Stroke::new(1.0, border_frame),
+        );
 
         let total_dur = self.duration_sec.max(0.01);
         let thumb_x = scroll_rect.min.x + (v_start / total_dur) * scroll_rect.width();
         let thumb_w = ((v_dur / total_dur) * scroll_rect.width()).clamp(16.0, scroll_rect.width());
-        let thumb_rect = Rect::from_min_size(Pos2::new(thumb_x, scroll_rect.min.y), Vec2::new(thumb_w, scroll_rect.height()));
+        let thumb_rect = Rect::from_min_size(
+            Pos2::new(thumb_x, scroll_rect.min.y),
+            Vec2::new(thumb_w, scroll_rect.height()),
+        );
 
         painter.rect_filled(thumb_rect, Rounding::same(3.0), border_frame);
-        painter.rect_stroke(thumb_rect, Rounding::same(3.0), Stroke::new(1.0, text_f_med));
+        painter.rect_stroke(
+            thumb_rect,
+            Rounding::same(3.0),
+            Stroke::new(1.0, text_f_med),
+        );
 
         // 6. UNIFIED SELECTION OVERLAY ACROSS ALL 3 VIEWS
         let view_top_y = ruler_rect.max.y;
@@ -3743,7 +4252,10 @@ impl AudioPreviewState {
 
                         if x_start >= track_min_x && x_start <= track_max_x {
                             painter.line_segment(
-                                [Pos2::new(x_start, ruler_rect.min.y), Pos2::new(x_start, view_bot_y)],
+                                [
+                                    Pos2::new(x_start, ruler_rect.min.y),
+                                    Pos2::new(x_start, view_bot_y),
+                                ],
                                 Stroke::new(2.5, accent_base),
                             );
                             painter.circle_filled(
@@ -3754,7 +4266,10 @@ impl AudioPreviewState {
                         }
                         if x_end >= track_min_x && x_end <= track_max_x {
                             painter.line_segment(
-                                [Pos2::new(x_end, ruler_rect.min.y), Pos2::new(x_end, view_bot_y)],
+                                [
+                                    Pos2::new(x_end, ruler_rect.min.y),
+                                    Pos2::new(x_end, view_bot_y),
+                                ],
                                 Stroke::new(2.5, accent_base),
                             );
                             painter.circle_filled(
@@ -3789,7 +4304,10 @@ impl AudioPreviewState {
 
                         if x_start >= track_min_x && x_start <= track_max_x {
                             painter.line_segment(
-                                [Pos2::new(x_start, ruler_rect.min.y), Pos2::new(x_start, view_bot_y)],
+                                [
+                                    Pos2::new(x_start, ruler_rect.min.y),
+                                    Pos2::new(x_start, view_bot_y),
+                                ],
                                 Stroke::new(stroke_width, handle_color),
                             );
                             painter.circle_filled(
@@ -3800,7 +4318,10 @@ impl AudioPreviewState {
                         }
                         if x_end >= track_min_x && x_end <= track_max_x {
                             painter.line_segment(
-                                [Pos2::new(x_end, ruler_rect.min.y), Pos2::new(x_end, view_bot_y)],
+                                [
+                                    Pos2::new(x_end, ruler_rect.min.y),
+                                    Pos2::new(x_end, view_bot_y),
+                                ],
                                 Stroke::new(stroke_width, handle_color),
                             );
                             painter.circle_filled(
@@ -3812,16 +4333,14 @@ impl AudioPreviewState {
 
                         // Badge on ruler top showing slice index "#1", "#2"
                         if x_start <= track_max_x && x_end >= track_min_x {
-                            let badge_x = (x_start + 4.0).max(track_min_x + 2.0).min(track_max_x - 30.0);
+                            let badge_x = (x_start + 4.0)
+                                .max(track_min_x + 2.0)
+                                .min(track_max_x - 30.0);
                             let badge_rect = Rect::from_min_size(
                                 Pos2::new(badge_x, ruler_rect.min.y + 3.0),
                                 Vec2::new(26.0, 14.0),
                             );
-                            let badge_bg = if is_active {
-                                border_frame
-                            } else {
-                                bg_frame
-                            };
+                            let badge_bg = if is_active { border_frame } else { bg_frame };
                             painter.rect_filled(badge_rect, Rounding::same(3.0), badge_bg);
                             painter.text(
                                 badge_rect.center(),
@@ -3840,7 +4359,10 @@ impl AudioPreviewState {
         let playhead_x = time_to_x(self.current_time_sec);
         if playhead_x >= track_min_x && playhead_x <= track_max_x {
             painter.line_segment(
-                [Pos2::new(playhead_x, ruler_rect.min.y), Pos2::new(playhead_x, view_bot_y)],
+                [
+                    Pos2::new(playhead_x, ruler_rect.min.y),
+                    Pos2::new(playhead_x, view_bot_y),
+                ],
                 Stroke::new(2.0, accent_playhead),
             );
             let head_top = Pos2::new(playhead_x, ruler_rect.min.y);
@@ -3859,7 +4381,10 @@ impl AudioPreviewState {
 
         // Precise Scrub Time Badge during ruler drag
         if matches!(self.active_drag, Some(DragAction::ScrubRuler)) {
-            let badge_pos = Pos2::new((playhead_x + 8.0).min(track_max_x - 65.0), ruler_rect.min.y + 26.0);
+            let badge_pos = Pos2::new(
+                (playhead_x + 8.0).min(track_max_x - 65.0),
+                ruler_rect.min.y + 26.0,
+            );
             let cur_m = (self.current_time_sec / 60.0) as u32;
             let cur_s = self.current_time_sec % 60.0;
             let badge_text = format!("{:02}:{:05.2}", cur_m, cur_s);
@@ -3927,8 +4452,8 @@ mod tests {
 
     #[test]
     fn audio_tool_modes_have_stable_toolbar_labels() {
-        assert_eq!(AudioToolMode::Inspect.label(), "🎵 Inspect & Slice");
-        assert_eq!(AudioToolMode::StemSeparation.label(), "✂ Stem Separation");
+        assert_eq!(AudioToolMode::Inspect.label(), "[I]nspect & Slice");
+        assert_eq!(AudioToolMode::StemSeparation.label(), "[S]tem Separation");
         assert_eq!(AudioToolMode::default(), AudioToolMode::Inspect);
     }
 
@@ -3940,7 +4465,10 @@ Separated track
 "#;
         let stems = parse_stem_manifest(output).expect("manifest should parse");
         assert_eq!(stems.len(), 4);
-        assert_eq!(stems[0], ("vocals".to_string(), PathBuf::from("/tmp/vocals.wav")));
+        assert_eq!(
+            stems[0],
+            ("vocals".to_string(), PathBuf::from("/tmp/vocals.wav"))
+        );
     }
 
     #[test]
@@ -3983,9 +4511,8 @@ Separated track
         assert!((transient_sensitivity_from_slider(1.0) - 1.0).abs() < tolerance);
 
         for sensitivity in [0.2, 0.25, 0.35, 0.6, 1.0] {
-            let round_trip = transient_sensitivity_from_slider(
-                transient_sensitivity_to_slider(sensitivity),
-            );
+            let round_trip =
+                transient_sensitivity_from_slider(transient_sensitivity_to_slider(sensitivity));
             assert!((round_trip - sensitivity).abs() < tolerance);
         }
     }
@@ -4015,24 +4542,42 @@ Separated track
         prepare_isolated_audacity_command(&mut command, workspace.path(), &stems).unwrap();
 
         let config = std::fs::read_to_string(
-            workspace.path().join("audacity-profile/config/audacity/audacity.cfg"),
-        ).unwrap();
+            workspace
+                .path()
+                .join("audacity-profile/config/audacity/audacity.cfg"),
+        )
+        .unwrap();
         assert!(config.contains("SkipEffectsScanAtStartup=1"));
         assert!(workspace.path().join("separated-stems.lof").is_file());
 
-        let environment = command.get_envs()
-            .map(|(key, value)| (
-                key.to_string_lossy().into_owned(),
-                value.unwrap().to_string_lossy().into_owned(),
-            ))
+        let environment = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.unwrap().to_string_lossy().into_owned(),
+                )
+            })
             .collect::<std::collections::HashMap<_, _>>();
         assert_eq!(
             environment.get("XDG_CONFIG_HOME"),
-            Some(&workspace.path().join("audacity-profile/config").to_string_lossy().into_owned()),
+            Some(
+                &workspace
+                    .path()
+                    .join("audacity-profile/config")
+                    .to_string_lossy()
+                    .into_owned()
+            ),
         );
         assert_eq!(
             environment.get("VST_PATH"),
-            Some(&workspace.path().join("audacity-profile/empty-plugins").to_string_lossy().into_owned()),
+            Some(
+                &workspace
+                    .path()
+                    .join("audacity-profile/empty-plugins")
+                    .to_string_lossy()
+                    .into_owned()
+            ),
         );
     }
 
@@ -4123,7 +4668,7 @@ Separated track
     fn test_mono_and_multichannel_handling() {
         use std::io::Write;
         let temp_dir = std::env::temp_dir();
-        
+
         // 1. Generate Mono WAV
         let mono_path = temp_dir.join(format!("test_mono_{}.wav", uuid::Uuid::new_v4()));
         {
@@ -4176,7 +4721,8 @@ Separated track
             f.write_all(&1u16.to_le_bytes()).unwrap();
             f.write_all(&num_channels.to_le_bytes()).unwrap();
             f.write_all(&sample_rate.to_le_bytes()).unwrap();
-            f.write_all(&(sample_rate * num_channels as u32 * 2).to_le_bytes()).unwrap();
+            f.write_all(&(sample_rate * num_channels as u32 * 2).to_le_bytes())
+                .unwrap();
             f.write_all(&(num_channels * 2).to_le_bytes()).unwrap();
             f.write_all(&bits.to_le_bytes()).unwrap();
             f.write_all(b"data").unwrap();
@@ -4188,7 +4734,8 @@ Separated track
             }
         }
 
-        let surround_analysis = compute_full_audio_analysis(&surround_path, 50).expect("analyze 5.1");
+        let surround_analysis =
+            compute_full_audio_analysis(&surround_path, 50).expect("analyze 5.1");
         assert_eq!(surround_analysis.channels, 6);
         assert!(surround_analysis.channels > 2); // Triggers warning badge in UI
         assert!(surround_analysis.ch2_samples.is_some()); // Displays L and R
@@ -4365,7 +4912,10 @@ Separated track
         assert_eq!(filename, "MyTrack_00m04s500ms_01s250ms.wav");
 
         let mono_left_name = format_sample_filename("DrumBeat", 75.0, 2.0, "_left_mono", "wav");
-        assert_eq!(mono_left_name, "DrumBeat_01m15s000ms_02s000ms_left_mono.wav");
+        assert_eq!(
+            mono_left_name,
+            "DrumBeat_01m15s000ms_02s000ms_left_mono.wav"
+        );
     }
 
     #[test]
@@ -4384,7 +4934,10 @@ Separated track
             state.open_save_dialog();
             assert!(state.save_dialog_open);
             assert_eq!(state.save_filenames.len(), 1);
-            assert_eq!(state.save_filenames[0], "TAPE_NOISE_04_00m01s000ms_01s500ms.wav");
+            assert_eq!(
+                state.save_filenames[0],
+                "TAPE_NOISE_04_00m01s000ms_01s500ms.wav"
+            );
 
             let res = state.execute_save(1.0);
             assert!(res.is_ok());
@@ -4399,8 +4952,14 @@ Separated track
             state.open_save_dialog();
             assert!(state.save_dialog_open);
             assert_eq!(state.save_filenames.len(), 2);
-            assert_eq!(state.save_filenames[0], "TAPE_NOISE_04_00m00s500ms_00s700ms.wav");
-            assert_eq!(state.save_filenames[1], "TAPE_NOISE_04_00m02s000ms_00s800ms.wav");
+            assert_eq!(
+                state.save_filenames[0],
+                "TAPE_NOISE_04_00m00s500ms_00s700ms.wav"
+            );
+            assert_eq!(
+                state.save_filenames[1],
+                "TAPE_NOISE_04_00m02s000ms_00s800ms.wav"
+            );
 
             let res_multi = state.execute_save(2.0);
             assert!(res_multi.is_ok());

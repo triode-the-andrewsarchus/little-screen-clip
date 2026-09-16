@@ -5,4 +5,4 @@
 
 pub mod device;
 
-pub use device::{DriverError, TrofeoDriver, DeviceInfo, PID_TROFEO, VID_WINBOND};
+pub use device::{DeviceInfo, DriverError, PID_TROFEO, TrofeoDriver, VID_WINBOND};

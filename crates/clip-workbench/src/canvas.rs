@@ -3,18 +3,20 @@
 //! Provides interactive drag-and-drop node graph design, wire connections, parameter tweaking,
 //! recipe loading/saving, and live graph execution.
 
+use crate::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, Id, Pos2, Rect, Rounding, Stroke, Vec2};
+use little_clip_core::SlotManager;
 use little_clip_core::config::AppConfig;
 use little_clip_core::theme::AppPalette;
-use little_clip_core::SlotManager;
-use crate::{hex_to_c32, hex_to_c32_alpha};
+use little_clip_ops::PipelineExecutor;
 use little_clip_ops::pipeline::catalog::{instantiate_template, search_templates};
 use little_clip_ops::pipeline::recipes::{
     create_script_file_scaffold, get_recipes_dir, load_all_recipes, make_basic_template_recipe,
     make_pad_and_caption_recipe, save_recipe, sync_recipe_script_headers,
 };
-use little_clip_ops::pipeline::types::{Connection, NodeGraph, NodeInstance, NodeKind, PortType, Recipe};
-use little_clip_ops::PipelineExecutor;
+use little_clip_ops::pipeline::types::{
+    Connection, NodeGraph, NodeInstance, NodeKind, PortType, Recipe,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -72,7 +74,13 @@ impl NodeCanvasState {
 
         let safe_name: String = sel_name
             .chars()
-            .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect();
         let path = get_recipes_dir().join(format!("{}.yaml", safe_name.to_lowercase()));
         let current_recipe_file = if path.exists() { Some(path) } else { None };
@@ -128,7 +136,10 @@ impl NodeCanvasState {
         self.available_recipes = load_all_recipes();
     }
 
-    pub fn run_current_graph(&mut self, slot_mgr: &SlotManager) -> Option<little_clip_ops::PipelineExecutionResult> {
+    pub fn run_current_graph(
+        &mut self,
+        slot_mgr: &SlotManager,
+    ) -> Option<little_clip_ops::PipelineExecutionResult> {
         let start = Instant::now();
         let executor = PipelineExecutor::new(&self.graph, slot_mgr);
         match executor.execute() {
@@ -176,11 +187,15 @@ impl NodeCanvasState {
                 }
             } else if cmd && ui.input(|i| i.key_pressed(egui::Key::Y)) {
                 self.redo();
-            } else if ui.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+            } else if ui
+                .input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+            {
                 if let Some(sel_id) = self.selected_node {
                     self.snapshot_undo();
                     self.graph.nodes.retain(|n| n.id != sel_id);
-                    self.graph.connections.retain(|c| c.from_node != sel_id && c.to_node != sel_id);
+                    self.graph
+                        .connections
+                        .retain(|c| c.from_node != sel_id && c.to_node != sel_id);
                     self.selected_node = None;
                     self.status_message = Some(("Deleted node".to_string(), false));
                 }
@@ -193,10 +208,8 @@ impl NodeCanvasState {
         ui.separator();
 
         // Main Canvas Interactive Area
-        let (canvas_rect, response) = ui.allocate_exact_size(
-            ui.available_size(),
-            egui::Sense::click_and_drag(),
-        );
+        let (canvas_rect, response) =
+            ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
 
         // Canvas Pan & Zoom
         if response.dragged_by(egui::PointerButton::Secondary)
@@ -217,24 +230,53 @@ impl NodeCanvasState {
         let painter = ui.painter_at(canvas_rect);
 
         // 1. Draw Background Grid
-        render_grid(&painter, canvas_rect, self.graph.pan, self.graph.zoom, palette);
+        render_grid(
+            &painter,
+            canvas_rect,
+            self.graph.pan,
+            self.graph.zoom,
+            palette,
+        );
 
         // 2. Compute Node Screen Rectangles
         let mut node_screen_rects: HashMap<Uuid, Rect> = HashMap::new();
         for node in &self.graph.nodes {
-            let screen_pos = world_to_screen(canvas_rect, self.graph.pan, self.graph.zoom, Pos2::new(node.pos[0], node.pos[1]));
+            let screen_pos = world_to_screen(
+                canvas_rect,
+                self.graph.pan,
+                self.graph.zoom,
+                Pos2::new(node.pos[0], node.pos[1]),
+            );
             let width = 250.0 * self.graph.zoom;
             let height = estimate_node_height(node) * self.graph.zoom;
-            node_screen_rects.insert(node.id, Rect::from_min_size(screen_pos, Vec2::new(width, height)));
+            node_screen_rects.insert(
+                node.id,
+                Rect::from_min_size(screen_pos, Vec2::new(width, height)),
+            );
         }
 
         // 3. Draw Existing Connection Cables
         for conn in &self.graph.connections {
-            if let (Some(&from_rect), Some(&to_rect)) =
-                (node_screen_rects.get(&conn.from_node), node_screen_rects.get(&conn.to_node))
-            {
-                let from_pos = get_pin_pos(from_rect, &self.graph.nodes, conn.from_node, &conn.from_pin, true, self.graph.zoom);
-                let to_pos = get_pin_pos(to_rect, &self.graph.nodes, conn.to_node, &conn.to_pin, false, self.graph.zoom);
+            if let (Some(&from_rect), Some(&to_rect)) = (
+                node_screen_rects.get(&conn.from_node),
+                node_screen_rects.get(&conn.to_node),
+            ) {
+                let from_pos = get_pin_pos(
+                    from_rect,
+                    &self.graph.nodes,
+                    conn.from_node,
+                    &conn.from_pin,
+                    true,
+                    self.graph.zoom,
+                );
+                let to_pos = get_pin_pos(
+                    to_rect,
+                    &self.graph.nodes,
+                    conn.to_node,
+                    &conn.to_pin,
+                    false,
+                    self.graph.zoom,
+                );
                 let cable_color = hex_to_c32(&palette.harmonies.base);
                 draw_bezier_cable(&painter, from_pos, to_pos, cable_color, self.graph.zoom);
             }
@@ -253,7 +295,11 @@ impl NodeCanvasState {
             let screen_rect = *node_screen_rects.get(&node_id).unwrap();
 
             // Check if node is dragged
-            let node_resp = ui.interact(screen_rect, ui.make_persistent_id(node_id), egui::Sense::click_and_drag());
+            let node_resp = ui.interact(
+                screen_rect,
+                ui.make_persistent_id(node_id),
+                egui::Sense::click_and_drag(),
+            );
             if node_resp.drag_started() {
                 node_drag_started = true;
             }
@@ -265,7 +311,9 @@ impl NodeCanvasState {
             if node_resp.clicked() {
                 self.selected_node = Some(node_id);
             }
-            if matches!(node.kind, NodeKind::PythonScript | NodeKind::BashCommand) && node_resp.double_clicked() {
+            if matches!(node.kind, NodeKind::PythonScript | NodeKind::BashCommand)
+                && node_resp.double_clicked()
+            {
                 let script_file = node.props.get("script_file").cloned().unwrap_or_else(|| {
                     let is_py = matches!(node.kind, NodeKind::PythonScript);
                     let ext = if is_py { "py" } else { "sh" };
@@ -306,7 +354,9 @@ impl NodeCanvasState {
             let from_node_inst = self.graph.nodes.iter().find(|n| n.id == from_node);
             let from_port_type = from_node_inst.and_then(|n| {
                 let pins = if is_out { &n.outputs } else { &n.inputs };
-                pins.iter().find(|p| p.name.eq_ignore_ascii_case(from_pin)).map(|p| p.port_type)
+                pins.iter()
+                    .find(|p| p.name.eq_ignore_ascii_case(from_pin))
+                    .map(|p| p.port_type)
             });
 
             let mut min_dist = (32.0 * zoom).clamp(22.0, 48.0);
@@ -316,7 +366,13 @@ impl NodeCanvasState {
                         if let Some(node) = self.graph.nodes.iter().find(|n| n.id == *to_node) {
                             let target_pins = if is_out { &node.inputs } else { &node.outputs };
                             for (p_idx, target_pin) in target_pins.iter().enumerate() {
-                                let pin_pos = get_pin_pos_by_idx(to_rect, target_pins.len(), p_idx, !is_out, zoom);
+                                let pin_pos = get_pin_pos_by_idx(
+                                    to_rect,
+                                    target_pins.len(),
+                                    p_idx,
+                                    !is_out,
+                                    zoom,
+                                );
                                 let dist = mouse_pos.distance(pin_pos);
                                 if dist < min_dist {
                                     min_dist = dist;
@@ -340,7 +396,14 @@ impl NodeCanvasState {
                 }
 
                 if let Some(&node_rect) = node_screen_rects.get(&from_node) {
-                    let source_pin_pos = get_pin_pos(node_rect, &self.graph.nodes, from_node, from_pin, is_out, zoom);
+                    let source_pin_pos = get_pin_pos(
+                        node_rect,
+                        &self.graph.nodes,
+                        from_node,
+                        from_pin,
+                        is_out,
+                        zoom,
+                    );
                     let time = ui.input(|i| i.time);
                     draw_active_cable(
                         &painter,
@@ -395,16 +458,26 @@ impl NodeCanvasState {
 
         if let Some((node_id, ref pin_name, is_output)) = socket_to_disconnect {
             let had_connections = if is_output {
-                self.graph.connections.iter().any(|c| c.from_node == node_id && c.from_pin == *pin_name)
+                self.graph
+                    .connections
+                    .iter()
+                    .any(|c| c.from_node == node_id && c.from_pin == *pin_name)
             } else {
-                self.graph.connections.iter().any(|c| c.to_node == node_id && c.to_pin == *pin_name)
+                self.graph
+                    .connections
+                    .iter()
+                    .any(|c| c.to_node == node_id && c.to_pin == *pin_name)
             };
             if had_connections {
                 self.snapshot_undo();
                 if is_output {
-                    self.graph.connections.retain(|c| !(c.from_node == node_id && c.from_pin == *pin_name));
+                    self.graph
+                        .connections
+                        .retain(|c| !(c.from_node == node_id && c.from_pin == *pin_name));
                 } else {
-                    self.graph.connections.retain(|c| !(c.to_node == node_id && c.to_pin == *pin_name));
+                    self.graph
+                        .connections
+                        .retain(|c| !(c.to_node == node_id && c.to_pin == *pin_name));
                 }
                 self.status_message = Some(("✔ Deleted wire".to_string(), false));
             }
@@ -423,10 +496,13 @@ impl NodeCanvasState {
 
         // Context Menu / Catalog on Right Click in empty space
         if response.secondary_clicked() && socket_to_disconnect.is_none() {
-            let mouse_pos = ui.input(|i| i.pointer.hover_pos()).unwrap_or(canvas_rect.center());
+            let mouse_pos = ui
+                .input(|i| i.pointer.hover_pos())
+                .unwrap_or(canvas_rect.center());
             let clicked_on_node = node_screen_rects.values().any(|r| r.contains(mouse_pos));
             if !clicked_on_node {
-                let world_pos = screen_to_world(canvas_rect, self.graph.pan, self.graph.zoom, mouse_pos);
+                let world_pos =
+                    screen_to_world(canvas_rect, self.graph.pan, self.graph.zoom, mouse_pos);
                 self.spawn_node_pos = Some([world_pos.x, world_pos.y]);
                 self.catalog_open = true;
                 self.catalog_search.clear();
@@ -444,25 +520,29 @@ impl NodeCanvasState {
                 let _ = create_script_file_scaffold(&self.selected_recipe_name, is_py);
             }
 
-            match std::process::Command::new(&editor).arg(&script_path).spawn() {
+            match std::process::Command::new(&editor)
+                .arg(&script_path)
+                .spawn()
+            {
                 Ok(_) => {
-                    self.status_message = Some((
-                        format!("✔ Opened {} in {}", fname, editor),
-                        false,
-                    ));
+                    self.status_message =
+                        Some((format!("✔ Opened {} in {}", fname, editor), false));
                 }
                 Err(e) => {
                     if editor != "xdg-open" {
-                        let _ = std::process::Command::new("xdg-open").arg(&script_path).spawn();
+                        let _ = std::process::Command::new("xdg-open")
+                            .arg(&script_path)
+                            .spawn();
                         self.status_message = Some((
-                            format!("Opened {} via xdg-open (failed to launch '{}': {})", fname, editor, e),
+                            format!(
+                                "Opened {} via xdg-open (failed to launch '{}': {})",
+                                fname, editor, e
+                            ),
                             false,
                         ));
                     } else {
-                        self.status_message = Some((
-                            format!("Error launching editor '{}': {}", editor, e),
-                            true,
-                        ));
+                        self.status_message =
+                            Some((format!("Error launching editor '{}': {}", editor, e), true));
                     }
                 }
             }
@@ -508,8 +588,7 @@ impl NodeCanvasState {
             // Group 2: Recipe Management
             if ui
                 .button(
-                    egui::RichText::new("📄 New Recipe")
-                        .color(hex_to_c32(&palette.theme.f_med)),
+                    egui::RichText::new("📄 New Recipe").color(hex_to_c32(&palette.theme.f_med)),
                 )
                 .on_hover_text("Start a fresh recipe from the basic template")
                 .clicked()
@@ -552,7 +631,13 @@ impl NodeCanvasState {
                 let safe: String = r
                     .name
                     .chars()
-                    .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+                    .map(|c| {
+                        if c.is_alphanumeric() || c == '_' || c == '-' {
+                            c
+                        } else {
+                            '_'
+                        }
+                    })
                     .collect();
                 let p = get_recipes_dir().join(format!("{}.yaml", safe.to_lowercase()));
                 self.current_recipe_file = if p.exists() { Some(p) } else { None };
@@ -561,15 +646,18 @@ impl NodeCanvasState {
 
             // Direct Save button
             if ui
-                .button(
-                    egui::RichText::new("💾 Save")
-                        .color(hex_to_c32(&palette.theme.f_med)),
-                )
+                .button(egui::RichText::new("💾 Save").color(hex_to_c32(&palette.theme.f_med)))
                 .on_hover_text("Save changes to this recipe")
                 .clicked()
             {
-                if self.current_recipe_file.is_some() && self.selected_recipe_name != "Untitled Recipe" {
-                    let _ = sync_recipe_script_headers(&mut self.graph, &self.selected_recipe_name, false);
+                if self.current_recipe_file.is_some()
+                    && self.selected_recipe_name != "Untitled Recipe"
+                {
+                    let _ = sync_recipe_script_headers(
+                        &mut self.graph,
+                        &self.selected_recipe_name,
+                        false,
+                    );
                     let recipe = Recipe {
                         name: self.selected_recipe_name.clone(),
                         description: "Custom user recipe".to_string(),
@@ -599,8 +687,7 @@ impl NodeCanvasState {
             // Save As button
             if ui
                 .button(
-                    egui::RichText::new("💾 Save As...")
-                        .color(hex_to_c32(&palette.theme.f_med)),
+                    egui::RichText::new("💾 Save As...").color(hex_to_c32(&palette.theme.f_med)),
                 )
                 .on_hover_text("Save copy under a new recipe name")
                 .clicked()
@@ -649,10 +736,7 @@ impl NodeCanvasState {
 
             // Clear button
             if ui
-                .button(
-                    egui::RichText::new("🗑 Clear")
-                        .color(hex_to_c32(&palette.theme.f_med)),
-                )
+                .button(egui::RichText::new("🗑 Clear").color(hex_to_c32(&palette.theme.f_med)))
                 .on_hover_text("Clear all nodes from the canvas")
                 .clicked()
             {
@@ -732,16 +816,19 @@ impl NodeCanvasState {
                                     .color(hex_to_c32(&palette.harmonies.base))
                                     .strong(),
                             );
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let close_btn = crate::danger_button(
-                                    "✕",
-                                    hex_to_c32(&palette.undo_card_bg),
-                                    palette,
-                                );
-                                if ui.add(close_btn).clicked() {
-                                    self.catalog_open = false;
-                                }
-                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let close_btn = crate::danger_button(
+                                        "✕",
+                                        hex_to_c32(&palette.undo_card_bg),
+                                        palette,
+                                    );
+                                    if ui.add(close_btn).clicked() {
+                                        self.catalog_open = false;
+                                    }
+                                },
+                            );
                         });
 
                         ui.add_space(8.0);
@@ -749,8 +836,9 @@ impl NodeCanvasState {
                         // Search box (autofocused)
                         let resp = ui.add_sized(
                             [ui.available_width(), 28.0],
-                            egui::TextEdit::singleline(&mut self.catalog_search)
-                                .hint_text("Search nodes or tags (e.g. caption, frame, normalize, python)..."),
+                            egui::TextEdit::singleline(&mut self.catalog_search).hint_text(
+                                "Search nodes or tags (e.g. caption, frame, normalize, python)...",
+                            ),
                         );
                         resp.request_focus();
 
@@ -759,7 +847,8 @@ impl NodeCanvasState {
                         // Category Pills
                         ui.horizontal(|ui| {
                             let categories = [
-                                "All", "Source", "Text", "Image", "Audio", "Files", "Script", "Sink",
+                                "All", "Source", "Text", "Image", "Audio", "Files", "Script",
+                                "Sink",
                             ];
                             for &cat in &categories {
                                 let is_sel = self.catalog_category == cat;
@@ -773,10 +862,8 @@ impl NodeCanvasState {
                         ui.separator();
 
                         // Filtered Node List
-                        let filtered = search_templates(
-                            &self.catalog_search,
-                            Some(&self.catalog_category),
-                        );
+                        let filtered =
+                            search_templates(&self.catalog_search, Some(&self.catalog_category));
 
                         egui::ScrollArea::vertical()
                             .max_height(260.0)
@@ -802,12 +889,17 @@ impl NodeCanvasState {
                                                         .strong(),
                                                 );
                                                 ui.label(
-                                                    egui::RichText::new(format!("[{}]", template.category))
-                                                        .color(hex_to_c32(&palette.theme.f_low))
-                                                        .small(),
+                                                    egui::RichText::new(format!(
+                                                        "[{}]",
+                                                        template.category
+                                                    ))
+                                                    .color(hex_to_c32(&palette.theme.f_low))
+                                                    .small(),
                                                 );
                                                 ui.with_layout(
-                                                    egui::Layout::right_to_left(egui::Align::Center),
+                                                    egui::Layout::right_to_left(
+                                                        egui::Align::Center,
+                                                    ),
                                                     |ui| {
                                                         let add_btn = crate::action_button(
                                                             "+ Add",
@@ -815,25 +907,56 @@ impl NodeCanvasState {
                                                             palette,
                                                         );
                                                         if ui.add(add_btn).clicked() {
-                                                            let spawn_pos = self.spawn_node_pos.take().unwrap_or_else(|| {
-                                                                let center_world = screen_to_world(parent_rect, self.graph.pan, self.graph.zoom, parent_rect.center());
-                                                                [center_world.x, center_world.y]
-                                                            });
+                                                            let spawn_pos = self
+                                                                .spawn_node_pos
+                                                                .take()
+                                                                .unwrap_or_else(|| {
+                                                                    let center_world =
+                                                                        screen_to_world(
+                                                                            parent_rect,
+                                                                            self.graph.pan,
+                                                                            self.graph.zoom,
+                                                                            parent_rect.center(),
+                                                                        );
+                                                                    [center_world.x, center_world.y]
+                                                                });
                                                             self.snapshot_undo();
                                                             let mut new_node = instantiate_template(
                                                                 template, spawn_pos,
                                                             );
 
                                                             // Generate script scaffolding for python / bash script nodes
-                                                            if template.kind == NodeKind::PythonScript {
-                                                                if let Ok(fname) = create_script_file_scaffold(&self.selected_recipe_name, true) {
-                                                                    new_node.props.insert("script_file".to_string(), fname);
+                                                            if template.kind
+                                                                == NodeKind::PythonScript
+                                                            {
+                                                                if let Ok(fname) =
+                                                                    create_script_file_scaffold(
+                                                                        &self.selected_recipe_name,
+                                                                        true,
+                                                                    )
+                                                                {
+                                                                    new_node.props.insert(
+                                                                        "script_file".to_string(),
+                                                                        fname,
+                                                                    );
                                                                     new_node.props.remove("script");
                                                                 }
-                                                            } else if template.kind == NodeKind::BashCommand {
-                                                                if let Ok(fname) = create_script_file_scaffold(&self.selected_recipe_name, false) {
-                                                                    new_node.props.insert("script_file".to_string(), fname);
-                                                                    new_node.props.remove("command");
+                                                            } else if template.kind
+                                                                == NodeKind::BashCommand
+                                                            {
+                                                                if let Ok(fname) =
+                                                                    create_script_file_scaffold(
+                                                                        &self.selected_recipe_name,
+                                                                        false,
+                                                                    )
+                                                                {
+                                                                    new_node.props.insert(
+                                                                        "script_file".to_string(),
+                                                                        fname,
+                                                                    );
+                                                                    new_node
+                                                                        .props
+                                                                        .remove("command");
                                                                 }
                                                             }
 
@@ -875,11 +998,19 @@ impl NodeCanvasState {
                 resp.request_focus();
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
-                    let save_btn = crate::action_button("Save", hex_to_c32(&palette.harmonies.base), palette);
-                    if ui.add_enabled(!self.save_name.trim().is_empty(), save_btn).clicked() {
+                    let save_btn =
+                        crate::action_button("Save", hex_to_c32(&palette.harmonies.base), palette);
+                    if ui
+                        .add_enabled(!self.save_name.trim().is_empty(), save_btn)
+                        .clicked()
+                    {
                         let new_name = self.save_name.trim().to_string();
                         let duplicate_scripts = self.save_is_save_as;
-                        let _ = sync_recipe_script_headers(&mut self.graph, &new_name, duplicate_scripts);
+                        let _ = sync_recipe_script_headers(
+                            &mut self.graph,
+                            &new_name,
+                            duplicate_scripts,
+                        );
 
                         let recipe = Recipe {
                             name: new_name.clone(),
@@ -891,21 +1022,24 @@ impl NodeCanvasState {
 
                         match save_recipe(&recipe) {
                             Ok(path) => {
-                                self.status_message = Some((
-                                    format!("✔ Saved recipe '{}'", recipe.name),
-                                    false,
-                                ));
+                                self.status_message =
+                                    Some((format!("✔ Saved recipe '{}'", recipe.name), false));
                                 self.current_recipe_file = Some(path);
                                 self.selected_recipe_name = recipe.name;
                                 self.reload_recipes();
                             }
                             Err(e) => {
-                                self.status_message = Some((format!("Error saving recipe: {}", e), true));
+                                self.status_message =
+                                    Some((format!("Error saving recipe: {}", e), true));
                             }
                         }
                         self.save_dialog_open = false;
                     }
-                    let cancel_btn = crate::secondary_button("Cancel", hex_to_c32(&palette.theme.b_med), palette);
+                    let cancel_btn = crate::secondary_button(
+                        "Cancel",
+                        hex_to_c32(&palette.theme.b_med),
+                        palette,
+                    );
                     if ui.add(cancel_btn).clicked() {
                         self.save_dialog_open = false;
                     }
@@ -1016,7 +1150,12 @@ fn draw_active_cable(
             Color32::TRANSPARENT,
             Stroke::new(
                 glow_stroke,
-                Color32::from_rgba_unmultiplied(main_color.r(), main_color.g(), main_color.b(), glow_alpha),
+                Color32::from_rgba_unmultiplied(
+                    main_color.r(),
+                    main_color.g(),
+                    main_color.b(),
+                    glow_alpha,
+                ),
             ),
         ));
 
@@ -1040,7 +1179,12 @@ fn draw_active_cable(
         for i in 0..4 {
             let t = ((time * 1.5 + i as f64 * 0.25) % 1.0) as f32;
             let pt = eval_cubic_bezier(p0, p1, p2, p3, t);
-            let spark_glow = Color32::from_rgba_unmultiplied(main_color.r(), main_color.g(), main_color.b(), 120);
+            let spark_glow = Color32::from_rgba_unmultiplied(
+                main_color.r(),
+                main_color.g(),
+                main_color.b(),
+                120,
+            );
             painter.circle_filled(pt, 5.0 * zoom, spark_glow);
             painter.circle_filled(pt, 2.5 * zoom, Color32::WHITE);
         }
@@ -1056,7 +1200,12 @@ fn draw_active_cable(
                 r,
                 Stroke::new(
                     1.8 * zoom,
-                    Color32::from_rgba_unmultiplied(main_color.r(), main_color.g(), main_color.b(), alpha),
+                    Color32::from_rgba_unmultiplied(
+                        main_color.r(),
+                        main_color.g(),
+                        main_color.b(),
+                        alpha,
+                    ),
                 ),
             );
         }
@@ -1115,7 +1264,11 @@ fn draw_active_cable(
             Stroke::new(1.5 * zoom, main_color),
         );
         // Text inside badge
-        painter.galley(badge_rect.min + padding, galley, hex_to_c32(&palette.theme.f_high));
+        painter.galley(
+            badge_rect.min + padding,
+            galley,
+            hex_to_c32(&palette.theme.f_high),
+        );
     } else {
         // Not snapped: normal smooth dragging cable
         let cable_color = hex_to_c32(&palette.harmonies.base);
@@ -1131,13 +1284,7 @@ fn draw_active_cable(
     }
 }
 
-fn draw_bezier_cable(
-    painter: &egui::Painter,
-    p0: Pos2,
-    p3: Pos2,
-    color: Color32,
-    zoom: f32,
-) {
+fn draw_bezier_cable(painter: &egui::Painter, p0: Pos2, p3: Pos2, color: Color32, zoom: f32) {
     let dx = ((p3.x - p0.x).abs() * 0.5).max(40.0 * zoom);
     let p1 = Pos2::new(p0.x + dx, p0.y);
     let p2 = Pos2::new(p3.x - dx, p3.y);
@@ -1354,7 +1501,11 @@ fn render_node_card(
                 )
                 .fill(file_fill);
 
-                if ui.add(file_btn).on_hover_text("Click to open script in text editor").clicked() {
+                if ui
+                    .add(file_btn)
+                    .on_hover_text("Click to open script in text editor")
+                    .clicked()
+                {
                     *script_to_open = Some(script_file.clone());
                 }
             });
@@ -1380,8 +1531,7 @@ fn render_node_card(
                             .small(),
                     );
                     ui.add(
-                        egui::TextEdit::singleline(val)
-                            .desired_width(ui.available_width() * 0.95),
+                        egui::TextEdit::singleline(val).desired_width(ui.available_width() * 0.95),
                     );
                 });
             }
@@ -1421,7 +1571,8 @@ fn render_socket(
 ) {
     let radius = 5.5 * zoom;
     let base_col = port_type.color_rgba();
-    let base_col = Color32::from_rgba_unmultiplied(base_col[0], base_col[1], base_col[2], base_col[3]);
+    let base_col =
+        Color32::from_rgba_unmultiplied(base_col[0], base_col[1], base_col[2], base_col[3]);
 
     let resp = ui.interact(
         Rect::from_center_size(pos, Vec2::splat(radius * 3.0)),
@@ -1440,11 +1591,7 @@ fn render_socket(
 
     if resp.hovered() {
         painter.circle_filled(pos, radius * 1.35, Color32::WHITE);
-        painter.circle_stroke(
-            pos,
-            radius * 1.35,
-            Stroke::new(2.0, base_col),
-        );
+        painter.circle_stroke(pos, radius * 1.35, Stroke::new(2.0, base_col));
     } else {
         painter.circle_filled(pos, radius, base_col);
         painter.circle_stroke(
@@ -1493,8 +1640,15 @@ fn get_pin_pos(
     zoom: f32,
 ) -> Pos2 {
     if let Some(node) = nodes.iter().find(|n| n.id == node_id) {
-        let pins = if is_output { &node.outputs } else { &node.inputs };
-        if let Some(idx) = pins.iter().position(|p| p.name.eq_ignore_ascii_case(pin_name)) {
+        let pins = if is_output {
+            &node.outputs
+        } else {
+            &node.inputs
+        };
+        if let Some(idx) = pins
+            .iter()
+            .position(|p| p.name.eq_ignore_ascii_case(pin_name))
+        {
             return get_pin_pos_by_idx(node_rect, pins.len(), idx, is_output, zoom);
         }
     }
@@ -1515,7 +1669,11 @@ fn get_pin_pos_by_idx(
     let header_h = 28.0 * zoom;
     let pin_row_h = 24.0 * zoom;
     let y = node_rect.min.y + header_h + 8.0 * zoom + (idx as f32 * pin_row_h) + (pin_row_h * 0.5);
-    let x = if is_output { node_rect.max.x } else { node_rect.min.x };
+    let x = if is_output {
+        node_rect.max.x
+    } else {
+        node_rect.min.x
+    };
     Pos2::new(x, y)
 }
 
@@ -1577,7 +1735,8 @@ mod tests {
 
         // 1. Mutate: add a node
         state.snapshot_undo();
-        let t_const = little_clip_ops::pipeline::catalog::find_template("source_const_text").unwrap();
+        let t_const =
+            little_clip_ops::pipeline::catalog::find_template("source_const_text").unwrap();
         let new_node = instantiate_template(t_const, [100.0, 100.0]);
         let new_node_id = new_node.id;
         state.graph.nodes.push(new_node);

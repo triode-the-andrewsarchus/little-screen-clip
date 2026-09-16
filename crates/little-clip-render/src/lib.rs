@@ -4,8 +4,8 @@
 //! to JPEG or direct tiny-skia Pixmap buffers.
 
 use fontdue::{Font, FontSettings};
-use image::{codecs::jpeg::JpegEncoder, ExtendedColorType};
-use little_clip_core::config::{parse_hex_color, AppConfig};
+use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
+use little_clip_core::config::{AppConfig, parse_hex_color};
 use little_clip_core::theme::AppPalette;
 use little_clip_core::{ClipItem, ClipPayload, SlotId, SlotManager};
 use std::path::Path;
@@ -177,7 +177,15 @@ impl ScreenRenderer {
     }
 
     /// Draws a subtle theme-aware checkerboard pattern for transparent image previews.
-    pub fn draw_checkerboard_pattern(&self, pixmap: &mut Pixmap, x: f32, y: f32, w: f32, h: f32, cell_size: f32) {
+    pub fn draw_checkerboard_pattern(
+        &self,
+        pixmap: &mut Pixmap,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        cell_size: f32,
+    ) {
         let c1 = self.color_from_hex(&self.palette.theme.b_low);
         let c2 = self.color_from_hex(&self.palette.theme.b_med);
         let mut p1 = Paint::default();
@@ -191,11 +199,15 @@ impl ScreenRenderer {
         for r in 0..rows {
             let cy = y + r as f32 * cell_size;
             let ch = (h - (r as f32 * cell_size)).min(cell_size);
-            if ch <= 0.0 { break; }
+            if ch <= 0.0 {
+                break;
+            }
             for c in 0..cols {
                 let cx = x + c as f32 * cell_size;
                 let cw = (w - (c as f32 * cell_size)).min(cell_size);
-                if cw <= 0.0 { break; }
+                if cw <= 0.0 {
+                    break;
+                }
                 if let Some(rect) = Rect::from_xywh(cx, cy, cw, ch) {
                     let paint = if (r + c) % 2 == 0 { &p1 } else { &p2 };
                     pixmap.fill_rect(rect, paint, Transform::identity(), None);
@@ -205,7 +217,9 @@ impl ScreenRenderer {
     }
 
     fn load_fonts() -> (Option<Font>, Option<Font>, Option<Font>, Option<Font>) {
-        let home_font_dir = std::env::var("HOME").ok().map(|h| format!("{}/.local/share/fonts", h));
+        let home_font_dir = std::env::var("HOME")
+            .ok()
+            .map(|h| format!("{}/.local/share/fonts", h));
         let home_fonts_legacy = std::env::var("HOME").ok().map(|h| format!("{}/.fonts", h));
 
         let mut regular_candidates = vec![
@@ -320,38 +334,125 @@ impl ScreenRenderer {
         pixmap.fill(Color::from_rgba8(bg_r, bg_g, bg_b, bg_a));
 
         // 1. [Undo] (x: 0, w: 240)
-        self.draw_slot_card(&mut pixmap, manager, SlotId::Undo, 0, 0, 240, SCREEN_HEIGHT, false);
+        self.draw_slot_card(
+            &mut pixmap,
+            manager,
+            SlotId::Undo,
+            0,
+            0,
+            240,
+            SCREEN_HEIGHT,
+            false,
+        );
 
         // 2. [Left hand] (x: 240, w: 360) - Hero Left
-        self.draw_slot_card(&mut pixmap, manager, SlotId::LeftHand, 240, 0, 360, SCREEN_HEIGHT, true);
+        self.draw_slot_card(
+            &mut pixmap,
+            manager,
+            SlotId::LeftHand,
+            240,
+            0,
+            360,
+            SCREEN_HEIGHT,
+            true,
+        );
 
         // 3. [L prior(1)] (x: 600, w: 240)
-        self.draw_slot_card(&mut pixmap, manager, SlotId::LeftPrior1, 600, 0, 240, SCREEN_HEIGHT, false);
+        self.draw_slot_card(
+            &mut pixmap,
+            manager,
+            SlotId::LeftPrior1,
+            600,
+            0,
+            240,
+            SCREEN_HEIGHT,
+            false,
+        );
 
         // 4. [L prior(2)] (x: 840, w: 240)
-        self.draw_slot_card(&mut pixmap, manager, SlotId::LeftPrior2, 840, 0, 240, SCREEN_HEIGHT, false);
+        self.draw_slot_card(
+            &mut pixmap,
+            manager,
+            SlotId::LeftPrior2,
+            840,
+            0,
+            240,
+            SCREEN_HEIGHT,
+            false,
+        );
 
         if self.config.slots.left_priors >= 3 {
             // 5. [L prior(3)] (x: 1080, w: 240)
-            self.draw_slot_card(&mut pixmap, manager, SlotId::LeftPrior3, 1080, 0, 240, SCREEN_HEIGHT, false);
+            self.draw_slot_card(
+                &mut pixmap,
+                manager,
+                SlotId::LeftPrior3,
+                1080,
+                0,
+                240,
+                SCREEN_HEIGHT,
+                false,
+            );
 
             // 6. [R prior(1)] (x: 1320, w: 240)
-            self.draw_slot_card(&mut pixmap, manager, SlotId::RightPrior1, 1320, 0, 240, SCREEN_HEIGHT, false);
+            self.draw_slot_card(
+                &mut pixmap,
+                manager,
+                SlotId::RightPrior1,
+                1320,
+                0,
+                240,
+                SCREEN_HEIGHT,
+                false,
+            );
         } else {
             // 5. [R prior(2)] (x: 1080, w: 240)
-            self.draw_slot_card(&mut pixmap, manager, SlotId::RightPrior2, 1080, 0, 240, SCREEN_HEIGHT, false);
+            self.draw_slot_card(
+                &mut pixmap,
+                manager,
+                SlotId::RightPrior2,
+                1080,
+                0,
+                240,
+                SCREEN_HEIGHT,
+                false,
+            );
 
             // 6. [R prior(1)] (x: 1320, w: 240)
-            self.draw_slot_card(&mut pixmap, manager, SlotId::RightPrior1, 1320, 0, 240, SCREEN_HEIGHT, false);
+            self.draw_slot_card(
+                &mut pixmap,
+                manager,
+                SlotId::RightPrior1,
+                1320,
+                0,
+                240,
+                SCREEN_HEIGHT,
+                false,
+            );
         }
 
         // 7. [Right hand] (x: 1560, w: 360) - Hero Right
-        self.draw_slot_card(&mut pixmap, manager, SlotId::RightHand, 1560, 0, 360, SCREEN_HEIGHT, true);
+        self.draw_slot_card(
+            &mut pixmap,
+            manager,
+            SlotId::RightHand,
+            1560,
+            0,
+            360,
+            SCREEN_HEIGHT,
+            true,
+        );
 
         // Draw Debug Handler badge in bottom left of screen if enabled
         if self.config.display.show_debug_handler {
-            let l_handler = manager.left_hand().map(|i| i.handler_tag.as_str()).unwrap_or("EMPTY");
-            let r_handler = manager.right_hand().map(|i| i.handler_tag.as_str()).unwrap_or("EMPTY");
+            let l_handler = manager
+                .left_hand()
+                .map(|i| i.handler_tag.as_str())
+                .unwrap_or("EMPTY");
+            let r_handler = manager
+                .right_hand()
+                .map(|i| i.handler_tag.as_str())
+                .unwrap_or("EMPTY");
             let handler_text = format!("LH: [{}] | RH: [{}]", l_handler, r_handler);
 
             let badge_x = 18.0;
@@ -366,7 +467,12 @@ impl ScreenRenderer {
 
                 let (str_r, str_g, str_b, str_a) = parse_hex_color(&self.palette.debug_badge_text);
                 let mut stroke_paint = Paint::default();
-                stroke_paint.set_color(Color::from_rgba8(str_r, str_g, str_b, (str_a as f32 * 0.8) as u8));
+                stroke_paint.set_color(Color::from_rgba8(
+                    str_r,
+                    str_g,
+                    str_b,
+                    (str_a as f32 * 0.8) as u8,
+                ));
                 let mut stroke = Stroke::default();
                 stroke.width = 1.5;
                 let path = PathBuilder::from_rect(br);
@@ -384,7 +490,6 @@ impl ScreenRenderer {
             }
         }
 
-
         Ok(pixmap)
     }
 
@@ -397,8 +502,9 @@ impl ScreenRenderer {
     /// Renders a completely black 1920x462 frame (all pixels turned off/dark)
     /// into a compressed JPEG for screen-saver / lock mode.
     pub fn render_blank_frame(&self) -> Result<Vec<u8>, RenderError> {
-        let mut pixmap = Pixmap::new(SCREEN_WIDTH, SCREEN_HEIGHT)
-            .ok_or_else(|| RenderError::ImageEncode("Failed to allocate blank pixmap".to_string()))?;
+        let mut pixmap = Pixmap::new(SCREEN_WIDTH, SCREEN_HEIGHT).ok_or_else(|| {
+            RenderError::ImageEncode("Failed to allocate blank pixmap".to_string())
+        })?;
         pixmap.fill(Color::from_rgba8(0, 0, 0, 255));
         self.encode_jpeg(&pixmap)
     }
@@ -453,9 +559,11 @@ impl ScreenRenderer {
             let bg_hex = match slot_id {
                 SlotId::Undo => &self.palette.undo_card_bg,
                 SlotId::LeftHand | SlotId::RightHand => &self.palette.hero_card_bg,
-                SlotId::LeftPrior1 | SlotId::LeftPrior2 | SlotId::LeftPrior3 | SlotId::RightPrior2 | SlotId::RightPrior1 => {
-                    &self.palette.prior_card_bg
-                }
+                SlotId::LeftPrior1
+                | SlotId::LeftPrior2
+                | SlotId::LeftPrior3
+                | SlotId::RightPrior2
+                | SlotId::RightPrior1 => &self.palette.prior_card_bg,
             };
             let (bg_r, bg_g, bg_b, bg_a) = parse_hex_color(bg_hex);
             let mut paint = Paint::default();
@@ -497,7 +605,16 @@ impl ScreenRenderer {
 
         // Content
         if let Some(item) = manager.get(slot_id) {
-            self.draw_item_content(pixmap, item, rect_x, rect_y, rect_w, rect_h, is_hero, border_color);
+            self.draw_item_content(
+                pixmap,
+                item,
+                rect_x,
+                rect_y,
+                rect_w,
+                rect_h,
+                is_hero,
+                border_color,
+            );
         } else {
             // Empty placeholder
             self.draw_text_clipped(
@@ -534,7 +651,12 @@ impl ScreenRenderer {
 
         // Resolve elision character color:
         // Default: "border" -> dynamically matches each slot box's border color
-        let elision_color = if self.config.display.elision_color.eq_ignore_ascii_case("border") {
+        let elision_color = if self
+            .config
+            .display
+            .elision_color
+            .eq_ignore_ascii_case("border")
+        {
             border_color
         } else {
             let (er, eg, eb, ea) = parse_hex_color(&self.config.display.elision_color);
@@ -544,7 +666,8 @@ impl ScreenRenderer {
         // Title: 28px for hero (down from 34px), 21px for history (smaller-but-not-too-small)
         let title_font_size = if is_hero { 28.0 } else { 21.0 };
         let title_color = Color::from_rgba8(t_r, t_g, t_b, t_a);
-        let elided_title = self.truncate_filename_elided(&item.title, max_content_w, title_font_size, true);
+        let elided_title =
+            self.truncate_filename_elided(&item.title, max_content_w, title_font_size, true);
         self.draw_elided_text_clipped(
             pixmap,
             &elided_title,
@@ -560,7 +683,8 @@ impl ScreenRenderer {
         // Subtitle: 19px for hero, 16px for history
         let sub_font_size = if is_hero { 19.0 } else { 16.0 };
         let subtitle_color = Color::from_rgba8(s_r, s_g, s_b, s_a);
-        let elided_subtitle = self.truncate_filename_elided(&item.subtitle, max_content_w, sub_font_size, false);
+        let elided_subtitle =
+            self.truncate_filename_elided(&item.subtitle, max_content_w, sub_font_size, false);
         self.draw_elided_text_clipped(
             pixmap,
             &elided_subtitle,
@@ -592,7 +716,10 @@ impl ScreenRenderer {
                 let (preview_text, effective_hint) = {
                     let trimmed = text.trim();
                     let p = Path::new(trimmed);
-                    if p.is_file() && little_clip_core::syntax::is_code_file(p) {
+                    if p.is_file()
+                        && (little_clip_core::syntax::is_code_file(p)
+                            || little_clip_ops::is_text_file(p))
+                    {
                         if let Ok(file_content) = std::fs::read_to_string(p) {
                             (file_content, p.extension().and_then(|s| s.to_str()))
                         } else {
@@ -650,8 +777,15 @@ impl ScreenRenderer {
             }
             ClipPayload::Url(url) => {
                 let url_str = url.as_str();
-                let line1: String = url_str.chars().take(if is_hero { 26 } else { 12 }).collect();
-                let line2: String = url_str.chars().skip(if is_hero { 26 } else { 12 }).take(if is_hero { 26 } else { 12 }).collect();
+                let line1: String = url_str
+                    .chars()
+                    .take(if is_hero { 26 } else { 12 })
+                    .collect();
+                let line2: String = url_str
+                    .chars()
+                    .skip(if is_hero { 26 } else { 12 })
+                    .take(if is_hero { 26 } else { 12 })
+                    .collect();
 
                 self.draw_text(
                     pixmap,
@@ -674,8 +808,23 @@ impl ScreenRenderer {
                     );
                 }
             }
-            ClipPayload::Image { width, height, thumbnail, .. } => {
-                self.draw_image_thumbnail(pixmap, *width, *height, thumbnail.as_ref(), rx, ry, rw, rh, is_hero);
+            ClipPayload::Image {
+                width,
+                height,
+                thumbnail,
+                ..
+            } => {
+                self.draw_image_thumbnail(
+                    pixmap,
+                    *width,
+                    *height,
+                    thumbnail.as_ref(),
+                    rx,
+                    ry,
+                    rw,
+                    rh,
+                    is_hero,
+                );
             }
             ClipPayload::MultiImage {
                 total_count,
@@ -747,12 +896,29 @@ impl ScreenRenderer {
                     if p.is_file() && little_clip_ops::is_spreadsheet_file(p) {
                         if let Ok(sheet_data) = little_clip_ops::load_spreadsheet(p) {
                             if let Some(first_sheet) = sheet_data.sheets.first() {
-                                self.draw_spreadsheet_card(pixmap, &sheet_data.title, first_sheet, rx, ry, rw, rh, is_hero);
+                                self.draw_spreadsheet_card(
+                                    pixmap,
+                                    &sheet_data.title,
+                                    first_sheet,
+                                    rx,
+                                    ry,
+                                    rw,
+                                    rh,
+                                    is_hero,
+                                );
                                 return;
                             }
                         }
                     }
-                    if p.is_file() && (p.extension().and_then(|s| s.to_str()).map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")).unwrap_or(false)) {
+                    if p.is_file()
+                        && (p
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .map(|e| {
+                                e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")
+                            })
+                            .unwrap_or(false))
+                    {
                         if let Ok(midi_data) = little_clip_ops::MidiData::parse_file(p) {
                             self.draw_midi_card(pixmap, &midi_data, rx, ry, rw, rh, is_hero);
                             return;
@@ -764,7 +930,9 @@ impl ScreenRenderer {
                             return;
                         }
                     }
-                    if little_clip_core::syntax::is_code_file(p) {
+                    if little_clip_core::syntax::is_code_file(p)
+                        || (p.is_file() && little_clip_ops::is_text_file(p))
+                    {
                         if let Ok(file_content) = std::fs::read_to_string(p) {
                             let ext = p.extension().and_then(|s| s.to_str());
                             self.draw_text_preview(
@@ -823,7 +991,9 @@ impl ScreenRenderer {
         let target_top = ry + 126.0;
 
         if let Some(thumb) = thumbnail {
-            if let Some(pixmap_ref) = PixmapRef::from_bytes(&thumb.premultiplied_rgba, thumb.width, thumb.height) {
+            if let Some(pixmap_ref) =
+                PixmapRef::from_bytes(&thumb.premultiplied_rgba, thumb.width, thumb.height)
+            {
                 let scale = (box_w / thumb.width as f32)
                     .min(box_h / thumb.height as f32)
                     .min(1.0);
@@ -834,23 +1004,24 @@ impl ScreenRenderer {
                 let center_y = target_top + (box_h - draw_h) / 2.0;
 
                 // Theme-aware checkerboard backdrop for transparent image thumbnails
-                self.draw_checkerboard_pattern(pixmap, center_x - 2.0, center_y - 2.0, draw_w + 4.0, draw_h + 4.0, 8.0);
-
-                let transform = Transform::from_scale(scale, scale)
-                    .post_translate(center_x, center_y);
-
-                pixmap.draw_pixmap(
-                    0,
-                    0,
-                    pixmap_ref,
-                    &PixmapPaint::default(),
-                    transform,
-                    None,
+                self.draw_checkerboard_pattern(
+                    pixmap,
+                    center_x - 2.0,
+                    center_y - 2.0,
+                    draw_w + 4.0,
+                    draw_h + 4.0,
+                    8.0,
                 );
+
+                let transform =
+                    Transform::from_scale(scale, scale).post_translate(center_x, center_y);
+
+                pixmap.draw_pixmap(0, 0, pixmap_ref, &PixmapPaint::default(), transform, None);
             }
         } else {
             // Sleek placeholder while generating preview async
-            if let Some(card_r) = Rect::from_xywh(rx + 16.0, target_top, box_w as f32, box_h as f32) {
+            if let Some(card_r) = Rect::from_xywh(rx + 16.0, target_top, box_w as f32, box_h as f32)
+            {
                 let mut p = Paint::default();
                 p.set_color(self.color_from_hex(&self.palette.theme.b_low));
                 pixmap.fill_rect(card_r, &p, Transform::identity(), None);
@@ -951,7 +1122,12 @@ impl ScreenRenderer {
                 vec![
                     (content_x, target_top, half_w, half_h),
                     (content_x + half_w + gap, target_top, half_w, half_h),
-                    (content_x + (box_w - half_w) / 2.0, target_top + half_h + gap, half_w, half_h),
+                    (
+                        content_x + (box_w - half_w) / 2.0,
+                        target_top + half_h + gap,
+                        half_w,
+                        half_h,
+                    ),
                 ]
             }
             _ => {
@@ -962,7 +1138,12 @@ impl ScreenRenderer {
                     (content_x, target_top, half_w, half_h),
                     (content_x + half_w + gap, target_top, half_w, half_h),
                     (content_x, target_top + half_h + gap, half_w, half_h),
-                    (content_x + half_w + gap, target_top + half_h + gap, half_w, half_h),
+                    (
+                        content_x + half_w + gap,
+                        target_top + half_h + gap,
+                        half_w,
+                        half_h,
+                    ),
                 ]
             }
         };
@@ -984,7 +1165,9 @@ impl ScreenRenderer {
 
             // Draw scaled thumbnail centered in cell
             if let Some(thumb) = thumbnails.get(i) {
-                if let Some(pixmap_ref) = PixmapRef::from_bytes(&thumb.premultiplied_rgba, thumb.width, thumb.height) {
+                if let Some(pixmap_ref) =
+                    PixmapRef::from_bytes(&thumb.premultiplied_rgba, thumb.width, thumb.height)
+                {
                     let scale = ((cw - 4.0) / thumb.width as f32)
                         .min((ch - 4.0) / thumb.height as f32)
                         .min(1.0);
@@ -994,7 +1177,8 @@ impl ScreenRenderer {
                     let img_x = cx + (cw - dw) / 2.0;
                     let img_y = cy + (ch - dh) / 2.0;
 
-                    let transform = Transform::from_scale(scale, scale).post_translate(img_x, img_y);
+                    let transform =
+                        Transform::from_scale(scale, scale).post_translate(img_x, img_y);
                     pixmap.draw_pixmap(0, 0, pixmap_ref, &PixmapPaint::default(), transform, None);
                 }
             }
@@ -1006,7 +1190,10 @@ impl ScreenRenderer {
             let badge_w = self.measure_text_width(&idx_str, badge_font_size, true) + 8.0;
             let badge_h = badge_font_size + 4.0;
             let badge_bg = self.color_from_hex(&self.palette.theme.b_low);
-            let badge_fg = self.contrast_color(badge_bg, Some(self.color_from_hex(&self.palette.theme.f_high)));
+            let badge_fg = self.contrast_color(
+                badge_bg,
+                Some(self.color_from_hex(&self.palette.theme.f_high)),
+            );
             if let Some(br) = Rect::from_xywh(cx + 4.0, cy + 4.0, badge_w, badge_h) {
                 let mut bp = Paint::default();
                 bp.set_color(badge_bg);
@@ -1036,7 +1223,10 @@ impl ScreenRenderer {
             let by = target_top + (box_h - badge_h) / 2.0;
 
             let overlay_bg = self.color_from_hex(&self.palette.theme.b_low);
-            let overlay_fg = self.contrast_color(overlay_bg, Some(self.color_from_hex(&self.palette.theme.f_high)));
+            let overlay_fg = self.contrast_color(
+                overlay_bg,
+                Some(self.color_from_hex(&self.palette.theme.f_high)),
+            );
             if let Some(br) = Rect::from_xywh(bx, by, badge_w, badge_h) {
                 let mut bp = Paint::default();
                 bp.set_color(overlay_bg);
@@ -1092,7 +1282,9 @@ impl ScreenRenderer {
 
             let frame_idx = thumb.get_frame_index_at_time(now_ms);
             if let Some(jpeg_bytes) = thumb.frames_jpeg.get(frame_idx) {
-                if let Ok(dyn_img) = image::load_from_memory_with_format(jpeg_bytes, image::ImageFormat::Jpeg) {
+                if let Ok(dyn_img) =
+                    image::load_from_memory_with_format(jpeg_bytes, image::ImageFormat::Jpeg)
+                {
                     let rgba = dyn_img.to_rgba8();
                     let (fw, fh) = (rgba.width(), rgba.height());
 
@@ -1110,7 +1302,14 @@ impl ScreenRenderer {
                         let center_y = target_top + (box_h as f32 - fh as f32) / 2.0;
 
                         // Checkerboard backdrop for animated frame (supports transparent GIF/APNG)
-                        self.draw_checkerboard_pattern(pixmap, center_x - 2.0, center_y - 2.0, fw as f32 + 4.0, fh as f32 + 4.0, 6.0);
+                        self.draw_checkerboard_pattern(
+                            pixmap,
+                            center_x - 2.0,
+                            center_y - 2.0,
+                            fw as f32 + 4.0,
+                            fh as f32 + 4.0,
+                            6.0,
+                        );
 
                         pixmap.draw_pixmap(
                             center_x as i32,
@@ -1122,9 +1321,13 @@ impl ScreenRenderer {
                         );
 
                         // Looping badge in top-left of box
-                        let badge = format!("▶ {} [{}/{}]", format, frame_idx + 1, thumb.frame_count);
+                        let badge =
+                            format!("▶ {} [{}/{}]", format, frame_idx + 1, thumb.frame_count);
                         let badge_bg = self.color_from_hex(&self.palette.theme.b_low);
-                        let badge_fg = self.contrast_color(badge_bg, Some(self.color_from_hex(&self.palette.harmonies.warm_attention)));
+                        let badge_fg = self.contrast_color(
+                            badge_bg,
+                            Some(self.color_from_hex(&self.palette.harmonies.warm_attention)),
+                        );
                         self.draw_pill_badge(
                             pixmap,
                             &badge,
@@ -1140,7 +1343,8 @@ impl ScreenRenderer {
             }
         } else {
             // Placeholder while extracting frames
-            if let Some(card_r) = Rect::from_xywh(rx + 14.0, target_top, box_w as f32, box_h as f32) {
+            if let Some(card_r) = Rect::from_xywh(rx + 14.0, target_top, box_w as f32, box_h as f32)
+            {
                 let mut p = Paint::default();
                 p.set_color(self.color_from_hex(&self.palette.theme.b_low));
                 pixmap.fill_rect(card_r, &p, Transform::identity(), None);
@@ -1264,7 +1468,11 @@ impl ScreenRenderer {
                 );
                 self.draw_text(
                     pixmap,
-                    &format!("Decoding {} at {:.1} kHz", format, sample_rate as f64 / 1000.0),
+                    &format!(
+                        "Decoding {} at {:.1} kHz",
+                        format,
+                        sample_rate as f64 / 1000.0
+                    ),
                     content_x,
                     content_y + 65.0,
                     18.0,
@@ -1287,7 +1495,9 @@ impl ScreenRenderer {
         }
 
         let bar_spacing = 3.0f32;
-        let num_bars = ((content_w / bar_spacing).floor() as usize).max(10).min(total_peaks);
+        let num_bars = ((content_w / bar_spacing).floor() as usize)
+            .max(10)
+            .min(total_peaks);
         let bar_width = (content_w / num_bars as f32 * 0.72).clamp(1.5, 6.0);
 
         if has_dual_channel {
@@ -1428,36 +1638,12 @@ impl ScreenRenderer {
             );
 
             let end_x = (content_x + content_w - 42.0).max(content_x + 50.0);
-            self.draw_text(
-                pixmap,
-                &end_str,
-                end_x,
-                time_y,
-                16.0,
-                attention_col,
-                false,
-            );
+            self.draw_text(pixmap, &end_str, end_x, time_y, 16.0, attention_col, false);
         } else {
             let footer_col = self.color_from_hex(&self.palette.theme.f_low);
-            self.draw_text(
-                pixmap,
-                "00:00",
-                content_x,
-                time_y,
-                16.0,
-                footer_col,
-                false,
-            );
+            self.draw_text(pixmap, "00:00", content_x, time_y, 16.0, footer_col, false);
             let end_x = (content_x + content_w - 42.0).max(content_x + 50.0);
-            self.draw_text(
-                pixmap,
-                &dur_text,
-                end_x,
-                time_y,
-                16.0,
-                footer_col,
-                false,
-            );
+            self.draw_text(pixmap, &dur_text, end_x, time_y, 16.0, footer_col, false);
         }
     }
 
@@ -1476,7 +1662,9 @@ impl ScreenRenderer {
         };
 
         if let Some(font) = font {
-            text.chars().map(|ch| font.metrics(ch, size).advance_width).sum()
+            text.chars()
+                .map(|ch| font.metrics(ch, size).advance_width)
+                .sum()
         } else {
             text.chars().count() as f32 * size * 0.6
         }
@@ -1568,7 +1756,11 @@ impl ScreenRenderer {
 
         if prefix.is_empty() {
             ElidedText {
-                prefix: name.chars().next().map(|c| c.to_string()).unwrap_or_default(),
+                prefix: name
+                    .chars()
+                    .next()
+                    .map(|c| c.to_string())
+                    .unwrap_or_default(),
                 elision: Some(elision_glyph.to_string()),
                 suffix: None,
             }
@@ -1654,8 +1846,10 @@ impl ScreenRenderer {
                             } else if a_norm > 0 {
                                 let inv_a = 255 - a_norm;
                                 data[idx] = ((cr * a_norm + data[idx] as u32 * inv_a) / 255) as u8;
-                                data[idx + 1] = ((cg * a_norm + data[idx + 1] as u32 * inv_a) / 255) as u8;
-                                data[idx + 2] = ((cb * a_norm + data[idx + 2] as u32 * inv_a) / 255) as u8;
+                                data[idx + 1] =
+                                    ((cg * a_norm + data[idx + 1] as u32 * inv_a) / 255) as u8;
+                                data[idx + 2] =
+                                    ((cb * a_norm + data[idx + 2] as u32 * inv_a) / 255) as u8;
                                 data[idx + 3] = 255;
                             }
                         }
@@ -1701,12 +1895,32 @@ impl ScreenRenderer {
         clip_right: f32,
     ) -> f32 {
         let mut cx = x;
-        cx = self.draw_text_clipped(pixmap, &elided.prefix, cx, y, size, base_color, bold, clip_right);
+        cx = self.draw_text_clipped(
+            pixmap,
+            &elided.prefix,
+            cx,
+            y,
+            size,
+            base_color,
+            bold,
+            clip_right,
+        );
         if let Some(ref elision_str) = elided.elision {
-            cx = self.draw_text_clipped(pixmap, elision_str, cx, y, size, elision_color, bold, clip_right);
+            cx = self.draw_text_clipped(
+                pixmap,
+                elision_str,
+                cx,
+                y,
+                size,
+                elision_color,
+                bold,
+                clip_right,
+            );
         }
         if let Some(ref suffix_str) = elided.suffix {
-            cx = self.draw_text_clipped(pixmap, suffix_str, cx, y, size, base_color, bold, clip_right);
+            cx = self.draw_text_clipped(
+                pixmap, suffix_str, cx, y, size, base_color, bold, clip_right,
+            );
         }
         cx
     }
@@ -1734,32 +1948,74 @@ impl ScreenRenderer {
             match span {
                 MarkdownSpan::Text(s) => {
                     cx = self.draw_text_styled_clipped(
-                        pixmap, s, cx, y, size, default_color, FontStyle::Regular, clip_right,
+                        pixmap,
+                        s,
+                        cx,
+                        y,
+                        size,
+                        default_color,
+                        FontStyle::Regular,
+                        clip_right,
                     );
                 }
                 MarkdownSpan::Bold(s) => {
                     cx = self.draw_text_styled_clipped(
-                        pixmap, s, cx, y, size, title_color, FontStyle::Bold, clip_right,
+                        pixmap,
+                        s,
+                        cx,
+                        y,
+                        size,
+                        title_color,
+                        FontStyle::Bold,
+                        clip_right,
                     );
                 }
                 MarkdownSpan::Italic(s) => {
                     cx = self.draw_text_styled_clipped(
-                        pixmap, s, cx, y, size, italic_color, FontStyle::Italic, clip_right,
+                        pixmap,
+                        s,
+                        cx,
+                        y,
+                        size,
+                        italic_color,
+                        FontStyle::Italic,
+                        clip_right,
                     );
                 }
                 MarkdownSpan::BoldItalic(s) => {
                     cx = self.draw_text_styled_clipped(
-                        pixmap, s, cx, y, size, title_color, FontStyle::BoldItalic, clip_right,
+                        pixmap,
+                        s,
+                        cx,
+                        y,
+                        size,
+                        title_color,
+                        FontStyle::BoldItalic,
+                        clip_right,
                     );
                 }
                 MarkdownSpan::Code(s) => {
                     cx = self.draw_text_styled_clipped(
-                        pixmap, s, cx, y, size, code_color, FontStyle::Mono, clip_right,
+                        pixmap,
+                        s,
+                        cx,
+                        y,
+                        size,
+                        code_color,
+                        FontStyle::Mono,
+                        clip_right,
                     );
                 }
                 MarkdownSpan::Link { label, .. } => {
                     cx = self.draw_text_styled_clipped(
-                        pixmap, label, cx, y, size, url_color, FontStyle::Regular, clip_right,
+                        pixmap,
+                        label,
+                        cx,
+                        y,
+                        size,
+                        url_color,
+                        FontStyle::Regular,
+                        clip_right,
                     );
                 }
             }
@@ -1780,7 +2036,10 @@ impl ScreenRenderer {
         let badge_h = size + 4.0;
         let bg_color = self.color_from_hex(&self.palette.theme.b_low);
         let border_color = self.color_from_hex(&self.palette.theme.b_med);
-        let text_color = self.contrast_color(bg_color, Some(self.color_from_hex(&self.palette.theme.f_high)));
+        let text_color = self.contrast_color(
+            bg_color,
+            Some(self.color_from_hex(&self.palette.theme.f_high)),
+        );
         if let Some(rect) = Rect::from_xywh(x, y - 2.0, badge_w.min(clip_right - x), badge_h) {
             let mut paint = Paint::default();
             paint.set_color(bg_color);
@@ -1845,7 +2104,11 @@ impl ScreenRenderer {
             }
 
             match line {
-                MarkdownLine::Heading { level, text: _, spans } => {
+                MarkdownLine::Heading {
+                    level,
+                    text: _,
+                    spans,
+                } => {
                     let (head_size, head_color_pref, lead_symbol) = match level {
                         1 => (
                             if is_hero { 21.0 } else { 18.0 },
@@ -1863,7 +2126,10 @@ impl ScreenRenderer {
                             "### ",
                         ),
                     };
-                    let head_color = self.contrast_color(self.color_from_hex(&self.palette.theme.background), Some(head_color_pref));
+                    let head_color = self.contrast_color(
+                        self.color_from_hex(&self.palette.theme.background),
+                        Some(head_color_pref),
+                    );
 
                     let cx = self.draw_text_styled_clipped(
                         pixmap,
@@ -1875,7 +2141,9 @@ impl ScreenRenderer {
                         FontStyle::Bold,
                         clip_right,
                     );
-                    self.draw_markdown_spans(pixmap, spans, cx, y, head_size, head_color, clip_right);
+                    self.draw_markdown_spans(
+                        pixmap, spans, cx, y, head_size, head_color, clip_right,
+                    );
                     y += if is_hero { 26.0 } else { 22.0 };
                 }
                 MarkdownLine::Bullet { indent, spans } => {
@@ -1892,7 +2160,9 @@ impl ScreenRenderer {
                         clip_right,
                     );
                     let font_size = if is_hero { 18.0 } else { 15.0 };
-                    self.draw_markdown_spans(pixmap, spans, cx, y, font_size, body_color, clip_right);
+                    self.draw_markdown_spans(
+                        pixmap, spans, cx, y, font_size, body_color, clip_right,
+                    );
                     y += if is_hero { 24.0 } else { 20.0 };
                 }
                 MarkdownLine::Numbered { number, spans } => {
@@ -1907,18 +2177,33 @@ impl ScreenRenderer {
                         FontStyle::Bold,
                         clip_right,
                     );
-                    self.draw_markdown_spans(pixmap, spans, cx, y, font_size, body_color, clip_right);
+                    self.draw_markdown_spans(
+                        pixmap, spans, cx, y, font_size, body_color, clip_right,
+                    );
                     y += if is_hero { 24.0 } else { 20.0 };
                 }
                 MarkdownLine::Quote { spans } => {
-                    if let Some(qr) = Rect::from_xywh(content_x, y, 2.5, if is_hero { 18.0 } else { 15.0 }) {
+                    if let Some(qr) =
+                        Rect::from_xywh(content_x, y, 2.5, if is_hero { 18.0 } else { 15.0 })
+                    {
                         let mut qp = Paint::default();
                         qp.set_color(self.color_from_hex(&self.palette.harmonies.base));
                         pixmap.fill_rect(qr, &qp, Transform::identity(), None);
                     }
                     let font_size = if is_hero { 17.5 } else { 14.5 };
-                    let quote_fg = self.contrast_color(self.color_from_hex(&self.palette.theme.background), Some(self.color_from_hex(&self.palette.theme.f_med)));
-                    self.draw_markdown_spans(pixmap, spans, content_x + 10.0, y, font_size, quote_fg, clip_right);
+                    let quote_fg = self.contrast_color(
+                        self.color_from_hex(&self.palette.theme.background),
+                        Some(self.color_from_hex(&self.palette.theme.f_med)),
+                    );
+                    self.draw_markdown_spans(
+                        pixmap,
+                        spans,
+                        content_x + 10.0,
+                        y,
+                        font_size,
+                        quote_fg,
+                        clip_right,
+                    );
                     y += if is_hero { 24.0 } else { 20.0 };
                 }
                 MarkdownLine::Rule => {
@@ -1930,8 +2215,15 @@ impl ScreenRenderer {
                     y += 14.0;
                 }
                 MarkdownLine::CodeFence { language } => {
-                    let label = if language.is_empty() { "```".to_string() } else { format!("``` {}", language) };
-                    let fence_fg = self.contrast_color(self.color_from_hex(&self.palette.theme.background), Some(self.color_from_hex(&self.palette.theme.f_low)));
+                    let label = if language.is_empty() {
+                        "```".to_string()
+                    } else {
+                        format!("``` {}", language)
+                    };
+                    let fence_fg = self.contrast_color(
+                        self.color_from_hex(&self.palette.theme.background),
+                        Some(self.color_from_hex(&self.palette.theme.f_low)),
+                    );
                     self.draw_text_styled_clipped(
                         pixmap,
                         &label,
@@ -1947,8 +2239,13 @@ impl ScreenRenderer {
                 MarkdownLine::CodeLine { line } => {
                     let font_size = if is_hero { 16.0 } else { 13.5 };
                     let code_bg = self.color_from_hex(&self.palette.theme.b_low);
-                    let code_fg = self.contrast_color(code_bg, Some(self.color_from_hex(&self.palette.harmonies.warm_attention)));
-                    if let Some(bg) = Rect::from_xywh(content_x, y - 2.0, max_content_w, font_size + 4.0) {
+                    let code_fg = self.contrast_color(
+                        code_bg,
+                        Some(self.color_from_hex(&self.palette.harmonies.warm_attention)),
+                    );
+                    if let Some(bg) =
+                        Rect::from_xywh(content_x, y - 2.0, max_content_w, font_size + 4.0)
+                    {
                         let mut p = Paint::default();
                         p.set_color(code_bg);
                         pixmap.fill_rect(bg, &p, Transform::identity(), None);
@@ -1967,7 +2264,9 @@ impl ScreenRenderer {
                 }
                 MarkdownLine::Paragraph { spans } => {
                     let font_size = if is_hero { 18.0 } else { 15.0 };
-                    self.draw_markdown_spans(pixmap, spans, content_x, y, font_size, body_color, clip_right);
+                    self.draw_markdown_spans(
+                        pixmap, spans, content_x, y, font_size, body_color, clip_right,
+                    );
                     y += if is_hero { 24.0 } else { 20.0 };
                 }
                 MarkdownLine::Empty => {
@@ -1990,7 +2289,9 @@ impl ScreenRenderer {
     ) {
         // Strip emojis that lack font glyphs to prevent missing glyph open boxes (▯)
         let clean_text = badge_text
-            .trim_start_matches(|c: char| !c.is_ascii_alphanumeric() && c != '[' && c != '(' && c != '#')
+            .trim_start_matches(|c: char| {
+                !c.is_ascii_alphanumeric() && c != '[' && c != '(' && c != '#'
+            })
             .trim();
         let font_size = size;
         let pad_x = 8.0;
@@ -2035,11 +2336,20 @@ impl ScreenRenderer {
         let mut y = ry + 124.0;
 
         let bg_col = self.color_from_hex(&self.palette.theme.background);
-        let f_high = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_high)));
-        let f_low = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_low)));
-        let base_c = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.harmonies.base)));
-        let diff_add = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_add)));
-        let diff_mod = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_mod)));
+        let f_high = self.contrast_color(
+            bg_col,
+            Some(self.color_from_hex(&self.palette.theme.f_high)),
+        );
+        let f_low =
+            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_low)));
+        let base_c = self.contrast_color(
+            bg_col,
+            Some(self.color_from_hex(&self.palette.harmonies.base)),
+        );
+        let diff_add =
+            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_add)));
+        let diff_mod =
+            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_mod)));
 
         self.draw_pill_badge(
             pixmap,
@@ -2120,15 +2430,32 @@ impl ScreenRenderer {
         let mut y = ry + 124.0;
 
         let bg_col = self.color_from_hex(&self.palette.theme.background);
-        let f_high = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_high)));
-        let f_low = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_low)));
-        let base_c = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.harmonies.base)));
-        let triadic_1 = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.harmonies.triadic_1)));
-        let diff_add = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_add)));
-        let diff_del = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_del)));
+        let f_high = self.contrast_color(
+            bg_col,
+            Some(self.color_from_hex(&self.palette.theme.f_high)),
+        );
+        let f_low =
+            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_low)));
+        let base_c = self.contrast_color(
+            bg_col,
+            Some(self.color_from_hex(&self.palette.harmonies.base)),
+        );
+        let triadic_1 = self.contrast_color(
+            bg_col,
+            Some(self.color_from_hex(&self.palette.harmonies.triadic_1)),
+        );
+        let diff_add =
+            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_add)));
+        let diff_del =
+            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_del)));
 
         match net {
-            little_clip_ops::NetworkPreview::Ip { ip, rfc_class, description, ping_status } => {
+            little_clip_ops::NetworkPreview::Ip {
+                ip,
+                rfc_class,
+                description,
+                ping_status,
+            } => {
                 self.draw_pill_badge(
                     pixmap,
                     "IP ADDRESS",
@@ -2194,7 +2521,11 @@ impl ScreenRenderer {
                     );
                 }
             }
-            little_clip_ops::NetworkPreview::Mac { formatted, vendor, mac_type } => {
+            little_clip_ops::NetworkPreview::Mac {
+                formatted,
+                vendor,
+                mac_type,
+            } => {
                 self.draw_pill_badge(
                     pixmap,
                     "MAC ADDRESS",
@@ -2260,11 +2591,18 @@ impl ScreenRenderer {
         let mut y = ry + 124.0;
 
         let bg_col = self.color_from_hex(&self.palette.theme.background);
-        let f_high = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_high)));
-        let f_med = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_med)));
-        let f_low = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_low)));
-        let diff_add = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_add)));
-        let diff_mod = self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_mod)));
+        let f_high = self.contrast_color(
+            bg_col,
+            Some(self.color_from_hex(&self.palette.theme.f_high)),
+        );
+        let f_med =
+            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_med)));
+        let f_low =
+            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_low)));
+        let diff_add =
+            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_add)));
+        let diff_mod =
+            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_mod)));
 
         self.draw_pill_badge(
             pixmap,
@@ -2342,7 +2680,10 @@ impl ScreenRenderer {
         let mut y = ry + 124.0;
 
         let badge_bg = self.color_from_hex(&self.palette.diff_add);
-        let badge_fg = self.contrast_color(badge_bg, Some(self.color_from_hex(&self.palette.theme.f_high)));
+        let badge_fg = self.contrast_color(
+            badge_bg,
+            Some(self.color_from_hex(&self.palette.theme.f_high)),
+        );
         self.draw_pill_badge(
             pixmap,
             "SPREADSHEET",
@@ -2355,7 +2696,10 @@ impl ScreenRenderer {
         );
         y += 28.0;
 
-        let sheet_info = format!("{} ({}r × {}c)", sheet.name, sheet.total_rows, sheet.total_cols);
+        let sheet_info = format!(
+            "{} ({}r × {}c)",
+            sheet.name, sheet.total_rows, sheet.total_cols
+        );
         self.draw_text_clipped(
             pixmap,
             &sheet_info,
@@ -2413,21 +2757,20 @@ impl ScreenRenderer {
                 let cell_x = content_x + (c_idx as f32 * col_w) + 4.0;
                 let cell_clip = content_x + ((c_idx + 1) as f32 * col_w) - 2.0;
                 let cell_color = if is_header {
-                    self.contrast_color(row_bg, Some(self.color_from_hex(&self.palette.harmonies.base)))
+                    self.contrast_color(
+                        row_bg,
+                        Some(self.color_from_hex(&self.palette.harmonies.base)),
+                    )
                 } else {
-                    self.contrast_color(row_bg, Some(self.color_from_hex(&self.palette.theme.f_high)))
+                    self.contrast_color(
+                        row_bg,
+                        Some(self.color_from_hex(&self.palette.theme.f_high)),
+                    )
                 };
 
                 let cell_y = row_y + (row_h - font_size) / 2.0 - 1.0;
                 self.draw_text_clipped(
-                    pixmap,
-                    cell_val,
-                    cell_x,
-                    cell_y,
-                    font_size,
-                    cell_color,
-                    is_header,
-                    cell_clip,
+                    pixmap, cell_val, cell_x, cell_y, font_size, cell_color, is_header, cell_clip,
                 );
             }
         }
@@ -2465,7 +2808,13 @@ impl ScreenRenderer {
         let border_color = self.color_from_hex(&self.palette.theme.b_med);
         border_paint.set_color(border_color);
         let path = PathBuilder::from_rect(rect);
-        pixmap.stroke_path(&path, &border_paint, &border_stroke, Transform::identity(), None);
+        pixmap.stroke_path(
+            &path,
+            &border_paint,
+            &border_stroke,
+            Transform::identity(),
+            None,
+        );
         Some(rect)
     }
 
@@ -2484,7 +2833,10 @@ impl ScreenRenderer {
         let mut y = ry + 124.0;
 
         let badge_bg = self.color_from_hex(&self.palette.harmonies.base);
-        let badge_fg = self.contrast_color(badge_bg, Some(self.color_from_hex(&self.palette.theme.f_high)));
+        let badge_fg = self.contrast_color(
+            badge_bg,
+            Some(self.color_from_hex(&self.palette.theme.f_high)),
+        );
         self.draw_pill_badge(
             pixmap,
             "MIDI PIANO ROLL",
@@ -2497,7 +2849,10 @@ impl ScreenRenderer {
         );
         y += 28.0;
 
-        let info = format!("{} • {} notes • {:.1}s • {:.0} BPM", midi.title, midi.total_notes, midi.duration_sec, midi.bpm);
+        let info = format!(
+            "{} • {} notes • {:.1}s • {:.0} BPM",
+            midi.title, midi.total_notes, midi.duration_sec, midi.bpm
+        );
         self.draw_text_clipped(
             pixmap,
             &info,
@@ -2516,7 +2871,6 @@ impl ScreenRenderer {
         let roll_h = (ry + rh - 30.0 - roll_y).max(40.0);
 
         if let Some(_rect) = self.draw_card_viewport_frame(pixmap, roll_x, roll_y, roll_w, roll_h) {
-
             let kb_w = 16.0f32;
             if let Some(kb_rect) = Rect::from_xywh(roll_x, roll_y, kb_w, roll_h) {
                 let mut kb_paint = Paint::default();
@@ -2585,7 +2939,10 @@ impl ScreenRenderer {
         let mut y = ry + 124.0;
 
         let badge_bg = self.color_from_hex(&self.palette.diff_mod);
-        let badge_fg = self.contrast_color(badge_bg, Some(self.color_from_hex(&self.palette.theme.f_high)));
+        let badge_fg = self.contrast_color(
+            badge_bg,
+            Some(self.color_from_hex(&self.palette.theme.f_high)),
+        );
         self.draw_pill_badge(
             pixmap,
             "3D STL MODEL",
@@ -2598,7 +2955,14 @@ impl ScreenRenderer {
         );
         y += 28.0;
 
-        let info = format!("{} • {} facets • {:.1}×{:.1}×{:.1}mm", mesh.name, mesh.triangles.len(), mesh.size.x, mesh.size.y, mesh.size.z);
+        let info = format!(
+            "{} • {} facets • {:.1}×{:.1}×{:.1}mm",
+            mesh.name,
+            mesh.triangles.len(),
+            mesh.size.x,
+            mesh.size.y,
+            mesh.size.z
+        );
         self.draw_text_clipped(
             pixmap,
             &info,
@@ -2650,7 +3014,8 @@ impl ScreenRenderer {
                     normal.x * cos_y + normal.z * sin_y,
                     normal.y * cos_x - (-normal.x * sin_y + normal.z * cos_y) * sin_x,
                     normal.y * sin_x + (-normal.x * sin_y + normal.z * cos_y) * cos_x,
-                ).normalize();
+                )
+                .normalize();
 
                 if rotated_normal.z <= 0.02 {
                     continue;
@@ -2692,13 +3057,24 @@ impl ScreenRenderer {
                 if let Some(t_path) = pb.finish() {
                     let base_c = self.color_from_hex(&self.palette.harmonies.base);
                     let bg_c = self.color_from_hex(&self.palette.theme.b_low);
-                    let r = ((bg_c.red() * (1.0 - diff * 0.7) + base_c.red() * diff * 0.7) * 255.0).clamp(0.0, 255.0) as u8;
-                    let g = ((bg_c.green() * (1.0 - diff * 0.7) + base_c.green() * diff * 0.7) * 255.0).clamp(0.0, 255.0) as u8;
-                    let b = ((bg_c.blue() * (1.0 - diff * 0.7) + base_c.blue() * diff * 0.7) * 255.0).clamp(0.0, 255.0) as u8;
+                    let r = ((bg_c.red() * (1.0 - diff * 0.7) + base_c.red() * diff * 0.7) * 255.0)
+                        .clamp(0.0, 255.0) as u8;
+                    let g = ((bg_c.green() * (1.0 - diff * 0.7) + base_c.green() * diff * 0.7)
+                        * 255.0)
+                        .clamp(0.0, 255.0) as u8;
+                    let b = ((bg_c.blue() * (1.0 - diff * 0.7) + base_c.blue() * diff * 0.7)
+                        * 255.0)
+                        .clamp(0.0, 255.0) as u8;
 
                     let mut fill_paint = Paint::default();
                     fill_paint.set_color(Color::from_rgba8(r, g, b, 235));
-                    pixmap.fill_path(&t_path, &fill_paint, tiny_skia::FillRule::Winding, Transform::identity(), None);
+                    pixmap.fill_path(
+                        &t_path,
+                        &fill_paint,
+                        tiny_skia::FillRule::Winding,
+                        Transform::identity(),
+                        None,
+                    );
 
                     // High-contrast, crisp wireframe edge lines matching theme accent
                     let mut line_stroke = Stroke::default();
@@ -2711,7 +3087,13 @@ impl ScreenRenderer {
                         (wire_c.blue() * 255.0) as u8,
                         220,
                     ));
-                    pixmap.stroke_path(&t_path, &line_paint, &line_stroke, Transform::identity(), None);
+                    pixmap.stroke_path(
+                        &t_path,
+                        &line_paint,
+                        &line_stroke,
+                        Transform::identity(),
+                        None,
+                    );
                 }
             }
         }
@@ -2770,13 +3152,28 @@ impl ScreenRenderer {
         };
         if let Some(ref sheet_data) = spreadsheet_opt {
             if let Some(first_sheet) = sheet_data.sheets.first() {
-                self.draw_spreadsheet_card(pixmap, &sheet_data.title, first_sheet, rx, ry, rw, rh, is_hero);
+                self.draw_spreadsheet_card(
+                    pixmap,
+                    &sheet_data.title,
+                    first_sheet,
+                    rx,
+                    ry,
+                    rw,
+                    rh,
+                    is_hero,
+                );
                 return;
             }
         }
 
         // 5. MIDI File Preview
-        if p.is_file() && (p.extension().and_then(|s| s.to_str()).map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")).unwrap_or(false)) {
+        if p.is_file()
+            && (p
+                .extension()
+                .and_then(|s| s.to_str())
+                .map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
+                .unwrap_or(false))
+        {
             if let Ok(midi_data) = little_clip_ops::MidiData::parse_file(p) {
                 self.draw_midi_card(pixmap, &midi_data, rx, ry, rw, rh, is_hero);
                 return;
@@ -2796,12 +3193,16 @@ impl ScreenRenderer {
         let text_font_size = if is_hero { 18.0 } else { 15.0 };
         let line_height = if is_hero { 24.0 } else { 20.0 };
 
-        let lines: Vec<&str> = text.lines().collect();
+        // Classification above uses the normalized text, but the previous renderer
+        // accidentally switched back to `text` here. A clipboard/file payload with
+        // a leading newline or space therefore produced a visibly indented first
+        // glyph in the tiny preview.
+        let lines: Vec<&str> = trimmed.lines().collect();
         let total_lines = lines.len();
         let max_y = ry + rh - 22.0;
         let mut line_y = ry + 124.0;
 
-        let lang_id = little_clip_core::syntax::detect_language(text, ext_hint);
+        let lang_id = little_clip_core::syntax::detect_language(trimmed, ext_hint);
         let syntax = SYNTAX_SET
             .find_syntax_by_extension(lang_id)
             .or_else(|| SYNTAX_SET.find_syntax_by_token(lang_id))
@@ -2821,8 +3222,19 @@ impl ScreenRenderer {
 
             if is_near_bottom && has_more {
                 let remaining = total_lines - idx;
-                let badge = format!("▼ +{} more lines ({})", remaining, little_clip_core::syntax::language_display_name(lang_id));
-                self.draw_footer_badge(pixmap, &badge, content_x, line_y, text_font_size, clip_right);
+                let badge = format!(
+                    "▼ +{} more lines ({})",
+                    remaining,
+                    little_clip_core::syntax::language_display_name(lang_id)
+                );
+                self.draw_footer_badge(
+                    pixmap,
+                    &badge,
+                    content_x,
+                    line_y,
+                    text_font_size,
+                    clip_right,
+                );
                 break;
             }
 
@@ -2839,8 +3251,16 @@ impl ScreenRenderer {
                 if cx >= clip_right {
                     break;
                 }
-                let fg = Color::from_rgba8(style.foreground.r, style.foreground.g, style.foreground.b, 255);
-                let font_style = if style.font_style.contains(syntect::highlighting::FontStyle::BOLD) {
+                let fg = Color::from_rgba8(
+                    style.foreground.r,
+                    style.foreground.g,
+                    style.foreground.b,
+                    255,
+                );
+                let font_style = if style
+                    .font_style
+                    .contains(syntect::highlighting::FontStyle::BOLD)
+                {
                     FontStyle::Bold
                 } else {
                     FontStyle::Mono
@@ -2860,7 +3280,6 @@ impl ScreenRenderer {
             line_y += line_height;
         }
     }
-
 
     fn draw_text(
         &self,
@@ -2946,13 +3365,20 @@ mod tests {
         let mut pixmap = Pixmap::new(200, 200).unwrap();
         let rgba_data = vec![255u8; 50 * 50 * 4];
         let sub = PixmapRef::from_bytes(&rgba_data, 50, 50).unwrap();
-        pixmap.draw_pixmap(10, 10, sub, &PixmapPaint::default(), Transform::identity(), None);
+        pixmap.draw_pixmap(
+            10,
+            10,
+            sub,
+            &PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
     }
 
     #[test]
     fn test_truncate_filename_elided() {
         let renderer = ScreenRenderer::fallback(AppConfig::default());
-        
+
         // 1. Short filename fits as-is
         let short = renderer.truncate_filename_elided("test.png", 200.0, 24.0, true);
         assert_eq!(short.prefix, "test.png");
@@ -2960,12 +3386,14 @@ mod tests {
         assert_eq!(short.full_text(), "test.png");
 
         // 2. Long filename with extension preserves extension and uses single-character elision '▸'
-        let long_ext = renderer.truncate_filename_elided("very_long_filename.jpg", 100.0, 24.0, true);
+        let long_ext =
+            renderer.truncate_filename_elided("very_long_filename.jpg", 100.0, 24.0, true);
         assert_eq!(long_ext.suffix.as_deref(), Some(".jpg"));
         assert_eq!(long_ext.elision.as_deref(), Some("▸"));
         assert!(long_ext.full_text().ends_with(".jpg"));
         // 3. Long text without extension adds '▸' at the end
-        let long_no_ext = renderer.truncate_filename_elided("very_long_document_title", 100.0, 24.0, true);
+        let long_no_ext =
+            renderer.truncate_filename_elided("very_long_document_title", 100.0, 24.0, true);
         assert_eq!(long_no_ext.elision.as_deref(), Some("▸"));
         assert_eq!(long_no_ext.suffix, None);
         assert!(long_no_ext.full_text().ends_with('▸'));
@@ -2976,8 +3404,12 @@ mod tests {
         let renderer = ScreenRenderer::fallback(AppConfig::default());
         let mut manager = SlotManager::new();
 
-        let md_item = ClipItem::from_text("# Heading 1\n- Item with **bold**\n> Quote\n```rust\nlet x = 1;\n```");
-        let txt_item = ClipItem::from_text("Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10\nLine 11\nLine 12");
+        let md_item = ClipItem::from_text(
+            "# Heading 1\n- Item with **bold**\n> Quote\n```rust\nlet x = 1;\n```",
+        );
+        let txt_item = ClipItem::from_text(
+            "Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6\nLine 7\nLine 8\nLine 9\nLine 10\nLine 11\nLine 12",
+        );
 
         manager.push_left(md_item);
         manager.push_right(txt_item);
@@ -3008,7 +3440,9 @@ mod tests {
 
         let mut multi_item = ClipItem::from_text("test");
         multi_item.payload = ClipPayload::MultiImage {
-            paths: (1..=8).map(|i| PathBuf::from(format!("img{}.png", i))).collect(),
+            paths: (1..=8)
+                .map(|i| PathBuf::from(format!("img{}.png", i)))
+                .collect(),
             total_count: 8,
             preview_indices: vec![0, 1, 6, 7],
             thumbnails: vec![thumb1, thumb2, thumb3, thumb4],
@@ -3028,8 +3462,13 @@ mod tests {
     #[test]
     fn test_render_blank_frame() {
         let renderer = ScreenRenderer::fallback(AppConfig::default());
-        let blank_jpeg = renderer.render_blank_frame().expect("render_blank_frame should succeed");
-        assert!(!blank_jpeg.is_empty(), "Blank JPEG frame should not be empty");
+        let blank_jpeg = renderer
+            .render_blank_frame()
+            .expect("render_blank_frame should succeed");
+        assert!(
+            !blank_jpeg.is_empty(),
+            "Blank JPEG frame should not be empty"
+        );
         // Verify JPEG magic bytes FF D8
         assert_eq!(blank_jpeg[0], 0xFF);
         assert_eq!(blank_jpeg[1], 0xD8);
@@ -3043,11 +3482,14 @@ mod tests {
         let mut manager = SlotManager::new();
 
         // 1. Raw CSV text
-        let csv_text = "Item,Quantity,Price\nWidget A,12,$4.50\nWidget B,8,$19.99\nWidget C,3,$99.00";
+        let csv_text =
+            "Item,Quantity,Price\nWidget A,12,$4.50\nWidget B,8,$19.99\nWidget C,3,$99.00";
         manager.push_left(ClipItem::from_text(csv_text));
 
         let pixmap = renderer.render_pixmap(&manager).unwrap();
-        let out_dir = std::path::Path::new("/home/vega/.gemini/antigravity-ide/brain/baf86972-714a-4618-98df-04ae2591b81d/scratch");
+        let out_dir = std::path::Path::new(
+            "/home/vega/.gemini/antigravity-ide/brain/baf86972-714a-4618-98df-04ae2591b81d/scratch",
+        );
         let _ = std::fs::create_dir_all(out_dir);
         let _ = pixmap.save_png(out_dir.join("csv_render.png"));
 
@@ -3065,12 +3507,16 @@ mod tests {
         // 3. Prose text with commas
         let prose = "Hey there, how is it going? I am testing out some plain text on my clipboard, to make sure it doesn't get treated as a spreadsheet.";
         let prose_detect = little_clip_ops::detect_csv_text(prose);
-        assert!(prose_detect.is_none(), "Prose should not be detected as CSV spreadsheet");
+        assert!(
+            prose_detect.is_none(),
+            "Prose should not be detected as CSV spreadsheet"
+        );
     }
 
     #[test]
     fn test_render_stl_card() {
-        let toothless_path = std::path::Path::new("/home/vega/Documents/type_testing/Toothless.stl");
+        let toothless_path =
+            std::path::Path::new("/home/vega/Documents/type_testing/Toothless.stl");
         if !toothless_path.exists() {
             return;
         }
@@ -3084,9 +3530,10 @@ mod tests {
         manager.push_left(item);
 
         let pixmap = renderer.render_pixmap(&manager).unwrap();
-        let out_dir = std::path::Path::new("/home/vega/.gemini/antigravity-ide/brain/baf86972-714a-4618-98df-04ae2591b81d/scratch");
+        let out_dir = std::path::Path::new(
+            "/home/vega/.gemini/antigravity-ide/brain/baf86972-714a-4618-98df-04ae2591b81d/scratch",
+        );
         let _ = std::fs::create_dir_all(out_dir);
         let _ = pixmap.save_png(out_dir.join("current_stl_card.png"));
     }
 }
-

@@ -4,19 +4,19 @@
 //! Wayland clipboard monitoring (`wl-paste`), and IPC communication with `clipctl` and `clip-workbench`.
 
 use little_clip_core::{
+    ClipItem, SlotId, SlotManager,
     ipc::{IpcRequest, IpcResponse},
     rolling_audio::RollingAudioBuffer,
-    ClipItem, SlotId, SlotManager,
 };
 use little_clip_driver::TrofeoDriver;
 use little_clip_render::ScreenRenderer;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{RwLock, mpsc};
 use tracing::{debug, error, info, warn};
 
 mod lock_monitor;
@@ -43,7 +43,8 @@ pub struct DaemonContext {
     /// Continuous PCM audio circular buffer.
     pub rolling_audio: Arc<std::sync::RwLock<RollingAudioBuffer>>,
     /// Temporary routing override for the next incoming system clipboard copy.
-    pub route_next_clipboard: RwLock<Option<(little_clip_core::HandSide, tokio::time::Instant, bool)>>,
+    pub route_next_clipboard:
+        RwLock<Option<(little_clip_core::HandSide, tokio::time::Instant, bool)>>,
 }
 
 impl DaemonContext {
@@ -166,9 +167,14 @@ impl DaemonContext {
 
 fn get_last_action_path() -> PathBuf {
     if let Ok(config_home) = std::env::var("XDG_CONFIG_HOME") {
-        PathBuf::from(config_home).join("little-screen-clip").join("last_action.json")
+        PathBuf::from(config_home)
+            .join("little-screen-clip")
+            .join("last_action.json")
     } else if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join(".config").join("little-screen-clip").join("last_action.json")
+        PathBuf::from(home)
+            .join(".config")
+            .join("little-screen-clip")
+            .join("last_action.json")
     } else {
         PathBuf::from("/tmp/little-clip-last-action.json")
     }
@@ -194,7 +200,6 @@ fn load_last_action_from_disk() -> Option<little_clip_core::ipc::LastAction> {
         None
     }
 }
-
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -222,7 +227,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some(drv)
         }
         Err(e) => {
-            warn!("Trofeo USB display not connected or accessible: {}. Running in virtual mode.", e);
+            warn!(
+                "Trofeo USB display not connected or accessible: {}. Running in virtual mode.",
+                e
+            );
             None
         }
     };
@@ -234,9 +242,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         run_display_worker(driver, display_rx).await;
     });
 
-    let rolling_audio = Arc::new(std::sync::RwLock::new(
-        RollingAudioBuffer::new(config.audio.rolling_capture_duration_sec, 48000, 2),
-    ));
+    let rolling_audio = Arc::new(std::sync::RwLock::new(RollingAudioBuffer::new(
+        config.audio.rolling_capture_duration_sec,
+        48000,
+        2,
+    )));
 
     let ctx = Arc::new(DaemonContext {
         config: RwLock::new(config.clone()),
@@ -281,7 +291,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let (interval_ms, has_anim) = {
                 let r = anim_ctx.renderer.read().await;
                 let mgr = anim_ctx.manager.read().await;
-                (r.config.display.animation_interval_ms.max(50), mgr.has_active_animation())
+                (
+                    r.config.display.animation_interval_ms.max(50),
+                    mgr.has_active_animation(),
+                )
             };
             if has_anim {
                 anim_ctx.refresh_display().await;
@@ -456,7 +469,8 @@ fn evaluate_op(
                 }
             } else if let Some(right) = mgr.right_hand() {
                 if op_name == "binary-diff"
-                    && little_clip_ops::binary_diff::resolve_two_files_from_single_item(&left).is_some()
+                    && little_clip_ops::binary_diff::resolve_two_files_from_single_item(&left)
+                        .is_some()
                 {
                     little_clip_ops::execute_unary_op(op_name, &left)
                 } else {
@@ -475,10 +489,7 @@ fn evaluate_op(
     }
 }
 
-async fn apply_op_result_and_respond(
-    new_item: ClipItem,
-    ctx: &Arc<DaemonContext>,
-) -> IpcResponse {
+async fn apply_op_result_and_respond(new_item: ClipItem, ctx: &Arc<DaemonContext>) -> IpcResponse {
     schedule_async_previews(&new_item, Arc::clone(ctx));
     let text_opt = extract_clipboard_text(&new_item);
     if let Some(ref t) = text_opt {
@@ -585,7 +596,10 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
             Ok(IpcRequest::PushText { text, hand }) => {
                 let (item, original) = if ctx.config.read().await.auto_actions.trim_link_tracking {
                     if let Some(cleaned) = little_clip_ops::clean_url_tracking(&text) {
-                        (ClipItem::from_text(cleaned), Some(ClipItem::from_text(text)))
+                        (
+                            ClipItem::from_text(cleaned),
+                            Some(ClipItem::from_text(text)),
+                        )
                     } else {
                         (ClipItem::from_text(text), None)
                     }
@@ -607,11 +621,10 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 }
             }
             Ok(IpcRequest::PushImage { bytes, mime, hand }) => {
-                let item_opt = tokio::task::spawn_blocking(move || {
-                    ClipItem::from_image_bytes(bytes, mime)
-                })
-                .await
-                .unwrap_or(None);
+                let item_opt =
+                    tokio::task::spawn_blocking(move || ClipItem::from_image_bytes(bytes, mime))
+                        .await
+                        .unwrap_or(None);
 
                 if let Some(item) = item_opt {
                     schedule_async_previews(&item, Arc::clone(&ctx));
@@ -632,11 +645,10 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
             }
             Ok(IpcRequest::PushFile { path, hand }) => {
                 let path_clone = path.clone();
-                let item = tokio::task::spawn_blocking(move || {
-                    ClipItem::from_single_file(&path_clone)
-                })
-                .await
-                .unwrap_or_else(|_| ClipItem::from_single_file(&path));
+                let item =
+                    tokio::task::spawn_blocking(move || ClipItem::from_single_file(&path_clone))
+                        .await
+                        .unwrap_or_else(|_| ClipItem::from_single_file(&path));
 
                 schedule_async_previews(&item, Arc::clone(&ctx));
                 {
@@ -753,9 +765,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
             Ok(IpcRequest::ExecuteRecipeWithPrompt {
                 recipe_name,
                 prompt_text,
-            }) => {
-                handle_execute_recipe(recipe_name, prompt_text, true, &ctx).await
-            }
+            }) => handle_execute_recipe(recipe_name, prompt_text, true, &ctx).await,
             Ok(IpcRequest::GetLastAction) => {
                 let act = ctx.last_action.read().await.clone();
                 IpcResponse::LastAction(act)
@@ -792,7 +802,8 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 match serde_yaml::from_str::<little_clip_ops::NodeGraph>(&yaml) {
                     Ok(graph) => {
                         let mgr_snapshot = { ctx.manager.read().await.clone() };
-                        let executor = little_clip_ops::PipelineExecutor::new(&graph, &mgr_snapshot);
+                        let executor =
+                            little_clip_ops::PipelineExecutor::new(&graph, &mgr_snapshot);
                         match executor.execute() {
                             Ok(pipe_res) => apply_pipeline_result(pipe_res, &ctx).await,
                             Err(e) => IpcResponse::Error {
@@ -850,19 +861,22 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     },
                 }
             }
-            Ok(IpcRequest::GetLockStatus) => {
-                IpcResponse::LockStatus(ctx.is_locked().await)
-            }
+            Ok(IpcRequest::GetLockStatus) => IpcResponse::LockStatus(ctx.is_locked().await),
             Ok(IpcRequest::GetRollingAudio) => {
                 let snapshot_dir = get_rolling_snapshot_dir();
                 let snapshot_path = snapshot_dir.join("current_snapshot.wav");
                 let res = {
                     let guard = ctx.rolling_audio.read().unwrap();
-                    guard.write_wav(&snapshot_path).map(|dur| (dur, guard.sample_rate(), guard.channels()))
+                    guard
+                        .write_wav(&snapshot_path)
+                        .map(|dur| (dur, guard.sample_rate(), guard.channels()))
                 };
                 match res {
                     Ok((dur, sr, ch)) => {
-                        info!("Captured rolling audio snapshot: {:.2}s -> {:?}", dur, snapshot_path);
+                        info!(
+                            "Captured rolling audio snapshot: {:.2}s -> {:?}",
+                            dur, snapshot_path
+                        );
                         IpcResponse::RollingAudio {
                             path: snapshot_path,
                             duration_secs: dur,
@@ -878,14 +892,21 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     }
                 }
             }
-            Ok(IpcRequest::RouteNextClipboard { hand, timeout_ms, restore_os_clipboard }) => {
+            Ok(IpcRequest::RouteNextClipboard {
+                hand,
+                timeout_ms,
+                restore_os_clipboard,
+            }) => {
                 let expires = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
                 {
                     let mut route = ctx.route_next_clipboard.write().await;
                     *route = Some((hand, expires, restore_os_clipboard));
                 }
                 IpcResponse::Success {
-                    message: format!("Next clipboard event routed to {:?} (timeout {}ms)", hand, timeout_ms),
+                    message: format!(
+                        "Next clipboard event routed to {:?} (timeout {}ms)",
+                        hand, timeout_ms
+                    ),
                 }
             }
             Ok(IpcRequest::GetSlotItem(slot)) => {
@@ -896,7 +917,10 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
             Ok(IpcRequest::GetAutoActions) => {
                 let cfg = ctx.config.read().await;
                 let mut map = std::collections::HashMap::new();
-                map.insert("trim_link_tracking".to_string(), cfg.auto_actions.trim_link_tracking);
+                map.insert(
+                    "trim_link_tracking".to_string(),
+                    cfg.auto_actions.trim_link_tracking,
+                );
                 IpcResponse::AutoActions(map)
             }
             Ok(IpcRequest::SetAutoAction { key, enabled }) => {
@@ -923,7 +947,6 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
 }
 
 async fn apply_pipeline_result(
-
     res: little_clip_ops::PipelineExecutionResult,
     ctx: &Arc<DaemonContext>,
 ) -> IpcResponse {
@@ -961,7 +984,10 @@ async fn apply_pipeline_result(
         IpcResponse::OpResult { item }
     } else {
         IpcResponse::Success {
-            message: format!("Pipeline executed successfully (saved {} files)", res.saved_files.len()),
+            message: format!(
+                "Pipeline executed successfully (saved {} files)",
+                res.saved_files.len()
+            ),
         }
     }
 }
@@ -976,13 +1002,19 @@ fn simulate_paste_action() {
 }
 
 fn schedule_thumbnail_generation(item: &ClipItem, ctx: Arc<DaemonContext>) {
-
-    if let little_clip_core::ClipPayload::Image { ref bytes, ref thumbnail, .. } = item.payload {
+    if let little_clip_core::ClipPayload::Image {
+        ref bytes,
+        ref thumbnail,
+        ..
+    } = item.payload
+    {
         if thumbnail.is_none() {
             let item_id = item.id;
             let bytes = bytes.clone();
             tokio::task::spawn_blocking(move || {
-                if let Some(thumb) = little_clip_core::item::ImageThumbnail::generate(&bytes, 320, 220) {
+                if let Some(thumb) =
+                    little_clip_core::item::ImageThumbnail::generate(&bytes, 320, 220)
+                {
                     tokio::spawn(async move {
                         let updated = {
                             let mut mgr = ctx.manager.write().await;
@@ -1021,7 +1053,9 @@ fn schedule_audio_waveform_generation(item: &ClipItem, ctx: Arc<DaemonContext>) 
                 // Phase 1: Fast plain waveform generation (200 bars)
                 // If duration exceeds audio_cfg.max_full_waveform_sec, extracts a 30s snippet
                 let audio_cfg_p2 = audio_cfg.clone();
-                if let Some(plain_wf) = little_clip_core::compute_plain_waveform(&path_clone, 200, &audio_cfg) {
+                if let Some(plain_wf) =
+                    little_clip_core::compute_plain_waveform(&path_clone, 200, &audio_cfg)
+                {
                     let path_p2 = path_clone.clone();
                     tokio::spawn(async move {
                         let updated = {
@@ -1034,7 +1068,11 @@ fn schedule_audio_waveform_generation(item: &ClipItem, ctx: Arc<DaemonContext>) 
 
                         // Phase 2: Spectral frequency analysis (adds frequency-based color map)
                         tokio::task::spawn_blocking(move || {
-                            if let Some(spectral_colors) = little_clip_core::compute_spectral_colors(&path_p2, 200, &audio_cfg_p2) {
+                            if let Some(spectral_colors) = little_clip_core::compute_spectral_colors(
+                                &path_p2,
+                                200,
+                                &audio_cfg_p2,
+                            ) {
                                 tokio::spawn(async move {
                                     let updated_spectral = {
                                         let mut mgr = ctx_p2.manager.write().await;
@@ -1091,9 +1129,21 @@ fn schedule_animation_generation(item: &ClipItem, ctx: Arc<DaemonContext>) {
 
             tokio::task::spawn_blocking(move || {
                 let anim_thumb = if format_clone == "GIF" || format_clone == "WEBP" {
-                    little_clip_core::animation::decode_animated_gif_or_webp(&path_clone, 200, 150, 25)
+                    little_clip_core::animation::decode_animated_gif_or_webp(
+                        &path_clone,
+                        200,
+                        150,
+                        25,
+                    )
                 } else if little_clip_core::animation::is_video_path(&path_clone) {
-                    little_clip_core::animation::extract_video_preview_frames(&path_clone, 200, 150, 25, 2.5, true)
+                    little_clip_core::animation::extract_video_preview_frames(
+                        &path_clone,
+                        200,
+                        150,
+                        25,
+                        2.5,
+                        true,
+                    )
                 } else {
                     None
                 };
@@ -1109,7 +1159,10 @@ fn schedule_animation_generation(item: &ClipItem, ctx: Arc<DaemonContext>) {
                         }
                     });
                 } else {
-                    tracing::warn!("Failed to generate animation thumbnail for {:?}", path_clone);
+                    tracing::warn!(
+                        "Failed to generate animation thumbnail for {:?}",
+                        path_clone
+                    );
                 }
             });
         }
@@ -1136,7 +1189,9 @@ fn schedule_multi_image_thumbnail_generation(item: &ClipItem, ctx: Arc<DaemonCon
                 let mut thumbs = Vec::with_capacity(paths_subset.len());
                 for path in paths_subset {
                     if let Ok(bytes) = std::fs::read(&path) {
-                        if let Some(thumb) = little_clip_core::item::ImageThumbnail::generate(&bytes, 200, 160) {
+                        if let Some(thumb) =
+                            little_clip_core::item::ImageThumbnail::generate(&bytes, 200, 160)
+                        {
                             thumbs.push(thumb);
                         }
                     }
@@ -1183,7 +1238,9 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
         let has_image_mime = if let Ok(ref out) = types_output {
             if out.status.success() {
                 let types_str = String::from_utf8_lossy(&out.stdout);
-                types_str.lines().any(|l| l.trim() == "image/png" || l.trim() == "image/jpeg")
+                types_str
+                    .lines()
+                    .any(|l| l.trim() == "image/png" || l.trim() == "image/jpeg")
             } else {
                 false
             }
@@ -1216,8 +1273,12 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
 
                         let (target_hand, restore_os) = ctx.take_route_override().await;
 
-                        if let Some(item) = ClipItem::from_image_bytes(img_out.stdout, "image/png") {
-                            info!("Captured clipboard image to {:?}: {} ({})", target_hand, item.title, item.subtitle);
+                        if let Some(item) = ClipItem::from_image_bytes(img_out.stdout, "image/png")
+                        {
+                            info!(
+                                "Captured clipboard image to {:?}: {} ({})",
+                                target_hand, item.title, item.subtitle
+                            );
                             schedule_async_previews(&item, Arc::clone(&ctx));
                             let prior_left = {
                                 let mut mgr = ctx.manager.write().await;
@@ -1226,7 +1287,11 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                                 old_left
                             };
                             ctx.refresh_display().await;
-                            ctx.maybe_restore_os_clipboard_after_route(restore_os, target_hand, prior_left);
+                            ctx.maybe_restore_os_clipboard_after_route(
+                                restore_os,
+                                target_hand,
+                                prior_left,
+                            );
                             continue;
                         }
                     } else {
@@ -1254,7 +1319,8 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                     let has_active_right_route = {
                         let route_guard = ctx.route_next_clipboard.read().await;
                         if let Some((hand, expires, _)) = *route_guard {
-                            hand == little_clip_core::HandSide::Right && tokio::time::Instant::now() < expires
+                            hand == little_clip_core::HandSide::Right
+                                && tokio::time::Instant::now() < expires
                         } else {
                             false
                         }
@@ -1266,16 +1332,16 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                         if let Some(left_item) = mgr.left_hand() {
                             match &left_item.payload {
                                 little_clip_core::ClipPayload::FileBatch(files) => {
-                                    let cand = little_clip_core::item::extract_local_file_paths(&text);
+                                    let cand =
+                                        little_clip_core::item::extract_local_file_paths(&text);
                                     !cand.is_empty() && cand == *files
                                 }
                                 little_clip_core::ClipPayload::AudioRef { path, .. } => {
-                                    let cand = little_clip_core::item::extract_local_file_paths(&text);
+                                    let cand =
+                                        little_clip_core::item::extract_local_file_paths(&text);
                                     cand.len() == 1 && cand[0] == *path
                                 }
-                                little_clip_core::ClipPayload::Text(t) => {
-                                    t.trim() == text.trim()
-                                }
+                                little_clip_core::ClipPayload::Text(t) => t.trim() == text.trim(),
                                 _ => false,
                             }
                         } else {
@@ -1294,10 +1360,21 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
 
                         let (target_hand, restore_os) = ctx.take_route_override().await;
 
-                        let (item, original_untracked) = if ctx.config.read().await.auto_actions.trim_link_tracking {
+                        let (item, original_untracked) = if ctx
+                            .config
+                            .read()
+                            .await
+                            .auto_actions
+                            .trim_link_tracking
+                        {
                             if let Some(cleaned) = little_clip_ops::clean_url_tracking(&text) {
-                                info!("Auto-Action: Trimmed link tracking from URL (original saved to Undo)");
-                                (ClipItem::from_text(cleaned), Some(ClipItem::from_text(text.clone())))
+                                info!(
+                                    "Auto-Action: Trimmed link tracking from URL (original saved to Undo)"
+                                );
+                                (
+                                    ClipItem::from_text(cleaned),
+                                    Some(ClipItem::from_text(text.clone())),
+                                )
                             } else {
                                 (ClipItem::from_text(text.clone()), None)
                             }
@@ -1305,7 +1382,10 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                             (ClipItem::from_text(text.clone()), None)
                         };
                         let was_cleaned = original_untracked.is_some();
-                        info!("Captured clipboard item to {:?}: [{}] {}", target_hand, item.handler_tag, item.title);
+                        info!(
+                            "Captured clipboard item to {:?}: [{}] {}",
+                            target_hand, item.handler_tag, item.title
+                        );
                         schedule_async_previews(&item, Arc::clone(&ctx));
                         let prior_left = {
                             let mut mgr = ctx.manager.write().await;
@@ -1319,11 +1399,18 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                         if was_cleaned {
                             if let Some(clean_text) = item.to_clipboard_text() {
                                 last_clipboard_text = clean_text.clone();
-                                let _ = tokio::process::Command::new("wl-copy").arg(&clean_text).status().await;
+                                let _ = tokio::process::Command::new("wl-copy")
+                                    .arg(&clean_text)
+                                    .status()
+                                    .await;
                             }
                         }
                         ctx.refresh_display().await;
-                        ctx.maybe_restore_os_clipboard_after_route(restore_os, target_hand, prior_left);
+                        ctx.maybe_restore_os_clipboard_after_route(
+                            restore_os,
+                            target_hand,
+                            prior_left,
+                        );
                     }
                 }
             }
@@ -1364,7 +1451,10 @@ fn is_image_file_path(p: &std::path::Path) -> bool {
         .and_then(|e| e.to_str())
         .unwrap_or("")
         .to_lowercase();
-    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "svg" | "gif" | "bmp")
+    matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "webp" | "svg" | "gif" | "bmp"
+    )
 }
 
 async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
@@ -1392,7 +1482,9 @@ async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
                 let _ = child.wait();
             }
         }
-        little_clip_core::ClipPayload::FileBatch(files) if files.len() == 1 && is_image_file_path(&files[0]) => {
+        little_clip_core::ClipPayload::FileBatch(files)
+            if files.len() == 1 && is_image_file_path(&files[0]) =>
+        {
             let path = &files[0];
             let ext = path
                 .extension()
@@ -1440,7 +1532,9 @@ async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
         }
         little_clip_core::ClipPayload::Url(u) => {
             ctx.add_self_copied_text(u.to_string()).await;
-            let _ = std::process::Command::new("wl-copy").arg(u.as_str()).spawn();
+            let _ = std::process::Command::new("wl-copy")
+                .arg(u.as_str())
+                .spawn();
         }
         little_clip_core::ClipPayload::Color { hex, .. } => {
             ctx.add_self_copied_text(hex.clone()).await;
@@ -1488,7 +1582,6 @@ async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
     }
 }
 
-
 /// Returns the Unix domain socket path used for IPC communication (`$XDG_RUNTIME_DIR/little-screen-clip.sock`).
 pub fn get_socket_path() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
@@ -1501,7 +1594,9 @@ pub fn get_socket_path() -> PathBuf {
 /// Returns the filesystem directory for saving rolling audio buffer snapshots.
 pub fn get_rolling_snapshot_dir() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(runtime_dir).join("little-screen-clip").join("rolling_snapshots")
+        PathBuf::from(runtime_dir)
+            .join("little-screen-clip")
+            .join("rolling_snapshots")
     } else {
         PathBuf::from("/tmp/little-screen-clip/rolling_snapshots")
     }

@@ -40,7 +40,9 @@ pub fn detect_language(content: &str, ext_hint: Option<&str>) -> &'static str {
 fn check_extension_hint(ext_hint: Option<&str>) -> Option<&'static str> {
     let ext = ext_hint?;
     let clean = ext.trim().trim_start_matches('.').to_lowercase();
-    if !clean.is_empty() && clean != "txt" && clean != "text" {
+    if clean == "txt" || clean == "text" {
+        Some("txt")
+    } else if !clean.is_empty() {
         map_extension_to_language(&clean)
     } else {
         None
@@ -54,9 +56,15 @@ fn check_shebang(trimmed: &str) -> Option<&'static str> {
     let first_line = trimmed.lines().next()?.to_lowercase();
     if first_line.contains("python") {
         Some("py")
-    } else if first_line.contains("bash") || first_line.contains("/sh") || first_line.contains("zsh") {
+    } else if first_line.contains("bash")
+        || first_line.contains("/sh")
+        || first_line.contains("zsh")
+    {
         Some("sh")
-    } else if first_line.contains("node") || first_line.contains("deno") || first_line.contains("bun") {
+    } else if first_line.contains("node")
+        || first_line.contains("deno")
+        || first_line.contains("bun")
+    {
         Some("js")
     } else if first_line.contains("ruby") {
         Some("rb")
@@ -76,7 +84,10 @@ fn check_structural_format(trimmed: &str) -> Option<&'static str> {
         }
     }
 
-    if trimmed.starts_with("<!DOCTYPE") || trimmed.starts_with("<html") || trimmed.starts_with("<?xml") {
+    if trimmed.starts_with("<!DOCTYPE")
+        || trimmed.starts_with("<html")
+        || trimmed.starts_with("<?xml")
+    {
         return Some("html");
     }
 
@@ -84,7 +95,9 @@ fn check_structural_format(trimmed: &str) -> Option<&'static str> {
         return Some("yaml");
     }
 
-    if (trimmed.starts_with("[package]") || trimmed.starts_with("[dependencies]") || trimmed.starts_with("[workspace]"))
+    if (trimmed.starts_with("[package]")
+        || trimmed.starts_with("[dependencies]")
+        || trimmed.starts_with("[workspace]"))
         && trimmed.contains('=')
     {
         return Some("toml");
@@ -135,19 +148,31 @@ fn score_language_heuristics(trimmed: &str) -> Option<&'static str> {
 
 fn score_rust_line(l: &str) -> u32 {
     let mut score = 0;
-    if ["fn ", "pub fn ", "pub async fn "].iter().any(|p| l.starts_with(p)) {
+    if ["fn ", "pub fn ", "pub async fn "]
+        .iter()
+        .any(|p| l.starts_with(p))
+    {
         score += 4;
     }
-    if ["use std::", "use crate::", "pub use "].iter().any(|p| l.starts_with(p)) {
+    if ["use std::", "use crate::", "pub use "]
+        .iter()
+        .any(|p| l.starts_with(p))
+    {
         score += 3;
     }
-    if ["impl ", "impl<", "trait "].iter().any(|p| l.starts_with(p)) {
+    if ["impl ", "impl<", "trait "]
+        .iter()
+        .any(|p| l.starts_with(p))
+    {
         score += 3;
     }
     if l.contains("let mut ") {
         score += 2;
     }
-    if ["println!(", "eprintln!(", "vec![", "format!("].iter().any(|p| l.contains(p)) {
+    if ["println!(", "eprintln!(", "vec![", "format!("]
+        .iter()
+        .any(|p| l.contains(p))
+    {
         score += 3;
     }
     if l.contains("match ") && l.ends_with('{') {
@@ -173,7 +198,10 @@ fn score_python_line(l: &str) -> u32 {
     if l.starts_with("if __name__ == ") || l.contains("__init__") {
         score += 4;
     }
-    if ["elif ", "except ", "finally:"].iter().any(|p| l.starts_with(p)) {
+    if ["elif ", "except ", "finally:"]
+        .iter()
+        .any(|p| l.starts_with(p))
+    {
         score += 3;
     }
     if l.contains("print(") && !l.ends_with(';') {
@@ -188,25 +216,43 @@ fn score_python_line(l: &str) -> u32 {
 fn score_c_cpp_line(l: &str) -> (u32, u32) {
     let mut c_score = 0;
     let mut cpp_score = 0;
-    if ["#include <", "#include \""].iter().any(|p| l.starts_with(p)) {
+    if ["#include <", "#include \""]
+        .iter()
+        .any(|p| l.starts_with(p))
+    {
         c_score += 4;
-        if ["<iostream>", "<vector>", "<string>", "<memory>"].iter().any(|p| l.contains(p)) {
+        if ["<iostream>", "<vector>", "<string>", "<memory>"]
+            .iter()
+            .any(|p| l.contains(p))
+        {
             cpp_score += 4;
         }
     }
     if l.starts_with("#define ") {
         c_score += 2;
     }
-    if ["int main(", "void main(", "int main ("].iter().any(|p| l.contains(p)) {
+    if ["int main(", "void main(", "int main ("]
+        .iter()
+        .any(|p| l.contains(p))
+    {
         c_score += 3;
     }
-    if ["std::", "cout <<", "cin >>", "nullptr"].iter().any(|p| l.contains(p)) {
+    if ["std::", "cout <<", "cin >>", "nullptr"]
+        .iter()
+        .any(|p| l.contains(p))
+    {
         cpp_score += 4;
     }
-    if ["template <", "template<", "namespace "].iter().any(|p| l.contains(p)) {
+    if ["template <", "template<", "namespace "]
+        .iter()
+        .any(|p| l.contains(p))
+    {
         cpp_score += 3;
     }
-    if ["printf(", "scanf(", "malloc("].iter().any(|p| l.contains(p)) {
+    if ["printf(", "scanf(", "malloc("]
+        .iter()
+        .any(|p| l.contains(p))
+    {
         c_score += 3;
     }
     (c_score, cpp_score)
@@ -214,16 +260,29 @@ fn score_c_cpp_line(l: &str) -> (u32, u32) {
 
 fn score_java_line(l: &str) -> u32 {
     let mut score = 0;
-    if ["public static void main", "System.out.print", "System.err.print"].iter().any(|p| l.contains(p)) {
+    if [
+        "public static void main",
+        "System.out.print",
+        "System.err.print",
+    ]
+    .iter()
+    .any(|p| l.contains(p))
+    {
         score += 5;
     }
-    if ["public class ", "private class ", "public interface "].iter().any(|p| l.starts_with(p)) {
+    if ["public class ", "private class ", "public interface "]
+        .iter()
+        .any(|p| l.starts_with(p))
+    {
         score += 4;
     }
     if l.starts_with("package ") && l.ends_with(';') {
         score += 3;
     }
-    if ["import java.", "import javax."].iter().any(|p| l.starts_with(p)) {
+    if ["import java.", "import javax."]
+        .iter()
+        .any(|p| l.starts_with(p))
+    {
         score += 4;
     }
     if l.contains("@Override") || l.contains("throws Exception") {
@@ -246,7 +305,10 @@ fn score_bash_line(l: &str) -> u32 {
     if ["fi", "done", "esac"].contains(&l) {
         score += 4;
     }
-    if ["chmod ", "chown ", "source "].iter().any(|p| l.starts_with(p)) {
+    if ["chmod ", "chown ", "source "]
+        .iter()
+        .any(|p| l.starts_with(p))
+    {
         score += 2;
     }
     if l.contains("${") && l.contains('}') {
@@ -257,7 +319,9 @@ fn score_bash_line(l: &str) -> u32 {
 
 fn score_js_line(l: &str) -> u32 {
     let mut score = 0;
-    if (l.starts_with("const ") || l.starts_with("let ") || l.starts_with("var ")) && l.contains(" = ") {
+    if (l.starts_with("const ") || l.starts_with("let ") || l.starts_with("var "))
+        && l.contains(" = ")
+    {
         score += 1;
     }
     if l.contains("console.log(") || l.contains("console.error(") {
@@ -355,9 +419,18 @@ pub fn is_code_file(path: &Path) -> bool {
 }
 
 const CODE_PREFIXES: &[&str] = &[
-    "#include", "#define", "#pragma", "#ifdef", "#ifndef",
-    "import ", "from ", "package ", "use std::", "pub fn ",
-    "int main(", "void main(",
+    "#include",
+    "#define",
+    "#pragma",
+    "#ifdef",
+    "#ifndef",
+    "import ",
+    "from ",
+    "package ",
+    "use std::",
+    "pub fn ",
+    "int main(",
+    "void main(",
 ];
 
 fn is_code_indicator(l: &str) -> bool {
@@ -414,7 +487,9 @@ impl MarkdownSignalCounter {
         if self.fence_count >= 2 {
             return true;
         }
-        if self.heading_count >= 1 && (self.list_count >= 1 || self.link_count >= 1 || self.fence_count >= 1) {
+        if self.heading_count >= 1
+            && (self.list_count >= 1 || self.link_count >= 1 || self.fence_count >= 1)
+        {
             return true;
         }
         self.heading_count >= 2 && self.list_count >= 1
@@ -463,7 +538,6 @@ pub fn detect_markdown_text(text: &str) -> bool {
     signals.is_markdown()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -480,9 +554,15 @@ mod tests {
 
     #[test]
     fn test_shebang_detection() {
-        assert_eq!(detect_language("#!/usr/bin/env python3\nprint('hello')", None), "py");
+        assert_eq!(
+            detect_language("#!/usr/bin/env python3\nprint('hello')", None),
+            "py"
+        );
         assert_eq!(detect_language("#!/bin/bash\necho hello", None), "sh");
-        assert_eq!(detect_language("#!/usr/bin/env node\nconsole.log(1)", None), "js");
+        assert_eq!(
+            detect_language("#!/usr/bin/env node\nconsole.log(1)", None),
+            "js"
+        );
     }
 
     #[test]
@@ -523,7 +603,16 @@ mod tests {
 
     #[test]
     fn test_json_and_structural() {
-        assert_eq!(detect_language("{\"name\": \"test\", \"version\": 1}", None), "json");
-        assert_eq!(detect_language("<!DOCTYPE html><html><body><h1>Hello</h1></body></html>", None), "html");
+        assert_eq!(
+            detect_language("{\"name\": \"test\", \"version\": 1}", None),
+            "json"
+        );
+        assert_eq!(
+            detect_language(
+                "<!DOCTYPE html><html><body><h1>Hello</h1></body></html>",
+                None
+            ),
+            "html"
+        );
     }
 }

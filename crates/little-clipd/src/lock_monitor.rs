@@ -89,7 +89,8 @@ async fn run_dbus_monitor(ctx: Arc<DaemonContext>) {
                             }
                         };
 
-                        let mut locked_hint_stream = session_proxy.receive_locked_hint_changed().await;
+                        let mut locked_hint_stream =
+                            session_proxy.receive_locked_hint_changed().await;
 
                         loop {
                             tokio::select! {
@@ -143,7 +144,10 @@ async fn run_dbus_monitor(ctx: Arc<DaemonContext>) {
                         }
                     }
                     (Err(e), _) | (_, Err(e)) => {
-                        warn!("Failed to create systemd-logind proxy: {}. Retrying in 5s...", e);
+                        warn!(
+                            "Failed to create systemd-logind proxy: {}. Retrying in 5s...",
+                            e
+                        );
                     }
                 }
             }
@@ -178,13 +182,21 @@ async fn run_noctalia_watchdog(ctx: Arc<DaemonContext>) {
             Ok(out) if out.status.success() => {
                 consecutive_failures = 0;
                 if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                    if let Some(is_active) = val.get("state").and_then(|s| s.get("lockScreenActive")).and_then(|b| b.as_bool()) {
+                    if let Some(is_active) = val
+                        .get("state")
+                        .and_then(|s| s.get("lockScreenActive"))
+                        .and_then(|b| b.as_bool())
+                    {
                         if is_active && !was_noctalia_locked {
-                            info!("Noctalia watchdog: lockScreenActive became true -> Blanking display");
+                            info!(
+                                "Noctalia watchdog: lockScreenActive became true -> Blanking display"
+                            );
                             was_noctalia_locked = true;
                             ctx.set_locked(true).await;
                         } else if !is_active && was_noctalia_locked {
-                            info!("Noctalia watchdog: lockScreenActive became false -> Restoring display");
+                            info!(
+                                "Noctalia watchdog: lockScreenActive became false -> Restoring display"
+                            );
                             was_noctalia_locked = false;
                             ctx.set_locked(false).await;
                         }

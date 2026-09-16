@@ -5,23 +5,24 @@
 
 use crate::ansi::ansi_to_layout_job;
 use crate::send_ipc_request;
+use crate::shell::{EscapeHatch, StudioShell};
 use eframe::egui::{self, Color32, Rounding, Stroke, Vec2};
-use little_clip_core::ipc::IpcRequest;
 use little_clip_core::HandSide;
-use little_clip_ops::diff::{compute_diff, DiffDisplayMode, DiffResult, DiffTarget};
+use little_clip_core::ipc::IpcRequest;
+use little_clip_ops::diff::{DiffDisplayMode, DiffResult, DiffTarget, compute_diff};
 use little_clip_ops::image_diff::{ImageDiffOptions, ImageDiffResult};
 
 /// Layout visualization mode for comparing bitmap images.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImageDiffViewMode {
     /// 3-Up view: `[Base] [Comparison] [Diff Mask]`.
-    ThreeUp,    // [ base ] [ comparison ] [ diff ] (matching ODiff demo table)
+    ThreeUp, // [ base ] [ comparison ] [ diff ] (matching ODiff demo table)
     /// Dimmed base image overlayed with glowing diff pixels.
-    Overlay,    // [ dimmed base + glowing diff pixels ]
+    Overlay, // [ dimmed base + glowing diff pixels ]
     /// High-contrast black mask highlighting pixel differences.
-    MaskOnly,   // [ black mask + glowing diff pixels ]
+    MaskOnly, // [ black mask + glowing diff pixels ]
     /// Split view: `[Base] [Diff Mask]`.
-    Split,      // [ base ] [ diff ]
+    Split, // [ base ] [ diff ]
 }
 
 impl ImageDiffViewMode {
@@ -64,7 +65,10 @@ fn spawn_image_diff_worker(
     lhs: &DiffTarget,
     rhs: &DiffTarget,
     options: ImageDiffOptions,
-) -> (Option<std::sync::mpsc::Receiver<Result<ImageDiffResult, String>>>, Option<String>) {
+) -> (
+    Option<std::sync::mpsc::Receiver<Result<ImageDiffResult, String>>>,
+    Option<String>,
+) {
     if let (Some(b1), Some(b2)) = (lhs.image_bytes(), rhs.image_bytes()) {
         if b1.is_empty() || b2.is_empty() {
             let mut missing = Vec::new();
@@ -93,7 +97,10 @@ fn spawn_image_diff_worker(
 
         (Some(rx), None)
     } else {
-        (None, Some("Failed to obtain image bytes from comparison targets".to_string()))
+        (
+            None,
+            Some("Failed to obtain image bytes from comparison targets".to_string()),
+        )
     }
 }
 
@@ -117,7 +124,11 @@ impl DiffViewerState {
                 ansi_to_layout_job("", 12.0),
             )
         } else {
-            let width = if mode == DiffDisplayMode::SideBySide { 150 } else { 120 };
+            let width = if mode == DiffDisplayMode::SideBySide {
+                150
+            } else {
+                120
+            };
             let r = compute_diff(&lhs, &rhs, mode, width);
             let job = ansi_to_layout_job(&r.raw_ansi, 12.0);
             (r, job)
@@ -170,14 +181,19 @@ impl DiffViewerState {
 
     pub fn recompute(&mut self) {
         if self.is_image() {
-            let (rx, err) = spawn_image_diff_worker(&self.lhs, &self.rhs, self.image_options.clone());
+            let (rx, err) =
+                spawn_image_diff_worker(&self.lhs, &self.rhs, self.image_options.clone());
             self.is_computing = rx.is_some();
             self.image_receiver = rx;
             self.compute_start_time = std::time::Instant::now();
             self.decode_error = err;
             self.textures_loaded = false;
         } else {
-            let width = if self.mode == DiffDisplayMode::SideBySide { 150 } else { 120 };
+            let width = if self.mode == DiffDisplayMode::SideBySide {
+                150
+            } else {
+                120
+            };
             self.result = compute_diff(&self.lhs, &self.rhs, self.mode, width);
             self.layout_job = ansi_to_layout_job(&self.result.raw_ansi, 12.0);
         }
@@ -209,26 +225,128 @@ impl DiffViewerState {
 
         if let Some(res) = &self.image_result {
             let max_tex_dim = 2048;
-            let (w, h, base_rgba) = little_clip_ops::image_diff::downsample_rgba(res.width, res.height, &res.base_rgba, max_tex_dim);
-            let (_, _, comp_rgba) = little_clip_ops::image_diff::downsample_rgba(res.width, res.height, &res.comp_rgba, max_tex_dim);
-            let (_, _, mask_rgba) = little_clip_ops::image_diff::downsample_rgba(res.width, res.height, &res.mask_rgba, max_tex_dim);
-            let (_, _, overlay_rgba) = little_clip_ops::image_diff::downsample_rgba(res.width, res.height, &res.overlay_rgba, max_tex_dim);
+            let (w, h, base_rgba) = little_clip_ops::image_diff::downsample_rgba(
+                res.width,
+                res.height,
+                &res.base_rgba,
+                max_tex_dim,
+            );
+            let (_, _, comp_rgba) = little_clip_ops::image_diff::downsample_rgba(
+                res.width,
+                res.height,
+                &res.comp_rgba,
+                max_tex_dim,
+            );
+            let (_, _, mask_rgba) = little_clip_ops::image_diff::downsample_rgba(
+                res.width,
+                res.height,
+                &res.mask_rgba,
+                max_tex_dim,
+            );
+            let (_, _, overlay_rgba) = little_clip_ops::image_diff::downsample_rgba(
+                res.width,
+                res.height,
+                &res.overlay_rgba,
+                max_tex_dim,
+            );
 
             let size = [w as usize, h as usize];
             if size[0] > 0 && size[1] > 0 {
                 let base_img = egui::ColorImage::from_rgba_unmultiplied(size, &base_rgba);
-                self.base_texture = Some(ctx.load_texture("diff-base", base_img, egui::TextureOptions::LINEAR));
+                self.base_texture =
+                    Some(ctx.load_texture("diff-base", base_img, egui::TextureOptions::LINEAR));
 
                 let comp_img = egui::ColorImage::from_rgba_unmultiplied(size, &comp_rgba);
-                self.comp_texture = Some(ctx.load_texture("diff-comp", comp_img, egui::TextureOptions::LINEAR));
+                self.comp_texture =
+                    Some(ctx.load_texture("diff-comp", comp_img, egui::TextureOptions::LINEAR));
 
                 let mask_img = egui::ColorImage::from_rgba_unmultiplied(size, &mask_rgba);
-                self.mask_texture = Some(ctx.load_texture("diff-mask", mask_img, egui::TextureOptions::NEAREST));
+                self.mask_texture =
+                    Some(ctx.load_texture("diff-mask", mask_img, egui::TextureOptions::NEAREST));
 
                 let overlay_img = egui::ColorImage::from_rgba_unmultiplied(size, &overlay_rgba);
-                self.overlay_texture = Some(ctx.load_texture("diff-overlay", overlay_img, egui::TextureOptions::LINEAR));
+                self.overlay_texture = Some(ctx.load_texture(
+                    "diff-overlay",
+                    overlay_img,
+                    egui::TextureOptions::LINEAR,
+                ));
             }
             self.textures_loaded = true;
+        }
+    }
+
+    /// Triggers launching Meld or KDiff3 for visual comparison.
+    pub fn trigger_escape_hatch(&mut self, now: f64) {
+        let left_path = match &self.lhs {
+            DiffTarget::File { path, .. } => path.clone(),
+            DiffTarget::ClipboardText {
+                content, ext_hint, ..
+            } => {
+                let ext = ext_hint.as_deref().unwrap_or("txt");
+                let p = std::env::temp_dir().join(format!(
+                    "clip_diff_lhs_{}.{}",
+                    uuid::Uuid::new_v4().simple(),
+                    ext
+                ));
+                let _ = std::fs::write(&p, content);
+                p
+            }
+            DiffTarget::Image { path: Some(p), .. } => p.clone(),
+            DiffTarget::Image { bytes, mime, .. } => {
+                let ext = if mime.contains("png") { "png" } else { "jpg" };
+                let p = std::env::temp_dir().join(format!(
+                    "clip_diff_lhs_{}.{}",
+                    uuid::Uuid::new_v4().simple(),
+                    ext
+                ));
+                let _ = std::fs::write(&p, bytes);
+                p
+            }
+        };
+
+        let right_path = match &self.rhs {
+            DiffTarget::File { path, .. } => path.clone(),
+            DiffTarget::ClipboardText {
+                content, ext_hint, ..
+            } => {
+                let ext = ext_hint.as_deref().unwrap_or("txt");
+                let p = std::env::temp_dir().join(format!(
+                    "clip_diff_rhs_{}.{}",
+                    uuid::Uuid::new_v4().simple(),
+                    ext
+                ));
+                let _ = std::fs::write(&p, content);
+                p
+            }
+            DiffTarget::Image { path: Some(p), .. } => p.clone(),
+            DiffTarget::Image { bytes, mime, .. } => {
+                let ext = if mime.contains("png") { "png" } else { "jpg" };
+                let p = std::env::temp_dir().join(format!(
+                    "clip_diff_rhs_{}.{}",
+                    uuid::Uuid::new_v4().simple(),
+                    ext
+                ));
+                let _ = std::fs::write(&p, bytes);
+                p
+            }
+        };
+
+        if std::process::Command::new("meld")
+            .arg(&left_path)
+            .arg(&right_path)
+            .spawn()
+            .is_ok()
+        {
+            self.status_toast = Some(("🚀 Launched Meld comparison".to_string(), now));
+        } else if std::process::Command::new("kdiff3")
+            .arg(&left_path)
+            .arg(&right_path)
+            .spawn()
+            .is_ok()
+        {
+            self.status_toast = Some(("🚀 Launched KDiff3 comparison".to_string(), now));
+        } else {
+            self.status_toast = Some(("⚠️ Neither Meld nor KDiff3 is installed".to_string(), now));
         }
     }
 
@@ -245,14 +363,22 @@ impl DiffViewerState {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             *close_requested = true;
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
+        if ctx.input(|i| {
+            i.key_pressed(egui::Key::Tab)
+                || (i.key_pressed(egui::Key::C)
+                    && !i.modifiers.command
+                    && !i.modifiers.ctrl
+                    && !i.modifiers.mac_cmd)
+        }) {
             self.toggle_mode();
         }
         if ctx.input(|i| i.key_pressed(egui::Key::S)) {
             self.swap_operands();
         }
 
-        if self.is_image() {
+        let is_img = self.is_image();
+
+        if is_img {
             if self.is_computing {
                 ctx.request_repaint();
                 if let Some(ref rx) = self.image_receiver {
@@ -282,427 +408,487 @@ impl DiffViewerState {
             }
 
             self.ensure_image_textures(ctx);
-            self.render_image_ui(ui, ctx, palette, close_requested, now);
-        } else {
-            self.render_text_ui(ui, ctx, palette, close_requested, now);
         }
-    }
 
-    fn render_image_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        palette: &little_clip_core::theme::AppPalette,
-        close_requested: &mut bool,
-        now: f64,
-    ) {
-        let bg = crate::hex_to_c32(&palette.theme.background);
-        let b_low = crate::hex_to_c32(&palette.theme.b_low);
-        let b_med = crate::hex_to_c32(&palette.theme.b_med);
-        let f_high = crate::hex_to_c32(&palette.theme.f_high);
-        let f_med = crate::hex_to_c32(&palette.theme.f_med);
-        let f_low = crate::hex_to_c32(&palette.theme.f_low);
-        let accent = crate::hex_to_c32(&palette.harmonies.base);
-        let success_color = crate::hex_to_c32(&palette.diff_add);
-        let del_color = crate::hex_to_c32(&palette.diff_del);
-
-        // Copy shortcut for image diff
+        // Copy shortcut
         let copy_requested = ctx.input(|i| {
             i.events.iter().any(|e| matches!(e, egui::Event::Copy))
                 || i.raw.events.iter().any(|e| matches!(e, egui::Event::Copy))
-                || (i.key_pressed(egui::Key::C) && (i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd))
+                || (i.key_pressed(egui::Key::C)
+                    && (i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd))
         }) || ctx.input_mut(|i| {
             i.consume_key(egui::Modifiers::COMMAND, egui::Key::C)
                 || i.consume_key(egui::Modifiers::CTRL, egui::Key::C)
         });
 
         if copy_requested {
-            self.copy_image_diff_to_clipboard(now);
+            if is_img {
+                self.copy_image_diff_to_clipboard(now);
+            } else {
+                ctx.output_mut(|o| o.copied_text = strip_ansi_codes(&self.result.raw_ansi));
+                self.status_toast = Some(("Diff text copied to clipboard!".to_string(), now));
+            }
         }
 
-        let full_rect = ui.available_rect_before_wrap();
-        ui.allocate_ui_at_rect(full_rect, |ui| {
-            // Background backdrop
-            ui.painter().rect_filled(
-                full_rect,
-                Rounding::ZERO,
-                bg,
-            );
+        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let accent = crate::hex_to_c32(&palette.harmonies.base);
+        let success_color = crate::hex_to_c32(&palette.diff_add);
+        let del_color = crate::hex_to_c32(&palette.diff_del);
 
-            ui.add_space(8.0);
+        let hatch = EscapeHatch::new(
+            "🔍 Open in Meld",
+            "meld",
+            "Open comparison in external Meld tool",
+        );
 
-            // 1. Top Control Bar
-            ui.horizontal(|ui| {
-                ui.add_space(12.0);
+        let mut shell = if is_img {
+            let mut s = StudioShell::new("Picture Diff Comparison", "⑂", palette, close_requested)
+                .with_escape_hatch(hatch)
+                .with_footer_hints("Navigation: [Esc] Close • [Tab/C] Toggle View • [S] Swap Operands • [Ctrl+C] Copy Mask");
 
-                ui.label(
-                    egui::RichText::new("⑂ Picture Diff Comparison")
-                        .heading()
-                        .strong()
-                        .color(f_high),
+            if self.is_computing {
+                let elapsed = self.compute_start_time.elapsed().as_secs_f32();
+                s = s.with_badge(format!("⏳ Comparing... ({:.1}s)", elapsed), Some(accent));
+            } else if let Some(res) = &self.image_result {
+                if res.is_identical {
+                    s = s.with_badge("✔ 0 diff pixels • Identical", Some(success_color));
+                } else {
+                    s = s.with_badge(
+                        format!(
+                            "⚡ {} diff pixels ({:.2}%)",
+                            res.diff_count, res.diff_percentage
+                        ),
+                        Some(del_color),
+                    );
+                }
+                s = s.with_badge(format!("⛶ {} × {}", res.width, res.height), None);
+                s = s.with_footer_readout(format!(
+                    "Tolerance: {:.2} • {} diff pixels",
+                    self.image_options.threshold, res.diff_count
+                ));
+            }
+            s
+        } else {
+            let lines_count = self.result.raw_ansi.lines().count();
+            let mut s = StudioShell::new("Diff Comparison", "⑂", palette, close_requested)
+                .with_badge(format!("⚡ {}", self.result.engine_name), Some(accent))
+                .with_escape_hatch(hatch)
+                .with_footer_hints("Navigation: [Esc] Close • [Tab/C] Toggle View • [S] Swap Operands • [Ctrl+C] Copy Diff");
+
+            if self.result.is_identical {
+                s = s.with_badge("✔ Identical", Some(success_color));
+            } else {
+                s = s.with_badge(format!("⚡ {} lines in diff", lines_count), None);
+            }
+            s = s.with_footer_readout(format!(
+                "LHS: {} • RHS: {}",
+                self.lhs.label(),
+                self.rhs.label()
+            ));
+            s
+        };
+
+        egui::Frame::none()
+            .fill(crate::hex_to_c32(&palette.theme.background))
+            .inner_margin(egui::Margin::same(12.0))
+            .show(ui, |ui| {
+                // Zone 1: Header
+                let clicked_hatch = shell.render_header(ui, |ui| {
+                    let swap_btn = crate::secondary_button("⇄ Swap [S]", b_med, palette);
+                    if ui
+                        .add(swap_btn)
+                        .on_hover_text("Swap operands (S)")
+                        .clicked()
+                    {
+                        self.swap_operands();
+                    }
+
+                    let copy_label = if is_img {
+                        "📋 Copy Diff Mask"
+                    } else {
+                        "📋 Copy Diff"
+                    };
+                    let copy_btn = crate::secondary_button(copy_label, b_med, palette);
+                    if ui.add(copy_btn).clicked() {
+                        if is_img {
+                            self.copy_image_diff_to_clipboard(now);
+                        } else {
+                            ui.output_mut(|o| {
+                                o.copied_text = strip_ansi_codes(&self.result.raw_ansi)
+                            });
+                            self.status_toast =
+                                Some(("Diff text copied to clipboard!".to_string(), now));
+                        }
+                    }
+                });
+
+                if clicked_hatch.is_some() {
+                    self.trigger_escape_hatch(now);
+                }
+
+                if shell.is_closed() {
+                    return;
+                }
+
+                ui.add_space(4.0);
+
+                // Zone 2: Mode Toolbar
+                if is_img {
+                    self.render_image_toolbar(ui, palette);
+                } else {
+                    self.render_text_toolbar(ui, palette);
+                }
+
+                ui.add_space(6.0);
+
+                // Zone 3: Main comparison viewport
+                let footer_h = 28.0;
+                let avail = ui.available_size();
+                let viewport_h = (avail.y - footer_h - 6.0).max(100.0);
+
+                ui.allocate_ui_with_layout(
+                    Vec2::new(avail.x, viewport_h),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        if is_img {
+                            self.render_image_viewport(ui, palette);
+                        } else {
+                            self.render_text_viewport(ui, palette);
+                        }
+                    },
                 );
 
-                ui.add_space(8.0);
+                ui.add_space(4.0);
 
-                if self.is_computing {
-                    let elapsed = self.compute_start_time.elapsed().as_secs_f32();
-                    let badge = egui::Button::new(
-                        egui::RichText::new(format!("⏳ Comparing... ({:.1}s)", elapsed))
-                            .small()
-                            .strong()
-                            .color(f_high),
-                    )
-                    .fill(b_med)
-                    .stroke(Stroke::new(1.0, accent))
-                    .rounding(Rounding::same(4.0));
-                    ui.add(badge);
-                } else if let Some(res) = &self.image_result {
-                    // Difference status badge
-                    let (badge_bg, badge_fg, badge_text) = if res.is_identical {
-                        (
-                            crate::hex_to_c32_alpha(&palette.diff_add, 45),
-                            success_color,
-                            "✔ 0 diff pixels • Identical".to_string(),
-                        )
-                    } else {
-                        (
-                            crate::hex_to_c32_alpha(&palette.diff_del, 45),
-                            del_color,
-                            format!("⚡ {} diff pixels ({:.2}%)", res.diff_count, res.diff_percentage),
-                        )
-                    };
+                // Zone 5: Footer
+                shell.render_footer(ui, &self.status_toast, now);
+            });
+    }
 
-                    let badge = egui::Button::new(
-                        egui::RichText::new(badge_text)
-                            .small()
-                            .strong()
-                            .color(badge_fg),
-                    )
-                    .fill(badge_bg)
-                    .stroke(Stroke::NONE)
-                    .rounding(Rounding::same(4.0));
-                    ui.add(badge);
+    fn render_image_toolbar(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::theme::AppPalette,
+    ) {
+        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let f_low = crate::hex_to_c32(&palette.theme.f_low);
 
-                    ui.add_space(4.0);
-
-                    // Dimension badge
-                    let dim_badge = egui::Button::new(
-                        egui::RichText::new(format!("⛶ {} × {}", res.width, res.height))
-                            .small()
-                            .color(f_low),
-                    )
-                    .fill(b_med)
-                    .stroke(Stroke::NONE)
-                    .rounding(Rounding::same(4.0));
-                    ui.add(dim_badge);
-                }
-
-                ui.add_space(12.0);
-
-                // View Mode Toggles
-                for mode in &[
-                    ImageDiffViewMode::ThreeUp,
-                    ImageDiffViewMode::Overlay,
-                    ImageDiffViewMode::MaskOnly,
-                    ImageDiffViewMode::Split,
-                ] {
-                    let is_active = self.image_mode == *mode;
-                    let btn = egui::Button::new(
-                        egui::RichText::new(mode.label())
-                            .small()
-                            .strong()
-                            .color(if is_active { crate::hex_to_c32(&palette.theme.f_inv) } else { f_low }),
-                    )
-                    .fill(if is_active { accent } else { b_med })
-                    .stroke(Stroke::new(1.0, b_low))
-                    .rounding(Rounding::same(4.0));
-
-                    if ui.add(btn).clicked() {
-                        self.image_mode = *mode;
+        egui::Frame::none()
+            .fill(b_low)
+            .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+            .stroke(Stroke::new(1.0, b_med))
+            .rounding(Rounding::same(4.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for mode in &[
+                        ImageDiffViewMode::ThreeUp,
+                        ImageDiffViewMode::Overlay,
+                        ImageDiffViewMode::MaskOnly,
+                        ImageDiffViewMode::Split,
+                    ] {
+                        let is_active = self.image_mode == *mode;
+                        let btn = crate::mode_tab_button(mode.label(), is_active, palette);
+                        if ui.add(btn).clicked() {
+                            self.image_mode = *mode;
+                        }
                     }
-                }
 
-                ui.add_space(8.0);
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(8.0);
 
-                // Allowable Difference Threshold Slider & Quick Presets
-                ui.label(egui::RichText::new("Tolerance:").small().color(f_low));
-                let slider = egui::Slider::new(&mut self.image_options.threshold, 0.00..=0.50)
-                    .step_by(0.01)
-                    .show_value(true);
-                if ui.add(slider).on_hover_text("Allowable perceptual difference threshold (0.00 = strict, 0.50 = loose)").changed() {
-                    self.recompute();
-                }
-
-                for (val, label) in &[(0.05f32, "0.05"), (0.10f32, "0.10"), (0.20f32, "0.20")] {
-                    let is_cur = (self.image_options.threshold - val).abs() < 0.005;
-                    let t_btn = egui::Button::new(
-                        egui::RichText::new(*label)
-                            .small()
-                            .color(if is_cur { crate::hex_to_c32(&palette.theme.f_inv) } else { f_low }),
-                    )
-                    .fill(if is_cur { accent } else { b_med })
-                    .stroke(Stroke::new(1.0, b_low))
-                    .rounding(Rounding::same(4.0));
-
-                    if ui.add(t_btn).clicked() && !is_cur {
-                        self.image_options.threshold = *val;
+                    ui.label(egui::RichText::new("Tolerance:").small().color(f_low));
+                    let slider = egui::Slider::new(&mut self.image_options.threshold, 0.00..=0.50)
+                        .step_by(0.01)
+                        .show_value(true);
+                    if ui.add(slider).on_hover_text("Allowable perceptual difference threshold (0.00 = strict, 0.50 = loose)").changed() {
                         self.recompute();
                     }
-                }
 
-                ui.add_space(8.0);
-
-                // Swap Operands Button
-                let swap_btn = egui::Button::new(
-                    egui::RichText::new("⇄ Swap [S]")
-                        .small()
-                        .color(f_high),
-                )
-                .fill(b_med)
-                .stroke(Stroke::new(1.0, b_low))
-                .rounding(Rounding::same(4.0));
-
-                if ui.add(swap_btn).on_hover_text("Swap Left and Right images (Hotkey: S)").clicked() {
-                    self.swap_operands();
-                }
-
-                // Copy Diff Image Button
-                let copy_btn = egui::Button::new(
-                    egui::RichText::new("📋 Copy Diff Mask")
-                        .small()
-                        .color(f_high),
-                )
-                .fill(b_med)
-                .stroke(Stroke::new(1.0, b_low))
-                .rounding(Rounding::same(4.0));
-
-                if ui.add(copy_btn).clicked() {
-                    self.copy_image_diff_to_clipboard(now);
-                }
-
-                // Push remaining items to the right
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(12.0);
-                    let close_btn = egui::Button::new(
-                        egui::RichText::new("✕ Close (Esc)")
-                            .strong()
-                            .color(crate::hex_to_c32(&palette.undo_border)),
-                    )
-                    .fill(crate::hex_to_c32(&palette.undo_card_bg))
-                    .stroke(Stroke::new(1.0, crate::hex_to_c32(&palette.undo_border)))
-                    .rounding(Rounding::same(6.0));
-
-                    if ui.add(close_btn).clicked() {
-                        *close_requested = true;
-                    }
-
-                    if let Some((msg, ts)) = &self.status_toast {
-                        if now - ts < 3.5 {
-                            ui.label(
-                                egui::RichText::new(msg)
-                                    .color(success_color)
-                                    .small(),
-                            );
+                    for (val, label) in &[(0.05f32, "0.05"), (0.10f32, "0.10"), (0.20f32, "0.20")] {
+                        let is_cur = (self.image_options.threshold - val).abs() < 0.005;
+                        let t_btn = crate::mode_tab_button(*label, is_cur, palette);
+                        if ui.add(t_btn).clicked() && !is_cur {
+                            self.image_options.threshold = *val;
+                            self.recompute();
                         }
                     }
                 });
             });
-
-            ui.add_space(8.0);
-
-            // 2. Main Image Comparison Display Area
-            if self.is_computing {
-                self.render_computing_ui(ui, palette);
-            } else if let Some(res) = &self.image_result {
-                let aspect = (res.width as f32) / (res.height as f32).max(1.0);
-
-                match self.image_mode {
-                    ImageDiffViewMode::ThreeUp => {
-                        let avail_w = ui.available_width() - 32.0;
-                        let col_w = ((avail_w - 24.0) / 3.0).max(180.0);
-                        let avail_h = (ui.available_height() - 70.0).max(200.0);
-
-                        let mut img_w = col_w;
-                        let mut img_h = img_w / aspect;
-                        if img_h > avail_h {
-                            img_h = avail_h;
-                            img_w = img_h * aspect;
-                        }
-
-                        ui.horizontal(|ui| {
-                            ui.add_space(12.0);
-
-                            // Column 1: Base
-                            self.render_image_column(
-                                ui,
-                                palette,
-                                "base",
-                                self.lhs.label(),
-                                f_high,
-                                self.base_texture.as_ref(),
-                                img_w,
-                                img_h,
-                            );
-
-                            ui.add_space(12.0);
-
-                            // Column 2: Comparison
-                            self.render_image_column(
-                                ui,
-                                palette,
-                                "comparison",
-                                self.rhs.label(),
-                                f_high,
-                                self.comp_texture.as_ref(),
-                                img_w,
-                                img_h,
-                            );
-
-                            ui.add_space(12.0);
-
-                            // Column 3: Diff
-                            let diff_sub = format!("{} diff pixels ({:.2}%)", res.diff_count, res.diff_percentage);
-                            self.render_image_column(
-                                ui,
-                                palette,
-                                "diff",
-                                &diff_sub,
-                                del_color,
-                                self.mask_texture.as_ref(),
-                                img_w,
-                                img_h,
-                            );
-                        });
-                    }
-                    ImageDiffViewMode::Overlay => {
-                        let avail_w = ui.available_width() - 32.0;
-                        let avail_h = (ui.available_height() - 70.0).max(200.0);
-
-                        let mut img_w = avail_w;
-                        let mut img_h = img_w / aspect;
-                        if img_h > avail_h {
-                            img_h = avail_h;
-                            img_w = img_h * aspect;
-                        }
-
-                        ui.vertical_centered(|ui| {
-                            ui.label(
-                                egui::RichText::new("Diff Overlay (Dimmed Base + Glowing Difference)")
-                                    .strong()
-                                    .color(f_high),
-                            );
-                            ui.add_space(4.0);
-
-                            if let Some(tex) = &self.overlay_texture {
-                                egui::Frame::none()
-                                    .fill(b_low)
-                                    .rounding(Rounding::same(6.0))
-                                    .stroke(Stroke::new(1.0, b_med))
-                                    .inner_margin(egui::Margin::same(4.0))
-                                    .show(ui, |ui| {
-                                        ui.image(egui::load::SizedTexture::new(tex.id(), Vec2::new(img_w, img_h)));
-                                    });
-                            }
-                        });
-                    }
-                    ImageDiffViewMode::MaskOnly => {
-                        let avail_w = ui.available_width() - 32.0;
-                        let avail_h = (ui.available_height() - 70.0).max(200.0);
-
-                        let mut img_w = avail_w;
-                        let mut img_h = img_w / aspect;
-                        if img_h > avail_h {
-                            img_h = avail_h;
-                            img_w = img_h * aspect;
-                        }
-
-                        ui.vertical_centered(|ui| {
-                            ui.label(
-                                egui::RichText::new("Diff Mask (Dark Canvas + Glowing Difference)")
-                                    .strong()
-                                    .color(del_color),
-                            );
-                            ui.add_space(4.0);
-
-                            if let Some(tex) = &self.mask_texture {
-                                egui::Frame::none()
-                                    .fill(b_low)
-                                    .rounding(Rounding::same(6.0))
-                                    .stroke(Stroke::new(1.0, b_med))
-                                    .inner_margin(egui::Margin::same(4.0))
-                                    .show(ui, |ui| {
-                                        ui.image(egui::load::SizedTexture::new(tex.id(), Vec2::new(img_w, img_h)));
-                                    });
-                            }
-                        });
-                    }
-                    ImageDiffViewMode::Split => {
-                        let avail_w = ui.available_width() - 32.0;
-                        let col_w = ((avail_w - 16.0) / 2.0).max(240.0);
-                        let avail_h = (ui.available_height() - 70.0).max(200.0);
-
-                        let mut img_w = col_w;
-                        let mut img_h = img_w / aspect;
-                        if img_h > avail_h {
-                            img_h = avail_h;
-                            img_w = img_h * aspect;
-                        }
-
-                        ui.horizontal(|ui| {
-                            ui.add_space(12.0);
-
-                            self.render_image_column(
-                                ui,
-                                palette,
-                                "base",
-                                self.lhs.label(),
-                                f_high,
-                                self.base_texture.as_ref(),
-                                img_w,
-                                img_h,
-                            );
-
-                            ui.add_space(16.0);
-
-                            let diff_sub = format!("{} diff pixels ({:.2}%)", res.diff_count, res.diff_percentage);
-                            self.render_image_column(
-                                ui,
-                                palette,
-                                "diff",
-                                &diff_sub,
-                                del_color,
-                                self.mask_texture.as_ref(),
-                                img_w,
-                                img_h,
-                            );
-                        });
-                    }
-                }
-            } else {
-                ui.centered_and_justified(|ui| {
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            egui::RichText::new("⚠️ Unable to Compare Images")
-                                .color(del_color)
-                                .heading(),
-                        );
-                        ui.add_space(8.0);
-                        let err_text = self
-                            .decode_error
-                            .as_deref()
-                            .unwrap_or("Unable to decode one or both images for comparison");
-                        ui.label(
-                            egui::RichText::new(err_text)
-                                .color(f_med)
-                                .size(14.0),
-                        );
-                    });
-                });
-            }
-        });
     }
 
-    fn render_computing_ui(&self, ui: &mut egui::Ui, palette: &little_clip_core::theme::AppPalette) {
+    fn render_image_viewport(
+        &self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::theme::AppPalette,
+    ) {
+        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let f_high = crate::hex_to_c32(&palette.theme.f_high);
+        let f_med = crate::hex_to_c32(&palette.theme.f_med);
+        let del_color = crate::hex_to_c32(&palette.diff_del);
+
+        if self.is_computing {
+            self.render_computing_ui(ui, palette);
+        } else if let Some(res) = &self.image_result {
+            let aspect = (res.width as f32) / (res.height as f32).max(1.0);
+
+            match self.image_mode {
+                ImageDiffViewMode::ThreeUp => {
+                    let avail_w = ui.available_width() - 32.0;
+                    let col_w = ((avail_w - 24.0) / 3.0).max(180.0);
+                    let avail_h = (ui.available_height() - 40.0).max(200.0);
+
+                    let mut img_w = col_w;
+                    let mut img_h = img_w / aspect;
+                    if img_h > avail_h {
+                        img_h = avail_h;
+                        img_w = img_h * aspect;
+                    }
+
+                    ui.horizontal(|ui| {
+                        ui.add_space(12.0);
+
+                        // Column 1: Base
+                        self.render_image_column(
+                            ui,
+                            palette,
+                            "base",
+                            self.lhs.label(),
+                            f_high,
+                            self.base_texture.as_ref(),
+                            img_w,
+                            img_h,
+                        );
+
+                        ui.add_space(12.0);
+
+                        // Column 2: Comparison
+                        self.render_image_column(
+                            ui,
+                            palette,
+                            "comparison",
+                            self.rhs.label(),
+                            f_high,
+                            self.comp_texture.as_ref(),
+                            img_w,
+                            img_h,
+                        );
+
+                        ui.add_space(12.0);
+
+                        // Column 3: Diff
+                        let diff_sub = format!(
+                            "{} diff pixels ({:.2}%)",
+                            res.diff_count, res.diff_percentage
+                        );
+                        self.render_image_column(
+                            ui,
+                            palette,
+                            "diff",
+                            &diff_sub,
+                            del_color,
+                            self.mask_texture.as_ref(),
+                            img_w,
+                            img_h,
+                        );
+                    });
+                }
+                ImageDiffViewMode::Overlay => {
+                    let avail_w = ui.available_width() - 32.0;
+                    let avail_h = (ui.available_height() - 40.0).max(200.0);
+
+                    let mut img_w = avail_w;
+                    let mut img_h = img_w / aspect;
+                    if img_h > avail_h {
+                        img_h = avail_h;
+                        img_w = img_h * aspect;
+                    }
+
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new("Diff Overlay (Dimmed Base + Glowing Difference)")
+                                .strong()
+                                .color(f_high),
+                        );
+                        ui.add_space(4.0);
+
+                        if let Some(tex) = &self.overlay_texture {
+                            egui::Frame::none()
+                                .fill(b_low)
+                                .rounding(Rounding::same(6.0))
+                                .stroke(Stroke::new(1.0, b_med))
+                                .inner_margin(egui::Margin::same(4.0))
+                                .show(ui, |ui| {
+                                    ui.image(egui::load::SizedTexture::new(
+                                        tex.id(),
+                                        Vec2::new(img_w, img_h),
+                                    ));
+                                });
+                        }
+                    });
+                }
+                ImageDiffViewMode::MaskOnly => {
+                    let avail_w = ui.available_width() - 32.0;
+                    let avail_h = (ui.available_height() - 40.0).max(200.0);
+
+                    let mut img_w = avail_w;
+                    let mut img_h = img_w / aspect;
+                    if img_h > avail_h {
+                        img_h = avail_h;
+                        img_w = img_h * aspect;
+                    }
+
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new("Diff Mask (Dark Canvas + Glowing Difference)")
+                                .strong()
+                                .color(del_color),
+                        );
+                        ui.add_space(4.0);
+
+                        if let Some(tex) = &self.mask_texture {
+                            egui::Frame::none()
+                                .fill(b_low)
+                                .rounding(Rounding::same(6.0))
+                                .stroke(Stroke::new(1.0, b_med))
+                                .inner_margin(egui::Margin::same(4.0))
+                                .show(ui, |ui| {
+                                    ui.image(egui::load::SizedTexture::new(
+                                        tex.id(),
+                                        Vec2::new(img_w, img_h),
+                                    ));
+                                });
+                        }
+                    });
+                }
+                ImageDiffViewMode::Split => {
+                    let avail_w = ui.available_width() - 32.0;
+                    let col_w = ((avail_w - 16.0) / 2.0).max(240.0);
+                    let avail_h = (ui.available_height() - 40.0).max(200.0);
+
+                    let mut img_w = col_w;
+                    let mut img_h = img_w / aspect;
+                    if img_h > avail_h {
+                        img_h = avail_h;
+                        img_w = img_h * aspect;
+                    }
+
+                    ui.horizontal(|ui| {
+                        ui.add_space(12.0);
+
+                        self.render_image_column(
+                            ui,
+                            palette,
+                            "base",
+                            self.lhs.label(),
+                            f_high,
+                            self.base_texture.as_ref(),
+                            img_w,
+                            img_h,
+                        );
+
+                        ui.add_space(16.0);
+
+                        let diff_sub = format!(
+                            "{} diff pixels ({:.2}%)",
+                            res.diff_count, res.diff_percentage
+                        );
+                        self.render_image_column(
+                            ui,
+                            palette,
+                            "diff",
+                            &diff_sub,
+                            del_color,
+                            self.mask_texture.as_ref(),
+                            img_w,
+                            img_h,
+                        );
+                    });
+                }
+            }
+        } else {
+            ui.centered_and_justified(|ui| {
+                ui.vertical_centered(|ui| {
+                    ui.label(
+                        egui::RichText::new("⚠️ Unable to Compare Images")
+                            .color(del_color)
+                            .heading(),
+                    );
+                    ui.add_space(8.0);
+                    let err_text = self
+                        .decode_error
+                        .as_deref()
+                        .unwrap_or("Unable to decode one or both images for comparison");
+                    ui.label(egui::RichText::new(err_text).color(f_med).size(14.0));
+                });
+            });
+        }
+    }
+
+    fn render_text_viewport(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::theme::AppPalette,
+    ) {
+        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+
+        egui::Frame::none()
+            .fill(b_low)
+            .rounding(Rounding::same(6.0))
+            .stroke(Stroke::new(1.0, b_med))
+            .inner_margin(egui::Margin::same(8.0))
+            .show(ui, |ui| {
+                egui::ScrollArea::both()
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(self.layout_job.clone()).sense(egui::Sense::click()),
+                        );
+                    });
+            });
+    }
+
+    fn render_text_toolbar(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::theme::AppPalette,
+    ) {
+        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+
+        egui::Frame::none()
+            .fill(b_low)
+            .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+            .stroke(Stroke::new(1.0, b_med))
+            .rounding(Rounding::same(4.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let is_side = self.mode == DiffDisplayMode::SideBySide;
+                    let mode_label = if is_side {
+                        "◫ Side-by-Side"
+                    } else {
+                        "≡ Unified"
+                    };
+                    let btn = crate::mode_tab_button(mode_label, true, palette);
+                    if ui
+                        .add(btn)
+                        .on_hover_text("Toggle text diff display mode (Tab / C)")
+                        .clicked()
+                    {
+                        self.toggle_mode();
+                    }
+                });
+            });
+    }
+
+    fn render_computing_ui(
+        &self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::theme::AppPalette,
+    ) {
         let elapsed = self.compute_start_time.elapsed().as_secs_f32();
         let progress = (elapsed * 0.75).fract();
         let b_med = crate::hex_to_c32(&palette.theme.b_med);
@@ -755,9 +941,12 @@ impl DiffViewerState {
                         ui.add_space(8.0);
 
                         ui.label(
-                            egui::RichText::new(format!("{:.2}s elapsed • multithreaded SIMD comparison", elapsed))
-                                .small()
-                                .color(accent),
+                            egui::RichText::new(format!(
+                                "{:.2}s elapsed • multithreaded SIMD comparison",
+                                elapsed
+                            ))
+                            .small()
+                            .color(accent),
                         );
 
                         ui.add_space(10.0);
@@ -792,11 +981,7 @@ impl DiffViewerState {
 
             // Column Header
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(title)
-                        .strong()
-                        .color(title_color),
-                );
+                ui.label(egui::RichText::new(title).strong().color(title_color));
                 ui.label(
                     egui::RichText::new(format!("• {}", subtitle))
                         .small()
@@ -831,280 +1016,12 @@ impl DiffViewerState {
                     hand: HandSide::Left,
                 };
                 let _ = send_ipc_request(&req);
-                self.status_toast = Some(("Diff Mask copied to Left Hand & clipboard!".to_string(), now));
+                self.status_toast = Some((
+                    "Diff Mask copied to Left Hand & clipboard!".to_string(),
+                    now,
+                ));
             }
         }
-    }
-
-    fn render_text_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        palette: &little_clip_core::theme::AppPalette,
-        close_requested: &mut bool,
-        now: f64,
-    ) {
-        let bg = crate::hex_to_c32(&palette.theme.background);
-        let b_low = crate::hex_to_c32(&palette.theme.b_low);
-        let b_med = crate::hex_to_c32(&palette.theme.b_med);
-        let f_high = crate::hex_to_c32(&palette.theme.f_high);
-        let f_low = crate::hex_to_c32(&palette.theme.f_low);
-        let accent = crate::hex_to_c32(&palette.harmonies.base);
-        let success_color = crate::hex_to_c32(&palette.diff_add);
-        let lhs_accent = crate::hex_to_c32(&palette.left_hand_border);
-        let rhs_accent = crate::hex_to_c32(&palette.right_hand_border);
-
-        let copy_requested = ctx.input(|i| {
-            i.events.iter().any(|e| matches!(e, egui::Event::Copy))
-                || i.raw.events.iter().any(|e| matches!(e, egui::Event::Copy))
-                || (i.key_pressed(egui::Key::C) && (i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd))
-        }) || ctx.input_mut(|i| {
-            i.consume_key(egui::Modifiers::COMMAND, egui::Key::C)
-                || i.consume_key(egui::Modifiers::CTRL, egui::Key::C)
-        });
-
-        if copy_requested {
-            ctx.output_mut(|o| o.copied_text = strip_ansi_codes(&self.result.raw_ansi));
-            self.status_toast = Some(("Diff text copied to clipboard!".to_string(), now));
-        }
-
-        let full_rect = ui.available_rect_before_wrap();
-        ui.allocate_ui_at_rect(full_rect, |ui| {
-            // Background backdrop
-            ui.painter().rect_filled(
-                full_rect,
-                Rounding::ZERO,
-                bg,
-            );
-
-            ui.add_space(8.0);
-
-            // 1. Top Control Bar
-            ui.horizontal(|ui| {
-                ui.add_space(12.0);
-
-                ui.label(
-                    egui::RichText::new("⑂ Diff Comparison")
-                        .heading()
-                        .strong()
-                        .color(f_high),
-                );
-
-                ui.add_space(8.0);
-
-                // Engine Badge
-                let badge = egui::Button::new(
-                    egui::RichText::new(format!("⚡ {}", self.result.engine_name))
-                        .small()
-                        .color(accent),
-                )
-                .fill(b_med)
-                .stroke(Stroke::new(1.0, b_low))
-                .rounding(Rounding::same(4.0));
-                ui.add(badge);
-
-                ui.add_space(16.0);
-
-                // Mode Toggles
-                let is_split = self.mode == DiffDisplayMode::SideBySide;
-                let split_btn = egui::Button::new(
-                    egui::RichText::new("⬌ Split (Side-by-Side)")
-                        .small()
-                        .strong()
-                        .color(if is_split { crate::hex_to_c32(&palette.theme.f_inv) } else { f_low }),
-                )
-                .fill(if is_split { accent } else { b_med })
-                .stroke(Stroke::new(1.0, b_low))
-                .rounding(Rounding::same(4.0));
-
-                if ui.add(split_btn).clicked() && !is_split {
-                    self.mode = DiffDisplayMode::SideBySide;
-                    self.recompute();
-                }
-
-                let is_inline = self.mode == DiffDisplayMode::Inline;
-                let inline_btn = egui::Button::new(
-                    egui::RichText::new("☰ Inline")
-                        .small()
-                        .strong()
-                        .color(if is_inline { crate::hex_to_c32(&palette.theme.f_inv) } else { f_low }),
-                )
-                .fill(if is_inline { accent } else { b_med })
-                .stroke(Stroke::new(1.0, b_low))
-                .rounding(Rounding::same(4.0));
-
-                if ui.add(inline_btn).clicked() && !is_inline {
-                    self.mode = DiffDisplayMode::Inline;
-                    self.recompute();
-                }
-
-                ui.add_space(8.0);
-
-                // Swap Operands
-                let swap_btn = egui::Button::new(
-                    egui::RichText::new("⇄ Swap Left/Right")
-                        .small()
-                        .color(f_high),
-                )
-                .fill(b_med)
-                .stroke(Stroke::new(1.0, b_low))
-                .rounding(Rounding::same(4.0));
-
-                if ui.add(swap_btn).on_hover_text("Swap LHS and RHS comparison operands (Hotkey: S)").clicked() {
-                    self.swap_operands();
-                }
-
-                // Copy Diff Button
-                let copy_btn = egui::Button::new(
-                    egui::RichText::new("📋 Copy Diff")
-                        .small()
-                        .color(f_high),
-                )
-                .fill(b_med)
-                .stroke(Stroke::new(1.0, b_low))
-                .rounding(Rounding::same(4.0));
-
-                if ui.add(copy_btn).clicked() {
-                    ctx.output_mut(|o| o.copied_text = strip_ansi_codes(&self.result.raw_ansi));
-                    self.status_toast = Some(("Diff text copied to clipboard!".to_string(), now));
-                }
-
-                // Push remaining items to the right
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(12.0);
-                    let close_btn = egui::Button::new(
-                        egui::RichText::new("✕ Close (Esc)")
-                            .strong()
-                            .color(crate::hex_to_c32(&palette.undo_border)),
-                    )
-                    .fill(crate::hex_to_c32(&palette.undo_card_bg))
-                    .stroke(Stroke::new(1.0, crate::hex_to_c32(&palette.undo_border)))
-                    .rounding(Rounding::same(6.0));
-
-                    if ui.add(close_btn).clicked() {
-                        *close_requested = true;
-                    }
-
-                    if let Some((msg, ts)) = &self.status_toast {
-                        if now - ts < 3.0 {
-                            ui.label(
-                                egui::RichText::new(msg)
-                                    .color(success_color)
-                                    .small(),
-                            );
-                        }
-                    }
-                });
-            });
-
-            ui.add_space(6.0);
-
-            // 2. Operand Comparison Pill Bar
-            ui.horizontal(|ui| {
-                ui.add_space(12.0);
-
-                let available_w = ui.available_width() - 24.0;
-                let half_w = (available_w - 12.0) * 0.5;
-
-                // Left Operand Card
-                egui::Frame::none()
-                    .fill(b_med)
-                    .rounding(Rounding::same(6.0))
-                    .stroke(Stroke::new(1.0, b_low))
-                    .inner_margin(egui::Margin::symmetric(10.0, 6.0))
-                    .show(ui, |ui| {
-                        ui.set_width(half_w);
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("LHS (Original):")
-                                    .small()
-                                    .strong()
-                                    .color(lhs_accent),
-                            );
-                            let lhs_type = if self.lhs.is_file() { "📄 File" } else { "📋 Clipboard Text" };
-                            ui.label(
-                                egui::RichText::new(format!("{} • {} ({} lines)", lhs_type, self.lhs.label(), self.lhs.line_count()))
-                                    .small()
-                                    .color(f_high),
-                            );
-                        });
-                    });
-
-                ui.add_space(8.0);
-
-                // Right Operand Card
-                egui::Frame::none()
-                    .fill(b_med)
-                    .rounding(Rounding::same(6.0))
-                    .stroke(Stroke::new(1.0, b_low))
-                    .inner_margin(egui::Margin::symmetric(10.0, 6.0))
-                    .show(ui, |ui| {
-                        ui.set_width(half_w);
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("RHS (Modified):")
-                                    .small()
-                                    .strong()
-                                    .color(rhs_accent),
-                            );
-                            let rhs_type = if self.rhs.is_file() { "📄 File" } else { "📋 Clipboard Text" };
-                            ui.label(
-                                egui::RichText::new(format!("{} • {} ({} lines)", rhs_type, self.rhs.label(), self.rhs.line_count()))
-                                    .small()
-                                    .color(f_high),
-                            );
-                        });
-                    });
-            });
-
-            ui.add_space(8.0);
-
-            // 3. Diff View Content Area
-            egui::Frame::none()
-                .fill(b_low)
-                .stroke(Stroke::new(1.0, b_med))
-                .rounding(Rounding::same(8.0))
-                .inner_margin(egui::Margin::same(12.0))
-                .show(ui, |ui| {
-                    let avail_size = ui.available_size();
-                    egui::ScrollArea::both()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.set_min_size(avail_size);
-                            ui.label(self.layout_job.clone());
-                        });
-                });
-
-            // 4. Bottom Quick Status
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.add_space(14.0);
-                ui.label(
-                    egui::RichText::new("Navigation: [Esc] Close • [Tab] Toggle Mode • [S] Swap Operands • [Ctrl+C] Copy Diff")
-                        .weak()
-                        .small()
-                        .color(f_low),
-                );
-
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(14.0);
-                    if self.result.is_identical {
-                        ui.label(
-                            egui::RichText::new("✓ Identical: No differences detected")
-                                .strong()
-                                .color(success_color),
-                        );
-                    } else {
-                        let lines_count = self.result.raw_ansi.lines().count();
-                        ui.label(
-                            egui::RichText::new(format!("{} lines in diff", lines_count))
-                                .small()
-                                .color(f_low),
-                        );
-                    }
-                });
-            });
-        });
     }
 }
 
@@ -1147,8 +1064,10 @@ mod tests {
             let t0 = Instant::now();
             let item1 = little_clip_core::ClipItem::from_single_file(&p1);
             let item2 = little_clip_core::ClipItem::from_single_file(&p2);
-            let t1 = little_clip_ops::diff::resolve_diff_target(&item1).expect("Failed to resolve t1");
-            let t2 = little_clip_ops::diff::resolve_diff_target(&item2).expect("Failed to resolve t2");
+            let t1 =
+                little_clip_ops::diff::resolve_diff_target(&item1).expect("Failed to resolve t1");
+            let t2 =
+                little_clip_ops::diff::resolve_diff_target(&item2).expect("Failed to resolve t2");
             let mut state = DiffViewerState::new(t1, t2, DiffDisplayMode::SideBySide);
             println!("frosky new time: {:?}", t0.elapsed());
             state.wait_for_completion();
@@ -1166,16 +1085,30 @@ mod tests {
             let item1 = little_clip_core::ClipItem::from_single_file(&v1);
             let item2 = little_clip_core::ClipItem::from_single_file(&v2);
             let t_load = Instant::now();
-            println!("Vega item from_single_file: {:?}", t_load.duration_since(t0));
-            let t1 = little_clip_ops::diff::resolve_diff_target(&item1).expect("Failed to resolve t1");
-            let t2 = little_clip_ops::diff::resolve_diff_target(&item2).expect("Failed to resolve t2");
+            println!(
+                "Vega item from_single_file: {:?}",
+                t_load.duration_since(t0)
+            );
+            let t1 =
+                little_clip_ops::diff::resolve_diff_target(&item1).expect("Failed to resolve t1");
+            let t2 =
+                little_clip_ops::diff::resolve_diff_target(&item2).expect("Failed to resolve t2");
             let t_resolve = Instant::now();
-            println!("Vega resolve_diff_target: {:?}", t_resolve.duration_since(t_load));
+            println!(
+                "Vega resolve_diff_target: {:?}",
+                t_resolve.duration_since(t_load)
+            );
             let mut state = DiffViewerState::new(t1, t2, DiffDisplayMode::SideBySide);
             let t_state = Instant::now();
-            println!("Vega DiffViewerState::new async spawn: {:?}", t_state.duration_since(t_resolve));
+            println!(
+                "Vega DiffViewerState::new async spawn: {:?}",
+                t_state.duration_since(t_resolve)
+            );
             state.wait_for_completion();
-            println!("Vega DiffViewerState::wait_for_completion: {:?}", t_state.elapsed());
+            println!(
+                "Vega DiffViewerState::wait_for_completion: {:?}",
+                t_state.elapsed()
+            );
             let res = state.image_result.unwrap();
             assert_eq!(res.width, 6000);
             assert_eq!(res.height, 6000);
