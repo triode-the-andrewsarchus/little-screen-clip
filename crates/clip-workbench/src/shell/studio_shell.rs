@@ -295,6 +295,16 @@ impl<'a> StudioShell<'a> {
         ui: &mut egui::Ui,
         right_actions: impl FnOnce(&mut egui::Ui),
     ) -> Option<usize> {
+        self.render_header_with_title_actions(ui, |_| {}, right_actions)
+    }
+
+    /// Renders a compact control immediately after the title, before badges.
+    pub fn render_header_with_title_actions(
+        &mut self,
+        ui: &mut egui::Ui,
+        title_actions: impl FnOnce(&mut egui::Ui),
+        right_actions: impl FnOnce(&mut egui::Ui),
+    ) -> Option<usize> {
         let palette = self.palette;
         let mut clicked_hatch = None;
 
@@ -320,6 +330,7 @@ impl<'a> StudioShell<'a> {
                     );
 
                     ui.add_space(8.0);
+                    title_actions(ui);
 
                     // Badges
                     for b in &self.badges {

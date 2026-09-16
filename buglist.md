@@ -4,6 +4,7 @@
     * In "🛡️ Clean Image" I see a globe and some tofu.
     * In "✕ Close (Esc)" I see a square
     * There may be others?
+* Some of the double-click to default sliders don't work
 ## Audio Studio
 ** The "Copy track" button is nearly falling off the screen.
 * In "✕ Close (Esc)" I see a square
@@ -33,11 +34,6 @@
   * This works one way - going to the stem seperator, but not the other. In Stem separation, the escape button doesn't work either.
 * The "[I]nspect and slice" should support deleting a slice with the delete key when hovered over that region. The waveform should recompute and "squish" to the new length
     * This works, but has no undo buffer
-* Holding shift+scrolling over a selected region should change that regions amplitude up or down, but this should be non-destructive until the user:
-    * opens the audio in audacity
-    * copies the selected region(s)
-    * This allows for silencing a region and then un-silenceing it within the same session
-* Pressing [M] should toggle multi region selection when in the "[I]nspect and slice" tool
 ## General Workbench
 ## Text/code preview
 * Scrolling should use a VS-Code like minimap instead of a plain scroll bar

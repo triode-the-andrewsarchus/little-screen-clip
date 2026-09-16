@@ -156,6 +156,108 @@ pub enum AudioAnalysisProgress {
     Failed(String),
 }
 
+/// Session-only gain and filter settings for one selected timeline region.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AudioRegionEdit {
+    pub start_sec: f32,
+    pub end_sec: f32,
+    /// `NEG_INFINITY` represents silence and can be raised again later.
+    pub gain_db: f32,
+    /// Apply soft clipping only when the selected signal would exceed full scale.
+    pub soft_clip: bool,
+    pub low_pass_hz: Option<f32>,
+    pub high_pass_hz: Option<f32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Biquad {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    z1: f32,
+    z2: f32,
+}
+
+impl Biquad {
+    fn new(sample_rate: f32, cutoff_hz: f32, high_pass: bool) -> Self {
+        let frequency = cutoff_hz.clamp(10.0, sample_rate * 0.49);
+        let omega = 2.0 * std::f32::consts::PI * frequency / sample_rate;
+        let (sin, cos) = omega.sin_cos();
+        let alpha = sin / std::f32::consts::SQRT_2;
+        let (b0, b1, b2) = if high_pass {
+            ((1.0 + cos) * 0.5, -(1.0 + cos), (1.0 + cos) * 0.5)
+        } else {
+            ((1.0 - cos) * 0.5, 1.0 - cos, (1.0 - cos) * 0.5)
+        };
+        let a0 = 1.0 + alpha;
+        Self {
+            b0: b0 / a0,
+            b1: b1 / a0,
+            b2: b2 / a0,
+            a1: -2.0 * cos / a0,
+            a2: (1.0 - alpha) / a0,
+            z1: 0.0,
+            z2: 0.0,
+        }
+    }
+
+    fn process(&mut self, input: f32) -> f32 {
+        let output = self.b0 * input + self.z1;
+        self.z1 = self.b1 * input - self.a1 * output + self.z2;
+        self.z2 = self.b2 * input - self.a2 * output;
+        output
+    }
+}
+
+/// Stateful two-pole Butterworth filters for one audio channel.
+#[derive(Debug, Clone, Default)]
+pub struct AudioFilterChain {
+    low_pass: Option<Biquad>,
+    high_pass: Option<Biquad>,
+}
+
+impl AudioFilterChain {
+    pub fn new(sample_rate: f32, region: &AudioRegionEdit) -> Self {
+        Self {
+            low_pass: region
+                .low_pass_hz
+                .map(|hz| Biquad::new(sample_rate, hz, false)),
+            high_pass: region
+                .high_pass_hz
+                .map(|hz| Biquad::new(sample_rate, hz, true)),
+        }
+    }
+
+    pub fn process(&mut self, mut sample: f32) -> f32 {
+        if let Some(filter) = &mut self.low_pass {
+            sample = filter.process(sample);
+        }
+        if let Some(filter) = &mut self.high_pass {
+            sample = filter.process(sample);
+        }
+        sample
+    }
+}
+
+/// Apply the same gain curve used by the audio editor preview.
+#[inline]
+pub fn apply_audio_gain(sample: f32, gain_db: f32, soft_clip: bool) -> f32 {
+    if gain_db == 0.0 {
+        sample
+    } else if gain_db == f32::NEG_INFINITY {
+        0.0
+    } else {
+        let amplified = sample * 10.0_f32.powf(gain_db / 20.0);
+        if soft_clip {
+            amplified.tanh()
+        } else {
+            amplified
+        }
+    }
+}
+
 impl FullAudioAnalysis {
     #[inline]
     pub fn query_color_at_time(&self, time_sec: f32) -> [u8; 3] {
@@ -1396,6 +1498,49 @@ pub fn detect_chord_from_fft(
 pub fn compute_audio_analysis_progressive<F>(
     path: &Path,
     num_cols: usize,
+    on_progress: F,
+) -> Option<FullAudioAnalysis>
+where
+    F: FnMut(AudioAnalysisProgress),
+{
+    compute_audio_analysis_progressive_with_edits(path, num_cols, &[], on_progress)
+}
+
+/// Rebuilds analysis from the original file with session edits applied to decoded PCM.
+/// The file itself is never modified.
+pub fn compute_audio_analysis_progressive_with_edits<F>(
+    path: &Path,
+    num_cols: usize,
+    region_edits: &[AudioRegionEdit],
+    on_progress: F,
+) -> Option<FullAudioAnalysis>
+where
+    F: FnMut(AudioAnalysisProgress),
+{
+    compute_audio_analysis_inner(path, num_cols, region_edits, false, on_progress)
+}
+
+/// Prioritizes the spectrum and chord strip for interactive region effect edits.
+/// Peak pyramids are built after the spectrum so filter edits show their
+/// spectral result first. Transient detection is skipped; snapping uses the
+/// retained source analysis.
+pub fn compute_audio_spectral_preview_with_edits<F>(
+    path: &Path,
+    num_cols: usize,
+    regions: &[AudioRegionEdit],
+    on_progress: F,
+) -> Option<FullAudioAnalysis>
+where
+    F: FnMut(AudioAnalysisProgress),
+{
+    compute_audio_analysis_inner(path, num_cols, regions, true, on_progress)
+}
+
+fn compute_audio_analysis_inner<F>(
+    path: &Path,
+    num_cols: usize,
+    region_edits: &[AudioRegionEdit],
+    spectral_only: bool,
     mut on_progress: F,
 ) -> Option<FullAudioAnalysis>
 where
@@ -1548,6 +1693,38 @@ where
         return None;
     }
 
+    if !region_edits.is_empty() {
+        // Earlier selections take precedence when regions overlap, matching the editor view.
+        let mut claimed = vec![false; total_frames];
+        for region in region_edits {
+            let start = ((region.start_sec.min(region.end_sec).max(0.0) * sample_rate as f32)
+                as usize)
+                .min(total_frames);
+            let end = ((region.start_sec.max(region.end_sec).max(0.0) * sample_rate as f32)
+                as usize)
+                .min(total_frames);
+            let mut ch1_filter = AudioFilterChain::new(sample_rate as f32, region);
+            let mut ch2_filter = AudioFilterChain::new(sample_rate as f32, region);
+            for frame in start..end {
+                if !claimed[frame] {
+                    claimed[frame] = true;
+                    ch1_samples[frame] = ch1_filter.process(apply_audio_gain(
+                        ch1_samples[frame],
+                        region.gain_db,
+                        region.soft_clip,
+                    ));
+                    if let Some(ch2) = &mut ch2_samples {
+                        ch2[frame] = ch2_filter.process(apply_audio_gain(
+                            ch2[frame],
+                            region.gain_db,
+                            region.soft_clip,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     let duration_ms = (total_frames as f64 / sample_rate as f64 * 1000.0) as u64;
 
     // Concurrently build multi-scale min/max peak pyramids with Serato DJ 3-band crossover colors
@@ -1555,17 +1732,21 @@ where
     let (
         (peaks_lvl0_ch1, peaks_lvl1_ch1, peaks_lvl2_ch1),
         (peaks_lvl0_ch2, peaks_lvl1_ch2, peaks_lvl2_ch2),
-    ) = rayon::join(
-        || build_peak_pyramid(&ch1_samples, sample_rate as f32),
-        || {
-            if let Some(ref ch2) = ch2_samples {
-                let (l0, l1, l2) = build_peak_pyramid(ch2, sample_rate as f32);
-                (Some(l0), Some(l1), Some(l2))
-            } else {
-                (None, None, None)
-            }
-        },
-    );
+    ) = if spectral_only {
+        ((Vec::new(), Vec::new(), Vec::new()), (None, None, None))
+    } else {
+        rayon::join(
+            || build_peak_pyramid(&ch1_samples, sample_rate as f32),
+            || {
+                if let Some(ref ch2) = ch2_samples {
+                    let (l0, l1, l2) = build_peak_pyramid(ch2, sample_rate as f32);
+                    (Some(l0), Some(l1), Some(l2))
+                } else {
+                    (None, None, None)
+                }
+            },
+        )
+    };
     let t_pyramid_elapsed = t_pyramid_start.elapsed();
 
     // 1. Overview Peaks
@@ -1577,7 +1758,7 @@ where
         None
     };
 
-    for c in 0..num_cols {
+    for c in 0..if spectral_only { 0 } else { num_cols } {
         let f_start = (c * total_frames) / num_cols;
         let f_end = (((c + 1) * total_frames) / num_cols).min(total_frames);
         let span = f_end.saturating_sub(f_start);
@@ -1682,17 +1863,25 @@ where
             None
         },
     };
-    on_progress(AudioAnalysisProgress::WaveformReady(Box::new(
-        analysis.clone(),
-    )));
+    if !spectral_only {
+        on_progress(AudioAnalysisProgress::WaveformReady(Box::new(
+            analysis.clone(),
+        )));
+    }
 
     // Emit Stage 2: Transients detection
     let t_transients_start = std::time::Instant::now();
-    let transients = detect_transients(&mixed_samples, sample_rate as f32);
+    let transients = if spectral_only {
+        Vec::new()
+    } else {
+        detect_transients(&mixed_samples, sample_rate as f32)
+    };
     let t_transients_elapsed = t_transients_start.elapsed();
     analysis.transients = transients.clone();
     analysis.is_transients_ready = true;
-    on_progress(AudioAnalysisProgress::TransientsReady(transients));
+    if !spectral_only {
+        on_progress(AudioAnalysisProgress::TransientsReady(transients));
+    }
 
     // Emit Stage 3: Rayon parallel STFT Spectrogram & ColorChord 2-D note strip
     let t_fft_loop_start = std::time::Instant::now();
@@ -1949,8 +2138,6 @@ where
         note_strip_info: note_strip_info.clone(),
         spectral_colors: spectral_colors.clone(),
     });
-    on_progress(AudioAnalysisProgress::Complete);
-
     analysis.spectrogram_width = spectrogram_width;
     analysis.spectrogram_height = spectrogram_height;
     analysis.spectrogram_rgba = spectrogram_rgba;
@@ -1960,6 +2147,30 @@ where
     analysis.note_strip_info = note_strip_info;
     analysis.spectral_colors = spectral_colors;
     analysis.is_spectrogram_ready = true;
+
+    if spectral_only {
+        let ((l0, l1, l2), right) = rayon::join(
+            || build_peak_pyramid(&analysis.ch1_samples, sample_rate as f32),
+            || {
+                analysis
+                    .ch2_samples
+                    .as_ref()
+                    .map(|ch2| build_peak_pyramid(ch2, sample_rate as f32))
+            },
+        );
+        analysis.peaks_lvl0_ch1 = l0;
+        analysis.peaks_lvl1_ch1 = l1;
+        analysis.peaks_lvl2_ch1 = l2;
+        if let Some((l0, l1, l2)) = right {
+            analysis.peaks_lvl0_ch2 = Some(l0);
+            analysis.peaks_lvl1_ch2 = Some(l1);
+            analysis.peaks_lvl2_ch2 = Some(l2);
+        }
+        on_progress(AudioAnalysisProgress::WaveformReady(Box::new(
+            analysis.clone(),
+        )));
+    }
+    on_progress(AudioAnalysisProgress::Complete);
 
     Some(analysis)
 }
@@ -2380,6 +2591,112 @@ fn resample_peaks(source: &[f32], target_len: usize) -> Vec<f32> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn session_gain_soft_clips_and_can_recover_from_silence() {
+        let sample = 0.5;
+        assert_eq!(apply_audio_gain(sample, f32::NEG_INFINITY, false), 0.0);
+        assert_eq!(apply_audio_gain(sample, 0.0, false), sample);
+        let boosted = apply_audio_gain(0.05, 40.0, true);
+        assert!(boosted > 0.9 && boosted < 1.0);
+        assert_eq!(apply_audio_gain(-0.05, 40.0, true), -boosted);
+        assert!(apply_audio_gain(sample, -12.0, false) > 0.0);
+        assert!(apply_audio_gain(sample, 1.0, false) > sample);
+    }
+
+    #[test]
+    fn session_gain_rebuilds_spectrum_and_notes_without_changing_source() {
+        let path = generate_test_wav();
+        let original_bytes = std::fs::read(&path).unwrap();
+        let original = compute_audio_analysis_progressive(&path, 120, |_| {}).unwrap();
+        let edited = compute_audio_analysis_progressive_with_edits(
+            &path,
+            120,
+            &[AudioRegionEdit {
+                start_sec: 0.25,
+                end_sec: 0.75,
+                gain_db: f32::NEG_INFINITY,
+                soft_clip: false,
+                low_pass_hz: None,
+                high_pass_hz: None,
+            }],
+            |_| {},
+        )
+        .unwrap();
+        assert_eq!(edited.ch1_samples[4000], original.ch1_samples[4000]);
+        assert_ne!(original.ch1_samples[15000], 0.0);
+        assert_eq!(edited.ch1_samples[15000], 0.0);
+        let middle_col = 60;
+        assert!((0..edited.spectrogram_height).any(|row| {
+            let idx = (row * edited.spectrogram_width + middle_col) * 4;
+            edited.spectrogram_rgba[idx..idx + 4] != original.spectrogram_rgba[idx..idx + 4]
+        }));
+        assert!(original.note_strip_info[middle_col].active);
+        assert!(!edited.note_strip_info[middle_col].active);
+        assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn spectral_preview_prioritizes_filters_and_attenuates_rejected_frequencies() {
+        let path = generate_test_wav();
+        let original = compute_audio_analysis_progressive(&path, 120, |_| {}).unwrap();
+        let mut stages = Vec::new();
+        let filtered = compute_audio_spectral_preview_with_edits(
+            &path,
+            120,
+            &[AudioRegionEdit {
+                start_sec: 0.0,
+                end_sec: 1.0,
+                gain_db: 0.0,
+                soft_clip: false,
+                low_pass_hz: Some(300.0),
+                high_pass_hz: None,
+            }],
+            |progress| stages.push(progress),
+        )
+        .unwrap();
+        let spectrum_stage = stages
+            .iter()
+            .position(|p| matches!(p, AudioAnalysisProgress::SpectrogramAndNotesReady { .. }))
+            .expect("spectrum update");
+        let waveform_stage = stages
+            .iter()
+            .position(|p| matches!(p, AudioAnalysisProgress::WaveformReady(_)))
+            .expect("waveform update");
+        assert!(spectrum_stage < waveform_stage);
+        assert!(
+            !stages
+                .iter()
+                .any(|p| matches!(p, AudioAnalysisProgress::TransientsReady(_)))
+        );
+        let raw_treble = original.ch2_samples.as_ref().unwrap();
+        let lowpassed_treble = filtered.ch2_samples.as_ref().unwrap();
+        let rms = |samples: &[f32]| {
+            (samples.iter().map(|x| x * x).sum::<f32>() / samples.len() as f32).sqrt()
+        };
+        assert!(rms(&lowpassed_treble[22_050..]) < rms(&raw_treble[22_050..]) * 0.1);
+        assert_ne!(filtered.spectrogram_rgba, original.spectrogram_rgba);
+
+        let highpassed = compute_audio_spectral_preview_with_edits(
+            &path,
+            120,
+            &[AudioRegionEdit {
+                start_sec: 0.0,
+                end_sec: 1.0,
+                gain_db: 0.0,
+                soft_clip: false,
+                low_pass_hz: None,
+                high_pass_hz: Some(1_000.0),
+            }],
+            |_| {},
+        )
+        .unwrap();
+        assert!(
+            rms(&highpassed.ch1_samples[22_050..]) < rms(&original.ch1_samples[22_050..]) * 0.1
+        );
+        std::fs::remove_file(path).unwrap();
+    }
 
     fn generate_test_wav() -> std::path::PathBuf {
         let temp_dir = std::env::temp_dir();

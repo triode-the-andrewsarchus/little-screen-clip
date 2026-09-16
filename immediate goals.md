@@ -11,6 +11,7 @@
         * Note: Full prompt/info in ChatGPT session
 * Depth-map driven contrast/saturation/brightness adjustment
 ## Audio Studio
+* n to normalize all selections to -6dB
 * Speech Fix
     * DeepFilterNet3 — primary speech denoiser.
     * ClearerVoice/MossFormer2_SE_48K — heavyweight speech rescue.
