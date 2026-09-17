@@ -22,23 +22,18 @@ pub use binary_diff::*;
 pub mod auto_actions;
 pub use auto_actions::*;
 
-pub mod units;
-pub use units::*;
-
-pub mod network_preview;
-pub use network_preview::*;
-
-pub mod timestamps;
-pub use timestamps::*;
-
-pub mod spreadsheet;
-pub use spreadsheet::*;
-
-pub mod midi;
+pub use little_clip_core::presentation::midi;
+pub use little_clip_core::presentation::model3d;
+pub use little_clip_core::presentation::network_preview;
+pub use little_clip_core::presentation::spreadsheet;
+pub use little_clip_core::presentation::timestamps;
+pub use little_clip_core::presentation::units;
 pub use midi::*;
-
-pub mod model3d;
 pub use model3d::*;
+pub use network_preview::*;
+pub use spreadsheet::*;
+pub use timestamps::*;
+pub use units::*;
 
 pub mod stl;
 pub use stl::*;

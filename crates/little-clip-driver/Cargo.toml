@@ -10,5 +10,4 @@ rusb.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 little-clip-core = { path = "../little-clip-core" }
-little-clip-render = { path = "../little-clip-render" }
 tracing-subscriber.workspace = true

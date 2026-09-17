@@ -2,6 +2,8 @@
 //! multi-slot history management, audio/video analysis, configuration definitions, and IPC contracts
 //! for the Little Screen Clip ecosystem.
 
+extern crate self as little_clip_core;
+
 pub mod animation;
 pub mod audio;
 pub mod color;
@@ -9,6 +11,21 @@ pub mod config;
 pub mod ipc;
 pub mod item;
 pub mod jobs;
+/// Presentation-ready classifiers and decoded models shared by renderers and operations.
+pub mod presentation {
+    #[path = "../../../little-clip-ops/src/midi.rs"]
+    pub mod midi;
+    #[path = "../../../little-clip-ops/src/model3d.rs"]
+    pub mod model3d;
+    #[path = "../../../little-clip-ops/src/network_preview.rs"]
+    pub mod network_preview;
+    #[path = "../../../little-clip-ops/src/spreadsheet.rs"]
+    pub mod spreadsheet;
+    #[path = "../../../little-clip-ops/src/timestamps.rs"]
+    pub mod timestamps;
+    #[path = "../../../little-clip-ops/src/units.rs"]
+    pub mod units;
+}
 pub mod raw_image;
 pub mod rolling_audio;
 pub mod slot;
@@ -39,6 +56,7 @@ pub use config::{
 pub use ipc::{IpcRequest, IpcResponse};
 pub use item::{ClipItem, ClipPayload, ImageThumbnail, PayloadKind};
 pub use jobs::{BackgroundJobs, JobError, JobTicket};
+pub use presentation::{midi, model3d, network_preview, spreadsheet, timestamps, units};
 pub use rolling_audio::{RollingAudioBuffer, slice_wav};
 pub use slot::{HandSide, SlotId, SlotManager};
 pub use staging::{ArtifactLease, ArtifactStore, StagingManager};
