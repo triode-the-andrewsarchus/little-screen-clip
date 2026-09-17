@@ -23,8 +23,81 @@ pub enum ByteColorMode {
     Background,
 }
 
+/// Pure, testable state machine for diff block and search match navigation.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BinaryDiffNavigation {
+    /// Zero-based index into the current diff block list.
+    pub current_diff_idx: usize,
+    /// Identifier of the currently highlighted diff block, if any.
+    pub selected_diff_block: Option<usize>,
+    /// Row index target to smoothly scroll the hex viewport to.
+    pub scroll_target_row: Option<usize>,
+    /// Zero-based index into the search results row vector.
+    pub current_search_idx: usize,
+    /// List of row indices matching the current hex/ASCII search query.
+    pub search_matches: Vec<usize>,
+}
+
+impl BinaryDiffNavigation {
+    /// Advances forward to the next diff block, wrapping around if at the end.
+    pub fn next_diff(&mut self, diff_blocks: &[little_clip_ops::binary_diff::BinaryDiffBlock]) {
+        if diff_blocks.is_empty() {
+            return;
+        }
+        self.current_diff_idx = (self.current_diff_idx + 1) % diff_blocks.len();
+        let block = &diff_blocks[self.current_diff_idx];
+        self.selected_diff_block = Some(block.id);
+        self.scroll_target_row = Some(block.start_row);
+    }
+
+    /// Moves backward to the previous diff block, wrapping around to the end.
+    pub fn prev_diff(&mut self, diff_blocks: &[little_clip_ops::binary_diff::BinaryDiffBlock]) {
+        if diff_blocks.is_empty() {
+            return;
+        }
+        if self.current_diff_idx == 0 {
+            self.current_diff_idx = diff_blocks.len() - 1;
+        } else {
+            self.current_diff_idx -= 1;
+        }
+        let block = &diff_blocks[self.current_diff_idx];
+        self.selected_diff_block = Some(block.id);
+        self.scroll_target_row = Some(block.start_row);
+    }
+
+    /// Updates the list of search matches and positions on the first match.
+    pub fn set_search_matches(&mut self, matches: Vec<usize>) {
+        self.search_matches = matches;
+        self.current_search_idx = 0;
+        self.scroll_target_row = self.search_matches.first().copied();
+    }
+
+    /// Advances forward to the next search match row, wrapping around if at the end.
+    pub fn next_search_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        self.current_search_idx = (self.current_search_idx + 1) % self.search_matches.len();
+        self.scroll_target_row = Some(self.search_matches[self.current_search_idx]);
+    }
+
+    /// Moves backward to the previous search match row, wrapping around to the end.
+    pub fn prev_search_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        if self.current_search_idx == 0 {
+            self.current_search_idx = self.search_matches.len() - 1;
+        } else {
+            self.current_search_idx -= 1;
+        }
+        self.scroll_target_row = Some(self.search_matches[self.current_search_idx]);
+    }
+}
+
 /// UI and navigation state for the binary hex diff viewer.
 pub struct BinaryDiffViewState {
+    pub nav: BinaryDiffNavigation,
     pub left_label: String,
     pub left_bytes: Vec<u8>,
     pub right_label: String,
@@ -74,6 +147,7 @@ impl BinaryDiffViewState {
         });
 
         Self {
+            nav: BinaryDiffNavigation::default(),
             left_label,
             left_bytes,
             right_label,
@@ -131,60 +205,42 @@ impl BinaryDiffViewState {
 
     pub fn next_diff(&mut self) {
         if let Some(ref res) = self.result {
-            if res.diff_blocks.is_empty() {
-                return;
-            }
-            self.current_diff_idx = (self.current_diff_idx + 1) % res.diff_blocks.len();
-            let block = &res.diff_blocks[self.current_diff_idx];
-            self.selected_diff_block = Some(block.id);
-            self.scroll_target_row = Some(block.start_row);
+            self.nav.next_diff(&res.diff_blocks);
+            self.current_diff_idx = self.nav.current_diff_idx;
+            self.selected_diff_block = self.nav.selected_diff_block;
+            self.scroll_target_row = self.nav.scroll_target_row;
         }
     }
 
     pub fn prev_diff(&mut self) {
         if let Some(ref res) = self.result {
-            if res.diff_blocks.is_empty() {
-                return;
-            }
-            if self.current_diff_idx == 0 {
-                self.current_diff_idx = res.diff_blocks.len() - 1;
-            } else {
-                self.current_diff_idx -= 1;
-            }
-            let block = &res.diff_blocks[self.current_diff_idx];
-            self.selected_diff_block = Some(block.id);
-            self.scroll_target_row = Some(block.start_row);
+            self.nav.prev_diff(&res.diff_blocks);
+            self.current_diff_idx = self.nav.current_diff_idx;
+            self.selected_diff_block = self.nav.selected_diff_block;
+            self.scroll_target_row = self.nav.scroll_target_row;
         }
     }
 
     pub fn update_search(&mut self) {
         if let Some(ref res) = self.result {
-            self.search_matches = search_rows(res, &self.search_query);
-            self.current_search_idx = 0;
-            if let Some(&first_row) = self.search_matches.first() {
-                self.scroll_target_row = Some(first_row);
-            }
+            let matches = search_rows(res, &self.search_query);
+            self.nav.set_search_matches(matches);
+            self.search_matches = self.nav.search_matches.clone();
+            self.current_search_idx = self.nav.current_search_idx;
+            self.scroll_target_row = self.nav.scroll_target_row;
         }
     }
 
     pub fn next_search_match(&mut self) {
-        if self.search_matches.is_empty() {
-            return;
-        }
-        self.current_search_idx = (self.current_search_idx + 1) % self.search_matches.len();
-        self.scroll_target_row = Some(self.search_matches[self.current_search_idx]);
+        self.nav.next_search_match();
+        self.current_search_idx = self.nav.current_search_idx;
+        self.scroll_target_row = self.nav.scroll_target_row;
     }
 
     pub fn prev_search_match(&mut self) {
-        if self.search_matches.is_empty() {
-            return;
-        }
-        if self.current_search_idx == 0 {
-            self.current_search_idx = self.search_matches.len() - 1;
-        } else {
-            self.current_search_idx -= 1;
-        }
-        self.scroll_target_row = Some(self.search_matches[self.current_search_idx]);
+        self.nav.prev_search_match();
+        self.current_search_idx = self.nav.current_search_idx;
+        self.scroll_target_row = self.nav.scroll_target_row;
     }
 
     /// Calculates responsive cell dimensions, font sizes, and row height based on bytes_per_row
@@ -1801,5 +1857,104 @@ mod tests {
                 },
             );
         }
+    }
+
+    #[test]
+    fn test_binary_diff_navigation_cycles_and_bounds() {
+        use little_clip_ops::binary_diff::BinaryDiffBlock;
+
+        let mut nav = BinaryDiffNavigation::default();
+        let blocks = vec![
+            BinaryDiffBlock {
+                id: 10,
+                start_row: 5,
+                end_row: 6,
+                left_offset: None,
+                right_offset: None,
+                byte_count: 2,
+                kind: DiffKind::Mismatch,
+                kind_label: "Mismatch".into(),
+                preview: String::new(),
+            },
+            BinaryDiffBlock {
+                id: 20,
+                start_row: 15,
+                end_row: 15,
+                left_offset: None,
+                right_offset: None,
+                byte_count: 1,
+                kind: DiffKind::RightOnly,
+                kind_label: "Insertion".into(),
+                preview: String::new(),
+            },
+            BinaryDiffBlock {
+                id: 30,
+                start_row: 25,
+                end_row: 27,
+                left_offset: None,
+                right_offset: None,
+                byte_count: 3,
+                kind: DiffKind::LeftOnly,
+                kind_label: "Replacement".into(),
+                preview: String::new(),
+            },
+        ];
+
+        // Empty block safeguard
+        nav.next_diff(&[]);
+        assert_eq!(nav.current_diff_idx, 0);
+        assert_eq!(nav.selected_diff_block, None);
+
+        // Next forward
+        nav.next_diff(&blocks);
+        assert_eq!(nav.current_diff_idx, 1);
+        assert_eq!(nav.selected_diff_block, Some(20));
+        assert_eq!(nav.scroll_target_row, Some(15));
+
+        nav.next_diff(&blocks);
+        assert_eq!(nav.current_diff_idx, 2);
+        assert_eq!(nav.selected_diff_block, Some(30));
+        assert_eq!(nav.scroll_target_row, Some(25));
+
+        // Wrap forward
+        nav.next_diff(&blocks);
+        assert_eq!(nav.current_diff_idx, 0);
+        assert_eq!(nav.selected_diff_block, Some(10));
+        assert_eq!(nav.scroll_target_row, Some(5));
+
+        // Wrap backward
+        nav.prev_diff(&blocks);
+        assert_eq!(nav.current_diff_idx, 2);
+        assert_eq!(nav.selected_diff_block, Some(30));
+
+        nav.prev_diff(&blocks);
+        assert_eq!(nav.current_diff_idx, 1);
+        assert_eq!(nav.selected_diff_block, Some(20));
+    }
+
+    #[test]
+    fn test_binary_diff_search_navigation() {
+        let mut nav = BinaryDiffNavigation::default();
+        nav.set_search_matches(vec![3, 7, 12]);
+        assert_eq!(nav.current_search_idx, 0);
+        assert_eq!(nav.scroll_target_row, Some(3));
+
+        nav.next_search_match();
+        assert_eq!(nav.current_search_idx, 1);
+        assert_eq!(nav.scroll_target_row, Some(7));
+
+        nav.next_search_match();
+        assert_eq!(nav.current_search_idx, 2);
+        assert_eq!(nav.scroll_target_row, Some(12));
+
+        // Wrap forward
+        nav.next_search_match();
+        assert_eq!(nav.current_search_idx, 0);
+        assert_eq!(nav.scroll_target_row, Some(3));
+
+        // Wrap backward
+        nav.prev_search_match();
+        assert_eq!(nav.current_search_idx, 2);
+        assert_eq!(nav.scroll_target_row, Some(12));
     }
 }

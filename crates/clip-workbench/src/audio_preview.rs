@@ -111,6 +111,95 @@ struct ScrollEditKey {
     range: (f32, f32),
 }
 
+/// Pure, testable viewport state machine managing timeline zoom and pan.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AudioViewport {
+    /// Start offset in seconds of the visible waveform window.
+    pub start_sec: f32,
+    /// Duration in seconds of the visible waveform window.
+    pub duration_sec: f32,
+}
+
+impl AudioViewport {
+    /// Creates a new viewport showing the full audio duration.
+    pub fn new(total_duration: f32) -> Self {
+        Self {
+            start_sec: 0.0,
+            duration_sec: total_duration.max(0.01),
+        }
+    }
+
+    /// Applies a zoom factor centered around an anchor time point, clamped within bounds.
+    pub fn zoom(&mut self, factor: f32, anchor_time: f32, total_duration: f32, sample_rate: f32) {
+        let dur = total_duration.max(0.01);
+        let min_dur = (12.0 / sample_rate.max(1.0)).max(0.0002);
+        let max_dur = dur;
+
+        let old_dur = self.duration_sec.clamp(min_dur, max_dur);
+        let new_dur = (old_dur * factor).clamp(min_dur, max_dur);
+
+        let anchor = anchor_time.clamp(0.0, dur);
+        let anchor_ratio = if old_dur > 0.0 {
+            ((anchor - self.start_sec) / old_dur).clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
+
+        let mut new_start = anchor - anchor_ratio * new_dur;
+        if new_start + new_dur > dur {
+            new_start = dur - new_dur;
+        }
+        if new_start < 0.0 {
+            new_start = 0.0;
+        }
+
+        self.start_sec = new_start;
+        self.duration_sec = new_dur;
+    }
+
+    /// Pans the visible window by a time delta in seconds, clamped between 0 and duration.
+    pub fn pan(&mut self, delta_sec: f32, total_duration: f32) {
+        let dur = total_duration.max(0.01);
+        let max_start = (dur - self.duration_sec).max(0.0);
+        self.start_sec = (self.start_sec + delta_sec).clamp(0.0, max_start);
+    }
+
+    /// Resets the visible window to display the entire audio file.
+    pub fn fit_to_window(&mut self, total_duration: f32) {
+        self.start_sec = 0.0;
+        self.duration_sec = total_duration.max(0.01);
+    }
+}
+
+/// Pure, testable helper for region selection boundaries and containment.
+pub struct AudioSelectionModel;
+
+impl AudioSelectionModel {
+    /// Returns true if `time_sec` falls within the inclusive `[start, end]` range (order independent).
+    #[inline]
+    pub fn contains(range: (f32, f32), time_sec: f32) -> bool {
+        let (s, e) = if range.0 <= range.1 {
+            (range.0, range.1)
+        } else {
+            (range.1, range.0)
+        };
+        time_sec >= s && time_sec <= e
+    }
+
+    /// Normalizes a `(start, end)` tuple so start <= end.
+    #[inline]
+    pub fn normalize(range: (f32, f32)) -> (f32, f32) {
+        (range.0.min(range.1), range.0.max(range.1))
+    }
+
+    /// Clamps a range within `[0.0, total_duration]`.
+    #[inline]
+    pub fn clamp_to_duration(range: (f32, f32), total_duration: f32) -> (f32, f32) {
+        let max_dur = total_duration.max(0.0);
+        (range.0.clamp(0.0, max_dur), range.1.clamp(0.0, max_dur))
+    }
+}
+
 /// Formats a time in seconds as `[hh]m:ss.mmm`.
 pub fn format_sample_timestamp(sec: f32) -> String {
     let total_ms = (sec.max(0.0) * 1000.0).round() as u64;
@@ -1294,12 +1383,12 @@ impl AudioPreviewState {
         match self.selection_mode {
             SelectionMode::Single => self
                 .selection
-                .map(|(s, e)| t >= s && t <= e)
+                .map(|r| AudioSelectionModel::contains(r, t))
                 .unwrap_or(false),
             SelectionMode::Multi => self
                 .multi_selections
                 .iter()
-                .any(|(s, e)| t >= *s && t <= *e),
+                .any(|&r| AudioSelectionModel::contains(r, t)),
         }
     }
 
@@ -1443,47 +1532,37 @@ impl AudioPreviewState {
     }
 
     pub fn zoom(&mut self, factor: f32, anchor_time: f32) {
-        let dur = self.duration_sec.max(0.01);
         let sample_rate = self
             .analysis
             .as_ref()
             .map(|a| a.sample_rate as f32)
             .unwrap_or(44100.0);
-        // Allow zooming down to ~12 samples!
-        let min_dur = (12.0 / sample_rate).max(0.0002);
-        let max_dur = dur;
-
-        let old_dur = self.view_duration_sec.clamp(min_dur, max_dur);
-        let new_dur = (old_dur * factor).clamp(min_dur, max_dur);
-
-        let anchor = anchor_time.clamp(0.0, dur);
-        let anchor_ratio = if old_dur > 0.0 {
-            ((anchor - self.view_start_sec) / old_dur).clamp(0.0, 1.0)
-        } else {
-            0.5
+        let mut vp = AudioViewport {
+            start_sec: self.view_start_sec,
+            duration_sec: self.view_duration_sec,
         };
-
-        let mut new_start = anchor - anchor_ratio * new_dur;
-        if new_start + new_dur > dur {
-            new_start = dur - new_dur;
-        }
-        if new_start < 0.0 {
-            new_start = 0.0;
-        }
-
-        self.view_start_sec = new_start;
-        self.view_duration_sec = new_dur;
+        vp.zoom(factor, anchor_time, self.duration_sec, sample_rate);
+        self.view_start_sec = vp.start_sec;
+        self.view_duration_sec = vp.duration_sec;
     }
 
     pub fn pan(&mut self, delta_sec: f32) {
-        let dur = self.duration_sec.max(0.01);
-        let max_start = (dur - self.view_duration_sec).max(0.0);
-        self.view_start_sec = (self.view_start_sec + delta_sec).clamp(0.0, max_start);
+        let mut vp = AudioViewport {
+            start_sec: self.view_start_sec,
+            duration_sec: self.view_duration_sec,
+        };
+        vp.pan(delta_sec, self.duration_sec);
+        self.view_start_sec = vp.start_sec;
     }
 
     pub fn fit_to_window(&mut self) {
-        self.view_start_sec = 0.0;
-        self.view_duration_sec = self.duration_sec.max(0.01);
+        let mut vp = AudioViewport {
+            start_sec: self.view_start_sec,
+            duration_sec: self.view_duration_sec,
+        };
+        vp.fit_to_window(self.duration_sec);
+        self.view_start_sec = vp.start_sec;
+        self.view_duration_sec = vp.duration_sec;
     }
 
     pub fn toggle_play(&mut self) {
@@ -3364,5 +3443,59 @@ Separated track
         let ultra_fine_factor = ultra_fine_ratio.powf(-1.0);
         state.zoom(ultra_fine_factor, 5.0);
         assert!((state.view_duration_sec - (initial_dur * ultra_fine_factor)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_audio_viewport_zoom_pan_and_fit() {
+        let mut vp = AudioViewport::new(10.0);
+        assert_eq!(vp.start_sec, 0.0);
+        assert_eq!(vp.duration_sec, 10.0);
+
+        // Zoom in by factor 0.5 centered at 4.0 seconds
+        vp.zoom(0.5, 4.0, 10.0, 44100.0);
+        assert!((vp.duration_sec - 5.0).abs() < 1e-4);
+        assert!(vp.start_sec >= 0.0 && vp.start_sec + vp.duration_sec <= 10.0);
+
+        // Pan right by 2 seconds
+        let prev_start = vp.start_sec;
+        vp.pan(2.0, 10.0);
+        assert!((vp.start_sec - (prev_start + 2.0)).abs() < 1e-4);
+
+        // Pan past right boundary clamps to 10.0 - duration
+        vp.pan(100.0, 10.0);
+        assert!((vp.start_sec - (10.0 - vp.duration_sec)).abs() < 1e-4);
+
+        // Pan negative clamps to 0.0
+        vp.pan(-100.0, 10.0);
+        assert_eq!(vp.start_sec, 0.0);
+
+        // Reset to full window
+        vp.fit_to_window(10.0);
+        assert_eq!(vp.start_sec, 0.0);
+        assert_eq!(vp.duration_sec, 10.0);
+    }
+
+    #[test]
+    fn test_audio_selection_model_contains_and_normalize() {
+        // Normal range
+        assert!(AudioSelectionModel::contains((2.0, 5.0), 3.0));
+        assert!(AudioSelectionModel::contains((2.0, 5.0), 2.0));
+        assert!(AudioSelectionModel::contains((2.0, 5.0), 5.0));
+        assert!(!AudioSelectionModel::contains((2.0, 5.0), 1.9));
+        assert!(!AudioSelectionModel::contains((2.0, 5.0), 5.1));
+
+        // Inverted range (dragged backwards)
+        assert!(AudioSelectionModel::contains((5.0, 2.0), 3.5));
+        assert!(!AudioSelectionModel::contains((5.0, 2.0), 1.0));
+
+        // Normalization
+        assert_eq!(AudioSelectionModel::normalize((5.0, 2.0)), (2.0, 5.0));
+        assert_eq!(AudioSelectionModel::normalize((2.0, 5.0)), (2.0, 5.0));
+
+        // Clamp to duration
+        assert_eq!(
+            AudioSelectionModel::clamp_to_duration((-1.0, 15.0), 10.0),
+            (0.0, 10.0)
+        );
     }
 }

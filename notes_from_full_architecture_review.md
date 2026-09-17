@@ -8,7 +8,7 @@
 | Highest-value work 2: pipeline compile/validation | **DONE/FIXED** |
 | Highest-value work 3: shared bounded jobs/processes | **DONE/FIXED** |
 | Highest-value work 4: crate layering | **DONE/FIXED** |
-| Large mixed-responsibility workbench modules | **IN PROGRESS** |
+| Large mixed-responsibility workbench modules | **DONE/FIXED** |
 | Renderer and core-audio module decomposition | **DONE/FIXED** |
 | Duplicate staging and clipboard mechanisms | **DONE/FIXED** |
 | Remaining external-command consolidation | **DONE/FIXED** |
