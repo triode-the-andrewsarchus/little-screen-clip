@@ -4,6 +4,7 @@
 //! topological order, handles inter-process communication for CLI tools (FFmpeg, ImageMagick, jq, Python),
 //! manages prompt inputs, and collects output payloads for slot state commitment or file saving.
 
+use super::catalog::NODE_CATALOG;
 use super::types::{NodeGraph, NodeInstance, NodeKind, PortValue};
 use base64::Engine;
 use little_clip_core::item::{ClipItem, ClipPayload};
@@ -30,6 +31,9 @@ pub enum PipelineError {
     /// Underlying filesystem I/O error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    /// Graph structure does not match the node catalog or has invalid wires.
+    #[error("Invalid graph: {0}")]
+    InvalidGraph(String),
 }
 
 /// Consolidated outputs and side-effects produced by a pipeline graph execution.
@@ -90,6 +94,7 @@ impl<'a> PipelineExecutor<'a> {
 
     /// Topologically sorts the graph nodes and executes all operations in dependency order.
     pub fn execute(&self) -> Result<PipelineExecutionResult, PipelineError> {
+        self.validate_graph()?;
         let ordered_nodes = self.topological_sort()?;
         let mut outputs: HashMap<(Uuid, String), PortValue> = HashMap::new();
         let mut result = PipelineExecutionResult::default();
@@ -119,6 +124,93 @@ impl<'a> PipelineExecutor<'a> {
         }
 
         Ok(result)
+    }
+
+    /// Verifies that deserialized graph data uses known node schemas and valid one-to-one wires.
+    fn validate_graph(&self) -> Result<(), PipelineError> {
+        let mut nodes = HashMap::new();
+        for node in &self.graph.nodes {
+            if nodes.insert(node.id, node).is_some() {
+                return Err(PipelineError::InvalidGraph(format!(
+                    "duplicate node id {}",
+                    node.id
+                )));
+            }
+            let template = NODE_CATALOG
+                .iter()
+                .find(|template| template.kind == node.kind)
+                .ok_or_else(|| {
+                    PipelineError::InvalidGraph(format!("unknown node kind: {:?}", node.kind))
+                })?;
+            let matches_schema =
+                |pins: &[super::types::Pin], expected: &[(&str, super::types::PortType)]| {
+                    pins.len() == expected.len()
+                        && pins.iter().zip(expected).all(|(pin, &(name, port_type))| {
+                            pin.name == name && pin.port_type == port_type
+                        })
+                };
+            if !matches_schema(&node.inputs, template.inputs)
+                || !matches_schema(&node.outputs, template.outputs)
+            {
+                return Err(PipelineError::InvalidGraph(format!(
+                    "node '{}' does not match catalog pin schema",
+                    node.title
+                )));
+            }
+        }
+
+        let mut destinations = std::collections::HashSet::new();
+        for connection in &self.graph.connections {
+            let source = nodes.get(&connection.from_node).ok_or_else(|| {
+                PipelineError::InvalidGraph(format!(
+                    "connection source node {} does not exist",
+                    connection.from_node
+                ))
+            })?;
+            let target = nodes.get(&connection.to_node).ok_or_else(|| {
+                PipelineError::InvalidGraph(format!(
+                    "connection target node {} does not exist",
+                    connection.to_node
+                ))
+            })?;
+            let source_pin = source
+                .outputs
+                .iter()
+                .find(|pin| pin.name == connection.from_pin)
+                .ok_or_else(|| {
+                    PipelineError::InvalidGraph(format!(
+                        "source pin '{}' does not exist on '{}'",
+                        connection.from_pin, source.title
+                    ))
+                })?;
+            let target_pin = target
+                .inputs
+                .iter()
+                .find(|pin| pin.name == connection.to_pin)
+                .ok_or_else(|| {
+                    PipelineError::InvalidGraph(format!(
+                        "target pin '{}' does not exist on '{}'",
+                        connection.to_pin, target.title
+                    ))
+                })?;
+            if !source_pin
+                .port_type
+                .is_compatible_with(&target_pin.port_type)
+            {
+                return Err(PipelineError::InvalidGraph(format!(
+                    "cannot connect {} output '{}' to {} input '{}'",
+                    source.title, connection.from_pin, target.title, connection.to_pin
+                )));
+            }
+            if !destinations.insert((connection.to_node, connection.to_pin.clone())) {
+                return Err(PipelineError::InvalidGraph(format!(
+                    "multiple connections target {} input '{}'",
+                    target.title, connection.to_pin
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     fn topological_sort(&self) -> Result<Vec<&'a NodeInstance>, PipelineError> {
@@ -1234,6 +1326,50 @@ mod tests {
     }
 
     #[test]
+    fn validation_rejects_dangling_and_duplicate_input_connections() {
+        let source = instantiate_template(find_template("source_const_text").unwrap(), [0.0, 0.0]);
+        let sink = instantiate_template(find_template("sink_lh").unwrap(), [100.0, 0.0]);
+        let missing_node = Uuid::new_v4();
+        let dangling = NodeGraph {
+            nodes: vec![source.clone(), sink.clone()],
+            connections: vec![Connection {
+                from_node: missing_node,
+                from_pin: "Out".to_string(),
+                to_node: sink.id,
+                to_pin: "In".to_string(),
+            }],
+            ..Default::default()
+        };
+        assert!(matches!(
+            PipelineExecutor::new(&dangling, &SlotManager::default()).validate_graph(),
+            Err(PipelineError::InvalidGraph(_))
+        ));
+
+        let duplicate_input = NodeGraph {
+            nodes: vec![source.clone(), sink.clone()],
+            connections: vec![
+                Connection {
+                    from_node: source.id,
+                    from_pin: "Text".to_string(),
+                    to_node: sink.id,
+                    to_pin: "In".to_string(),
+                },
+                Connection {
+                    from_node: source.id,
+                    from_pin: "Text".to_string(),
+                    to_node: sink.id,
+                    to_pin: "In".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(matches!(
+            PipelineExecutor::new(&duplicate_input, &SlotManager::default()).validate_graph(),
+            Err(PipelineError::InvalidGraph(_))
+        ));
+    }
+
+    #[test]
     fn test_recipe_yaml_roundtrip() {
         let recipe = make_pad_and_caption_recipe();
         let yaml = serde_yaml::to_string(&recipe).expect("Serialization failed");
@@ -1466,19 +1602,13 @@ printf "%s!BASH!" "$data"
         }
         img2.save(&img2_path).unwrap();
 
-        let t_const = find_template("source_const_text").unwrap();
+        let t_left = find_template("source_lh").unwrap();
+        let t_right = find_template("source_rh").unwrap();
         let t_diff = find_template("img_diff").unwrap();
         let t_sink = find_template("sink_lh").unwrap();
 
-        let mut n_src1 = instantiate_template(t_const, [0.0, 0.0]);
-        n_src1
-            .props
-            .insert("text".to_string(), img1_path.to_str().unwrap().to_string());
-
-        let mut n_src2 = instantiate_template(t_const, [0.0, 100.0]);
-        n_src2
-            .props
-            .insert("text".to_string(), img2_path.to_str().unwrap().to_string());
+        let n_src1 = instantiate_template(t_left, [0.0, 0.0]);
+        let n_src2 = instantiate_template(t_right, [0.0, 100.0]);
 
         let mut n_diff = instantiate_template(t_diff, [200.0, 50.0]);
         n_diff
@@ -1497,13 +1627,13 @@ printf "%s!BASH!" "$data"
             connections: vec![
                 Connection {
                     from_node: n_src1.id,
-                    from_pin: "Text".to_string(),
+                    from_pin: "Out".to_string(),
                     to_node: n_diff.id,
                     to_pin: "Base Image".to_string(),
                 },
                 Connection {
                     from_node: n_src2.id,
-                    from_pin: "Text".to_string(),
+                    from_pin: "Out".to_string(),
                     to_node: n_diff.id,
                     to_pin: "Compare Image".to_string(),
                 },
@@ -1517,7 +1647,13 @@ printf "%s!BASH!" "$data"
             ..Default::default()
         };
 
-        let mgr = SlotManager::default();
+        let mut mgr = SlotManager::default();
+        mgr.push_left(
+            ClipItem::from_image_bytes(fs::read(&img1_path).unwrap(), "image/png").unwrap(),
+        );
+        mgr.push_right(
+            ClipItem::from_image_bytes(fs::read(&img2_path).unwrap(), "image/png").unwrap(),
+        );
         let executor = PipelineExecutor::new(&graph, &mgr);
         let res = executor
             .execute()
