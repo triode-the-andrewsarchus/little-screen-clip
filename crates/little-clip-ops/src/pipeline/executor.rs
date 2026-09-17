@@ -4,14 +4,14 @@
 //! topological order, handles inter-process communication for CLI tools (FFmpeg, ImageMagick, jq, Python),
 //! manages prompt inputs, and collects output payloads for slot state commitment or file saving.
 
-use super::catalog::NODE_CATALOG;
+use super::compiler::CompiledPipeline;
 use super::types::{NodeGraph, NodeInstance, NodeKind, PortValue};
 use base64::Engine;
 use little_clip_core::ArtifactLease;
 use little_clip_core::ArtifactStore;
 use little_clip_core::item::{ClipItem, ClipPayload};
 use little_clip_core::slot::SlotManager;
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -107,20 +107,14 @@ impl<'a> PipelineExecutor<'a> {
 
     /// Topologically sorts the graph nodes and executes all operations in dependency order.
     pub fn execute(&self) -> Result<PipelineExecutionResult, PipelineError> {
-        self.validate_graph()?;
-        let ordered_nodes = self.topological_sort()?;
+        let compiled = CompiledPipeline::compile(self.graph)?;
         let mut outputs: HashMap<(Uuid, String), PortValue> = HashMap::new();
         let mut result = PipelineExecutionResult::default();
 
-        for node in ordered_nodes {
+        for node in compiled.nodes() {
             let mut inputs = HashMap::new();
             for pin in &node.inputs {
-                if let Some(conn) = self
-                    .graph
-                    .connections
-                    .iter()
-                    .find(|c| c.to_node == node.id && c.to_pin.eq_ignore_ascii_case(&pin.name))
-                {
+                if let Some(conn) = compiled.input_for(node.id, &pin.name) {
                     if let Some(val) = outputs.get(&(conn.from_node, conn.from_pin.clone())) {
                         inputs.insert(pin.name.clone(), val.clone());
                     }
@@ -139,137 +133,14 @@ impl<'a> PipelineExecutor<'a> {
         Ok(result)
     }
 
-    /// Verifies that deserialized graph data uses known node schemas and valid one-to-one wires.
+    /// Verifies graph structure without launching an operation.
     fn validate_graph(&self) -> Result<(), PipelineError> {
-        let mut nodes = HashMap::new();
-        for node in &self.graph.nodes {
-            if nodes.insert(node.id, node).is_some() {
-                return Err(PipelineError::InvalidGraph(format!(
-                    "duplicate node id {}",
-                    node.id
-                )));
-            }
-            let template = NODE_CATALOG
-                .iter()
-                .find(|template| template.kind == node.kind)
-                .ok_or_else(|| {
-                    PipelineError::InvalidGraph(format!("unknown node kind: {:?}", node.kind))
-                })?;
-            let matches_schema =
-                |pins: &[super::types::Pin], expected: &[(&str, super::types::PortType)]| {
-                    pins.len() == expected.len()
-                        && pins.iter().zip(expected).all(|(pin, &(name, port_type))| {
-                            pin.name == name && pin.port_type == port_type
-                        })
-                };
-            if !matches_schema(&node.inputs, template.inputs)
-                || !matches_schema(&node.outputs, template.outputs)
-            {
-                return Err(PipelineError::InvalidGraph(format!(
-                    "node '{}' does not match catalog pin schema",
-                    node.title
-                )));
-            }
-        }
-
-        let mut destinations = std::collections::HashSet::new();
-        for connection in &self.graph.connections {
-            let source = nodes.get(&connection.from_node).ok_or_else(|| {
-                PipelineError::InvalidGraph(format!(
-                    "connection source node {} does not exist",
-                    connection.from_node
-                ))
-            })?;
-            let target = nodes.get(&connection.to_node).ok_or_else(|| {
-                PipelineError::InvalidGraph(format!(
-                    "connection target node {} does not exist",
-                    connection.to_node
-                ))
-            })?;
-            let source_pin = source
-                .outputs
-                .iter()
-                .find(|pin| pin.name == connection.from_pin)
-                .ok_or_else(|| {
-                    PipelineError::InvalidGraph(format!(
-                        "source pin '{}' does not exist on '{}'",
-                        connection.from_pin, source.title
-                    ))
-                })?;
-            let target_pin = target
-                .inputs
-                .iter()
-                .find(|pin| pin.name == connection.to_pin)
-                .ok_or_else(|| {
-                    PipelineError::InvalidGraph(format!(
-                        "target pin '{}' does not exist on '{}'",
-                        connection.to_pin, target.title
-                    ))
-                })?;
-            if !source_pin
-                .port_type
-                .is_compatible_with(&target_pin.port_type)
-            {
-                return Err(PipelineError::InvalidGraph(format!(
-                    "cannot connect {} output '{}' to {} input '{}'",
-                    source.title, connection.from_pin, target.title, connection.to_pin
-                )));
-            }
-            if !destinations.insert((connection.to_node, connection.to_pin.clone())) {
-                return Err(PipelineError::InvalidGraph(format!(
-                    "multiple connections target {} input '{}'",
-                    target.title, connection.to_pin
-                )));
-            }
-        }
-
-        Ok(())
+        CompiledPipeline::compile(self.graph).map(|_| ())
     }
 
+    /// Returns the compiled execution order for legacy executor tests.
     fn topological_sort(&self) -> Result<Vec<&'a NodeInstance>, PipelineError> {
-        let mut in_degree: HashMap<Uuid, usize> = HashMap::new();
-        let mut adj: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
-
-        for node in &self.graph.nodes {
-            in_degree.insert(node.id, 0);
-            adj.insert(node.id, Vec::new());
-        }
-
-        for conn in &self.graph.connections {
-            if in_degree.contains_key(&conn.to_node) && adj.contains_key(&conn.from_node) {
-                *in_degree.entry(conn.to_node).or_insert(0) += 1;
-                adj.entry(conn.from_node).or_default().push(conn.to_node);
-            }
-        }
-
-        let mut queue: VecDeque<Uuid> = in_degree
-            .iter()
-            .filter(|&(_, &deg)| deg == 0)
-            .map(|(&id, _)| id)
-            .collect();
-
-        let mut sorted = Vec::new();
-        while let Some(node_id) = queue.pop_front() {
-            if let Some(node) = self.graph.nodes.iter().find(|n| n.id == node_id) {
-                sorted.push(node);
-            }
-            if let Some(neighbors) = adj.get(&node_id) {
-                for &neighbor in neighbors {
-                    if let Some(deg) = in_degree.get_mut(&neighbor) {
-                        *deg -= 1;
-                        if *deg == 0 {
-                            queue.push_back(neighbor);
-                        }
-                    }
-                }
-            }
-        }
-
-        if sorted.len() != self.graph.nodes.len() {
-            return Err(PipelineError::CycleDetected);
-        }
-
-        Ok(sorted)
+        Ok(CompiledPipeline::compile(self.graph)?.nodes().to_vec())
     }
 
     fn extract_script_stdin(inputs: &HashMap<String, PortValue>) -> String {
@@ -1343,21 +1214,22 @@ mod tests {
         assert_eq!(sorted[0].id, n1.id);
         assert_eq!(sorted[1].id, n2.id);
 
-        // Cyclic graph: n1 -> n2 -> n1
+        // Cyclic graph: two valid transform nodes wired into each other.
+        let n3 = instantiate_template(t_trim, [200.0, 0.0]);
         let cyclic_graph = NodeGraph {
-            nodes: vec![n1.clone(), n2.clone()],
+            nodes: vec![n2.clone(), n3.clone()],
             connections: vec![
-                Connection {
-                    from_node: n1.id,
-                    from_pin: "Text".to_string(),
-                    to_node: n2.id,
-                    to_pin: "In".to_string(),
-                },
                 Connection {
                     from_node: n2.id,
                     from_pin: "Out".to_string(),
-                    to_node: n1.id,
-                    to_pin: "Text".to_string(),
+                    to_node: n3.id,
+                    to_pin: "In".to_string(),
+                },
+                Connection {
+                    from_node: n3.id,
+                    from_pin: "Out".to_string(),
+                    to_node: n2.id,
+                    to_pin: "In".to_string(),
                 },
             ],
             ..Default::default()
