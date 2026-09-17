@@ -2,25 +2,31 @@
 //! perceptual image diffs, MIDI synthesis, spreadsheet/CSV parsing, STL mesh rendering,
 //! unit/timestamp conversions, and DAG execution pipelines.
 
+use crate::binary_diff::{
+    BinaryDiffMode, compute_binary_diff, get_item_binary_bytes, resolve_two_files_from_single_item,
+};
+use crate::diff::{DiffDisplayMode, compute_diff, resolve_diff_pair, resolve_diff_target};
+use crate::image_diff::{ImageDiffOptions, compare_image_bytes};
 use base64::Engine;
 use little_clip_core::{ClipItem, ClipPayload};
 use std::collections::HashSet;
 use thiserror::Error;
 
 pub mod pipeline;
-pub use pipeline::*;
+pub use pipeline::{
+    NodeGraph, PipelineError, PipelineExecutionResult, PipelineExecutor, PortType,
+    find_recipe_by_name, load_all_recipes,
+};
 
 pub mod diff;
-pub use diff::*;
+pub use diff::is_image_path;
 
 pub mod image_diff;
-pub use image_diff::*;
 
 pub mod binary_diff;
-pub use binary_diff::*;
 
 pub mod auto_actions;
-pub use auto_actions::*;
+pub use auto_actions::clean_url_tracking;
 
 pub use little_clip_core::presentation::midi;
 pub use little_clip_core::presentation::model3d;
@@ -28,30 +34,18 @@ pub use little_clip_core::presentation::network_preview;
 pub use little_clip_core::presentation::spreadsheet;
 pub use little_clip_core::presentation::timestamps;
 pub use little_clip_core::presentation::units;
-pub use midi::*;
-pub use model3d::*;
-pub use network_preview::*;
-pub use spreadsheet::*;
-pub use timestamps::*;
-pub use units::*;
 
 pub mod stl;
-pub use stl::*;
 
 pub mod barcode;
-pub use barcode::*;
 
 pub mod decorrelation_stretch;
-pub use decorrelation_stretch::*;
 
 pub mod metadata;
-pub use metadata::*;
 
 pub mod perspective;
-pub use perspective::*;
 
 pub mod creative_fx;
-pub use creative_fx::*;
 
 /// Error encountered during transformation or diff execution.
 #[derive(Debug, Error)]

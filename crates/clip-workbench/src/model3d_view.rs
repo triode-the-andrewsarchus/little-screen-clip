@@ -7,8 +7,8 @@
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::StatusToast;
 use eframe::egui::{self, Color32, Pos2, Rounding, Stroke, Vec2};
+use little_clip_core::presentation::model3d::{Model3d, ModelFormat, Vec3};
 use little_clip_core::theme::AppPalette;
-use little_clip_ops::{Model3d, ModelFormat, Vec3};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
