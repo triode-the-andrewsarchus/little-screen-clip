@@ -26,14 +26,12 @@ pub mod presentation {
     #[path = "../../../little-clip-ops/src/units.rs"]
     pub mod units;
 }
+pub mod pdf;
 pub mod raw_image;
 pub mod rolling_audio;
 pub mod slot;
 pub mod staging;
 pub mod syntax;
-pub use raw_image::*;
-pub mod pdf;
-pub use pdf::*;
 pub mod theme;
 pub use color::parse_hex_color;
 pub use theme::{
