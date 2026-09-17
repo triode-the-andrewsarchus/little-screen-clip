@@ -338,7 +338,7 @@ impl ElidedText {
 
 impl ScreenRenderer {
     /// Renders the complete 1920x462 hotbar layout into a tiny-skia Pixmap.
-    /// Order: [Undo] [Left hand] [L prior(1)] [L prior(2)] [R prior(2)] [R prior(1)] [Right hand]
+    /// Order: \[Undo] \[Left hand] \[L prior(1)] \[L prior(2)] \[R prior(2)] \[R prior(1)] \[Right hand]
     pub fn render_pixmap(&self, manager: &SlotManager) -> Result<Pixmap, RenderError> {
         let mut pixmap = Pixmap::new(SCREEN_WIDTH, SCREEN_HEIGHT)
             .ok_or_else(|| RenderError::ImageEncode("Failed to allocate pixmap".to_string()))?;

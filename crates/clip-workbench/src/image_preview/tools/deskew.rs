@@ -2,8 +2,8 @@ use super::super::*;
 
 #[derive(Clone)]
 pub struct DeskewState {
-    /// Normalized corner coordinates in [0.0, 1.0] range relative to image:
-    /// [0] Top-Left, [1] Top-Right, [2] Bottom-Right, [3] Bottom-Left
+    /// Normalized corner coordinates in \[0.0, 1.0] range relative to image:
+    /// \[0] Top-Left, \[1] Top-Right, \[2] Bottom-Right, \[3] Bottom-Left
     pub corners: [Pos2; 4],
     pub dragging_corner: Option<usize>,
     pub crop_mode: DeskewCropMode,

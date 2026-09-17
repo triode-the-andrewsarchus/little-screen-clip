@@ -326,7 +326,7 @@ pub fn make_clean_and_slugify_recipe() -> Recipe {
 }
 
 /// Basic starting template for new custom recipes:
-/// Left Hand Source [LH] -> Set in Left Hand [LH]
+/// Left Hand Source \[LH] -> Set in Left Hand \[LH]
 pub fn make_basic_template_recipe() -> Recipe {
     let t_lh = find_template("source_lh").expect("source_lh template not found");
     let t_sink = find_template("sink_lh").expect("sink_lh template not found");
