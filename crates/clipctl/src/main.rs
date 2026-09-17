@@ -6,7 +6,9 @@
 use clap::{Parser, Subcommand};
 use colored::*;
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
-use little_clip_core::{HandSide, SlotId};
+use little_clip_core::{
+    HandSide, SlotId, copy_bytes_to_system_clipboard, copy_text_to_system_clipboard,
+};
 use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -107,6 +109,22 @@ async fn send_ipc_req(
         Ok(resp)
     } else {
         Err("Daemon closed connection without responding".into())
+    }
+}
+
+async fn copy_text_to_os_clipboard(text: String) {
+    match tokio::task::spawn_blocking(move || copy_text_to_system_clipboard(&text)).await {
+        Ok(Err(error)) => eprintln!("Clipboard copy failed: {error}"),
+        Err(error) => eprintln!("Clipboard copy worker failed: {error}"),
+        Ok(Ok(())) => {}
+    }
+}
+
+async fn copy_bytes_to_os_clipboard(bytes: Vec<u8>, mime: String) {
+    match tokio::task::spawn_blocking(move || copy_bytes_to_system_clipboard(&bytes, &mime)).await {
+        Ok(Err(error)) => eprintln!("Clipboard copy failed: {error}"),
+        Err(error) => eprintln!("Clipboard copy worker failed: {error}"),
+        Ok(Ok(())) => {}
     }
 }
 
@@ -231,32 +249,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let resp = send_ipc_req(&mut writer, &mut lines, &get_req).await?;
             if let IpcResponse::SlotItem(Some(item)) = resp {
                 if let Some(text) = item.to_clipboard_text() {
-                    if let Ok(mut child) = tokio::process::Command::new("wl-copy")
-                        .stdin(std::process::Stdio::piped())
-                        .spawn()
-                    {
-                        if let Some(mut stdin) = child.stdin.take() {
-                            let _ = stdin.write_all(text.as_bytes()).await;
-                        }
-                        let _ = child.wait().await;
-                    }
-                } else if let little_clip_core::ClipPayload::Image {
-                    ref bytes,
-                    ref mime,
-                    ..
-                } = item.payload
+                    copy_text_to_os_clipboard(text).await;
+                } else if let little_clip_core::ClipPayload::Image { bytes, mime, .. } =
+                    item.payload
                 {
-                    if let Ok(mut child) = tokio::process::Command::new("wl-copy")
-                        .arg("-t")
-                        .arg(mime)
-                        .stdin(std::process::Stdio::piped())
-                        .spawn()
-                    {
-                        if let Some(mut stdin) = child.stdin.take() {
-                            let _ = stdin.write_all(bytes).await;
-                        }
-                        let _ = child.wait().await;
-                    }
+                    copy_bytes_to_os_clipboard(bytes, mime).await;
                 }
 
                 tokio::time::sleep(std::time::Duration::from_millis(30)).await;
@@ -272,10 +269,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         send_ipc_req(&mut writer, &mut lines, &left_req).await
                     {
                         if let Some(left_text) = left_item.to_clipboard_text() {
-                            let _ = tokio::process::Command::new("wl-copy")
-                                .arg(left_text)
-                                .status()
-                                .await;
+                            copy_text_to_os_clipboard(left_text).await;
                         }
                     }
                 }

@@ -1678,16 +1678,13 @@ impl AudioPreviewState {
                 };
                 let ipc_sent = crate::send_ipc_request(&req).is_ok();
 
-                // If daemon is not running, fall back to direct wl-copy
+                // If the daemon is unavailable, use the shared local clipboard adapter.
                 if !ipc_sent {
-                    let path_str = out_path.to_string_lossy().to_string();
-                    let uri_list = format!("file://{}\n", path_str);
-                    let _ = std::process::Command::new("wl-copy")
-                        .arg("-t")
-                        .arg("text/uri-list")
-                        .arg(&uri_list)
-                        .spawn();
-                    let _ = std::process::Command::new("wl-copy").arg(&path_str).spawn();
+                    if let Err(error) = little_clip_core::copy_file_uris_to_system_clipboard(
+                        std::slice::from_ref(&out_path),
+                    ) {
+                        tracing::debug!(%error, "failed to copy audio slice to system clipboard");
+                    }
                 }
 
                 let mode_desc = match mode {
@@ -1785,11 +1782,6 @@ impl AudioPreviewState {
         }
 
         if !out_paths.is_empty() {
-            let mut uri_list = String::new();
-            for p in &out_paths {
-                uri_list.push_str(&format!("file://{}\n", p.to_string_lossy()));
-            }
-
             // Push all files as a single batch into Left Hand (1 item, 1 hand!)
             let req = if out_paths.len() == 1 {
                 IpcRequest::PushFile {
@@ -1804,14 +1796,12 @@ impl AudioPreviewState {
             };
             let ipc_sent = crate::send_ipc_request(&req).is_ok();
 
-            // If daemon is not running, fall back to direct wl-copy
+            // If the daemon is unavailable, use the shared local clipboard adapter.
             if !ipc_sent {
-                let _ = std::process::Command::new("wl-copy")
-                    .arg("-t")
-                    .arg("text/uri-list")
-                    .arg(&uri_list)
-                    .spawn();
-                let _ = std::process::Command::new("wl-copy").arg(&uri_list).spawn();
+                if let Err(error) = little_clip_core::copy_file_uris_to_system_clipboard(&out_paths)
+                {
+                    tracing::debug!(%error, "failed to copy audio slices to system clipboard");
+                }
             }
 
             let mode_desc = match mode {

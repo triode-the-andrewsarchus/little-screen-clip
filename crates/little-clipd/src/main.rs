@@ -1517,10 +1517,7 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
                         if was_cleaned {
                             if let Some(clean_text) = item.to_clipboard_text() {
                                 last_clipboard_text = clean_text.clone();
-                                let _ = tokio::process::Command::new("wl-copy")
-                                    .arg(&clean_text)
-                                    .status()
-                                    .await;
+                                copy_cleaned_clipboard_text(clean_text).await;
                             }
                         }
                         ctx.refresh_display().await;
@@ -1560,6 +1557,14 @@ fn extract_clipboard_text(item: &ClipItem) -> Option<String> {
             Some(path.to_string_lossy().to_string())
         }
         _ => None,
+    }
+}
+
+async fn copy_cleaned_clipboard_text(text: String) {
+    match tokio::task::spawn_blocking(move || copy_text_to_system_clipboard(&text)).await {
+        Ok(Err(error)) => warn!(%error, "failed to copy cleaned clipboard text"),
+        Err(error) => warn!(%error, "clipboard copy worker failed"),
+        Ok(Ok(())) => {}
     }
 }
 

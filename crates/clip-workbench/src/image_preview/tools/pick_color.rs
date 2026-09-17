@@ -20,12 +20,9 @@ impl ImagePreviewState {
 
         let hex_for_cmd = hex.clone();
         std::thread::spawn(move || {
-            let _ = Command::new("wl-copy").arg(&hex_for_cmd).output();
-            let _ = Command::new("xclip")
-                .arg("-selection")
-                .arg("clipboard")
-                .arg(&hex_for_cmd)
-                .output();
+            if let Err(error) = little_clip_core::copy_text_to_system_clipboard(&hex_for_cmd) {
+                tracing::debug!(%error, "failed to copy picked color to system clipboard");
+            }
         });
 
         self.pick_color_state.last_picked = Some(col);
@@ -54,7 +51,7 @@ impl ImagePreviewState {
     }
 
     /// Copies the currently displayed image to a specific clipboard hand slot (Left or Right) via daemon IPC,
-    /// and simultaneously syncs to the OS clipboard (wl-copy / xclip).
+    /// and simultaneously syncs to the OS clipboard through the shared adapter.
 
     pub(crate) fn render_pick_color_overlay(
         &mut self,

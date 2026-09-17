@@ -377,7 +377,7 @@ impl ImagePreviewState {
     }
 
     /// Copies the currently displayed image to the Left Hand clipboard slot via daemon IPC,
-    /// and simultaneously syncs to the OS clipboard (wl-copy / xclip).
+    /// and simultaneously syncs to the OS clipboard through the shared adapter.
     pub fn copy_to_clipboard_slot(&mut self) {
         self.copy_to_hand_slot(HandSide::Left);
     }
