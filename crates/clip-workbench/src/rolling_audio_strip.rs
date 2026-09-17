@@ -1088,6 +1088,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual integration test requires a live rolling-audio snapshot"]
     fn test_pcm16_sync() {
         let path = PathBuf::from(
             "/run/user/1000/little-screen-clip/rolling_snapshots/current_snapshot.wav",
