@@ -25,6 +25,19 @@ pub const SCREEN_WIDTH: u32 = 1920;
 /// Target height in pixels for the physical secondary display.
 pub const SCREEN_HEIGHT: u32 = 462;
 
+/// Returns true if `ch` is a zero-width formatting character or Unicode BOM.
+#[inline]
+pub fn is_zero_width_or_bom(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{feff}' // Byte Order Mark / Zero Width No-Break Space
+        | '\u{200b}' // Zero Width Space
+        | '\u{200c}' // Zero Width Non-Joiner
+        | '\u{200d}' // Zero Width Joiner
+        | '\u{2060}' // Word Joiner
+    )
+}
+
 /// Errors that can occur during layout rasterization or image encoding.
 #[derive(Debug, Error)]
 pub enum RenderError {
@@ -721,7 +734,10 @@ impl ScreenRenderer {
                             || little_clip_ops::is_text_file(p))
                     {
                         if let Ok(file_content) = std::fs::read_to_string(p) {
-                            (file_content, p.extension().and_then(|s| s.to_str()))
+                            let clean_content = file_content
+                                .trim_start_matches(is_zero_width_or_bom)
+                                .to_string();
+                            (clean_content, p.extension().and_then(|s| s.to_str()))
                         } else {
                             (text.clone(), ext_hint)
                         }
@@ -934,10 +950,13 @@ impl ScreenRenderer {
                         || (p.is_file() && little_clip_ops::is_text_file(p))
                     {
                         if let Ok(file_content) = std::fs::read_to_string(p) {
+                            let clean_content = file_content
+                                .trim_start_matches(is_zero_width_or_bom)
+                                .to_string();
                             let ext = p.extension().and_then(|s| s.to_str());
                             self.draw_text_preview(
                                 pixmap,
-                                &file_content,
+                                &clean_content,
                                 ext,
                                 rx,
                                 ry,
@@ -1663,10 +1682,11 @@ impl ScreenRenderer {
 
         if let Some(font) = font {
             text.chars()
+                .filter(|&ch| !is_zero_width_or_bom(ch))
                 .map(|ch| font.metrics(ch, size).advance_width)
                 .sum()
         } else {
-            text.chars().count() as f32 * size * 0.6
+            text.chars().filter(|&ch| !is_zero_width_or_bom(ch)).count() as f32 * size * 0.6
         }
     }
 
@@ -1809,6 +1829,9 @@ impl ScreenRenderer {
             let data = pixmap.data_mut();
 
             for ch in text.chars() {
+                if is_zero_width_or_bom(ch) {
+                    continue;
+                }
                 if curr_x >= clip_right {
                     break;
                 }
@@ -2083,7 +2106,8 @@ impl ScreenRenderer {
         let max_content_w = (rw - 28.0).max(10.0);
         let clip_right = rx + rw - 10.0;
 
-        let lines = crate::markdown::parse_markdown(content);
+        let clean_content = content.trim_start_matches(is_zero_width_or_bom);
+        let lines = crate::markdown::parse_markdown(clean_content);
         let total_lines = lines.len();
         let max_y = ry + rh - 22.0;
         let mut y = ry + 124.0;
@@ -3123,7 +3147,8 @@ impl ScreenRenderer {
         is_hero: bool,
         _elision_color: Color,
     ) {
-        let trimmed = text.trim();
+        let clean_text = text.trim_start_matches(is_zero_width_or_bom);
+        let trimmed = clean_text.trim();
 
         // 1. Unit conversion preview
         if let Some(conv) = little_clip_ops::detect_unit_conversion(trimmed) {
@@ -3535,5 +3560,56 @@ mod tests {
         );
         let _ = std::fs::create_dir_all(out_dir);
         let _ = pixmap.save_png(out_dir.join("current_stl_card.png"));
+    }
+
+    #[test]
+    fn test_bom_and_zero_width_rendering() {
+        assert!(is_zero_width_or_bom('\u{feff}'));
+        assert!(is_zero_width_or_bom('\u{200b}'));
+        assert!(!is_zero_width_or_bom('a'));
+        assert!(!is_zero_width_or_bom(' '));
+
+        let renderer = ScreenRenderer::fallback(AppConfig::default());
+
+        let w_with_bom =
+            renderer.measure_text_width_styled("\u{feff}1. Do not talk", 15.0, FontStyle::Mono);
+        let w_without_bom =
+            renderer.measure_text_width_styled("1. Do not talk", 15.0, FontStyle::Mono);
+        assert_eq!(
+            w_with_bom, w_without_bom,
+            "BOM character must not add to measured width"
+        );
+
+        let mut pix1 = Pixmap::new(200, 50).unwrap();
+        let mut pix2 = Pixmap::new(200, 50).unwrap();
+        let end_x1 = renderer.draw_text_styled_clipped(
+            &mut pix1,
+            "\u{feff}1. Do not talk",
+            10.0,
+            10.0,
+            15.0,
+            Color::WHITE,
+            FontStyle::Mono,
+            200.0,
+        );
+        let end_x2 = renderer.draw_text_styled_clipped(
+            &mut pix2,
+            "1. Do not talk",
+            10.0,
+            10.0,
+            15.0,
+            Color::WHITE,
+            FontStyle::Mono,
+            200.0,
+        );
+        assert_eq!(
+            end_x1, end_x2,
+            "BOM character must not advance drawing cursor"
+        );
+        assert_eq!(
+            pix1.data(),
+            pix2.data(),
+            "Rendered pixels with BOM must match without BOM"
+        );
     }
 }

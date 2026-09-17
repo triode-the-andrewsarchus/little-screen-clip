@@ -139,6 +139,7 @@ pub use little_clip_core::syntax::detect_markdown_text;
 impl TextPreviewState {
     /// Creates a new text preview from in-memory text.
     pub fn from_text(text: String, title: Option<String>, config: &AppConfig) -> Self {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
         let line_starts = line_start_offsets(&text);
         let is_md = detect_markdown_text(&text);
         let lang = if is_md {

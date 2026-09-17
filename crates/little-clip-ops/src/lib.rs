@@ -1086,15 +1086,16 @@ pub fn read_text_file_preview<P: AsRef<std::path::Path>>(
     let mut buffer = vec![0u8; max_bytes];
     let n = file.read(&mut buffer).ok()?;
     buffer.truncate(n);
-    match String::from_utf8(buffer) {
-        Ok(s) => Some(s),
+    let s = match String::from_utf8(buffer) {
+        Ok(s) => s,
         Err(e) => {
             let valid = e.utf8_error().valid_up_to();
             let mut bytes = e.into_bytes();
             bytes.truncate(valid);
-            String::from_utf8(bytes).ok()
+            String::from_utf8(bytes).ok()?
         }
-    }
+    };
+    Some(s.strip_prefix('\u{feff}').unwrap_or(&s).to_string())
 }
 
 #[cfg(test)]

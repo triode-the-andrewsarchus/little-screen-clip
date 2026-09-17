@@ -65,6 +65,7 @@ pub enum MarkdownLine {
 
 /// Parses raw Markdown text into a sequence of [`MarkdownLine`] blocks.
 pub fn parse_markdown(input: &str) -> Vec<MarkdownLine> {
+    let input = input.trim_start_matches('\u{feff}');
     let mut lines = Vec::new();
     let mut in_code_fence = false;
 

@@ -367,6 +367,7 @@ impl ClipItem {
     /// Parses arbitrary clipboard text, classifying it into files, URLs, colors, SVGs, JSON, Markdown, or plain text.
     pub fn from_text(text: impl Into<String>) -> Self {
         let text = text.into();
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
         let trimmed = text.trim();
 
         // 1. Check if copied text represents one or more local file paths / URIs (e.g. from file manager)
