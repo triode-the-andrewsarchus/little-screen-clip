@@ -2,8 +2,17 @@
 //!
 //! Provides consolidated `#RGB`, `#RRGGBB`, and `#RRGGBBAA` hex color parsing.
 
-/// Parses a hex color string (e.g. `#FFF`, `#1E293B`, `#1E293BFF`) into `(r, g, b, formatted_hex)` tuple.
-/// Returns `None` if the input is not a valid hex color string.
+/// Parses a hex color string (e.g. `#FFF`, `#1E293B`, `#1E293BFF`) into `(r, g, b, formatted_hex)`.
+///
+/// The returned hex value is uppercase and omits an input alpha component. Returns `None` when
+/// the input does not begin with `#` or has an unsupported length or invalid digit.
+///
+/// ```
+/// use little_clip_core::parse_hex_color;
+///
+/// assert_eq!(parse_hex_color("#1e293b"), Some((30, 41, 59, "#1E293B".into())));
+/// assert_eq!(parse_hex_color("not a color"), None);
+/// ```
 pub fn parse_hex_color(s: &str) -> Option<(u8, u8, u8, String)> {
     let s = s.trim();
     if !s.starts_with('#') {
@@ -31,8 +40,9 @@ pub fn parse_hex_color(s: &str) -> Option<(u8, u8, u8, String)> {
     None
 }
 
-/// Parses a hex color string like `#RGB`, `#RRGGBB`, or `#RRGGBBAA` into `(r, g, b, a)`.
-/// Defaults to opaque white `(255, 255, 255, 255)` on parse failure.
+/// Strictly parses `#RGB`, `#RRGGBB`, or `#RRGGBBAA` into `(r, g, b, a)`.
+///
+/// Unlike [`parse_hex_color_rgba_or_white`], this function reports malformed input as `None`.
 pub fn parse_hex_color_rgba_strict(s: &str) -> Option<(u8, u8, u8, u8)> {
     let s = s.trim();
     let s = s.strip_prefix('#').unwrap_or(s);
@@ -63,6 +73,9 @@ pub fn parse_hex_color_rgba_strict(s: &str) -> Option<(u8, u8, u8, u8)> {
 }
 
 /// Parses a hex color using opaque white when parsing fails.
+///
+/// Use this only at display-only fallback boundaries. Validation and configuration input should
+/// prefer [`parse_hex_color_rgba_strict`] so invalid values remain observable.
 pub fn parse_hex_color_rgba_or_white(s: &str) -> (u8, u8, u8, u8) {
     parse_hex_color_rgba_strict(s).unwrap_or((255, 255, 255, 255))
 }

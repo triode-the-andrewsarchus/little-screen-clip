@@ -29,7 +29,18 @@ pub enum PortType {
 }
 
 impl PortType {
-    /// Returns `true` if this port type can connect to `other`.
+    /// Returns `true` if this output port type can connect to `other` input port type.
+    ///
+    /// `Any` is deliberately compatible with every port type; all other connections require an
+    /// exact type match.
+    ///
+    /// ```
+    /// use little_clip_ops::PortType;
+    ///
+    /// assert!(PortType::Text.is_compatible_with(&PortType::Text));
+    /// assert!(PortType::Any.is_compatible_with(&PortType::Image));
+    /// assert!(!PortType::Text.is_compatible_with(&PortType::Audio));
+    /// ```
     pub fn is_compatible_with(&self, other: &PortType) -> bool {
         match (self, other) {
             (PortType::Any, _) | (_, PortType::Any) => true,

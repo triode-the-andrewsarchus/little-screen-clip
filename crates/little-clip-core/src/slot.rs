@@ -202,6 +202,16 @@ impl SlotManager {
     /// Cascades existing Left Hand history:
     /// `left_prior2` -> `left_prior3`, `left_prior1` -> `left_prior2`, `left_hand` -> `left_prior1`.
     /// Note: `Undo` is NOT modified during normal copy pushes.
+    ///
+    /// ```
+    /// use little_clip_core::{ClipItem, SlotId, SlotManager};
+    ///
+    /// let mut slots = SlotManager::new();
+    /// slots.push_left(ClipItem::from_text("first"));
+    /// slots.push_left(ClipItem::from_text("second"));
+    /// assert_eq!(slots.get(SlotId::LeftHand).unwrap().title, "second");
+    /// assert_eq!(slots.get(SlotId::LeftPrior1).unwrap().title, "first");
+    /// ```
     pub fn push_left(&mut self, item: ClipItem) {
         self.left_prior3 = self.left_prior2.take();
         self.left_prior2 = self.left_prior1.take();
