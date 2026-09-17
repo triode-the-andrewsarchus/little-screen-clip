@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::color::parse_hex_color_rgba;
+use crate::color::parse_hex_color_rgba_or_white as parse_hex_color_rgba;
 
 /// Represents the 9 standard colors defined in a Hundred Rabbits theme.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

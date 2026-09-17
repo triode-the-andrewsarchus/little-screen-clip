@@ -826,7 +826,7 @@ pub fn get_user_config_path() -> Option<PathBuf> {
 
 /// Helper to parse hex string like "#RRGGBB" or "#RGB" into `(r, g, b, a)` tuple.
 pub fn parse_hex_color(s: &str) -> (u8, u8, u8, u8) {
-    crate::color::parse_hex_color_rgba(s)
+    crate::color::parse_hex_color_rgba_or_white(s)
 }
 
 #[cfg(test)]

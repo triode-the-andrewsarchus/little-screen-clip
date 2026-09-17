@@ -33,28 +33,38 @@ pub fn parse_hex_color(s: &str) -> Option<(u8, u8, u8, String)> {
 
 /// Parses a hex color string like `#RGB`, `#RRGGBB`, or `#RRGGBBAA` into `(r, g, b, a)`.
 /// Defaults to opaque white `(255, 255, 255, 255)` on parse failure.
-pub fn parse_hex_color_rgba(s: &str) -> (u8, u8, u8, u8) {
+pub fn parse_hex_color_rgba_strict(s: &str) -> Option<(u8, u8, u8, u8)> {
     let s = s.trim();
     let s = s.strip_prefix('#').unwrap_or(s);
     if s.len() == 6 {
-        let r = u8::from_str_radix(&s[0..2], 16).unwrap_or(255);
-        let g = u8::from_str_radix(&s[2..4], 16).unwrap_or(255);
-        let b = u8::from_str_radix(&s[4..6], 16).unwrap_or(255);
-        (r, g, b, 255)
+        Some((
+            u8::from_str_radix(&s[0..2], 16).ok()?,
+            u8::from_str_radix(&s[2..4], 16).ok()?,
+            u8::from_str_radix(&s[4..6], 16).ok()?,
+            255,
+        ))
     } else if s.len() == 8 {
-        let r = u8::from_str_radix(&s[0..2], 16).unwrap_or(255);
-        let g = u8::from_str_radix(&s[2..4], 16).unwrap_or(255);
-        let b = u8::from_str_radix(&s[4..6], 16).unwrap_or(255);
-        let a = u8::from_str_radix(&s[6..8], 16).unwrap_or(255);
-        (r, g, b, a)
+        Some((
+            u8::from_str_radix(&s[0..2], 16).ok()?,
+            u8::from_str_radix(&s[2..4], 16).ok()?,
+            u8::from_str_radix(&s[4..6], 16).ok()?,
+            u8::from_str_radix(&s[6..8], 16).ok()?,
+        ))
     } else if s.len() == 3 {
-        let r = u8::from_str_radix(&s[0..1].repeat(2), 16).unwrap_or(255);
-        let g = u8::from_str_radix(&s[1..2].repeat(2), 16).unwrap_or(255);
-        let b = u8::from_str_radix(&s[2..3].repeat(2), 16).unwrap_or(255);
-        (r, g, b, 255)
+        Some((
+            u8::from_str_radix(&s[0..1].repeat(2), 16).ok()?,
+            u8::from_str_radix(&s[1..2].repeat(2), 16).ok()?,
+            u8::from_str_radix(&s[2..3].repeat(2), 16).ok()?,
+            255,
+        ))
     } else {
-        (255, 255, 255, 255)
+        None
     }
+}
+
+/// Parses a hex color using opaque white when parsing fails.
+pub fn parse_hex_color_rgba_or_white(s: &str) -> (u8, u8, u8, u8) {
+    parse_hex_color_rgba_strict(s).unwrap_or((255, 255, 255, 255))
 }
 
 #[cfg(test)]
@@ -77,9 +87,14 @@ mod tests {
 
     #[test]
     fn test_parse_hex_color_rgba() {
-        assert_eq!(parse_hex_color_rgba("#FF0000"), (255, 0, 0, 255));
-        assert_eq!(parse_hex_color_rgba("#00FF0080"), (0, 255, 0, 128));
-        assert_eq!(parse_hex_color_rgba("#F00"), (255, 0, 0, 255));
-        assert_eq!(parse_hex_color_rgba("invalid"), (255, 255, 255, 255));
+        assert_eq!(
+            parse_hex_color_rgba_strict("#FF0000"),
+            Some((255, 0, 0, 255))
+        );
+        assert_eq!(parse_hex_color_rgba_strict("invalid"), None);
+        assert_eq!(
+            parse_hex_color_rgba_or_white("invalid"),
+            (255, 255, 255, 255)
+        );
     }
 }

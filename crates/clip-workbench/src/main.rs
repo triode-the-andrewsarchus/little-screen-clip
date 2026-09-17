@@ -4,7 +4,7 @@
 //! visual node graph builder, audio/image/video/3D/PDF/MIDI inspection windows, and live screen mirror.
 
 use eframe::egui;
-use little_clip_core::color::parse_hex_color_rgba;
+use little_clip_core::color::parse_hex_color_rgba_or_white as parse_hex_color_rgba;
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::theme::{
     AppPalette, DerivedHarmonies, Theme, find_themes_dir, load_themes_from_dir,
