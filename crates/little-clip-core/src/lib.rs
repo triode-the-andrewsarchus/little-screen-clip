@@ -32,7 +32,9 @@ pub use audio::{
     compute_spectral_colors, detect_pitch_yin, detect_transients, freq_to_note, is_audio_path,
     read_audio_metadata,
 };
-pub use config::{AppConfig, AudioConfig, AudioSamplePosition, ColorConfig, DisplayConfig};
+pub use config::{
+    AppConfig, AudioConfig, AudioSamplePosition, ColorConfig, DisplayConfig, Model3dConfig,
+};
 pub use ipc::{IpcRequest, IpcResponse};
 pub use item::{ClipItem, ClipPayload, ImageThumbnail, PayloadKind};
 pub use rolling_audio::{RollingAudioBuffer, slice_wav};

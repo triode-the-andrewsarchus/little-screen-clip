@@ -305,6 +305,13 @@ impl ClipItem {
                     None
                 }
             }
+            ClipPayload::Url(u) => {
+                if let Ok(p) = u.to_file_path() {
+                    if p.is_file() { Some(p) } else { None }
+                } else {
+                    None
+                }
+            }
             _ => None,
         }
     }

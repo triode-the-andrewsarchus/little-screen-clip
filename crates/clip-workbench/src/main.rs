@@ -27,6 +27,7 @@ mod canvas;
 mod diff_view;
 mod image_preview;
 mod midi_view;
+mod model3d_view;
 mod pdf_view;
 mod rolling_audio_strip;
 pub mod shell;
@@ -43,11 +44,11 @@ use image_preview::ImagePreviewState;
 use little_clip_ops::binary_diff::resolve_binary_diff_pair;
 use little_clip_ops::diff::{DiffDisplayMode, resolve_diff_pair, resolve_diff_target};
 use midi_view::MidiViewerState;
+use model3d_view::Model3dViewerState;
 use pdf_view::PdfEditorState;
 use rolling_audio_strip::RollingAudioStripState;
 pub use shell::*;
 use spreadsheet_view::SpreadsheetViewerState;
-use stl_view::StlViewerState;
 use text_preview::TextPreviewState;
 pub use ui_ext::*;
 
@@ -196,7 +197,7 @@ struct WorkbenchApp {
     spreadsheet_viewer: Option<SpreadsheetViewerState>,
     pdf_viewer: Option<PdfEditorState>,
     midi_viewer: Option<MidiViewerState>,
-    stl_viewer: Option<StlViewerState>,
+    model3d_viewer: Option<Model3dViewerState>,
     text_preview: Option<TextPreviewState>,
     rolling_audio_strip: Option<RollingAudioStripState>,
     dragging_slot: Option<SlotId>,
@@ -277,7 +278,7 @@ impl WorkbenchApp {
             spreadsheet_viewer: None,
             pdf_viewer: None,
             midi_viewer: None,
-            stl_viewer: None,
+            model3d_viewer: None,
             text_preview: None,
             rolling_audio_strip,
             dragging_slot: None,
@@ -1016,13 +1017,13 @@ impl eframe::App for WorkbenchApp {
                                 None
                             }
                         });
-                        let first_stl_item = self.selected_slots.iter().find_map(|s| {
+                        let first_3d_model_item = self.selected_slots.iter().find_map(|s| {
                             let it = self.state.get(*s)?;
-                            if let Some(p) = it.file_path().filter(|p| little_clip_ops::is_stl_file(p)) {
+                            if let Some(p) = it.file_path().filter(|p| little_clip_ops::is_3d_model_file(p)) {
                                 Some(p)
                             } else if let Some(txt) = it.to_clipboard_text() {
                                 let p = std::path::Path::new(txt.trim());
-                                if p.is_file() && little_clip_ops::is_stl_file(p) {
+                                if p.is_file() && little_clip_ops::is_3d_model_file(p) {
                                     Some(p.to_path_buf())
                                 } else {
                                     None
@@ -1085,22 +1086,25 @@ impl eframe::App for WorkbenchApp {
                             }
                         }
 
-                        if let Some(stl_path) = first_stl_item {
+                        if let Some(model_path) = first_3d_model_item {
                             ui.add_space(8.0);
-                            let stl_bg = hex_to_c32(&self.renderer.palette.harmonies.split_comp_1);
-                            let stl_fg = contrast_text_c32(stl_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
-                            let stl_btn = egui::Button::new(
-                                egui::RichText::new("🧊 3D STL Model")
+                            let model_bg = hex_to_c32(&self.renderer.palette.harmonies.split_comp_1);
+                            let model_fg = contrast_text_c32(model_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
+                            let ext = model_path.extension().and_then(|s| s.to_str()).unwrap_or("3D").to_ascii_uppercase();
+                            let btn_text = format!("🧊 3D {} Model", ext);
+                            let model_btn = egui::Button::new(
+                                egui::RichText::new(btn_text)
                                     .small()
                                     .strong()
-                                    .color(stl_fg),
+                                    .color(model_fg),
                             )
-                            .fill(stl_bg)
+                            .fill(model_bg)
                             .rounding(4.0);
-                            if ui.add(stl_btn).on_hover_text("Open interactive 3D orbit viewer (pan, zoom, rotate)").clicked() {
-                                if let Ok(st) = StlViewerState::from_file(stl_path) {
-                                    self.stl_viewer = Some(st);
-                                }
+                            if ui.add(model_btn).on_hover_text("Open interactive 3D orbit viewer (pan, zoom, rotate)").clicked() {
+                                self.model3d_viewer = Some(
+                                    Model3dViewerState::from_file(model_path)
+                                        .with_config(self.config.model3d.clone()),
+                                );
                             }
                         }
 
@@ -1676,16 +1680,16 @@ impl WorkbenchApp {
             return true;
         }
 
-        if let Some(stl_state) = &mut self.stl_viewer {
-            let mut close_stl = false;
+        if let Some(model_state) = &mut self.model3d_viewer {
+            let mut close_model = false;
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    stl_state.render_ui(ui, &self.renderer.palette, &mut close_stl);
+                    model_state.render_ui(ui, &self.renderer.palette, &mut close_model);
                 });
 
-            if close_stl {
-                self.stl_viewer = None;
+            if close_model {
+                self.model3d_viewer = None;
             }
             return true;
         }
@@ -1717,10 +1721,11 @@ impl WorkbenchApp {
             if let Ok(st) = MidiViewerState::from_file(fp.to_path_buf()) {
                 self.midi_viewer = Some(st);
             }
-        } else if little_clip_ops::is_stl_file(fp) {
-            if let Ok(st) = StlViewerState::from_file(fp.to_path_buf()) {
-                self.stl_viewer = Some(st);
-            }
+        } else if little_clip_ops::is_3d_model_file(fp) {
+            self.model3d_viewer = Some(
+                Model3dViewerState::from_file(fp.to_path_buf())
+                    .with_config(self.config.model3d.clone()),
+            );
         } else if little_clip_core::pdf::is_pdf_path(fp) {
             self.pdf_viewer = Some(PdfEditorState::new(fp.to_path_buf()));
         } else if little_clip_ops::is_spreadsheet_file(fp) {

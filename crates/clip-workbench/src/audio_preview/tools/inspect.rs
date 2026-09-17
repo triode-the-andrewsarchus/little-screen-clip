@@ -196,6 +196,8 @@ impl AudioPreviewState {
             self.delete_active_slice_from_session(now);
         }
 
+        self.handle_undo_shortcuts(ctx);
+
         // 'Z' key: Snap selection to zero-crossings / Toggle zero-crossing snap mode
         if ctx.input(|i| {
             i.key_pressed(egui::Key::Z)
@@ -1041,14 +1043,21 @@ impl AudioPreviewState {
                     hovered_time.is_some_and(|time| self.focus_region_at_time(time));
                 if has_selected_region {
                     let steps = (shifted_scroll / 50.0).clamp(-4.0, 4.0);
+                    let edit_time = Instant::now();
                     match effect {
-                        Some(CanvasEffect::Gain) => self.adjust_active_region_gain(steps),
-                        Some(CanvasEffect::LowPass) => {
-                            self.adjust_active_region_filter(SpectrumFilterKind::LowPass, steps)
+                        Some(CanvasEffect::Gain) => {
+                            self.adjust_active_region_gain(steps, edit_time)
                         }
-                        Some(CanvasEffect::HighPass) => {
-                            self.adjust_active_region_filter(SpectrumFilterKind::HighPass, steps)
-                        }
+                        Some(CanvasEffect::LowPass) => self.adjust_active_region_filter(
+                            SpectrumFilterKind::LowPass,
+                            steps,
+                            edit_time,
+                        ),
+                        Some(CanvasEffect::HighPass) => self.adjust_active_region_filter(
+                            SpectrumFilterKind::HighPass,
+                            steps,
+                            edit_time,
+                        ),
                         None => {}
                     }
                     // The enclosing stem ScrollArea runs after this child UI.

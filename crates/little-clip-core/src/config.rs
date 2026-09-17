@@ -34,6 +34,9 @@ pub struct AppConfig {
     /// Automatic clip actions (e.g. link tracking parameter stripping).
     #[serde(default)]
     pub auto_actions: AutoActionsConfig,
+    /// 3D model preview and inspection configuration.
+    #[serde(default, alias = "model_3d", alias = "model")]
+    pub model3d: Model3dConfig,
 }
 
 /// Slot depth configuration for the dual-stack model.
@@ -230,6 +233,47 @@ impl TextConfig {
             }
         }
         "code".to_string()
+    }
+}
+
+/// 3D model loading, turntable preview, and workbench rendering configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Model3dConfig {
+    /// Maximum number of triangle facets rendered in the rotating preview card.
+    /// Higher values increase geometric fidelity for intricate models; lower values
+    /// reduce CPU usage on weaker machines. (default: 10,000).
+    #[serde(
+        default = "default_preview_triangle_limit",
+        alias = "max_preview_triangles",
+        alias = "max_thumbnail_triangles",
+        alias = "triangle_limit"
+    )]
+    pub preview_triangle_limit: usize,
+
+    /// Maximum number of triangle facets rendered in the interactive 3D workbench studio viewer.
+    /// (default: 150,000).
+    #[serde(
+        default = "default_workbench_triangle_limit",
+        alias = "max_workbench_triangles",
+        alias = "workbench_triangle_limit"
+    )]
+    pub workbench_triangle_limit: usize,
+}
+
+fn default_preview_triangle_limit() -> usize {
+    10_000
+}
+
+fn default_workbench_triangle_limit() -> usize {
+    150_000
+}
+
+impl Default for Model3dConfig {
+    fn default() -> Self {
+        Self {
+            preview_triangle_limit: default_preview_triangle_limit(),
+            workbench_triangle_limit: default_workbench_triangle_limit(),
+        }
     }
 }
 
@@ -572,6 +616,7 @@ impl Default for AppConfig {
             text: TextConfig::default(),
             slots: SlotsConfig::default(),
             auto_actions: AutoActionsConfig::default(),
+            model3d: Model3dConfig::default(),
         }
     }
 }
@@ -832,5 +877,29 @@ left_hand_border = "#6366f1"
         assert!(cleared.contains("# hero_card_bg = \"#181b26\""));
         assert!(cleared.contains("# left_hand_border = \"#6366f1\""));
         assert!(cleared.contains("# Existing comment"));
+    }
+
+    #[test]
+    fn test_model3d_config_defaults_and_overrides() {
+        let default_cfg: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(default_cfg.model3d.preview_triangle_limit, 10_000);
+        assert_eq!(default_cfg.model3d.workbench_triangle_limit, 150_000);
+
+        let custom_toml = r#"
+[model3d]
+preview_triangle_limit = 4000
+workbench_triangle_limit = 80000
+"#;
+        let custom_cfg: AppConfig = toml::from_str(custom_toml).unwrap();
+        assert_eq!(custom_cfg.model3d.preview_triangle_limit, 4000);
+        assert_eq!(custom_cfg.model3d.workbench_triangle_limit, 80_000);
+
+        // Test alias support: triangle_limit under [model_3d]
+        let alias_toml = r#"
+[model_3d]
+triangle_limit = 2500
+"#;
+        let alias_cfg: AppConfig = toml::from_str(alias_toml).unwrap();
+        assert_eq!(alias_cfg.model3d.preview_triangle_limit, 2500);
     }
 }

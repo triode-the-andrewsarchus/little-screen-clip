@@ -492,7 +492,7 @@ impl SlotManager {
         updated
     }
 
-    /// Checks if any of the visible slots currently contains an active animation with frames
+    /// Checks if any of the visible slots currently contains an active animation with frames or a 3D model
     pub fn has_active_animation(&self) -> bool {
         let slots = [
             &self.undo,
@@ -506,13 +506,24 @@ impl SlotManager {
         ];
         slots.iter().any(|slot| {
             if let Some(item) = slot {
-                matches!(
+                if matches!(
                     item.payload,
                     crate::item::ClipPayload::Animation {
                         thumbnail: Some(ref t),
                         ..
                     } if t.frame_count > 1
-                )
+                ) {
+                    return true;
+                }
+                if let Some(fp) = item.file_path() {
+                    if let Some(ext) = fp.extension().and_then(|e| e.to_str()) {
+                        let e = ext.to_ascii_lowercase();
+                        if e == "stl" || e == "obj" || e == "gltf" || e == "glb" {
+                            return true;
+                        }
+                    }
+                }
+                false
             } else {
                 false
             }
@@ -640,5 +651,18 @@ mod tests {
         mgr.apply_config(&cfg);
         assert!(mgr.get(SlotId::LeftPrior3).is_none());
         assert!(mgr.get(SlotId::LeftPrior2).is_some());
+    }
+
+    #[test]
+    fn test_has_active_animation_3d_model() {
+        let mut mgr = SlotManager::new();
+        assert!(!mgr.has_active_animation());
+
+        let tmp = std::env::temp_dir().join("teapot_test.obj");
+        std::fs::write(&tmp, b"# test obj\n").unwrap();
+        let item = ClipItem::from_text(tmp.to_string_lossy());
+        mgr.push_left(item);
+        assert!(mgr.has_active_animation());
+        let _ = std::fs::remove_file(&tmp);
     }
 }

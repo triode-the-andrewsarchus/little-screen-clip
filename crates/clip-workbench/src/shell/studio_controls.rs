@@ -4,6 +4,7 @@ use crate::hex_to_c32;
 use eframe::egui::{self, Pos2, Rect, Stroke, Vec2};
 use little_clip_core::theme::AppPalette;
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_context_slider(
     ui: &mut egui::Ui,
     label: &str,
@@ -36,14 +37,9 @@ pub fn render_context_slider(
                 }
             });
 
-        let response = ui.add(slider);
-        if response.changed() {
+        let slider_response = ui.add(slider);
+        if slider_response.changed() {
             *value = cur_val;
-            changed = true;
-        }
-
-        if response.double_clicked() {
-            *value = default_val;
             changed = true;
         }
 
@@ -54,9 +50,10 @@ pub fn render_context_slider(
         } else {
             format!("{:.2}{}", default_val, suffix)
         };
-        response.on_hover_text(format!("Double-click to reset (default: {})", def_display));
+        let slider_response = slider_response
+            .on_hover_text(format!("Double-click to reset (default: {})", def_display));
 
-        render_slider_track(
+        let track_rect = render_slider_track(
             ui,
             *value,
             range.clone(),
@@ -64,9 +61,39 @@ pub fn render_context_slider(
             slider_width,
             palette,
         );
+
+        let interactive_rect = slider_response.rect.union(track_rect);
+        if slider_double_clicked_in(ui, &slider_response, interactive_rect) {
+            *value = default_val;
+            changed = true;
+        }
     });
 
     changed
+}
+
+/// Returns true if the primary mouse button was double-clicked over the slider.
+pub fn slider_double_clicked(ui: &egui::Ui, slider_response: &egui::Response) -> bool {
+    slider_double_clicked_in(ui, slider_response, slider_response.rect)
+}
+
+/// Returns true if the primary mouse button was double-clicked over the given interactive rect,
+/// taking into account pointer position, clipping, occlusion, and avoiding resets during text editing.
+pub fn slider_double_clicked_in(
+    ui: &egui::Ui,
+    slider_response: &egui::Response,
+    interactive_rect: Rect,
+) -> bool {
+    if !ui.input(|i| {
+        i.pointer
+            .button_double_clicked(egui::PointerButton::Primary)
+    }) {
+        return false;
+    }
+    if slider_response.has_focus() {
+        return false;
+    }
+    ui.rect_contains_pointer(interactive_rect.expand(2.0)) || slider_response.hovered()
 }
 
 /// Draw the range baseline, endpoint and default ticks, and current value below any slider.
@@ -78,7 +105,7 @@ pub fn render_slider_track(
     default_val: f32,
     slider_width: f32,
     palette: &AppPalette,
-) {
+) -> Rect {
     let (track_rect, _) =
         ui.allocate_exact_size(Vec2::new(slider_width, 6.0), egui::Sense::hover());
     paint_slider_track(
@@ -91,6 +118,7 @@ pub fn render_slider_track(
         2.5,
         palette,
     );
+    track_rect
 }
 
 /// A compact interactive slider whose thumb and fill share the same track geometry.
@@ -241,5 +269,314 @@ mod tests {
         assert_eq!(track_value_at_x(108.0, track, &(0.0..=100.0)), 100.0);
         assert_eq!(track_value_at_x(58.0, track, &(0.0..=100.0)), 50.0);
         assert_eq!(track_value_at_x(120.0, track, &(0.0..=100.0)), 100.0);
+    }
+
+    #[test]
+    fn slider_double_click_resets_render_context_slider_to_default() {
+        let ctx = egui::Context::default();
+        let palette = AppPalette::default();
+        let mut val = 0.85f32;
+        let default_val = 0.0f32;
+
+        // Pass 1: Initial layout
+        let mut raw_input = egui::RawInput::default();
+        raw_input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0)));
+        let _ = ctx.run(raw_input.clone(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_context_slider(
+                    ui,
+                    "Exposure",
+                    &mut val,
+                    -1.0..=1.0,
+                    default_val,
+                    "",
+                    120.0,
+                    &palette,
+                );
+            });
+        });
+
+        assert_eq!(val, 0.85);
+
+        // Click 1 at (50.0, 20.0)
+        let click_pos = Pos2::new(50.0, 20.0);
+        let mut click1_down = raw_input.clone();
+        click1_down.time = Some(0.01);
+        click1_down.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(click1_down, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_context_slider(
+                    ui,
+                    "Exposure",
+                    &mut val,
+                    -1.0..=1.0,
+                    default_val,
+                    "",
+                    120.0,
+                    &palette,
+                );
+            });
+        });
+
+        let mut click1_up = raw_input.clone();
+        click1_up.time = Some(0.05);
+        click1_up.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(click1_up, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_context_slider(
+                    ui,
+                    "Exposure",
+                    &mut val,
+                    -1.0..=1.0,
+                    default_val,
+                    "",
+                    120.0,
+                    &palette,
+                );
+            });
+        });
+
+        // Value changed by first click, not reset yet
+        assert_ne!(val, 0.85);
+
+        // Click 2 at (50.0, 20.0) within double-click threshold (e.g. 0.15s later)
+        let mut click2_down = raw_input.clone();
+        click2_down.time = Some(0.15);
+        click2_down.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(click2_down, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_context_slider(
+                    ui,
+                    "Exposure",
+                    &mut val,
+                    -1.0..=1.0,
+                    default_val,
+                    "",
+                    120.0,
+                    &palette,
+                );
+            });
+        });
+
+        let mut click2_up = raw_input.clone();
+        click2_up.time = Some(0.20);
+        click2_up.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let mut changed_on_double_click = false;
+        let _ = ctx.run(click2_up, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                changed_on_double_click = render_context_slider(
+                    ui,
+                    "Exposure",
+                    &mut val,
+                    -1.0..=1.0,
+                    default_val,
+                    "",
+                    120.0,
+                    &palette,
+                );
+            });
+        });
+
+        // Double click must have reset the value to default_val!
+        assert!(changed_on_double_click);
+        assert_eq!(val, default_val);
+    }
+
+    #[test]
+    fn single_click_on_slider_does_not_reset_to_default() {
+        let ctx = egui::Context::default();
+        let palette = AppPalette::default();
+        let mut val = 0.85f32;
+        let default_val = 0.0f32;
+
+        let mut raw_input = egui::RawInput::default();
+        raw_input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0)));
+
+        // Pass 1: Initial layout
+        let _ = ctx.run(raw_input.clone(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_context_slider(
+                    ui,
+                    "Exposure",
+                    &mut val,
+                    -1.0..=1.0,
+                    default_val,
+                    "",
+                    120.0,
+                    &palette,
+                );
+            });
+        });
+
+        // Single Click at (50.0, 20.0)
+        let click_pos = Pos2::new(50.0, 20.0);
+        let mut click_down = raw_input.clone();
+        click_down.time = Some(0.01);
+        click_down.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(click_down, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_context_slider(
+                    ui,
+                    "Exposure",
+                    &mut val,
+                    -1.0..=1.0,
+                    default_val,
+                    "",
+                    120.0,
+                    &palette,
+                );
+            });
+        });
+
+        let mut click_up = raw_input.clone();
+        click_up.time = Some(0.05);
+        click_up.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(click_up, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                render_context_slider(
+                    ui,
+                    "Exposure",
+                    &mut val,
+                    -1.0..=1.0,
+                    default_val,
+                    "",
+                    120.0,
+                    &palette,
+                );
+            });
+        });
+
+        // After a single click, value should NOT be default_val
+        assert_ne!(val, default_val);
+    }
+
+    #[test]
+    fn slider_double_clicked_helper_resets_standalone_slider() {
+        let ctx = egui::Context::default();
+        let mut seed = 500;
+        let default_seed = 100;
+
+        let mut raw_input = egui::RawInput::default();
+        raw_input.screen_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0)));
+
+        // Pass 1: Initial layout
+        let _ = ctx.run(raw_input.clone(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
+                let is_dc = slider_double_clicked(ui, &resp);
+                if is_dc {
+                    seed = default_seed;
+                }
+            });
+        });
+
+        assert_eq!(seed, 500);
+
+        // Click 1
+        let click_pos = Pos2::new(50.0, 10.0);
+        let mut click1_down = raw_input.clone();
+        click1_down.time = Some(0.01);
+        click1_down.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(click1_down, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
+                let is_dc = slider_double_clicked(ui, &resp);
+                if is_dc {
+                    seed = default_seed;
+                }
+            });
+        });
+
+        let mut click1_up = raw_input.clone();
+        click1_up.time = Some(0.05);
+        click1_up.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(click1_up, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
+                let is_dc = slider_double_clicked(ui, &resp);
+                if is_dc {
+                    seed = default_seed;
+                }
+            });
+        });
+
+        // Click 2
+        let mut click2_down = raw_input.clone();
+        click2_down.time = Some(0.15);
+        click2_down.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(click2_down, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
+                let is_dc = slider_double_clicked(ui, &resp);
+                if is_dc {
+                    seed = default_seed;
+                }
+            });
+        });
+
+        let mut click2_up = raw_input.clone();
+        click2_up.time = Some(0.20);
+        click2_up.events.push(egui::Event::PointerButton {
+            pos: click_pos,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        let _ = ctx.run(click2_up, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let resp = ui.add(egui::Slider::new(&mut seed, 0..=1000));
+                let is_dc = slider_double_clicked(ui, &resp);
+                if is_dc {
+                    seed = default_seed;
+                }
+            });
+        });
+
+        assert_eq!(seed, default_seed);
     }
 }

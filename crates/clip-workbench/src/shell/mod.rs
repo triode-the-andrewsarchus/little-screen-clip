@@ -16,5 +16,8 @@ pub use panel::{
 pub use screen_mirror::{MirrorAction, ScreenMirrorWidget, slot_at_x, slot_rects};
 pub use shortcuts::{CommonShortcut, ShortcutDispatcher};
 pub use split_compare::SplitCompareView;
-pub use studio_controls::{render_context_slider, render_slider_track, render_track_slider};
+pub use studio_controls::{
+    render_context_slider, render_slider_track, render_track_slider, slider_double_clicked,
+    slider_double_clicked_in,
+};
 pub use studio_shell::{HeaderBadge, PanelBody, StudioPanelLayout, StudioPanelRects, StudioShell};

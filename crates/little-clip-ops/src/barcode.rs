@@ -67,13 +67,12 @@ fn rxing_detect(
 ) -> Result<Vec<BarcodeDetection>, String> {
     use rxing::common::HybridBinarizer;
     use rxing::multi::{GenericMultipleBarcodeReader, MultipleBarcodeReader};
-    use rxing::{
-        BarcodeFormat, BinaryBitmap, BufferedImageLuminanceSource, DecodeHints, MultiFormatReader,
-        Reader,
-    };
+    use rxing::{BarcodeFormat, BinaryBitmap, DecodeHints, MultiFormatReader, Reader};
     use std::collections::HashSet;
 
-    let lum_source = BufferedImageLuminanceSource::new(dyn_img.clone());
+    let luma = dyn_img.to_luma8().into_raw();
+    let lum_source = rxing::Luma8LuminanceSource::new(luma, width, height)
+        .map_err(|e| format!("Failed to create luminance source: {:?}", e))?;
     let mut bitmap = BinaryBitmap::new(HybridBinarizer::new(lum_source));
 
     let mut hints = DecodeHints::default();

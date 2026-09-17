@@ -940,9 +940,9 @@ impl ScreenRenderer {
                             return;
                         }
                     }
-                    if p.is_file() && little_clip_ops::is_stl_file(p) {
-                        if let Ok(stl_mesh) = little_clip_ops::StlMesh::parse_file(p) {
-                            self.draw_stl_card(pixmap, &stl_mesh, rx, ry, rw, rh, is_hero);
+                    if p.is_file() && little_clip_ops::is_3d_model_file(p) {
+                        if let Ok(model) = little_clip_ops::Model3d::load_cached(p) {
+                            self.draw_model3d_card(pixmap, &model, rx, ry, rw, rh, is_hero);
                             return;
                         }
                     }
@@ -2948,10 +2948,24 @@ impl ScreenRenderer {
         );
     }
 
+    #[allow(dead_code)]
     fn draw_stl_card(
         &self,
         pixmap: &mut Pixmap,
-        mesh: &little_clip_ops::StlMesh,
+        mesh: &little_clip_ops::Model3d,
+        rx: f32,
+        ry: f32,
+        rw: f32,
+        rh: f32,
+        is_hero: bool,
+    ) {
+        self.draw_model3d_card(pixmap, mesh, rx, ry, rw, rh, is_hero);
+    }
+
+    fn draw_model3d_card(
+        &self,
+        pixmap: &mut Pixmap,
+        mesh: &little_clip_ops::Model3d,
         rx: f32,
         ry: f32,
         rw: f32,
@@ -2967,9 +2981,10 @@ impl ScreenRenderer {
             badge_bg,
             Some(self.color_from_hex(&self.palette.theme.f_high)),
         );
+        let badge_label = format!("3D {} MODEL", mesh.format.badge_label());
         self.draw_pill_badge(
             pixmap,
-            "3D STL MODEL",
+            &badge_label,
             content_x,
             y,
             14.0,
@@ -3009,7 +3024,8 @@ impl ScreenRenderer {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_millis())
                 .unwrap_or(0);
-            let angle_y = (now_millis as f32 / 1000.0) * 0.75;
+            // Continuous, perfectly smooth 360-degree rotation every 12 seconds with sub-millisecond precision
+            let angle_y = ((now_millis % 12_000) as f32 / 12_000.0) * std::f32::consts::TAU;
             let tilt_x = 0.35f32;
 
             let sin_y = angle_y.sin();
@@ -3017,27 +3033,35 @@ impl ScreenRenderer {
             let sin_x = tilt_x.sin();
             let cos_x = tilt_x.cos();
 
+            let is_z_up = mesh.format == little_clip_ops::ModelFormat::Stl;
             let center = mesh.center;
             let max_dim = mesh.max_dimension.max(0.001);
             let scale = (vp_w.min(vp_h) * 0.42) / (max_dim * 0.5);
 
             let cx = vp_x + vp_w * 0.5;
             let cy = vp_y + vp_h * 0.5;
-
             let light_dir = little_clip_ops::Vec3::new(0.4, 0.6, 0.7).normalize();
-            let step = (mesh.triangles.len() / 8000).max(1);
 
-            let mut projected = Vec::new();
-            for (idx, tri) in mesh.triangles.iter().enumerate() {
-                if idx % step != 0 {
-                    continue;
-                }
+            let budget = self.config.model3d.preview_triangle_limit.max(100);
+            let source_triangles = if !mesh.thumbnail_triangles.is_empty() {
+                &mesh.thumbnail_triangles
+            } else {
+                &mesh.triangles
+            };
+            let step = source_triangles.len().div_ceil(budget).max(1);
 
-                let normal = tri.normal;
+            let mut projected = Vec::with_capacity(source_triangles.len() / step + 1);
+            for tri in source_triangles.iter().step_by(step) {
+                let (nx, ny, nz) = if is_z_up {
+                    (tri.normal.x, tri.normal.z, -tri.normal.y)
+                } else {
+                    (tri.normal.x, tri.normal.y, tri.normal.z)
+                };
+
                 let rotated_normal = little_clip_ops::Vec3::new(
-                    normal.x * cos_y + normal.z * sin_y,
-                    normal.y * cos_x - (-normal.x * sin_y + normal.z * cos_y) * sin_x,
-                    normal.y * sin_x + (-normal.x * sin_y + normal.z * cos_y) * cos_x,
+                    nx * cos_y + nz * sin_y,
+                    ny * cos_x - (-nx * sin_y + nz * cos_y) * sin_x,
+                    ny * sin_x + (-nx * sin_y + nz * cos_y) * cos_x,
                 )
                 .normalize();
 
@@ -3046,9 +3070,11 @@ impl ScreenRenderer {
                 }
 
                 let transform_v = |v: little_clip_ops::Vec3| -> (f32, f32, f32) {
-                    let dx = v.x - center.x;
-                    let dy = v.y - center.y;
-                    let dz = v.z - center.z;
+                    let (dx, dy, dz) = if is_z_up {
+                        (v.x - center.x, v.z - center.z, -(v.y - center.y))
+                    } else {
+                        (v.x - center.x, v.y - center.y, v.z - center.z)
+                    };
 
                     let rx = dx * cos_y + dz * sin_y;
                     let rz = -dx * sin_y + dz * cos_y;
@@ -3064,14 +3090,33 @@ impl ScreenRenderer {
                 let (p2x, p2y, p2z) = transform_v(tri.v2);
                 let (p3x, p3y, p3z) = transform_v(tri.v3);
 
+                let cross_2d = (p2x - p1x) * (p3y - p1y) - (p2y - p1y) * (p3x - p1x);
+                if cross_2d.abs() < 0.2 {
+                    continue;
+                }
+
                 let avg_z = (p1z + p2z + p3z) / 3.0;
                 let diff = rotated_normal.dot(light_dir).max(0.18).min(1.0);
-                projected.push((avg_z, diff, (p1x, p1y), (p2x, p2y), (p3x, p3y)));
+                projected.push((avg_z, diff, tri.color, (p1x, p1y), (p2x, p2y), (p3x, p3y)));
             }
 
             projected.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-            for (_, diff, (p1x, p1y), (p2x, p2y), (p3x, p3y)) in projected {
+            let base_c = self.color_from_hex(&self.palette.harmonies.base);
+            let bg_c = self.color_from_hex(&self.palette.theme.b_low);
+
+            let mut line_stroke = Stroke::default();
+            line_stroke.width = 1.2;
+            let mut line_paint = Paint::default();
+            let wire_c = self.color_from_hex(&self.palette.harmonies.base);
+            line_paint.set_color(Color::from_rgba8(
+                (wire_c.red() * 255.0) as u8,
+                (wire_c.green() * 255.0) as u8,
+                (wire_c.blue() * 255.0) as u8,
+                220,
+            ));
+
+            for (_, diff, tri_color, (p1x, p1y), (p2x, p2y), (p3x, p3y)) in projected {
                 let mut pb = PathBuilder::new();
                 pb.move_to(p1x, p1y);
                 pb.line_to(p2x, p2y);
@@ -3079,14 +3124,18 @@ impl ScreenRenderer {
                 pb.close();
 
                 if let Some(t_path) = pb.finish() {
-                    let base_c = self.color_from_hex(&self.palette.harmonies.base);
-                    let bg_c = self.color_from_hex(&self.palette.theme.b_low);
-                    let r = ((bg_c.red() * (1.0 - diff * 0.7) + base_c.red() * diff * 0.7) * 255.0)
-                        .clamp(0.0, 255.0) as u8;
-                    let g = ((bg_c.green() * (1.0 - diff * 0.7) + base_c.green() * diff * 0.7)
+                    let tri_base_c = if let Some(c) = tri_color {
+                        Color::from_rgba(c[0], c[1], c[2], c[3]).unwrap_or(base_c)
+                    } else {
+                        base_c
+                    };
+                    let r = ((bg_c.red() * (1.0 - diff * 0.7) + tri_base_c.red() * diff * 0.7)
                         * 255.0)
                         .clamp(0.0, 255.0) as u8;
-                    let b = ((bg_c.blue() * (1.0 - diff * 0.7) + base_c.blue() * diff * 0.7)
+                    let g = ((bg_c.green() * (1.0 - diff * 0.7) + tri_base_c.green() * diff * 0.7)
+                        * 255.0)
+                        .clamp(0.0, 255.0) as u8;
+                    let b = ((bg_c.blue() * (1.0 - diff * 0.7) + tri_base_c.blue() * diff * 0.7)
                         * 255.0)
                         .clamp(0.0, 255.0) as u8;
 
@@ -3100,17 +3149,6 @@ impl ScreenRenderer {
                         None,
                     );
 
-                    // High-contrast, crisp wireframe edge lines matching theme accent
-                    let mut line_stroke = Stroke::default();
-                    line_stroke.width = 1.2;
-                    let mut line_paint = Paint::default();
-                    let wire_c = self.color_from_hex(&self.palette.harmonies.base);
-                    line_paint.set_color(Color::from_rgba8(
-                        (wire_c.red() * 255.0) as u8,
-                        (wire_c.green() * 255.0) as u8,
-                        (wire_c.blue() * 255.0) as u8,
-                        220,
-                    ));
                     pixmap.stroke_path(
                         &t_path,
                         &line_paint,
@@ -3205,10 +3243,10 @@ impl ScreenRenderer {
             }
         }
 
-        // 6. STL 3D Mesh Preview (rotates slowly in preview)
-        if p.is_file() && little_clip_ops::is_stl_file(p) {
-            if let Ok(stl_mesh) = little_clip_ops::StlMesh::parse_file(p) {
-                self.draw_stl_card(pixmap, &stl_mesh, rx, ry, rw, rh, is_hero);
+        // 6. 3D Mesh Preview (rotates slowly in preview)
+        if p.is_file() && little_clip_ops::is_3d_model_file(p) {
+            if let Ok(model) = little_clip_ops::Model3d::load_cached(p) {
+                self.draw_model3d_card(pixmap, &model, rx, ry, rw, rh, is_hero);
                 return;
             }
         }
@@ -3560,6 +3598,32 @@ mod tests {
         );
         let _ = std::fs::create_dir_all(out_dir);
         let _ = pixmap.save_png(out_dir.join("current_stl_card.png"));
+    }
+
+    #[test]
+    fn test_model3d_rotation_differs_over_time() {
+        let teapot_path = std::path::Path::new(
+            "/home/vega/Documents/type_testing/jhfmh2s0xt6o-teapotnglass/teapot_n_glass.obj",
+        );
+        if !teapot_path.exists() {
+            return;
+        }
+
+        let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
+        let mut manager = SlotManager::new();
+        let mut item = ClipItem::from_text("teapot_n_glass.obj");
+        item.payload = ClipPayload::FileBatch(vec![teapot_path.to_path_buf()]);
+        manager.push_left(item);
+
+        let pix1 = renderer.render_pixmap(&manager).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let pix2 = renderer.render_pixmap(&manager).unwrap();
+
+        assert_ne!(
+            pix1.data(),
+            pix2.data(),
+            "Pixmap pixels must change as model rotates over time"
+        );
     }
 
     #[test]

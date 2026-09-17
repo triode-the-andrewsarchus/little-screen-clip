@@ -18,8 +18,8 @@
 * It currently doesn't auto-rotate in the little screen view
 * It doesn't actually render as polygons, like you'd expect
 * Some sort of false-color would be good.
+* open in blender doesn't work.
 ## .txt preview
-* .txt previews seem to add a space before the first character in the small previews
 ## Code previews
 ## PDF viewer
 * There's duplicated delete and rotate buttons, one set in the top bar, and one in the big, individual page preview. I believe only the top bar ones are hooked up.

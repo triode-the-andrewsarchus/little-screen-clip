@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::shell::render_context_slider;
+use crate::shell::{render_context_slider, slider_double_clicked};
 
 /// Message sent back from background thread rendering full creative FX.
 pub enum CreativeFxMsg {
@@ -1448,7 +1448,14 @@ impl ImagePreviewState {
                                                 ui.label(egui::RichText::new("RF Static / Snow").small().color(f_med));
                                                 ui.spacing_mut().slider_width = slider_w;
                                                 let mut snow = self.creative_fx_state.ntsc_params.snow;
-                                                if ui.add(egui::Slider::new(&mut snow, 0.0..=0.04).max_decimals(4)).changed() {
+                                                let slider_response = ui.add(egui::Slider::new(&mut snow, 0.0..=0.04).max_decimals(4));
+                                                let default_snow = NtscParams::default().snow;
+                                                let slider_response = slider_response.on_hover_text(format!("Double-click to reset (default: {:.4})", default_snow));
+                                                let is_double_click = slider_double_clicked(ui, &slider_response);
+                                                if is_double_click {
+                                                    snow = default_snow;
+                                                }
+                                                if slider_response.changed() || is_double_click {
                                                     self.creative_fx_state.ntsc_params.snow = snow;
                                                     self.creative_fx_state.selected_preset_name = "Custom".to_string();
                                                     self.creative_fx_state.mark_dirty();
@@ -1615,7 +1622,14 @@ impl ImagePreviewState {
                                                 ui.label(egui::RichText::new("🎲 Noise Random Seed").size(10.0).color(f_med));
                                                 ui.spacing_mut().slider_width = slider_w;
                                                 let mut seed = self.creative_fx_state.ntsc_params.random_seed;
-                                                if ui.add(egui::Slider::new(&mut seed, 0..=1000)).changed() {
+                                                let slider_response = ui.add(egui::Slider::new(&mut seed, 0..=1000));
+                                                let default_seed = NtscParams::default().random_seed;
+                                                let slider_response = slider_response.on_hover_text(format!("Double-click to reset (default: {})", default_seed));
+                                                let is_double_click = slider_double_clicked(ui, &slider_response);
+                                                if is_double_click {
+                                                    seed = default_seed;
+                                                }
+                                                if slider_response.changed() || is_double_click {
                                                     self.creative_fx_state.ntsc_params.random_seed = seed;
                                                     self.creative_fx_state.selected_preset_name = "Custom".to_string();
                                                     self.creative_fx_state.mark_dirty();

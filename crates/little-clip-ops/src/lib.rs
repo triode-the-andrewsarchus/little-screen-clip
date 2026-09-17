@@ -37,6 +37,9 @@ pub use spreadsheet::*;
 pub mod midi;
 pub use midi::*;
 
+pub mod model3d;
+pub use model3d::*;
+
 pub mod stl;
 pub use stl::*;
 

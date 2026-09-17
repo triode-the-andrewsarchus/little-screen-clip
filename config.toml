@@ -110,3 +110,15 @@ viewer = "nomacs"
 # (e.g. "code", "subl", "gedit", "kate", "nano", "nvim").
 # Defaults to "code".
 editor = "code"
+
+[model3d]
+# Maximum triangle count for the rotating preview thumbnail on the display and workbench mirror.
+# Higher values (e.g. 15,000 - 30,000) provide finer geometric detail and smoother curves.
+# Lower values (e.g. 2,000 - 5,000) reduce CPU usage on weaker CPUs (e.g. Raspberry Pi / low-power laptops).
+# Default: 10000
+preview_triangle_limit = 10000
+
+# Maximum triangle count rendered in the interactive 3D workbench studio viewer.
+# Default: 150000
+workbench_triangle_limit = 150000
+

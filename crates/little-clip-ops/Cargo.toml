@@ -22,8 +22,12 @@ image = { workspace = true }
 chrono = "0.4"
 calamine = "0.36.1"
 midly = "0.5"
-rxing = "0.9.2"
+rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
 kamadak-exif = "0.6.1"
 rayon = { workspace = true }
 ntsc-rs = { git = "https://github.com/ntsc-rs/ntsc-rs", package = "ntsc-rs", default-features = false, features = ["std", "rayon"] }
+scenix-loader = "1.5.0"
+scenix-mesh = "1.5.0"
+scenix-math = "1.5.0"
+tempfile = "3.10"
 

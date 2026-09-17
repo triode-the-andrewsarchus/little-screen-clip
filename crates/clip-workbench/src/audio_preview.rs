@@ -3,7 +3,7 @@
 //! Provides spectral waterfall analysis, zero-crossing snapping, multi-slice region selection,
 //! audio playback with Rodio, and export/split capabilities.
 
-use crate::shell::{EscapeHatch, StudioShell};
+use crate::shell::{CommonShortcut, EscapeHatch, ShortcutDispatcher, StudioShell};
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::audio::{
@@ -95,6 +95,20 @@ pub enum SelectionMode {
 enum SpectrumFilterKind {
     LowPass,
     HighPass,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScrollEditKind {
+    Gain,
+    Filter(SpectrumFilterKind),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ScrollEditKey {
+    kind: ScrollEditKind,
+    mode: SelectionMode,
+    index: Option<usize>,
+    range: (f32, f32),
 }
 
 /// Formats a time in seconds as `[hh]m:ss.mmm`.
@@ -298,6 +312,22 @@ impl<S: Source> Source for EditedPreviewSource<S> {
 }
 
 /// Interactive UI state for audio waveform preview, spectrogram analysis, and multi-slice editing.
+#[derive(Clone, PartialEq)]
+struct AudioEditSnapshot {
+    path: PathBuf,
+    duration_sec: f32,
+    selection_mode: SelectionMode,
+    selection: Option<(f32, f32)>,
+    multi_selections: Vec<(f32, f32)>,
+    active_multi_index: Option<usize>,
+    region_gain_db: Vec<f32>,
+    single_region_gain_db: f32,
+    single_low_pass_hz: Option<f32>,
+    single_high_pass_hz: Option<f32>,
+    region_low_pass_hz: Vec<Option<f32>>,
+    region_high_pass_hz: Vec<Option<f32>>,
+}
+
 pub struct AudioPreviewState {
     pub path: PathBuf,
     pub title: String,
@@ -339,6 +369,9 @@ pub struct AudioPreviewState {
     pub selection: Option<(f32, f32)>, // (start_sec, end_sec) for Single mode
     pub multi_selections: Vec<(f32, f32)>, // (start_sec, end_sec) list for Multi mode
     pub active_multi_index: Option<usize>,
+    undo_stack: Vec<AudioEditSnapshot>,
+    redo_stack: Vec<AudioEditSnapshot>,
+    last_scroll_edit: Option<(ScrollEditKey, Instant)>,
     /// Non-destructive gain offsets keyed to multi-region selection indices.
     /// Source samples remain untouched until an export/editor handoff.
     pub region_gain_db: Vec<f32>,
@@ -375,6 +408,161 @@ pub struct AudioPreviewState {
 impl AudioPreviewState {
     const MIN_GAIN_DB: f32 = -60.0;
     const MAX_GAIN_DB: f32 = 40.0; // 100x
+    const MAX_UNDO_STEPS: usize = 50;
+    const SCROLL_UNDO_WINDOW: Duration = Duration::from_millis(300);
+
+    fn edit_snapshot(&self) -> AudioEditSnapshot {
+        AudioEditSnapshot {
+            path: self.path.clone(),
+            duration_sec: self.duration_sec,
+            selection_mode: self.selection_mode,
+            selection: self.selection,
+            multi_selections: self.multi_selections.clone(),
+            active_multi_index: self.active_multi_index,
+            region_gain_db: self.region_gain_db.clone(),
+            single_region_gain_db: self.single_region_gain_db,
+            single_low_pass_hz: self.single_low_pass_hz,
+            single_high_pass_hz: self.single_high_pass_hz,
+            region_low_pass_hz: self.region_low_pass_hz.clone(),
+            region_high_pass_hz: self.region_high_pass_hz.clone(),
+        }
+    }
+
+    fn record_edit(&mut self, before: AudioEditSnapshot) {
+        if before == self.edit_snapshot() {
+            return;
+        }
+        if self.undo_stack.len() == Self::MAX_UNDO_STEPS {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(before);
+        self.redo_stack.clear();
+        self.last_scroll_edit = None;
+    }
+
+    fn record_scroll_edit(
+        &mut self,
+        before: AudioEditSnapshot,
+        kind: ScrollEditKind,
+        now: Instant,
+    ) {
+        if before == self.edit_snapshot() {
+            return;
+        }
+        let target = match self.selection_mode {
+            SelectionMode::Single => self.selection.map(|range| (None, range)),
+            SelectionMode::Multi => self.active_multi_index.and_then(|index| {
+                self.multi_selections
+                    .get(index)
+                    .copied()
+                    .map(|range| (Some(index), range))
+            }),
+        };
+        let Some((index, range)) = target else {
+            self.record_edit(before);
+            return;
+        };
+        let key = ScrollEditKey {
+            kind,
+            mode: self.selection_mode,
+            index,
+            range,
+        };
+        let continues = self.last_scroll_edit.is_some_and(|(previous, at)| {
+            previous == key
+                && now
+                    .checked_duration_since(at)
+                    .is_some_and(|elapsed| elapsed <= Self::SCROLL_UNDO_WINDOW)
+        });
+        if !continues {
+            self.record_edit(before);
+        }
+        self.last_scroll_edit = Some((key, now));
+    }
+
+    fn restore_edit(&mut self, snapshot: AudioEditSnapshot) {
+        let session_changed = self.path != snapshot.path;
+        if session_changed {
+            self.stop();
+        }
+        self.path = snapshot.path;
+        self.duration_sec = snapshot.duration_sec;
+        self.selection_mode = snapshot.selection_mode;
+        self.selection = snapshot.selection;
+        self.multi_selections = snapshot.multi_selections;
+        self.active_multi_index = snapshot.active_multi_index;
+        self.region_gain_db = snapshot.region_gain_db;
+        self.single_region_gain_db = snapshot.single_region_gain_db;
+        self.single_low_pass_hz = snapshot.single_low_pass_hz;
+        self.single_high_pass_hz = snapshot.single_high_pass_hz;
+        self.region_low_pass_hz = snapshot.region_low_pass_hz;
+        self.region_high_pass_hz = snapshot.region_high_pass_hz;
+        if session_changed {
+            self.current_time_sec = self.current_time_sec.min(self.duration_sec);
+            self.view_start_sec = 0.0;
+            self.view_duration_sec = self.duration_sec;
+            self.restart_session_analysis();
+        }
+    }
+
+    fn undo(&mut self) {
+        self.last_scroll_edit = None;
+        if let Some(previous) = self.undo_stack.pop() {
+            self.redo_stack.push(self.edit_snapshot());
+            self.restore_edit(previous);
+        }
+    }
+
+    fn redo(&mut self) {
+        self.last_scroll_edit = None;
+        if let Some(next) = self.redo_stack.pop() {
+            if self.undo_stack.len() == Self::MAX_UNDO_STEPS {
+                self.undo_stack.remove(0);
+            }
+            self.undo_stack.push(self.edit_snapshot());
+            self.restore_edit(next);
+        }
+    }
+
+    fn handle_undo_shortcuts(&mut self, ctx: &egui::Context) {
+        match ShortcutDispatcher::check_common(ctx) {
+            Some(CommonShortcut::Undo) => {
+                self.undo();
+                ctx.request_repaint();
+            }
+            Some(CommonShortcut::Redo) => {
+                self.redo();
+                ctx.request_repaint();
+            }
+            _ => {}
+        }
+    }
+
+    fn restart_session_analysis(&mut self) {
+        self.analysis = None;
+        self.edited_waveform = None;
+        self.spectrogram_texture = None;
+        self.note_strip_texture = None;
+        self.is_loading_analysis = true;
+        self.edit_analysis_rx = None;
+        self.edit_analysis_observed.clear();
+        self.edit_analysis_inflight.clear();
+        self.edit_analysis_displayed.clear();
+        if let Ok(mut regions) = self.playback_edits.regions.write() {
+            regions.clear();
+            self.playback_edits
+                .generation
+                .fetch_add(1, Ordering::Release);
+        }
+        let (tx, rx) = channel();
+        let path = self.path.clone();
+        std::thread::spawn(move || {
+            compute_audio_analysis_progressive(&path, 1200, |p| {
+                let _ = tx.send(p);
+            })
+        });
+        self.analysis_rx = Some(rx);
+    }
 
     fn step_gain_db(current: f32, delta_db: f32) -> f32 {
         if delta_db == 0.0 {
@@ -395,7 +583,8 @@ impl AudioPreviewState {
         }
     }
 
-    pub fn adjust_active_region_gain(&mut self, delta_db: f32) {
+    pub fn adjust_active_region_gain(&mut self, delta_db: f32, now: Instant) {
+        let before = self.edit_snapshot();
         match self.selection_mode {
             SelectionMode::Single if self.selection.is_some() => {
                 self.single_region_gain_db =
@@ -413,6 +602,7 @@ impl AudioPreviewState {
             }
             _ => {}
         }
+        self.record_scroll_edit(before, ScrollEditKind::Gain, now);
     }
 
     fn filter_cutoff_range(&self) -> (f32, f32) {
@@ -441,7 +631,13 @@ impl AudioPreviewState {
         Some((current.unwrap_or(start) * 2.0_f32.powf(wheel_steps / 4.0)).clamp(range.0, range.1))
     }
 
-    fn adjust_active_region_filter(&mut self, kind: SpectrumFilterKind, wheel_steps: f32) {
+    fn adjust_active_region_filter(
+        &mut self,
+        kind: SpectrumFilterKind,
+        wheel_steps: f32,
+        now: Instant,
+    ) {
+        let before = self.edit_snapshot();
         let range = self.filter_cutoff_range();
         match self.selection_mode {
             SelectionMode::Single if self.selection.is_some() => {
@@ -465,6 +661,7 @@ impl AudioPreviewState {
             }
             _ => {}
         }
+        self.record_scroll_edit(before, ScrollEditKind::Filter(kind), now);
     }
 
     fn active_filter_cutoff(&self, kind: SpectrumFilterKind) -> Option<f32> {
@@ -481,6 +678,7 @@ impl AudioPreviewState {
     }
 
     fn reset_active_region_filter(&mut self, kind: SpectrumFilterKind) -> bool {
+        let before = self.edit_snapshot();
         let cutoff = match (self.selection_mode, kind) {
             (SelectionMode::Single, SpectrumFilterKind::LowPass) if self.selection.is_some() => {
                 Some(&mut self.single_low_pass_hz)
@@ -496,11 +694,13 @@ impl AudioPreviewState {
                 .and_then(|i| self.region_high_pass_hz.get_mut(i)),
             _ => None,
         };
-        if let Some(cutoff) = cutoff {
+        let changed = if let Some(cutoff) = cutoff {
             cutoff.take().is_some()
         } else {
             false
-        }
+        };
+        self.record_edit(before);
+        changed
     }
 
     fn clear_single_region_effects(&mut self) {
@@ -582,7 +782,8 @@ impl AudioPreviewState {
     }
 
     fn reset_active_region_gain(&mut self) -> bool {
-        match self.selection_mode {
+        let before = self.edit_snapshot();
+        let changed = match self.selection_mode {
             SelectionMode::Single if self.selection.is_some() => {
                 let changed = self.single_region_gain_db != 0.0;
                 self.single_region_gain_db = 0.0;
@@ -598,7 +799,9 @@ impl AudioPreviewState {
                 })
                 .unwrap_or(false),
             _ => false,
-        }
+        };
+        self.record_edit(before);
+        changed
     }
 
     fn region_edit(
@@ -812,6 +1015,9 @@ impl AudioPreviewState {
             selection: None,
             multi_selections: Vec::new(),
             active_multi_index: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            last_scroll_edit: None,
             region_gain_db: Vec::new(),
             single_region_gain_db: 0.0,
             single_low_pass_hz: None,
@@ -924,6 +1130,7 @@ impl AudioPreviewState {
             self.status_toast = Some(("Failed to create edited audio session".into(), now));
             return;
         }
+        let before = self.edit_snapshot();
         self.stop();
         self.path = out;
         self.duration_sec = (self.duration_sec - (end - start)).max(0.0);
@@ -933,27 +1140,8 @@ impl AudioPreviewState {
         self.selection = None;
         self.clear_multi_regions();
         self.clear_single_region_effects();
-        self.analysis = None;
-        self.edited_waveform = None;
-        self.is_loading_analysis = true;
-        self.edit_analysis_rx = None;
-        self.edit_analysis_observed.clear();
-        self.edit_analysis_inflight.clear();
-        self.edit_analysis_displayed.clear();
-        if let Ok(mut regions) = self.playback_edits.regions.write() {
-            regions.clear();
-            self.playback_edits
-                .generation
-                .fetch_add(1, Ordering::Release);
-        }
-        let (tx, rx) = channel();
-        let path = self.path.clone();
-        std::thread::spawn(move || {
-            compute_audio_analysis_progressive(&path, 1200, |p| {
-                let _ = tx.send(p);
-            })
-        });
-        self.analysis_rx = Some(rx);
+        self.restart_session_analysis();
+        self.record_edit(before);
         self.status_toast = Some((
             format!("Deleted {:.2}s; waveform recomputing", end - start),
             now,
@@ -2335,8 +2523,8 @@ mod tests {
         );
         state.duration_sec = 10.0;
         state.selection = Some((1.0, 3.0));
-        state.adjust_active_region_filter(SpectrumFilterKind::LowPass, -4.0);
-        state.adjust_active_region_filter(SpectrumFilterKind::HighPass, 4.0);
+        state.adjust_active_region_filter(SpectrumFilterKind::LowPass, -4.0, Instant::now());
+        state.adjust_active_region_filter(SpectrumFilterKind::HighPass, 4.0, Instant::now());
         assert_eq!(state.single_low_pass_hz, Some(6_000.0));
         assert_eq!(state.single_high_pass_hz, Some(240.0));
         let filter = state.session_edit_filter().unwrap();
@@ -2355,6 +2543,152 @@ mod tests {
         assert!(state.reset_active_region_filter(SpectrumFilterKind::LowPass));
         assert_eq!(state.region_low_pass_hz, vec![None, None]);
         assert_eq!(state.region_high_pass_hz, vec![Some(240.0), None]);
+    }
+
+    #[test]
+    fn gain_and_filter_edits_undo_and_redo_in_order() {
+        let mut state = AudioPreviewState::new(
+            PathBuf::from("/__little_clip_missing_undo_test__.wav"),
+            "test".to_string(),
+        );
+        state.selection = Some((1.0, 2.0));
+        state.adjust_active_region_gain(3.0, Instant::now());
+        state.adjust_active_region_filter(SpectrumFilterKind::LowPass, -4.0, Instant::now());
+        assert!(state.reset_active_region_gain());
+        assert_eq!(state.undo_stack.len(), 3);
+
+        state.undo();
+        assert_eq!(state.single_region_gain_db, 3.0);
+        state.undo();
+        assert_eq!(state.single_low_pass_hz, None);
+        state.undo();
+        assert_eq!(state.single_region_gain_db, 0.0);
+        state.redo();
+        state.redo();
+        assert_eq!(state.single_region_gain_db, 3.0);
+        assert_eq!(state.single_low_pass_hz, Some(6_000.0));
+
+        state.adjust_active_region_filter(SpectrumFilterKind::HighPass, 4.0, Instant::now());
+        assert!(state.redo_stack.is_empty());
+        state.undo();
+        assert_eq!(state.single_high_pass_hz, None);
+        assert_eq!(state.single_low_pass_hz, Some(6_000.0));
+    }
+
+    #[test]
+    fn rapid_gain_scrolls_share_one_undo_step_until_the_gap_exceeds_300_ms() {
+        let mut state = AudioPreviewState::new(
+            PathBuf::from("/__little_clip_missing_scroll_undo__.wav"),
+            "test".to_string(),
+        );
+        state.selection = Some((1.0, 2.0));
+        let start = Instant::now();
+        state.adjust_active_region_gain(1.0, start);
+        state.adjust_active_region_gain(1.0, start + Duration::from_millis(200));
+        state.adjust_active_region_gain(1.0, start + Duration::from_millis(500));
+        assert_eq!(state.undo_stack.len(), 1);
+        assert_eq!(state.single_region_gain_db, 3.0);
+
+        state.adjust_active_region_gain(1.0, start + Duration::from_millis(801));
+        assert_eq!(state.undo_stack.len(), 2);
+        state.undo();
+        assert_eq!(state.single_region_gain_db, 3.0);
+        state.undo();
+        assert_eq!(state.single_region_gain_db, 0.0);
+        state.adjust_active_region_gain(2.0, start + Duration::from_millis(900));
+        assert_eq!(state.undo_stack.len(), 1);
+        assert!(state.redo_stack.is_empty());
+        state.undo();
+        assert_eq!(state.single_region_gain_db, 0.0);
+    }
+
+    #[test]
+    fn scroll_history_separates_filter_types_and_slices() {
+        let mut state = AudioPreviewState::new(
+            PathBuf::from("/__little_clip_missing_scroll_targets__.wav"),
+            "test".to_string(),
+        );
+        state.selection_mode = SelectionMode::Multi;
+        state.multi_selections = vec![(1.0, 2.0), (3.0, 4.0)];
+        state.active_multi_index = Some(0);
+        let start = Instant::now();
+        state.adjust_active_region_filter(SpectrumFilterKind::LowPass, -1.0, start);
+        state.adjust_active_region_filter(
+            SpectrumFilterKind::LowPass,
+            -1.0,
+            start + Duration::from_millis(100),
+        );
+        state.adjust_active_region_filter(
+            SpectrumFilterKind::HighPass,
+            1.0,
+            start + Duration::from_millis(150),
+        );
+        state.active_multi_index = Some(1);
+        state.adjust_active_region_filter(
+            SpectrumFilterKind::HighPass,
+            1.0,
+            start + Duration::from_millis(200),
+        );
+        assert_eq!(state.undo_stack.len(), 3);
+        state.undo();
+        assert_eq!(state.active_multi_index, Some(1));
+        assert_eq!(state.region_high_pass_hz[1], None);
+        assert!(state.region_high_pass_hz[0].is_some());
+        state.undo();
+        assert_eq!(state.active_multi_index, Some(0));
+        assert_eq!(state.region_high_pass_hz.first().copied().flatten(), None);
+        assert!(state.region_low_pass_hz[0].is_some());
+        state.undo();
+        assert_eq!(state.region_low_pass_hz.first().copied().flatten(), None);
+    }
+
+    #[test]
+    fn deleting_a_region_restores_the_previous_session_on_undo() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let original = dir.path().join("original.wav");
+        let samples = vec![0_u8; 16_000];
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36_u32 + samples.len() as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16_u32.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&1_u16.to_le_bytes());
+        wav.extend_from_slice(&8_000_u32.to_le_bytes());
+        wav.extend_from_slice(&16_000_u32.to_le_bytes());
+        wav.extend_from_slice(&2_u16.to_le_bytes());
+        wav.extend_from_slice(&16_u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(samples.len() as u32).to_le_bytes());
+        wav.extend_from_slice(&samples);
+        std::fs::write(&original, wav).unwrap();
+
+        let mut state = AudioPreviewState::new(original.clone(), "test".to_string());
+        state.duration_sec = 1.0;
+        state.selection = Some((0.25, 0.5));
+        state.adjust_active_region_gain(6.0, Instant::now());
+        state.delete_active_slice_from_session(0.0);
+        let edited = state.path.clone();
+        assert_ne!(edited, original);
+        assert!(edited.is_file());
+        assert_eq!(state.duration_sec, 0.75);
+        state.undo();
+        assert_eq!(state.path, original);
+        assert_eq!(state.selection, Some((0.25, 0.5)));
+        assert_eq!(state.single_region_gain_db, 6.0);
+        assert_eq!(state.duration_sec, 1.0);
+        state.redo();
+        assert_eq!(state.path, edited);
+        assert_eq!(state.selection, None);
+        assert_eq!(state.duration_sec, 0.75);
+        let _ = std::fs::remove_file(edited);
     }
 
     #[test]

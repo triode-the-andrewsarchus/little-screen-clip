@@ -28,5 +28,5 @@ libc = "0.2"
 filmr = { git = "https://github.com/W-Mai/filmr", default-features = false }
 
 [dev-dependencies]
-rxing = "0.9.2"
+rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
 
