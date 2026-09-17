@@ -14,7 +14,7 @@ use tracing::{info, warn};
 /// Spawns a background worker thread continuously capturing system audio into `buffer`.
 pub fn start_rolling_capture_thread(
     buffer: Arc<RwLock<RollingAudioBuffer>>,
-    config: AudioConfig,
+    config: Arc<RwLock<AudioConfig>>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
         .name("rolling-audio-capture".into())
@@ -98,25 +98,33 @@ fn spawn_capture_child(target_device: Option<&str>) -> Option<Child> {
     }
 }
 
-fn run_capture_loop(buffer: Arc<RwLock<RollingAudioBuffer>>, config: AudioConfig) {
-    if !config.rolling_capture_enabled {
-        info!("Rolling audio capture is disabled in configuration");
-        return;
-    }
-
-    let dev_str = config
-        .rolling_capture_device
-        .as_deref()
-        .unwrap_or("@DEFAULT_SINK@");
-    info!(
-        "Starting background rolling audio capture ({}s buffer on '{}')",
-        config.rolling_capture_duration_sec, dev_str
-    );
-
+fn run_capture_loop(buffer: Arc<RwLock<RollingAudioBuffer>>, config: Arc<RwLock<AudioConfig>>) {
     let mut buf = [0u8; 4096];
 
     loop {
-        let mut child = match spawn_capture_child(config.rolling_capture_device.as_deref()) {
+        let active_config = match config.read() {
+            Ok(config) => config.clone(),
+            Err(_) => {
+                warn!("Rolling audio configuration lock was poisoned; retrying");
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+        };
+        if !active_config.rolling_capture_enabled {
+            std::thread::sleep(Duration::from_secs(1));
+            continue;
+        }
+
+        let dev_str = active_config
+            .rolling_capture_device
+            .as_deref()
+            .unwrap_or("@DEFAULT_SINK@");
+        info!(
+            "Starting background rolling audio capture ({}s buffer on '{}')",
+            active_config.rolling_capture_duration_sec, dev_str
+        );
+
+        let mut child = match spawn_capture_child(active_config.rolling_capture_device.as_deref()) {
             Some(c) => c,
             None => {
                 warn!("Unable to start audio capture process. Retrying in 5 seconds...");
@@ -136,6 +144,12 @@ fn run_capture_loop(buffer: Arc<RwLock<RollingAudioBuffer>>, config: AudioConfig
                         if let Ok(mut lock) = buffer.write() {
                             lock.push_pcm_s16le(&buf[..n]);
                         }
+                        if capture_settings_changed(&active_config, &config) {
+                            info!(
+                                "Rolling audio capture settings changed; restarting capture process"
+                            );
+                            break;
+                        }
                     }
                     Err(e) => {
                         warn!("Error reading from audio capture stdout: {}", e);
@@ -150,5 +164,30 @@ fn run_capture_loop(buffer: Arc<RwLock<RollingAudioBuffer>>, config: AudioConfig
 
         info!("Restarting audio capture worker in 2 seconds...");
         std::thread::sleep(Duration::from_secs(2));
+    }
+}
+
+fn capture_settings_changed(active: &AudioConfig, current: &Arc<RwLock<AudioConfig>>) -> bool {
+    match current.read() {
+        Ok(current) => {
+            active.rolling_capture_enabled != current.rolling_capture_enabled
+                || active.rolling_capture_device != current.rolling_capture_device
+        }
+        Err(_) => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_restarts_when_device_or_enabled_state_changes() {
+        let active = AudioConfig::default();
+        let current = Arc::new(RwLock::new(active.clone()));
+        assert!(!capture_settings_changed(&active, &current));
+
+        current.write().unwrap().rolling_capture_enabled = false;
+        assert!(capture_settings_changed(&active, &current));
     }
 }

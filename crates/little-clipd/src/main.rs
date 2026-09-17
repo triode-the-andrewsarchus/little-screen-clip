@@ -42,6 +42,8 @@ pub struct DaemonContext {
     pub is_locked: AtomicBool,
     /// Continuous PCM audio circular buffer.
     pub rolling_audio: Arc<std::sync::RwLock<RollingAudioBuffer>>,
+    /// Audio capture settings shared with the rolling capture worker.
+    pub rolling_capture_config: Arc<std::sync::RwLock<little_clip_core::config::AudioConfig>>,
     /// Temporary routing override for the next incoming system clipboard copy.
     pub route_next_clipboard:
         RwLock<Option<(little_clip_core::HandSide, tokio::time::Instant, bool)>>,
@@ -247,6 +249,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         48000,
         2,
     )));
+    let rolling_capture_config = Arc::new(std::sync::RwLock::new(config.audio.clone()));
 
     let ctx = Arc::new(DaemonContext {
         config: RwLock::new(config.clone()),
@@ -258,13 +261,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         last_action: RwLock::new(load_last_action_from_disk()),
         is_locked: AtomicBool::new(false),
         rolling_audio: Arc::clone(&rolling_audio),
+        rolling_capture_config: Arc::clone(&rolling_capture_config),
         route_next_clipboard: RwLock::new(None),
     });
 
     // Start background rolling audio capture thread
     let capture_audio = Arc::clone(&rolling_audio);
-    let capture_cfg = config.audio.clone();
-    rolling_capture::start_rolling_capture_thread(capture_audio, capture_cfg);
+    rolling_capture::start_rolling_capture_thread(capture_audio, rolling_capture_config);
 
     // Push initial blank state to screen
     ctx.refresh_display().await;
@@ -830,6 +833,25 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
 
             Ok(IpcRequest::ReloadConfig) => {
                 let new_config = little_clip_core::config::AppConfig::load();
+                let new_audio_config = new_config.audio.clone();
+                {
+                    let mut config = ctx.config.write().await;
+                    *config = new_config.clone();
+                }
+                match ctx.rolling_capture_config.write() {
+                    Ok(mut config) => *config = new_audio_config.clone(),
+                    Err(_) => warn!("Rolling audio configuration lock was poisoned during reload"),
+                }
+                match ctx.rolling_audio.write() {
+                    Ok(mut buffer) => {
+                        buffer.reconfigure(
+                            new_audio_config.rolling_capture_duration_sec,
+                            48_000,
+                            2,
+                        );
+                    }
+                    Err(_) => warn!("Rolling audio buffer lock was poisoned during reload"),
+                }
                 {
                     let mut r = ctx.renderer.write().await;
                     r.set_config(new_config);
