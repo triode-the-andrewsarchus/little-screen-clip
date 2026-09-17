@@ -27,6 +27,7 @@ pub mod presentation {
     pub mod units;
 }
 pub mod pdf;
+pub mod process;
 pub mod raw_image;
 pub mod rolling_audio;
 pub mod slot;
@@ -55,6 +56,7 @@ pub use ipc::{IpcRequest, IpcResponse};
 pub use item::{ClipItem, ClipPayload, ImageThumbnail, PayloadKind};
 pub use jobs::{BackgroundJobs, JobError, JobTicket};
 pub use presentation::{midi, model3d, network_preview, spreadsheet, timestamps, units};
+pub use process::{CommandError, CommandOutput, CommandRequest, command_available};
 pub use rolling_audio::{RollingAudioBuffer, slice_wav};
 pub use slot::{HandSide, SlotId, SlotManager};
 pub use staging::{ArtifactLease, ArtifactStore, StagingManager};

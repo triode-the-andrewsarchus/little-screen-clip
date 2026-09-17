@@ -7,18 +7,15 @@
 use super::compiler::CompiledPipeline;
 use super::types::{NodeGraph, NodeInstance, NodeKind, PortValue};
 use base64::Engine;
-use little_clip_core::ArtifactLease;
-use little_clip_core::ArtifactStore;
 use little_clip_core::item::{ClipItem, ClipPayload};
 use little_clip_core::slot::SlotManager;
+use little_clip_core::{ArtifactLease, ArtifactStore, CommandRequest};
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
-use wait_timeout::ChildExt;
 
 const EXTERNAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -1085,76 +1082,38 @@ fn prompt_desktop_entry(title: &str, message: &str, default_val: &str) -> Option
 }
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<String, String> {
-    let child = Command::new(cmd)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn {}: {}", cmd, e))?;
-    let output = wait_for_command_output(child, cmd, EXTERNAL_COMMAND_TIMEOUT)?;
+    let request = args.iter().fold(
+        CommandRequest::new(cmd).timeout(EXTERNAL_COMMAND_TIMEOUT),
+        |request, arg| request.arg(*arg),
+    );
+    let output = request.run().map_err(|error| error.to_string())?;
 
     if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
             "{} error (exit {:?}): {}",
             cmd,
             output.status.code(),
-            err
+            output.stderr_lossy()
         ));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(output.stdout_lossy())
 }
 
 fn run_command_with_stdin(cmd: &str, args: &[&str], stdin_data: &str) -> Result<String, String> {
-    let mut child = Command::new(cmd)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn {}: {}", cmd, e))?;
-
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| format!("Failed to open stdin for {cmd}"))?;
-    stdin
-        .write_all(stdin_data.as_bytes())
-        .map_err(|e| format!("Failed to write stdin for {cmd}: {e}"))?;
-    drop(stdin);
-
-    let output = wait_for_command_output(child, cmd, EXTERNAL_COMMAND_TIMEOUT)?;
+    let request = args.iter().fold(
+        CommandRequest::new(cmd)
+            .timeout(EXTERNAL_COMMAND_TIMEOUT)
+            .stdin_bytes(stdin_data.as_bytes()),
+        |request, arg| request.arg(*arg),
+    );
+    let output = request.run().map_err(|error| error.to_string())?;
 
     if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("{} error: {}", cmd, err));
+        return Err(format!("{} error: {}", cmd, output.stderr_lossy()));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-fn wait_for_command_output(
-    mut child: std::process::Child,
-    cmd: &str,
-    timeout: Duration,
-) -> Result<std::process::Output, String> {
-    match child
-        .wait_timeout(timeout)
-        .map_err(|e| format!("Failed to wait for {cmd}: {e}"))?
-    {
-        Some(_) => child
-            .wait_with_output()
-            .map_err(|e| format!("Failed to collect output from {cmd}: {e}")),
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            Err(format!(
-                "{cmd} exceeded the {} second timeout",
-                timeout.as_secs()
-            ))
-        }
-    }
+    Ok(output.stdout_lossy())
 }
 
 fn run_python_snippet(code: &str, stdin_data: &str) -> Result<String, String> {

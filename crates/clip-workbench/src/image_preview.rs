@@ -10,7 +10,7 @@ use crate::{contrast_text_c32, hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use image::RgbaImage;
 use little_clip_core::theme::AppPalette;
-use little_clip_core::{AppConfig, ClipItem, HandSide, IpcRequest};
+use little_clip_core::{AppConfig, ClipItem, CommandRequest, HandSide, IpcRequest};
 use little_clip_ops::barcode::BarcodeDetection;
 use little_clip_ops::creative_fx::{
     CmykHalftoneParams, CreativeFxParams, CreativeFxType, DitherMethod, DitherPaletteParams,
@@ -1684,19 +1684,10 @@ fn encode_webp(img: &RgbaImage, lossless: bool, quality: u8) -> Result<Vec<u8>, 
 }
 
 fn render_svg_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
-    let mut child = Command::new("rsvg-convert")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+    let output = CommandRequest::new("rsvg-convert")
+        .stdin_bytes(bytes)
+        .run()
         .ok()?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        let _ = stdin.write_all(bytes);
-    }
-
-    let output = child.wait_with_output().ok()?;
     if output.status.success() && !output.stdout.is_empty() {
         Some(output.stdout)
     } else {

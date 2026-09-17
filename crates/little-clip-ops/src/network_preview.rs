@@ -4,6 +4,7 @@
 //! specifications (RFC 1918, RFC 1122, RFC 6598, etc.), identifies well-known public DNS resolvers,
 //! performs OUI hardware vendor lookups for MAC addresses, and runs non-blocking ICMP ping reachability checks.
 
+use little_clip_core::CommandRequest;
 use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
@@ -124,17 +125,18 @@ pub fn check_bounded_ping(ip: IpAddr) -> Option<String> {
     // 2. Spawn background single-shot ping
     let ip_clone = ip;
     std::thread::spawn(move || {
-        let cmd_res = std::process::Command::new("ping")
+        let cmd_res = CommandRequest::new("ping")
             .arg("-c")
             .arg("1")
             .arg("-W")
             .arg("1")
             .arg(ip_clone.to_string())
-            .output();
+            .timeout(Duration::from_secs(2))
+            .run();
 
         let status = match cmd_res {
             Ok(output) if output.status.success() => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stdout = output.stdout_lossy();
                 // Extract "time=X.X ms"
                 if let Some(t_idx) = stdout.find("time=") {
                     let part = &stdout[t_idx + 5..];
