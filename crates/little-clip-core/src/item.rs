@@ -414,7 +414,7 @@ impl ClipItem {
         }
 
         // 2. Check if color hex (#RRGGBB or #RGB)
-        if let Some(color) = parse_hex_color(trimmed) {
+        if let Some(color) = crate::color::parse_hex_color(trimmed) {
             return Self::from_color(color);
         }
 
@@ -1434,10 +1434,6 @@ fn parse_raw_path_string(clean: &str, home: Option<&str>) -> Option<String> {
     } else {
         None
     }
-}
-
-fn parse_hex_color(s: &str) -> Option<(u8, u8, u8, String)> {
-    crate::color::parse_hex_color(s)
 }
 
 fn format_bytes(bytes: u64) -> String {

@@ -5,7 +5,8 @@
 
 use fontdue::{Font, FontSettings};
 use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
-use little_clip_core::config::{AppConfig, parse_hex_color};
+use little_clip_core::color::parse_hex_color_rgba_or_white as parse_hex_color;
+use little_clip_core::config::AppConfig;
 use little_clip_core::theme::AppPalette;
 use little_clip_core::{ClipItem, ClipPayload, SlotId, SlotManager};
 use little_clip_core::{midi, model3d, network_preview, spreadsheet, timestamps, units};
