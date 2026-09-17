@@ -33,6 +33,16 @@ pub const CHUNK_BURST_ALIGNMENT: usize = 4;
 /// Fixed size of the USB ACK response packet in bytes.
 pub const USB_ACK_SIZE: usize = 512;
 
+fn frame_chunk_layout(total_size: usize) -> (usize, usize) {
+    if total_size == 0 {
+        return (1, 0);
+    }
+
+    let num_chunks = total_size.div_ceil(CHUNK_DATA_SIZE);
+    let last_chunk_data = total_size - ((num_chunks - 1) * CHUNK_DATA_SIZE);
+    (num_chunks, last_chunk_data)
+}
+
 /// USB timeout for handshake requests.
 pub const TIMEOUT_HANDSHAKE: Duration = Duration::from_millis(1500);
 /// USB timeout for bulk frame writes.
@@ -231,8 +241,7 @@ impl TrofeoDriver {
             return Err(DriverError::PayloadTooLarge { size: total_size });
         }
 
-        let num_chunks = (total_size / CHUNK_DATA_SIZE) + 1;
-        let last_chunk_data = total_size % CHUNK_DATA_SIZE;
+        let (num_chunks, last_chunk_data) = frame_chunk_layout(total_size);
 
         // Pad chunks to multiple of CHUNK_BURST_ALIGNMENT (4)
         let remainder = num_chunks % CHUNK_BURST_ALIGNMENT;
@@ -278,9 +287,15 @@ impl TrofeoDriver {
                 remaining.min(2048)
             };
 
-            self.handle
-                .write_bulk(EP_OUT, &buffer[pos..pos + write_size], TIMEOUT_WRITE)?;
-            pos += USB_BURST_WRITE_SIZE;
+            let written =
+                self.handle
+                    .write_bulk(EP_OUT, &buffer[pos..pos + write_size], TIMEOUT_WRITE)?;
+            if written != write_size {
+                return Err(DriverError::WriteFailed(format!(
+                    "short USB bulk write: expected {write_size} bytes, wrote {written}"
+                )));
+            }
+            pos += write_size;
         }
 
         // Read ACK packet and propagate errors — a failure here means
@@ -295,6 +310,19 @@ impl TrofeoDriver {
             total_size, num_chunks
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frame_chunk_layout_avoids_empty_final_chunk_for_exact_multiples() {
+        assert_eq!(frame_chunk_layout(0), (1, 0));
+        assert_eq!(frame_chunk_layout(1), (1, 1));
+        assert_eq!(frame_chunk_layout(CHUNK_DATA_SIZE), (1, CHUNK_DATA_SIZE));
+        assert_eq!(frame_chunk_layout(CHUNK_DATA_SIZE + 1), (2, 1));
     }
 }
 
