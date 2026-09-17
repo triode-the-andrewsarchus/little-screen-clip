@@ -4,6 +4,7 @@
 //! topological order, handles inter-process communication for CLI tools (FFmpeg, ImageMagick, jq, Python),
 //! manages prompt inputs, and collects output payloads for slot state commitment or file saving.
 
+use super::catalog::NODE_CATALOG;
 use super::types::{NodeGraph, NodeInstance, NodeKind, PortValue};
 use base64::Engine;
 use little_clip_core::item::{ClipItem, ClipPayload};
@@ -12,8 +13,12 @@ use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
+use wait_timeout::ChildExt;
+
+const EXTERNAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Errors that can occur during graph compilation or node execution.
 #[derive(Debug, Error)]
@@ -30,6 +35,9 @@ pub enum PipelineError {
     /// Underlying filesystem I/O error.
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+    /// Graph structure does not match the node catalog or has invalid wires.
+    #[error("Invalid graph: {0}")]
+    InvalidGraph(String),
 }
 
 /// Consolidated outputs and side-effects produced by a pipeline graph execution.
@@ -90,6 +98,7 @@ impl<'a> PipelineExecutor<'a> {
 
     /// Topologically sorts the graph nodes and executes all operations in dependency order.
     pub fn execute(&self) -> Result<PipelineExecutionResult, PipelineError> {
+        self.validate_graph()?;
         let ordered_nodes = self.topological_sort()?;
         let mut outputs: HashMap<(Uuid, String), PortValue> = HashMap::new();
         let mut result = PipelineExecutionResult::default();
@@ -119,6 +128,93 @@ impl<'a> PipelineExecutor<'a> {
         }
 
         Ok(result)
+    }
+
+    /// Verifies that deserialized graph data uses known node schemas and valid one-to-one wires.
+    fn validate_graph(&self) -> Result<(), PipelineError> {
+        let mut nodes = HashMap::new();
+        for node in &self.graph.nodes {
+            if nodes.insert(node.id, node).is_some() {
+                return Err(PipelineError::InvalidGraph(format!(
+                    "duplicate node id {}",
+                    node.id
+                )));
+            }
+            let template = NODE_CATALOG
+                .iter()
+                .find(|template| template.kind == node.kind)
+                .ok_or_else(|| {
+                    PipelineError::InvalidGraph(format!("unknown node kind: {:?}", node.kind))
+                })?;
+            let matches_schema =
+                |pins: &[super::types::Pin], expected: &[(&str, super::types::PortType)]| {
+                    pins.len() == expected.len()
+                        && pins.iter().zip(expected).all(|(pin, &(name, port_type))| {
+                            pin.name == name && pin.port_type == port_type
+                        })
+                };
+            if !matches_schema(&node.inputs, template.inputs)
+                || !matches_schema(&node.outputs, template.outputs)
+            {
+                return Err(PipelineError::InvalidGraph(format!(
+                    "node '{}' does not match catalog pin schema",
+                    node.title
+                )));
+            }
+        }
+
+        let mut destinations = std::collections::HashSet::new();
+        for connection in &self.graph.connections {
+            let source = nodes.get(&connection.from_node).ok_or_else(|| {
+                PipelineError::InvalidGraph(format!(
+                    "connection source node {} does not exist",
+                    connection.from_node
+                ))
+            })?;
+            let target = nodes.get(&connection.to_node).ok_or_else(|| {
+                PipelineError::InvalidGraph(format!(
+                    "connection target node {} does not exist",
+                    connection.to_node
+                ))
+            })?;
+            let source_pin = source
+                .outputs
+                .iter()
+                .find(|pin| pin.name == connection.from_pin)
+                .ok_or_else(|| {
+                    PipelineError::InvalidGraph(format!(
+                        "source pin '{}' does not exist on '{}'",
+                        connection.from_pin, source.title
+                    ))
+                })?;
+            let target_pin = target
+                .inputs
+                .iter()
+                .find(|pin| pin.name == connection.to_pin)
+                .ok_or_else(|| {
+                    PipelineError::InvalidGraph(format!(
+                        "target pin '{}' does not exist on '{}'",
+                        connection.to_pin, target.title
+                    ))
+                })?;
+            if !source_pin
+                .port_type
+                .is_compatible_with(&target_pin.port_type)
+            {
+                return Err(PipelineError::InvalidGraph(format!(
+                    "cannot connect {} output '{}' to {} input '{}'",
+                    source.title, connection.from_pin, target.title, connection.to_pin
+                )));
+            }
+            if !destinations.insert((connection.to_node, connection.to_pin.clone())) {
+                return Err(PipelineError::InvalidGraph(format!(
+                    "multiple connections target {} input '{}'",
+                    target.title, connection.to_pin
+                )));
+            }
+        }
+
+        Ok(())
     }
 
     fn topological_sort(&self) -> Result<Vec<&'a NodeInstance>, PipelineError> {
@@ -201,6 +297,16 @@ impl<'a> PipelineExecutor<'a> {
         let mut out = Vec::new();
         #[allow(unused_assignments)]
         let mut preview = None;
+        macro_rules! path_arg {
+            ($path:expr) => {
+                $path.to_str().ok_or_else(|| {
+                    PipelineError::NodeFailed(
+                        node.title.clone(),
+                        format!("Path is not valid UTF-8: {}", $path.display()),
+                    )
+                })?
+            };
+        }
 
         match &node.kind {
             NodeKind::LeftHandSource => {
@@ -456,12 +562,12 @@ else:
                 let out_path = self.temp_dir.join(format!("framed_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
-                    in_path.to_str().unwrap(),
+                    path_arg!(in_path),
                     "-bordercolor",
                     border_color,
                     "-border",
                     border_size,
-                    out_path.to_str().unwrap(),
+                    path_arg!(out_path),
                 ])
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
@@ -503,7 +609,7 @@ else:
                 let out_path = self.temp_dir.join(format!("titled_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
-                    in_path.to_str().unwrap(),
+                    path_arg!(in_path),
                     "-background",
                     bar_color,
                     "-fill",
@@ -517,7 +623,7 @@ else:
                     "-annotate",
                     "+0+10",
                     &caption,
-                    out_path.to_str().unwrap(),
+                    path_arg!(out_path),
                 ])
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
@@ -536,11 +642,11 @@ else:
                     .join(format!("cropped_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
-                    in_path.to_str().unwrap(),
+                    path_arg!(in_path),
                     "-crop",
                     geom,
                     "+repage",
-                    out_path.to_str().unwrap(),
+                    path_arg!(out_path),
                 ])
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
@@ -564,10 +670,10 @@ else:
                     .join(format!("resized_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
-                    in_path.to_str().unwrap(),
+                    path_arg!(in_path),
                     "-resize",
                     &format!("{}x{}>", max_w, max_h),
-                    out_path.to_str().unwrap(),
+                    path_arg!(out_path),
                 ])
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
@@ -583,13 +689,8 @@ else:
                     .unwrap_or("90");
                 let out_path = self.temp_dir.join(format!("{}.webp", Uuid::new_v4()));
 
-                run_magick(&[
-                    in_path.to_str().unwrap(),
-                    "-quality",
-                    q,
-                    out_path.to_str().unwrap(),
-                ])
-                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                run_magick(&[path_arg!(in_path), "-quality", q, path_arg!(out_path)])
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some("Converted to WebP".to_string());
                 out.push(("Image Out".to_string(), PortValue::ImagePath(out_path)));
@@ -605,13 +706,8 @@ else:
                     .temp_dir
                     .join(format!("rotated_{}.png", Uuid::new_v4()));
 
-                run_magick(&[
-                    in_path.to_str().unwrap(),
-                    "-rotate",
-                    deg,
-                    out_path.to_str().unwrap(),
-                ])
-                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                run_magick(&[path_arg!(in_path), "-rotate", deg, path_arg!(out_path)])
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some(format!("Rotated {}°", deg));
                 out.push(("Image Out".to_string(), PortValue::ImagePath(out_path)));
@@ -624,10 +720,10 @@ else:
                     .join(format!("stitched_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
-                    left_path.to_str().unwrap(),
-                    right_path.to_str().unwrap(),
+                    path_arg!(left_path),
+                    path_arg!(right_path),
                     "+append",
-                    out_path.to_str().unwrap(),
+                    path_arg!(out_path),
                 ])
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
@@ -640,12 +736,8 @@ else:
                     .temp_dir
                     .join(format!("stripped_{}.png", Uuid::new_v4()));
 
-                run_magick(&[
-                    in_path.to_str().unwrap(),
-                    "-strip",
-                    out_path.to_str().unwrap(),
-                ])
-                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                run_magick(&[path_arg!(in_path), "-strip", path_arg!(out_path)])
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some("EXIF stripped".to_string());
                 out.push(("Image Out".to_string(), PortValue::ImagePath(out_path)));
@@ -713,10 +805,10 @@ else:
                     &[
                         "-y",
                         "-i",
-                        in_path.to_str().unwrap(),
+                        path_arg!(in_path),
                         "-af",
                         &filter,
-                        out_path.to_str().unwrap(),
+                        path_arg!(out_path),
                     ],
                 )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -744,10 +836,10 @@ else:
                     &[
                         "-y",
                         "-i",
-                        in_path.to_str().unwrap(),
+                        path_arg!(in_path),
                         "-af",
                         &filter,
-                        out_path.to_str().unwrap(),
+                        path_arg!(out_path),
                     ],
                 )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -770,10 +862,10 @@ else:
                     &[
                         "-y",
                         "-i",
-                        in_path.to_str().unwrap(),
+                        path_arg!(in_path),
                         "-af",
                         &filter,
-                        out_path.to_str().unwrap(),
+                        path_arg!(out_path),
                     ],
                 )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -792,14 +884,14 @@ else:
                     &[
                         "-y",
                         "-i",
-                        in1.to_str().unwrap(),
+                        path_arg!(in1),
                         "-i",
-                        in2.to_str().unwrap(),
+                        path_arg!(in2),
                         "-filter_complex",
                         filter,
                         "-map",
                         "[out]",
-                        out_path.to_str().unwrap(),
+                        path_arg!(out_path),
                     ],
                 )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -816,7 +908,7 @@ else:
                     .ok_or_else(|| PipelineError::MissingInput("In".to_string()))?;
                 let hash = match in_val {
                     PortValue::FilePath(p) | PortValue::ImagePath(p) | PortValue::AudioPath(p) => {
-                        let out = run_command("sha256sum", &[p.to_str().unwrap()])
+                        let out = run_command("sha256sum", &[path_arg!(p)])
                             .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
                         out.split_whitespace().next().unwrap_or("").to_string()
                     }
@@ -828,8 +920,7 @@ else:
                     PortValue::FileBatch(paths) => {
                         let mut hashes = Vec::new();
                         for p in paths {
-                            let out = run_command("sha256sum", &[p.to_str().unwrap()])
-                                .unwrap_or_default();
+                            let out = run_command("sha256sum", &[path_arg!(p)]).unwrap_or_default();
                             let h = out.split_whitespace().next().unwrap_or("").to_string();
                             hashes.push(format!("{}: {}", p.display(), h));
                         }
@@ -854,9 +945,9 @@ else:
                     .unwrap_or("archive.zip");
                 let out_path = self.temp_dir.join(archive_name);
 
-                let mut args = vec!["-r", out_path.to_str().unwrap()];
+                let mut args = vec!["-r", path_arg!(out_path)];
                 for p in &paths {
-                    args.push(p.to_str().unwrap());
+                    args.push(path_arg!(p));
                 }
                 run_command("zip", &args)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -887,7 +978,7 @@ else:
                             format!("Script file not found: {}", fpath.display()),
                         ));
                     }
-                    run_command_with_stdin("python3", &[fpath.to_str().unwrap()], &stdin_data)
+                    run_command_with_stdin("python3", &[path_arg!(fpath)], &stdin_data)
                         .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?
                 } else {
                     let script = node
@@ -913,7 +1004,7 @@ else:
                             format!("Script file not found: {}", fpath.display()),
                         ));
                     }
-                    run_command_with_stdin("bash", &[fpath.to_str().unwrap()], &stdin_data)
+                    run_command_with_stdin("bash", &[path_arg!(fpath)], &stdin_data)
                         .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?
                 } else {
                     let cmd = node
@@ -959,7 +1050,7 @@ else:
                     .map(|s| s.as_str())
                     .unwrap_or("~/Downloads");
                 let dest_expanded = shellexpand(dest_str);
-                let _ = std::fs::create_dir_all(&dest_expanded);
+                std::fs::create_dir_all(&dest_expanded)?;
 
                 let saved = match in_val {
                     PortValue::FilePath(p) | PortValue::ImagePath(p) | PortValue::AudioPath(p) => {
@@ -974,12 +1065,20 @@ else:
                         target
                     }
                     PortValue::FileBatch(paths) => {
+                        let mut saved_files = Vec::with_capacity(paths.len());
                         for p in paths {
                             let filename = p.file_name().unwrap_or_default();
                             let target = dest_expanded.join(filename);
-                            let _ = std::fs::copy(p, &target);
+                            std::fs::copy(p, &target)?;
+                            saved_files.push(target);
                         }
-                        dest_expanded
+                        if saved_files.is_empty() {
+                            return Err(PipelineError::MissingInput("Files In".to_string()));
+                        }
+                        let saved_preview = format!("Saved {} files", saved_files.len());
+                        result.saved_files.extend(saved_files);
+                        preview = Some(saved_preview);
+                        return Ok((out, preview));
                     }
                 };
 
@@ -1116,10 +1215,13 @@ fn prompt_desktop_entry(title: &str, message: &str, default_val: &str) -> Option
 }
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<String, String> {
-    let output = Command::new(cmd)
+    let child = Command::new(cmd)
         .args(args)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("Failed to spawn {}: {}", cmd, e))?;
+    let output = wait_for_command_output(child, cmd, EXTERNAL_COMMAND_TIMEOUT)?;
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
@@ -1143,13 +1245,16 @@ fn run_command_with_stdin(cmd: &str, args: &[&str], stdin_data: &str) -> Result<
         .spawn()
         .map_err(|e| format!("Failed to spawn {}: {}", cmd, e))?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(stdin_data.as_bytes());
-    }
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| format!("Failed to open stdin for {cmd}"))?;
+    stdin
+        .write_all(stdin_data.as_bytes())
+        .map_err(|e| format!("Failed to write stdin for {cmd}: {e}"))?;
+    drop(stdin);
 
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Failed to wait for {}: {}", cmd, e))?;
+    let output = wait_for_command_output(child, cmd, EXTERNAL_COMMAND_TIMEOUT)?;
 
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr);
@@ -1157,6 +1262,29 @@ fn run_command_with_stdin(cmd: &str, args: &[&str], stdin_data: &str) -> Result<
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn wait_for_command_output(
+    mut child: std::process::Child,
+    cmd: &str,
+    timeout: Duration,
+) -> Result<std::process::Output, String> {
+    match child
+        .wait_timeout(timeout)
+        .map_err(|e| format!("Failed to wait for {cmd}: {e}"))?
+    {
+        Some(_) => child
+            .wait_with_output()
+            .map_err(|e| format!("Failed to collect output from {cmd}: {e}")),
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(format!(
+                "{cmd} exceeded the {} second timeout",
+                timeout.as_secs()
+            ))
+        }
+    }
 }
 
 fn run_python_snippet(code: &str, stdin_data: &str) -> Result<String, String> {
@@ -1230,6 +1358,50 @@ mod tests {
         assert!(matches!(
             cyclic_executor.topological_sort(),
             Err(PipelineError::CycleDetected)
+        ));
+    }
+
+    #[test]
+    fn validation_rejects_dangling_and_duplicate_input_connections() {
+        let source = instantiate_template(find_template("source_const_text").unwrap(), [0.0, 0.0]);
+        let sink = instantiate_template(find_template("sink_lh").unwrap(), [100.0, 0.0]);
+        let missing_node = Uuid::new_v4();
+        let dangling = NodeGraph {
+            nodes: vec![source.clone(), sink.clone()],
+            connections: vec![Connection {
+                from_node: missing_node,
+                from_pin: "Out".to_string(),
+                to_node: sink.id,
+                to_pin: "In".to_string(),
+            }],
+            ..Default::default()
+        };
+        assert!(matches!(
+            PipelineExecutor::new(&dangling, &SlotManager::default()).validate_graph(),
+            Err(PipelineError::InvalidGraph(_))
+        ));
+
+        let duplicate_input = NodeGraph {
+            nodes: vec![source.clone(), sink.clone()],
+            connections: vec![
+                Connection {
+                    from_node: source.id,
+                    from_pin: "Text".to_string(),
+                    to_node: sink.id,
+                    to_pin: "In".to_string(),
+                },
+                Connection {
+                    from_node: source.id,
+                    from_pin: "Text".to_string(),
+                    to_node: sink.id,
+                    to_pin: "In".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+        assert!(matches!(
+            PipelineExecutor::new(&duplicate_input, &SlotManager::default()).validate_graph(),
+            Err(PipelineError::InvalidGraph(_))
         ));
     }
 
@@ -1466,19 +1638,13 @@ printf "%s!BASH!" "$data"
         }
         img2.save(&img2_path).unwrap();
 
-        let t_const = find_template("source_const_text").unwrap();
+        let t_left = find_template("source_lh").unwrap();
+        let t_right = find_template("source_rh").unwrap();
         let t_diff = find_template("img_diff").unwrap();
         let t_sink = find_template("sink_lh").unwrap();
 
-        let mut n_src1 = instantiate_template(t_const, [0.0, 0.0]);
-        n_src1
-            .props
-            .insert("text".to_string(), img1_path.to_str().unwrap().to_string());
-
-        let mut n_src2 = instantiate_template(t_const, [0.0, 100.0]);
-        n_src2
-            .props
-            .insert("text".to_string(), img2_path.to_str().unwrap().to_string());
+        let n_src1 = instantiate_template(t_left, [0.0, 0.0]);
+        let n_src2 = instantiate_template(t_right, [0.0, 100.0]);
 
         let mut n_diff = instantiate_template(t_diff, [200.0, 50.0]);
         n_diff
@@ -1497,13 +1663,13 @@ printf "%s!BASH!" "$data"
             connections: vec![
                 Connection {
                     from_node: n_src1.id,
-                    from_pin: "Text".to_string(),
+                    from_pin: "Out".to_string(),
                     to_node: n_diff.id,
                     to_pin: "Base Image".to_string(),
                 },
                 Connection {
                     from_node: n_src2.id,
-                    from_pin: "Text".to_string(),
+                    from_pin: "Out".to_string(),
                     to_node: n_diff.id,
                     to_pin: "Compare Image".to_string(),
                 },
@@ -1517,7 +1683,13 @@ printf "%s!BASH!" "$data"
             ..Default::default()
         };
 
-        let mgr = SlotManager::default();
+        let mut mgr = SlotManager::default();
+        mgr.push_left(
+            ClipItem::from_image_bytes(fs::read(&img1_path).unwrap(), "image/png").unwrap(),
+        );
+        mgr.push_right(
+            ClipItem::from_image_bytes(fs::read(&img2_path).unwrap(), "image/png").unwrap(),
+        );
         let executor = PipelineExecutor::new(&graph, &mgr);
         let res = executor
             .execute()

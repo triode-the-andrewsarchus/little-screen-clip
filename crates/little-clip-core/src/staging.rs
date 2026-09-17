@@ -49,17 +49,13 @@ impl StagingManager {
         let now = std::time::SystemTime::now();
         let mut count = 0;
 
-        if let Ok(entries) = std::fs::read_dir(&self.base_dir) {
-            for entry in entries.flatten() {
-                if let Ok(meta) = entry.metadata() {
-                    if let Ok(modified) = meta.modified() {
-                        if let Ok(age) = now.duration_since(modified) {
-                            if age.as_secs() > max_age_seconds {
-                                let _ = std::fs::remove_file(entry.path());
-                                count += 1;
-                            }
-                        }
-                    }
+        for entry in std::fs::read_dir(&self.base_dir)? {
+            let entry = entry?;
+            let modified = entry.metadata()?.modified()?;
+            if let Ok(age) = now.duration_since(modified) {
+                if age.as_secs() > max_age_seconds {
+                    std::fs::remove_file(entry.path())?;
+                    count += 1;
                 }
             }
         }
@@ -68,23 +64,23 @@ impl StagingManager {
 }
 
 /// Returns the standard staging directory, creating it if necessary.
-pub fn get_staging_dir() -> PathBuf {
+pub fn get_staging_dir() -> Result<PathBuf, StagingError> {
     let cache_dir = dirs_or_fallback_cache();
     let staging_dir = cache_dir.join("little-screen-clip").join("staging");
-    let _ = std::fs::create_dir_all(&staging_dir);
-    staging_dir
+    std::fs::create_dir_all(&staging_dir)?;
+    Ok(staging_dir)
 }
 
 /// Creates a unique staged file path in the standard staging directory.
-pub fn create_staging_path(prefix: &str, extension: &str) -> PathBuf {
-    let base_dir = get_staging_dir();
+pub fn create_staging_path(prefix: &str, extension: &str) -> Result<PathBuf, StagingError> {
+    let base_dir = get_staging_dir()?;
     let id = uuid::Uuid::new_v4();
     let filename = if extension.is_empty() {
         format!("{}_{}", prefix, id)
     } else {
         format!("{}_{}.{}", prefix, id, extension.trim_start_matches('.'))
     };
-    base_dir.join(filename)
+    Ok(base_dir.join(filename))
 }
 
 fn dirs_or_fallback_cache() -> PathBuf {
@@ -97,4 +93,21 @@ fn dirs_or_fallback_cache() -> PathBuf {
         return PathBuf::from(home).join(".cache");
     }
     PathBuf::from("/tmp")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_reports_an_unreadable_staging_directory() {
+        let manager = StagingManager {
+            base_dir: std::env::temp_dir()
+                .join(format!("missing-staging-{}", uuid::Uuid::new_v4())),
+        };
+
+        let result = manager.cleanup_old_items(0);
+
+        assert!(matches!(result, Err(StagingError::Io(_))));
+    }
 }

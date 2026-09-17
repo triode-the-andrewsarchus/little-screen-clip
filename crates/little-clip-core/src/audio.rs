@@ -2798,6 +2798,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixtures"]
     fn test_shapeforms_sample() {
         let cfg = AudioConfig::default();
         let path = std::path::Path::new(
@@ -2836,6 +2837,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixtures"]
     fn test_compute_full_waveform() {
         let wav_path = generate_test_wav();
         let wf = compute_full_waveform(&wav_path, 80).expect("failed to compute full waveform");
@@ -2961,6 +2963,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixtures"]
     fn test_compute_full_audio_analysis() {
         let wav_path = generate_test_wav();
         let analysis = compute_full_audio_analysis(&wav_path, 150)

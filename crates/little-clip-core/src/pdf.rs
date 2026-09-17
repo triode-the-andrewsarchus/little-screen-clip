@@ -7,6 +7,34 @@ use lopdf::{Document, Object};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+fn preview_output_paths(temp_prefix: &Path) -> Vec<PathBuf> {
+    let Some(parent) = temp_prefix.parent() else {
+        return Vec::new();
+    };
+    let Some(prefix) = temp_prefix.file_name().and_then(|name| name.to_str()) else {
+        return Vec::new();
+    };
+    let prefix = format!("{prefix}-");
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".png"))
+        })
+        .collect()
+}
+
+fn cleanup_preview_outputs(temp_prefix: &Path) {
+    for path in preview_output_paths(temp_prefix) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// Metadata summary extracted from a PDF document.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PdfInfo {
@@ -97,21 +125,18 @@ pub fn render_pdf_page_preview(
         .map_err(|e| format!("pdftoppm execution failed: {}", e))?;
 
     if !output.status.success() {
+        cleanup_preview_outputs(&temp_prefix);
         return Err("pdftoppm failed to render page".to_string());
     }
 
-    let out_png = PathBuf::from(format!("{}-{}.png", temp_prefix.to_string_lossy(), page));
-    if !out_png.is_file() {
-        // Sometimes pdftoppm outputs with 0-padded digits or 1 digit
-        let _glob_pattern = format!("{}-*.png", temp_prefix.to_string_lossy());
-        return Err(format!(
-            "Expected output PNG at {:?} but not found",
-            out_png
-        ));
-    }
+    let out_png = preview_output_paths(&temp_prefix).into_iter().next();
+    let Some(out_png) = out_png else {
+        return Err(format!("pdftoppm did not produce a PNG for page {page}"));
+    };
 
-    let png_bytes = std::fs::read(&out_png).map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_file(&out_png);
+    let png_bytes = std::fs::read(&out_png).map_err(|e| e.to_string());
+    cleanup_preview_outputs(&temp_prefix);
+    let png_bytes = png_bytes?;
 
     let (w, h) = if let Ok(dyn_img) = image::load_from_memory(&png_bytes) {
         (dyn_img.width(), dyn_img.height())
@@ -130,9 +155,9 @@ pub fn render_all_pdf_page_thumbnails(
     let info = get_pdf_info(path)?;
     let mut pages = Vec::new();
     for page_num in 1..=info.page_count {
-        if let Ok((bytes, _, _)) = render_pdf_page_preview(path, page_num, thumb_w) {
-            pages.push((page_num, bytes));
-        }
+        let (bytes, _, _) = render_pdf_page_preview(path, page_num, thumb_w)
+            .map_err(|error| format!("Failed to render PDF page {page_num}: {error}"))?;
+        pages.push((page_num, bytes));
     }
     Ok(pages)
 }

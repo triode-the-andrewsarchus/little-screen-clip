@@ -3540,6 +3540,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual integration test writes developer-local screenshots"]
     fn test_render_spreadsheet_and_prose() {
         let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
         let mut manager = SlotManager::new();
@@ -3577,6 +3578,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local model fixture"]
     fn test_render_stl_card() {
         let toothless_path =
             std::path::Path::new("/home/vega/Documents/type_testing/Toothless.stl");
@@ -3601,6 +3603,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local model fixture"]
     fn test_model3d_rotation_differs_over_time() {
         let teapot_path = std::path::Path::new(
             "/home/vega/Documents/type_testing/jhfmh2s0xt6o-teapotnglass/teapot_n_glass.obj",

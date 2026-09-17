@@ -1055,6 +1055,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local image fixtures"]
     fn test_image_diff_state_from_type_testing() {
         use std::path::PathBuf;
         use std::time::Instant;

@@ -2871,6 +2871,7 @@ Separated track
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_audio_preview_state_creation_and_seek() {
         let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
         if p.is_file() {
@@ -2895,6 +2896,7 @@ Separated track
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_zoom_and_pan_calculations() {
         let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
         if p.is_file() {
@@ -2919,6 +2921,7 @@ Separated track
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_channel_slicing_modes() {
         let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
         if p.is_file() {
@@ -2940,6 +2943,7 @@ Separated track
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_small_sub_50ms_slice_selection() {
         let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
         if p.is_file() {
@@ -3032,6 +3036,7 @@ Separated track
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_multi_region_mode_and_removal() {
         let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
         if p.is_file() {
@@ -3080,6 +3085,7 @@ Separated track
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_zero_crossing_snapping_integration() {
         let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
         if p.is_file() {
@@ -3109,6 +3115,7 @@ Separated track
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_transient_toggle_and_snapping_integration() {
         let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
         if p.is_file() {
@@ -3153,6 +3160,7 @@ Separated track
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_middle_mouse_pan_calculation() {
         let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
         if p.is_file() {
@@ -3208,6 +3216,7 @@ Separated track
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_save_to_file_single_and_multi() {
         let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
         if p.is_file() {
@@ -3270,6 +3279,7 @@ Separated track
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_slice_preview_start_to_stop() {
         let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
         let mut state = AudioPreviewState::new(p, "test.wav".to_string());
@@ -3298,6 +3308,7 @@ Separated track
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_fine_grained_consistent_zoom() {
         let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
         let mut state = AudioPreviewState::new(p, "test.wav".to_string());

@@ -38,6 +38,14 @@ impl RollingAudioBuffer {
         }
     }
 
+    /// Clears buffered audio and applies new capture dimensions.
+    ///
+    /// Callers should hold their synchronization guard while reconfiguring so capture
+    /// cannot append samples using the previous channel layout.
+    pub fn reconfigure(&mut self, duration_sec: u64, sample_rate: u32, channels: u16) {
+        *self = Self::new(duration_sec, sample_rate, channels);
+    }
+
     #[inline]
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
@@ -388,6 +396,19 @@ mod tests {
         // The oldest 10 samples (0..10) were overwritten, so snapshot should be 10..50
         let expected: Vec<i16> = (10..50).collect();
         assert_eq!(snapshot, expected);
+    }
+
+    #[test]
+    fn reconfigure_clears_samples_and_uses_new_capacity() {
+        let mut buffer = RollingAudioBuffer::new(2, 10, 2);
+        buffer.push_samples(&[1, 2, 3, 4]);
+
+        buffer.reconfigure(3, 8, 1);
+
+        assert!(buffer.is_empty());
+        assert_eq!(buffer.sample_rate(), 8);
+        assert_eq!(buffer.channels(), 1);
+        assert_eq!(buffer.capacity_samples(), 24);
     }
 
     #[test]

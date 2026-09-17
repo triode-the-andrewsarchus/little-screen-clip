@@ -22,6 +22,42 @@ use tracing::{debug, error, info, warn};
 mod lock_monitor;
 mod rolling_capture;
 
+const MAX_IPC_REQUEST_BYTES: usize = 1024 * 1024;
+
+async fn read_bounded_ipc_line<R>(
+    reader: &mut R,
+    request: &mut Vec<u8>,
+) -> std::io::Result<Option<usize>>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    request.clear();
+    loop {
+        let (take, found_newline) = {
+            let available = reader.fill_buf().await?;
+            if available.is_empty() {
+                return Ok((!request.is_empty()).then_some(request.len()));
+            }
+            let take = available
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(available.len(), |position| position + 1);
+            if request.len() + take > MAX_IPC_REQUEST_BYTES {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "IPC request exceeds byte limit",
+                ));
+            }
+            request.extend_from_slice(&available[..take]);
+            (take, take < available.len() || available[take - 1] == b'\n')
+        };
+        reader.consume(take);
+        if found_newline {
+            return Ok(Some(request.len()));
+        }
+    }
+}
+
 /// Shared runtime state across daemon IPC handlers, background workers, and display pipelines.
 pub struct DaemonContext {
     /// Active application configuration.
@@ -42,6 +78,8 @@ pub struct DaemonContext {
     pub is_locked: AtomicBool,
     /// Continuous PCM audio circular buffer.
     pub rolling_audio: Arc<std::sync::RwLock<RollingAudioBuffer>>,
+    /// Audio capture settings shared with the rolling capture worker.
+    pub rolling_capture_config: Arc<std::sync::RwLock<little_clip_core::config::AudioConfig>>,
     /// Temporary routing override for the next incoming system clipboard copy.
     pub route_next_clipboard:
         RwLock<Option<(little_clip_core::HandSide, tokio::time::Instant, bool)>>,
@@ -247,6 +285,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         48000,
         2,
     )));
+    let rolling_capture_config = Arc::new(std::sync::RwLock::new(config.audio.clone()));
 
     let ctx = Arc::new(DaemonContext {
         config: RwLock::new(config.clone()),
@@ -258,13 +297,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         last_action: RwLock::new(load_last_action_from_disk()),
         is_locked: AtomicBool::new(false),
         rolling_audio: Arc::clone(&rolling_audio),
+        rolling_capture_config: Arc::clone(&rolling_capture_config),
         route_next_clipboard: RwLock::new(None),
     });
 
     // Start background rolling audio capture thread
     let capture_audio = Arc::clone(&rolling_audio);
-    let capture_cfg = config.audio.clone();
-    rolling_capture::start_rolling_capture_thread(capture_audio, capture_cfg);
+    rolling_capture::start_rolling_capture_thread(capture_audio, rolling_capture_config);
 
     // Push initial blank state to screen
     ctx.refresh_display().await;
@@ -581,10 +620,37 @@ async fn handle_execute_recipe(
 async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
     info!("Client connected to IPC socket");
     let (reader, mut writer) = stream.into_split();
-    let mut lines = BufReader::new(reader).lines();
+    let mut reader = BufReader::new(reader);
+    let mut request_bytes = Vec::new();
 
-    while let Ok(Some(line)) = lines.next_line().await {
-        info!("IPC request received: {}", line);
+    loop {
+        match read_bounded_ipc_line(&mut reader, &mut request_bytes).await {
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::InvalidData {
+                    let response = IpcResponse::Error {
+                        error: format!("IPC request exceeds {} byte limit", MAX_IPC_REQUEST_BYTES),
+                    };
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let _ = writer.write_all(format!("{json}\n").as_bytes()).await;
+                    }
+                }
+                warn!("Failed to read IPC request: {e}");
+                break;
+            }
+        }
+        let line = match std::str::from_utf8(&request_bytes) {
+            Ok(line) => line.trim_end_matches(['\r', '\n']),
+            Err(_) => {
+                warn!(
+                    "Rejected non-UTF-8 IPC request ({} bytes)",
+                    request_bytes.len()
+                );
+                continue;
+            }
+        };
+        info!("IPC request received ({} bytes)", request_bytes.len());
         let req: Result<IpcRequest, _> = serde_json::from_str(&line);
         let resp = match req {
             Ok(IpcRequest::GetState) => {
@@ -802,12 +868,19 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 match serde_yaml::from_str::<little_clip_ops::NodeGraph>(&yaml) {
                     Ok(graph) => {
                         let mgr_snapshot = { ctx.manager.read().await.clone() };
-                        let executor =
-                            little_clip_ops::PipelineExecutor::new(&graph, &mgr_snapshot);
-                        match executor.execute() {
-                            Ok(pipe_res) => apply_pipeline_result(pipe_res, &ctx).await,
-                            Err(e) => IpcResponse::Error {
+                        let execution = tokio::task::spawn_blocking(move || {
+                            little_clip_ops::PipelineExecutor::new(&graph, &mgr_snapshot).execute()
+                        });
+                        match tokio::time::timeout(Duration::from_secs(65), execution).await {
+                            Ok(Ok(Ok(pipe_res))) => apply_pipeline_result(pipe_res, &ctx).await,
+                            Ok(Ok(Err(e))) => IpcResponse::Error {
                                 error: format!("Graph execution failed: {}", e),
+                            },
+                            Ok(Err(e)) => IpcResponse::Error {
+                                error: format!("Graph worker failed: {e}"),
+                            },
+                            Err(_) => IpcResponse::Error {
+                                error: "Graph execution exceeded the 65 second timeout".to_string(),
                             },
                         }
                     }
@@ -830,6 +903,25 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
 
             Ok(IpcRequest::ReloadConfig) => {
                 let new_config = little_clip_core::config::AppConfig::load();
+                let new_audio_config = new_config.audio.clone();
+                {
+                    let mut config = ctx.config.write().await;
+                    *config = new_config.clone();
+                }
+                match ctx.rolling_capture_config.write() {
+                    Ok(mut config) => *config = new_audio_config.clone(),
+                    Err(_) => warn!("Rolling audio configuration lock was poisoned during reload"),
+                }
+                match ctx.rolling_audio.write() {
+                    Ok(mut buffer) => {
+                        buffer.reconfigure(
+                            new_audio_config.rolling_capture_duration_sec,
+                            48_000,
+                            2,
+                        );
+                    }
+                    Err(_) => warn!("Rolling audio buffer lock was poisoned during reload"),
+                }
                 {
                     let mut r = ctx.renderer.write().await;
                     r.set_config(new_config);
@@ -863,16 +955,26 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
             }
             Ok(IpcRequest::GetLockStatus) => IpcResponse::LockStatus(ctx.is_locked().await),
             Ok(IpcRequest::GetRollingAudio) => {
-                let snapshot_dir = get_rolling_snapshot_dir();
-                let snapshot_path = snapshot_dir.join("current_snapshot.wav");
-                let res = {
-                    let guard = ctx.rolling_audio.read().unwrap();
-                    guard
-                        .write_wav(&snapshot_path)
-                        .map(|dur| (dur, guard.sample_rate(), guard.channels()))
-                };
+                let rolling_audio = Arc::clone(&ctx.rolling_audio);
+                let res = tokio::task::spawn_blocking(move || {
+                    let snapshot_dir = get_rolling_snapshot_dir();
+                    std::fs::create_dir_all(&snapshot_dir)?;
+                    let snapshot_path =
+                        snapshot_dir.join(format!("snapshot-{}.wav", uuid::Uuid::new_v4()));
+                    let guard = rolling_audio.read().map_err(|_| {
+                        std::io::Error::other("rolling audio buffer lock was poisoned")
+                    })?;
+                    let duration = guard.write_wav(&snapshot_path)?;
+                    Ok::<_, std::io::Error>((
+                        duration,
+                        guard.sample_rate(),
+                        guard.channels(),
+                        snapshot_path,
+                    ))
+                })
+                .await;
                 match res {
-                    Ok((dur, sr, ch)) => {
+                    Ok(Ok((dur, sr, ch, snapshot_path))) => {
                         info!(
                             "Captured rolling audio snapshot: {:.2}s -> {:?}",
                             dur, snapshot_path
@@ -884,12 +986,15 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                             channels: ch,
                         }
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         error!("Failed to write rolling audio snapshot: {}", e);
                         IpcResponse::Error {
                             error: format!("Failed to capture rolling audio: {}", e),
                         }
                     }
+                    Err(e) => IpcResponse::Error {
+                        error: format!("Rolling audio snapshot worker failed: {e}"),
+                    },
                 }
             }
             Ok(IpcRequest::RouteNextClipboard {
@@ -923,15 +1028,18 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 );
                 IpcResponse::AutoActions(map)
             }
-            Ok(IpcRequest::SetAutoAction { key, enabled }) => {
-                let mut cfg = ctx.config.write().await;
-                if key == "trim_link_tracking" {
+            Ok(IpcRequest::SetAutoAction { key, enabled }) => match key.as_str() {
+                "trim_link_tracking" => {
+                    let mut cfg = ctx.config.write().await;
                     cfg.auto_actions.trim_link_tracking = enabled;
+                    IpcResponse::Success {
+                        message: format!("Auto-action '{}' set to {}", key, enabled),
+                    }
                 }
-                IpcResponse::Success {
-                    message: format!("Auto-action '{}' set to {}", key, enabled),
-                }
-            }
+                _ => IpcResponse::Error {
+                    error: format!("Unknown auto-action: {}", key),
+                },
+            },
             Err(e) => IpcResponse::Error {
                 error: format!("Invalid request: {}", e),
             },

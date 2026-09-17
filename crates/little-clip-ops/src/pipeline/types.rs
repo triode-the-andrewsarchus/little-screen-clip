@@ -121,8 +121,16 @@ impl PortValue {
                     PortValue::FileBatch(paths.clone())
                 }
             }
-            ClipPayload::Image { bytes, mime, .. } => {
-                // For raw image in memory, we save to staging or temp path
+            ClipPayload::Image {
+                path: Some(path), ..
+            } => PortValue::ImagePath(path.clone()),
+            ClipPayload::Image {
+                bytes,
+                mime,
+                path: None,
+                ..
+            } => {
+                // Memory-only images need a materialized pipeline input file.
                 let ext = if mime.contains("png") {
                     "png"
                 } else if mime.contains("jpeg") || mime.contains("jpg") {
