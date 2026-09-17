@@ -22,6 +22,8 @@ use tracing::{debug, error, info, warn};
 mod lock_monitor;
 mod rolling_capture;
 
+const MAX_IPC_REQUEST_BYTES: usize = 1024 * 1024;
+
 /// Shared runtime state across daemon IPC handlers, background workers, and display pipelines.
 pub struct DaemonContext {
     /// Active application configuration.
@@ -584,10 +586,46 @@ async fn handle_execute_recipe(
 async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
     info!("Client connected to IPC socket");
     let (reader, mut writer) = stream.into_split();
-    let mut lines = BufReader::new(reader).lines();
+    let mut reader = BufReader::new(reader);
+    let mut request_bytes = Vec::new();
 
-    while let Ok(Some(line)) = lines.next_line().await {
-        info!("IPC request received: {}", line);
+    loop {
+        request_bytes.clear();
+        let bytes_read = match reader.read_until(b'\n', &mut request_bytes).await {
+            Ok(bytes_read) => bytes_read,
+            Err(e) => {
+                warn!("Failed to read IPC request: {e}");
+                break;
+            }
+        };
+        if bytes_read == 0 {
+            break;
+        }
+        if request_bytes.len() > MAX_IPC_REQUEST_BYTES {
+            warn!(
+                "Rejected oversized IPC request ({} bytes; limit {} bytes)",
+                request_bytes.len(),
+                MAX_IPC_REQUEST_BYTES
+            );
+            let response = IpcResponse::Error {
+                error: format!("IPC request exceeds {} byte limit", MAX_IPC_REQUEST_BYTES),
+            };
+            if let Ok(json) = serde_json::to_string(&response) {
+                let _ = writer.write_all(format!("{json}\n").as_bytes()).await;
+            }
+            break;
+        }
+        let line = match std::str::from_utf8(&request_bytes) {
+            Ok(line) => line.trim_end_matches(['\r', '\n']),
+            Err(_) => {
+                warn!(
+                    "Rejected non-UTF-8 IPC request ({} bytes)",
+                    request_bytes.len()
+                );
+                continue;
+            }
+        };
+        info!("IPC request received ({} bytes)", request_bytes.len());
         let req: Result<IpcRequest, _> = serde_json::from_str(&line);
         let resp = match req {
             Ok(IpcRequest::GetState) => {
