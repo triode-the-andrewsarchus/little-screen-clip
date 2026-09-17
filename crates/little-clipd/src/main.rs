@@ -868,12 +868,19 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 match serde_yaml::from_str::<little_clip_ops::NodeGraph>(&yaml) {
                     Ok(graph) => {
                         let mgr_snapshot = { ctx.manager.read().await.clone() };
-                        let executor =
-                            little_clip_ops::PipelineExecutor::new(&graph, &mgr_snapshot);
-                        match executor.execute() {
-                            Ok(pipe_res) => apply_pipeline_result(pipe_res, &ctx).await,
-                            Err(e) => IpcResponse::Error {
+                        let execution = tokio::task::spawn_blocking(move || {
+                            little_clip_ops::PipelineExecutor::new(&graph, &mgr_snapshot).execute()
+                        });
+                        match tokio::time::timeout(Duration::from_secs(65), execution).await {
+                            Ok(Ok(Ok(pipe_res))) => apply_pipeline_result(pipe_res, &ctx).await,
+                            Ok(Ok(Err(e))) => IpcResponse::Error {
                                 error: format!("Graph execution failed: {}", e),
+                            },
+                            Ok(Err(e)) => IpcResponse::Error {
+                                error: format!("Graph worker failed: {e}"),
+                            },
+                            Err(_) => IpcResponse::Error {
+                                error: "Graph execution exceeded the 65 second timeout".to_string(),
                             },
                         }
                     }
