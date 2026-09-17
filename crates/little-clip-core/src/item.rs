@@ -377,9 +377,9 @@ impl ClipItem {
         } else {
             "png"
         };
-        let staging_path = crate::staging::create_staging_path("img", ext)
-            .ok()
-            .and_then(|path| std::fs::write(&path, &bytes).ok().map(|()| path));
+        let staging_path = crate::staging::ArtifactStore::new()
+            .and_then(|store| store.stage_bytes("clipboard", "img", ext, &bytes))
+            .ok();
 
         Some(Self {
             id: Uuid::new_v4(),
@@ -729,9 +729,9 @@ impl ClipItem {
         let (w, h) = read_image_dimensions(&bytes).unwrap_or((0, 0));
         let size_kb = bytes.len() as f64 / 1024.0;
         let thumbnail = ImageThumbnail::generate(&bytes, 320, 220);
-        let staging_path = crate::staging::create_staging_path("svg", "svg")
-            .ok()
-            .and_then(|path| std::fs::write(&path, &bytes).ok().map(|()| path));
+        let staging_path = crate::staging::ArtifactStore::new()
+            .and_then(|store| store.stage_bytes("clipboard", "svg", "svg", &bytes))
+            .ok();
         Self {
             id: Uuid::new_v4(),
             created_at: current_unix_timestamp(),
@@ -864,9 +864,9 @@ impl ClipItem {
         } else {
             "png"
         };
-        let staging_path = crate::staging::create_staging_path("img", ext)
-            .ok()
-            .and_then(|path| std::fs::write(&path, &bytes).ok().map(|()| path));
+        let staging_path = crate::staging::ArtifactStore::new()
+            .and_then(|store| store.stage_bytes("clipboard", "img", ext, &bytes))
+            .ok();
 
         Self {
             id: Uuid::new_v4(),

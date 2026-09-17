@@ -7,6 +7,8 @@
 use super::catalog::NODE_CATALOG;
 use super::types::{NodeGraph, NodeInstance, NodeKind, PortValue};
 use base64::Engine;
+use little_clip_core::ArtifactLease;
+use little_clip_core::ArtifactStore;
 use little_clip_core::item::{ClipItem, ClipPayload};
 use little_clip_core::slot::SlotManager;
 use std::collections::{HashMap, VecDeque};
@@ -60,6 +62,7 @@ pub struct PipelineExecutor<'a> {
     graph: &'a NodeGraph,
     slot_mgr: &'a SlotManager,
     temp_dir: PathBuf,
+    _workspace: Option<ArtifactLease>,
     /// Node-specific prompt overrides mapped by node UUID.
     pub prompt_overrides: HashMap<Uuid, String>,
     /// Single prompt override applied to the first interactive prompt node.
@@ -69,16 +72,22 @@ pub struct PipelineExecutor<'a> {
 impl<'a> PipelineExecutor<'a> {
     /// Constructs a new `PipelineExecutor` with an isolated temporary working directory.
     pub fn new(graph: &'a NodeGraph, slot_mgr: &'a SlotManager) -> Self {
-        let run_id = Uuid::new_v4();
-        let temp_dir = std::env::temp_dir()
-            .join("little_clip_pipeline_runs")
-            .join(run_id.to_string());
+        let workspace = ArtifactStore::new()
+            .and_then(|store| store.create_workspace("pipeline", "run"))
+            .ok();
+        let temp_dir = workspace
+            .as_ref()
+            .map(|workspace| workspace.path().to_path_buf())
+            .unwrap_or_else(|| {
+                std::env::temp_dir().join(format!("little_clip_pipeline_runs_{}", Uuid::new_v4()))
+            });
         let _ = std::fs::create_dir_all(&temp_dir);
 
         Self {
             graph,
             slot_mgr,
             temp_dir,
+            _workspace: workspace,
             prompt_overrides: HashMap::new(),
             single_prompt_override: None,
         }

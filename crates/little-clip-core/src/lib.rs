@@ -39,4 +39,4 @@ pub use ipc::{IpcRequest, IpcResponse};
 pub use item::{ClipItem, ClipPayload, ImageThumbnail, PayloadKind};
 pub use rolling_audio::{RollingAudioBuffer, slice_wav};
 pub use slot::{HandSide, SlotId, SlotManager};
-pub use staging::StagingManager;
+pub use staging::{ArtifactLease, ArtifactStore, StagingManager};

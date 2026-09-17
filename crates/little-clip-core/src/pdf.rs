@@ -3,6 +3,7 @@
 //! Wraps Poppler utilities (`pdfinfo`, `pdftoppm`) for inspection and previews,
 //! and uses `lopdf` for lossless page manipulation.
 
+use crate::staging::ArtifactStore;
 use lopdf::{Document, Object};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -105,8 +106,10 @@ pub fn render_pdf_page_preview(
     page: usize,
     max_dim: u32,
 ) -> Result<(Vec<u8>, u32, u32), String> {
-    let temp_prefix =
-        std::env::temp_dir().join(format!("pdf_preview_{}_{}", uuid::Uuid::new_v4(), page));
+    let workspace = ArtifactStore::new()
+        .and_then(|store| store.create_workspace("pdf", "preview"))
+        .map_err(|error| format!("could not create PDF preview workspace: {error}"))?;
+    let temp_prefix = workspace.path().join(format!("page-{page}"));
     let page_str = page.to_string();
 
     let output = Command::new("pdftoppm")
@@ -306,8 +309,10 @@ fn rebuild_pages(
     output: &Path,
 ) -> Result<(), String> {
     let page_count = get_pdf_info(input)?.page_count;
-    let temp = std::env::temp_dir().join(format!("little-clip-pdf-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir_all(&temp).map_err(|e| e.to_string())?;
+    let workspace = ArtifactStore::new()
+        .and_then(|store| store.create_workspace("pdf", "rebuild"))
+        .map_err(|error| format!("could not create PDF rebuild workspace: {error}"))?;
+    let temp = workspace.path();
     let pattern = temp.join("page-%d.pdf");
     let separated = Command::new("pdfseparate")
         .arg(input)
@@ -315,7 +320,7 @@ fn rebuild_pages(
         .status()
         .map_err(|e| format!("pdfseparate unavailable: {e}"))?;
     if !separated.success() {
-        let _ = std::fs::remove_dir_all(&temp);
+        let _ = std::fs::remove_dir_all(temp);
         return Err("pdfseparate failed".into());
     }
     let mut inputs = Vec::new();
@@ -343,7 +348,7 @@ fn rebuild_pages(
                 .status()
                 .map_err(|e| format!("Ghostscript unavailable: {e}"))?;
             if !status.success() {
-                let _ = std::fs::remove_dir_all(&temp);
+                let _ = std::fs::remove_dir_all(temp);
                 return Err("Ghostscript rotation failed".into());
             }
             inputs.push(rotated);
@@ -352,7 +357,7 @@ fn rebuild_pages(
         }
     }
     if inputs.is_empty() {
-        let _ = std::fs::remove_dir_all(&temp);
+        let _ = std::fs::remove_dir_all(temp);
         return Err("Cannot delete all pages".into());
     }
     let status = Command::new("pdfunite")
@@ -360,7 +365,7 @@ fn rebuild_pages(
         .arg(output)
         .status()
         .map_err(|e| format!("pdfunite unavailable: {e}"))?;
-    let _ = std::fs::remove_dir_all(&temp);
+    let _ = std::fs::remove_dir_all(temp);
     if status.success() {
         Ok(())
     } else {
