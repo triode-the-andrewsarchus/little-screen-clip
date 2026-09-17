@@ -187,6 +187,30 @@ pub fn read_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
+fn image_mime_matches_bytes(mime: &str, bytes: &[u8]) -> bool {
+    if mime == "image/svg+xml" {
+        return is_svg_bytes(bytes);
+    }
+
+    let Ok(format) = image::guess_format(bytes) else {
+        return false;
+    };
+    matches!(
+        (mime, format),
+        ("image/png", image::ImageFormat::Png)
+            | ("image/jpeg" | "image/jpg", image::ImageFormat::Jpeg)
+            | ("image/webp", image::ImageFormat::WebP)
+            | ("image/gif", image::ImageFormat::Gif)
+            | ("image/bmp", image::ImageFormat::Bmp)
+            | ("image/tiff", image::ImageFormat::Tiff)
+            | (
+                "image/x-icon" | "image/vnd.microsoft.icon",
+                image::ImageFormat::Ico
+            )
+            | ("image/avif", image::ImageFormat::Avif)
+    )
+}
+
 /// Concrete typed payload data contained within a clipboard item.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ClipPayload {
@@ -324,7 +348,10 @@ impl ClipItem {
 
     /// Creates an image `ClipItem` directly from in-memory bytes and a MIME type string.
     pub fn from_image_bytes(bytes: Vec<u8>, mime: impl Into<String>) -> Option<Self> {
-        let mime = mime.into();
+        let mime = mime.into().to_ascii_lowercase();
+        if !image_mime_matches_bytes(&mime, &bytes) {
+            return None;
+        }
         // Fast header-only dimension extraction in ~0.05ms (does NOT decode pixels)
         let (width, height) = read_image_dimensions(&bytes).unwrap_or((0, 0));
         let size_kb = bytes.len() as f64 / 1024.0;
@@ -1638,5 +1665,14 @@ mod tests {
         assert_eq!(item.to_clipboard_text(), Some(path_str));
 
         let _ = std::fs::remove_file(&file_path);
+    }
+
+    #[test]
+    fn invalid_or_mismatched_image_bytes_are_rejected() {
+        assert!(ClipItem::from_image_bytes(b"not an image".to_vec(), "image/png").is_none());
+        assert!(
+            ClipItem::from_image_bytes(b"not an image".to_vec(), "application/octet-stream")
+                .is_none()
+        );
     }
 }
