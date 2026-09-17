@@ -3542,7 +3542,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual integration test writes developer-local screenshots"]
     fn test_render_spreadsheet_and_prose() {
         let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
         let mut manager = SlotManager::new();
@@ -3553,22 +3552,20 @@ mod tests {
         manager.push_left(ClipItem::from_text(csv_text));
 
         let pixmap = renderer.render_pixmap(&manager).unwrap();
-        let out_dir = std::path::Path::new(
-            "/home/vega/.gemini/antigravity-ide/brain/baf86972-714a-4618-98df-04ae2591b81d/scratch",
-        );
-        let _ = std::fs::create_dir_all(out_dir);
-        let _ = pixmap.save_png(out_dir.join("csv_render.png"));
+        assert_eq!(pixmap.width(), SCREEN_WIDTH);
+        assert_eq!(pixmap.height(), SCREEN_HEIGHT);
 
         // 2. CSV File in FileBatch
-        let temp_csv = std::env::temp_dir().join("test_sample.csv");
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_csv = temp_dir.path().join("test_sample.csv");
         std::fs::write(&temp_csv, csv_text).unwrap();
         let mut file_item = ClipItem::from_text("test_sample.csv");
         file_item.payload = ClipPayload::FileBatch(vec![temp_csv.clone()]);
         manager.push_left(file_item);
 
         let pixmap_file = renderer.render_pixmap(&manager).unwrap();
-        let _ = pixmap_file.save_png(out_dir.join("csv_file_render.png"));
-        let _ = std::fs::remove_file(&temp_csv);
+        assert_eq!(pixmap_file.width(), SCREEN_WIDTH);
+        assert_eq!(pixmap_file.height(), SCREEN_HEIGHT);
 
         // 3. Prose text with commas
         let prose = "Hey there, how is it going? I am testing out some plain text on my clipboard, to make sure it doesn't get treated as a spreadsheet.";
@@ -3580,55 +3577,26 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local model fixture"]
     fn test_render_stl_card() {
-        let toothless_path =
-            std::path::Path::new("/home/vega/Documents/type_testing/Toothless.stl");
-        if !toothless_path.exists() {
-            return;
-        }
+        let temp_dir = tempfile::tempdir().unwrap();
+        let stl_path = temp_dir.path().join("triangle.stl");
+        std::fs::write(
+            &stl_path,
+            "solid triangle\n  facet normal 0 0 1\n    outer loop\n      vertex 0 0 0\n      vertex 1 0 0\n      vertex 0 1 0\n    endloop\n  endfacet\nendsolid triangle\n",
+        )
+        .unwrap();
 
         let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
         let mut manager = SlotManager::new();
-        let mut item = ClipItem::from_text("Toothless.stl");
-        item.payload = ClipPayload::FileBatch(vec![toothless_path.to_path_buf()]);
-        item.title = "Toothless.stl".to_string();
+        let mut item = ClipItem::from_text("triangle.stl");
+        item.payload = ClipPayload::FileBatch(vec![stl_path]);
+        item.title = "triangle.stl".to_string();
         item.subtitle = "STL 3D Model".to_string();
         manager.push_left(item);
 
         let pixmap = renderer.render_pixmap(&manager).unwrap();
-        let out_dir = std::path::Path::new(
-            "/home/vega/.gemini/antigravity-ide/brain/baf86972-714a-4618-98df-04ae2591b81d/scratch",
-        );
-        let _ = std::fs::create_dir_all(out_dir);
-        let _ = pixmap.save_png(out_dir.join("current_stl_card.png"));
-    }
-
-    #[test]
-    #[ignore = "manual integration test requires developer-local model fixture"]
-    fn test_model3d_rotation_differs_over_time() {
-        let teapot_path = std::path::Path::new(
-            "/home/vega/Documents/type_testing/jhfmh2s0xt6o-teapotnglass/teapot_n_glass.obj",
-        );
-        if !teapot_path.exists() {
-            return;
-        }
-
-        let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
-        let mut manager = SlotManager::new();
-        let mut item = ClipItem::from_text("teapot_n_glass.obj");
-        item.payload = ClipPayload::FileBatch(vec![teapot_path.to_path_buf()]);
-        manager.push_left(item);
-
-        let pix1 = renderer.render_pixmap(&manager).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let pix2 = renderer.render_pixmap(&manager).unwrap();
-
-        assert_ne!(
-            pix1.data(),
-            pix2.data(),
-            "Pixmap pixels must change as model rotates over time"
-        );
+        assert_eq!(pixmap.width(), SCREEN_WIDTH);
+        assert_eq!(pixmap.height(), SCREEN_HEIGHT);
     }
 
     #[test]
