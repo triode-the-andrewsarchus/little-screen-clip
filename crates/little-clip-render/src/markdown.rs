@@ -11,7 +11,7 @@
 //! - Inline italics (*italic*, _italic_)
 //! - Inline bold-italics (***bold italic***)
 //! - Inline code (`code`)
-//! - Links ([label](url))
+//! - Links (\[label](url))
 
 /// A styled inline segment within a Markdown line.
 #[derive(Debug, Clone, PartialEq)]

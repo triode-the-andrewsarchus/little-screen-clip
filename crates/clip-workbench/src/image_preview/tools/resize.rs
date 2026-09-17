@@ -682,32 +682,10 @@ impl ImagePreviewState {
         let bytes_for_cmd = res.encoded_data.clone();
         let mime_for_cmd = mime.to_string();
         std::thread::spawn(move || {
-            if let Ok(mut child) = Command::new("wl-copy")
-                .arg("-t")
-                .arg(&mime_for_cmd)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
+            if let Err(error) =
+                little_clip_core::copy_bytes_to_system_clipboard(&bytes_for_cmd, &mime_for_cmd)
             {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = std::io::Write::write_all(&mut stdin, &bytes_for_cmd);
-                }
-                let _ = child.wait();
-            } else if let Ok(mut child) = Command::new("xclip")
-                .arg("-selection")
-                .arg("clipboard")
-                .arg("-t")
-                .arg(&mime_for_cmd)
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = std::io::Write::write_all(&mut stdin, &bytes_for_cmd);
-                }
-                let _ = child.wait();
+                tracing::debug!(%error, "failed to copy optimized image to system clipboard");
             }
         });
 

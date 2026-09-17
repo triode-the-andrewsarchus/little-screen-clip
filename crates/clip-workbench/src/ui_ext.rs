@@ -415,7 +415,7 @@ pub fn zoom_control_bar(
 }
 
 /// Renders a standardized view top toolbar header with icon, title, metadata badges slot,
-/// right-aligned action buttons slot, and a contrast-safe Close [Esc] button.
+/// right-aligned action buttons slot, and a contrast-safe Close \[Esc] button.
 pub fn render_view_header<R>(
     ui: &mut egui::Ui,
     icon: &str,

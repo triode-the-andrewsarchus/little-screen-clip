@@ -4,8 +4,15 @@
 //! visual node graph builder, audio/image/video/3D/PDF/MIDI inspection windows, and live screen mirror.
 
 use eframe::egui;
-use little_clip_core::color::parse_hex_color_rgba;
-use little_clip_core::ipc::{IpcRequest, IpcResponse};
+use little_clip_core::color::parse_hex_color_rgba_or_white as parse_hex_color_rgba;
+use little_clip_core::ipc::{IpcRequest, IpcResponse, SlotStateSummary};
+use little_clip_core::presentation::{
+    model3d::is_3d_model_file,
+    network_preview::{NetworkPreview, detect_network_preview},
+    spreadsheet::{detect_csv_text, is_spreadsheet_file, load_spreadsheet},
+    timestamps::detect_timestamp,
+    units::detect_unit_conversion,
+};
 use little_clip_core::theme::{
     AppPalette, DerivedHarmonies, Theme, find_themes_dir, load_themes_from_dir,
 };
@@ -42,7 +49,9 @@ use canvas::*;
 use diff_view::DiffViewerState;
 use image_preview::ImagePreviewState;
 use little_clip_ops::binary_diff::resolve_binary_diff_pair;
-use little_clip_ops::diff::{DiffDisplayMode, resolve_diff_pair, resolve_diff_target};
+use little_clip_ops::diff::{
+    DiffDisplayMode, is_image_path, resolve_diff_pair, resolve_diff_target,
+};
 use midi_view::MidiViewerState;
 use model3d_view::Model3dViewerState;
 use pdf_view::PdfEditorState;
@@ -223,15 +232,48 @@ impl WorkbenchApp {
             .unwrap_or_else(|_| ScreenRenderer::fallback(config.clone()));
 
         let (state_tx, state_rx) = channel::<SlotManager>();
+        let mut polled_state = state.clone();
+        let mut previous_summary = SlotStateSummary::from_manager(&polled_state);
 
-        // Background poller thread for live updates from daemon
+        // Poll compact cards, then hydrate only slots whose item identity changed.
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(Duration::from_millis(250));
-                if let Ok(IpcResponse::State(s)) = send_ipc_request(&IpcRequest::GetState) {
-                    if state_tx.send(s).is_err() {
-                        break; // UI closed
+                let Ok(IpcResponse::StateSummary(summary)) =
+                    send_ipc_request(&IpcRequest::GetStateSummary)
+                else {
+                    continue;
+                };
+                if summary == previous_summary {
+                    continue;
+                }
+
+                let mut hydration_failed = false;
+                for slot in SlotId::all() {
+                    if summary.card(slot) == previous_summary.card(slot) {
+                        continue;
                     }
+                    match send_ipc_request(&IpcRequest::GetSlotItem(slot)) {
+                        Ok(IpcResponse::SlotItem(item)) => {
+                            *polled_state
+                                .get_mut(slot)
+                                .expect("all SlotId values are valid") = item;
+                        }
+                        _ => {
+                            hydration_failed = true;
+                            break;
+                        }
+                    }
+                }
+                if hydration_failed {
+                    continue;
+                }
+
+                polled_state.cursor = summary.cursor;
+                polled_state.selected = summary.selected.clone();
+                previous_summary = summary;
+                if state_tx.send(polled_state.clone()).is_err() {
+                    break; // UI closed
                 }
             }
         });
@@ -992,10 +1034,10 @@ impl eframe::App for WorkbenchApp {
                         });
                         let first_spreadsheet_item = self.selected_slots.iter().find_map(|s| {
                             let it = self.state.get(*s)?;
-                            if let Some(p) = it.file_path().filter(|p| little_clip_ops::is_spreadsheet_file(p)) {
-                                little_clip_ops::load_spreadsheet(&p).ok().map(|data| (data, Some(p)))
+                            if let Some(p) = it.file_path().filter(|p| is_spreadsheet_file(p)) {
+                                load_spreadsheet(&p).ok().map(|data| (data, Some(p)))
                             } else if let Some(txt) = it.to_clipboard_text() {
-                                little_clip_ops::detect_csv_text(txt.trim()).map(|data| (data, None))
+                                detect_csv_text(txt.trim()).map(|data| (data, None))
                             } else {
                                 None
                             }
@@ -1019,11 +1061,11 @@ impl eframe::App for WorkbenchApp {
                         });
                         let first_3d_model_item = self.selected_slots.iter().find_map(|s| {
                             let it = self.state.get(*s)?;
-                            if let Some(p) = it.file_path().filter(|p| little_clip_ops::is_3d_model_file(p)) {
+                            if let Some(p) = it.file_path().filter(|p| is_3d_model_file(p)) {
                                 Some(p)
                             } else if let Some(txt) = it.to_clipboard_text() {
                                 let p = std::path::Path::new(txt.trim());
-                                if p.is_file() && little_clip_ops::is_3d_model_file(p) {
+                                if p.is_file() && is_3d_model_file(p) {
                                     Some(p.to_path_buf())
                                 } else {
                                     None
@@ -1114,7 +1156,7 @@ impl eframe::App for WorkbenchApp {
                         });
                         if let Some(ref text) = first_text_item {
                             let trimmed = text.trim();
-                            if let Some(conv) = little_clip_ops::detect_unit_conversion(trimmed) {
+                            if let Some(conv) = detect_unit_conversion(trimmed) {
                                 ui.add_space(8.0);
                                 let unit_bg = hex_to_c32(&self.renderer.palette.harmonies.split_comp_2);
                                 let unit_fg = contrast_text_c32(unit_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
@@ -1131,13 +1173,13 @@ impl eframe::App for WorkbenchApp {
                                     ui.output_mut(|o| o.copied_text = conv.primary_conversion.clone());
                                     self.status_msg = Some(format!("Copied: {}", conv.primary_conversion));
                                 }
-                            } else if let Some(net) = little_clip_ops::detect_network_preview(trimmed) {
+                            } else if let Some(net) = detect_network_preview(trimmed) {
                                 ui.add_space(8.0);
                                 let net_bg = hex_to_c32(&self.renderer.palette.diff_mod);
                                 let net_fg = contrast_text_c32(net_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
                                 let label = match &net {
-                                    little_clip_ops::NetworkPreview::Ip { ip, rfc_class, .. } => format!("🌐 {} ({})", ip, rfc_class),
-                                    little_clip_ops::NetworkPreview::Mac { formatted, vendor, .. } => format!("🔌 {} ({})", formatted, vendor),
+                                    NetworkPreview::Ip { ip, rfc_class, .. } => format!("🌐 {} ({})", ip, rfc_class),
+                                    NetworkPreview::Mac { formatted, vendor, .. } => format!("🔌 {} ({})", formatted, vendor),
                                 };
                                 let btn = egui::Button::new(
                                     egui::RichText::new(label)
@@ -1152,7 +1194,7 @@ impl eframe::App for WorkbenchApp {
                                     ui.output_mut(|o| o.copied_text = lines.clone());
                                     self.status_msg = Some("Copied network info".to_string());
                                 }
-                            } else if let Some(ts) = little_clip_ops::detect_timestamp(trimmed) {
+                            } else if let Some(ts) = detect_timestamp(trimmed) {
                                 ui.add_space(8.0);
                                 let ts_bg = hex_to_c32(&self.renderer.palette.harmonies.tetradic_1);
                                 let ts_fg = contrast_text_c32(ts_bg, Some(hex_to_c32(&self.renderer.palette.f_high)), &self.renderer.palette);
@@ -1721,19 +1763,19 @@ impl WorkbenchApp {
             if let Ok(st) = MidiViewerState::from_file(fp.to_path_buf()) {
                 self.midi_viewer = Some(st);
             }
-        } else if little_clip_ops::is_3d_model_file(fp) {
+        } else if is_3d_model_file(fp) {
             self.model3d_viewer = Some(
                 Model3dViewerState::from_file(fp.to_path_buf())
                     .with_config(self.config.model3d.clone()),
             );
         } else if little_clip_core::pdf::is_pdf_path(fp) {
             self.pdf_viewer = Some(PdfEditorState::new(fp.to_path_buf()));
-        } else if little_clip_ops::is_spreadsheet_file(fp) {
-            if let Ok(data) = little_clip_ops::load_spreadsheet(fp) {
+        } else if is_spreadsheet_file(fp) {
+            if let Ok(data) = load_spreadsheet(fp) {
                 self.spreadsheet_viewer =
                     Some(SpreadsheetViewerState::new(data, Some(fp.to_path_buf())));
             }
-        } else if is_image || little_clip_ops::is_image_path(fp) {
+        } else if is_image || is_image_path(fp) {
             if let Ok(editor) = ImagePreviewState::from_path(fp.to_path_buf(), &self.config) {
                 self.image_preview = Some(editor);
             }
@@ -1750,7 +1792,7 @@ impl WorkbenchApp {
             self.open_slot_file_preview(p, false);
             return;
         }
-        if let Some(data) = little_clip_ops::detect_csv_text(text.trim()) {
+        if let Some(data) = detect_csv_text(text.trim()) {
             self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, None));
         } else {
             self.text_preview = Some(TextPreviewState::from_text(

@@ -6,7 +6,7 @@
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::{self, StatusToast, ZoomAction};
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
-use little_clip_ops::{MidiData, MidiNote};
+use little_clip_core::presentation::midi::{MidiData, MidiNote};
 use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
 use rodio::{Decoder, Player};
 use std::io::Cursor;

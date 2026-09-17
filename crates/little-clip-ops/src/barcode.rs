@@ -188,9 +188,6 @@ fn format_name(fmt: &rxing::BarcodeFormat) -> String {
 
 /// Fallback detection via `zbarimg` CLI if installed.
 fn zbar_detect(img: &RgbaImage) -> Result<Vec<BarcodeDetection>, String> {
-    use std::io::Write;
-    use std::process::Command;
-
     let mut png_data = Vec::new();
     img.write_to(
         &mut std::io::Cursor::new(&mut png_data),
@@ -198,26 +195,19 @@ fn zbar_detect(img: &RgbaImage) -> Result<Vec<BarcodeDetection>, String> {
     )
     .map_err(|e| e.to_string())?;
 
-    let mut child = Command::new("zbarimg")
+    let output = little_clip_core::CommandRequest::new("zbarimg")
         .arg("-q")
         .arg("--raw")
         .arg("-")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+        .stdin_bytes(png_data)
+        .run()
         .map_err(|e| format!("zbarimg spawn failed: {}", e))?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(&png_data);
-    }
-
-    let output = child.wait_with_output().map_err(|e| e.to_string())?;
     if !output.status.success() && output.stdout.is_empty() {
         return Ok(Vec::new());
     }
 
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let text = output.stdout_lossy().trim().to_string();
     if text.is_empty() {
         return Ok(Vec::new());
     }

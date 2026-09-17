@@ -217,12 +217,11 @@ impl ImagePreviewState {
                 ctx.output_mut(|output| output.copied_text = csv.clone());
                 let csv_for_command = csv.clone();
                 std::thread::spawn(move || {
-                    let _ = Command::new("wl-copy").arg(&csv_for_command).output();
-                    let _ = Command::new("xclip")
-                        .arg("-selection")
-                        .arg("clipboard")
-                        .arg(&csv_for_command)
-                        .output();
+                    if let Err(error) =
+                        little_clip_core::copy_text_to_system_clipboard(&csv_for_command)
+                    {
+                        tracing::debug!(%error, "failed to copy palette to system clipboard");
+                    }
                 });
                 self.show_toast("Copied palette hex codes to clipboard");
             }

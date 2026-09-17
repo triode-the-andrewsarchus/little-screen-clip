@@ -3,8 +3,8 @@
 //! Uses `exiftool` to rapidly extract embedded full-resolution JPEG previews from camera RAW files
 //! (`.CR2`, `.NEF`, `.ARW`, `.DNG`, `.RAF`, etc.) with fallback to ImageMagick.
 
+use crate::process::CommandRequest;
 use std::path::Path;
-use std::process::Command;
 
 /// Returns `true` if the path has a known camera RAW file extension.
 pub fn is_raw_image_path(p: &Path) -> bool {
@@ -34,11 +34,12 @@ pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), Str
     // 1. Try exiftool embedded preview extraction (near-instant)
     let exiftool_tags = ["-PreviewImage", "-JpgFromRaw", "-ThumbnailImage"];
     for tag in exiftool_tags {
-        let out = Command::new("exiftool")
+        let out = CommandRequest::new("exiftool")
             .arg("-b")
             .arg(tag)
             .arg(path)
-            .output();
+            .max_output_bytes(16 * 1024 * 1024)
+            .run();
 
         if let Ok(output) = out {
             if output.status.success() && output.stdout.len() > 1024 {
@@ -50,12 +51,13 @@ pub fn extract_raw_image_preview(path: &Path) -> Result<(Vec<u8>, u32, u32), Str
     }
 
     // 2. Fallback to ImageMagick
-    let out = Command::new("magick")
+    let out = CommandRequest::new("magick")
         .arg(format!("{}[0]", path.to_string_lossy()))
         .arg("-resize")
         .arg("1600x1200>")
         .arg("jpeg:-")
-        .output();
+        .max_output_bytes(16 * 1024 * 1024)
+        .run();
 
     if let Ok(output) = out {
         if output.status.success() && output.stdout.len() > 1024 {

@@ -4,6 +4,7 @@
 //! producing difference masks, dimmed overlays with highlighted diff pixels, and diff percentage metrics.
 
 use image::{ImageBuffer, RgbaImage};
+use little_clip_core::CommandRequest;
 use std::path::Path;
 
 /// Errors that can occur during image diff decoding and comparison.
@@ -539,29 +540,16 @@ fn is_svg(bytes: &[u8]) -> bool {
 
 /// Invokes `rsvg-convert` CLI to render SVG bytes to PNG format.
 fn render_svg_to_png(bytes: &[u8]) -> Result<Vec<u8>, String> {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-
-    let mut child = Command::new("rsvg-convert")
+    let output = CommandRequest::new("rsvg-convert")
         .arg("-a")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to execute 'rsvg-convert': {}", e))?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(bytes);
-    }
-
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("'rsvg-convert' failed while waiting for output: {}", e))?;
+        .stdin_bytes(bytes)
+        .run()
+        .map_err(|error| format!("Failed to execute 'rsvg-convert': {error}"))?;
 
     if output.status.success() && !output.stdout.is_empty() {
         Ok(output.stdout)
     } else {
-        let err_msg = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let err_msg = output.stderr_lossy().trim().to_string();
         Err(if err_msg.is_empty() {
             format!(
                 "'rsvg-convert' exited with status {:?}",

@@ -32,6 +32,23 @@ pub struct NodeTemplate {
     pub default_props: &'static [(&'static str, &'static str)],
 }
 
+impl NodeTemplate {
+    /// Returns the corresponding clipboard [`OpDescriptor`](crate::OpDescriptor) if this node template represents
+    /// a built-in clipboard operation.
+    pub fn matching_op_descriptor(&self) -> Option<&'static crate::OpDescriptor> {
+        let target_op = match self.id {
+            "text_trim" => Some("trim"),
+            "text_slugify" => Some("slugify"),
+            "text_case" => Some("snake-case"),
+            "text_base64" => Some("base64-encode"),
+            "text_join" => Some("join-commas"),
+            "img_diff" => Some("diff"),
+            _ => None,
+        };
+        target_op.and_then(crate::find_op_by_name)
+    }
+}
+
 /// Static catalog of all available pipeline node templates.
 pub const NODE_CATALOG: &[NodeTemplate] = &[
     // -------------------------------------------------------------

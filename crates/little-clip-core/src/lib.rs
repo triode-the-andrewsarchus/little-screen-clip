@@ -6,6 +6,7 @@ extern crate self as little_clip_core;
 
 pub mod animation;
 pub mod audio;
+pub mod clipboard;
 pub mod color;
 pub mod config;
 pub mod ipc;
@@ -26,14 +27,13 @@ pub mod presentation {
     #[path = "../../../little-clip-ops/src/units.rs"]
     pub mod units;
 }
+pub mod pdf;
+pub mod process;
 pub mod raw_image;
 pub mod rolling_audio;
 pub mod slot;
 pub mod staging;
 pub mod syntax;
-pub use raw_image::*;
-pub mod pdf;
-pub use pdf::*;
 pub mod theme;
 pub use color::parse_hex_color;
 pub use theme::{
@@ -50,6 +50,10 @@ pub use audio::{
     compute_spectral_colors, detect_pitch_yin, detect_transients, freq_to_note, is_audio_path,
     read_audio_metadata,
 };
+pub use clipboard::{
+    ClipboardError, copy_bytes_to_system_clipboard, copy_file_uris_to_system_clipboard,
+    copy_text_to_system_clipboard, file_uri_list,
+};
 pub use config::{
     AppConfig, AudioConfig, AudioSamplePosition, ColorConfig, DisplayConfig, Model3dConfig,
 };
@@ -57,6 +61,7 @@ pub use ipc::{IpcRequest, IpcResponse};
 pub use item::{ClipItem, ClipPayload, ImageThumbnail, PayloadKind};
 pub use jobs::{BackgroundJobs, JobError, JobTicket};
 pub use presentation::{midi, model3d, network_preview, spreadsheet, timestamps, units};
+pub use process::{CommandError, CommandOutput, CommandRequest, command_available};
 pub use rolling_audio::{RollingAudioBuffer, slice_wav};
 pub use slot::{HandSide, SlotId, SlotManager};
 pub use staging::{ArtifactLease, ArtifactStore, StagingManager};

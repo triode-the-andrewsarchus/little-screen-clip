@@ -313,29 +313,8 @@ impl ImagePreviewState {
         let _ = crate::send_ipc_request(&req);
         let text_for_cmd = text;
         std::thread::spawn(move || {
-            use std::io::Write;
-            if let Ok(mut child) = Command::new("wl-copy")
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(text_for_cmd.as_bytes());
-                }
-                let _ = child.wait();
-            } else if let Ok(mut child) = Command::new("xclip")
-                .arg("-selection")
-                .arg("clipboard")
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(text_for_cmd.as_bytes());
-                }
-                let _ = child.wait();
+            if let Err(error) = little_clip_core::copy_text_to_system_clipboard(&text_for_cmd) {
+                tracing::debug!(%error, "failed to copy OCR text to system clipboard");
             }
         });
         self.show_toast(format!(

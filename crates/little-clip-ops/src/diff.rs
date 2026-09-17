@@ -6,7 +6,6 @@
 
 use little_clip_core::{ClipItem, ClipPayload};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
@@ -194,10 +193,8 @@ pub fn find_difft_bin() -> Option<PathBuf> {
     }
 
     // 3. Test running `difft --version` in PATH
-    if let Ok(output) = Command::new("difft").arg("--version").output() {
-        if output.status.success() {
-            return Some(PathBuf::from("difft"));
-        }
+    if let Some(path) = little_clip_core::command_available("difft") {
+        return Some(path);
     }
 
     None
@@ -362,51 +359,14 @@ pub fn resolve_diff_target(item: &ClipItem) -> Option<DiffTarget> {
             mime,
             ..
         } => {
-            let mut actual_path = path.clone();
-            let mut actual_bytes = if !bytes.is_empty() {
-                bytes.clone()
-            } else if let Some(p) = path {
-                std::fs::read(p).unwrap_or_default()
-            } else {
-                Vec::new()
-            };
-
-            // If bytes are empty, aggressively search common locations and item metadata
-            if actual_bytes.is_empty() {
-                // Check if any details entry is a valid file
-                for d in &item.details {
-                    let p = Path::new(d);
-                    if p.is_file() {
-                        if let Ok(b) = std::fs::read(p) {
-                            actual_bytes = b;
-                            actual_path = Some(p.to_path_buf());
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if actual_bytes.is_empty() {
-                let p = PathBuf::from(&item.title);
-                if p.is_file() {
-                    if let Ok(b) = std::fs::read(&p) {
-                        actual_bytes = b;
-                        actual_path = Some(p);
-                    }
-                }
-            }
-
-            if actual_bytes.is_empty() {
-                if let Ok(staging_dir) = little_clip_core::staging::get_staging_dir() {
-                    let staging = staging_dir.join(&item.title);
-                    if staging.is_file() {
-                        if let Ok(b) = std::fs::read(&staging) {
-                            actual_bytes = b;
-                            actual_path = Some(staging);
-                        }
-                    }
-                }
-            }
+            // Payload bytes and the payload path are the only authoritative sources. UI labels and
+            // detail strings are mutable presentation metadata and must not redirect a diff to a
+            // different local file.
+            let actual_path = path.clone();
+            let actual_bytes = path
+                .as_ref()
+                .and_then(|path| std::fs::read(path).ok())
+                .unwrap_or_else(|| bytes.clone());
 
             let (actual_w, actual_h) = if *width > 0 && *height > 0 {
                 (*width, *height)
@@ -534,7 +494,7 @@ pub fn run_difft(
     let run_id = Uuid::new_v4();
     let temp_dir =
         std::env::temp_dir().join(format!("little_clip_diff_{}", &run_id.to_string()[..8]));
-    let _ = std::fs::create_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir)?;
 
     // Determine extension to assist tree-sitter language detection
     let ext_hint = lhs.ext_hint().or_else(|| rhs.ext_hint());
@@ -593,7 +553,7 @@ pub fn run_difft(
     };
 
     // Invoke difft using GIT_EXTERNAL_DIFF 7-argument format to avoid printing /tmp paths
-    let output = Command::new(difft_bin)
+    let output = little_clip_core::CommandRequest::new(difft_bin)
         .arg("--display")
         .arg(display_arg)
         .arg("--color")
@@ -607,7 +567,12 @@ pub fn run_difft(
         .arg(&rhs_path)
         .arg(".")
         .arg(".")
-        .output();
+        .run()
+        .map(|out| std::process::Output {
+            status: out.status,
+            stdout: out.stdout,
+            stderr: out.stderr,
+        });
 
     if lhs_is_temp {
         let _ = std::fs::remove_file(&lhs_path);
@@ -617,7 +582,8 @@ pub fn run_difft(
     }
     let _ = std::fs::remove_dir(&temp_dir);
 
-    let output = output?;
+    let output =
+        output.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     let raw_ansi = String::from_utf8_lossy(&output.stdout).to_string();
     let is_identical = raw_ansi.trim().contains("No changes.") || raw_ansi.trim().is_empty();
 
@@ -1661,5 +1627,36 @@ mod tests {
         let _ = std::fs::remove_file(&img1_path);
         let _ = std::fs::remove_file(&img2_path);
         let _ = std::fs::remove_dir(&temp_dir);
+    }
+
+    #[test]
+    fn image_diff_uses_payload_path_after_display_metadata_changes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_path = temp_dir.path().join("authoritative.png");
+        let title_path = temp_dir.path().join("misleading-title.png");
+        std::fs::write(&source_path, b"source bytes").unwrap();
+        std::fs::write(&title_path, b"wrong bytes").unwrap();
+
+        let item = ClipItem {
+            id: Uuid::new_v4(),
+            created_at: 0,
+            payload: ClipPayload::Image {
+                bytes: b"in-memory fallback".to_vec(),
+                path: Some(source_path),
+                width: 0,
+                height: 0,
+                mime: "image/png".to_string(),
+                thumbnail: None,
+            },
+            title: title_path.display().to_string(),
+            subtitle: String::new(),
+            details: vec![title_path.display().to_string()],
+            handler_tag: "IMAGE".to_string(),
+        };
+
+        let Some(DiffTarget::Image { bytes, .. }) = resolve_diff_target(&item) else {
+            panic!("expected image diff target");
+        };
+        assert_eq!(bytes, b"source bytes");
     }
 }

@@ -7,18 +7,15 @@
 use super::compiler::CompiledPipeline;
 use super::types::{NodeGraph, NodeInstance, NodeKind, PortValue};
 use base64::Engine;
-use little_clip_core::ArtifactLease;
-use little_clip_core::ArtifactStore;
 use little_clip_core::item::{ClipItem, ClipPayload};
 use little_clip_core::slot::SlotManager;
+use little_clip_core::{ArtifactLease, ArtifactStore, CommandRequest};
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
 use thiserror::Error;
 use uuid::Uuid;
-use wait_timeout::ChildExt;
 
 const EXTERNAL_COMMAND_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -106,6 +103,12 @@ impl<'a> PipelineExecutor<'a> {
     }
 
     /// Topologically sorts the graph nodes and executes all operations in dependency order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PipelineError`] if graph compilation fails, if a required input is missing at
+    /// runtime, if an external subprocess exits with an error code, if an artifact cannot be staged,
+    /// or if script evaluation fails.
     pub fn execute(&self) -> Result<PipelineExecutionResult, PipelineError> {
         let compiled = CompiledPipeline::compile(self.graph)?;
         let mut outputs: HashMap<(Uuid, String), PortValue> = HashMap::new();
@@ -131,16 +134,6 @@ impl<'a> PipelineExecutor<'a> {
         }
 
         Ok(result)
-    }
-
-    /// Verifies graph structure without launching an operation.
-    fn validate_graph(&self) -> Result<(), PipelineError> {
-        CompiledPipeline::compile(self.graph).map(|_| ())
-    }
-
-    /// Returns the compiled execution order for legacy executor tests.
-    fn topological_sort(&self) -> Result<Vec<&'a NodeInstance>, PipelineError> {
-        Ok(CompiledPipeline::compile(self.graph)?.nodes().to_vec())
     }
 
     fn extract_script_stdin(inputs: &HashMap<String, PortValue>) -> String {
@@ -191,7 +184,7 @@ impl<'a> PipelineExecutor<'a> {
         match &node.kind {
             NodeKind::LeftHandSource => {
                 if let Some(item) = self.slot_mgr.left_hand() {
-                    let val = PortValue::from_clip_item(item);
+                    let val = source_port_value(node, item)?;
                     preview = Some(item.title.clone());
                     out.push(("Out".to_string(), val));
                 } else {
@@ -202,7 +195,7 @@ impl<'a> PipelineExecutor<'a> {
             }
             NodeKind::RightHandSource => {
                 if let Some(item) = self.slot_mgr.right_hand() {
-                    let val = PortValue::from_clip_item(item);
+                    let val = source_port_value(node, item)?;
                     preview = Some(item.title.clone());
                     out.push(("Out".to_string(), val));
                 } else {
@@ -213,7 +206,7 @@ impl<'a> PipelineExecutor<'a> {
             }
             NodeKind::SlotSource(slot_id) => {
                 if let Some(item) = self.slot_mgr.get(*slot_id) {
-                    let val = PortValue::from_clip_item(item);
+                    let val = source_port_value(node, item)?;
                     preview = Some(item.title.clone());
                     out.push(("Out".to_string(), val));
                 } else {
@@ -1033,6 +1026,11 @@ else:
     }
 }
 
+fn source_port_value(node: &NodeInstance, item: &ClipItem) -> Result<PortValue, PipelineError> {
+    PortValue::from_clip_item(item)
+        .map_err(|error| PipelineError::NodeFailed(node.title.clone(), error.to_string()))
+}
+
 fn shellexpand(path: &str) -> PathBuf {
     if let Some(stripped) = path.strip_prefix("~/") {
         if let Ok(home) = std::env::var("HOME") {
@@ -1095,76 +1093,38 @@ fn prompt_desktop_entry(title: &str, message: &str, default_val: &str) -> Option
 }
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<String, String> {
-    let child = Command::new(cmd)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn {}: {}", cmd, e))?;
-    let output = wait_for_command_output(child, cmd, EXTERNAL_COMMAND_TIMEOUT)?;
+    let request = args.iter().fold(
+        CommandRequest::new(cmd).timeout(EXTERNAL_COMMAND_TIMEOUT),
+        |request, arg| request.arg(*arg),
+    );
+    let output = request.run().map_err(|error| error.to_string())?;
 
     if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
             "{} error (exit {:?}): {}",
             cmd,
             output.status.code(),
-            err
+            output.stderr_lossy()
         ));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    Ok(output.stdout_lossy())
 }
 
 fn run_command_with_stdin(cmd: &str, args: &[&str], stdin_data: &str) -> Result<String, String> {
-    let mut child = Command::new(cmd)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("Failed to spawn {}: {}", cmd, e))?;
-
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| format!("Failed to open stdin for {cmd}"))?;
-    stdin
-        .write_all(stdin_data.as_bytes())
-        .map_err(|e| format!("Failed to write stdin for {cmd}: {e}"))?;
-    drop(stdin);
-
-    let output = wait_for_command_output(child, cmd, EXTERNAL_COMMAND_TIMEOUT)?;
+    let request = args.iter().fold(
+        CommandRequest::new(cmd)
+            .timeout(EXTERNAL_COMMAND_TIMEOUT)
+            .stdin_bytes(stdin_data.as_bytes()),
+        |request, arg| request.arg(*arg),
+    );
+    let output = request.run().map_err(|error| error.to_string())?;
 
     if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("{} error: {}", cmd, err));
+        return Err(format!("{} error: {}", cmd, output.stderr_lossy()));
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-fn wait_for_command_output(
-    mut child: std::process::Child,
-    cmd: &str,
-    timeout: Duration,
-) -> Result<std::process::Output, String> {
-    match child
-        .wait_timeout(timeout)
-        .map_err(|e| format!("Failed to wait for {cmd}: {e}"))?
-    {
-        Some(_) => child
-            .wait_with_output()
-            .map_err(|e| format!("Failed to collect output from {cmd}: {e}")),
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            Err(format!(
-                "{cmd} exceeded the {} second timeout",
-                timeout.as_secs()
-            ))
-        }
-    }
+    Ok(output.stdout_lossy())
 }
 
 fn run_python_snippet(code: &str, stdin_data: &str) -> Result<String, String> {
@@ -1206,11 +1166,10 @@ mod tests {
             ..Default::default()
         };
 
-        let mgr = SlotManager::default();
-        let executor = PipelineExecutor::new(&graph, &mgr);
-        let sorted = executor
-            .topological_sort()
-            .expect("Should sort DAG cleanly");
+        let sorted = CompiledPipeline::compile(&graph)
+            .expect("Should compile DAG cleanly")
+            .nodes()
+            .to_vec();
         assert_eq!(sorted[0].id, n1.id);
         assert_eq!(sorted[1].id, n2.id);
 
@@ -1235,9 +1194,8 @@ mod tests {
             ..Default::default()
         };
 
-        let cyclic_executor = PipelineExecutor::new(&cyclic_graph, &mgr);
         assert!(matches!(
-            cyclic_executor.topological_sort(),
+            CompiledPipeline::compile(&cyclic_graph),
             Err(PipelineError::CycleDetected)
         ));
     }
@@ -1258,7 +1216,7 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            PipelineExecutor::new(&dangling, &SlotManager::default()).validate_graph(),
+            CompiledPipeline::compile(&dangling),
             Err(PipelineError::InvalidGraph(_))
         ));
 
@@ -1281,7 +1239,7 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            PipelineExecutor::new(&duplicate_input, &SlotManager::default()).validate_graph(),
+            CompiledPipeline::compile(&duplicate_input),
             Err(PipelineError::InvalidGraph(_))
         ));
     }

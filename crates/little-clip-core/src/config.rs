@@ -629,30 +629,53 @@ impl AppConfig {
     pub fn load() -> Self {
         let local_path = Path::new("config.toml");
         if local_path.exists() {
-            if let Ok(config) = Self::load_from_path(local_path) {
-                info!("Loaded configuration from local ./config.toml");
-                return config;
+            match Self::load_from_path(local_path) {
+                Ok(config) => {
+                    info!("Loaded configuration from local ./config.toml");
+                    return config;
+                }
+                Err(error) => warn!(
+                    "Rejected local configuration at {}: {error}; trying user configuration",
+                    local_path.display()
+                ),
             }
         }
 
         if let Some(user_path) = get_user_config_path() {
             if user_path.exists() {
-                if let Ok(config) = Self::load_from_path(&user_path) {
-                    info!("Loaded configuration from {}", user_path.display());
-                    return config;
+                match Self::load_from_path(&user_path) {
+                    Ok(config) => {
+                        info!("Loaded configuration from {}", user_path.display());
+                        return config;
+                    }
+                    Err(error) => warn!(
+                        "Rejected user configuration at {}: {error}; using defaults",
+                        user_path.display()
+                    ),
                 }
             } else {
                 // Auto-create default config template
                 let default_cfg = Self::default();
                 if let Some(parent) = user_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    if let Err(err) = std::fs::create_dir_all(parent) {
+                        warn!(
+                            "Failed to create directory for configuration template at {}: {err}",
+                            parent.display()
+                        );
+                    }
                 }
-                if let Ok(toml_str) = toml::to_string_pretty(&default_cfg) {
-                    let _ = std::fs::write(&user_path, toml_str);
-                    info!(
-                        "Created default configuration file at {}",
-                        user_path.display()
-                    );
+                match toml::to_string_pretty(&default_cfg) {
+                    Ok(toml_str) => match std::fs::write(&user_path, toml_str) {
+                        Ok(()) => info!(
+                            "Created default configuration file at {}",
+                            user_path.display()
+                        ),
+                        Err(err) => warn!(
+                            "Failed to write default configuration template to {}: {err}",
+                            user_path.display()
+                        ),
+                    },
+                    Err(err) => warn!("Failed to serialize default configuration: {err}"),
                 }
                 return default_cfg;
             }
@@ -663,6 +686,10 @@ impl AppConfig {
     }
 
     /// Deserializes an `AppConfig` from a TOML file path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or if TOML deserialization fails.
     pub fn load_from_path(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let contents = std::fs::read_to_string(path)?;
         let config: AppConfig = toml::from_str(&contents)?;
@@ -675,12 +702,20 @@ impl AppConfig {
     }
 
     /// Saves the current configuration to disk (non-destructively updating theme).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading or writing the configuration file fails.
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         Self::save_theme_to_file(&self.colors.theme)
     }
 
     /// Non-destructively updates the active theme in `config.toml` without modifying comments,
     /// display rotation, or other user configuration settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading or writing the configuration file fails.
     pub fn save_theme_to_file(new_theme: &str) -> Result<(), Box<dyn std::error::Error>> {
         let path = find_config_file_path();
         if path.exists() {
@@ -822,11 +857,6 @@ pub fn get_user_config_path() -> Option<PathBuf> {
     } else {
         None
     }
-}
-
-/// Helper to parse hex string like "#RRGGBB" or "#RGB" into `(r, g, b, a)` tuple.
-pub fn parse_hex_color(s: &str) -> (u8, u8, u8, u8) {
-    crate::color::parse_hex_color_rgba(s)
 }
 
 #[cfg(test)]

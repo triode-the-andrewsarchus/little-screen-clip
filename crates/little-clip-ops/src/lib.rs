@@ -2,25 +2,31 @@
 //! perceptual image diffs, MIDI synthesis, spreadsheet/CSV parsing, STL mesh rendering,
 //! unit/timestamp conversions, and DAG execution pipelines.
 
+use crate::binary_diff::{
+    BinaryDiffMode, compute_binary_diff, get_item_binary_bytes, resolve_two_files_from_single_item,
+};
+use crate::diff::{DiffDisplayMode, compute_diff, resolve_diff_pair, resolve_diff_target};
+use crate::image_diff::{ImageDiffOptions, compare_image_bytes};
 use base64::Engine;
 use little_clip_core::{ClipItem, ClipPayload};
 use std::collections::HashSet;
 use thiserror::Error;
 
 pub mod pipeline;
-pub use pipeline::*;
+pub use pipeline::{
+    NodeGraph, PipelineError, PipelineExecutionResult, PipelineExecutor, PortType,
+    find_recipe_by_name, load_all_recipes,
+};
 
 pub mod diff;
-pub use diff::*;
+pub use diff::is_image_path;
 
 pub mod image_diff;
-pub use image_diff::*;
 
 pub mod binary_diff;
-pub use binary_diff::*;
 
 pub mod auto_actions;
-pub use auto_actions::*;
+pub use auto_actions::clean_url_tracking;
 
 pub use little_clip_core::presentation::midi;
 pub use little_clip_core::presentation::model3d;
@@ -28,30 +34,18 @@ pub use little_clip_core::presentation::network_preview;
 pub use little_clip_core::presentation::spreadsheet;
 pub use little_clip_core::presentation::timestamps;
 pub use little_clip_core::presentation::units;
-pub use midi::*;
-pub use model3d::*;
-pub use network_preview::*;
-pub use spreadsheet::*;
-pub use timestamps::*;
-pub use units::*;
 
 pub mod stl;
-pub use stl::*;
 
 pub mod barcode;
-pub use barcode::*;
 
 pub mod decorrelation_stretch;
-pub use decorrelation_stretch::*;
 
 pub mod metadata;
-pub use metadata::*;
 
 pub mod perspective;
-pub use perspective::*;
 
 pub mod creative_fx;
-pub use creative_fx::*;
 
 /// Error encountered during transformation or diff execution.
 #[derive(Debug, Error)]
@@ -252,6 +246,30 @@ pub const AVAILABLE_OPS: &[OpDescriptor] = &[
         category: "Multi-Slot",
     },
 ];
+
+impl OpDescriptor {
+    /// Returns the matching pipeline [`NodeTemplate`](pipeline::NodeTemplate) if this operation is also available
+    /// as a pipeline node.
+    pub fn matching_node_template(&self) -> Option<&'static pipeline::NodeTemplate> {
+        let target_id = match self.name {
+            "trim" => Some("text_trim"),
+            "slugify" => Some("text_slugify"),
+            "uppercase" | "lowercase" | "snake-case" | "camel-case" | "kebab-case" => {
+                Some("text_case")
+            }
+            "base64-encode" | "base64-decode" => Some("text_base64"),
+            "join-spaces" | "join-commas" | "concat" | "concat-all" => Some("text_join"),
+            "diff" => Some("img_diff"),
+            _ => None,
+        };
+        target_id.and_then(pipeline::catalog::find_template)
+    }
+}
+
+/// Looks up a built-in operation descriptor by operation name (e.g. `"trim"`, `"clean-url"`).
+pub fn find_op_by_name(name: &str) -> Option<&'static OpDescriptor> {
+    AVAILABLE_OPS.iter().find(|op| op.name == name)
+}
 
 /// Returns a list of operations applicable to the provided slice of selected clipboard items.
 pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
@@ -562,6 +580,11 @@ pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
 }
 
 /// Executes a unary operation (e.g. `trim`, `slugify`, `uppercase`) on a single clip item.
+///
+/// # Errors
+///
+/// Returns [`OpError::IncompatiblePayload`] if the item payload cannot be transformed by the
+/// operation, or [`OpError::ExecutionFailed`] if the transformation fails or `op_name` is unknown.
 pub fn execute_unary_op(op_name: &str, item: &ClipItem) -> Result<ClipItem, OpError> {
     match op_name {
         "trim" => op_trim(item),
@@ -654,6 +677,11 @@ fn op_binary_diff_unary(item: &ClipItem) -> Result<ClipItem, OpError> {
 }
 
 /// Executes a binary operation (e.g. `concat`, `diff`, `binary-diff`) combining two clip items.
+///
+/// # Errors
+///
+/// Returns [`OpError::IncompatiblePayload`] if either item payload cannot be used with the operation,
+/// or [`OpError::ExecutionFailed`] if comparison, parsing, or formatting fails.
 pub fn execute_binary_op(
     op_name: &str,
     hand: &ClipItem,
@@ -709,6 +737,11 @@ fn op_binary_diff(a: &ClipItem, b: &ClipItem) -> Result<ClipItem, OpError> {
 }
 
 /// Executes an operation on a slice of 1, 2, or 3+ selected items.
+///
+/// # Errors
+///
+/// Returns [`OpError::ExecutionFailed`] if `items` is empty or if the operation fails,
+/// or [`OpError::IncompatiblePayload`] if payload extraction fails.
 pub fn execute_multi_op(
     op_name: &str,
     items: &[&ClipItem],
@@ -1217,5 +1250,30 @@ mod tests {
 
         let _ = std::fs::remove_file(&txt_path);
         let _ = std::fs::remove_file(&bin_path);
+    }
+
+    #[test]
+    fn test_op_descriptor_and_pipeline_catalog_bridge() {
+        let trim_op = find_op_by_name("trim").expect("trim op exists");
+        let trim_node = trim_op.matching_node_template().expect("trim node exists");
+        assert_eq!(trim_node.id, "text_trim");
+        assert_eq!(trim_node.matching_op_descriptor().unwrap().name, "trim");
+
+        let slugify_op = find_op_by_name("slugify").expect("slugify op exists");
+        let slugify_node = slugify_op
+            .matching_node_template()
+            .expect("text_slugify node exists");
+        assert_eq!(slugify_node.id, "text_slugify");
+        assert_eq!(
+            slugify_node.matching_op_descriptor().unwrap().name,
+            "slugify"
+        );
+
+        let diff_op = find_op_by_name("diff").expect("diff op exists");
+        let diff_node = diff_op
+            .matching_node_template()
+            .expect("img_diff node exists");
+        assert_eq!(diff_node.id, "img_diff");
+        assert_eq!(diff_node.matching_op_descriptor().unwrap().name, "diff");
     }
 }

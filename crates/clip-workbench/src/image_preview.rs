@@ -10,7 +10,7 @@ use crate::{contrast_text_c32, hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use image::RgbaImage;
 use little_clip_core::theme::AppPalette;
-use little_clip_core::{AppConfig, ClipItem, HandSide, IpcRequest};
+use little_clip_core::{AppConfig, ClipItem, CommandRequest, HandSide, IpcRequest};
 use little_clip_ops::barcode::BarcodeDetection;
 use little_clip_ops::creative_fx::{
     CmykHalftoneParams, CreativeFxParams, CreativeFxType, DitherMethod, DitherPaletteParams,
@@ -351,35 +351,13 @@ impl ImagePreviewState {
         };
         let ipc_ok = crate::send_ipc_request(&req).is_ok();
 
-        // 2. Also pipe directly to wl-copy / xclip for instantaneous OS clipboard sync
+        // 2. Also copy directly for instantaneous OS clipboard synchronization.
         let bytes_for_cmd = png_bytes;
         std::thread::spawn(move || {
-            if let Ok(mut child) = Command::new("wl-copy")
-                .arg("-t")
-                .arg("image/png")
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
+            if let Err(error) =
+                little_clip_core::copy_bytes_to_system_clipboard(&bytes_for_cmd, "image/png")
             {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = std::io::Write::write_all(&mut stdin, &bytes_for_cmd);
-                }
-                let _ = child.wait();
-            } else if let Ok(mut child) = Command::new("xclip")
-                .arg("-selection")
-                .arg("clipboard")
-                .arg("-t")
-                .arg("image/png")
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = std::io::Write::write_all(&mut stdin, &bytes_for_cmd);
-                }
-                let _ = child.wait();
+                tracing::debug!(%error, "failed to copy rendered image to system clipboard");
             }
         });
 
@@ -399,7 +377,7 @@ impl ImagePreviewState {
     }
 
     /// Copies the currently displayed image to the Left Hand clipboard slot via daemon IPC,
-    /// and simultaneously syncs to the OS clipboard (wl-copy / xclip).
+    /// and simultaneously syncs to the OS clipboard through the shared adapter.
     pub fn copy_to_clipboard_slot(&mut self) {
         self.copy_to_hand_slot(HandSide::Left);
     }
@@ -515,7 +493,14 @@ impl ImagePreviewState {
 
         if let Some(parent) = final_path.parent() {
             if !parent.as_os_str().is_empty() {
-                let _ = std::fs::create_dir_all(parent);
+                if let Err(err) = std::fs::create_dir_all(parent) {
+                    tracing::warn!(
+                        "Failed to create destination directory {}: {err}",
+                        parent.display()
+                    );
+                    self.status_toast = Some((format!("Failed to create directory: {err}"), 0.0));
+                    return;
+                }
             }
         }
 
@@ -1684,19 +1669,10 @@ fn encode_webp(img: &RgbaImage, lossless: bool, quality: u8) -> Result<Vec<u8>, 
 }
 
 fn render_svg_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
-    let mut child = Command::new("rsvg-convert")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+    let output = CommandRequest::new("rsvg-convert")
+        .stdin_bytes(bytes)
+        .run()
         .ok()?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        let _ = stdin.write_all(bytes);
-    }
-
-    let output = child.wait_with_output().ok()?;
     if output.status.success() && !output.stdout.is_empty() {
         Some(output.stdout)
     } else {
