@@ -355,6 +355,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 print_slot(SlotId::RightPrior1, mgr.get(SlotId::RightPrior1));
                 print_slot(SlotId::RightHand, mgr.get(SlotId::RightHand));
             }
+            IpcResponse::StateSummary(_) => {
+                eprintln!("Received a polling-only state summary where full state was expected.");
+                std::process::exit(1);
+            }
             IpcResponse::RecipeList(recipes) => {
                 println!("{}", "=== LITTLE SCREEN CLIP RECIPES ===".cyan().bold());
                 if recipes.is_empty() {

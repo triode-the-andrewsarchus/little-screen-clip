@@ -659,6 +659,12 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 info!("Got manager read lock for GetState");
                 IpcResponse::State(mgr.clone())
             }
+            Ok(IpcRequest::GetStateSummary) => {
+                let mgr = ctx.manager.read().await;
+                IpcResponse::StateSummary(little_clip_core::ipc::SlotStateSummary::from_manager(
+                    &mgr,
+                ))
+            }
             Ok(IpcRequest::PushText { text, hand }) => {
                 let (item, original) = if ctx.config.read().await.auto_actions.trim_link_tracking {
                     if let Some(cleaned) = little_clip_ops::clean_url_tracking(&text) {

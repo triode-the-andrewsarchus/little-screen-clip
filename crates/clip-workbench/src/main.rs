@@ -5,7 +5,7 @@
 
 use eframe::egui;
 use little_clip_core::color::parse_hex_color_rgba_or_white as parse_hex_color_rgba;
-use little_clip_core::ipc::{IpcRequest, IpcResponse};
+use little_clip_core::ipc::{IpcRequest, IpcResponse, SlotStateSummary};
 use little_clip_core::presentation::{
     model3d::is_3d_model_file,
     network_preview::{NetworkPreview, detect_network_preview},
@@ -232,15 +232,48 @@ impl WorkbenchApp {
             .unwrap_or_else(|_| ScreenRenderer::fallback(config.clone()));
 
         let (state_tx, state_rx) = channel::<SlotManager>();
+        let mut polled_state = state.clone();
+        let mut previous_summary = SlotStateSummary::from_manager(&polled_state);
 
-        // Background poller thread for live updates from daemon
+        // Poll compact cards, then hydrate only slots whose item identity changed.
         std::thread::spawn(move || {
             loop {
                 std::thread::sleep(Duration::from_millis(250));
-                if let Ok(IpcResponse::State(s)) = send_ipc_request(&IpcRequest::GetState) {
-                    if state_tx.send(s).is_err() {
-                        break; // UI closed
+                let Ok(IpcResponse::StateSummary(summary)) =
+                    send_ipc_request(&IpcRequest::GetStateSummary)
+                else {
+                    continue;
+                };
+                if summary == previous_summary {
+                    continue;
+                }
+
+                let mut hydration_failed = false;
+                for slot in SlotId::all() {
+                    if summary.card(slot) == previous_summary.card(slot) {
+                        continue;
                     }
+                    match send_ipc_request(&IpcRequest::GetSlotItem(slot)) {
+                        Ok(IpcResponse::SlotItem(item)) => {
+                            *polled_state
+                                .get_mut(slot)
+                                .expect("all SlotId values are valid") = item;
+                        }
+                        _ => {
+                            hydration_failed = true;
+                            break;
+                        }
+                    }
+                }
+                if hydration_failed {
+                    continue;
+                }
+
+                polled_state.cursor = summary.cursor;
+                polled_state.selected = summary.selected.clone();
+                previous_summary = summary;
+                if state_tx.send(polled_state.clone()).is_err() {
+                    break; // UI closed
                 }
             }
         });

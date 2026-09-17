@@ -3,7 +3,7 @@
 //! Defines JSON-serializable request/response commands sent across the UNIX domain socket
 //! (`/tmp/little-clipd.sock`).
 
-use crate::item::ClipItem;
+use crate::item::{ClipItem, PayloadKind};
 use crate::slot::{HandSide, SlotId, SlotManager};
 use serde::{Deserialize, Serialize};
 
@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 pub enum IpcRequest {
     /// Queries the complete `SlotManager` state.
     GetState,
+    /// Queries lightweight slot cards for polling; use `GetSlotItem` for changed item details.
+    GetStateSummary,
     /// Pushes plain text into the specified hand.
     PushText {
         text: String,
@@ -119,6 +121,8 @@ fn default_left_hand() -> HandSide {
 pub enum IpcResponse {
     /// Current full slot state.
     State(SlotManager),
+    /// Lightweight slot cards and selection state suitable for frequent polling.
+    StateSummary(SlotStateSummary),
     /// Item from a single queried slot.
     SlotItem(Option<ClipItem>),
     /// Map of auto-action keys to enabled status.
@@ -147,6 +151,62 @@ pub enum IpcResponse {
     },
     /// Failure response with error description.
     Error { error: String },
+}
+
+/// Change-detection metadata for one occupied slot, excluding clipboard content and labels.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SlotCard {
+    /// Slot represented by this card.
+    pub slot: SlotId,
+    /// Stable identity of the current item; clients use it to decide when to fetch details.
+    pub item_id: uuid::Uuid,
+    /// Payload category, without its content or user-supplied display labels.
+    pub payload_kind: PayloadKind,
+}
+
+/// Compact state projection for long-lived IPC clients.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SlotStateSummary {
+    /// Cards for occupied slots. A missing slot is empty.
+    pub cards: Vec<SlotCard>,
+    /// Currently focused slot.
+    pub cursor: SlotId,
+    /// Currently selected slots.
+    pub selected: Vec<SlotId>,
+}
+
+impl SlotStateSummary {
+    /// Projects a slot manager without serializing item payloads, media bytes, paths, or labels.
+    pub fn from_manager(manager: &SlotManager) -> Self {
+        let cards = SlotId::all()
+            .into_iter()
+            .filter_map(|slot| {
+                manager
+                    .get(slot)
+                    .map(|item| SlotCard::from_item(slot, item))
+            })
+            .collect();
+        Self {
+            cards,
+            cursor: manager.cursor,
+            selected: manager.selected.clone(),
+        }
+    }
+
+    /// Returns the card currently occupying `slot`, if any.
+    pub fn card(&self, slot: SlotId) -> Option<&SlotCard> {
+        self.cards.iter().find(|card| card.slot == slot)
+    }
+}
+
+impl SlotCard {
+    fn from_item(slot: SlotId, item: &ClipItem) -> Self {
+        Self {
+            slot,
+            item_id: item.id,
+            payload_kind: item.kind(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -212,5 +272,28 @@ mod tests {
             }
             _ => panic!("Expected RollingAudio"),
         }
+    }
+
+    #[test]
+    fn state_summary_excludes_item_payloads_and_tracks_replacement() {
+        let mut manager = SlotManager::new();
+        manager.push_left(ClipItem::from_text("private clipboard text"));
+        let first = SlotStateSummary::from_manager(&manager);
+        let json = serde_json::to_string(&first).unwrap();
+
+        assert!(!json.contains("private clipboard text"));
+        assert_eq!(first.cards.len(), 1);
+        assert_eq!(
+            first.card(SlotId::LeftHand).unwrap().payload_kind,
+            PayloadKind::Text
+        );
+
+        manager.push_left(ClipItem::from_text("replacement"));
+        let second = SlotStateSummary::from_manager(&manager);
+        assert_ne!(
+            first.card(SlotId::LeftHand).unwrap().item_id,
+            second.card(SlotId::LeftHand).unwrap().item_id
+        );
+        assert!(second.card(SlotId::LeftPrior1).is_some());
     }
 }
