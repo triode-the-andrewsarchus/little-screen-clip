@@ -1071,6 +1071,8 @@ impl AudioPreviewState {
             p.set_volume(0.8);
         }
 
+        let initial_viewport = AudioViewport::new(duration_sec);
+
         Self {
             path,
             title,
@@ -1089,8 +1091,8 @@ impl AudioPreviewState {
             edit_change_at: Instant::now(),
             edit_analysis_debounce: Duration::from_millis(180),
             playback_edits: Arc::default(),
-            view_start_sec: 0.0,
-            view_duration_sec: duration_sec,
+            view_start_sec: initial_viewport.start_sec,
+            view_duration_sec: initial_viewport.duration_sec,
             spectrogram_texture: None,
             note_strip_texture: None,
             player,
@@ -1394,13 +1396,17 @@ impl AudioPreviewState {
 
     #[inline]
     pub fn active_selection_range(&self) -> Option<(f32, f32)> {
-        match self.selection_mode {
+        let raw = match self.selection_mode {
             SelectionMode::Single => self.selection,
             SelectionMode::Multi => self
                 .active_multi_index
                 .and_then(|idx| self.multi_selections.get(idx).copied())
                 .or_else(|| self.multi_selections.first().copied()),
-        }
+        }?;
+        Some(AudioSelectionModel::clamp_to_duration(
+            AudioSelectionModel::normalize(raw),
+            self.duration_sec,
+        ))
     }
 
     pub fn snap_time(&self, time_sec: f32, bypass: bool) -> f32 {
