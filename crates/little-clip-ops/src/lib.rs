@@ -556,6 +556,11 @@ pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
 }
 
 /// Executes a unary operation (e.g. `trim`, `slugify`, `uppercase`) on a single clip item.
+///
+/// # Errors
+///
+/// Returns [`OpError::IncompatiblePayload`] if the item payload cannot be transformed by the
+/// operation, or [`OpError::ExecutionFailed`] if the transformation fails or `op_name` is unknown.
 pub fn execute_unary_op(op_name: &str, item: &ClipItem) -> Result<ClipItem, OpError> {
     match op_name {
         "trim" => op_trim(item),
@@ -648,6 +653,11 @@ fn op_binary_diff_unary(item: &ClipItem) -> Result<ClipItem, OpError> {
 }
 
 /// Executes a binary operation (e.g. `concat`, `diff`, `binary-diff`) combining two clip items.
+///
+/// # Errors
+///
+/// Returns [`OpError::IncompatiblePayload`] if either item payload cannot be used with the operation,
+/// or [`OpError::ExecutionFailed`] if comparison, parsing, or formatting fails.
 pub fn execute_binary_op(
     op_name: &str,
     hand: &ClipItem,
@@ -703,6 +713,11 @@ fn op_binary_diff(a: &ClipItem, b: &ClipItem) -> Result<ClipItem, OpError> {
 }
 
 /// Executes an operation on a slice of 1, 2, or 3+ selected items.
+///
+/// # Errors
+///
+/// Returns [`OpError::ExecutionFailed`] if `items` is empty or if the operation fails,
+/// or [`OpError::IncompatiblePayload`] if payload extraction fails.
 pub fn execute_multi_op(
     op_name: &str,
     items: &[&ClipItem],

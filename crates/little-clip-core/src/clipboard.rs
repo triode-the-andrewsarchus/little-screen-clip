@@ -13,6 +13,11 @@ use url::Url;
 const CLIPBOARD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Writes UTF-8 text to the system clipboard as `text/plain;charset=utf-8`.
+///
+/// # Errors
+///
+/// Returns [`ClipboardError::Unavailable`] if neither `wl-copy` nor `xclip` is installed,
+/// or [`ClipboardError::Failed`] if the invoked clipboard tool fails.
 pub fn copy_text_to_system_clipboard(text: &str) -> Result<(), ClipboardError> {
     copy_bytes_to_system_clipboard(text.as_bytes(), "text/plain;charset=utf-8")
 }
@@ -64,6 +69,12 @@ pub fn copy_bytes_to_system_clipboard(bytes: &[u8], mime: &str) -> Result<(), Cl
 }
 
 /// Writes a standards-compliant `text/uri-list` for local paths to the system clipboard.
+///
+/// # Errors
+///
+/// Returns [`ClipboardError::InvalidPath`] if any path cannot be converted to a `file://` URI,
+/// [`ClipboardError::Unavailable`] if no clipboard tool is available, or [`ClipboardError::Failed`]
+/// if writing to the clipboard fails.
 pub fn copy_file_uris_to_system_clipboard(
     paths: &[impl AsRef<Path>],
 ) -> Result<(), ClipboardError> {
@@ -74,6 +85,10 @@ pub fn copy_file_uris_to_system_clipboard(
 ///
 /// This is useful to clipboard watchers that must register the exact payload for echo-loop
 /// suppression before writing it through [`copy_bytes_to_system_clipboard`].
+///
+/// # Errors
+///
+/// Returns [`ClipboardError::InvalidPath`] if any path cannot be represented as a `file://` URI.
 pub fn file_uri_list(paths: &[impl AsRef<Path>]) -> Result<String, ClipboardError> {
     let uris = paths
         .iter()

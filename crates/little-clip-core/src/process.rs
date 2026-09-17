@@ -97,6 +97,13 @@ impl CommandRequest {
     }
 
     /// Runs this request, collecting bounded output while the child executes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CommandError::Spawn`] if the process executable cannot be started,
+    /// [`CommandError::Writer`] if standard input writing fails,
+    /// [`CommandError::Wait`] if waiting for the child process fails,
+    /// or [`CommandError::TimedOut`] if the command exceeds the configured timeout duration.
     pub fn run(&self) -> Result<CommandOutput, CommandError> {
         let mut command = Command::new(&self.program);
         command

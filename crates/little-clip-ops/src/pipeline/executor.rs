@@ -103,6 +103,12 @@ impl<'a> PipelineExecutor<'a> {
     }
 
     /// Topologically sorts the graph nodes and executes all operations in dependency order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PipelineError`] if graph compilation fails, if a required input is missing at
+    /// runtime, if an external subprocess exits with an error code, if an artifact cannot be staged,
+    /// or if script evaluation fails.
     pub fn execute(&self) -> Result<PipelineExecutionResult, PipelineError> {
         let compiled = CompiledPipeline::compile(self.graph)?;
         let mut outputs: HashMap<(Uuid, String), PortValue> = HashMap::new();

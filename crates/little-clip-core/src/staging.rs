@@ -31,6 +31,10 @@ pub struct ArtifactLease {
 
 impl ArtifactStore {
     /// Opens the standard artifact store, creating it when necessary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StagingError::Io`] if the base artifact directory cannot be created.
     pub fn new() -> Result<Self, StagingError> {
         let base_dir = dirs_or_fallback_cache()
             .join("little-screen-clip")
@@ -45,6 +49,10 @@ impl ArtifactStore {
     }
 
     /// Creates an empty, drop-cleaned workspace directory for one operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StagingError::Io`] if the scoped workspace directory cannot be created.
     pub fn create_workspace(
         &self,
         scope: &str,
@@ -59,6 +67,10 @@ impl ArtifactStore {
     }
 
     /// Reserves a drop-cleaned file path in a named scope.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StagingError::Io`] if creating parent directories for the file path fails.
     pub fn create_file(
         &self,
         scope: &str,
@@ -76,6 +88,11 @@ impl ArtifactStore {
     }
 
     /// Atomically writes bytes and retains the result for path-only consumers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StagingError::Io`] if creating parent directories or atomically writing
+    /// the bytes fails.
     pub fn stage_bytes(
         &self,
         scope: &str,
@@ -89,6 +106,10 @@ impl ArtifactStore {
     }
 
     /// Removes retained artifacts older than max_age_seconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StagingError::Io`] if directory traversal or removal of expired files fails.
     pub fn cleanup_old_items(&self, max_age_seconds: u64) -> Result<usize, StagingError> {
         let now = std::time::SystemTime::now();
         let mut removed = 0;
@@ -118,6 +139,11 @@ impl ArtifactLease {
     }
 
     /// Atomically replaces the leased file with bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StagingError::Io`] if creating, writing, syncing, or renaming the
+    /// temporary file fails.
     pub fn write_atomic(&self, bytes: &[u8]) -> Result<(), StagingError> {
         let temporary = self.path.with_extension(format!("tmp-{}", Uuid::new_v4()));
         let result = (|| -> Result<(), std::io::Error> {
@@ -156,11 +182,19 @@ impl Drop for ArtifactLease {
 pub type StagingManager = ArtifactStore;
 
 /// Returns the standard artifact directory, creating it if necessary.
+///
+/// # Errors
+///
+/// Returns [`StagingError::Io`] if the artifact store cannot be initialized.
 pub fn get_staging_dir() -> Result<PathBuf, StagingError> {
     Ok(ArtifactStore::new()?.base_dir().to_path_buf())
 }
 
 /// Reserves a legacy staging path. Prefer ArtifactStore for new code.
+///
+/// # Errors
+///
+/// Returns [`StagingError::Io`] if initializing the store or creating parent directories fails.
 pub fn create_staging_path(prefix: &str, extension: &str) -> Result<PathBuf, StagingError> {
     let lease = ArtifactStore::new()?.create_file("legacy", prefix, extension)?;
     Ok(lease.retain())

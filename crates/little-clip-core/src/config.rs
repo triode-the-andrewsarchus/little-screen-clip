@@ -686,6 +686,10 @@ impl AppConfig {
     }
 
     /// Deserializes an `AppConfig` from a TOML file path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read or if TOML deserialization fails.
     pub fn load_from_path(path: &Path) -> Result<Self, Box<dyn std::error::Error>> {
         let contents = std::fs::read_to_string(path)?;
         let config: AppConfig = toml::from_str(&contents)?;
@@ -698,12 +702,20 @@ impl AppConfig {
     }
 
     /// Saves the current configuration to disk (non-destructively updating theme).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading or writing the configuration file fails.
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
         Self::save_theme_to_file(&self.colors.theme)
     }
 
     /// Non-destructively updates the active theme in `config.toml` without modifying comments,
     /// display rotation, or other user configuration settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading or writing the configuration file fails.
     pub fn save_theme_to_file(new_theme: &str) -> Result<(), Box<dyn std::error::Error>> {
         let path = find_config_file_path();
         if path.exists() {

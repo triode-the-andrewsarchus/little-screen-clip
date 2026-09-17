@@ -22,7 +22,7 @@
 | Configuration error reporting | **DONE/FIXED** |
 | Local state/retention documentation | **DONE/FIXED** |
 | IPC log redaction and request bounds | **DONE/FIXED** |
-| Public API contracts | **IN PROGRESS** |
+| Public API contracts | **DONE/FIXED** |
 | Rustdoc warnings and stable doctests | **DONE/FIXED** |
 | Architecture/IPC/privacy README documentation | **DONE/FIXED** |
 | Hermetic fixtures and failure-path coverage | **DONE/FIXED** |

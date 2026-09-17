@@ -340,6 +340,11 @@ impl ElidedText {
 impl ScreenRenderer {
     /// Renders the complete 1920x462 hotbar layout into a tiny-skia Pixmap.
     /// Order: \[Undo] \[Left hand] \[L prior(1)] \[L prior(2)] \[R prior(2)] \[R prior(1)] \[Right hand]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError`] if allocating the canvas buffer fails or if rendering
+    /// any slot element encounters an unrecoverable graphics error.
     pub fn render_pixmap(&self, manager: &SlotManager) -> Result<Pixmap, RenderError> {
         let mut pixmap = Pixmap::new(SCREEN_WIDTH, SCREEN_HEIGHT)
             .ok_or_else(|| RenderError::ImageEncode("Failed to allocate pixmap".to_string()))?;
@@ -509,6 +514,10 @@ impl ScreenRenderer {
     }
 
     /// Renders the complete 1920x462 hotbar layout into a compressed JPEG.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError`] if rendering the pixmap fails or if JPEG compression fails.
     pub fn render_frame(&self, manager: &SlotManager) -> Result<Vec<u8>, RenderError> {
         let pixmap = self.render_pixmap(manager)?;
         self.encode_jpeg(&pixmap)
@@ -516,6 +525,10 @@ impl ScreenRenderer {
 
     /// Renders a completely black 1920x462 frame (all pixels turned off/dark)
     /// into a compressed JPEG for screen-saver / lock mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RenderError`] if allocating the canvas buffer fails or if JPEG compression fails.
     pub fn render_blank_frame(&self) -> Result<Vec<u8>, RenderError> {
         let mut pixmap = Pixmap::new(SCREEN_WIDTH, SCREEN_HEIGHT).ok_or_else(|| {
             RenderError::ImageEncode("Failed to allocate blank pixmap".to_string())

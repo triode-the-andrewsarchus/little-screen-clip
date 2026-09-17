@@ -26,11 +26,22 @@ pub struct CompiledPipeline<'a> {
 
 impl<'a> CompiledPipeline<'a> {
     /// Compiles a graph using the default interactive execution policy.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PipelineError`] if the graph contains cycles, duplicate node IDs,
+    /// dangling connections, multiple connections to the same input pin, incompatible port types,
+    /// missing required inputs, or unknown node kinds.
     pub fn compile(graph: &'a NodeGraph) -> Result<Self, PipelineError> {
         Self::compile_with_policy(graph, ExecutionPolicy::AllowInteractive)
     }
 
     /// Validates graph structure and produces an execution plan.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PipelineError`] if the graph fails structural validation or violates
+    /// the supplied [`ExecutionPolicy`] (e.g. non-interactive policy rejecting prompt nodes).
     pub fn compile_with_policy(
         graph: &'a NodeGraph,
         policy: ExecutionPolicy,
