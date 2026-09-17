@@ -2798,46 +2798,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local audio fixtures"]
-    fn test_shapeforms_sample() {
-        let cfg = AudioConfig::default();
-        let path = std::path::Path::new(
-            "/home/vega/Downloads/Shapeforms CASSETTE/Shapeforms CASSETTE/AUDIO/EMF AND NOISE/EMF_TAPE_RECORDING_05.wav",
-        );
-        if path.exists() {
-            let meta = read_audio_metadata(path).expect("failed to read metadata of 24-bit wav");
-            println!(
-                "EMF_TAPE_RECORDING_05: {} ms, {} Hz, {} channels",
-                meta.duration_ms, meta.sample_rate, meta.channels
-            );
-            assert_eq!(meta.channels, 2);
-            assert_eq!(meta.sample_rate, 96000);
-
-            let wf = compute_plain_waveform(path, 100, &cfg)
-                .expect("failed to compute plain waveform of 24-bit wav");
-            assert_eq!(wf.ch1_peaks.len(), 100);
-            assert!(wf.ch2_peaks.is_some());
-
-            let colors = compute_spectral_colors(path, 100, &cfg)
-                .expect("failed to compute spectral colors of 24-bit wav");
-            assert_eq!(colors.len(), 100);
-            println!(
-                "First 5 spectral colors of EMF recording: {:?}",
-                &colors[..5]
-            );
-        }
-
-        let noise_path = std::path::Path::new(
-            "/home/vega/Downloads/Shapeforms CASSETTE/Shapeforms CASSETTE/AUDIO/EMF AND NOISE/TAPE_NOISE_01.wav",
-        );
-        if noise_path.exists() {
-            let colors = compute_spectral_colors(noise_path, 100, &cfg).expect("failed on noise");
-            println!("First 5 spectral colors of TAPE NOISE: {:?}", &colors[..5]);
-        }
-    }
-
-    #[test]
-    #[ignore = "manual integration test requires developer-local audio fixtures"]
     fn test_compute_full_waveform() {
         let wav_path = generate_test_wav();
         let wf = compute_full_waveform(&wav_path, 80).expect("failed to compute full waveform");
@@ -2848,16 +2808,6 @@ mod tests {
         assert!(!wf.is_snippet);
         assert_eq!(wf.snippet_start_ms, 0);
         let _ = std::fs::remove_file(&wav_path);
-
-        let mp3_path =
-            std::path::Path::new("/home/vega/Documents/type_testing/Computer Error Song.mp3");
-        if mp3_path.is_file() {
-            let full_wf =
-                compute_full_waveform(mp3_path, 200).expect("failed to decode mp3 full waveform");
-            assert!(!full_wf.is_snippet);
-            assert!(full_wf.duration_ms > 350_000);
-            assert_eq!(full_wf.ch1_peaks.len(), 200);
-        }
     }
 
     #[test]
@@ -2963,7 +2913,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local audio fixtures"]
     fn test_compute_full_audio_analysis() {
         let wav_path = generate_test_wav();
         let analysis = compute_full_audio_analysis(&wav_path, 150)
@@ -3000,49 +2949,6 @@ mod tests {
         assert!(!active_notes.is_empty());
 
         let _ = std::fs::remove_file(&wav_path);
-
-        let noise_path =
-            std::path::Path::new("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
-        if noise_path.is_file() {
-            let noise_analysis = compute_full_audio_analysis(noise_path, 200)
-                .expect("failed to analyze TAPE_NOISE_04.wav");
-            assert_eq!(noise_analysis.channels, 2);
-            assert!(noise_analysis.total_frames > 0);
-            assert_eq!(noise_analysis.spectrogram_width, 200);
-            assert_eq!(noise_analysis.note_strip_width, 200);
-        }
-
-        let mp3_path =
-            std::path::Path::new("/home/vega/Documents/type_testing/Computer Error Song.mp3");
-        if mp3_path.is_file() {
-            let t0 = std::time::Instant::now();
-            let mp3_analysis = compute_full_audio_analysis(mp3_path, 1200)
-                .expect("failed to analyze Computer Error Song.mp3");
-            let el = t0.elapsed();
-            println!("Computer Error Song analysis took: {:?}", el);
-            assert_eq!(mp3_analysis.channels, 2);
-            assert!(mp3_analysis.total_frames > 15_000_000);
-
-            // Test 1400 queries to simulate a 60 FPS frame render on 15.8M samples
-            let q_start = std::time::Instant::now();
-            let num_bars = 1400;
-            let step = mp3_analysis.total_frames / num_bars;
-            for b in 0..num_bars {
-                let s = b * step;
-                let e = (s + step).min(mp3_analysis.total_frames);
-                let (mn1, mx1, _) = mp3_analysis.query_peaks(0, s, e);
-                let (mn2, mx2, _) = mp3_analysis.query_peaks(1, s, e);
-                assert!(mn1 <= mx1);
-                assert!(mn2 <= mx2);
-            }
-            let q_elapsed = q_start.elapsed();
-            println!(
-                "1400 bar queries across 15.8M samples took: {:?}",
-                q_elapsed
-            );
-            // Must execute in well under 5ms (typically ~50 microseconds)
-            assert!(q_elapsed.as_millis() < 5);
-        }
     }
 
     #[test]
