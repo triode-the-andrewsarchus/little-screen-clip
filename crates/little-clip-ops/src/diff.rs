@@ -397,11 +397,13 @@ pub fn resolve_diff_target(item: &ClipItem) -> Option<DiffTarget> {
             }
 
             if actual_bytes.is_empty() {
-                let staging = little_clip_core::staging::get_staging_dir().join(&item.title);
-                if staging.is_file() {
-                    if let Ok(b) = std::fs::read(&staging) {
-                        actual_bytes = b;
-                        actual_path = Some(staging);
+                if let Ok(staging_dir) = little_clip_core::staging::get_staging_dir() {
+                    let staging = staging_dir.join(&item.title);
+                    if staging.is_file() {
+                        if let Ok(b) = std::fs::read(&staging) {
+                            actual_bytes = b;
+                            actual_path = Some(staging);
+                        }
                     }
                 }
             }

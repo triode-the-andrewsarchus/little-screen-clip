@@ -350,15 +350,16 @@ impl ClipItem {
         } else {
             "png"
         };
-        let staging_path = crate::staging::create_staging_path("img", ext);
-        let _ = std::fs::write(&staging_path, &bytes);
+        let staging_path = crate::staging::create_staging_path("img", ext)
+            .ok()
+            .and_then(|path| std::fs::write(&path, &bytes).ok().map(|()| path));
 
         Some(Self {
             id: Uuid::new_v4(),
             created_at: current_unix_timestamp(),
             payload: ClipPayload::Image {
                 bytes,
-                path: Some(staging_path),
+                path: staging_path,
                 width,
                 height,
                 mime: mime.clone(),
@@ -701,14 +702,15 @@ impl ClipItem {
         let (w, h) = read_image_dimensions(&bytes).unwrap_or((0, 0));
         let size_kb = bytes.len() as f64 / 1024.0;
         let thumbnail = ImageThumbnail::generate(&bytes, 320, 220);
-        let staging_path = crate::staging::create_staging_path("svg", "svg");
-        let _ = std::fs::write(&staging_path, &bytes);
+        let staging_path = crate::staging::create_staging_path("svg", "svg")
+            .ok()
+            .and_then(|path| std::fs::write(&path, &bytes).ok().map(|()| path));
         Self {
             id: Uuid::new_v4(),
             created_at: current_unix_timestamp(),
             payload: ClipPayload::Image {
                 bytes,
-                path: Some(staging_path),
+                path: staging_path,
                 width: w,
                 height: h,
                 mime: "image/svg+xml".to_string(),
@@ -835,15 +837,16 @@ impl ClipItem {
         } else {
             "png"
         };
-        let staging_path = crate::staging::create_staging_path("img", ext);
-        let _ = std::fs::write(&staging_path, &bytes);
+        let staging_path = crate::staging::create_staging_path("img", ext)
+            .ok()
+            .and_then(|path| std::fs::write(&path, &bytes).ok().map(|()| path));
 
         Self {
             id: Uuid::new_v4(),
             created_at: current_unix_timestamp(),
             payload: ClipPayload::Image {
                 bytes,
-                path: Some(staging_path),
+                path: staging_path,
                 width,
                 height,
                 mime: mime.clone(),
