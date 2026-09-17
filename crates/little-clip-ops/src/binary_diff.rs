@@ -172,26 +172,17 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
             }
             (item.title.clone(), Vec::new())
         }
-        ClipPayload::Image { thumbnail, .. } => {
-            let p = Path::new(&item.title);
-            if p.is_file() {
-                if let Ok(bytes) = std::fs::read(p) {
-                    return (item.title.clone(), bytes);
+        ClipPayload::Image { bytes, path, .. } => {
+            if let Some(path) = path {
+                if let Ok(source_bytes) = std::fs::read(path) {
+                    return (item.title.clone(), source_bytes);
                 }
             }
-            if let Some(thumb) = thumbnail {
-                return (item.title.clone(), thumb.premultiplied_rgba.clone());
-            }
-            (item.title.clone(), Vec::new())
+            (item.title.clone(), bytes.clone())
         }
-        ClipPayload::AudioRef { .. } => {
-            let p = Path::new(&item.title);
-            if p.is_file() {
-                if let Ok(bytes) = std::fs::read(p) {
-                    return (item.title.clone(), bytes);
-                }
-            }
-            (item.title.clone(), item.subtitle.as_bytes().to_vec())
+        ClipPayload::AudioRef { path, .. } => {
+            let bytes = std::fs::read(path).unwrap_or_default();
+            (item.title.clone(), bytes)
         }
         ClipPayload::Color { hex, r, g, b } => {
             let s = format!("{} ({}, {}, {})", hex, r, g, b);
@@ -211,14 +202,9 @@ pub fn get_item_binary_bytes(item: &ClipItem) -> (String, Vec<u8>) {
             }
             (item.title.clone(), Vec::new())
         }
-        ClipPayload::Animation { .. } => {
-            let p = Path::new(&item.title);
-            if p.is_file() {
-                if let Ok(bytes) = std::fs::read(p) {
-                    return (item.title.clone(), bytes);
-                }
-            }
-            (item.title.clone(), Vec::new())
+        ClipPayload::Animation { path, .. } => {
+            let bytes = std::fs::read(path).unwrap_or_default();
+            (item.title.clone(), bytes)
         }
         ClipPayload::Directory(p) => (item.title.clone(), p.to_string_lossy().as_bytes().to_vec()),
     }
@@ -885,6 +871,20 @@ pub fn search_rows(result: &BinaryDiffResult, query: &str) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use little_clip_core::ClipPayload;
+    use uuid::Uuid;
+
+    fn item(payload: ClipPayload, title: &str) -> ClipItem {
+        ClipItem {
+            id: Uuid::new_v4(),
+            created_at: 0,
+            payload,
+            title: title.to_string(),
+            subtitle: "display metadata, not source data".to_string(),
+            details: Vec::new(),
+            handler_tag: "TEST".to_string(),
+        }
+    }
 
     #[test]
     fn test_identical_binary_diff() {
@@ -922,5 +922,43 @@ mod tests {
         // Search hex 0x45 0x4C 0x46 ("ELF")
         let hex_matches = search_rows(&res, "45 4C 46");
         assert_eq!(hex_matches, vec![0]);
+    }
+
+    #[test]
+    fn binary_bytes_use_payload_paths_instead_of_display_titles() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let image_path = temp_dir.path().join("source-image.bin");
+        let audio_path = temp_dir.path().join("source-audio.bin");
+        std::fs::write(&image_path, b"original encoded image bytes").unwrap();
+        std::fs::write(&audio_path, b"original audio bytes").unwrap();
+
+        let image = item(
+            ClipPayload::Image {
+                bytes: b"in-memory preview bytes".to_vec(),
+                path: Some(image_path),
+                width: 1,
+                height: 1,
+                mime: "image/png".to_string(),
+                thumbnail: None,
+            },
+            "A renamed image",
+        );
+        let audio = item(
+            ClipPayload::AudioRef {
+                path: audio_path,
+                duration_ms: 0,
+                sample_rate: 0,
+                channels: 0,
+                format: "wav".to_string(),
+                waveform: None,
+            },
+            "A renamed audio clip",
+        );
+
+        assert_eq!(
+            get_item_binary_bytes(&image).1,
+            b"original encoded image bytes"
+        );
+        assert_eq!(get_item_binary_bytes(&audio).1, b"original audio bytes");
     }
 }
