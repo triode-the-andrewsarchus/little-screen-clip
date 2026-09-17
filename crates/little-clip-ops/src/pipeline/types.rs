@@ -6,6 +6,7 @@
 use little_clip_core::ArtifactStore;
 use little_clip_core::item::{ClipItem, ClipPayload};
 use little_clip_core::slot::SlotId;
+use little_clip_core::staging::StagingError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -110,8 +111,13 @@ impl PortValue {
     }
 
     /// Converts a `ClipItem` into its corresponding `PortValue`.
-    pub fn from_clip_item(item: &ClipItem) -> Self {
-        match &item.payload {
+    ///
+    /// # Errors
+    ///
+    /// Returns a staging error when a memory-only image cannot be materialized for a path-based
+    /// pipeline operation. It never returns a path that was not successfully written.
+    pub fn from_clip_item(item: &ClipItem) -> Result<Self, StagingError> {
+        Ok(match &item.payload {
             ClipPayload::Text(t) => PortValue::Text(t.clone()),
             ClipPayload::Markdown(m) => PortValue::Text(m.clone()),
             ClipPayload::Url(u) => PortValue::Text(u.to_string()),
@@ -154,14 +160,11 @@ impl PortValue {
                 } else {
                     "bin"
                 };
-                let path = ArtifactStore::new()
-                    .and_then(|store| store.stage_bytes("pipeline-input", "image", ext, bytes))
-                    .unwrap_or_else(|_| {
-                        PathBuf::from(format!("pipeline-input-{}.{}", Uuid::new_v4(), ext))
-                    });
+                let path =
+                    ArtifactStore::new()?.stage_bytes("pipeline-input", "image", ext, bytes)?;
                 PortValue::ImagePath(path)
             }
-        }
+        })
     }
 
     /// Materializes the port value into a new `ClipItem`.

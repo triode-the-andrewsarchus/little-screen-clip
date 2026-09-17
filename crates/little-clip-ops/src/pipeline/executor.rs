@@ -178,7 +178,7 @@ impl<'a> PipelineExecutor<'a> {
         match &node.kind {
             NodeKind::LeftHandSource => {
                 if let Some(item) = self.slot_mgr.left_hand() {
-                    let val = PortValue::from_clip_item(item);
+                    let val = source_port_value(node, item)?;
                     preview = Some(item.title.clone());
                     out.push(("Out".to_string(), val));
                 } else {
@@ -189,7 +189,7 @@ impl<'a> PipelineExecutor<'a> {
             }
             NodeKind::RightHandSource => {
                 if let Some(item) = self.slot_mgr.right_hand() {
-                    let val = PortValue::from_clip_item(item);
+                    let val = source_port_value(node, item)?;
                     preview = Some(item.title.clone());
                     out.push(("Out".to_string(), val));
                 } else {
@@ -200,7 +200,7 @@ impl<'a> PipelineExecutor<'a> {
             }
             NodeKind::SlotSource(slot_id) => {
                 if let Some(item) = self.slot_mgr.get(*slot_id) {
-                    let val = PortValue::from_clip_item(item);
+                    let val = source_port_value(node, item)?;
                     preview = Some(item.title.clone());
                     out.push(("Out".to_string(), val));
                 } else {
@@ -1018,6 +1018,11 @@ else:
         }
         Err(PipelineError::MissingInput(preferred_names.join(" or ")))
     }
+}
+
+fn source_port_value(node: &NodeInstance, item: &ClipItem) -> Result<PortValue, PipelineError> {
+    PortValue::from_clip_item(item)
+        .map_err(|error| PipelineError::NodeFailed(node.title.clone(), error.to_string()))
 }
 
 fn shellexpand(path: &str) -> PathBuf {
