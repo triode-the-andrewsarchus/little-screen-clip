@@ -293,6 +293,16 @@ impl<'a> PipelineExecutor<'a> {
         let mut out = Vec::new();
         #[allow(unused_assignments)]
         let mut preview = None;
+        macro_rules! path_arg {
+            ($path:expr) => {
+                $path.to_str().ok_or_else(|| {
+                    PipelineError::NodeFailed(
+                        node.title.clone(),
+                        format!("Path is not valid UTF-8: {}", $path.display()),
+                    )
+                })?
+            };
+        }
 
         match &node.kind {
             NodeKind::LeftHandSource => {
@@ -548,12 +558,12 @@ else:
                 let out_path = self.temp_dir.join(format!("framed_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
-                    in_path.to_str().unwrap(),
+                    path_arg!(in_path),
                     "-bordercolor",
                     border_color,
                     "-border",
                     border_size,
-                    out_path.to_str().unwrap(),
+                    path_arg!(out_path),
                 ])
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
@@ -595,7 +605,7 @@ else:
                 let out_path = self.temp_dir.join(format!("titled_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
-                    in_path.to_str().unwrap(),
+                    path_arg!(in_path),
                     "-background",
                     bar_color,
                     "-fill",
@@ -609,7 +619,7 @@ else:
                     "-annotate",
                     "+0+10",
                     &caption,
-                    out_path.to_str().unwrap(),
+                    path_arg!(out_path),
                 ])
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
@@ -628,11 +638,11 @@ else:
                     .join(format!("cropped_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
-                    in_path.to_str().unwrap(),
+                    path_arg!(in_path),
                     "-crop",
                     geom,
                     "+repage",
-                    out_path.to_str().unwrap(),
+                    path_arg!(out_path),
                 ])
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
@@ -656,10 +666,10 @@ else:
                     .join(format!("resized_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
-                    in_path.to_str().unwrap(),
+                    path_arg!(in_path),
                     "-resize",
                     &format!("{}x{}>", max_w, max_h),
-                    out_path.to_str().unwrap(),
+                    path_arg!(out_path),
                 ])
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
@@ -675,13 +685,8 @@ else:
                     .unwrap_or("90");
                 let out_path = self.temp_dir.join(format!("{}.webp", Uuid::new_v4()));
 
-                run_magick(&[
-                    in_path.to_str().unwrap(),
-                    "-quality",
-                    q,
-                    out_path.to_str().unwrap(),
-                ])
-                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                run_magick(&[path_arg!(in_path), "-quality", q, path_arg!(out_path)])
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some("Converted to WebP".to_string());
                 out.push(("Image Out".to_string(), PortValue::ImagePath(out_path)));
@@ -697,13 +702,8 @@ else:
                     .temp_dir
                     .join(format!("rotated_{}.png", Uuid::new_v4()));
 
-                run_magick(&[
-                    in_path.to_str().unwrap(),
-                    "-rotate",
-                    deg,
-                    out_path.to_str().unwrap(),
-                ])
-                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                run_magick(&[path_arg!(in_path), "-rotate", deg, path_arg!(out_path)])
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some(format!("Rotated {}°", deg));
                 out.push(("Image Out".to_string(), PortValue::ImagePath(out_path)));
@@ -716,10 +716,10 @@ else:
                     .join(format!("stitched_{}.png", Uuid::new_v4()));
 
                 run_magick(&[
-                    left_path.to_str().unwrap(),
-                    right_path.to_str().unwrap(),
+                    path_arg!(left_path),
+                    path_arg!(right_path),
                     "+append",
-                    out_path.to_str().unwrap(),
+                    path_arg!(out_path),
                 ])
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
@@ -732,12 +732,8 @@ else:
                     .temp_dir
                     .join(format!("stripped_{}.png", Uuid::new_v4()));
 
-                run_magick(&[
-                    in_path.to_str().unwrap(),
-                    "-strip",
-                    out_path.to_str().unwrap(),
-                ])
-                .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
+                run_magick(&[path_arg!(in_path), "-strip", path_arg!(out_path)])
+                    .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
 
                 preview = Some("EXIF stripped".to_string());
                 out.push(("Image Out".to_string(), PortValue::ImagePath(out_path)));
@@ -805,10 +801,10 @@ else:
                     &[
                         "-y",
                         "-i",
-                        in_path.to_str().unwrap(),
+                        path_arg!(in_path),
                         "-af",
                         &filter,
-                        out_path.to_str().unwrap(),
+                        path_arg!(out_path),
                     ],
                 )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -836,10 +832,10 @@ else:
                     &[
                         "-y",
                         "-i",
-                        in_path.to_str().unwrap(),
+                        path_arg!(in_path),
                         "-af",
                         &filter,
-                        out_path.to_str().unwrap(),
+                        path_arg!(out_path),
                     ],
                 )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -862,10 +858,10 @@ else:
                     &[
                         "-y",
                         "-i",
-                        in_path.to_str().unwrap(),
+                        path_arg!(in_path),
                         "-af",
                         &filter,
-                        out_path.to_str().unwrap(),
+                        path_arg!(out_path),
                     ],
                 )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -884,14 +880,14 @@ else:
                     &[
                         "-y",
                         "-i",
-                        in1.to_str().unwrap(),
+                        path_arg!(in1),
                         "-i",
-                        in2.to_str().unwrap(),
+                        path_arg!(in2),
                         "-filter_complex",
                         filter,
                         "-map",
                         "[out]",
-                        out_path.to_str().unwrap(),
+                        path_arg!(out_path),
                     ],
                 )
                 .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -908,7 +904,7 @@ else:
                     .ok_or_else(|| PipelineError::MissingInput("In".to_string()))?;
                 let hash = match in_val {
                     PortValue::FilePath(p) | PortValue::ImagePath(p) | PortValue::AudioPath(p) => {
-                        let out = run_command("sha256sum", &[p.to_str().unwrap()])
+                        let out = run_command("sha256sum", &[path_arg!(p)])
                             .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
                         out.split_whitespace().next().unwrap_or("").to_string()
                     }
@@ -920,8 +916,7 @@ else:
                     PortValue::FileBatch(paths) => {
                         let mut hashes = Vec::new();
                         for p in paths {
-                            let out = run_command("sha256sum", &[p.to_str().unwrap()])
-                                .unwrap_or_default();
+                            let out = run_command("sha256sum", &[path_arg!(p)]).unwrap_or_default();
                             let h = out.split_whitespace().next().unwrap_or("").to_string();
                             hashes.push(format!("{}: {}", p.display(), h));
                         }
@@ -946,9 +941,9 @@ else:
                     .unwrap_or("archive.zip");
                 let out_path = self.temp_dir.join(archive_name);
 
-                let mut args = vec!["-r", out_path.to_str().unwrap()];
+                let mut args = vec!["-r", path_arg!(out_path)];
                 for p in &paths {
-                    args.push(p.to_str().unwrap());
+                    args.push(path_arg!(p));
                 }
                 run_command("zip", &args)
                     .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?;
@@ -979,7 +974,7 @@ else:
                             format!("Script file not found: {}", fpath.display()),
                         ));
                     }
-                    run_command_with_stdin("python3", &[fpath.to_str().unwrap()], &stdin_data)
+                    run_command_with_stdin("python3", &[path_arg!(fpath)], &stdin_data)
                         .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?
                 } else {
                     let script = node
@@ -1005,7 +1000,7 @@ else:
                             format!("Script file not found: {}", fpath.display()),
                         ));
                     }
-                    run_command_with_stdin("bash", &[fpath.to_str().unwrap()], &stdin_data)
+                    run_command_with_stdin("bash", &[path_arg!(fpath)], &stdin_data)
                         .map_err(|e| PipelineError::NodeFailed(node.title.clone(), e))?
                 } else {
                     let cmd = node
