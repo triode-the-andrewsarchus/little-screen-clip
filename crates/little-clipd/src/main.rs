@@ -885,16 +885,26 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
             }
             Ok(IpcRequest::GetLockStatus) => IpcResponse::LockStatus(ctx.is_locked().await),
             Ok(IpcRequest::GetRollingAudio) => {
-                let snapshot_dir = get_rolling_snapshot_dir();
-                let snapshot_path = snapshot_dir.join("current_snapshot.wav");
-                let res = {
-                    let guard = ctx.rolling_audio.read().unwrap();
-                    guard
-                        .write_wav(&snapshot_path)
-                        .map(|dur| (dur, guard.sample_rate(), guard.channels()))
-                };
+                let rolling_audio = Arc::clone(&ctx.rolling_audio);
+                let res = tokio::task::spawn_blocking(move || {
+                    let snapshot_dir = get_rolling_snapshot_dir();
+                    std::fs::create_dir_all(&snapshot_dir)?;
+                    let snapshot_path =
+                        snapshot_dir.join(format!("snapshot-{}.wav", uuid::Uuid::new_v4()));
+                    let guard = rolling_audio.read().map_err(|_| {
+                        std::io::Error::other("rolling audio buffer lock was poisoned")
+                    })?;
+                    let duration = guard.write_wav(&snapshot_path)?;
+                    Ok::<_, std::io::Error>((
+                        duration,
+                        guard.sample_rate(),
+                        guard.channels(),
+                        snapshot_path,
+                    ))
+                })
+                .await;
                 match res {
-                    Ok((dur, sr, ch)) => {
+                    Ok(Ok((dur, sr, ch, snapshot_path))) => {
                         info!(
                             "Captured rolling audio snapshot: {:.2}s -> {:?}",
                             dur, snapshot_path
@@ -906,12 +916,15 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                             channels: ch,
                         }
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         error!("Failed to write rolling audio snapshot: {}", e);
                         IpcResponse::Error {
                             error: format!("Failed to capture rolling audio: {}", e),
                         }
                     }
+                    Err(e) => IpcResponse::Error {
+                        error: format!("Rolling audio snapshot worker failed: {e}"),
+                    },
                 }
             }
             Ok(IpcRequest::RouteNextClipboard {
