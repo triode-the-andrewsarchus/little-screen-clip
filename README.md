@@ -244,3 +244,7 @@ Reload configuration live without restarting:
    ```bash
    ./launch.sh service restart
    ```
+# Dependency update policy
+
+Git dependencies are pinned to an immutable revision in their crate manifest. Update a pin only
+with its corresponding Cargo.lock change and a review of the upstream release or commit.
