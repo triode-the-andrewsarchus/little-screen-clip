@@ -133,16 +133,6 @@ impl<'a> PipelineExecutor<'a> {
         Ok(result)
     }
 
-    /// Verifies graph structure without launching an operation.
-    fn validate_graph(&self) -> Result<(), PipelineError> {
-        CompiledPipeline::compile(self.graph).map(|_| ())
-    }
-
-    /// Returns the compiled execution order for legacy executor tests.
-    fn topological_sort(&self) -> Result<Vec<&'a NodeInstance>, PipelineError> {
-        Ok(CompiledPipeline::compile(self.graph)?.nodes().to_vec())
-    }
-
     fn extract_script_stdin(inputs: &HashMap<String, PortValue>) -> String {
         let in_val = inputs.values().next().cloned();
         match in_val {
@@ -1206,11 +1196,10 @@ mod tests {
             ..Default::default()
         };
 
-        let mgr = SlotManager::default();
-        let executor = PipelineExecutor::new(&graph, &mgr);
-        let sorted = executor
-            .topological_sort()
-            .expect("Should sort DAG cleanly");
+        let sorted = CompiledPipeline::compile(&graph)
+            .expect("Should compile DAG cleanly")
+            .nodes()
+            .to_vec();
         assert_eq!(sorted[0].id, n1.id);
         assert_eq!(sorted[1].id, n2.id);
 
@@ -1235,9 +1224,8 @@ mod tests {
             ..Default::default()
         };
 
-        let cyclic_executor = PipelineExecutor::new(&cyclic_graph, &mgr);
         assert!(matches!(
-            cyclic_executor.topological_sort(),
+            CompiledPipeline::compile(&cyclic_graph),
             Err(PipelineError::CycleDetected)
         ));
     }
@@ -1258,7 +1246,7 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            PipelineExecutor::new(&dangling, &SlotManager::default()).validate_graph(),
+            CompiledPipeline::compile(&dangling),
             Err(PipelineError::InvalidGraph(_))
         ));
 
@@ -1281,7 +1269,7 @@ mod tests {
             ..Default::default()
         };
         assert!(matches!(
-            PipelineExecutor::new(&duplicate_input, &SlotManager::default()).validate_graph(),
+            CompiledPipeline::compile(&duplicate_input),
             Err(PipelineError::InvalidGraph(_))
         ));
     }
