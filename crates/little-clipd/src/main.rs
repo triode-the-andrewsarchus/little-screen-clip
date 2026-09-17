@@ -1712,3 +1712,43 @@ pub fn get_rolling_snapshot_dir() -> PathBuf {
         PathBuf::from("/tmp/little-screen-clip/rolling_snapshots")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[tokio::test]
+    async fn bounded_ipc_reader_preserves_line_boundaries() {
+        let mut reader = BufReader::new(Cursor::new(b"first\nsecond\n".to_vec()));
+        let mut request = Vec::new();
+
+        assert_eq!(
+            read_bounded_ipc_line(&mut reader, &mut request)
+                .await
+                .unwrap(),
+            Some(6)
+        );
+        assert_eq!(request, b"first\n");
+
+        assert_eq!(
+            read_bounded_ipc_line(&mut reader, &mut request)
+                .await
+                .unwrap(),
+            Some(7)
+        );
+        assert_eq!(request, b"second\n");
+    }
+
+    #[tokio::test]
+    async fn bounded_ipc_reader_rejects_oversized_request() {
+        let bytes = vec![b'x'; MAX_IPC_REQUEST_BYTES + 1];
+        let mut reader = BufReader::new(Cursor::new(bytes));
+        let mut request = Vec::new();
+
+        let error = read_bounded_ipc_line(&mut reader, &mut request)
+            .await
+            .expect_err("oversized requests must be rejected");
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+}
