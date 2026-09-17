@@ -657,14 +657,25 @@ impl AppConfig {
                 // Auto-create default config template
                 let default_cfg = Self::default();
                 if let Some(parent) = user_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
+                    if let Err(err) = std::fs::create_dir_all(parent) {
+                        warn!(
+                            "Failed to create directory for configuration template at {}: {err}",
+                            parent.display()
+                        );
+                    }
                 }
-                if let Ok(toml_str) = toml::to_string_pretty(&default_cfg) {
-                    let _ = std::fs::write(&user_path, toml_str);
-                    info!(
-                        "Created default configuration file at {}",
-                        user_path.display()
-                    );
+                match toml::to_string_pretty(&default_cfg) {
+                    Ok(toml_str) => match std::fs::write(&user_path, toml_str) {
+                        Ok(()) => info!(
+                            "Created default configuration file at {}",
+                            user_path.display()
+                        ),
+                        Err(err) => warn!(
+                            "Failed to write default configuration template to {}: {err}",
+                            user_path.display()
+                        ),
+                    },
+                    Err(err) => warn!("Failed to serialize default configuration: {err}"),
                 }
                 return default_cfg;
             }

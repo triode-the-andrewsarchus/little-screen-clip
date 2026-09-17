@@ -278,7 +278,7 @@ impl DiffViewerState {
     /// Triggers launching Meld or KDiff3 for visual comparison.
     pub fn trigger_escape_hatch(&mut self, now: f64) {
         let left_path = match &self.lhs {
-            DiffTarget::File { path, .. } => path.clone(),
+            DiffTarget::File { path, .. } => Some(path.clone()),
             DiffTarget::ClipboardText {
                 content, ext_hint, ..
             } => {
@@ -288,10 +288,18 @@ impl DiffViewerState {
                     uuid::Uuid::new_v4().simple(),
                     ext
                 ));
-                let _ = std::fs::write(&p, content);
-                p
+                match std::fs::write(&p, content) {
+                    Ok(()) => Some(p),
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to write diff LHS temp file to {}: {err}",
+                            p.display()
+                        );
+                        None
+                    }
+                }
             }
-            DiffTarget::Image { path: Some(p), .. } => p.clone(),
+            DiffTarget::Image { path: Some(p), .. } => Some(p.clone()),
             DiffTarget::Image { bytes, mime, .. } => {
                 let ext = if mime.contains("png") { "png" } else { "jpg" };
                 let p = std::env::temp_dir().join(format!(
@@ -299,13 +307,21 @@ impl DiffViewerState {
                     uuid::Uuid::new_v4().simple(),
                     ext
                 ));
-                let _ = std::fs::write(&p, bytes);
-                p
+                match std::fs::write(&p, bytes) {
+                    Ok(()) => Some(p),
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to write diff LHS image temp file to {}: {err}",
+                            p.display()
+                        );
+                        None
+                    }
+                }
             }
         };
 
         let right_path = match &self.rhs {
-            DiffTarget::File { path, .. } => path.clone(),
+            DiffTarget::File { path, .. } => Some(path.clone()),
             DiffTarget::ClipboardText {
                 content, ext_hint, ..
             } => {
@@ -315,10 +331,18 @@ impl DiffViewerState {
                     uuid::Uuid::new_v4().simple(),
                     ext
                 ));
-                let _ = std::fs::write(&p, content);
-                p
+                match std::fs::write(&p, content) {
+                    Ok(()) => Some(p),
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to write diff RHS temp file to {}: {err}",
+                            p.display()
+                        );
+                        None
+                    }
+                }
             }
-            DiffTarget::Image { path: Some(p), .. } => p.clone(),
+            DiffTarget::Image { path: Some(p), .. } => Some(p.clone()),
             DiffTarget::Image { bytes, mime, .. } => {
                 let ext = if mime.contains("png") { "png" } else { "jpg" };
                 let p = std::env::temp_dir().join(format!(
@@ -326,9 +350,25 @@ impl DiffViewerState {
                     uuid::Uuid::new_v4().simple(),
                     ext
                 ));
-                let _ = std::fs::write(&p, bytes);
-                p
+                match std::fs::write(&p, bytes) {
+                    Ok(()) => Some(p),
+                    Err(err) => {
+                        tracing::warn!(
+                            "Failed to write diff RHS image temp file to {}: {err}",
+                            p.display()
+                        );
+                        None
+                    }
+                }
             }
+        };
+
+        let (Some(left_path), Some(right_path)) = (left_path, right_path) else {
+            self.status_toast = Some((
+                "❌ Failed to stage diff files for external tool".to_string(),
+                now,
+            ));
+            return;
         };
 
         if let Some(meld) = little_clip_core::command_available("meld") {

@@ -1090,7 +1090,14 @@ impl AudioPreviewState {
             .join("little_clip_audio_sessions")
             .join(format!("edited-{}.wav", uuid::Uuid::new_v4()));
         if let Some(parent) = out.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                tracing::warn!(
+                    "Failed to create audio session directory {}: {err}",
+                    parent.display()
+                );
+                self.status_toast = Some(("Failed to create session directory".into(), now));
+                return;
+            }
         }
         let mut filters = Vec::new();
         let mut labels = Vec::new();
@@ -1639,7 +1646,14 @@ impl AudioPreviewState {
             .unwrap_or("audio");
 
         let staging_dir = std::env::temp_dir().join("little_clip_audio_segments");
-        let _ = std::fs::create_dir_all(&staging_dir);
+        if let Err(err) = std::fs::create_dir_all(&staging_dir) {
+            tracing::warn!(
+                "Failed to create audio staging directory {}: {err}",
+                staging_dir.display()
+            );
+            self.status_toast = Some(("Failed to create audio staging directory".into(), now));
+            return;
+        }
 
         let mode_suffix = match mode {
             ChannelCopyMode::Native => "",
@@ -1730,7 +1744,14 @@ impl AudioPreviewState {
             .unwrap_or("audio");
 
         let staging_dir = std::env::temp_dir().join("little_clip_audio_segments");
-        let _ = std::fs::create_dir_all(&staging_dir);
+        if let Err(err) = std::fs::create_dir_all(&staging_dir) {
+            tracing::warn!(
+                "Failed to create audio staging directory {}: {err}",
+                staging_dir.display()
+            );
+            self.status_toast = Some(("Failed to create audio staging directory".into(), now));
+            return;
+        }
 
         let mode_suffix = match mode {
             ChannelCopyMode::Native => "",

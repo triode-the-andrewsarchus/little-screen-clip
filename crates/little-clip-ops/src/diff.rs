@@ -494,7 +494,7 @@ pub fn run_difft(
     let run_id = Uuid::new_v4();
     let temp_dir =
         std::env::temp_dir().join(format!("little_clip_diff_{}", &run_id.to_string()[..8]));
-    let _ = std::fs::create_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir)?;
 
     // Determine extension to assist tree-sitter language detection
     let ext_hint = lhs.ext_hint().or_else(|| rhs.ext_hint());

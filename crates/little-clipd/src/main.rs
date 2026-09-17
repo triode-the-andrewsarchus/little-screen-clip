@@ -224,10 +224,21 @@ async fn save_last_action(action: &little_clip_core::ipc::LastAction, ctx: &Daem
     *lock = Some(action.clone());
     let path = get_last_action_path();
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        if let Err(err) = std::fs::create_dir_all(parent) {
+            warn!(
+                "Failed to create directory for last action state at {}: {err}",
+                parent.display()
+            );
+            return;
+        }
     }
-    if let Ok(json) = serde_json::to_string_pretty(action) {
-        let _ = std::fs::write(path, json);
+    match serde_json::to_string_pretty(action) {
+        Ok(json) => {
+            if let Err(err) = std::fs::write(&path, json) {
+                warn!("Failed to persist last action to {}: {err}", path.display());
+            }
+        }
+        Err(err) => warn!("Failed to serialize last action state: {err}"),
     }
 }
 

@@ -285,7 +285,13 @@ impl RollingAudioStripState {
         } else {
             PathBuf::from("/tmp/little-screen-clip/rolling_slices")
         };
-        let _ = std::fs::create_dir_all(&slice_dir);
+        if let Err(err) = std::fs::create_dir_all(&slice_dir) {
+            tracing::warn!(
+                "Failed to create rolling slice directory {}: {err}",
+                slice_dir.display()
+            );
+            return;
+        }
         let preview_path = slice_dir.join("preview.wav");
 
         if let Err(err) =
@@ -376,7 +382,14 @@ impl RollingAudioStripState {
         } else {
             PathBuf::from("/tmp/little-screen-clip/rolling_slices")
         };
-        let _ = std::fs::create_dir_all(&slice_dir);
+        if let Err(err) = std::fs::create_dir_all(&slice_dir) {
+            tracing::warn!(
+                "Failed to create rolling slice directory {}: {err}",
+                slice_dir.display()
+            );
+            self.status_toast = Some((format!("Failed to create slice directory: {err}"), now));
+            return false;
+        }
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())

@@ -493,7 +493,14 @@ impl ImagePreviewState {
 
         if let Some(parent) = final_path.parent() {
             if !parent.as_os_str().is_empty() {
-                let _ = std::fs::create_dir_all(parent);
+                if let Err(err) = std::fs::create_dir_all(parent) {
+                    tracing::warn!(
+                        "Failed to create destination directory {}: {err}",
+                        parent.display()
+                    );
+                    self.status_toast = Some((format!("Failed to create directory: {err}"), 0.0));
+                    return;
+                }
             }
         }
 

@@ -18,7 +18,7 @@
 | Pipeline catalog enforcement | **DONE/FIXED** |
 | Lightweight IPC state projections | **DONE/FIXED** |
 | Pinned Git dependencies | **DONE/FIXED** |
-| Required-side-effect error reporting | **IN PROGRESS** |
+| Required-side-effect error reporting | **DONE/FIXED** |
 | Configuration error reporting | **DONE/FIXED** |
 | Local state/retention documentation | **DONE/FIXED** |
 | IPC log redaction and request bounds | **DONE/FIXED** |
