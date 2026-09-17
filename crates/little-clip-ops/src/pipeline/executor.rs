@@ -1051,7 +1051,7 @@ else:
                     .map(|s| s.as_str())
                     .unwrap_or("~/Downloads");
                 let dest_expanded = shellexpand(dest_str);
-                let _ = std::fs::create_dir_all(&dest_expanded);
+                std::fs::create_dir_all(&dest_expanded)?;
 
                 let saved = match in_val {
                     PortValue::FilePath(p) | PortValue::ImagePath(p) | PortValue::AudioPath(p) => {
@@ -1066,12 +1066,20 @@ else:
                         target
                     }
                     PortValue::FileBatch(paths) => {
+                        let mut saved_files = Vec::with_capacity(paths.len());
                         for p in paths {
                             let filename = p.file_name().unwrap_or_default();
                             let target = dest_expanded.join(filename);
-                            let _ = std::fs::copy(p, &target);
+                            std::fs::copy(p, &target)?;
+                            saved_files.push(target);
                         }
-                        dest_expanded
+                        if saved_files.is_empty() {
+                            return Err(PipelineError::MissingInput("Files In".to_string()));
+                        }
+                        let saved_preview = format!("Saved {} files", saved_files.len());
+                        result.saved_files.extend(saved_files);
+                        preview = Some(saved_preview);
+                        return Ok((out, preview));
                     }
                 };
 
@@ -1235,9 +1243,14 @@ fn run_command_with_stdin(cmd: &str, args: &[&str], stdin_data: &str) -> Result<
         .spawn()
         .map_err(|e| format!("Failed to spawn {}: {}", cmd, e))?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(stdin_data.as_bytes());
-    }
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| format!("Failed to open stdin for {cmd}"))?;
+    stdin
+        .write_all(stdin_data.as_bytes())
+        .map_err(|e| format!("Failed to write stdin for {cmd}: {e}"))?;
+    drop(stdin);
 
     let output = child
         .wait_with_output()
