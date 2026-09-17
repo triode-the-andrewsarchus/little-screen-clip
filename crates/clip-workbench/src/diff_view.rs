@@ -331,23 +331,29 @@ impl DiffViewerState {
             }
         };
 
-        if std::process::Command::new("meld")
-            .arg(&left_path)
-            .arg(&right_path)
-            .spawn()
-            .is_ok()
-        {
-            self.status_toast = Some(("🚀 Launched Meld comparison".to_string(), now));
-        } else if std::process::Command::new("kdiff3")
-            .arg(&left_path)
-            .arg(&right_path)
-            .spawn()
-            .is_ok()
-        {
-            self.status_toast = Some(("🚀 Launched KDiff3 comparison".to_string(), now));
-        } else {
-            self.status_toast = Some(("⚠️ Neither Meld nor KDiff3 is installed".to_string(), now));
+        if let Some(meld) = little_clip_core::command_available("meld") {
+            if std::process::Command::new(meld)
+                .arg(&left_path)
+                .arg(&right_path)
+                .spawn()
+                .is_ok()
+            {
+                self.status_toast = Some(("🚀 Launched Meld comparison".to_string(), now));
+                return;
+            }
         }
+        if let Some(kdiff3) = little_clip_core::command_available("kdiff3") {
+            if std::process::Command::new(kdiff3)
+                .arg(&left_path)
+                .arg(&right_path)
+                .spawn()
+                .is_ok()
+            {
+                self.status_toast = Some(("🚀 Launched KDiff3 comparison".to_string(), now));
+                return;
+            }
+        }
+        self.status_toast = Some(("⚠️ Neither Meld nor KDiff3 is installed".to_string(), now));
     }
 
     pub fn render_ui(

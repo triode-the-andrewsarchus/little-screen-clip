@@ -11,7 +11,7 @@
 | Large mixed-responsibility workbench modules | **IN PROGRESS** |
 | Renderer and core-audio module decomposition | **FIX NOT YET STARTED** |
 | Duplicate staging and clipboard mechanisms | **DONE/FIXED** |
-| Remaining external-command consolidation | **IN PROGRESS** |
+| Remaining external-command consolidation | **DONE/FIXED** |
 | Hex parser API split | **DONE/FIXED** |
 | Shared operation descriptor/catalog | **FIX NOT YET STARTED** |
 | Curated core/ops public exports | **DONE/FIXED** |

@@ -78,26 +78,24 @@ pub fn is_animated_image_path(path: &Path) -> bool {
 
 /// Reads video width, height, and duration (in milliseconds) via ffprobe
 pub fn read_video_metadata(path: &Path) -> Option<(u32, u32, u64)> {
-    let output = std::process::Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-show_entries",
-            "stream=width,height",
-            "-show_entries",
-            "format=duration",
-            "-of",
-            "default=noprint_wrappers=1",
-            path.to_str()?,
-        ])
-        .output()
+    let output = crate::process::CommandRequest::new("ffprobe")
+        .arg("-v")
+        .arg("error")
+        .arg("-show_entries")
+        .arg("stream=width,height")
+        .arg("-show_entries")
+        .arg("format=duration")
+        .arg("-of")
+        .arg("default=noprint_wrappers=1")
+        .arg(path.to_str()?)
+        .run()
         .ok()?;
 
     if !output.status.success() {
         return None;
     }
 
-    let text = String::from_utf8_lossy(&output.stdout);
+    let text = output.stdout_lossy();
     let mut width = 0u32;
     let mut height = 0u32;
     let mut duration_ms = 0u64;
@@ -150,24 +148,23 @@ pub fn extract_animated_frames_via_ffmpeg(
         max_w, max_h
     );
 
-    let output = std::process::Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-i",
-            path.to_str()?,
-            "-vf",
-            &scale_filter,
-            "-frames:v",
-            &target_frames.to_string(),
-            "-c:v",
-            "mjpeg",
-            "-q:v",
-            "6",
-            "-f",
-            "image2pipe",
-            "-",
-        ])
-        .output()
+    let output = crate::process::CommandRequest::new("ffmpeg")
+        .arg("-y")
+        .arg("-i")
+        .arg(path.to_str()?)
+        .arg("-vf")
+        .arg(&scale_filter)
+        .arg("-frames:v")
+        .arg(&target_frames.to_string())
+        .arg("-c:v")
+        .arg("mjpeg")
+        .arg("-q:v")
+        .arg("6")
+        .arg("-f")
+        .arg("image2pipe")
+        .arg("-")
+        .max_output_bytes(32 * 1024 * 1024)
+        .run()
         .ok()?;
 
     if !output.status.success() {
@@ -354,26 +351,25 @@ pub fn extract_video_preview_frames(
         target_fps, max_w, max_h
     );
 
-    let output = std::process::Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-ss",
-            &format!("{:.2}", start_sec),
-            "-t",
-            &format!("{:.2}", sample_duration_sec),
-            "-i",
-            path.to_str()?,
-            "-vf",
-            &scale_filter,
-            "-c:v",
-            "mjpeg",
-            "-q:v",
-            "6",
-            "-f",
-            "image2pipe",
-            "-",
-        ])
-        .output()
+    let output = crate::process::CommandRequest::new("ffmpeg")
+        .arg("-y")
+        .arg("-ss")
+        .arg(format!("{:.2}", start_sec))
+        .arg("-t")
+        .arg(format!("{:.2}", sample_duration_sec))
+        .arg("-i")
+        .arg(path.to_str()?)
+        .arg("-vf")
+        .arg(&scale_filter)
+        .arg("-c:v")
+        .arg("mjpeg")
+        .arg("-q:v")
+        .arg("6")
+        .arg("-f")
+        .arg("image2pipe")
+        .arg("-")
+        .max_output_bytes(32 * 1024 * 1024)
+        .run()
         .ok()?;
 
     if !output.status.success() {

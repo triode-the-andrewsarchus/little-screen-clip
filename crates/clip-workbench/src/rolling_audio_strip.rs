@@ -75,7 +75,7 @@ impl RollingAudioStripState {
             .map_err(|error| format!("Could not materialize selected audio: {error}"))?;
 
         let trimmed = directory.join(format!("rolling-{id}-trimmed.wav"));
-        let status = std::process::Command::new("ffmpeg")
+        let status = little_clip_core::CommandRequest::new("ffmpeg")
             .args(["-y", "-i"])
             .arg(&sliced)
             .args([
@@ -86,7 +86,7 @@ impl RollingAudioStripState {
                 "silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB,areverse",
             ])
             .arg(&trimmed)
-            .output()
+            .run()
             .map(|output| output.status.success())
             .unwrap_or(false);
         if status && trimmed.is_file() {

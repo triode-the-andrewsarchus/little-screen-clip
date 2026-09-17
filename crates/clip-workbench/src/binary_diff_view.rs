@@ -220,23 +220,29 @@ impl BinaryDiffViewState {
             return;
         }
 
-        if std::process::Command::new("imhex")
-            .arg(&temp_left)
-            .arg(&temp_right)
-            .spawn()
-            .is_ok()
-        {
-            self.status_toast.set("🚀 Launched ImHex hex editor", now);
-        } else if std::process::Command::new("xdg-open")
-            .arg(&temp_left)
-            .spawn()
-            .is_ok()
-        {
-            self.status_toast
-                .set("🚀 Opened left binary file with system default", now);
-        } else {
-            self.status_toast.set("⚠️ ImHex is not installed", now);
+        if let Some(imhex) = little_clip_core::command_available("imhex") {
+            if std::process::Command::new(imhex)
+                .arg(&temp_left)
+                .arg(&temp_right)
+                .spawn()
+                .is_ok()
+            {
+                self.status_toast.set("🚀 Launched ImHex hex editor", now);
+                return;
+            }
         }
+        if let Some(xdg_open) = little_clip_core::command_available("xdg-open") {
+            if std::process::Command::new(xdg_open)
+                .arg(&temp_left)
+                .spawn()
+                .is_ok()
+            {
+                self.status_toast
+                    .set("🚀 Opened left binary file with system default", now);
+                return;
+            }
+        }
+        self.status_toast.set("⚠️ ImHex is not installed", now);
     }
 
     pub fn render_ui(

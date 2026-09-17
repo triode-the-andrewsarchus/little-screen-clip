@@ -49,6 +49,16 @@ impl CommandRequest {
         self
     }
 
+    /// Appends multiple opaque operating-system arguments.
+    pub fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<OsString>,
+    {
+        self.args.extend(args.into_iter().map(Into::into));
+        self
+    }
+
     /// Supplies bytes to the command's standard input and closes it after writing.
     pub fn stdin_bytes(mut self, bytes: impl Into<Vec<u8>>) -> Self {
         self.stdin = Some(bytes.into());

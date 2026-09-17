@@ -6,7 +6,6 @@
 
 use little_clip_core::{ClipItem, ClipPayload};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
@@ -194,10 +193,8 @@ pub fn find_difft_bin() -> Option<PathBuf> {
     }
 
     // 3. Test running `difft --version` in PATH
-    if let Ok(output) = Command::new("difft").arg("--version").output() {
-        if output.status.success() {
-            return Some(PathBuf::from("difft"));
-        }
+    if let Some(path) = little_clip_core::command_available("difft") {
+        return Some(path);
     }
 
     None
@@ -556,7 +553,7 @@ pub fn run_difft(
     };
 
     // Invoke difft using GIT_EXTERNAL_DIFF 7-argument format to avoid printing /tmp paths
-    let output = Command::new(difft_bin)
+    let output = little_clip_core::CommandRequest::new(difft_bin)
         .arg("--display")
         .arg(display_arg)
         .arg("--color")
@@ -570,7 +567,12 @@ pub fn run_difft(
         .arg(&rhs_path)
         .arg(".")
         .arg(".")
-        .output();
+        .run()
+        .map(|out| std::process::Output {
+            status: out.status,
+            stdout: out.stdout,
+            stderr: out.stderr,
+        });
 
     if lhs_is_temp {
         let _ = std::fs::remove_file(&lhs_path);
@@ -580,7 +582,8 @@ pub fn run_difft(
     }
     let _ = std::fs::remove_dir(&temp_dir);
 
-    let output = output?;
+    let output =
+        output.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     let raw_ansi = String::from_utf8_lossy(&output.stdout).to_string();
     let is_identical = raw_ansi.trim().contains("No changes.") || raw_ansi.trim().is_empty();
 

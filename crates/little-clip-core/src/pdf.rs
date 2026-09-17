@@ -3,10 +3,10 @@
 //! Wraps Poppler utilities (`pdfinfo`, `pdftoppm`) for inspection and previews,
 //! and uses `lopdf` for lossless page manipulation.
 
+use crate::process::CommandRequest;
 use crate::staging::ArtifactStore;
 use lopdf::{Document, Object};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 fn preview_output_paths(temp_prefix: &Path) -> Vec<PathBuf> {
     let Some(parent) = temp_prefix.parent() else {
@@ -59,16 +59,16 @@ pub fn is_pdf_path(p: &Path) -> bool {
 
 /// Runs `pdfinfo` on a file and parses its page count and metadata tags.
 pub fn get_pdf_info(path: &Path) -> Result<PdfInfo, String> {
-    let output = Command::new("pdfinfo")
+    let output = CommandRequest::new("pdfinfo")
         .arg(path)
-        .output()
+        .run()
         .map_err(|e| format!("Failed to run pdfinfo: {}", e))?;
 
     if !output.status.success() {
         return Err("pdfinfo exited with error".to_string());
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = output.stdout_lossy();
     let mut page_count = 1;
     let mut title = None;
     let mut author = None;
@@ -112,7 +112,7 @@ pub fn render_pdf_page_preview(
     let temp_prefix = workspace.path().join(format!("page-{page}"));
     let page_str = page.to_string();
 
-    let output = Command::new("pdftoppm")
+    let output = CommandRequest::new("pdftoppm")
         .arg("-png")
         .arg("-f")
         .arg(&page_str)
@@ -124,7 +124,7 @@ pub fn render_pdf_page_preview(
         .arg("-1")
         .arg(path)
         .arg(&temp_prefix)
-        .output()
+        .run()
         .map_err(|e| format!("pdftoppm execution failed: {}", e))?;
 
     if !output.status.success() {
@@ -265,10 +265,12 @@ fn qpdf_edit(
     if rotation.is_none() && pages_to_delete.is_empty() {
         return Err("No PDF edit requested".into());
     }
-    let mut command = Command::new("qpdf");
+    let mut command = CommandRequest::new("qpdf");
     if let Some((page, degrees)) = rotation {
-        command.arg(format!("--rotate=+{degrees}:{page}"));
-        command.arg(input).arg(output);
+        command = command
+            .arg(format!("--rotate=+{degrees}:{page}"))
+            .arg(input)
+            .arg(output);
     } else {
         let count = get_pdf_info(input)?.page_count;
         let kept = (1..=count)
@@ -278,7 +280,7 @@ fn qpdf_edit(
         if kept.is_empty() {
             return Err("Cannot delete all pages".into());
         }
-        command
+        command = command
             .arg(input)
             .arg("--pages")
             .arg(input)
@@ -287,15 +289,12 @@ fn qpdf_edit(
             .arg(output);
     }
     let result = command
-        .output()
+        .run()
         .map_err(|e| format!("qpdf unavailable: {e}"))?;
     if result.status.success() {
         Ok(())
     } else {
-        Err(format!(
-            "qpdf failed: {}",
-            String::from_utf8_lossy(&result.stderr).trim()
-        ))
+        Err(format!("qpdf failed: {}", result.stderr_lossy().trim()))
     }
 }
 
@@ -314,12 +313,12 @@ fn rebuild_pages(
         .map_err(|error| format!("could not create PDF rebuild workspace: {error}"))?;
     let temp = workspace.path();
     let pattern = temp.join("page-%d.pdf");
-    let separated = Command::new("pdfseparate")
+    let separated = CommandRequest::new("pdfseparate")
         .arg(input)
         .arg(&pattern)
-        .status()
+        .run()
         .map_err(|e| format!("pdfseparate unavailable: {e}"))?;
-    if !separated.success() {
+    if !separated.status.success() {
         let _ = std::fs::remove_dir_all(temp);
         return Err("pdfseparate failed".into());
     }
@@ -338,16 +337,19 @@ fn rebuild_pages(
                 270 => 1,
                 _ => 0,
             };
-            let status = Command::new("gs")
-                .args(["-q", "-dNOPAUSE", "-dBATCH", "-sDEVICE=pdfwrite"])
+            let status = CommandRequest::new("gs")
+                .arg("-q")
+                .arg("-dNOPAUSE")
+                .arg("-dBATCH")
+                .arg("-sDEVICE=pdfwrite")
                 .arg(format!("-sOutputFile={}", rotated.display()))
                 .arg("-c")
                 .arg(format!("<</Orientation {orientation}>> setpagedevice"))
                 .arg("-f")
                 .arg(&source)
-                .status()
+                .run()
                 .map_err(|e| format!("Ghostscript unavailable: {e}"))?;
-            if !status.success() {
+            if !status.status.success() {
                 let _ = std::fs::remove_dir_all(temp);
                 return Err("Ghostscript rotation failed".into());
             }
@@ -360,13 +362,16 @@ fn rebuild_pages(
         let _ = std::fs::remove_dir_all(temp);
         return Err("Cannot delete all pages".into());
     }
-    let status = Command::new("pdfunite")
-        .args(&inputs)
+    let mut unite = CommandRequest::new("pdfunite");
+    for input_file in &inputs {
+        unite = unite.arg(input_file);
+    }
+    let status = unite
         .arg(output)
-        .status()
+        .run()
         .map_err(|e| format!("pdfunite unavailable: {e}"))?;
     let _ = std::fs::remove_dir_all(temp);
-    if status.success() {
+    if status.status.success() {
         Ok(())
     } else {
         Err("pdfunite failed".into())

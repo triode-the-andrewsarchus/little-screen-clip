@@ -1112,9 +1112,12 @@ fn simulate_paste_action() {
         std::time::Duration::from_secs(2),
         || {
             std::thread::sleep(std::time::Duration::from_millis(150));
-            let _ = std::process::Command::new("wtype")
-                .args(["-M", "ctrl", "-k", "v", "-m", "ctrl"])
-                .status();
+            if little_clip_core::command_available("wtype").is_some() {
+                let _ = little_clip_core::CommandRequest::new("wtype")
+                    .args(["-M", "ctrl", "-k", "v", "-m", "ctrl"])
+                    .discard_output()
+                    .run();
+            }
         },
     );
 }
