@@ -629,17 +629,29 @@ impl AppConfig {
     pub fn load() -> Self {
         let local_path = Path::new("config.toml");
         if local_path.exists() {
-            if let Ok(config) = Self::load_from_path(local_path) {
-                info!("Loaded configuration from local ./config.toml");
-                return config;
+            match Self::load_from_path(local_path) {
+                Ok(config) => {
+                    info!("Loaded configuration from local ./config.toml");
+                    return config;
+                }
+                Err(error) => warn!(
+                    "Rejected local configuration at {}: {error}; trying user configuration",
+                    local_path.display()
+                ),
             }
         }
 
         if let Some(user_path) = get_user_config_path() {
             if user_path.exists() {
-                if let Ok(config) = Self::load_from_path(&user_path) {
-                    info!("Loaded configuration from {}", user_path.display());
-                    return config;
+                match Self::load_from_path(&user_path) {
+                    Ok(config) => {
+                        info!("Loaded configuration from {}", user_path.display());
+                        return config;
+                    }
+                    Err(error) => warn!(
+                        "Rejected user configuration at {}: {error}; using defaults",
+                        user_path.display()
+                    ),
                 }
             } else {
                 // Auto-create default config template
