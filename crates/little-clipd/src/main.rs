@@ -958,15 +958,18 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 );
                 IpcResponse::AutoActions(map)
             }
-            Ok(IpcRequest::SetAutoAction { key, enabled }) => {
-                let mut cfg = ctx.config.write().await;
-                if key == "trim_link_tracking" {
+            Ok(IpcRequest::SetAutoAction { key, enabled }) => match key.as_str() {
+                "trim_link_tracking" => {
+                    let mut cfg = ctx.config.write().await;
                     cfg.auto_actions.trim_link_tracking = enabled;
+                    IpcResponse::Success {
+                        message: format!("Auto-action '{}' set to {}", key, enabled),
+                    }
                 }
-                IpcResponse::Success {
-                    message: format!("Auto-action '{}' set to {}", key, enabled),
-                }
-            }
+                _ => IpcResponse::Error {
+                    error: format!("Unknown auto-action: {}", key),
+                },
+            },
             Err(e) => IpcResponse::Error {
                 error: format!("Invalid request: {}", e),
             },
