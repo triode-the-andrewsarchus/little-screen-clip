@@ -6,6 +6,7 @@ extern crate self as little_clip_core;
 
 pub mod animation;
 pub mod audio;
+pub mod clipboard;
 pub mod color;
 pub mod config;
 pub mod ipc;
@@ -48,6 +49,10 @@ pub use audio::{
     PeakBlock, compute_full_audio_analysis, compute_full_waveform, compute_plain_waveform,
     compute_spectral_colors, detect_pitch_yin, detect_transients, freq_to_note, is_audio_path,
     read_audio_metadata,
+};
+pub use clipboard::{
+    ClipboardError, copy_bytes_to_system_clipboard, copy_file_uris_to_system_clipboard,
+    copy_text_to_system_clipboard, file_uri_list,
 };
 pub use config::{
     AppConfig, AudioConfig, AudioSamplePosition, ColorConfig, DisplayConfig, Model3dConfig,

@@ -351,35 +351,13 @@ impl ImagePreviewState {
         };
         let ipc_ok = crate::send_ipc_request(&req).is_ok();
 
-        // 2. Also pipe directly to wl-copy / xclip for instantaneous OS clipboard sync
+        // 2. Also copy directly for instantaneous OS clipboard synchronization.
         let bytes_for_cmd = png_bytes;
         std::thread::spawn(move || {
-            if let Ok(mut child) = Command::new("wl-copy")
-                .arg("-t")
-                .arg("image/png")
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
+            if let Err(error) =
+                little_clip_core::copy_bytes_to_system_clipboard(&bytes_for_cmd, "image/png")
             {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = std::io::Write::write_all(&mut stdin, &bytes_for_cmd);
-                }
-                let _ = child.wait();
-            } else if let Ok(mut child) = Command::new("xclip")
-                .arg("-selection")
-                .arg("clipboard")
-                .arg("-t")
-                .arg("image/png")
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = std::io::Write::write_all(&mut stdin, &bytes_for_cmd);
-                }
-                let _ = child.wait();
+                tracing::debug!(%error, "failed to copy rendered image to system clipboard");
             }
         });
 

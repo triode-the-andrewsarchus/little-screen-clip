@@ -11,7 +11,6 @@ use little_clip_core::syntax::detect_language;
 use little_clip_core::theme::AppPalette;
 use regex::Regex;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
@@ -392,11 +391,9 @@ impl TextPreviewState {
     /// Copies the full text content to the system clipboard.
     pub fn copy_all_to_clipboard(&mut self, ctx: &egui::Context) {
         ctx.output_mut(|o| o.copied_text = self.content.clone());
-        let _ = Command::new("wl-copy").arg(&self.content).output();
-        let _ = Command::new("xclip")
-            .args(["-selection", "clipboard"])
-            .arg(&self.content)
-            .output();
+        if let Err(error) = little_clip_core::copy_text_to_system_clipboard(&self.content) {
+            tracing::debug!(%error, "failed to copy text preview to system clipboard");
+        }
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

@@ -4,7 +4,8 @@
 //! Wayland clipboard monitoring (`wl-paste`), and IPC communication with `clipctl` and `clip-workbench`.
 
 use little_clip_core::{
-    ClipItem, SlotId, SlotManager,
+    ClipItem, SlotId, SlotManager, copy_bytes_to_system_clipboard, copy_text_to_system_clipboard,
+    file_uri_list,
     ipc::{IpcRequest, IpcResponse},
     rolling_audio::RollingAudioBuffer,
 };
@@ -1575,127 +1576,102 @@ fn is_image_file_path(p: &std::path::Path) -> bool {
 }
 
 async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
-    use std::hash::{Hash, Hasher};
-
     match &item.payload {
         little_clip_core::ClipPayload::Image { bytes, mime, .. } => {
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            bytes.hash(&mut hasher);
-            let hash = hasher.finish();
-            {
-                let mut guard = ctx.self_copied_image_hash.write().await;
-                *guard = Some(hash);
-            }
-
-            if let Ok(mut child) = std::process::Command::new("wl-copy")
-                .arg("-t")
-                .arg(mime)
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-            {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = std::io::Write::write_all(&mut stdin, bytes);
-                }
-                let _ = child.wait();
-            }
+            copy_image(bytes, mime, ctx).await
         }
         little_clip_core::ClipPayload::FileBatch(files)
             if files.len() == 1 && is_image_file_path(&files[0]) =>
         {
-            let path = &files[0];
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("png")
-                .to_lowercase();
-            let mime = if ext == "jpg" || ext == "jpeg" {
-                "image/jpeg"
-            } else if ext == "webp" {
-                "image/webp"
-            } else if ext == "svg" {
-                "image/svg+xml"
-            } else {
-                "image/png"
-            };
-            if let Ok(bytes) = std::fs::read(path) {
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                bytes.hash(&mut hasher);
-                let hash = hasher.finish();
-                {
-                    let mut guard = ctx.self_copied_image_hash.write().await;
-                    *guard = Some(hash);
-                }
-
-                if let Ok(mut child) = std::process::Command::new("wl-copy")
-                    .arg("-t")
-                    .arg(mime)
-                    .stdin(std::process::Stdio::piped())
-                    .spawn()
-                {
-                    if let Some(mut stdin) = child.stdin.take() {
-                        let _ = std::io::Write::write_all(&mut stdin, &bytes);
-                    }
-                    let _ = child.wait();
-                }
-            }
+            copy_image_file(&files[0], ctx).await
         }
-        little_clip_core::ClipPayload::Text(t) => {
-            ctx.add_self_copied_text(t.clone()).await;
-            let _ = std::process::Command::new("wl-copy").arg(t).spawn();
-        }
-        little_clip_core::ClipPayload::Markdown(m) => {
-            ctx.add_self_copied_text(m.clone()).await;
-            let _ = std::process::Command::new("wl-copy").arg(m).spawn();
-        }
-        little_clip_core::ClipPayload::Url(u) => {
-            ctx.add_self_copied_text(u.to_string()).await;
-            let _ = std::process::Command::new("wl-copy")
-                .arg(u.as_str())
-                .spawn();
-        }
-        little_clip_core::ClipPayload::Color { hex, .. } => {
-            ctx.add_self_copied_text(hex.clone()).await;
-            let _ = std::process::Command::new("wl-copy").arg(hex).spawn();
-        }
+        little_clip_core::ClipPayload::Text(text) => copy_text(text, "text", ctx).await,
+        little_clip_core::ClipPayload::Markdown(text) => copy_text(text, "Markdown", ctx).await,
+        little_clip_core::ClipPayload::Url(url) => copy_text(url.as_str(), "URL", ctx).await,
+        little_clip_core::ClipPayload::Color { hex, .. } => copy_text(hex, "color", ctx).await,
         little_clip_core::ClipPayload::MultiImage { paths, .. } => {
-            let text = paths
-                .iter()
-                .map(|p| p.to_string_lossy().to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-            ctx.add_self_copied_text(text.clone()).await;
-            let _ = std::process::Command::new("wl-copy").arg(&text).spawn();
+            copy_path_text(paths, "image paths", ctx).await
         }
-        little_clip_core::ClipPayload::FileBatch(files) => {
-            let mut uri_list = String::new();
-            for p in files {
-                uri_list.push_str(&format!("file://{}\n", p.to_string_lossy()));
-            }
-            let text = files
-                .iter()
-                .map(|p| p.to_string_lossy().to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-            ctx.add_self_copied_text(uri_list.clone()).await;
-            ctx.add_self_copied_text(text.clone()).await;
-            let _ = std::process::Command::new("wl-copy")
-                .arg("-t")
-                .arg("text/uri-list")
-                .arg(&uri_list)
-                .spawn();
-        }
-        little_clip_core::ClipPayload::AudioRef { path, .. } => {
-            let uri = format!("file://{}\n", path.to_string_lossy());
-            let path_str = path.to_string_lossy().to_string();
-            ctx.add_self_copied_text(uri.clone()).await;
-            ctx.add_self_copied_text(path_str.clone()).await;
-            let _ = std::process::Command::new("wl-copy")
-                .arg("-t")
-                .arg("text/uri-list")
-                .arg(&uri)
-                .spawn();
-        }
+        little_clip_core::ClipPayload::FileBatch(files) => copy_file_batch(files, ctx).await,
+        little_clip_core::ClipPayload::AudioRef { path, .. } => copy_audio_path(path, ctx).await,
         _ => {}
+    }
+}
+
+async fn copy_image(bytes: &[u8], mime: &str, ctx: &DaemonContext) {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hasher);
+    *ctx.self_copied_image_hash.write().await = Some(hasher.finish());
+    if let Err(error) = copy_bytes_to_system_clipboard(bytes, mime) {
+        warn!(%error, "failed to copy image to system clipboard");
+    }
+}
+
+async fn copy_image_file(path: &std::path::Path, ctx: &DaemonContext) {
+    let Ok(bytes) = std::fs::read(path) else {
+        warn!(path = %path.display(), "failed to read image file for clipboard copy");
+        return;
+    };
+    let mime = match path.extension().and_then(|extension| extension.to_str()) {
+        Some(extension)
+            if extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg") =>
+        {
+            "image/jpeg"
+        }
+        Some(extension) if extension.eq_ignore_ascii_case("webp") => "image/webp",
+        Some(extension) if extension.eq_ignore_ascii_case("svg") => "image/svg+xml",
+        _ => "image/png",
+    };
+    copy_image(&bytes, mime, ctx).await;
+}
+
+async fn copy_text(text: &str, description: &str, ctx: &DaemonContext) {
+    ctx.add_self_copied_text(text.to_owned()).await;
+    if let Err(error) = copy_text_to_system_clipboard(text) {
+        warn!(%error, %description, "failed to copy to system clipboard");
+    }
+}
+
+async fn copy_path_text(paths: &[PathBuf], description: &str, ctx: &DaemonContext) {
+    let text = paths
+        .iter()
+        .map(|path| path.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("\n");
+    copy_text(&text, description, ctx).await;
+}
+
+async fn copy_file_batch(files: &[PathBuf], ctx: &DaemonContext) {
+    let Ok(uri_list) = file_uri_list(files) else {
+        warn!("failed to encode file paths as clipboard URIs");
+        return;
+    };
+    ctx.add_self_copied_text(uri_list.clone()).await;
+    ctx.add_self_copied_text(
+        files
+            .iter()
+            .map(|path| path.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .await;
+    if let Err(error) = copy_bytes_to_system_clipboard(uri_list.as_bytes(), "text/uri-list") {
+        warn!(%error, "failed to copy files to system clipboard");
+    }
+}
+
+async fn copy_audio_path(path: &std::path::Path, ctx: &DaemonContext) {
+    let Ok(uri) = file_uri_list(&[path]) else {
+        warn!(path = %path.display(), "failed to encode audio path as clipboard URI");
+        return;
+    };
+    ctx.add_self_copied_text(uri.clone()).await;
+    ctx.add_self_copied_text(path.to_string_lossy().into_owned())
+        .await;
+    if let Err(error) = copy_bytes_to_system_clipboard(uri.as_bytes(), "text/uri-list") {
+        warn!(%error, "failed to copy audio path to system clipboard");
     }
 }
 
