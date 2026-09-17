@@ -32,6 +32,49 @@ Standard clipboard managers flatten everything into a single chronological list.
   - **Rolling Audio Strip**: Ambient 30s background audio buffer snapshot, waveform visualizer, and slicer.
   - **Picture Studio (`Right-Click Image Slot` / `Palette`)**: Interactive visual editor with lossless cropping (1:1, 16:9, 9:16), rotations/flips, privacy black-bar redaction, magnifying color loupe eyedropper, target pixel & file size optimizer, palette extraction, one-click escape hatches (Krita, Inkscape, Nomacs), and AI background removal (`nobg`).
 
+### Crate map and dependency direction
+
+| Crate | Owns | May depend on |
+| --- | --- | --- |
+| `little-clip-core` | Clipboard/slot models, configuration, IPC messages, artifacts, and domain-neutral presentation data | Third-party libraries only |
+| `little-clip-ops` | Transformations, diffs, operation dispatch, pipeline compilation and execution | `little-clip-core` |
+| `little-clip-render` | Pixel layout, text/image drawing, and card rendering | `little-clip-core` |
+| `little-clip-driver` | USB display protocol, capture and lock monitoring | `little-clip-core` |
+| `little-clipd` | Process lifecycle, IPC dispatch, clipboard integration, and hardware orchestration | The library crates |
+| `clipctl` | Command-line IPC client | `little-clip-core` and operation-facing libraries |
+| `clip-workbench` | egui state and interaction | The library crates through their public APIs |
+
+Dependencies point toward the lower rows of responsibility: UI, daemon, driver, and renderer must
+not pull operation-domain behavior back into their own crates. Presentation-ready models belong in
+`little-clip-core`; transformations and external command policy belong in `little-clip-ops`.
+
+### Local IPC contract
+
+The daemon listens on a user-local Unix socket at
+`$XDG_RUNTIME_DIR/little-screen-clip.sock` (or `/tmp/little-screen-clip.sock` only when the runtime
+directory is unavailable). The JSON protocol is intentionally private to the shipped daemon,
+workbench, and CLI; it has no network listener or authentication layer.
+
+The protocol does not yet carry a version envelope. Until it does, request or response changes are
+an atomic workspace change: update `little-clip-core` message types and every bundled client in the
+same release. Before supporting independently versioned clients, introduce a protocol version and
+negotiate it before sending state or media. Do not log raw request payloads: they may contain
+clipboard text, paths, images, or recipe scripts.
+
+### Local data, retention, and trust boundaries
+
+| Data | Location | Retention and trust model |
+| --- | --- | --- |
+| Temporary artifacts | `$XDG_CACHE_HOME/little-screen-clip/artifacts` (or `~/.cache`, then `/tmp`) | Scoped leases are removed on drop. Retained artifacts persist until `ArtifactStore::cleanup_old_items` is invoked; remove the cache directory to recover disk space after a crash. |
+| Rolling-audio snapshots | `$XDG_RUNTIME_DIR/little-screen-clip/rolling_snapshots` (or `/tmp/little-screen-clip/rolling_snapshots`) | Runtime files are disposable. A snapshot path is returned only to the requesting local client. |
+| Last action | `$XDG_CONFIG_HOME/little-screen-clip/last_action.json` (or `~/.config`) | Stores the last operation or recipe name for re-run; it does not persist slot contents. Delete it to reset this history. |
+| Recipes and generated scripts | `$XDG_CONFIG_HOME/little-screen-clip/recipes` (or `~/.config`) | User-owned YAML and Python/Bash scripts. Treat these files as trusted local code: a recipe can invoke external commands with the user’s permissions. |
+| Clipboard/slot state | Process memory | Not restored across daemon restart. Clipboard contents and full state must be treated as sensitive even on the local socket. |
+
+Runtime directories should be owned by the launching user and are expected to disappear at logout or
+reboot. Configuration and cache locations inherit normal user-directory permissions; do not place
+them on a shared account if clipboard contents or recipe scripts are sensitive.
+
 ---
 
 ## System Requirements
@@ -47,7 +90,7 @@ Standard clipboard managers flatten everything into a single chronological list.
   - `wtype` — Wayland virtual keyboard simulation (for synthetic copy/paste).
   - `wl-clipboard` (`wl-copy`, `wl-paste`) — Wayland clipboard protocol tools.
   - `pipewire` / `pipewire-pulse` — for rolling system audio buffer capture (`pw-record`).
-- **Rust Toolchain**: Rust edition 2021 (`cargo`, `rustc`).
+- **Rust Toolchain**: Rust edition 2024 (`cargo`, `rustc`).
 - **Optional Tools for Pipeline Recipes & Picture Studio**:
   - `difftastic` (`difft`) — Structural semantic code diffing.
   - `ffmpeg` & `sox` — Advanced audio normalization and transcoding.
