@@ -49,17 +49,13 @@ impl StagingManager {
         let now = std::time::SystemTime::now();
         let mut count = 0;
 
-        if let Ok(entries) = std::fs::read_dir(&self.base_dir) {
-            for entry in entries.flatten() {
-                if let Ok(meta) = entry.metadata() {
-                    if let Ok(modified) = meta.modified() {
-                        if let Ok(age) = now.duration_since(modified) {
-                            if age.as_secs() > max_age_seconds {
-                                let _ = std::fs::remove_file(entry.path());
-                                count += 1;
-                            }
-                        }
-                    }
+        for entry in std::fs::read_dir(&self.base_dir)? {
+            let entry = entry?;
+            let modified = entry.metadata()?.modified()?;
+            if let Ok(age) = now.duration_since(modified) {
+                if age.as_secs() > max_age_seconds {
+                    std::fs::remove_file(entry.path())?;
+                    count += 1;
                 }
             }
         }
@@ -97,4 +93,21 @@ fn dirs_or_fallback_cache() -> PathBuf {
         return PathBuf::from(home).join(".cache");
     }
     PathBuf::from("/tmp")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cleanup_reports_an_unreadable_staging_directory() {
+        let manager = StagingManager {
+            base_dir: std::env::temp_dir()
+                .join(format!("missing-staging-{}", uuid::Uuid::new_v4())),
+        };
+
+        let result = manager.cleanup_old_items(0);
+
+        assert!(matches!(result, Err(StagingError::Io(_))));
+    }
 }
