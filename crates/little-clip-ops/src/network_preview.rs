@@ -4,10 +4,10 @@
 //! specifications (RFC 1918, RFC 1122, RFC 6598, etc.), identifies well-known public DNS resolvers,
 //! performs OUI hardware vendor lookups for MAC addresses, and runs non-blocking ICMP ping reachability checks.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
-use std::sync::{LazyLock, RwLock};
+use std::sync::{LazyLock, Mutex, RwLock};
 use std::time::{Duration, Instant};
 
 /// Structured network entity detected from clipboard text.
@@ -74,6 +74,33 @@ impl NetworkPreview {
 // Thread-safe cache for bounded ping results: IP -> (status, timestamp)
 static PING_CACHE: LazyLock<RwLock<HashMap<IpAddr, (String, Instant)>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
+static PINGS_IN_FLIGHT: LazyLock<Mutex<HashSet<IpAddr>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+
+const PING_CACHE_TTL: Duration = Duration::from_secs(60);
+const MAX_PING_CACHE_ENTRIES: usize = 256;
+const MAX_CONCURRENT_PINGS: usize = 8;
+
+fn prune_ping_cache(cache: &mut HashMap<IpAddr, (String, Instant)>, now: Instant) {
+    cache.retain(|_, (_, timestamp)| now.duration_since(*timestamp) < PING_CACHE_TTL);
+    while cache.len() > MAX_PING_CACHE_ENTRIES {
+        let Some(oldest) = cache
+            .iter()
+            .min_by_key(|(_, (_, timestamp))| *timestamp)
+            .map(|(ip, _)| *ip)
+        else {
+            break;
+        };
+        cache.remove(&oldest);
+    }
+}
+
+fn store_ping_result(ip: IpAddr, status: String) {
+    if let Ok(mut cache) = PING_CACHE.write() {
+        cache.insert(ip, (status, Instant::now()));
+        prune_ping_cache(&mut cache, Instant::now());
+    }
+}
 
 /// Asynchronously initiates a 1-second ICMP ping and returns cached result if available.
 pub fn check_bounded_ping(ip: IpAddr) -> Option<String> {
@@ -81,11 +108,18 @@ pub fn check_bounded_ping(ip: IpAddr) -> Option<String> {
     // 1. Check cache (valid for 60s)
     if let Ok(cache) = PING_CACHE.read() {
         if let Some((status, ts)) = cache.get(&ip) {
-            if now.duration_since(*ts) < Duration::from_secs(60) {
+            if now.duration_since(*ts) < PING_CACHE_TTL {
                 return Some(status.clone());
             }
         }
     }
+
+    let mut in_flight = PINGS_IN_FLIGHT.lock().ok()?;
+    if in_flight.contains(&ip) || in_flight.len() >= MAX_CONCURRENT_PINGS {
+        return None;
+    }
+    in_flight.insert(ip);
+    drop(in_flight);
 
     // 2. Spawn background single-shot ping
     let ip_clone = ip;
@@ -113,8 +147,9 @@ pub fn check_bounded_ping(ip: IpAddr) -> Option<String> {
             _ => "Unreachable / No Reply".to_string(),
         };
 
-        if let Ok(mut cache) = PING_CACHE.write() {
-            cache.insert(ip_clone, (status, Instant::now()));
+        store_ping_result(ip_clone, status);
+        if let Ok(mut in_flight) = PINGS_IN_FLIGHT.lock() {
+            in_flight.remove(&ip_clone);
         }
     });
 
@@ -402,6 +437,27 @@ pub fn detect_network_preview(text: &str) -> Option<NetworkPreview> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ping_cache_pruning_bounds_entries() {
+        let now = Instant::now();
+        let mut cache = HashMap::new();
+        for host in 0..=MAX_PING_CACHE_ENTRIES {
+            cache.insert(
+                IpAddr::V4(Ipv4Addr::new(
+                    198,
+                    51,
+                    (host / 256) as u8,
+                    (host % 256) as u8,
+                )),
+                ("ok".to_string(), now),
+            );
+        }
+
+        prune_ping_cache(&mut cache, now);
+
+        assert_eq!(cache.len(), MAX_PING_CACHE_ENTRIES);
+    }
 
     #[test]
     fn test_network_preview_ip() {
