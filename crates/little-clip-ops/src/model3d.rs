@@ -625,6 +625,7 @@ endsolid test_cache
     }
 
     #[test]
+    #[ignore = "manual integration test requires developer-local model fixture"]
     fn test_load_teapot_obj() {
         let p = Path::new(
             "/home/vega/Documents/type_testing/jhfmh2s0xt6o-teapotnglass/teapot_n_glass.obj",
