@@ -3,6 +3,7 @@
 //! Defines graph topology types (`NodeGraph`, `NodeInstance`, `Connection`, `Pin`),
 //! data flow representations (`PortType`, `PortValue`), and recipe structures (`Recipe`, `RecipeInputType`).
 
+use little_clip_core::ArtifactStore;
 use little_clip_core::item::{ClipItem, ClipPayload};
 use little_clip_core::slot::SlotId;
 use serde::{Deserialize, Serialize};
@@ -142,10 +143,11 @@ impl PortValue {
                 } else {
                     "bin"
                 };
-                let cache_dir = std::env::temp_dir().join("little_clip_pipeline_staging");
-                let _ = std::fs::create_dir_all(&cache_dir);
-                let path = cache_dir.join(format!("{}.{}", Uuid::new_v4(), ext));
-                let _ = std::fs::write(&path, bytes);
+                let path = ArtifactStore::new()
+                    .and_then(|store| store.stage_bytes("pipeline-input", "image", ext, bytes))
+                    .unwrap_or_else(|_| {
+                        PathBuf::from(format!("pipeline-input-{}.{}", Uuid::new_v4(), ext))
+                    });
                 PortValue::ImagePath(path)
             }
         }

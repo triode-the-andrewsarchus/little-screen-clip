@@ -7,11 +7,9 @@ license.workspace = true
 
 [dependencies]
 little-clip-core = { path = "../little-clip-core" }
-little-clip-ops = { path = "../little-clip-ops" }
 tiny-skia.workspace = true
 fontdue.workspace = true
 image.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 syntect.workspace = true
-

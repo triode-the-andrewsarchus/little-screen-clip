@@ -155,13 +155,13 @@ impl AudioPreviewState {
             return;
         }
         let source = self.path.clone();
-        let workspace = std::env::temp_dir().join(format!(
-            "little-screen-clip-stems-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis()
-        ));
+        let workspace = little_clip_core::ArtifactStore::new()
+            .and_then(|store| store.create_workspace("stems", "separation"))
+            .map(|workspace| workspace.retain())
+            .unwrap_or_else(|_| {
+                std::env::temp_dir()
+                    .join(format!("little-screen-clip-stems-{}", uuid::Uuid::new_v4()))
+            });
         let (tx, rx) = channel();
         self.stem_separation.in_progress = true;
         self.stem_separation.status = Some("Starting local HTDemucs v4 separation…".to_string());

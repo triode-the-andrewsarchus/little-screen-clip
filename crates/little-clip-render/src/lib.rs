@@ -8,6 +8,7 @@ use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
 use little_clip_core::config::{AppConfig, parse_hex_color};
 use little_clip_core::theme::AppPalette;
 use little_clip_core::{ClipItem, ClipPayload, SlotId, SlotManager};
+use little_clip_core::{midi, model3d, network_preview, spreadsheet, timestamps, units};
 use std::path::Path;
 use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
@@ -731,7 +732,7 @@ impl ScreenRenderer {
                     let p = Path::new(trimmed);
                     if p.is_file()
                         && (little_clip_core::syntax::is_code_file(p)
-                            || little_clip_ops::is_text_file(p))
+                            || little_clip_core::syntax::is_code_file(p))
                     {
                         if let Ok(file_content) = std::fs::read_to_string(p) {
                             let clean_content = file_content
@@ -909,8 +910,8 @@ impl ScreenRenderer {
             ClipPayload::FileBatch(files) => {
                 if files.len() == 1 {
                     let p = &files[0];
-                    if p.is_file() && little_clip_ops::is_spreadsheet_file(p) {
-                        if let Ok(sheet_data) = little_clip_ops::load_spreadsheet(p) {
+                    if p.is_file() && spreadsheet::is_spreadsheet_file(p) {
+                        if let Ok(sheet_data) = spreadsheet::load_spreadsheet(p) {
                             if let Some(first_sheet) = sheet_data.sheets.first() {
                                 self.draw_spreadsheet_card(
                                     pixmap,
@@ -935,19 +936,19 @@ impl ScreenRenderer {
                             })
                             .unwrap_or(false))
                     {
-                        if let Ok(midi_data) = little_clip_ops::MidiData::parse_file(p) {
+                        if let Ok(midi_data) = midi::MidiData::parse_file(p) {
                             self.draw_midi_card(pixmap, &midi_data, rx, ry, rw, rh, is_hero);
                             return;
                         }
                     }
-                    if p.is_file() && little_clip_ops::is_3d_model_file(p) {
-                        if let Ok(model) = little_clip_ops::Model3d::load_cached(p) {
+                    if p.is_file() && model3d::is_3d_model_file(p) {
+                        if let Ok(model) = model3d::Model3d::load_cached(p) {
                             self.draw_model3d_card(pixmap, &model, rx, ry, rw, rh, is_hero);
                             return;
                         }
                     }
                     if little_clip_core::syntax::is_code_file(p)
-                        || (p.is_file() && little_clip_ops::is_text_file(p))
+                        || (p.is_file() && little_clip_core::syntax::is_code_file(p))
                     {
                         if let Ok(file_content) = std::fs::read_to_string(p) {
                             let clean_content = file_content
@@ -2348,7 +2349,7 @@ impl ScreenRenderer {
     fn draw_unit_conversion_card(
         &self,
         pixmap: &mut Pixmap,
-        conv: &little_clip_ops::UnitConversion,
+        conv: &units::UnitConversion,
         rx: f32,
         ry: f32,
         rw: f32,
@@ -2442,7 +2443,7 @@ impl ScreenRenderer {
     fn draw_network_preview_card(
         &self,
         pixmap: &mut Pixmap,
-        net: &little_clip_ops::NetworkPreview,
+        net: &network_preview::NetworkPreview,
         rx: f32,
         ry: f32,
         rw: f32,
@@ -2474,7 +2475,7 @@ impl ScreenRenderer {
             self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_del)));
 
         match net {
-            little_clip_ops::NetworkPreview::Ip {
+            network_preview::NetworkPreview::Ip {
                 ip,
                 rfc_class,
                 description,
@@ -2545,7 +2546,7 @@ impl ScreenRenderer {
                     );
                 }
             }
-            little_clip_ops::NetworkPreview::Mac {
+            network_preview::NetworkPreview::Mac {
                 formatted,
                 vendor,
                 mac_type,
@@ -2603,7 +2604,7 @@ impl ScreenRenderer {
     fn draw_timestamp_card(
         &self,
         pixmap: &mut Pixmap,
-        ts: &little_clip_ops::TimestampPreview,
+        ts: &timestamps::TimestampPreview,
         rx: f32,
         ry: f32,
         rw: f32,
@@ -2692,7 +2693,7 @@ impl ScreenRenderer {
         &self,
         pixmap: &mut Pixmap,
         _title: &str,
-        sheet: &little_clip_ops::SpreadsheetSheet,
+        sheet: &spreadsheet::SpreadsheetSheet,
         rx: f32,
         ry: f32,
         rw: f32,
@@ -2845,7 +2846,7 @@ impl ScreenRenderer {
     fn draw_midi_card(
         &self,
         pixmap: &mut Pixmap,
-        midi: &little_clip_ops::MidiData,
+        midi: &midi::MidiData,
         rx: f32,
         ry: f32,
         rw: f32,
@@ -2952,7 +2953,7 @@ impl ScreenRenderer {
     fn draw_stl_card(
         &self,
         pixmap: &mut Pixmap,
-        mesh: &little_clip_ops::Model3d,
+        mesh: &model3d::Model3d,
         rx: f32,
         ry: f32,
         rw: f32,
@@ -2965,7 +2966,7 @@ impl ScreenRenderer {
     fn draw_model3d_card(
         &self,
         pixmap: &mut Pixmap,
-        mesh: &little_clip_ops::Model3d,
+        mesh: &model3d::Model3d,
         rx: f32,
         ry: f32,
         rw: f32,
@@ -3033,14 +3034,14 @@ impl ScreenRenderer {
             let sin_x = tilt_x.sin();
             let cos_x = tilt_x.cos();
 
-            let is_z_up = mesh.format == little_clip_ops::ModelFormat::Stl;
+            let is_z_up = mesh.format == model3d::ModelFormat::Stl;
             let center = mesh.center;
             let max_dim = mesh.max_dimension.max(0.001);
             let scale = (vp_w.min(vp_h) * 0.42) / (max_dim * 0.5);
 
             let cx = vp_x + vp_w * 0.5;
             let cy = vp_y + vp_h * 0.5;
-            let light_dir = little_clip_ops::Vec3::new(0.4, 0.6, 0.7).normalize();
+            let light_dir = model3d::Vec3::new(0.4, 0.6, 0.7).normalize();
 
             let budget = self.config.model3d.preview_triangle_limit.max(100);
             let source_triangles = if !mesh.thumbnail_triangles.is_empty() {
@@ -3058,7 +3059,7 @@ impl ScreenRenderer {
                     (tri.normal.x, tri.normal.y, tri.normal.z)
                 };
 
-                let rotated_normal = little_clip_ops::Vec3::new(
+                let rotated_normal = model3d::Vec3::new(
                     nx * cos_y + nz * sin_y,
                     ny * cos_x - (-nx * sin_y + nz * cos_y) * sin_x,
                     ny * sin_x + (-nx * sin_y + nz * cos_y) * cos_x,
@@ -3069,7 +3070,7 @@ impl ScreenRenderer {
                     continue;
                 }
 
-                let transform_v = |v: little_clip_ops::Vec3| -> (f32, f32, f32) {
+                let transform_v = |v: model3d::Vec3| -> (f32, f32, f32) {
                     let (dx, dy, dz) = if is_z_up {
                         (v.x - center.x, v.z - center.z, -(v.y - center.y))
                     } else {
@@ -3189,29 +3190,29 @@ impl ScreenRenderer {
         let trimmed = clean_text.trim();
 
         // 1. Unit conversion preview
-        if let Some(conv) = little_clip_ops::detect_unit_conversion(trimmed) {
+        if let Some(conv) = units::detect_unit_conversion(trimmed) {
             self.draw_unit_conversion_card(pixmap, &conv, rx, ry, rw, rh, is_hero);
             return;
         }
 
         // 2. IP or MAC network preview
-        if let Some(net) = little_clip_ops::detect_network_preview(trimmed) {
+        if let Some(net) = network_preview::detect_network_preview(trimmed) {
             self.draw_network_preview_card(pixmap, &net, rx, ry, rw, rh, is_hero);
             return;
         }
 
         // 3. Timestamp preview
-        if let Some(ts) = little_clip_ops::detect_timestamp(trimmed) {
+        if let Some(ts) = timestamps::detect_timestamp(trimmed) {
             self.draw_timestamp_card(pixmap, &ts, rx, ry, rw, rh, is_hero);
             return;
         }
 
         // 4. Spreadsheet preview (CSV text or spreadsheet file)
         let p = Path::new(trimmed);
-        let spreadsheet_opt = if p.is_file() && little_clip_ops::is_spreadsheet_file(p) {
-            little_clip_ops::load_spreadsheet(p).ok()
+        let spreadsheet_opt = if p.is_file() && spreadsheet::is_spreadsheet_file(p) {
+            spreadsheet::load_spreadsheet(p).ok()
         } else {
-            little_clip_ops::detect_csv_text(trimmed)
+            spreadsheet::detect_csv_text(trimmed)
         };
         if let Some(ref sheet_data) = spreadsheet_opt {
             if let Some(first_sheet) = sheet_data.sheets.first() {
@@ -3237,15 +3238,15 @@ impl ScreenRenderer {
                 .map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
                 .unwrap_or(false))
         {
-            if let Ok(midi_data) = little_clip_ops::MidiData::parse_file(p) {
+            if let Ok(midi_data) = midi::MidiData::parse_file(p) {
                 self.draw_midi_card(pixmap, &midi_data, rx, ry, rw, rh, is_hero);
                 return;
             }
         }
 
         // 6. 3D Mesh Preview (rotates slowly in preview)
-        if p.is_file() && little_clip_ops::is_3d_model_file(p) {
-            if let Ok(model) = little_clip_ops::Model3d::load_cached(p) {
+        if p.is_file() && model3d::is_3d_model_file(p) {
+            if let Ok(model) = model3d::Model3d::load_cached(p) {
                 self.draw_model3d_card(pixmap, &model, rx, ry, rw, rh, is_hero);
                 return;
             }
@@ -3570,7 +3571,7 @@ mod tests {
 
         // 3. Prose text with commas
         let prose = "Hey there, how is it going? I am testing out some plain text on my clipboard, to make sure it doesn't get treated as a spreadsheet.";
-        let prose_detect = little_clip_ops::detect_csv_text(prose);
+        let prose_detect = spreadsheet::detect_csv_text(prose);
         assert!(
             prose_detect.is_none(),
             "Prose should not be detected as CSV spreadsheet"

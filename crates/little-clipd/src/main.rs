@@ -1101,12 +1101,15 @@ async fn apply_pipeline_result(
 }
 
 fn simulate_paste_action() {
-    std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        let _ = std::process::Command::new("wtype")
-            .args(["-M", "ctrl", "-k", "v", "-m", "ctrl"])
-            .status();
-    });
+    let _ = little_clip_core::BackgroundJobs::global().submit(
+        std::time::Duration::from_secs(2),
+        || {
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            let _ = std::process::Command::new("wtype")
+                .args(["-M", "ctrl", "-k", "v", "-m", "ctrl"])
+                .status();
+        },
+    );
 }
 
 fn schedule_thumbnail_generation(item: &ClipItem, ctx: Arc<DaemonContext>) {
