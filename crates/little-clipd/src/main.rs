@@ -24,6 +24,40 @@ mod rolling_capture;
 
 const MAX_IPC_REQUEST_BYTES: usize = 1024 * 1024;
 
+async fn read_bounded_ipc_line<R>(
+    reader: &mut R,
+    request: &mut Vec<u8>,
+) -> std::io::Result<Option<usize>>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    request.clear();
+    loop {
+        let (take, found_newline) = {
+            let available = reader.fill_buf().await?;
+            if available.is_empty() {
+                return Ok((!request.is_empty()).then_some(request.len()));
+            }
+            let take = available
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(available.len(), |position| position + 1);
+            if request.len() + take > MAX_IPC_REQUEST_BYTES {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "IPC request exceeds byte limit",
+                ));
+            }
+            request.extend_from_slice(&available[..take]);
+            (take, take < available.len() || available[take - 1] == b'\n')
+        };
+        reader.consume(take);
+        if found_newline {
+            return Ok(Some(request.len()));
+        }
+    }
+}
+
 /// Shared runtime state across daemon IPC handlers, background workers, and display pipelines.
 pub struct DaemonContext {
     /// Active application configuration.
@@ -590,30 +624,21 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
     let mut request_bytes = Vec::new();
 
     loop {
-        request_bytes.clear();
-        let bytes_read = match reader.read_until(b'\n', &mut request_bytes).await {
-            Ok(bytes_read) => bytes_read,
+        match read_bounded_ipc_line(&mut reader, &mut request_bytes).await {
+            Ok(Some(_)) => {}
+            Ok(None) => break,
             Err(e) => {
+                if e.kind() == std::io::ErrorKind::InvalidData {
+                    let response = IpcResponse::Error {
+                        error: format!("IPC request exceeds {} byte limit", MAX_IPC_REQUEST_BYTES),
+                    };
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let _ = writer.write_all(format!("{json}\n").as_bytes()).await;
+                    }
+                }
                 warn!("Failed to read IPC request: {e}");
                 break;
             }
-        };
-        if bytes_read == 0 {
-            break;
-        }
-        if request_bytes.len() > MAX_IPC_REQUEST_BYTES {
-            warn!(
-                "Rejected oversized IPC request ({} bytes; limit {} bytes)",
-                request_bytes.len(),
-                MAX_IPC_REQUEST_BYTES
-            );
-            let response = IpcResponse::Error {
-                error: format!("IPC request exceeds {} byte limit", MAX_IPC_REQUEST_BYTES),
-            };
-            if let Ok(json) = serde_json::to_string(&response) {
-                let _ = writer.write_all(format!("{json}\n").as_bytes()).await;
-            }
-            break;
         }
         let line = match std::str::from_utf8(&request_bytes) {
             Ok(line) => line.trim_end_matches(['\r', '\n']),
