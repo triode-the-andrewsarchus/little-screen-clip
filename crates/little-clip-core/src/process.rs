@@ -25,6 +25,8 @@ pub struct CommandRequest {
     stdin: Option<Vec<u8>>,
     timeout: Duration,
     max_output_bytes: usize,
+    capture_stdout: bool,
+    capture_stderr: bool,
 }
 
 impl CommandRequest {
@@ -36,6 +38,8 @@ impl CommandRequest {
             stdin: None,
             timeout: Duration::from_secs(30),
             max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+            capture_stdout: true,
+            capture_stderr: true,
         }
     }
 
@@ -63,6 +67,25 @@ impl CommandRequest {
         self
     }
 
+    /// Disables stdout capture, directing stdout to null.
+    pub fn discard_stdout(mut self) -> Self {
+        self.capture_stdout = false;
+        self
+    }
+
+    /// Disables stderr capture, directing stderr to null.
+    pub fn discard_stderr(mut self) -> Self {
+        self.capture_stderr = false;
+        self
+    }
+
+    /// Disables both stdout and stderr capture.
+    pub fn discard_output(mut self) -> Self {
+        self.capture_stdout = false;
+        self.capture_stderr = false;
+        self
+    }
+
     /// Runs this request, collecting bounded output while the child executes.
     pub fn run(&self) -> Result<CommandOutput, CommandError> {
         let mut command = Command::new(&self.program);
@@ -73,23 +96,37 @@ impl CommandRequest {
                     .as_ref()
                     .map_or(Stdio::null(), |_| Stdio::piped()),
             )
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdout(if self.capture_stdout {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stderr(if self.capture_stderr {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            });
         let mut child = command.spawn().map_err(|source| CommandError::Spawn {
             program: self.program.clone(),
             source,
         })?;
 
-        let stdout = child.stdout.take().expect("stdout was piped");
-        let stderr = child.stderr.take().expect("stderr was piped");
-        let stdout_reader = thread::spawn({
+        let stdout_reader = if self.capture_stdout {
+            let stdout = child.stdout.take().expect("stdout was piped");
             let limit = self.max_output_bytes;
-            move || read_capped(stdout, limit)
-        });
-        let stderr_reader = thread::spawn({
+            Some(thread::spawn(move || read_capped(stdout, limit)))
+        } else {
+            None
+        };
+
+        let stderr_reader = if self.capture_stderr {
+            let stderr = child.stderr.take().expect("stderr was piped");
             let limit = self.max_output_bytes;
-            move || read_capped(stderr, limit)
-        });
+            Some(thread::spawn(move || read_capped(stderr, limit)))
+        } else {
+            None
+        };
+
         let stdin_writer = self.stdin.clone().map(|bytes| {
             let mut stdin = child.stdin.take().expect("stdin was piped");
             thread::spawn(move || stdin.write_all(&bytes))
@@ -110,8 +147,19 @@ impl CommandRequest {
                 });
             }
         };
-        let (stdout, stdout_truncated) = stdout_reader.join().map_err(|_| CommandError::Reader)?;
-        let (stderr, stderr_truncated) = stderr_reader.join().map_err(|_| CommandError::Reader)?;
+
+        let (stdout, stdout_truncated) = if let Some(reader) = stdout_reader {
+            reader.join().map_err(|_| CommandError::Reader)?
+        } else {
+            (Vec::new(), false)
+        };
+
+        let (stderr, stderr_truncated) = if let Some(reader) = stderr_reader {
+            reader.join().map_err(|_| CommandError::Reader)?
+        } else {
+            (Vec::new(), false)
+        };
+
         if let Some(writer) = stdin_writer {
             writer
                 .join()
@@ -223,12 +271,16 @@ fn read_capped(mut reader: impl Read, limit: usize) -> (Vec<u8>, bool) {
 }
 
 fn drain_threads(
-    stdout: thread::JoinHandle<(Vec<u8>, bool)>,
-    stderr: thread::JoinHandle<(Vec<u8>, bool)>,
+    stdout: Option<thread::JoinHandle<(Vec<u8>, bool)>>,
+    stderr: Option<thread::JoinHandle<(Vec<u8>, bool)>>,
     stdin: Option<thread::JoinHandle<std::io::Result<()>>>,
 ) {
-    let _ = stdout.join();
-    let _ = stderr.join();
+    if let Some(stdout) = stdout {
+        let _ = stdout.join();
+    }
+    if let Some(stderr) = stderr {
+        let _ = stderr.join();
+    }
     if let Some(stdin) = stdin {
         let _ = stdin.join();
     }

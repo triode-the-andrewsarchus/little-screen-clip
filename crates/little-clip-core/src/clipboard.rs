@@ -34,6 +34,7 @@ pub fn copy_bytes_to_system_clipboard(bytes: &[u8], mime: &str) -> Result<(), Cl
                 .arg("-t")
                 .arg(mime)
                 .stdin_bytes(bytes)
+                .discard_output()
                 .timeout(CLIPBOARD_TIMEOUT),
             "xclip" => CommandRequest::new(program)
                 .arg("-selection")
@@ -41,6 +42,7 @@ pub fn copy_bytes_to_system_clipboard(bytes: &[u8], mime: &str) -> Result<(), Cl
                 .arg("-t")
                 .arg(mime)
                 .stdin_bytes(bytes)
+                .discard_output()
                 .timeout(CLIPBOARD_TIMEOUT),
             _ => unreachable!("clipboard adapters are fixed above"),
         };

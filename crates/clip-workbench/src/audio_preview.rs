@@ -1667,6 +1667,7 @@ impl AudioPreviewState {
         cmd.arg("-c:a").arg("pcm_s16le");
 
         cmd.arg(&out_path)
+            .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
 
@@ -1771,6 +1772,7 @@ impl AudioPreviewState {
             cmd.arg("-c:a").arg("pcm_s16le");
 
             cmd.arg(&out_path)
+                .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null());
 
@@ -2013,6 +2015,7 @@ impl AudioPreviewState {
             }
 
             cmd.arg(&out_path)
+                .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null());
 
@@ -2860,91 +2863,118 @@ Separated track
         );
     }
 
+    fn generate_fixture_wav(name: &str, duration_secs: f32) -> (tempfile::TempDir, PathBuf) {
+        use std::io::Write;
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join(format!("{name}.wav"));
+        let mut file = std::fs::File::create(&path).unwrap();
+        let sample_rate = 44100u32;
+        let num_samples = (sample_rate as f32 * duration_secs) as usize;
+        let num_channels = 2u16;
+        let bits_per_sample = 16u16;
+
+        let byte_rate = sample_rate * num_channels as u32 * (bits_per_sample as u32 / 8);
+        let block_align = num_channels * (bits_per_sample / 8);
+        let data_len = (num_samples * num_channels as usize * 2) as u32;
+        let riff_len = 36 + data_len;
+
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&riff_len.to_le_bytes()).unwrap();
+        file.write_all(b"WAVE").unwrap();
+        file.write_all(b"fmt ").unwrap();
+        file.write_all(&16u32.to_le_bytes()).unwrap();
+        file.write_all(&1u16.to_le_bytes()).unwrap();
+        file.write_all(&num_channels.to_le_bytes()).unwrap();
+        file.write_all(&sample_rate.to_le_bytes()).unwrap();
+        file.write_all(&byte_rate.to_le_bytes()).unwrap();
+        file.write_all(&block_align.to_le_bytes()).unwrap();
+        file.write_all(&bits_per_sample.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&data_len.to_le_bytes()).unwrap();
+
+        for i in 0..num_samples {
+            let t = i as f32 / sample_rate as f32;
+            let s1 = ((t * 440.0 * 2.0 * std::f32::consts::PI).sin() * 8000.0) as i16;
+            let s2 = ((t * 880.0 * 2.0 * std::f32::consts::PI).sin() * 8000.0) as i16;
+            file.write_all(&s1.to_le_bytes()).unwrap();
+            file.write_all(&s2.to_le_bytes()).unwrap();
+        }
+        (temp_dir, path)
+    }
+
     #[test]
-    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_audio_preview_state_creation_and_seek() {
-        let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
-        if p.is_file() {
-            let mut state = AudioPreviewState::new(p.clone(), "TAPE_NOISE_04.wav".to_string());
-            assert!(state.duration_sec > 4.0);
-            assert!(state.metadata.is_some());
+        let (_dir, p) = generate_fixture_wav("fixture", 5.0);
+        let mut state = AudioPreviewState::new(p.clone(), "fixture.wav".to_string());
+        assert!(state.duration_sec >= 4.0);
+        assert!(state.metadata.is_some());
 
-            // Test seek
-            state.seek_to(2.0);
-            assert_eq!(state.current_time_sec, 2.0);
+        // Test seek
+        state.seek_to(2.0);
+        assert_eq!(state.current_time_sec, 2.0);
 
-            // Test selection
-            state.selection = Some((1.0, 3.0));
-            assert_eq!(state.selection, Some((1.0, 3.0)));
+        // Test selection
+        state.selection = Some((1.0, 3.0));
+        assert_eq!(state.selection, Some((1.0, 3.0)));
 
-            // Test segment copy extraction (native stereo)
-            state.copy_selected_segment(1.0, ChannelCopyMode::Native);
-            assert!(state.status_toast.is_some());
-            let (toast, _) = state.status_toast.unwrap();
-            assert!(toast.contains("Copied slice"));
-        }
+        // Test segment copy extraction (native stereo)
+        state.copy_selected_segment(1.0, ChannelCopyMode::Native);
+        assert!(state.status_toast.is_some());
+        let (toast, _) = state.status_toast.unwrap();
+        assert!(toast.contains("Copied slice"));
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_zoom_and_pan_calculations() {
-        let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
-        if p.is_file() {
-            let mut state = AudioPreviewState::new(p.clone(), "TAPE_NOISE_04.wav".to_string());
-            let init_dur = state.view_duration_sec;
+        let (_dir, p) = generate_fixture_wav("fixture", 5.0);
+        let mut state = AudioPreviewState::new(p.clone(), "fixture.wav".to_string());
+        let init_dur = state.view_duration_sec;
 
-            // Zoom In
-            state.zoom(0.5, 2.0);
-            assert!(state.view_duration_sec < init_dur);
-            assert!(state.view_start_sec >= 0.0);
+        // Zoom In
+        state.zoom(0.5, 2.0);
+        assert!(state.view_duration_sec < init_dur);
+        assert!(state.view_start_sec >= 0.0);
 
-            // Pan right
-            let s1 = state.view_start_sec;
-            state.pan(0.5);
-            assert!(state.view_start_sec >= s1);
+        // Pan right
+        let s1 = state.view_start_sec;
+        state.pan(0.5);
+        assert!(state.view_start_sec >= s1);
 
-            // Fit to window
-            state.fit_to_window();
-            assert_eq!(state.view_start_sec, 0.0);
-            assert_eq!(state.view_duration_sec, state.duration_sec);
-        }
+        // Fit to window
+        state.fit_to_window();
+        assert_eq!(state.view_start_sec, 0.0);
+        assert_eq!(state.view_duration_sec, state.duration_sec);
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_channel_slicing_modes() {
-        let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
-        if p.is_file() {
-            let mut state = AudioPreviewState::new(p.clone(), "TAPE_NOISE_04.wav".to_string());
-            state.selection = Some((0.5, 1.5));
+        let (_dir, p) = generate_fixture_wav("fixture", 5.0);
+        let mut state = AudioPreviewState::new(p.clone(), "fixture.wav".to_string());
+        state.selection = Some((0.5, 1.5));
 
-            // Test Left Only
-            state.copy_selected_segment(1.0, ChannelCopyMode::LeftOnly);
-            assert!(state.status_toast.is_some());
-            let (toast, _) = state.status_toast.as_ref().unwrap();
-            assert!(toast.contains("LEFT (mono)"));
+        // Test Left Only
+        state.copy_selected_segment(1.0, ChannelCopyMode::LeftOnly);
+        assert!(state.status_toast.is_some());
+        let (toast, _) = state.status_toast.as_ref().unwrap();
+        assert!(toast.contains("LEFT (mono)"));
 
-            // Test Right Only
-            state.copy_selected_segment(2.0, ChannelCopyMode::RightOnly);
-            assert!(state.status_toast.is_some());
-            let (toast, _) = state.status_toast.as_ref().unwrap();
-            assert!(toast.contains("RIGHT (mono)"));
-        }
+        // Test Right Only
+        state.copy_selected_segment(2.0, ChannelCopyMode::RightOnly);
+        assert!(state.status_toast.is_some());
+        let (toast, _) = state.status_toast.as_ref().unwrap();
+        assert!(toast.contains("RIGHT (mono)"));
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_small_sub_50ms_slice_selection() {
-        let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
-        if p.is_file() {
-            let mut state = AudioPreviewState::new(p.clone(), "TAPE_NOISE_04.wav".to_string());
-            state.selection = Some((1.000, 1.020));
-            state.copy_selected_segment(1.0, ChannelCopyMode::Native);
-            assert!(state.status_toast.is_some());
-            let (toast, _) = state.status_toast.unwrap();
-            assert!(toast.contains("Copied slice"));
-            assert!(toast.contains("0.020s"));
-        }
+        let (_dir, p) = generate_fixture_wav("fixture", 5.0);
+        let mut state = AudioPreviewState::new(p.clone(), "fixture.wav".to_string());
+        state.selection = Some((1.000, 1.020));
+        state.copy_selected_segment(1.0, ChannelCopyMode::Native);
+        assert!(state.status_toast.is_some());
+        let (toast, _) = state.status_toast.unwrap();
+        assert!(toast.contains("Copied slice"));
+        assert!(toast.contains("0.020s"));
     }
 
     #[test]
@@ -3026,155 +3056,143 @@ Separated track
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_multi_region_mode_and_removal() {
-        let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
-        if p.is_file() {
-            let mut state = AudioPreviewState::new(p.clone(), "TAPE_NOISE_04.wav".to_string());
-            assert_eq!(state.selection_mode, SelectionMode::Single);
-            assert!(state.multi_selections.is_empty());
+        let (_dir, p) = generate_fixture_wav("fixture", 5.0);
+        let mut state = AudioPreviewState::new(p.clone(), "fixture.wav".to_string());
+        assert_eq!(state.selection_mode, SelectionMode::Single);
+        assert!(state.multi_selections.is_empty());
 
-            // Single selection default
-            state.selection = Some((1.0, 2.0));
-            assert_eq!(state.active_selection_range(), Some((1.0, 2.0)));
-            assert!(state.is_time_selected(1.5));
-            assert!(!state.is_time_selected(2.5));
+        // Single selection default
+        state.selection = Some((1.0, 2.0));
+        assert_eq!(state.active_selection_range(), Some((1.0, 2.0)));
+        assert!(state.is_time_selected(1.5));
+        assert!(!state.is_time_selected(2.5));
 
-            // Switch to Multi-Region Mode
-            state.set_selection_mode(SelectionMode::Multi);
-            assert_eq!(state.selection_mode, SelectionMode::Multi);
-            // Preserves the existing selection into multi_selections
-            assert_eq!(state.multi_selections.len(), 1);
-            assert_eq!(state.multi_selections[0], (1.0, 2.0));
+        // Switch to Multi-Region Mode
+        state.set_selection_mode(SelectionMode::Multi);
+        assert_eq!(state.selection_mode, SelectionMode::Multi);
+        // Preserves the existing selection into multi_selections
+        assert_eq!(state.multi_selections.len(), 1);
+        assert_eq!(state.multi_selections[0], (1.0, 2.0));
 
-            // Add second region
-            state.multi_selections.push((2.5, 3.5));
-            assert_eq!(state.multi_selections.len(), 2);
-            assert!(state.is_time_selected(1.5));
-            assert!(state.is_time_selected(3.0));
-            assert!(!state.is_time_selected(2.2));
+        // Add second region
+        state.multi_selections.push((2.5, 3.5));
+        assert_eq!(state.multi_selections.len(), 2);
+        assert!(state.is_time_selected(1.5));
+        assert!(state.is_time_selected(3.0));
+        assert!(!state.is_time_selected(2.2));
 
-            // Test multi-region batch extraction
-            state.copy_all_multi_segments(1.0, ChannelCopyMode::Native);
-            assert!(state.status_toast.is_some());
-            let (toast, _) = state.status_toast.as_ref().unwrap();
-            assert!(toast.contains("Copied 2 audio slices"));
+        // Test multi-region batch extraction
+        state.copy_all_multi_segments(1.0, ChannelCopyMode::Native);
+        assert!(state.status_toast.is_some());
+        let (toast, _) = state.status_toast.as_ref().unwrap();
+        assert!(toast.contains("Copied 2 audio slices"));
 
-            // Remove a region
-            state.multi_selections.remove(0);
-            assert_eq!(state.multi_selections.len(), 1);
-            assert_eq!(state.multi_selections[0], (2.5, 3.5));
-            assert!(!state.is_time_selected(1.5));
-            assert!(state.is_time_selected(3.0));
+        // Remove a region
+        state.multi_selections.remove(0);
+        assert_eq!(state.multi_selections.len(), 1);
+        assert_eq!(state.multi_selections[0], (2.5, 3.5));
+        assert!(!state.is_time_selected(1.5));
+        assert!(state.is_time_selected(3.0));
 
-            // Switch back to Single Mode: keeps first multi-region as single selection
-            state.set_selection_mode(SelectionMode::Single);
-            assert_eq!(state.selection_mode, SelectionMode::Single);
-            assert_eq!(state.selection, Some((2.5, 3.5)));
-        }
+        // Switch back to Single Mode: keeps first multi-region as single selection
+        state.set_selection_mode(SelectionMode::Single);
+        assert_eq!(state.selection_mode, SelectionMode::Single);
+        assert_eq!(state.selection, Some((2.5, 3.5)));
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_zero_crossing_snapping_integration() {
-        let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
-        if p.is_file() {
-            let mut state = AudioPreviewState::new(p.clone(), "TAPE_NOISE_04.wav".to_string());
-            assert!(!state.snap_zero_crossings);
+        let (_dir, p) = generate_fixture_wav("fixture", 5.0);
+        let mut state = AudioPreviewState::new(p.clone(), "fixture.wav".to_string());
+        assert!(!state.snap_zero_crossings);
 
-            state.selection = Some((1.0123, 2.4567));
-            // Toggle snap mode
-            state.snap_zero_crossings = true;
-            assert!(state.snap_zero_crossings);
+        state.selection = Some((1.0123, 2.4567));
+        // Toggle snap mode
+        state.snap_zero_crossings = true;
+        assert!(state.snap_zero_crossings);
 
-            let analysis = compute_full_audio_analysis(&p, 50).expect("analysis");
-            state.analysis = Some(analysis);
+        let analysis = compute_full_audio_analysis(&p, 50).expect("analysis");
+        state.analysis = Some(analysis);
 
-            let snapped_s = state.snap_time(1.0123, false);
-            let snapped_e = state.snap_time(2.4567, false);
-            // Snapped values should be valid timestamps
-            assert!(snapped_s >= 0.0 && snapped_s <= state.duration_sec);
-            assert!(snapped_e >= 0.0 && snapped_e <= state.duration_sec);
+        let snapped_s = state.snap_time(1.0123, false);
+        let snapped_e = state.snap_time(2.4567, false);
+        // Snapped values should be valid timestamps
+        assert!(snapped_s >= 0.0 && snapped_s <= state.duration_sec);
+        assert!(snapped_e >= 0.0 && snapped_e <= state.duration_sec);
 
-            // Trigger instant snap on active selection
-            state.snap_active_selection_to_zero_crossings(1.0);
-            assert!(state.status_toast.is_some());
-            let (toast, _) = state.status_toast.as_ref().unwrap();
-            assert!(toast.contains("Snapped selection to 0-crossings"));
-        }
+        // Trigger instant snap on active selection
+        state.snap_active_selection_to_zero_crossings(1.0);
+        assert!(state.status_toast.is_some());
+        let (toast, _) = state.status_toast.as_ref().unwrap();
+        assert!(toast.contains("Snapped selection to 0-crossings"));
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_transient_toggle_and_snapping_integration() {
-        let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
-        if p.is_file() {
-            let mut state = AudioPreviewState::new(p.clone(), "TAPE_NOISE_04.wav".to_string());
-            assert!(!state.show_transients);
+        let (_dir, p) = generate_fixture_wav("fixture", 5.0);
+        let mut state = AudioPreviewState::new(p.clone(), "fixture.wav".to_string());
+        assert!(!state.show_transients);
 
-            // Toggle transients ON
-            state.show_transients = true;
-            assert!(state.show_transients);
+        // Toggle transients ON
+        state.show_transients = true;
+        assert!(state.show_transients);
 
-            let mut analysis = compute_full_audio_analysis(&p, 50).expect("analysis");
-            // Add a synthetic transient if empty to verify snapping
-            if analysis.transients.is_empty() {
-                analysis.transients.push(1.234);
-            }
-            state.analysis = Some(analysis.clone());
-
-            let target_t = analysis.transients[0];
-            // Test snapping near the transient (within ~5ms)
-            let test_t = target_t + 0.005;
-            let snapped = state.snap_time(test_t, false);
-            assert_eq!(snapped, target_t);
-
-            // With both modes enabled, choose the transient first and then refine it
-            // to the nearest zero crossing rather than snapping around the pointer.
-            state.snap_zero_crossings = true;
-            let expected_crossing = analysis.snap_to_zero_crossing(target_t, 500);
-            assert_eq!(state.snap_time(test_t, false), expected_crossing);
-
-            // Holding Shift or Ctrl bypasses snapping even when both modes are ON
-            let bypassed = state.snap_time(test_t, true);
-            assert_eq!(bypassed, test_t);
-
-            // Toggle transients OFF -> should not snap to transient
-            state.show_transients = false;
-            let zero_crossing_only = state.snap_time(test_t, false);
-            assert_eq!(
-                zero_crossing_only,
-                analysis.snap_to_zero_crossing(test_t, 500),
-            );
+        let mut analysis = compute_full_audio_analysis(&p, 50).expect("analysis");
+        // Add a synthetic transient if empty to verify snapping
+        if analysis.transients.is_empty() {
+            analysis.transients.push(1.234);
         }
+        state.analysis = Some(analysis.clone());
+
+        let target_t = analysis.transients[0];
+        // Test snapping near the transient (within ~5ms)
+        let test_t = target_t + 0.005;
+        let snapped = state.snap_time(test_t, false);
+        assert_eq!(snapped, target_t);
+
+        // With both modes enabled, choose the transient first and then refine it
+        // to the nearest zero crossing rather than snapping around the pointer.
+        state.snap_zero_crossings = true;
+        let expected_crossing = analysis.snap_to_zero_crossing(target_t, 500);
+        assert_eq!(state.snap_time(test_t, false), expected_crossing);
+
+        // Holding Shift or Ctrl bypasses snapping even when both modes are ON
+        let bypassed = state.snap_time(test_t, true);
+        assert_eq!(bypassed, test_t);
+
+        // Toggle transients OFF -> should not snap to transient
+        state.show_transients = false;
+        let zero_crossing_only = state.snap_time(test_t, false);
+        assert_eq!(
+            zero_crossing_only,
+            analysis.snap_to_zero_crossing(test_t, 500),
+        );
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_middle_mouse_pan_calculation() {
-        let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
-        if p.is_file() {
-            let mut state = AudioPreviewState::new(p.clone(), "TAPE_NOISE_04.wav".to_string());
-            state.view_duration_sec = 2.0;
-            state.view_start_sec = 1.0;
-            state.selection = Some((1.2, 1.8));
+        let (_dir, p) = generate_fixture_wav("fixture", 5.0);
+        let mut state = AudioPreviewState::new(p.clone(), "fixture.wav".to_string());
+        state.view_duration_sec = 2.0;
+        state.view_start_sec = 1.0;
+        state.selection = Some((1.2, 1.8));
 
-            // Simulate middle mouse pan drag:
-            // start_x = 500.0, current_x = 400.0 (mouse moved 100px left, meaning viewing future audio)
-            let track_width = 1000.0;
-            let start_x = 500.0;
-            let cur_x = 400.0;
-            let initial_start_sec = 1.0;
+        // Simulate middle mouse pan drag:
+        // start_x = 500.0, current_x = 400.0 (mouse moved 100px left, meaning viewing future audio)
+        let track_width = 1000.0;
+        let start_x = 500.0;
+        let cur_x = 400.0;
+        let initial_start_sec = 1.0;
 
-            let dx = cur_x - start_x; // -100.0
-            let dt = (dx / track_width) * state.view_duration_sec; // (-100/1000) * 2.0 = -0.2
-            let max_start = (state.duration_sec - state.view_duration_sec).max(0.0);
-            state.view_start_sec = (initial_start_sec - dt).clamp(0.0, max_start); // 1.0 - (-0.2) = 1.2
+        let dx = cur_x - start_x; // -100.0
+        let dt = (dx / track_width) * state.view_duration_sec; // (-100/1000) * 2.0 = -0.2
+        let max_start = (state.duration_sec - state.view_duration_sec).max(0.0);
+        state.view_start_sec = (initial_start_sec - dt).clamp(0.0, max_start); // 1.0 - (-0.2) = 1.2
 
-            assert!((state.view_start_sec - 1.2).abs() < 0.001);
-            // Selection remains intact and unchanged
-            assert_eq!(state.selection, Some((1.2, 1.8)));
-        }
+        assert!((state.view_start_sec - 1.2).abs() < 0.001);
+        // Selection remains intact and unchanged
+        assert_eq!(state.selection, Some((1.2, 1.8)));
     }
 
     #[test]
@@ -3206,72 +3224,69 @@ Separated track
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_save_to_file_single_and_multi() {
-        let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
-        if p.is_file() {
-            let mut state = AudioPreviewState::new(p.clone(), "TAPE_NOISE_04.wav".to_string());
-            let temp_dest = std::env::temp_dir().join("little_clip_save_test");
-            let _ = std::fs::create_dir_all(&temp_dest);
-            state.save_destination_dir = temp_dest.to_string_lossy().to_string();
-            state.open_folder_after_save = false; // don't open file manager in test
+        let (_dir, p) = generate_fixture_wav("test_track", 5.0);
+        let mut state = AudioPreviewState::new(p.clone(), "test_track.wav".to_string());
+        let temp_dest =
+            std::env::temp_dir().join(format!("little_clip_save_test_{}", uuid::Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&temp_dest);
+        state.save_destination_dir = temp_dest.to_string_lossy().to_string();
+        state.open_folder_after_save = false; // don't open file manager in test
 
-            // 1. Single Selection Save
-            state.set_selection_mode(SelectionMode::Single);
-            state.selection = Some((1.0, 2.5)); // start 1.0s, duration 1.5s
-            state.open_save_dialog();
-            assert!(state.save_dialog_open);
-            assert_eq!(state.save_filenames.len(), 1);
-            assert_eq!(
-                state.save_filenames[0],
-                "TAPE_NOISE_04_00m01s000ms_01s500ms.wav"
-            );
+        // 1. Single Selection Save
+        state.set_selection_mode(SelectionMode::Single);
+        state.selection = Some((1.0, 2.5)); // start 1.0s, duration 1.5s
+        state.open_save_dialog();
+        assert!(state.save_dialog_open);
+        assert_eq!(state.save_filenames.len(), 1);
+        assert_eq!(
+            state.save_filenames[0],
+            "test_track_00m01s000ms_01s500ms.wav"
+        );
 
-            let res = state.execute_save(1.0);
-            assert!(res.is_ok());
-            assert_eq!(res.unwrap(), 1);
-            let saved_single = temp_dest.join("TAPE_NOISE_04_00m01s000ms_01s500ms.wav");
-            assert!(saved_single.exists());
-            assert!(std::fs::metadata(&saved_single).unwrap().len() > 0);
+        let res = state.execute_save(1.0);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), 1);
+        let saved_single = temp_dest.join("test_track_00m01s000ms_01s500ms.wav");
+        assert!(saved_single.exists());
+        assert!(std::fs::metadata(&saved_single).unwrap().len() > 0);
 
-            // 2. Multi-Selection Save
-            state.set_selection_mode(SelectionMode::Multi);
-            state.multi_selections = vec![(0.5, 1.2), (2.0, 2.8)];
-            state.open_save_dialog();
-            assert!(state.save_dialog_open);
-            assert_eq!(state.save_filenames.len(), 2);
-            assert_eq!(
-                state.save_filenames[0],
-                "TAPE_NOISE_04_00m00s500ms_00s700ms.wav"
-            );
-            assert_eq!(
-                state.save_filenames[1],
-                "TAPE_NOISE_04_00m02s000ms_00s800ms.wav"
-            );
+        // 2. Multi-Selection Save
+        state.set_selection_mode(SelectionMode::Multi);
+        state.multi_selections = vec![(0.5, 1.2), (2.0, 2.8)];
+        state.open_save_dialog();
+        assert!(state.save_dialog_open);
+        assert_eq!(state.save_filenames.len(), 2);
+        assert_eq!(
+            state.save_filenames[0],
+            "test_track_00m00s500ms_00s700ms.wav"
+        );
+        assert_eq!(
+            state.save_filenames[1],
+            "test_track_00m02s000ms_00s800ms.wav"
+        );
 
-            let res_multi = state.execute_save(2.0);
-            assert!(res_multi.is_ok());
-            assert_eq!(res_multi.unwrap(), 2);
+        let res_multi = state.execute_save(2.0);
+        assert!(res_multi.is_ok());
+        assert_eq!(res_multi.unwrap(), 2);
 
-            let saved_multi_1 = temp_dest.join("TAPE_NOISE_04_00m00s500ms_00s700ms.wav");
-            let saved_multi_2 = temp_dest.join("TAPE_NOISE_04_00m02s000ms_00s800ms.wav");
-            assert!(saved_multi_1.exists());
-            assert!(saved_multi_2.exists());
-            assert!(std::fs::metadata(&saved_multi_1).unwrap().len() > 0);
-            assert!(std::fs::metadata(&saved_multi_2).unwrap().len() > 0);
+        let saved_multi_1 = temp_dest.join("test_track_00m00s500ms_00s700ms.wav");
+        let saved_multi_2 = temp_dest.join("test_track_00m02s000ms_00s800ms.wav");
+        assert!(saved_multi_1.exists());
+        assert!(saved_multi_2.exists());
+        assert!(std::fs::metadata(&saved_multi_1).unwrap().len() > 0);
+        assert!(std::fs::metadata(&saved_multi_2).unwrap().len() > 0);
 
-            // Cleanup test files
-            let _ = std::fs::remove_file(saved_single);
-            let _ = std::fs::remove_file(saved_multi_1);
-            let _ = std::fs::remove_file(saved_multi_2);
-            let _ = std::fs::remove_dir(temp_dest);
-        }
+        // Cleanup test files
+        let _ = std::fs::remove_file(saved_single);
+        let _ = std::fs::remove_file(saved_multi_1);
+        let _ = std::fs::remove_file(saved_multi_2);
+        let _ = std::fs::remove_dir(temp_dest);
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_slice_preview_start_to_stop() {
-        let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
+        let (_dir, p) = generate_fixture_wav("test", 5.0);
         let mut state = AudioPreviewState::new(p, "test.wav".to_string());
         state.duration_sec = 10.0;
 
@@ -3298,9 +3313,8 @@ Separated track
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local audio fixture"]
     fn test_fine_grained_consistent_zoom() {
-        let p = PathBuf::from("/home/vega/Documents/type_testing/TAPE_NOISE_04.wav");
+        let (_dir, p) = generate_fixture_wav("test", 5.0);
         let mut state = AudioPreviewState::new(p, "test.wav".to_string());
         state.duration_sec = 20.0;
         state.view_start_sec = 2.0;

@@ -1055,65 +1055,25 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual integration test requires developer-local image fixtures"]
-    fn test_image_diff_state_from_type_testing() {
-        use std::path::PathBuf;
-        use std::time::Instant;
-        let p1 = PathBuf::from("/home/vega/Documents/type_testing/frosky.png");
-        let p2 = PathBuf::from("/home/vega/Documents/type_testing/frosky_edit.png");
-        if p1.is_file() && p2.is_file() {
-            let t0 = Instant::now();
-            let item1 = little_clip_core::ClipItem::from_single_file(&p1);
-            let item2 = little_clip_core::ClipItem::from_single_file(&p2);
-            let t1 =
-                little_clip_ops::diff::resolve_diff_target(&item1).expect("Failed to resolve t1");
-            let t2 =
-                little_clip_ops::diff::resolve_diff_target(&item2).expect("Failed to resolve t2");
-            let mut state = DiffViewerState::new(t1, t2, DiffDisplayMode::SideBySide);
-            println!("frosky new time: {:?}", t0.elapsed());
-            state.wait_for_completion();
-            println!("frosky total completed time: {:?}", t0.elapsed());
-            let res = state.image_result.unwrap();
-            assert_eq!(res.width, 3000);
-            assert_eq!(res.height, 3000);
-            assert_eq!(res.diff_count, 194173);
-        }
+    fn image_diff_state_uses_generated_fixture_images() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let left_path = temp_dir.path().join("left.png");
+        let right_path = temp_dir.path().join("right.png");
+        let left = image::RgbaImage::from_pixel(3, 2, image::Rgba([0, 0, 0, 255]));
+        let mut right = left.clone();
+        right.put_pixel(1, 1, image::Rgba([255, 255, 255, 255]));
+        left.save(&left_path).unwrap();
+        right.save(&right_path).unwrap();
 
-        let v1 = PathBuf::from("/home/vega/Documents/type_testing/Vega.webp");
-        let v2 = PathBuf::from("/home/vega/Documents/type_testing/Vega_edit.webp");
-        if v1.is_file() && v2.is_file() {
-            let t0 = Instant::now();
-            let item1 = little_clip_core::ClipItem::from_single_file(&v1);
-            let item2 = little_clip_core::ClipItem::from_single_file(&v2);
-            let t_load = Instant::now();
-            println!(
-                "Vega item from_single_file: {:?}",
-                t_load.duration_since(t0)
-            );
-            let t1 =
-                little_clip_ops::diff::resolve_diff_target(&item1).expect("Failed to resolve t1");
-            let t2 =
-                little_clip_ops::diff::resolve_diff_target(&item2).expect("Failed to resolve t2");
-            let t_resolve = Instant::now();
-            println!(
-                "Vega resolve_diff_target: {:?}",
-                t_resolve.duration_since(t_load)
-            );
-            let mut state = DiffViewerState::new(t1, t2, DiffDisplayMode::SideBySide);
-            let t_state = Instant::now();
-            println!(
-                "Vega DiffViewerState::new async spawn: {:?}",
-                t_state.duration_since(t_resolve)
-            );
-            state.wait_for_completion();
-            println!(
-                "Vega DiffViewerState::wait_for_completion: {:?}",
-                t_state.elapsed()
-            );
-            let res = state.image_result.unwrap();
-            assert_eq!(res.width, 6000);
-            assert_eq!(res.height, 6000);
-            assert_eq!(res.diff_count, 1794022);
-        }
+        let left = little_clip_core::ClipItem::from_single_file(&left_path);
+        let right = little_clip_core::ClipItem::from_single_file(&right_path);
+        let left = little_clip_ops::diff::resolve_diff_target(&left).unwrap();
+        let right = little_clip_ops::diff::resolve_diff_target(&right).unwrap();
+        let mut state = DiffViewerState::new(left, right, DiffDisplayMode::SideBySide);
+        state.wait_for_completion();
+
+        let result = state.image_result.unwrap();
+        assert_eq!((result.width, result.height), (3, 2));
+        assert_eq!(result.diff_count, 1);
     }
 }
