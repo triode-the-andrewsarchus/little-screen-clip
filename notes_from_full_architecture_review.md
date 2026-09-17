@@ -13,7 +13,7 @@
 | Duplicate staging and clipboard mechanisms | **DONE/FIXED** |
 | Remaining external-command consolidation | **DONE/FIXED** |
 | Hex parser API split | **DONE/FIXED** |
-| Shared operation descriptor/catalog | **FIX NOT YET STARTED** |
+| Shared operation descriptor/catalog | **DONE/FIXED** |
 | Curated core/ops public exports | **DONE/FIXED** |
 | Pipeline catalog enforcement | **DONE/FIXED** |
 | Lightweight IPC state projections | **DONE/FIXED** |

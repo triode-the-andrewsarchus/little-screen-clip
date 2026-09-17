@@ -247,6 +247,30 @@ pub const AVAILABLE_OPS: &[OpDescriptor] = &[
     },
 ];
 
+impl OpDescriptor {
+    /// Returns the matching pipeline [`NodeTemplate`](pipeline::NodeTemplate) if this operation is also available
+    /// as a pipeline node.
+    pub fn matching_node_template(&self) -> Option<&'static pipeline::NodeTemplate> {
+        let target_id = match self.name {
+            "trim" => Some("text_trim"),
+            "slugify" => Some("text_slugify"),
+            "uppercase" | "lowercase" | "snake-case" | "camel-case" | "kebab-case" => {
+                Some("text_case")
+            }
+            "base64-encode" | "base64-decode" => Some("text_base64"),
+            "join-spaces" | "join-commas" | "concat" | "concat-all" => Some("text_join"),
+            "diff" => Some("img_diff"),
+            _ => None,
+        };
+        target_id.and_then(pipeline::catalog::find_template)
+    }
+}
+
+/// Looks up a built-in operation descriptor by operation name (e.g. `"trim"`, `"clean-url"`).
+pub fn find_op_by_name(name: &str) -> Option<&'static OpDescriptor> {
+    AVAILABLE_OPS.iter().find(|op| op.name == name)
+}
+
 /// Returns a list of operations applicable to the provided slice of selected clipboard items.
 pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
     if items.is_empty() {
@@ -1226,5 +1250,30 @@ mod tests {
 
         let _ = std::fs::remove_file(&txt_path);
         let _ = std::fs::remove_file(&bin_path);
+    }
+
+    #[test]
+    fn test_op_descriptor_and_pipeline_catalog_bridge() {
+        let trim_op = find_op_by_name("trim").expect("trim op exists");
+        let trim_node = trim_op.matching_node_template().expect("trim node exists");
+        assert_eq!(trim_node.id, "text_trim");
+        assert_eq!(trim_node.matching_op_descriptor().unwrap().name, "trim");
+
+        let slugify_op = find_op_by_name("slugify").expect("slugify op exists");
+        let slugify_node = slugify_op
+            .matching_node_template()
+            .expect("text_slugify node exists");
+        assert_eq!(slugify_node.id, "text_slugify");
+        assert_eq!(
+            slugify_node.matching_op_descriptor().unwrap().name,
+            "slugify"
+        );
+
+        let diff_op = find_op_by_name("diff").expect("diff op exists");
+        let diff_node = diff_op
+            .matching_node_template()
+            .expect("img_diff node exists");
+        assert_eq!(diff_node.id, "img_diff");
+        assert_eq!(diff_node.matching_op_descriptor().unwrap().name, "diff");
     }
 }
