@@ -8,6 +8,7 @@ pub mod color;
 pub mod config;
 pub mod ipc;
 pub mod item;
+pub mod jobs;
 pub mod raw_image;
 pub mod rolling_audio;
 pub mod slot;
@@ -37,6 +38,7 @@ pub use config::{
 };
 pub use ipc::{IpcRequest, IpcResponse};
 pub use item::{ClipItem, ClipPayload, ImageThumbnail, PayloadKind};
+pub use jobs::{BackgroundJobs, JobError, JobTicket};
 pub use rolling_audio::{RollingAudioBuffer, slice_wav};
 pub use slot::{HandSide, SlotId, SlotManager};
 pub use staging::{ArtifactLease, ArtifactStore, StagingManager};

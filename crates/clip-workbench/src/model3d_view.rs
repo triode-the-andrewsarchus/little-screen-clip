@@ -41,7 +41,7 @@ pub struct Model3dViewerState {
     pub title: String,
     pub status: ModelLoadingStatus,
     pub mesh: Option<Model3d>,
-    pub rx: Option<Receiver<Result<Model3d, String>>>,
+    pub rx: Option<Receiver<Result<Result<Model3d, String>, little_clip_core::JobError>>>,
     pub pitch: f32, // X rotation (radians)
     pub yaw: f32,   // Y rotation (radians)
     pub zoom: f32,
@@ -73,12 +73,11 @@ impl Model3dViewerState {
             UpAxis::YUp
         };
 
-        let (tx, rx) = std::sync::mpsc::channel();
         let load_path = path.clone();
-        std::thread::spawn(move || {
-            let res = Model3d::load_file(&load_path);
-            let _ = tx.send(res);
-        });
+        let (_, rx) = little_clip_core::BackgroundJobs::global()
+            .submit(std::time::Duration::from_secs(30), move || {
+                Model3d::load_file(&load_path)
+            });
 
         Self {
             path: Some(path),
@@ -156,7 +155,7 @@ impl Model3dViewerState {
         if let Some(ref rx) = self.rx {
             if let Ok(res) = rx.try_recv() {
                 match res {
-                    Ok(m) => {
+                    Ok(Ok(m)) => {
                         self.up_axis = if m.format == ModelFormat::Stl {
                             UpAxis::ZUp
                         } else {
@@ -165,9 +164,10 @@ impl Model3dViewerState {
                         self.mesh = Some(m);
                         self.status = ModelLoadingStatus::Ready;
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         self.status = ModelLoadingStatus::Error(e);
                     }
+                    Err(error) => self.status = ModelLoadingStatus::Error(error.to_string()),
                 }
                 self.rx = None;
             }
