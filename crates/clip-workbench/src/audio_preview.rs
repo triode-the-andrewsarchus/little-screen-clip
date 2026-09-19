@@ -287,6 +287,16 @@ enum DragAction {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RightClickHoldState {
+    pub start_instant: Instant,
+    pub target_range: (f32, f32),
+    pub slice_index: Option<usize>,
+    pub started_looping: bool,
+}
+
+pub const RIGHT_CLICK_HOLD_TIMEOUT: Duration = Duration::from_millis(300);
+
 #[derive(Default)]
 struct PlaybackEdits {
     generation: AtomicU64,
@@ -488,8 +498,11 @@ pub struct AudioPreviewState {
     pub open_folder_after_save: bool,
     browse_rx: Option<Receiver<Option<String>>>,
 
-    // Slice preview limit (for right-click slice preview)
+    // Slice preview limit and looping state (for right-click slice preview and hold-to-loop)
     pub preview_stop_time: Option<f32>,
+    pub preview_slice_range: Option<(f32, f32)>,
+    pub preview_is_looping: bool,
+    pub right_click_hold: Option<RightClickHoldState>,
 
     stem_separation: StemSeparationState,
 }
@@ -1129,6 +1142,9 @@ impl AudioPreviewState {
             open_folder_after_save: true,
             browse_rx: None,
             preview_stop_time: None,
+            preview_slice_range: None,
+            preview_is_looping: false,
+            right_click_hold: None,
             stem_separation: StemSeparationState::default(),
         }
     }
@@ -1596,7 +1612,7 @@ impl AudioPreviewState {
         }
     }
 
-    pub fn play_slice_preview(&mut self, start_sec: f32, end_sec: f32) {
+    pub fn play_slice_preview_ex(&mut self, start_sec: f32, end_sec: f32, looping: bool) {
         let (s, mut e) = if start_sec < end_sec {
             (start_sec, end_sec)
         } else {
@@ -1606,6 +1622,8 @@ impl AudioPreviewState {
             e = (s + 0.1).min(self.duration_sec);
         }
         self.preview_stop_time = Some(e);
+        self.preview_slice_range = Some((s, e));
+        self.preview_is_looping = looping;
         self.current_time_sec = s;
         self.playback_start_offset_sec = s;
         self.playback_start_instant = Some(Instant::now());
@@ -1627,8 +1645,18 @@ impl AudioPreviewState {
         }
     }
 
+    pub fn play_slice_preview(&mut self, start_sec: f32, end_sec: f32) {
+        self.play_slice_preview_ex(start_sec, end_sec, false);
+    }
+
+    pub fn play_slice_preview_loop(&mut self, start_sec: f32, end_sec: f32) {
+        self.play_slice_preview_ex(start_sec, end_sec, true);
+    }
+
     pub fn play(&mut self) {
         self.preview_stop_time = None;
+        self.preview_slice_range = None;
+        self.preview_is_looping = false;
         if self.player.is_none() {
             return;
         }
@@ -1667,6 +1695,8 @@ impl AudioPreviewState {
 
     pub fn pause(&mut self) {
         self.preview_stop_time = None;
+        self.preview_slice_range = None;
+        self.preview_is_looping = false;
         if let Some(ref p) = self.player {
             p.pause();
         }
@@ -1676,6 +1706,8 @@ impl AudioPreviewState {
 
     pub fn stop(&mut self) {
         self.preview_stop_time = None;
+        self.preview_slice_range = None;
+        self.preview_is_looping = false;
         if let Some(ref p) = self.player {
             p.stop();
         }
@@ -1684,8 +1716,12 @@ impl AudioPreviewState {
         self.current_time_sec = self.active_selection_range().map(|(s, _)| s).unwrap_or(0.0);
     }
 
-    pub fn seek_to(&mut self, target_sec: f32) {
-        self.preview_stop_time = None;
+    pub fn seek_to_internal(&mut self, target_sec: f32, clear_preview: bool) {
+        if clear_preview {
+            self.preview_stop_time = None;
+            self.preview_slice_range = None;
+            self.preview_is_looping = false;
+        }
         let clamped = target_sec.clamp(0.0, self.duration_sec);
         self.current_time_sec = clamped;
         self.playback_start_offset_sec = clamped;
@@ -1716,6 +1752,14 @@ impl AudioPreviewState {
                 }
             }
         }
+    }
+
+    pub fn seek_to(&mut self, target_sec: f32) {
+        self.seek_to_internal(target_sec, true);
+    }
+
+    pub fn loop_seek_to(&mut self, target_sec: f32) {
+        self.seek_to_internal(target_sec, false);
     }
 
     pub fn copy_selected_segment(&mut self, now: f64, mode: ChannelCopyMode) {
@@ -3503,5 +3547,66 @@ Separated track
             AudioSelectionModel::clamp_to_duration((-1.0, 15.0), 10.0),
             (0.0, 10.0)
         );
+    }
+
+    #[test]
+    fn test_slice_preview_looping_and_loop_seek() {
+        let (_dir, p) = generate_fixture_wav("test", 5.0);
+        let mut state = AudioPreviewState::new(p, "test.wav".to_string());
+        state.duration_sec = 10.0;
+
+        assert_eq!(state.preview_stop_time, None);
+        assert_eq!(state.preview_slice_range, None);
+        assert!(!state.preview_is_looping);
+
+        // 1. Play slice preview with looping enabled
+        state.play_slice_preview_loop(1.2, 3.8);
+        assert_eq!(state.preview_stop_time, Some(3.8));
+        assert_eq!(state.preview_slice_range, Some((1.2, 3.8)));
+        assert!(state.preview_is_looping);
+        assert!((state.current_time_sec - 1.2).abs() < 1e-4);
+
+        // 2. Loop seek preserves preview bounds and looping flag
+        state.loop_seek_to(1.2);
+        assert_eq!(state.preview_stop_time, Some(3.8));
+        assert_eq!(state.preview_slice_range, Some((1.2, 3.8)));
+        assert!(state.preview_is_looping);
+        assert!((state.current_time_sec - 1.2).abs() < 1e-4);
+
+        // 3. Normal seek clears preview state
+        state.seek_to(0.5);
+        assert_eq!(state.preview_stop_time, None);
+        assert_eq!(state.preview_slice_range, None);
+        assert!(!state.preview_is_looping);
+        assert!((state.current_time_sec - 0.5).abs() < 1e-4);
+
+        // 4. Play slice preview non-looping
+        state.play_slice_preview(2.0, 4.0);
+        assert_eq!(state.preview_stop_time, Some(4.0));
+        assert_eq!(state.preview_slice_range, Some((2.0, 4.0)));
+        assert!(!state.preview_is_looping);
+
+        // 5. Pause clears preview state
+        state.pause();
+        assert_eq!(state.preview_stop_time, None);
+        assert_eq!(state.preview_slice_range, None);
+        assert!(!state.preview_is_looping);
+    }
+
+    #[test]
+    fn test_right_click_hold_state_and_timeout() {
+        assert_eq!(RIGHT_CLICK_HOLD_TIMEOUT, Duration::from_millis(300));
+
+        let now = Instant::now();
+        let hold = RightClickHoldState {
+            start_instant: now,
+            target_range: (1.0, 3.0),
+            slice_index: Some(2),
+            started_looping: false,
+        };
+
+        assert_eq!(hold.target_range, (1.0, 3.0));
+        assert_eq!(hold.slice_index, Some(2));
+        assert!(!hold.started_looping);
     }
 }

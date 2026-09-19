@@ -68,11 +68,28 @@ impl AudioPreviewState {
                 let new_time = self.playback_start_offset_sec + elapsed;
 
                 // Check if previewing a specific slice
+                if self.preview_is_looping {
+                    if let Some((sel_start, sel_end)) = self.active_selection_range() {
+                        self.preview_stop_time = Some(sel_end);
+                        self.preview_slice_range = Some((sel_start, sel_end));
+                    }
+                }
+
                 if let Some(stop_t) = self.preview_stop_time {
                     if new_time >= stop_t {
-                        self.pause();
-                        self.current_time_sec = stop_t;
-                        self.preview_stop_time = None;
+                        if self.preview_is_looping {
+                            let start_t =
+                                self.preview_slice_range.map(|(s, _)| s).unwrap_or_else(|| {
+                                    self.active_selection_range().map(|(s, _)| s).unwrap_or(0.0)
+                                });
+                            self.loop_seek_to(start_t);
+                        } else {
+                            self.pause();
+                            self.current_time_sec = stop_t;
+                            self.preview_stop_time = None;
+                            self.preview_slice_range = None;
+                            self.preview_is_looping = false;
+                        }
                     } else {
                         self.current_time_sec = new_time;
                     }
@@ -118,14 +135,21 @@ impl AudioPreviewState {
 
         // Global Keybindings for Audio Preview
         let accepts_tool_shortcuts = !ctx.wants_keyboard_input();
-        if accepts_tool_shortcuts
-            && self.active_mode == AudioToolMode::Inspect
-            && ctx.input(|i| i.key_pressed(egui::Key::M))
-        {
-            self.selection_mode = match self.selection_mode {
-                SelectionMode::Single => SelectionMode::Multi,
-                SelectionMode::Multi => SelectionMode::Single,
-            };
+        if accepts_tool_shortcuts && self.active_mode == AudioToolMode::Inspect {
+            if ctx.input(|i| i.key_pressed(egui::Key::M)) {
+                self.selection_mode = match self.selection_mode {
+                    SelectionMode::Single => SelectionMode::Multi,
+                    SelectionMode::Multi => SelectionMode::Single,
+                };
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::L)) {
+                self.loop_selection = !self.loop_selection;
+                if self.is_playing && self.preview_stop_time.is_some() {
+                    self.preview_is_looping = self.loop_selection;
+                }
+                let status = if self.loop_selection { "ON" } else { "OFF" };
+                self.status_toast = Some((format!("🔁 Selection Looping: {}", status), now));
+            }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
             self.toggle_play();
@@ -346,6 +370,31 @@ impl AudioPreviewState {
                 );
                 if ui.add(replay_btn).clicked() {
                     self.seek_to(self.active_selection_range().map(|(s, _)| s).unwrap_or(0.0));
+                }
+
+                ui.add_space(3.0);
+
+                let loop_btn = layout::AudioWorkspace::toggle_button(
+                    "🔁 Loop [L]",
+                    self.loop_selection,
+                    palette,
+                );
+                if ui
+                    .add(loop_btn)
+                    .on_hover_text(
+                        "Loop playback within the active selection or on right-click preview. Press [L] to toggle.",
+                    )
+                    .clicked()
+                {
+                    self.loop_selection = !self.loop_selection;
+                    if self.is_playing && self.preview_stop_time.is_some() {
+                        self.preview_is_looping = self.loop_selection;
+                    }
+                    let status = if self.loop_selection { "ON" } else { "OFF" };
+                    self.status_toast = Some((
+                        format!("🔁 Selection Looping: {}", status),
+                        now,
+                    ));
                 }
 
                 ui.add_space(10.0);
@@ -850,7 +899,7 @@ impl AudioPreviewState {
                                 .min_size(Vec2::new(0.0, 30.0));
 
                                 let btn_resp = ui.add(btn).on_hover_text(
-                                    "Left-Click: focus & seek | Right-Click: preview slice",
+                                    "Left-Click: focus & seek | Right-Click: preview slice (hold or toggle [L] to loop)",
                                 );
                                 if btn_resp.clicked() {
                                     seek_target = Some((idx, s));
@@ -883,18 +932,33 @@ impl AudioPreviewState {
 
                     if let Some((idx, s, e)) = preview_target {
                         self.active_multi_index = Some(idx);
-                        self.play_slice_preview(s, e);
-                        self.status_toast = Some((
-                            format!(
-                                "▶ Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
-                                idx + 1,
-                                (s / 60.0) as u32,
-                                s % 60.0,
-                                (e / 60.0) as u32,
-                                e % 60.0
-                            ),
-                            now,
-                        ));
+                        if self.loop_selection {
+                            self.play_slice_preview_loop(s, e);
+                            self.status_toast = Some((
+                                format!(
+                                    "🔁 Looping slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
+                                    idx + 1,
+                                    (s / 60.0) as u32,
+                                    s % 60.0,
+                                    (e / 60.0) as u32,
+                                    e % 60.0
+                                ),
+                                now,
+                            ));
+                        } else {
+                            self.play_slice_preview(s, e);
+                            self.status_toast = Some((
+                                format!(
+                                    "▶ Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
+                                    idx + 1,
+                                    (s / 60.0) as u32,
+                                    s % 60.0,
+                                    (e / 60.0) as u32,
+                                    e % 60.0
+                                ),
+                                now,
+                            ));
+                        }
                     } else if let Some((idx, s)) = seek_target {
                         self.active_multi_index = Some(idx);
                         self.seek_to(s);
@@ -1093,6 +1157,131 @@ impl AudioPreviewState {
 
         let is_middle = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
         let is_primary = ui.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+        let is_secondary_down = ui.input(|i| i.pointer.button_down(egui::PointerButton::Secondary));
+        let is_secondary_pressed =
+            ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Secondary));
+        let is_secondary_released =
+            ui.input(|i| i.pointer.button_released(egui::PointerButton::Secondary));
+        let shift_down = ui.input(|i| i.modifiers.shift);
+        let now = ui.input(|i| i.time);
+
+        // Right-click press down on waveform canvas (when Shift is not held)
+        if is_secondary_pressed && !shift_down {
+            let pointer_pos = ui
+                .input(|i| i.pointer.interact_pos())
+                .or_else(|| response.interact_pointer_pos())
+                .or_else(|| response.hover_pos());
+            if let Some(pos) = pointer_pos.filter(|p| rect.contains(*p)) {
+                let is_in_ruler = pos.y <= ruler_rect.max.y;
+                if !is_in_ruler {
+                    let clicked_t = x_to_t(pos.x, self.view_start_sec, self.view_duration_sec)
+                        .clamp(0.0, self.duration_sec);
+                    let clicked_slice = match self.selection_mode {
+                        SelectionMode::Multi => self
+                            .multi_selections
+                            .iter()
+                            .enumerate()
+                            .find(|(_, (s, e))| clicked_t >= *s && clicked_t <= *e)
+                            .map(|(idx, &(s, e))| (Some(idx), s, e))
+                            .or_else(|| {
+                                self.active_multi_index.and_then(|idx| {
+                                    self.multi_selections
+                                        .get(idx)
+                                        .map(|&(s, e)| (Some(idx), s, e))
+                                })
+                            }),
+                        SelectionMode::Single => self.selection.map(|(s, e)| {
+                            let (s_min, s_max) = (s.min(e), s.max(e));
+                            (None, s_min, s_max)
+                        }),
+                    };
+                    if let Some((idx_opt, s, e)) = clicked_slice {
+                        self.right_click_hold = Some(crate::audio_preview::RightClickHoldState {
+                            start_instant: Instant::now(),
+                            target_range: (s, e),
+                            slice_index: idx_opt,
+                            started_looping: false,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Advance right-click hold-to-loop
+        if let Some(ref mut hold) = self.right_click_hold {
+            ui.ctx().request_repaint();
+            if is_secondary_down {
+                if !hold.started_looping
+                    && hold.start_instant.elapsed()
+                        >= crate::audio_preview::RIGHT_CLICK_HOLD_TIMEOUT
+                {
+                    hold.started_looping = true;
+                    if let Some(idx) = hold.slice_index {
+                        self.active_multi_index = Some(idx);
+                    }
+                    let (s, e) = hold.target_range;
+                    self.play_slice_preview_loop(s, e);
+                    self.status_toast = Some((
+                        format!(
+                            "🔁 Looping slice ({:02}:{:04.1} - {:02}:{:04.1}) [Hold]",
+                            (s / 60.0) as u32,
+                            s % 60.0,
+                            (e / 60.0) as u32,
+                            e % 60.0
+                        ),
+                        now,
+                    ));
+                }
+            }
+        }
+
+        // Right-click release handling
+        if is_secondary_released || (!is_secondary_down && self.right_click_hold.is_some()) {
+            if let Some(hold) = self.right_click_hold.take() {
+                if hold.started_looping {
+                    self.pause();
+                    self.status_toast = Some(("⏹ Stopped loop preview".to_string(), now));
+                } else {
+                    if let Some(idx) = hold.slice_index {
+                        self.active_multi_index = Some(idx);
+                    }
+                    let (s, e) = hold.target_range;
+                    if self.loop_selection {
+                        self.play_slice_preview_loop(s, e);
+                        self.status_toast = Some((
+                            format!(
+                                "🔁 Looping slice ({:02}:{:04.1} - {:02}:{:04.1})",
+                                (s / 60.0) as u32,
+                                s % 60.0,
+                                (e / 60.0) as u32,
+                                e % 60.0
+                            ),
+                            now,
+                        ));
+                    } else {
+                        self.play_slice_preview(s, e);
+                        self.status_toast = Some((
+                            format!(
+                                "▶ Previewing slice ({:02}:{:04.1} - {:02}:{:04.1})",
+                                (s / 60.0) as u32,
+                                s % 60.0,
+                                (e / 60.0) as u32,
+                                e % 60.0
+                            ),
+                            now,
+                        ));
+                    }
+                }
+            }
+        }
+
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) && self.right_click_hold.is_some() {
+            if let Some(hold) = self.right_click_hold.take() {
+                if hold.started_looping {
+                    self.stop();
+                }
+            }
+        }
 
         if response.drag_started() {
             if let Some(mouse_pos) = response.interact_pointer_pos() {
@@ -1385,82 +1574,38 @@ impl AudioPreviewState {
                 }
             }
         } else if response.secondary_clicked() {
-            // Right-click: preview selected slice from start to stop (Shift+Right-click removes/clears)
+            // Shift+Right-click removes/clears selected slice
             if let Some(pos) = response.interact_pointer_pos() {
                 let clicked_t = x_to_t(pos.x, self.view_start_sec, self.view_duration_sec)
                     .clamp(0.0, self.duration_sec);
                 let shift_down = ui.input(|i| i.modifiers.shift);
 
-                match self.selection_mode {
-                    SelectionMode::Multi => {
-                        let clicked_slice = self
-                            .multi_selections
-                            .iter()
-                            .enumerate()
-                            .find(|(_, (s, e))| clicked_t >= *s && clicked_t <= *e)
-                            .map(|(idx, &(s, e))| (idx, s, e));
+                if shift_down {
+                    match self.selection_mode {
+                        SelectionMode::Multi => {
+                            let clicked_slice = self
+                                .multi_selections
+                                .iter()
+                                .enumerate()
+                                .find(|(_, (s, e))| clicked_t >= *s && clicked_t <= *e)
+                                .map(|(idx, &(s, e))| (idx, s, e));
 
-                        if shift_down {
                             if let Some((idx, _, _)) = clicked_slice {
                                 self.remove_multi_region(idx);
-                                self.status_toast = Some((
-                                    format!("Removed slice #{}", idx + 1),
-                                    ui.input(|i| i.time),
-                                ));
-                            }
-                        } else if let Some((idx, s, e)) = clicked_slice {
-                            self.active_multi_index = Some(idx);
-                            self.play_slice_preview(s, e);
-                            self.status_toast = Some((
-                                format!(
-                                    "▶ Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
-                                    idx + 1,
-                                    (s / 60.0) as u32,
-                                    s % 60.0,
-                                    (e / 60.0) as u32,
-                                    e % 60.0
-                                ),
-                                ui.input(|i| i.time),
-                            ));
-                        } else if let Some(idx) = self.active_multi_index {
-                            if idx < self.multi_selections.len() {
-                                let (s, e) = self.multi_selections[idx];
-                                self.play_slice_preview(s, e);
-                                self.status_toast = Some((
-                                    format!(
-                                        "▶ Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
-                                        idx + 1,
-                                        (s / 60.0) as u32,
-                                        s % 60.0,
-                                        (e / 60.0) as u32,
-                                        e % 60.0
-                                    ),
-                                    ui.input(|i| i.time),
-                                ));
+                                self.status_toast =
+                                    Some((format!("Removed slice #{}", idx + 1), now));
                             }
                         }
-                    }
-                    SelectionMode::Single => {
-                        if let Some((s, e)) = self.selection {
-                            let (s_min, s_max) = (s.min(e), s.max(e));
-                            let is_inside = clicked_t >= s_min && clicked_t <= s_max;
-                            if shift_down && is_inside {
-                                self.selection = None;
-                                self.clear_single_region_effects();
-                                self.status_toast =
-                                    Some(("Cleared selection".to_string(), ui.input(|i| i.time)));
-                            } else {
-                                self.play_slice_preview(s_min, s_max);
-                                self.status_toast = Some((
-                                    format!(
-                                        "▶ Previewing slice ({:02}:{:04.1} - {:02}:{:04.1})",
-                                        (s_min / 60.0) as u32,
-                                        s_min % 60.0,
-                                        (s_max / 60.0) as u32,
-                                        s_max % 60.0
-                                    ),
-                                    ui.input(|i| i.time),
-                                ));
+                        SelectionMode::Single => {
+                            if let Some((s, e)) = self.selection {
+                                let (s_min, s_max) = (s.min(e), s.max(e));
+                                let is_inside = clicked_t >= s_min && clicked_t <= s_max;
+                                if is_inside {
+                                    self.selection = None;
+                                    self.clear_single_region_effects();
+                                    self.status_toast =
+                                        Some(("Cleared selection".to_string(), now));
+                                }
                             }
                         }
                     }
