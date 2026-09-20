@@ -47,6 +47,8 @@ pub mod perspective;
 
 pub mod creative_fx;
 
+pub mod digital_decode;
+
 /// Error encountered during transformation or diff execution.
 #[derive(Debug, Error)]
 pub enum OpError {

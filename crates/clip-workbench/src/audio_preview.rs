@@ -33,16 +33,18 @@ pub enum AudioToolMode {
     #[default]
     Inspect,
     StemSeparation,
+    DigitalDecode,
 }
 
 impl AudioToolMode {
     /// Order of tools in the shared Audio Studio tab bar.
-    const ALL: &'static [Self] = &[Self::Inspect, Self::StemSeparation];
+    const ALL: &'static [Self] = &[Self::Inspect, Self::StemSeparation, Self::DigitalDecode];
 
     fn label(self) -> &'static str {
         match self {
             Self::Inspect => "[I]nspect & Slice",
             Self::StemSeparation => "[S]tem Separation",
+            Self::DigitalDecode => "[D]igital Decode",
         }
     }
 }
@@ -505,6 +507,7 @@ pub struct AudioPreviewState {
     pub right_click_hold: Option<RightClickHoldState>,
 
     stem_separation: StemSeparationState,
+    digital_decode: DigitalDecodeState,
 }
 
 impl AudioPreviewState {
@@ -1146,6 +1149,7 @@ impl AudioPreviewState {
             preview_is_looping: false,
             right_click_hold: None,
             stem_separation: StemSeparationState::default(),
+            digital_decode: DigitalDecodeState::default(),
         }
     }
 
@@ -2573,6 +2577,11 @@ impl AudioPreviewState {
             {
                 self.active_mode = AudioToolMode::StemSeparation;
             }
+            if ctx
+                .input(|i| i.key_pressed(egui::Key::D) && !i.modifiers.command && !i.modifiers.ctrl)
+            {
+                self.active_mode = AudioToolMode::DigitalDecode;
+            }
         }
         // Tool-level shortcuts must win over nested stem editors.
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -2598,6 +2607,9 @@ impl AudioPreviewState {
                 }
                 AudioToolMode::StemSeparation => {
                     self.render_stem_separation_ui(ui, ctx, palette, close_requested)
+                }
+                AudioToolMode::DigitalDecode => {
+                    self.render_digital_decode_ui(ui, ctx, palette, close_requested)
                 }
             }
         });
@@ -2886,6 +2898,7 @@ mod tests {
     fn audio_tool_modes_have_stable_toolbar_labels() {
         assert_eq!(AudioToolMode::Inspect.label(), "[I]nspect & Slice");
         assert_eq!(AudioToolMode::StemSeparation.label(), "[S]tem Separation");
+        assert_eq!(AudioToolMode::DigitalDecode.label(), "[D]igital Decode");
         assert_eq!(AudioToolMode::default(), AudioToolMode::Inspect);
     }
 
