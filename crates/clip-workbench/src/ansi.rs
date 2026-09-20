@@ -37,7 +37,7 @@ pub fn ansi_to_layout_job(ansi_text: &str, font_size: f32) -> egui::text::Layout
                     }
 
                     let underline = if is_underlined {
-                        Stroke::new(1.0, color)
+                        Stroke::new(1.0_f32, color)
                     } else {
                         Stroke::NONE
                     };

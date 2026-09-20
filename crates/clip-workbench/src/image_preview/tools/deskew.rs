@@ -126,7 +126,7 @@ impl ImagePreviewState {
         egui::Frame::none()
             .fill(frame_bg)
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0, frame_stroke))
+            .stroke(Stroke::new(1.0_f32, frame_stroke))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
@@ -227,7 +227,7 @@ impl ImagePreviewState {
                             .color(apply_fg),
                     )
                     .fill(apply_bg)
-                    .stroke(Stroke::new(1.0, apply_bg))
+                    .stroke(Stroke::new(1.0_f32, apply_bg))
                     .rounding(Rounding::same(4.0));
 
                     if ui.add(apply_btn).on_hover_text("Rectify quad perspective into rectangular output (Enter)").clicked() {
@@ -240,7 +240,7 @@ impl ImagePreviewState {
                         egui::RichText::new("⟲ Reset Quad").small().color(reset_fg),
                     )
                     .fill(btn_bg)
-                    .stroke(Stroke::new(1.0, btn_border))
+                    .stroke(Stroke::new(1.0_f32, btn_border))
                     .rounding(Rounding::same(4.0));
 
                     if ui.add(reset_btn).on_hover_text("Reset corner handles to default positions").clicked() {
@@ -285,9 +285,13 @@ impl ImagePreviewState {
                 .collect();
 
             // Draw existing placed points
-            let pt_stroke = Stroke::new(2.0, hex_to_c32(&palette.diff_add));
+            let pt_stroke = Stroke::new(2.0_f32, hex_to_c32(&palette.diff_add));
             for (i, &pt) in placed_screen.iter().enumerate() {
-                painter.circle_stroke(pt, 8.0, Stroke::new(2.0, hex_to_c32(&palette.theme.b_low)));
+                painter.circle_stroke(
+                    pt,
+                    8.0,
+                    Stroke::new(2.0_f32, hex_to_c32(&palette.theme.b_low)),
+                );
                 painter.circle_filled(pt, 6.0, hex_to_c32(&palette.diff_add));
                 painter.text(
                     pt + Vec2::new(8.0, -18.0),
@@ -312,7 +316,8 @@ impl ImagePreviewState {
                     ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Crosshair);
 
                     // Rubber-band line from last placed point to cursor
-                    let rubber_stroke = Stroke::new(1.5, hex_to_c32_alpha(&palette.diff_add, 180));
+                    let rubber_stroke =
+                        Stroke::new(1.5_f32, hex_to_c32_alpha(&palette.diff_add, 180));
                     if n >= 1 {
                         painter
                             .line_segment([*placed_screen.last().unwrap(), ptr_pos], rubber_stroke);
@@ -347,7 +352,7 @@ impl ImagePreviewState {
                     painter.rect_stroke(
                         badge_rect,
                         Rounding::same(4.0),
-                        Stroke::new(1.0, hex_to_c32(&palette.diff_add)),
+                        Stroke::new(1.0_f32, hex_to_c32(&palette.diff_add)),
                     );
                     painter.galley(badge_rect.min + Vec2::new(6.0, 3.0), galley, badge_fg);
                 }
@@ -372,7 +377,7 @@ impl ImagePreviewState {
             painter.rect_stroke(
                 banner_rect,
                 Rounding::same(4.0),
-                Stroke::new(1.0, hex_to_c32(&palette.harmonies.base)),
+                Stroke::new(1.0_f32, hex_to_c32(&palette.harmonies.base)),
             );
             painter.galley(banner_rect.min + Vec2::new(8.0, 3.0), banner_galley, b_fg);
 
@@ -428,7 +433,7 @@ impl ImagePreviewState {
             ];
 
             // 1. Perspective Grid (rule of thirds inside quad)
-            let grid_stroke = Stroke::new(1.0, hex_to_c32_alpha(&palette.theme.f_med, 80));
+            let grid_stroke = Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_med, 80));
             for &u in &[1.0 / 3.0, 2.0 / 3.0] {
                 let top_pt = screen_pts[0].to_vec2() * (1.0 - u) + screen_pts[1].to_vec2() * u;
                 let bot_pt = screen_pts[3].to_vec2() * (1.0 - u) + screen_pts[2].to_vec2() * u;
@@ -440,7 +445,7 @@ impl ImagePreviewState {
             }
 
             // 2. Quad Outer Edges
-            let edge_stroke = Stroke::new(2.0, hex_to_c32(&palette.harmonies.base));
+            let edge_stroke = Stroke::new(2.0_f32, hex_to_c32(&palette.harmonies.base));
             painter.line_segment([screen_pts[0], screen_pts[1]], edge_stroke);
             painter.line_segment([screen_pts[1], screen_pts[2]], edge_stroke);
             painter.line_segment([screen_pts[2], screen_pts[3]], edge_stroke);
@@ -461,7 +466,7 @@ impl ImagePreviewState {
                 painter.circle_stroke(
                     pt,
                     handle_radius + 2.0,
-                    Stroke::new(2.0, hex_to_c32(&palette.theme.b_low)),
+                    Stroke::new(2.0_f32, hex_to_c32(&palette.theme.b_low)),
                 );
                 painter.circle_filled(pt, handle_radius, handle_col);
 
@@ -503,7 +508,7 @@ impl ImagePreviewState {
             painter.rect_stroke(
                 badge_rect,
                 Rounding::same(4.0),
-                Stroke::new(1.0, hex_to_c32(&palette.harmonies.base)),
+                Stroke::new(1.0_f32, hex_to_c32(&palette.harmonies.base)),
             );
             painter.galley(badge_rect.min + Vec2::new(7.0, 3.0), galley, badge_fg);
 
@@ -556,7 +561,7 @@ impl ImagePreviewState {
                         painter.rect_stroke(
                             h_rect,
                             Rounding::same(3.0),
-                            Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)),
+                            Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)),
                         );
                         painter.galley(h_rect.min + Vec2::new(5.0, 2.0), h_galley, h_fg);
                     }

@@ -1101,7 +1101,7 @@ impl ImagePreviewState {
             // Save As button
             let save_btn =
                 crate::action_button("💾 Save As...", hex_to_c32(&palette.diff_add), palette)
-                    .stroke(Stroke::new(1.0, hex_to_c32(&palette.diff_add)));
+                    .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.diff_add)));
             if ui
                 .add(save_btn)
                 .on_hover_text("Save current image to file (Ctrl+S)")
@@ -1118,7 +1118,7 @@ impl ImagePreviewState {
                 hex_to_c32(&palette.harmonies.base),
                 palette,
             )
-            .stroke(Stroke::new(1.0, hex_to_c32(&palette.harmonies.base)));
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.harmonies.base)));
             if ui
                 .add(copy_btn)
                 .on_hover_text(
@@ -1243,7 +1243,7 @@ impl ImagePreviewState {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_low))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     // Tool Modes
@@ -1465,7 +1465,7 @@ impl ImagePreviewState {
             painter.rect_stroke(
                 img_rect,
                 Rounding::ZERO,
-                Stroke::new(1.0, hex_to_c32_alpha(&palette.theme.f_med, 40)),
+                Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_med, 40)),
             );
 
             // Draw any placed redaction bars so they remain visible across all modes

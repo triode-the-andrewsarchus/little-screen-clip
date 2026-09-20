@@ -65,7 +65,7 @@ impl AudioWorkspace {
         let text = crate::contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_med)), palette);
         egui::Button::new(egui::RichText::new(label.into()).color(text))
             .fill(fill)
-            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
             .rounding(Rounding::same(4.0))
             .min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
     }
@@ -78,7 +78,7 @@ impl AudioWorkspace {
     ) {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_low))
-            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
             .inner_margin(egui::Margin::symmetric(14.0, 5.0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -95,7 +95,7 @@ impl AudioWorkspace {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_med))
             .stroke(Stroke::new(
-                1.0,
+                1.0_f32,
                 hex_to_c32_alpha(&palette.harmonies.base, 100),
             ))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
@@ -122,7 +122,7 @@ impl AudioWorkspace {
             ui.allocate_exact_size(Vec2::new(2.0, Self::BUTTON_HEIGHT), egui::Sense::hover());
         ui.painter().line_segment(
             [rect.center_top(), rect.center_bottom()],
-            Stroke::new(1.5, hex_to_c32_alpha(&palette.harmonies.base, 140)),
+            Stroke::new(1.5_f32, hex_to_c32_alpha(&palette.harmonies.base, 140)),
         );
         ui.add_space(8.0);
     }
@@ -151,7 +151,7 @@ impl AudioWorkspace {
     ) {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_low))
-            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
             .inner_margin(egui::Margin::symmetric(14.0, 5.0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -185,7 +185,7 @@ impl AudioWorkspace {
                 .color(crate::contrast_text_c32(background, Some(border), palette)),
         )
         .fill(background)
-        .stroke(Stroke::new(1.0, border))
+        .stroke(Stroke::new(1.0_f32, border))
         .rounding(Rounding::same(4.0))
         .min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
     }
@@ -325,7 +325,7 @@ impl AudioPreviewState {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_low))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for &mode in AudioToolMode::ALL {

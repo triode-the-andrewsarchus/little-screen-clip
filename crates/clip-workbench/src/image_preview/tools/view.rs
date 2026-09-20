@@ -15,7 +15,7 @@ impl ImagePreviewState {
         egui::Frame::none()
             .fill(frame_bg)
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0, frame_stroke))
+            .stroke(Stroke::new(1.0_f32, frame_stroke))
             .show(ui, |ui| {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
@@ -71,7 +71,7 @@ impl ImagePreviewState {
                                             .color(map_fg),
                                     )
                                     .fill(btn_bg)
-                                    .stroke(Stroke::new(1.0, btn_border))
+                                    .stroke(Stroke::new(1.0_f32, btn_border))
                                     .rounding(Rounding::same(4.0));
                                     if ui
                                         .add(map_btn)
@@ -101,7 +101,7 @@ impl ImagePreviewState {
                                     .color(toggle_fg),
                             )
                             .fill(btn_bg)
-                            .stroke(Stroke::new(1.0, btn_border))
+                            .stroke(Stroke::new(1.0_f32, btn_border))
                             .rounding(Rounding::same(4.0));
                             if ui.add(toggle_btn).clicked() {
                                 self.show_metadata_drawer = !self.show_metadata_drawer;
@@ -263,7 +263,7 @@ impl ImagePreviewState {
                                                         egui::RichText::new("📋 Copy").small(),
                                                     )
                                                     .fill(btn_bg)
-                                                    .stroke(Stroke::new(1.0, btn_border));
+                                                    .stroke(Stroke::new(1.0_f32, btn_border));
                                                     if ui.add(copy_btn).clicked() {
                                                         ctx.output_mut(|o| {
                                                             o.copied_text =

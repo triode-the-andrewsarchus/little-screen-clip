@@ -369,7 +369,7 @@ impl MidiViewerState {
                 // Zone 2: Transport & Zoom Bar
                 egui::Frame::none()
                     .fill(b_low)
-                    .stroke(Stroke::new(1.0, b_med))
+                    .stroke(Stroke::new(1.0_f32, b_med))
                     .inner_margin(egui::Margin::symmetric(14.0, 6.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -388,7 +388,7 @@ impl MidiViewerState {
 
                             let stop_btn = crate::action_button("Stop", b_med, palette)
                                 .min_size(egui::Vec2::new(0.0, 26.0))
-                                .stroke(Stroke::new(1.0, b_low));
+                                .stroke(Stroke::new(1.0_f32, b_low));
                             if ui.add(stop_btn).clicked() {
                                 stop_clicked = true;
                             }
@@ -506,7 +506,7 @@ impl MidiViewerState {
                         bg
                     };
                     painter.rect_filled(lane_rect, Rounding::ZERO, lane_bg);
-                    painter.line_segment([lane_rect.left_bottom(), lane_rect.right_bottom()], Stroke::new(0.5, b_med));
+                    painter.line_segment([lane_rect.left_bottom(), lane_rect.right_bottom()], Stroke::new(0.5_f32, b_med));
 
                     // Left keyboard key
                     let key_rect = Rect::from_min_size(Pos2::new(canvas_rect.min.x, y_top), Vec2::new(kb_width, row_height));
@@ -521,7 +521,7 @@ impl MidiViewerState {
                         bg
                     };
                     painter.rect_filled(key_rect, Rounding::same(2.0), key_color);
-                    painter.rect_stroke(key_rect, Rounding::same(2.0), Stroke::new(0.5, b_low));
+                    painter.rect_stroke(key_rect, Rounding::same(2.0), Stroke::new(0.5_f32, b_low));
 
                     let note_name = format!("{}{}", NOTE_NAMES[(k_int % 12) as usize], (k_int as i32 / 12) - 1);
                     if row_height >= 12.0 || (k_int % 12) == 0 {
@@ -638,9 +638,9 @@ impl MidiViewerState {
                         let x = grid_rect.min.x + norm_x * grid_rect.width();
                         let is_major = (s / (step * 5.0)).fract().abs() < 0.001 || ((s / step).round() as i64 % 5 == 0);
                         let stroke = if is_major {
-                            Stroke::new(1.0, f_low)
+                            Stroke::new(1.0_f32, f_low)
                         } else {
-                            Stroke::new(0.5, b_med)
+                            Stroke::new(0.5_f32, b_med)
                         };
                         painter.line_segment([Pos2::new(x, grid_rect.min.y), Pos2::new(x, grid_rect.max.y)], stroke);
 
@@ -707,7 +707,7 @@ impl MidiViewerState {
                     };
 
                     painter.rect_filled(note_rect, Rounding::same(2.0), fill_color);
-                    painter.rect_stroke(note_rect, Rounding::same(2.0), Stroke::new(0.5, b_low));
+                    painter.rect_stroke(note_rect, Rounding::same(2.0), Stroke::new(0.5_f32, b_low));
                 }
 
                 self.hovered_note = hovered;
@@ -718,7 +718,7 @@ impl MidiViewerState {
                     let px = grid_rect.min.x + playhead_norm * grid_rect.width();
                     painter.line_segment(
                         [Pos2::new(px, grid_rect.min.y), Pos2::new(px, grid_rect.max.y)],
-                        Stroke::new(2.0, playhead_color),
+                        Stroke::new(2.0_f32, playhead_color),
                     );
 
                     // Playhead triangle handle

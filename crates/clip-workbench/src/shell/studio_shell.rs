@@ -162,7 +162,7 @@ impl StudioPanelLayout {
             ui.set_clip_rect(rect);
             egui::Frame::none()
                 .fill(hex_to_c32(&palette.theme.b_low))
-                .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+                .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
                 .rounding(Rounding::same(4.0))
                 .inner_margin(egui::Margin::same(8.0))
                 .show(ui, |ui| {
@@ -198,7 +198,7 @@ impl StudioPanelLayout {
             ui.set_clip_rect(rect);
             egui::Frame::none()
                 .fill(hex_to_c32(&palette.theme.b_low))
-                .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+                .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
                 .rounding(Rounding::same(4.0))
                 .inner_margin(egui::Margin::same(8.0))
                 .show(ui, add_contents);
@@ -311,7 +311,7 @@ impl<'a> StudioShell<'a> {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_low))
             .inner_margin(egui::Margin::symmetric(14.0, 8.0))
-            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if !self.icon.is_empty() {
@@ -356,7 +356,7 @@ impl<'a> StudioShell<'a> {
                                 .color(close_fg),
                         )
                         .fill(close_bg)
-                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_low)))
+                        .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
                         .rounding(Rounding::same(4.0));
 
                         if ui.add(close_btn).clicked() {
@@ -379,7 +379,7 @@ impl<'a> StudioShell<'a> {
                                 )
                             };
                             let btn = themed_button(&hatch.label, bg, Some(fg), palette)
-                                .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_low)));
+                                .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)));
                             if ui.add(btn).on_hover_text(&hatch.tooltip).clicked() {
                                 clicked_hatch = Some(idx);
                             }
@@ -416,7 +416,7 @@ impl<'a> StudioShell<'a> {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_low))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for &mode in modes {

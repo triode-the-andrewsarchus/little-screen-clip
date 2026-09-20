@@ -57,7 +57,7 @@ impl ImagePreviewState {
         egui::Frame::none()
             .fill(frame_bg)
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0, frame_stroke))
+            .stroke(Stroke::new(1.0_f32, frame_stroke))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
@@ -76,7 +76,7 @@ impl ImagePreviewState {
                             .color(btn_fg),
                     )
                     .fill(btn_bg)
-                    .stroke(Stroke::new(1.0, btn_border))
+                    .stroke(Stroke::new(1.0_f32, btn_border))
                     .rounding(Rounding::same(4.0));
                     if ui
                         .add(ccw_btn)
@@ -94,7 +94,7 @@ impl ImagePreviewState {
                             .color(btn_fg),
                     )
                     .fill(btn_bg)
-                    .stroke(Stroke::new(1.0, btn_border))
+                    .stroke(Stroke::new(1.0_f32, btn_border))
                     .rounding(Rounding::same(4.0));
                     if ui
                         .add(cw_btn)
@@ -109,7 +109,7 @@ impl ImagePreviewState {
                         egui::RichText::new("180°").small().strong().color(btn_fg),
                     )
                     .fill(btn_bg)
-                    .stroke(Stroke::new(1.0, btn_border))
+                    .stroke(Stroke::new(1.0_f32, btn_border))
                     .rounding(Rounding::same(4.0));
                     if ui
                         .add(r180_btn)
@@ -134,7 +134,7 @@ impl ImagePreviewState {
                             .color(btn_fg),
                     )
                     .fill(btn_bg)
-                    .stroke(Stroke::new(1.0, btn_border))
+                    .stroke(Stroke::new(1.0_f32, btn_border))
                     .rounding(Rounding::same(4.0));
                     if ui
                         .add(fh_btn)
@@ -152,7 +152,7 @@ impl ImagePreviewState {
                             .color(btn_fg),
                     )
                     .fill(btn_bg)
-                    .stroke(Stroke::new(1.0, btn_border))
+                    .stroke(Stroke::new(1.0_f32, btn_border))
                     .rounding(Rounding::same(4.0));
                     if ui
                         .add(fv_btn)
@@ -172,7 +172,7 @@ impl ImagePreviewState {
                                 .color(rev_fg),
                         )
                         .fill(btn_bg)
-                        .stroke(Stroke::new(1.0, btn_border))
+                        .stroke(Stroke::new(1.0_f32, btn_border))
                         .rounding(Rounding::same(4.0));
                         if ui.add(revert_btn).clicked() {
                             self.revert_to_original();
@@ -192,7 +192,7 @@ impl ImagePreviewState {
                                     .color(undo_fg),
                             )
                             .fill(btn_bg)
-                            .stroke(Stroke::new(1.0, btn_border))
+                            .stroke(Stroke::new(1.0_f32, btn_border))
                             .rounding(Rounding::same(4.0));
                             if ui.add(undo_btn).clicked() {
                                 self.undo();

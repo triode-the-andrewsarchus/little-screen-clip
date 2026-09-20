@@ -487,7 +487,7 @@ impl RollingAudioStripState {
                 // Refresh Snapshot button
                 let refresh_btn = ui.add(
                     crate::secondary_button("⟳ Refresh", hex_to_c32(&palette.theme.b_low), palette)
-                        .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med))),
+                        .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med))),
                 );
                 if refresh_btn.clicked() {
                     self.load_snapshot();
@@ -562,9 +562,9 @@ impl RollingAudioStripState {
             // Background & Border (glow border when selection is active and focused)
             painter.rect_filled(rect, Rounding::same(4.0), hex_to_c32(&palette.theme.b_low));
             let border_stroke = if self.selected_region.is_some() {
-                Stroke::new(1.5, hex_to_c32(&palette.harmonies.base))
+                Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base))
             } else {
-                Stroke::new(1.0, hex_to_c32(&palette.theme.b_med))
+                Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med))
             };
             painter.rect_stroke(
                 rect,
@@ -578,7 +578,7 @@ impl RollingAudioStripState {
             // Center zero-baseline
             painter.line_segment(
                 [Pos2::new(rect.min.x, center_y), Pos2::new(rect.max.x, center_y)],
-                Stroke::new(1.0, hex_to_c32_alpha(&palette.theme.f_low, 30)),
+                Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_low, 30)),
             );
 
             // Time Tick Marks (-30s, -20s, -10s, NOW)
@@ -596,7 +596,7 @@ impl RollingAudioStripState {
 
                 painter.line_segment(
                     [Pos2::new(tick_x, rect.min.y), Pos2::new(tick_x, rect.min.y + 4.0)],
-                    Stroke::new(1.0, hex_to_c32_alpha(&palette.theme.f_med, 60)),
+                    Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_med, 60)),
                 );
                 painter.text(
                     Pos2::new(tick_x + 2.0, rect.min.y + 3.0),
@@ -705,11 +705,11 @@ impl RollingAudioStripState {
                 );
                 painter.line_segment(
                     [Pos2::new(x_s, rect.min.y), Pos2::new(x_s, rect.max.y)],
-                    Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
+                    Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
                 );
                 painter.line_segment(
                     [Pos2::new(x_e, rect.min.y), Pos2::new(x_e, rect.max.y)],
-                    Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
+                    Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
                 );
             }
 
@@ -718,7 +718,7 @@ impl RollingAudioStripState {
                 let px = rect.min.x + (self.playhead_sec.clamp(0.0, total_dur) / total_dur) * rect.width();
                 painter.line_segment(
                     [Pos2::new(px, rect.min.y), Pos2::new(px, rect.max.y)],
-                    Stroke::new(2.0, hex_to_c32(&palette.harmonies.complementary)),
+                    Stroke::new(2.0_f32, hex_to_c32(&palette.harmonies.complementary)),
                 );
                 painter.circle_filled(Pos2::new(px, rect.min.y + 3.0), 3.0, hex_to_c32(&palette.harmonies.complementary));
             }

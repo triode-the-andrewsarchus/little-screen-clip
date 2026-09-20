@@ -129,7 +129,7 @@ impl SpreadsheetViewerState {
                 let clicked_hatch = shell.render_header(ui, |ui| {
                     // Copy Table button
                     let copy_btn = crate::secondary_button("📋 Copy Table", b_med, palette)
-                        .stroke(Stroke::new(1.0, b_low));
+                        .stroke(Stroke::new(1.0_f32, b_low));
                     if ui.add(copy_btn).clicked() {
                         copy_table_clicked = true;
                     }
@@ -265,7 +265,7 @@ impl SpreadsheetViewerState {
                     let corner_btn = egui::Button::new(corner_label)
                         .fill(b_low)
                         .min_size(Vec2::new(corner_width, header_height))
-                        .stroke(Stroke::new(0.5, b_med))
+                        .stroke(Stroke::new(0.5_f32, b_med))
                         .rounding(Rounding::ZERO);
                     if ui
                         .add(corner_btn)
@@ -325,7 +325,7 @@ impl SpreadsheetViewerState {
                         )
                         .fill(col_bg)
                         .min_size(Vec2::new(cell_w, header_height))
-                        .stroke(Stroke::new(0.5, b_low))
+                        .stroke(Stroke::new(0.5_f32, b_low))
                         .rounding(Rounding::ZERO);
 
                         let resp = header_child_ui.add(col_btn);
@@ -395,7 +395,7 @@ impl SpreadsheetViewerState {
                         )
                         .fill(row_bg)
                         .min_size(Vec2::new(corner_width, row_height))
-                        .stroke(Stroke::new(0.5, b_med))
+                        .stroke(Stroke::new(0.5_f32, b_med))
                         .rounding(Rounding::ZERO);
 
                         let resp = row_child_ui.add(row_btn);
@@ -471,7 +471,7 @@ impl SpreadsheetViewerState {
                                             )
                                             .fill(cell_bg)
                                             .min_size(Vec2::new(cell_w, row_height))
-                                            .stroke(Stroke::new(0.5, b_med))
+                                            .stroke(Stroke::new(0.5_f32, b_med))
                                             .rounding(Rounding::ZERO);
 
                                             let resp = ui.add(btn);

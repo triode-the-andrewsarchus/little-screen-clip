@@ -98,7 +98,7 @@ impl ImagePreviewState {
         egui::Frame::none()
             .fill(frame_bg)
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0, frame_stroke))
+            .stroke(Stroke::new(1.0_f32, frame_stroke))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
@@ -139,7 +139,7 @@ impl ImagePreviewState {
                             .color(burn_fg),
                     )
                     .fill(burn_bg)
-                    .stroke(Stroke::new(1.0, burn_stroke))
+                    .stroke(Stroke::new(1.0_f32, burn_stroke))
                     .rounding(Rounding::same(4.0));
 
                     if ui.add_enabled(has_boxes, burn_btn).on_hover_text("Permanently rasterize black bars into image pixels (Enter)").clicked() {
@@ -156,7 +156,7 @@ impl ImagePreviewState {
                             .color(del_fg),
                     )
                     .fill(btn_bg)
-                    .stroke(Stroke::new(1.0, if has_selection { hex_to_c32(&palette.diff_del) } else { btn_border }))
+                    .stroke(Stroke::new(1.0_f32, if has_selection { hex_to_c32(&palette.diff_del) } else { btn_border }))
                     .rounding(Rounding::same(4.0));
 
                     if ui.add_enabled(has_selection, del_btn).clicked() {
@@ -171,7 +171,7 @@ impl ImagePreviewState {
                             .color(clear_fg),
                     )
                     .fill(btn_bg)
-                    .stroke(Stroke::new(1.0, btn_border))
+                    .stroke(Stroke::new(1.0_f32, btn_border))
                     .rounding(Rounding::same(4.0));
 
                     if ui.add_enabled(has_boxes, clear_btn).clicked() {
@@ -191,7 +191,7 @@ impl ImagePreviewState {
                             .color(strip_fg),
                     )
                     .fill(btn_bg)
-                    .stroke(Stroke::new(1.0, if has_meta { hex_to_c32(&palette.diff_mod) } else { btn_border }))
+                    .stroke(Stroke::new(1.0_f32, if has_meta { hex_to_c32(&palette.diff_mod) } else { btn_border }))
                     .rounding(Rounding::same(4.0));
 
                     if ui.add(strip_btn)
@@ -212,7 +212,7 @@ impl ImagePreviewState {
                                 egui::RichText::new("⟲ Undo (Ctrl+Z)").small().strong().color(undo_fg),
                             )
                             .fill(btn_bg)
-                            .stroke(Stroke::new(1.0, btn_border))
+                            .stroke(Stroke::new(1.0_f32, btn_border))
                             .rounding(Rounding::same(4.0));
                             if ui.add(undo_btn).clicked() {
                                 self.undo();
@@ -270,7 +270,11 @@ impl ImagePreviewState {
             let is_selected = self.redaction_state.selected_idx == Some(i);
             if is_selected {
                 // Highlight border
-                painter.rect_stroke(box_screen_rect, Rounding::ZERO, Stroke::new(2.0, diff_del));
+                painter.rect_stroke(
+                    box_screen_rect,
+                    Rounding::ZERO,
+                    Stroke::new(2.0_f32, diff_del),
+                );
 
                 // 8 Grab Handles
                 let handles = get_box_handles(box_screen_rect);
@@ -285,7 +289,7 @@ impl ImagePreviewState {
                     painter.rect_stroke(
                         handle_rect,
                         Rounding::same(1.0),
-                        Stroke::new(1.0, hex_to_c32(&palette.theme.b_low)),
+                        Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)),
                     );
                 }
 
@@ -305,13 +309,17 @@ impl ImagePreviewState {
                 let badge_rect =
                     Rect::from_center_size(badge_pos, galley.size() + Vec2::new(12.0, 4.0));
                 painter.rect_filled(badge_rect, Rounding::same(4.0), b_low_badge);
-                painter.rect_stroke(badge_rect, Rounding::same(4.0), Stroke::new(1.0, diff_del));
+                painter.rect_stroke(
+                    badge_rect,
+                    Rounding::same(4.0),
+                    Stroke::new(1.0_f32, diff_del),
+                );
                 painter.galley(badge_rect.min + Vec2::new(6.0, 2.0), galley, badge_text_col);
             } else {
                 painter.rect_stroke(
                     box_screen_rect,
                     Rounding::ZERO,
-                    Stroke::new(1.0, hex_to_c32_alpha(&palette.theme.f_med, 60)),
+                    Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_med, 60)),
                 );
             }
         }
@@ -328,7 +336,11 @@ impl ImagePreviewState {
                 Rounding::ZERO,
                 Color32::from_rgba_unmultiplied(0, 0, 0, 210),
             );
-            painter.rect_stroke(in_progress_rect, Rounding::ZERO, Stroke::new(1.5, diff_del));
+            painter.rect_stroke(
+                in_progress_rect,
+                Rounding::ZERO,
+                Stroke::new(1.5_f32, diff_del),
+            );
         }
 
         // 3. Set Cursor icon

@@ -336,7 +336,7 @@ impl ImagePreviewState {
                 |ui| {
                     egui::Frame::none()
                         .fill(b_low)
-                        .stroke(Stroke::new(1.0, b_med))
+                        .stroke(Stroke::new(1.0_f32, b_med))
                         .rounding(Rounding::same(4.0))
                         .inner_margin(egui::Margin::same(8.0))
                         .show(ui, |ui| {
@@ -507,7 +507,7 @@ impl ImagePreviewState {
                                 painter.rect_stroke(
                                     img_rect,
                                     Rounding::ZERO,
-                                    Stroke::new(1.0, hex_to_c32_alpha(&palette.theme.f_med, 40)),
+                                    Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_med, 40)),
                                 );
                             }
 
@@ -517,7 +517,7 @@ impl ImagePreviewState {
                                 let spin_bg = hex_to_c32_alpha(&palette.theme.b_low, 210);
                                 let spin_rect = Rect::from_center_size(spinner_pos, Vec2::new(220.0, 36.0));
                                 painter.rect_filled(spin_rect, Rounding::same(8.0), spin_bg);
-                                painter.rect_stroke(spin_rect, Rounding::same(8.0), Stroke::new(1.0, b_med));
+                                painter.rect_stroke(spin_rect, Rounding::same(8.0), Stroke::new(1.0_f32, b_med));
                                 painter.text(
                                     spinner_pos,
                                     egui::Align2::CENTER_CENTER,
@@ -551,7 +551,7 @@ impl ImagePreviewState {
                 |ui| {
                     egui::Frame::none()
                         .fill(b_low)
-                        .stroke(Stroke::new(1.0, b_med))
+                        .stroke(Stroke::new(1.0_f32, b_med))
                         .rounding(Rounding::same(4.0))
                         .inner_margin(egui::Margin::same(8.0))
                         .show(ui, |ui| {
@@ -592,7 +592,7 @@ impl ImagePreviewState {
                                             egui::RichText::new(preset.name).small().strong().color(s_fg),
                                         )
                                         .fill(s_bg)
-                                        .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                        .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                         .rounding(Rounding::same(4.0))
                                         .min_size(Vec2::new(full_w, 20.0));
 
@@ -698,7 +698,7 @@ impl ImagePreviewState {
                                                     };
                                                     let btn = egui::Button::new(egui::RichText::new(label).small().strong().color(b_fg))
                                                         .fill(b_bg)
-                                                        .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                                        .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                                         .rounding(Rounding::same(4.0));
                                                     if ui.add(btn).clicked() && !sel {
                                                         self.creative_fx_state.trichromatic_params.mode = mode;
@@ -801,7 +801,7 @@ impl ImagePreviewState {
                                                     };
                                                     let btn = egui::Button::new(egui::RichText::new(label).small().strong().color(b_fg))
                                                         .fill(b_bg)
-                                                        .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                                        .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                                         .rounding(Rounding::same(4.0));
                                                     if ui.add(btn).clicked() && !sel {
                                                         self.creative_fx_state.pixel_sort_params.direction = d;
@@ -829,7 +829,7 @@ impl ImagePreviewState {
                                                     };
                                                     let btn = egui::Button::new(egui::RichText::new(label).small().strong().color(b_fg))
                                                         .fill(b_bg)
-                                                        .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                                        .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                                         .rounding(Rounding::same(4.0));
                                                     if ui.add(btn).clicked() && !sel {
                                                         self.creative_fx_state.pixel_sort_params.criteria = c;
@@ -856,7 +856,7 @@ impl ImagePreviewState {
                                                     };
                                                     let btn = egui::Button::new(egui::RichText::new(label).small().strong().color(b_fg))
                                                         .fill(b_bg)
-                                                        .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                                        .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                                         .rounding(Rounding::same(4.0));
                                                     if ui.add(btn).clicked() && !sel {
                                                         self.creative_fx_state.pixel_sort_params.order = o;
@@ -973,7 +973,7 @@ impl ImagePreviewState {
                                                         egui::RichText::new(tint.label()).small().strong().color(b_fg)
                                                     )
                                                     .fill(b_bg)
-                                                    .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                                    .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                                     .rounding(Rounding::same(4.0));
                                                     if ui.add(btn).clicked() && !sel {
                                                         self.creative_fx_state.cmyk_params.paper_tint = *tint;
@@ -1125,7 +1125,7 @@ impl ImagePreviewState {
                                                         egui::RichText::new(pal.label()).small().strong().color(b_fg)
                                                     )
                                                     .fill(b_bg)
-                                                    .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                                    .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                                     .rounding(Rounding::same(4.0));
                                                     if ui.add(btn).clicked() && !sel {
                                                         self.creative_fx_state.dither_params.palette = *pal;
@@ -1150,7 +1150,7 @@ impl ImagePreviewState {
                                                         egui::RichText::new(method.label()).small().strong().color(b_fg)
                                                     )
                                                     .fill(b_bg)
-                                                    .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                                    .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                                     .rounding(Rounding::same(4.0));
                                                     if ui.add(btn).clicked() && !sel {
                                                         self.creative_fx_state.dither_params.method = *method;
@@ -1175,7 +1175,7 @@ impl ImagePreviewState {
                                                         egui::RichText::new(format!("{}×", scale)).small().strong().color(b_fg)
                                                     )
                                                     .fill(b_bg)
-                                                    .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                                    .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                                     .rounding(Rounding::same(4.0))
                                                     .min_size(Vec2::new(32.0, 20.0));
                                                     if ui.add(btn).clicked() && !sel {
@@ -1281,7 +1281,7 @@ impl ImagePreviewState {
                                                     };
                                                     let btn = egui::Button::new(egui::RichText::new(demo.label()).small().strong().color(b_fg))
                                                         .fill(b_bg)
-                                                        .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                                        .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                                         .rounding(Rounding::same(4.0));
                                                     if ui.add(btn).clicked() && !sel {
                                                         self.creative_fx_state.ntsc_params.demodulation = *demo;
@@ -1304,7 +1304,7 @@ impl ImagePreviewState {
                                                     };
                                                     let btn = egui::Button::new(egui::RichText::new(ps.label()).small().strong().color(b_fg))
                                                         .fill(b_bg)
-                                                        .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                                        .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                                         .rounding(Rounding::same(4.0))
                                                         .min_size(Vec2::new(38.0, 20.0));
                                                     if ui.add(btn).clicked() && !sel {
@@ -1328,7 +1328,7 @@ impl ImagePreviewState {
                                                     };
                                                     let btn = egui::Button::new(egui::RichText::new(cl.label()).small().strong().color(b_fg))
                                                         .fill(b_bg)
-                                                        .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                                        .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                                         .rounding(Rounding::same(4.0));
                                                     if ui.add(btn).clicked() && !sel {
                                                         self.creative_fx_state.ntsc_params.chroma_lowpass = *cl;
@@ -1536,7 +1536,7 @@ impl ImagePreviewState {
                                                             egui::RichText::new(speed.label()).small().strong().color(b_fg)
                                                         )
                                                         .fill(b_bg)
-                                                        .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                                        .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                                         .rounding(Rounding::same(4.0));
                                                         if ui.add(btn).clicked() && !sel {
                                                             self.creative_fx_state.ntsc_params.tape_speed = speed;
@@ -1648,7 +1648,7 @@ impl ImagePreviewState {
                                         egui::RichText::new("✓ Apply to Image").small().strong().color(apply_fg),
                                     )
                                     .fill(diff_add)
-                                    .stroke(Stroke::new(1.0, diff_add))
+                                    .stroke(Stroke::new(1.0_f32, diff_add))
                                     .rounding(Rounding::same(4.0))
                                     .min_size(Vec2::new(full_w, 24.0));
 
@@ -1665,7 +1665,7 @@ impl ImagePreviewState {
                                     let reset_fg = contrast_text_c32(b_med, Some(f_med), palette);
                                     let reset_btn = egui::Button::new(egui::RichText::new("⟲ Reset Defaults").small().strong().color(reset_fg))
                                         .fill(b_med)
-                                        .stroke(Stroke::new(1.0, b_low))
+                                        .stroke(Stroke::new(1.0_f32, b_low))
                                         .rounding(Rounding::same(4.0))
                                         .min_size(Vec2::new(full_w, 22.0));
 
@@ -1742,7 +1742,7 @@ impl ImagePreviewState {
             Vec2::new(100.0, 22.0),
         );
         painter.rect_filled(orig_rect, Rounding::same(4.0), badge_bg);
-        painter.rect_stroke(orig_rect, Rounding::same(4.0), Stroke::new(1.0, b_med));
+        painter.rect_stroke(orig_rect, Rounding::same(4.0), Stroke::new(1.0_f32, b_med));
         painter.text(
             orig_rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -1768,7 +1768,7 @@ impl ImagePreviewState {
             Vec2::new(fx_badge_w, 22.0),
         );
         painter.rect_filled(fx_rect, Rounding::same(4.0), badge_bg);
-        painter.rect_stroke(fx_rect, Rounding::same(4.0), Stroke::new(1.0, base_c));
+        painter.rect_stroke(fx_rect, Rounding::same(4.0), Stroke::new(1.0_f32, base_c));
         painter.text(
             fx_rect.center(),
             egui::Align2::CENTER_CENTER,

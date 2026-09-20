@@ -831,7 +831,7 @@ impl ImagePreviewState {
                     } else {
                         surface
                     })
-                    .stroke(Stroke::new(1.0, border))
+                    .stroke(Stroke::new(1.0_f32, border))
                     .rounding(Rounding::same(4.0));
                 if ui
                     .add_sized([ui.available_width(), 28.0], lock_button)

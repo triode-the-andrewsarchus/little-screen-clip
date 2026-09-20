@@ -272,8 +272,11 @@ impl ImagePreviewState {
                     ui.allocate_exact_size(Vec2::splat(34.0), egui::Sense::click());
                 ui.painter()
                     .rect_filled(swatch, Rounding::same(4.0), color.color);
-                ui.painter()
-                    .rect_stroke(swatch, Rounding::same(4.0), Stroke::new(1.0, surface));
+                ui.painter().rect_stroke(
+                    swatch,
+                    Rounding::same(4.0),
+                    Stroke::new(1.0_f32, surface),
+                );
 
                 ui.vertical(|ui| {
                     ui.label(

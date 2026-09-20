@@ -207,7 +207,7 @@ fn paint_slider_track(
     // Baseline track
     painter.line_segment(
         [Pos2::new(x_start, y_bar), Pos2::new(x_end, y_bar)],
-        Stroke::new(1.0, b_med),
+        Stroke::new(1.0_f32, b_med),
     );
 
     // Start tick (min)
@@ -216,19 +216,19 @@ fn paint_slider_track(
             Pos2::new(x_start, y_bar - 2.5),
             Pos2::new(x_start, y_bar + 2.5),
         ],
-        Stroke::new(1.0, f_low),
+        Stroke::new(1.0_f32, f_low),
     );
 
     // End tick (max)
     painter.line_segment(
         [Pos2::new(x_end, y_bar - 2.5), Pos2::new(x_end, y_bar + 2.5)],
-        Stroke::new(1.0, f_low),
+        Stroke::new(1.0_f32, f_low),
     );
 
     // Center tick (midpoint of range)
     painter.line_segment(
         [Pos2::new(x_mid, y_bar - 2.0), Pos2::new(x_mid, y_bar + 2.0)],
-        Stroke::new(1.0, f_low),
+        Stroke::new(1.0_f32, f_low),
     );
 
     if let Some(default_val) = default_val {
@@ -236,7 +236,7 @@ fn paint_slider_track(
         let x_def = x_start + def_norm * (x_end - x_start);
         painter.line_segment(
             [Pos2::new(x_def, y_bar - 3.5), Pos2::new(x_def, y_bar + 3.5)],
-            Stroke::new(1.5, base_c),
+            Stroke::new(1.5_f32, base_c),
         );
     }
 
@@ -250,7 +250,7 @@ fn paint_slider_track(
     if (g_end - g_start).abs() > 0.5 {
         painter.line_segment(
             [Pos2::new(g_start, y_bar), Pos2::new(g_end, y_bar)],
-            Stroke::new(2.5, base_c),
+            Stroke::new(2.5_f32, base_c),
         );
     }
 

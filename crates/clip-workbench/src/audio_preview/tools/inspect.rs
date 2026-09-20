@@ -894,7 +894,7 @@ impl AudioPreviewState {
                                     egui::RichText::new(label).strong().color(text_col),
                                 )
                                 .fill(bg_col)
-                                .stroke(Stroke::new(1.0, border_col))
+                                .stroke(Stroke::new(1.0_f32, border_col))
                                 .rounding(Rounding::same(4.0))
                                 .min_size(Vec2::new(0.0, 30.0));
 
@@ -993,7 +993,11 @@ impl AudioPreviewState {
 
         // Frame border & background
         painter.rect_filled(rect, Rounding::same(8.0), bg_frame);
-        painter.rect_stroke(rect, Rounding::same(8.0), Stroke::new(1.0, border_frame));
+        painter.rect_stroke(
+            rect,
+            Rounding::same(8.0),
+            Stroke::new(1.0_f32, border_frame),
+        );
 
         if self.is_loading_analysis || self.analysis.is_none() {
             let elapsed = self.loading_start_time.elapsed().as_secs_f32();
@@ -1706,7 +1710,7 @@ impl AudioPreviewState {
                 Pos2::new(rect.min.x, ruler_rect.max.y),
                 Pos2::new(rect.max.x, ruler_rect.max.y),
             ],
-            Stroke::new(1.0, border_frame),
+            Stroke::new(1.0_f32, border_frame),
         );
 
         // Dynamic Time Ticks
@@ -1741,7 +1745,7 @@ impl AudioPreviewState {
                             Pos2::new(x, ruler_rect.max.y),
                             Pos2::new(x, strip_rect.max.y),
                         ],
-                        Stroke::new(1.0, crate::hex_to_c32_alpha(&palette.theme.f_low, 20)),
+                        Stroke::new(1.0_f32, crate::hex_to_c32_alpha(&palette.theme.f_low, 20)),
                     );
                     // Ruler tick
                     painter.line_segment(
@@ -1749,7 +1753,7 @@ impl AudioPreviewState {
                             Pos2::new(x, ruler_rect.min.y + 14.0),
                             Pos2::new(x, ruler_rect.max.y),
                         ],
-                        Stroke::new(1.0, crate::hex_to_c32_alpha(&palette.theme.f_med, 80)),
+                        Stroke::new(1.0_f32, crate::hex_to_c32_alpha(&palette.theme.f_med, 80)),
                     );
                     // Label
                     let label = if interval_sec >= 1.0 {
@@ -1778,7 +1782,11 @@ impl AudioPreviewState {
 
         // 2. VIEW 1: WAVEFORM (Audacity-style Stems or Peak Bars)
         painter.rect_filled(wave_rect, Rounding::ZERO, bg_frame);
-        painter.rect_stroke(wave_rect, Rounding::ZERO, Stroke::new(1.0, border_frame));
+        painter.rect_stroke(
+            wave_rect,
+            Rounding::ZERO,
+            Stroke::new(1.0_f32, border_frame),
+        );
 
         let is_stereo = analysis.channels >= 2 && analysis.ch2_samples.is_some();
         let total_frames = analysis.total_frames;
@@ -1799,7 +1807,7 @@ impl AudioPreviewState {
                     Pos2::new(track_min_x, wave_rect.min.y + half),
                     Pos2::new(track_max_x, wave_rect.min.y + half),
                 ],
-                Stroke::new(1.0, border_frame),
+                Stroke::new(1.0_f32, border_frame),
             );
 
             painter.text(
@@ -1852,7 +1860,7 @@ impl AudioPreviewState {
                         Pos2::new(track_min_x, y_base),
                         Pos2::new(track_max_x, y_base),
                     ],
-                    Stroke::new(1.0, border_frame),
+                    Stroke::new(1.0_f32, border_frame),
                 );
 
                 let mut prev_pos: Option<Pos2> = None;
@@ -1880,13 +1888,13 @@ impl AudioPreviewState {
                     };
 
                     if let Some(p_pos) = prev_pos {
-                        painter.line_segment([p_pos, pos], Stroke::new(1.5, point_col));
+                        painter.line_segment([p_pos, pos], Stroke::new(1.5_f32, point_col));
                     }
 
                     painter.line_segment(
                         [Pos2::new(x, y_base), pos],
                         Stroke::new(
-                            1.0,
+                            1.0_f32,
                             Color32::from_rgba_unmultiplied(
                                 point_col.r(),
                                 point_col.g(),
@@ -1897,7 +1905,7 @@ impl AudioPreviewState {
                     );
 
                     painter.circle_filled(pos, 3.0, point_col);
-                    painter.circle_stroke(pos, 3.0, Stroke::new(1.0, border_frame));
+                    painter.circle_stroke(pos, 3.0, Stroke::new(1.0_f32, border_frame));
 
                     prev_pos = Some(pos);
                 }
@@ -1928,7 +1936,7 @@ impl AudioPreviewState {
                         Pos2::new(track_min_x, y_base),
                         Pos2::new(track_max_x, y_base),
                     ],
-                    Stroke::new(1.0, border_frame),
+                    Stroke::new(1.0_f32, border_frame),
                 );
 
                 let mut mesh = egui::Mesh::default();
@@ -1986,7 +1994,7 @@ impl AudioPreviewState {
                             Pos2::new(tx, wave_rect.min.y),
                             Pos2::new(tx, wave_rect.max.y),
                         ],
-                        Stroke::new(1.0, transient_col),
+                        Stroke::new(1.0_f32, transient_col),
                     );
                     // Draw transient marker pip/diamond at top of waveform
                     let pip_top = Pos2::new(tx, wave_rect.min.y + 1.0);
@@ -1996,7 +2004,7 @@ impl AudioPreviewState {
                     painter.add(egui::Shape::convex_polygon(
                         vec![pip_top, pip_right, pip_bot, pip_left],
                         transient_col,
-                        Stroke::new(0.5, border_frame),
+                        Stroke::new(0.5_f32, border_frame),
                     ));
                 }
             }
@@ -2030,7 +2038,7 @@ impl AudioPreviewState {
             );
             painter.line_segment(
                 [Pos2::new(track_min_x, y), Pos2::new(track_max_x, y)],
-                Stroke::new(1.0, border_frame),
+                Stroke::new(1.0_f32, border_frame),
             );
         }
 
@@ -2065,7 +2073,7 @@ impl AudioPreviewState {
                     let y = spec_rect.max.y - (hz / nyquist).clamp(0.0, 1.0) * spec_rect.height();
                     cutoff_painter.line_segment(
                         [Pos2::new(x_start, y), Pos2::new(x_end, y)],
-                        Stroke::new(2.0, color),
+                        Stroke::new(2.0_f32, color),
                     );
                     cutoff_painter.text(
                         Pos2::new(x_start + 4.0, y - 4.0),
@@ -2077,7 +2085,11 @@ impl AudioPreviewState {
                 }
             }
         }
-        painter.rect_stroke(spec_rect, Rounding::ZERO, Stroke::new(1.0, border_frame));
+        painter.rect_stroke(
+            spec_rect,
+            Rounding::ZERO,
+            Stroke::new(1.0_f32, border_frame),
+        );
 
         // 4. VIEW 3: COLORCHORD 2-D MULTI-NOTE CHROMATIC RIBBON
         painter.text(
@@ -2106,7 +2118,11 @@ impl AudioPreviewState {
                 text_f_low,
             );
         }
-        painter.rect_stroke(strip_rect, Rounding::ZERO, Stroke::new(1.0, border_frame));
+        painter.rect_stroke(
+            strip_rect,
+            Rounding::ZERO,
+            Stroke::new(1.0_f32, border_frame),
+        );
 
         // Hover tooltip over ColorChord note strip (multi-note chord display)
         if let Some(mouse_pos) = response.hover_pos() {
@@ -2164,7 +2180,7 @@ impl AudioPreviewState {
         painter.rect_stroke(
             scroll_rect,
             Rounding::same(3.0),
-            Stroke::new(1.0, border_frame),
+            Stroke::new(1.0_f32, border_frame),
         );
 
         let total_dur = self.duration_sec.max(0.01);
@@ -2179,7 +2195,7 @@ impl AudioPreviewState {
         painter.rect_stroke(
             thumb_rect,
             Rounding::same(3.0),
-            Stroke::new(1.0, text_f_med),
+            Stroke::new(1.0_f32, text_f_med),
         );
 
         // 6. UNIFIED SELECTION OVERLAY ACROSS ALL 3 VIEWS
@@ -2209,7 +2225,7 @@ impl AudioPreviewState {
                                     Pos2::new(x_start, ruler_rect.min.y),
                                     Pos2::new(x_start, view_bot_y),
                                 ],
-                                Stroke::new(2.5, accent_base),
+                                Stroke::new(2.5_f32, accent_base),
                             );
                             painter.circle_filled(
                                 Pos2::new(x_start, ruler_rect.center().y),
@@ -2223,7 +2239,7 @@ impl AudioPreviewState {
                                     Pos2::new(x_end, ruler_rect.min.y),
                                     Pos2::new(x_end, view_bot_y),
                                 ],
-                                Stroke::new(2.5, accent_base),
+                                Stroke::new(2.5_f32, accent_base),
                             );
                             painter.circle_filled(
                                 Pos2::new(x_end, ruler_rect.center().y),
@@ -2253,7 +2269,7 @@ impl AudioPreviewState {
                         );
 
                         let handle_color = accent_base;
-                        let stroke_width = if is_active { 2.5 } else { 1.5 };
+                        let stroke_width = if is_active { 2.5_f32 } else { 1.5_f32 };
 
                         if x_start >= track_min_x && x_start <= track_max_x {
                             painter.line_segment(
@@ -2316,7 +2332,7 @@ impl AudioPreviewState {
                     Pos2::new(playhead_x, ruler_rect.min.y),
                     Pos2::new(playhead_x, view_bot_y),
                 ],
-                Stroke::new(2.0, accent_playhead),
+                Stroke::new(2.0_f32, accent_playhead),
             );
             let head_top = Pos2::new(playhead_x, ruler_rect.min.y);
             let diamond = [

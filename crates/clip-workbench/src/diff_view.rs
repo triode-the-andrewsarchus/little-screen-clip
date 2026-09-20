@@ -623,7 +623,7 @@ impl DiffViewerState {
         egui::Frame::none()
             .fill(b_low)
             .inner_margin(egui::Margin::symmetric(12.0, 6.0))
-            .stroke(Stroke::new(1.0, b_med))
+            .stroke(Stroke::new(1.0_f32, b_med))
             .rounding(Rounding::same(4.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -764,7 +764,7 @@ impl DiffViewerState {
                             egui::Frame::none()
                                 .fill(b_low)
                                 .rounding(Rounding::same(6.0))
-                                .stroke(Stroke::new(1.0, b_med))
+                                .stroke(Stroke::new(1.0_f32, b_med))
                                 .inner_margin(egui::Margin::same(4.0))
                                 .show(ui, |ui| {
                                     ui.image(egui::load::SizedTexture::new(
@@ -798,7 +798,7 @@ impl DiffViewerState {
                             egui::Frame::none()
                                 .fill(b_low)
                                 .rounding(Rounding::same(6.0))
-                                .stroke(Stroke::new(1.0, b_med))
+                                .stroke(Stroke::new(1.0_f32, b_med))
                                 .inner_margin(egui::Margin::same(4.0))
                                 .show(ui, |ui| {
                                     ui.image(egui::load::SizedTexture::new(
@@ -884,7 +884,7 @@ impl DiffViewerState {
         egui::Frame::none()
             .fill(b_low)
             .rounding(Rounding::same(6.0))
-            .stroke(Stroke::new(1.0, b_med))
+            .stroke(Stroke::new(1.0_f32, b_med))
             .inner_margin(egui::Margin::same(8.0))
             .show(ui, |ui| {
                 egui::ScrollArea::both()
@@ -908,7 +908,7 @@ impl DiffViewerState {
         egui::Frame::none()
             .fill(b_low)
             .inner_margin(egui::Margin::symmetric(12.0, 6.0))
-            .stroke(Stroke::new(1.0, b_med))
+            .stroke(Stroke::new(1.0_f32, b_med))
             .rounding(Rounding::same(4.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -946,7 +946,7 @@ impl DiffViewerState {
         ui.centered_and_justified(|ui| {
             egui::Frame::none()
                 .fill(b_med)
-                .stroke(Stroke::new(1.0, b_low))
+                .stroke(Stroke::new(1.0_f32, b_low))
                 .rounding(Rounding::same(12.0))
                 .inner_margin(egui::Margin::symmetric(36.0, 28.0))
                 .show(ui, |ui| {
@@ -1041,7 +1041,7 @@ impl DiffViewerState {
             egui::Frame::none()
                 .fill(b_low)
                 .rounding(Rounding::same(6.0))
-                .stroke(Stroke::new(1.0, b_med))
+                .stroke(Stroke::new(1.0_f32, b_med))
                 .inner_margin(egui::Margin::same(2.0))
                 .show(ui, |ui| {
                     if let Some(tex) = texture {

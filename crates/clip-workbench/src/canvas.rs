@@ -803,7 +803,7 @@ impl NodeCanvasState {
             .show(ui.ctx(), |ui| {
                 egui::Frame::window(&ui.style())
                     .fill(hex_to_c32(&palette.theme.b_low))
-                    .stroke(Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)))
+                    .stroke(Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)))
                     .rounding(8.0)
                     .inner_margin(egui::Margin::same(14.0))
                     .show(ui, |ui| {
@@ -1336,7 +1336,7 @@ fn render_node_card(
     painter.rect_stroke(
         rect,
         Rounding::same(8.0 * zoom),
-        Stroke::new(if is_selected { 2.0 } else { 1.2 }, border_col),
+        Stroke::new(if is_selected { 2.0_f32 } else { 1.2_f32 }, border_col),
     );
 
     // Category Header banner
@@ -1461,7 +1461,7 @@ fn render_node_card(
                 Pos2::new(rect.min.x + 8.0 * zoom, props_top - 4.0 * zoom),
                 Pos2::new(rect.max.x - 8.0 * zoom, props_top - 4.0 * zoom),
             ],
-            Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)),
+            Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)),
         );
     }
 
@@ -1591,13 +1591,13 @@ fn render_socket(
 
     if resp.hovered() {
         painter.circle_filled(pos, radius * 1.35, Color32::WHITE);
-        painter.circle_stroke(pos, radius * 1.35, Stroke::new(2.0, base_col));
+        painter.circle_stroke(pos, radius * 1.35, Stroke::new(2.0_f32, base_col));
     } else {
         painter.circle_filled(pos, radius, base_col);
         painter.circle_stroke(
             pos,
             radius,
-            Stroke::new(1.2, hex_to_c32(&palette.theme.background)),
+            Stroke::new(1.2_f32, hex_to_c32(&palette.theme.background)),
         );
     }
 }

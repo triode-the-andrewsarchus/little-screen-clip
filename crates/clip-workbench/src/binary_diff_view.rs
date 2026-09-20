@@ -506,7 +506,7 @@ impl BinaryDiffViewState {
         egui::Frame::none()
             .fill(b_low)
             .inner_margin(egui::Margin::symmetric(12.0, 6.0))
-            .stroke(Stroke::new(1.0, b_med))
+            .stroke(Stroke::new(1.0_f32, b_med))
             .rounding(Rounding::same(4.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -868,14 +868,14 @@ impl BinaryDiffViewState {
                     );
                     ui.painter().line_segment(
                         [actual_row_rect.left_top(), actual_row_rect.right_top()],
-                        Stroke::new(1.0, hex_to_c32_alpha(&palette.harmonies.base, 100)),
+                        Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.harmonies.base, 100)),
                     );
                     ui.painter().line_segment(
                         [
                             actual_row_rect.left_bottom(),
                             actual_row_rect.right_bottom(),
                         ],
-                        Stroke::new(1.0, hex_to_c32_alpha(&palette.harmonies.base, 100)),
+                        Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.harmonies.base, 100)),
                     );
                 }
 
@@ -935,7 +935,7 @@ impl BinaryDiffViewState {
                             ui.painter().rect_stroke(
                                 rect.expand(1.0),
                                 Rounding::same(2.0),
-                                Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
+                                Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
                             );
                         }
 
@@ -968,7 +968,7 @@ impl BinaryDiffViewState {
                             ui.painter().rect_stroke(
                                 rect.expand(1.0),
                                 Rounding::same(2.0),
-                                Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
+                                Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
                             );
                         }
 
@@ -1031,7 +1031,7 @@ impl BinaryDiffViewState {
                             ui.painter().rect_stroke(
                                 rect.expand(1.0),
                                 Rounding::same(2.0),
-                                Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
+                                Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
                             );
                         }
 
@@ -1064,7 +1064,7 @@ impl BinaryDiffViewState {
                             ui.painter().rect_stroke(
                                 rect.expand(1.0),
                                 Rounding::same(2.0),
-                                Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
+                                Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
                             );
                         }
 
@@ -1122,7 +1122,7 @@ impl BinaryDiffViewState {
         ui.painter().rect_stroke(
             rect,
             Rounding::same(3.0),
-            Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)),
+            Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)),
         );
 
         // Difference markers
@@ -1169,7 +1169,7 @@ impl BinaryDiffViewState {
         ui.painter().rect_stroke(
             view_rect,
             Rounding::same(2.0),
-            Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
+            Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
         );
 
         // Click / Drag to jump
@@ -1321,9 +1321,9 @@ impl BinaryDiffViewState {
                                     hex_to_c32(&palette.theme.b_low)
                                 })
                                 .stroke(if is_selected {
-                                    Stroke::new(1.5, hex_to_c32(&palette.harmonies.base))
+                                    Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base))
                                 } else {
-                                    Stroke::new(1.0, hex_to_c32(&palette.theme.b_med))
+                                    Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med))
                                 })
                                 .rounding(Rounding::same(4.0))
                                 .inner_margin(egui::Margin {
@@ -1447,7 +1447,7 @@ impl BinaryDiffViewState {
 
                 egui::Frame::none()
                     .fill(hex_to_c32(&palette.theme.b_low))
-                    .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+                    .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
                     .inner_margin(egui::Margin::symmetric(14.0, 6.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {

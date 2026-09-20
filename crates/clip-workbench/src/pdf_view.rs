@@ -395,7 +395,7 @@ impl PdfEditorState {
                             .color(del_fg),
                     )
                     .fill(warn_bg)
-                    .stroke(Stroke::new(1.0, warn_accent))
+                    .stroke(Stroke::new(1.0_f32, warn_accent))
                     .rounding(Rounding::same(4.0));
                     if ui
                         .add(del_btn)
@@ -409,7 +409,7 @@ impl PdfEditorState {
 
                     // Rotate 90 CW Button
                     let rot_btn = crate::secondary_button("↻ Rotate 90° [R]", b_med, palette)
-                        .stroke(Stroke::new(1.0, b_low));
+                        .stroke(Stroke::new(1.0_f32, b_low));
                     if ui
                         .add(rot_btn)
                         .on_hover_text("Rotate selected page 90° clockwise (Hotkey: R)")
@@ -453,7 +453,7 @@ impl PdfEditorState {
 
                             egui::Frame::none()
                                 .fill(b_low)
-                                .stroke(Stroke::new(1.0, b_med))
+                                .stroke(Stroke::new(1.0_f32, b_med))
                                 .rounding(Rounding::same(6.0))
                                 .inner_margin(egui::Margin::same(8.0))
                                 .show(ui, |ui| {
@@ -510,7 +510,7 @@ impl PdfEditorState {
                                                         } else {
                                                             b_med
                                                         };
-                                                        let stroke_w = if is_selected { 2.0 } else { 1.0 };
+                                                        let stroke_w = if is_selected { 2.0_f32 } else { 1.0_f32 };
 
                                                         egui::Frame::none()
                                                             .fill(if is_selected { b_med } else { bg })
@@ -583,7 +583,7 @@ impl PdfEditorState {
 
                             egui::Frame::none()
                                 .fill(b_low)
-                                .stroke(Stroke::new(1.0, b_med))
+                                .stroke(Stroke::new(1.0_f32, b_med))
                                 .rounding(Rounding::same(6.0))
                                 .inner_margin(egui::Margin::same(12.0))
                                 .show(ui, |ui| {

@@ -380,7 +380,7 @@ impl Model3dViewerState {
                 // Toolbar
                 egui::Frame::none()
                     .fill(b_low)
-                    .stroke(Stroke::new(1.0, b_med))
+                    .stroke(Stroke::new(1.0_f32, b_med))
                     .inner_margin(egui::Margin::symmetric(14.0, 6.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -398,7 +398,7 @@ impl Model3dViewerState {
                                 .color(auto_rot_fg),
                             )
                             .fill(auto_rot_bg)
-                            .stroke(Stroke::new(1.0, b_low))
+                            .stroke(Stroke::new(1.0_f32, b_low))
                             .rounding(Rounding::same(4.0));
                             if ui.add(auto_rot_btn).clicked() {
                                 auto_rot_clicked = true;
@@ -417,7 +417,7 @@ impl Model3dViewerState {
                                 .color(wire_fg),
                             )
                             .fill(wire_bg)
-                            .stroke(Stroke::new(1.0, b_low))
+                            .stroke(Stroke::new(1.0_f32, b_low))
                             .rounding(Rounding::same(4.0));
                             if ui.add(wire_btn).clicked() {
                                 wire_clicked = true;
@@ -435,7 +435,7 @@ impl Model3dViewerState {
                                     .color(axis_fg),
                             )
                             .fill(b_med)
-                            .stroke(Stroke::new(1.0, b_low))
+                            .stroke(Stroke::new(1.0_f32, b_low))
                             .rounding(Rounding::same(4.0));
                             let mut axis_clicked = false;
                             if ui
@@ -453,7 +453,7 @@ impl Model3dViewerState {
                                 egui::RichText::new("↺ Reset View").small().color(reset_fg),
                             )
                             .fill(b_med)
-                            .stroke(Stroke::new(1.0, b_low))
+                            .stroke(Stroke::new(1.0_f32, b_low))
                             .rounding(Rounding::same(4.0));
                             if ui.add(reset_btn).clicked() {
                                 reset_clicked = true;
@@ -627,7 +627,7 @@ fn render_mesh_projection(
     let light_dir = Vec3::new(0.4, 0.7, 0.6).normalize();
 
     if wireframe {
-        let stroke = Stroke::new(1.0, accent);
+        let stroke = Stroke::new(1.0_f32, accent);
         for (_, pts, _, _) in &projected_tris {
             painter.line_segment([pts[0], pts[1]], stroke);
             painter.line_segment([pts[1], pts[2]], stroke);

@@ -80,7 +80,7 @@ impl ImagePreviewState {
         egui::Frame::none()
             .fill(b_low)
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0, b_med))
+            .stroke(Stroke::new(1.0_f32, b_med))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let rescan_fg = contrast_text_c32(base_c, None, palette);
@@ -95,7 +95,7 @@ impl ImagePreviewState {
                         .color(rescan_fg),
                     )
                     .fill(base_c)
-                    .stroke(Stroke::new(1.0, b_med))
+                    .stroke(Stroke::new(1.0_f32, b_med))
                     .rounding(Rounding::same(4.0));
 
                     if ui
@@ -142,7 +142,7 @@ impl ImagePreviewState {
                                 egui::RichText::new("📋 Copy All").small().color(copy_fg),
                             )
                             .fill(b_med)
-                            .stroke(Stroke::new(1.0, b_low))
+                            .stroke(Stroke::new(1.0_f32, b_low))
                             .rounding(Rounding::same(3.0));
 
                             if ui.add(copy_all_btn).clicked() {
@@ -174,7 +174,7 @@ impl ImagePreviewState {
                                     egui::Frame::none()
                                         .fill(b_low)
                                         .inner_margin(egui::Margin::symmetric(8.0, 4.0))
-                                        .stroke(Stroke::new(1.0, card_border))
+                                        .stroke(Stroke::new(1.0_f32, card_border))
                                         .rounding(Rounding::same(4.0))
                                         .show(ui, |ui| {
                                             ui.horizontal(|ui| {
@@ -240,7 +240,7 @@ impl ImagePreviewState {
                                                     egui::RichText::new("RH").small().color(rh_fg),
                                                 )
                                                 .fill(b_low)
-                                                .stroke(Stroke::new(1.0, diff_add))
+                                                .stroke(Stroke::new(1.0_f32, diff_add))
                                                 .rounding(Rounding::same(3.0));
                                                 if ui
                                                     .add(push_btn)
@@ -292,9 +292,13 @@ impl ImagePreviewState {
             let hovered = ptr_pos.map(|p| code_rect.contains(p)).unwrap_or(false);
 
             let (fill, border, stroke_w) = if is_selected || hovered {
-                (hex_to_c32_alpha(&palette.diff_mod, 50), diff_mod, 2.5)
+                (hex_to_c32_alpha(&palette.diff_mod, 50), diff_mod, 2.5_f32)
             } else {
-                (hex_to_c32_alpha(&palette.harmonies.base, 30), base_c, 1.5)
+                (
+                    hex_to_c32_alpha(&palette.harmonies.base, 30),
+                    base_c,
+                    1.5_f32,
+                )
             };
 
             if det.points.len() >= 3 {
@@ -329,7 +333,11 @@ impl ImagePreviewState {
             let badge_rect = Rect::from_min_size(badge_pos, Vec2::new(75.0, 16.0));
             let badge_text_col = contrast_text_c32(b_low, Some(f_high), palette);
             painter.rect_filled(badge_rect, Rounding::same(3.0), b_low);
-            painter.rect_stroke(badge_rect, Rounding::same(3.0), Stroke::new(1.0, border));
+            painter.rect_stroke(
+                badge_rect,
+                Rounding::same(3.0),
+                Stroke::new(1.0_f32, border),
+            );
             painter.text(
                 badge_rect.center(),
                 egui::Align2::CENTER_CENTER,

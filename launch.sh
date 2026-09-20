@@ -255,6 +255,47 @@ function manage_service() {
     esac
 }
 
+function sweep_target() {
+    local keep_n="${1:-2}"
+    echo -e "${BLUE}Sweeping target artifacts with cargo-sweep...${NC}"
+    if command -v cargo-sweep >/dev/null 2>&1; then
+        cargo sweep --installed
+    else
+        echo -e "${YELLOW}cargo-sweep not installed or not in PATH; skipping cargo sweep --installed.${NC}"
+    fi
+
+    echo -e "${BLUE}Pruning stale incremental compilation sessions (retaining newest ${keep_n})...${NC}"
+    python3 -c "
+import os, re, shutil
+inc_roots = ['$SCRIPT_DIR/target/debug/incremental', '$SCRIPT_DIR/target/release/incremental']
+keep_n = int('$keep_n')
+total_freed = 0
+total_removed = 0
+for inc_root in inc_roots:
+    if not os.path.isdir(inc_root):
+        continue
+    groups = {}
+    for e in os.listdir(inc_root):
+        p = os.path.join(inc_root, e)
+        if os.path.isdir(p):
+            m = re.match(r'^(.*?)-[0-9a-z]+$', e)
+            base = m.group(1) if m else e
+            groups.setdefault(base, []).append((p, os.path.getmtime(p)))
+    for base, dirs in groups.items():
+        dirs.sort(key=lambda x: x[1], reverse=True)
+        for p, _ in dirs[keep_n:]:
+            sz = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(p) for f in fs)
+            shutil.rmtree(p, ignore_errors=True)
+            total_freed += sz
+            total_removed += 1
+if total_freed > 0:
+    print(f'Pruned {total_removed} stale incremental session(s), freeing {total_freed / (1024**3):.2f} GB.')
+else:
+    print('Incremental cache is clean (no sessions beyond retention threshold).')
+" 2>/dev/null || true
+    echo -e "${GREEN}✓ Target sweep completed!${NC}"
+}
+
 # Subcommand routing
 case "${1:-}" in
     start)
@@ -324,6 +365,11 @@ case "${1:-}" in
         echo -e "${BLUE}Building workspace (release mode)...${NC}"
         cargo build --release "$@"
         echo -e "${GREEN}Build complete! (target/release)${NC}"
+        sweep_target 2
+        ;;
+    sweep)
+        shift || true
+        sweep_target "${1:-2}"
         ;;
     *)
         status_daemon
@@ -347,7 +393,8 @@ case "${1:-}" in
         echo "  last            - Re-run last operation or recipe directly"
         echo "  logs            - Tail daemon output logs"
         echo "  test            - Run direct USB display hardware test"
-        echo "  build           - Recompile all Rust workspace crates in release mode"
+        echo "  build           - Recompile all Rust workspace crates in release mode and sweep stale artifacts"
+        echo "  sweep [N]       - Run cargo sweep --installed and prune incremental cache (keeps N past sessions, default: 2)"
         ;;
 esac
 

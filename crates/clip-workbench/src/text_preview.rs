@@ -651,7 +651,7 @@ impl TextPreviewState {
         ui.add_space(8.0);
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_low))
-            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
             .rounding(Rounding::same(6.0))
             .inner_margin(egui::Margin::symmetric(10.0, 6.0))
             .show(ui, |ui| {
@@ -767,7 +767,7 @@ impl TextPreviewState {
         // Unified editor surface frame
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_low))
-            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
             .rounding(Rounding::same(6.0))
             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
@@ -978,7 +978,7 @@ fn render_markdown_element(
             flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
             egui::Frame::none()
                 .fill(hex_to_c32(&palette.theme.b_low))
-                .stroke(Stroke::new(3.0, hex_to_c32(&palette.harmonies.base)))
+                .stroke(Stroke::new(3.0_f32, hex_to_c32(&palette.harmonies.base)))
                 .inner_margin(egui::Margin::symmetric(10.0, 4.0))
                 .rounding(Rounding::same(3.0))
                 .show(ui, |ui| {
@@ -1221,7 +1221,7 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
 
     egui::Frame::none()
         .fill(hex_to_c32(&palette.theme.b_low))
-        .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+        .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
         .inner_margin(egui::Margin::same(10.0))
         .rounding(Rounding::same(4.0))
         .show(ui, |ui| {

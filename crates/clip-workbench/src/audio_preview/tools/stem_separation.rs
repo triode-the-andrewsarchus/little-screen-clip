@@ -480,7 +480,7 @@ impl AudioPreviewState {
             hex_to_c32(&palette.harmonies.base)
         };
         painter.rect_filled(rect, Rounding::same(4.0), bg);
-        painter.rect_stroke(rect, Rounding::same(4.0), Stroke::new(1.0, accent));
+        painter.rect_stroke(rect, Rounding::same(4.0), Stroke::new(1.0_f32, accent));
         let Some(preview) = preview else {
             painter.text(
                 rect.center(),
@@ -533,7 +533,7 @@ impl AudioPreviewState {
                         mid - min.clamp(-1.0, 1.0) * rect.height() * 0.42,
                     ),
                 ],
-                Stroke::new(1.0, color),
+                Stroke::new(1.0_f32, color),
             );
         }
         let playhead_x =
@@ -543,7 +543,7 @@ impl AudioPreviewState {
                 Pos2::new(playhead_x, rect.min.y),
                 Pos2::new(playhead_x, rect.max.y),
             ],
-            Stroke::new(1.5, hex_to_c32(&palette.harmonies.complementary)),
+            Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.complementary)),
         );
         response
             .interact_pointer_pos()
@@ -762,7 +762,7 @@ impl AudioPreviewState {
                             })
                             .inner_margin(egui::Margin::symmetric(10.0, 4.0))
                             .stroke(Stroke::new(
-                                if selected_now { 2.0 } else { 1.0 },
+                                if selected_now { 2.0_f32 } else { 1.0_f32 },
                                 if selected_now {
                                     hex_to_c32(&palette.harmonies.base)
                                 } else {

@@ -369,7 +369,7 @@ impl ImagePreviewState {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_low))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
@@ -444,7 +444,7 @@ impl ImagePreviewState {
                                     .color(undo_fg),
                             )
                             .fill(undo_bg)
-                            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_low)))
+                            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
                             .rounding(Rounding::same(4.0));
 
                             if ui.add(undo_btn).clicked() {
@@ -521,7 +521,7 @@ impl ImagePreviewState {
         // 2. Rule of Thirds Grid
         let w = crop_screen_rect.width();
         let h = crop_screen_rect.height();
-        let grid_stroke = Stroke::new(1.0, hex_to_c32_alpha(&palette.theme.f_med, 60));
+        let grid_stroke = Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_med, 60));
         painter.line_segment(
             [
                 Pos2::new(crop_screen_rect.min.x + w / 3.0, crop_screen_rect.min.y),
@@ -567,7 +567,7 @@ impl ImagePreviewState {
         painter.rect_stroke(
             crop_screen_rect,
             Rounding::ZERO,
-            Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
+            Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
         );
 
         // 4. Handles definitions & drawing
@@ -625,7 +625,7 @@ impl ImagePreviewState {
             painter.rect_stroke(
                 handle_rect,
                 Rounding::same(1.0),
-                Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)),
+                Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)),
             );
         }
 
@@ -655,7 +655,7 @@ impl ImagePreviewState {
         painter.rect_stroke(
             badge_rect,
             Rounding::same(4.0),
-            Stroke::new(1.0, hex_to_c32(&palette.harmonies.base)),
+            Stroke::new(1.0_f32, hex_to_c32(&palette.harmonies.base)),
         );
         painter.galley(badge_rect.min + Vec2::new(6.0, 2.0), galley, badge_text_col);
 

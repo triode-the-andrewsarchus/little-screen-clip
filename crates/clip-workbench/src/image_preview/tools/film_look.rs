@@ -1000,7 +1000,7 @@ impl ImagePreviewState {
                 |ui| {
                     egui::Frame::none()
                         .fill(b_low)
-                        .stroke(Stroke::new(1.0, b_med))
+                        .stroke(Stroke::new(1.0_f32, b_med))
                         .rounding(Rounding::same(4.0))
                         .inner_margin(egui::Margin::same(8.0))
                         .show(ui, |ui| {
@@ -1267,7 +1267,10 @@ impl ImagePreviewState {
                                 painter.rect_stroke(
                                     img_rect,
                                     Rounding::ZERO,
-                                    Stroke::new(1.0, hex_to_c32_alpha(&palette.theme.f_med, 40)),
+                                    Stroke::new(
+                                        1.0_f32,
+                                        hex_to_c32_alpha(&palette.theme.f_med, 40),
+                                    ),
                                 );
                             }
 
@@ -1281,7 +1284,7 @@ impl ImagePreviewState {
                                 painter.rect_stroke(
                                     spin_rect,
                                     Rounding::same(8.0),
-                                    Stroke::new(1.0, b_med),
+                                    Stroke::new(1.0_f32, b_med),
                                 );
                                 painter.text(
                                     spinner_pos,
@@ -1317,7 +1320,7 @@ impl ImagePreviewState {
                 |ui| {
                     egui::Frame::none()
                         .fill(b_low)
-                        .stroke(Stroke::new(1.0, b_med))
+                        .stroke(Stroke::new(1.0_f32, b_med))
                         .rounding(Rounding::same(4.0))
                         .inner_margin(egui::Margin::same(8.0))
                         .show(ui, |ui| {
@@ -1373,7 +1376,10 @@ impl ImagePreviewState {
                                                 .color(s_fg),
                                         )
                                         .fill(s_bg)
-                                        .stroke(Stroke::new(1.0, if sel { base_c } else { b_med }))
+                                        .stroke(Stroke::new(
+                                            1.0_f32,
+                                            if sel { base_c } else { b_med },
+                                        ))
                                         .rounding(Rounding::same(4.0))
                                         .min_size(Vec2::new(right_w - 28.0, 20.0));
 
@@ -1566,7 +1572,7 @@ impl ImagePreviewState {
         ui.add_space(4.0);
         egui::Frame::none()
             .fill(b_low)
-            .stroke(Stroke::new(1.0, b_med))
+            .stroke(Stroke::new(1.0_f32, b_med))
             .rounding(Rounding::same(4.0))
             .inner_margin(egui::Margin::symmetric(12.0, 6.0))
             .show(ui, |ui| {
@@ -1688,7 +1694,7 @@ impl ImagePreviewState {
                                 egui::RichText::new(label).small().strong().color(btn_fg),
                             )
                             .fill(btn_bg)
-                            .stroke(Stroke::new(1.0, if sel { base_c } else { b_low }))
+                            .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_low }))
                             .rounding(Rounding::same(3.0))
                             .min_size(Vec2::new(36.0, 18.0));
                             if ui.add(b).clicked() && !sel {
@@ -1710,7 +1716,7 @@ impl ImagePreviewState {
                                 .color(al_fg),
                         )
                         .fill(diff_mod)
-                        .stroke(Stroke::new(1.0, diff_mod))
+                        .stroke(Stroke::new(1.0_f32, diff_mod))
                         .rounding(Rounding::same(4.0));
                         if ui
                             .add(al_btn)
@@ -1737,7 +1743,7 @@ impl ImagePreviewState {
                                 .color(ae_fg),
                         )
                         .fill(base_c)
-                        .stroke(Stroke::new(1.0, base_c))
+                        .stroke(Stroke::new(1.0_f32, base_c))
                         .rounding(Rounding::same(4.0));
                         if ui
                             .add(ae_btn)
@@ -1768,7 +1774,7 @@ impl ImagePreviewState {
                                     .color(apply_fg),
                             )
                             .fill(diff_add)
-                            .stroke(Stroke::new(1.0, diff_add))
+                            .stroke(Stroke::new(1.0_f32, diff_add))
                             .rounding(Rounding::same(4.0));
                             let apply_enabled = self.film_sim_state.preview_rgba.is_some();
                             if ui
@@ -1791,7 +1797,7 @@ impl ImagePreviewState {
                                     .color(reset_fg),
                             )
                             .fill(b_med)
-                            .stroke(Stroke::new(1.0, b_low))
+                            .stroke(Stroke::new(1.0_f32, b_low))
                             .rounding(Rounding::same(4.0));
                             if ui
                                 .add(reset_btn)
@@ -1873,7 +1879,7 @@ impl ImagePreviewState {
             Vec2::new(100.0, 22.0),
         );
         painter.rect_filled(orig_rect, Rounding::same(4.0), badge_bg);
-        painter.rect_stroke(orig_rect, Rounding::same(4.0), Stroke::new(1.0, b_med));
+        painter.rect_stroke(orig_rect, Rounding::same(4.0), Stroke::new(1.0_f32, b_med));
         painter.text(
             orig_rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -1902,7 +1908,7 @@ impl ImagePreviewState {
             Vec2::new(sim_badge_w, 22.0),
         );
         painter.rect_filled(sim_rect, Rounding::same(4.0), badge_bg);
-        painter.rect_stroke(sim_rect, Rounding::same(4.0), Stroke::new(1.0, base_c));
+        painter.rect_stroke(sim_rect, Rounding::same(4.0), Stroke::new(1.0_f32, base_c));
         painter.text(
             sim_rect.center(),
             egui::Align2::CENTER_CENTER,

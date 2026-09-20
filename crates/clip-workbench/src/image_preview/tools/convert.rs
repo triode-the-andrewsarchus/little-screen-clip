@@ -347,7 +347,10 @@ impl ImagePreviewState {
                         .color(foreground),
                 )
                 .fill(fill)
-                .stroke(Stroke::new(1.0, if active { foreground } else { border }))
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    if active { foreground } else { border },
+                ))
                 .rounding(Rounding::same(4.0));
                 if ui.add_sized([format_width, 30.0], button).clicked() && !active {
                     self.convert_state.target_format = format;
@@ -683,14 +686,14 @@ impl ImagePreviewState {
                 Pos2::new(split_x, img_rect.min.y),
                 Pos2::new(split_x, img_rect.max.y),
             ],
-            Stroke::new(3.0, Color32::from_black_alpha(150)),
+            Stroke::new(3.0_f32, Color32::from_black_alpha(150)),
         );
         painter.line_segment(
             [
                 Pos2::new(split_x, img_rect.min.y),
                 Pos2::new(split_x, img_rect.max.y),
             ],
-            Stroke::new(1.5, Color32::WHITE),
+            Stroke::new(1.5_f32, Color32::WHITE),
         );
 
         // 4. Draggable Center Knob
@@ -700,7 +703,12 @@ impl ImagePreviewState {
         let b_med = hex_to_c32(&palette.theme.b_med);
         let base_c = hex_to_c32(&palette.harmonies.base);
         let knob_fg = contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_high)), palette);
-        painter.circle(knob_center, knob_radius, b_low, Stroke::new(2.0, base_c));
+        painter.circle(
+            knob_center,
+            knob_radius,
+            b_low,
+            Stroke::new(2.0_f32, base_c),
+        );
         painter.text(
             knob_center,
             egui::Align2::CENTER_CENTER,
@@ -748,7 +756,11 @@ impl ImagePreviewState {
         let badge_bg = hex_to_c32_alpha(&palette.theme.b_low, 210);
         let before_fg = contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_med)), palette);
         painter.rect_filled(before_rect, Rounding::same(4.0), badge_bg);
-        painter.rect_stroke(before_rect, Rounding::same(4.0), Stroke::new(1.0, b_med));
+        painter.rect_stroke(
+            before_rect,
+            Rounding::same(4.0),
+            Stroke::new(1.0_f32, b_med),
+        );
         painter.text(
             before_rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -761,7 +773,11 @@ impl ImagePreviewState {
         let after_rect = Rect::from_min_size(after_badge_pos, Vec2::new(140.0, 24.0));
         let after_fg = contrast_text_c32(b_low, Some(base_c), palette);
         painter.rect_filled(after_rect, Rounding::same(4.0), badge_bg);
-        painter.rect_stroke(after_rect, Rounding::same(4.0), Stroke::new(1.0, base_c));
+        painter.rect_stroke(
+            after_rect,
+            Rounding::same(4.0),
+            Stroke::new(1.0_f32, base_c),
+        );
         painter.text(
             after_rect.center(),
             egui::Align2::CENTER_CENTER,

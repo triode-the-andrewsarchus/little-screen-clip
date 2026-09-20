@@ -113,7 +113,7 @@ impl ImagePreviewState {
                 painter.rect_stroke(
                     card_rect,
                     Rounding::same(8.0),
-                    Stroke::new(1.5, hex_to_c32(&palette.harmonies.base)),
+                    Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
                 );
 
                 // Loupe Grid
@@ -162,12 +162,12 @@ impl ImagePreviewState {
                             painter.rect_stroke(
                                 cell_rect,
                                 Rounding::ZERO,
-                                Stroke::new(2.0, hex_to_c32(&palette.theme.f_high)),
+                                Stroke::new(2.0_f32, hex_to_c32(&palette.theme.f_high)),
                             );
                             painter.rect_stroke(
                                 cell_rect.expand(1.0),
                                 Rounding::ZERO,
-                                Stroke::new(1.0, hex_to_c32(&palette.theme.b_low)),
+                                Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)),
                             );
                         }
                     }
@@ -183,7 +183,7 @@ impl ImagePreviewState {
                 painter.rect_stroke(
                     swatch_rect,
                     Rounding::same(3.0),
-                    Stroke::new(1.0, hex_to_c32(&palette.theme.b_med)),
+                    Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)),
                 );
 
                 // Hex Code Text
@@ -281,7 +281,7 @@ impl ImagePreviewState {
             ui.painter()
                 .rect_filled(swatch, Rounding::same(5.0), current);
             ui.painter()
-                .rect_stroke(swatch, Rounding::same(5.0), Stroke::new(1.0, surface));
+                .rect_stroke(swatch, Rounding::same(5.0), Stroke::new(1.0_f32, surface));
 
             ui.vertical(|ui| {
                 ui.label(
@@ -368,8 +368,11 @@ impl ImagePreviewState {
             ui.horizontal(|ui| {
                 let (swatch, _) = ui.allocate_exact_size(Vec2::splat(34.0), egui::Sense::hover());
                 ui.painter().rect_filled(swatch, Rounding::same(4.0), color);
-                ui.painter()
-                    .rect_stroke(swatch, Rounding::same(4.0), Stroke::new(1.0, surface));
+                ui.painter().rect_stroke(
+                    swatch,
+                    Rounding::same(4.0),
+                    Stroke::new(1.0_f32, surface),
+                );
                 ui.label(
                     egui::RichText::new(format!(
                         "#{:02X}{:02X}{:02X}",

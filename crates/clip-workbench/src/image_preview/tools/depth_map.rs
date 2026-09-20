@@ -136,7 +136,7 @@ impl ImagePreviewState {
         egui::Frame::none()
             .fill(b_low)
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0, b_med))
+            .stroke(Stroke::new(1.0_f32, b_med))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if self.bg_removal_in_progress {
@@ -159,7 +159,7 @@ impl ImagePreviewState {
                                 .color(depth_fg),
                         )
                         .fill(base_c)
-                        .stroke(Stroke::new(1.0, b_med))
+                        .stroke(Stroke::new(1.0_f32, b_med))
                         .rounding(Rounding::same(4.0));
 
                         if ui.add(depth_btn).on_hover_text("Generate AI metric depth map with Depth-Anything V2 neural network (Enter)").clicked() {
@@ -203,7 +203,7 @@ impl ImagePreviewState {
                             egui::RichText::new("📋 Slot: Right Hand").small().color(rh_fg),
                         )
                         .fill(b_low)
-                        .stroke(Stroke::new(1.0, diff_add))
+                        .stroke(Stroke::new(1.0_f32, diff_add))
                         .rounding(Rounding::same(3.0));
                         if ui.add(push_rh).on_hover_text("Push current depth map directly to Right Hand slot").clicked() {
                             self.copy_to_hand_slot(HandSide::Right);
@@ -214,7 +214,7 @@ impl ImagePreviewState {
                             egui::RichText::new("📋 Slot: Left Hand").small().color(lh_fg),
                         )
                         .fill(b_low)
-                        .stroke(Stroke::new(1.0, base_c))
+                        .stroke(Stroke::new(1.0_f32, base_c))
                         .rounding(Rounding::same(3.0));
                         if ui.add(push_lh).on_hover_text("Push current depth map directly to Left Hand slot").clicked() {
                             self.copy_to_hand_slot(HandSide::Left);

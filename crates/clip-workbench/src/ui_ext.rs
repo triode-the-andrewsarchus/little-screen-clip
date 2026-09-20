@@ -89,7 +89,7 @@ pub fn mode_tab_button<'a>(
 
     egui::Button::new(RichText::new(label.into()).small().strong().color(fg))
         .fill(bg)
-        .stroke(Stroke::new(1.0, border_fg))
+        .stroke(Stroke::new(1.0_f32, border_fg))
         .rounding(Rounding::same(4.0))
 }
 
@@ -305,7 +305,7 @@ impl StatusToast {
             let fg = contrast_text_c32(bg, Some(stroke), palette);
             egui::Frame::none()
                 .fill(bg)
-                .stroke(Stroke::new(1.0, stroke))
+                .stroke(Stroke::new(1.0_f32, stroke))
                 .rounding(Rounding::same(4.0))
                 .inner_margin(egui::Margin::symmetric(8.0, 4.0))
                 .show(ui, |ui| {
@@ -447,7 +447,7 @@ pub fn render_view_header<R>(
                     .color(close_fg),
             )
             .fill(close_bg)
-            .stroke(Stroke::new(1.0, hex_to_c32(&palette.theme.b_low)))
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
             .rounding(Rounding::same(4.0));
             if ui.add(close_btn).clicked() {
                 *close = true;

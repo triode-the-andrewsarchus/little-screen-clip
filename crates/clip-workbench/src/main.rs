@@ -894,7 +894,7 @@ impl eframe::App for WorkbenchApp {
                         .fill(crate::hex_to_c32(&self.renderer.palette.theme.background))
                         .inner_margin(egui::Margin::symmetric(14.0, 6.0))
                         .stroke(egui::Stroke::new(
-                            1.0,
+                            1.0_f32,
                             crate::hex_to_c32(&self.renderer.palette.theme.b_med),
                         )),
                 )
@@ -1401,7 +1401,7 @@ impl eframe::App for WorkbenchApp {
                         let card_stroke = hex_to_c32(&self.renderer.palette.theme.b_med);
                         egui::Frame::none()
                             .fill(card_bg)
-                            .stroke(egui::Stroke::new(1.0, card_stroke))
+                            .stroke(egui::Stroke::new(1.0_f32, card_stroke))
                             .rounding(egui::Rounding::same(8.0))
                             .inner_margin(egui::Margin::symmetric(16.0, 14.0))
                             .show(ui, |ui| {
@@ -1506,7 +1506,7 @@ impl WorkbenchApp {
                 .frame(
                     egui::Frame::window(&ctx.style())
                         .fill(modal_bg)
-                        .stroke(egui::Stroke::new(1.5, modal_stroke))
+                        .stroke(egui::Stroke::new(1.5_f32, modal_stroke))
                         .rounding(8.0)
                         .inner_margin(egui::Margin::symmetric(22.0, 18.0)),
                 )
@@ -2094,7 +2094,7 @@ impl WorkbenchApp {
             // Active theme tag
             egui::Frame::none()
                 .fill(hex_to_c32(&palette.b_low))
-                .stroke(egui::Stroke::new(1.0, hex_to_c32(&palette.left_hand_border)))
+                .stroke(egui::Stroke::new(1.0_f32, hex_to_c32(&palette.left_hand_border)))
                 .rounding(egui::Rounding::same(4.0))
                 .inner_margin(egui::Margin::symmetric(8.0, 3.0))
                 .show(ui, |ui| {
@@ -2107,7 +2107,7 @@ impl WorkbenchApp {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let reset_btn = secondary_button("↺ Reset Overrides", hex_to_c32(&palette.undo_card_bg), &palette)
-                    .stroke(egui::Stroke::new(1.0, hex_to_c32(&palette.undo_border)));
+                    .stroke(egui::Stroke::new(1.0_f32, hex_to_c32(&palette.undo_border)));
 
                 if ui
                     .add(reset_btn)
@@ -2211,7 +2211,7 @@ impl WorkbenchApp {
                 };
 
                 let card_stroke =
-                    egui::Stroke::new(if is_active { 2.0 } else { 1.0 }, border_color);
+                    egui::Stroke::new(if is_active { 2.0_f32 } else { 1.0_f32 }, border_color);
 
                 let frame_resp = egui::Frame::none()
                     .fill(card_bg)
@@ -2249,7 +2249,7 @@ impl WorkbenchApp {
                                         egui::Frame::none()
                                             .fill(hex_to_c32(&palette.b_low))
                                             .stroke(egui::Stroke::new(
-                                                1.0,
+                                                1.0_f32,
                                                 hex_to_c32(&palette.cursor_border),
                                             ))
                                             .rounding(egui::Rounding::same(4.0))
@@ -2294,7 +2294,7 @@ impl WorkbenchApp {
                                             rect.center(),
                                             4.5,
                                             egui::Stroke::new(
-                                                0.5,
+                                                0.5_f32,
                                                 hex_to_c32_alpha(&theme.f_high, 60),
                                             ),
                                         );
@@ -2346,7 +2346,7 @@ impl WorkbenchApp {
                                             2.0,
                                             c,
                                             egui::Stroke::new(
-                                                0.5,
+                                                0.5_f32,
                                                 hex_to_c32_alpha(&theme.f_high, 40),
                                             ),
                                         );
@@ -2372,7 +2372,7 @@ impl WorkbenchApp {
                         ui.painter().rect_stroke(
                             frame_resp.response.rect,
                             6.0,
-                            egui::Stroke::new(1.5, hex_to_c32(&theme.f_med)),
+                            egui::Stroke::new(1.5_f32, hex_to_c32(&theme.f_med)),
                         );
                     }
                 }
@@ -2459,7 +2459,7 @@ impl eframe::App for PromptApp {
             .frame(
                 egui::Frame::none()
                     .fill(p_bg)
-                    .stroke(egui::Stroke::new(1.0, p_border))
+                    .stroke(egui::Stroke::new(1.0_f32, p_border))
                     .inner_margin(egui::Margin::symmetric(24.0, 20.0)),
             )
             .show(ctx, |ui| {

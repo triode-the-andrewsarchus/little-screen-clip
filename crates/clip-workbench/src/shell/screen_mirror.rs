@@ -166,14 +166,14 @@ impl<'a> ScreenMirrorWidget<'a> {
                 painter.rect_stroke(
                     slot_screen_rect,
                     Rounding::same(4.0),
-                    Stroke::new(2.0, stroke_color),
+                    Stroke::new(2.0_f32, stroke_color),
                 );
             } else if is_hovered && !is_dragging {
                 let stroke_color = hex_to_c32(&palette.theme.f_med);
                 painter.rect_stroke(
                     slot_screen_rect,
                     Rounding::same(4.0),
-                    Stroke::new(1.0, stroke_color),
+                    Stroke::new(1.0_f32, stroke_color),
                 );
             }
         }

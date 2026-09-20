@@ -390,7 +390,10 @@ impl ImagePreviewState {
                         .color(foreground),
                 )
                 .fill(fill)
-                .stroke(Stroke::new(1.0, if active { foreground } else { border }))
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    if active { foreground } else { border },
+                ))
                 .rounding(Rounding::same(4.0));
                 if ui
                     .add_enabled_ui(!self.ocr_state.in_progress, |ui| {
