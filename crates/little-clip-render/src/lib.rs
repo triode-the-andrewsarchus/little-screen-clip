@@ -182,7 +182,7 @@ impl ScreenRenderer {
         }
     }
 
-    fn load_fonts() -> (Option<Font>, Option<Font>, Option<Font>, Option<Font>) {
+    pub fn load_fonts() -> (Option<Font>, Option<Font>, Option<Font>, Option<Font>) {
         let home_font_dir = std::env::var("HOME")
             .ok()
             .map(|h| format!("{}/.local/share/fonts", h));
@@ -266,6 +266,7 @@ impl ScreenRenderer {
 mod cards;
 pub mod primitives;
 
+pub use fontdue;
 pub use primitives::ElidedText;
 pub use tiny_skia;
 

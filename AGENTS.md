@@ -18,6 +18,7 @@ cargo test -p little-clip-ops            # Test one crate
 cargo fmt --check                        # Verify Rust formatting
 cargo clippy --workspace --all-targets -- -D warnings
 ./launch.sh build                        # Release build through the helper
+./launch.sh sweep                        # Clean stale target and incremental artifacts
 ./launch.sh start                        # Start the local daemon
 ./launch.sh ui                           # Open the workbench
 ./launch.sh test                         # Exercise the USB display directly

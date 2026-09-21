@@ -63,6 +63,9 @@ pub struct ImagePreviewState {
     // Redaction State
     pub redaction_state: RedactionState,
 
+    // Screenshot Markup State
+    pub markup_state: MarkupState,
+
     // Pick Color State
     pub pick_color_state: PickColorState,
 
@@ -221,6 +224,7 @@ impl ImagePreviewState {
             redo_stack: Vec::new(),
             crop_state: CropState::default(),
             redaction_state: RedactionState::default(),
+            markup_state: MarkupState::default(),
             pick_color_state: PickColorState::default(),
             resize_state,
             palette_state,
@@ -288,6 +292,11 @@ impl ImagePreviewState {
                     }
                 }
             }
+        }
+
+        // Burn any pending vector markup layers onto the output image
+        if !self.markup_state.items.is_empty() {
+            img = rasterize_markup(&img, &self.markup_state.items);
         }
 
         if self.active_mode == ImageToolMode::Crop {
@@ -766,6 +775,14 @@ impl ImagePreviewState {
                 && !self.redaction_state.boxes.is_empty()
             {
                 self.clear_all_redactions();
+            } else if self.active_mode == ImageToolMode::Markup
+                && self.markup_state.editing_text_idx.is_some()
+            {
+                self.markup_state.editing_text_idx = None;
+            } else if self.active_mode == ImageToolMode::Markup
+                && self.markup_state.selected_idx.is_some()
+            {
+                self.markup_state.selected_idx = None;
             } else {
                 if self.ocr_state.in_progress {
                     self.cancel_ocr();
@@ -797,6 +814,12 @@ impl ImagePreviewState {
             && ui.input(|i| i.key_pressed(egui::Key::Enter))
         {
             self.apply_redactions();
+        }
+        if self.active_mode == ImageToolMode::Markup
+            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+            && self.markup_state.editing_text_idx.is_none()
+        {
+            self.apply_flatten_markup();
         }
         if self.active_mode == ImageToolMode::Resize
             && ui.input(|i| i.key_pressed(egui::Key::Enter))
@@ -858,12 +881,69 @@ impl ImagePreviewState {
                     self.delete_selected_redaction();
                 }
             }
+            if self.active_mode == ImageToolMode::Markup
+                && self.markup_state.editing_text_idx.is_none()
+            {
+                let del_pressed = ui.input(|i| {
+                    i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
+                }) || ui.input_mut(|i| {
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)
+                        || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)
+                });
+                if del_pressed {
+                    if let Some(sel) = self.markup_state.selected_idx {
+                        if sel < self.markup_state.items.len() {
+                            self.markup_state.items.remove(sel);
+                            self.markup_state.selected_idx = None;
+                            self.markup_state.sync_next_badge_number();
+                            self.show_toast("🗑 Markup item deleted");
+                        }
+                    }
+                }
+            }
+            if self.active_mode == ImageToolMode::Markup
+                && self.markup_state.editing_text_idx.is_none()
+            {
+                let no_modifiers = ui.input(|i| {
+                    !i.modifiers.command
+                        && !i.modifiers.ctrl
+                        && !i.modifiers.alt
+                        && !i.modifiers.mac_cmd
+                });
+                if no_modifiers {
+                    if ui.input(|i| i.key_pressed(egui::Key::Num1)) {
+                        self.markup_state.active_tool = MarkupToolType::Select;
+                        self.markup_state.editing_text_idx = None;
+                    } else if ui.input(|i| i.key_pressed(egui::Key::Num2)) {
+                        self.markup_state.active_tool = MarkupToolType::Arrow;
+                        self.markup_state.editing_text_idx = None;
+                    } else if ui.input(|i| i.key_pressed(egui::Key::Num3)) {
+                        self.markup_state.active_tool = MarkupToolType::Circle;
+                        self.markup_state.editing_text_idx = None;
+                    } else if ui.input(|i| i.key_pressed(egui::Key::Num4)) {
+                        self.markup_state.active_tool = MarkupToolType::Rectangle;
+                        self.markup_state.editing_text_idx = None;
+                    } else if ui.input(|i| i.key_pressed(egui::Key::Num5)) {
+                        self.markup_state.active_tool = MarkupToolType::Line;
+                        self.markup_state.editing_text_idx = None;
+                    } else if ui.input(|i| i.key_pressed(egui::Key::Num6)) {
+                        self.markup_state.active_tool = MarkupToolType::Highlighter;
+                        self.markup_state.editing_text_idx = None;
+                    } else if ui.input(|i| i.key_pressed(egui::Key::Num7)) {
+                        self.markup_state.active_tool = MarkupToolType::StepBadge;
+                        self.markup_state.editing_text_idx = None;
+                    } else if ui.input(|i| i.key_pressed(egui::Key::Num8)) {
+                        self.markup_state.active_tool = MarkupToolType::Text;
+                    }
+                }
+            } else {
+                if ui.input(|i| i.key_pressed(egui::Key::Num1)) {
+                    self.zoom = 1.0;
+                    self.pan = Vec2::ZERO;
+                }
+            }
             if ui.input(|i| i.key_pressed(egui::Key::Num0)) {
                 self.fit_to_view(ui.available_size());
-            }
-            if ui.input(|i| i.key_pressed(egui::Key::Num1)) {
-                self.zoom = 1.0;
-                self.pan = Vec2::ZERO;
             }
             if ui.input(|i| i.key_pressed(egui::Key::Equals) || i.key_pressed(egui::Key::Plus)) {
                 self.zoom = (self.zoom * 1.25).clamp(0.05, 5.0);
@@ -890,6 +970,8 @@ impl ImagePreviewState {
                     self.set_tool_mode(ImageToolMode::Transform);
                 } else if ui.input(|i| i.key_pressed(egui::Key::X)) {
                     self.set_tool_mode(ImageToolMode::Redact);
+                } else if ui.input(|i| i.key_pressed(egui::Key::M)) {
+                    self.set_tool_mode(ImageToolMode::Markup);
                 } else if ui.input(|i| i.key_pressed(egui::Key::P)) {
                     self.set_tool_mode(ImageToolMode::PickColor);
                 } else if ui.input(|i| i.key_pressed(egui::Key::S)) {
@@ -1180,6 +1262,7 @@ impl ImagePreviewState {
             | ImageToolMode::Deskew
             | ImageToolMode::Transform
             | ImageToolMode::Redact
+            | ImageToolMode::Markup
             | ImageToolMode::Ocr
             | ImageToolMode::RemoveBg
             | ImageToolMode::DepthMap => {}
@@ -1254,6 +1337,7 @@ impl ImagePreviewState {
                         ImageToolMode::Deskew,
                         ImageToolMode::Transform,
                         ImageToolMode::Redact,
+                        ImageToolMode::Markup,
                         ImageToolMode::PickColor,
                         ImageToolMode::Resize,
                         ImageToolMode::Convert,
@@ -1486,6 +1570,11 @@ impl ImagePreviewState {
                 );
             }
 
+            // Draw any placed markup layers so they remain visible across all modes
+            if self.active_mode != ImageToolMode::Markup && !self.markup_state.items.is_empty() {
+                self.render_markup_passive(&painter, img_rect);
+            }
+
             // Mode-specific on-canvas overlays
             if self.active_mode == ImageToolMode::Crop {
                 self.render_crop_overlay(ui, &painter, &response, img_rect, palette);
@@ -1493,6 +1582,8 @@ impl ImagePreviewState {
                 self.render_deskew_overlay(ui, &painter, &response, img_rect, palette);
             } else if self.active_mode == ImageToolMode::Redact {
                 self.render_redact_overlay(ui, &painter, &response, img_rect, palette);
+            } else if self.active_mode == ImageToolMode::Markup {
+                self.render_markup_overlay(ui, &painter, &response, img_rect, palette);
             } else if self.active_mode == ImageToolMode::PickColor {
                 self.render_pick_color_overlay(ui, &painter, &response, img_rect, palette);
             } else if self.active_mode == ImageToolMode::Barcode {
@@ -1514,6 +1605,7 @@ impl ImagePreviewState {
                         ImageToolMode::Deskew => "🎯 Click 4 points (TL → TR → BR → BL) | 🖱 Drag handles | Enter: Apply | Esc: Close",
                         ImageToolMode::Transform => "🖱 Rotate / Flip buttons above | Ctrl+Z: Undo | Ctrl+C: Copy Slot | Ctrl+S: Save As",
                         ImageToolMode::Redact => "🖱 Drag on image: Place black bar | 🛡️ Strip EXIF | Del: Remove | Enter: Burn/Apply | Ctrl+C: Copy Slot",
+                        ImageToolMode::Markup => "🖱 Drag: Draw shape | 1-8: Tools | Del: Delete | Esc: Deselect | Enter: Flatten Layers | Ctrl+C: Copy Slot",
                         ImageToolMode::PickColor => "🖱 Hover: Magnifying loupe | Click: Copy Hex code to clipboard | Ctrl+C: Copy Slot",
                         ImageToolMode::Convert => "🖱 Drag vertical divider: Before/After comparison | Enter: Apply to Canvas | Ctrl+S: Save As",
                         ImageToolMode::Ocr => "🖱 Choose engine and prompt on the left | Enter: Run OCR | Results appear on the right",

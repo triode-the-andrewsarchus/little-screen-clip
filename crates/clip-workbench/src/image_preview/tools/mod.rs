@@ -40,6 +40,8 @@ pub enum ImageToolMode {
     FilmSim,
     /// Creative optical and digital distortion FX suite.
     CreativeFx,
+    /// Interactive screenshot markup (arrow, circle, rectangle, line, text, badge).
+    Markup,
 }
 
 impl ImageToolMode {
@@ -51,6 +53,7 @@ impl ImageToolMode {
             ImageToolMode::Deskew => "Des[K]ew",
             ImageToolMode::Transform => "[F]lip/Rotate",
             ImageToolMode::Redact => "█ [X] Redact",
+            ImageToolMode::Markup => "✏ [M]arkup",
             ImageToolMode::PickColor => "[P]ick Color",
             ImageToolMode::Resize => "↔ Re[S]ize",
             ImageToolMode::Convert => "Conver[T]",
@@ -87,6 +90,8 @@ pub(super) use film_look::{
     all_film_stocks, apply_film_sim_post_adjustments,
 };
 mod layout;
+mod markup;
+pub(super) use markup::{MarkupDrag, MarkupShape, MarkupState, MarkupToolType, rasterize_markup};
 mod ocr;
 pub(super) use ocr::{OcrEngine, OcrMsg, OcrState};
 mod palette;

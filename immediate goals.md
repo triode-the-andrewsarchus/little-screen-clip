@@ -1,16 +1,26 @@
+# Overall
+- Use https://github.com/Rust-GPU/rust-gpu to get rendering times down
+- Make sure as much as possible is keyboard driven, like numbers to get to the tools in the image markup editor
+- replace all emoji with SVGs
+
 # Big new features:
 ## Image Studio
-* needs a quick circle, arrow, line, and text tool
 * More image FX
     * Image → particle system → image
         * Turn bright pixels into particles, let them flow under gravity/noise/vortices, then accumulate the particles back into an image.
     * Echo image — repeatedly offset and composite the image.
     * Edge feedback — edge-detect → amplify → feed back.
-    * Add a new image effect called Structure to the clipboard image-processing system.
-    * The goal is to reproduce the visual concept of Snapseed's "Structure" control: enhance naturally occurring texture and fine-to-medium detail throughout an image while deliberately avoiding the appearance of conventional sharpening. Object boundaries/strong edges should remain comparatively unaffected.
-        * Note: Full prompt/info in ChatGPT session
+    * https://github.com/Xpktro/bndr port
 * Depth-map driven contrast/saturation/brightness adjustment
 ## Audio Studio
+* ctrl+scroll should change the fade of a selection, that way gain/filtering isn't abrupt
+    * Should be equal fade in/out UNLESS selection contains the 1st sample or last sample, in which case don't fade the ends.
+* Resample / change sample rate
+* Channel operations — stereo→mono, extract L/R, swap L/R, invert polarity, perhaps copy L→R/R→L.
+* '+' over sample to get next region of the same size, that way a lot of drums can be extracted quickly.
+    * This requires some careful thinking about how to handle 0-crossing and user intent vs the obvious
+    * We might need to store the original target transient point targets seprately from the actual selecting boundry
+* Reverse support
 * n to normalize all selections to -6dB
 * Speech Fix
     * DeepFilterNet3 — primary speech denoiser.
@@ -23,10 +33,14 @@
     * BUDDy — experimental/high-quality speech dereverb.
     * U-DREAM — newer experimental dereverb candidate.
 * Some sort of indication of stereo separation on stereo files
+* Copy spectrum as image, copy waveform as image options
 ## MIDI
 * Ability to select region, copy
     * Need to test if copying pasting MIDI to bitwig works first
 * I'd like a live system MIDI monitor, similar to the rolling audio meter
+## PDF
+* add epub support
+* convert epub <-> pdf
 ## 3D file viewer
 * More file support
 ## .ply/.splat preview
