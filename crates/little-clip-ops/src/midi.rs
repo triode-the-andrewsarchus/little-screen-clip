@@ -272,9 +272,37 @@ impl MidiData {
             max_k = 72; // C5
         }
 
+        // If Type 0 (single track in SMF) but notes span multiple distinct channels, split into virtual tracks per channel
+        if smf.tracks.len() <= 1 {
+            let mut unique_channels: Vec<u8> = all_notes.iter().map(|n| n.channel).collect();
+            unique_channels.sort_unstable();
+            unique_channels.dedup();
+            if unique_channels.len() > 1 {
+                let mut new_track_names = Vec::new();
+                for &ch in &unique_channels {
+                    let first_note = all_notes.iter().find(|n| n.channel == ch);
+                    let prog = first_note.map(|n| n.program).unwrap_or(0);
+                    let name = if ch == 9 {
+                        "Drums (Ch 10)".to_string()
+                    } else {
+                        format!("Channel {} (Patch {})", ch + 1, prog)
+                    };
+                    new_track_names.push(name);
+                }
+                for note in &mut all_notes {
+                    if let Some(pos) = unique_channels.iter().position(|&c| c == note.channel) {
+                        note.track = pos;
+                    }
+                }
+                track_names = new_track_names;
+            }
+        }
+
+        let track_count = track_names.len().max(smf.tracks.len());
+
         Ok(Self {
             title,
-            track_count: smf.tracks.len(),
+            track_count,
             track_names,
             total_notes: all_notes.len(),
             duration_sec: max_end_sec.max(1.0),
@@ -359,9 +387,259 @@ impl MidiData {
         }
     }
 
-    /// Synthesizes the MIDI notes into an in-memory 44.1kHz 16-bit Mono WAV byte buffer.
-    /// Distinguishes drum channels and synthesizes rich instruments per track/program.
-    pub fn synthesize_to_wav(&self) -> Vec<u8> {
+    /// Extracts a time slice of MIDI notes between `start_sec` and `end_sec`.
+    ///
+    /// If `solo_track` is specified, only notes from that track are retained and
+    /// remapped to a single track. Note timings are re-anchored to `start_sec` = 0.0
+    /// and clamped to the slice boundary.
+    pub fn slice(&self, start_sec: f32, end_sec: f32, solo_track: Option<usize>) -> Self {
+        let s = start_sec.min(end_sec).max(0.0);
+        let e = start_sec.max(end_sec);
+        let duration = (e - s).max(0.05);
+
+        let mut sliced_notes = Vec::new();
+        let mut min_k: u8 = 127;
+        let mut max_k: u8 = 0;
+
+        for note in &self.notes {
+            if solo_track.is_some_and(|st| note.track != st) {
+                continue;
+            }
+
+            let note_end = note.start_sec + note.duration_sec;
+            if note_end <= s || note.start_sec >= e {
+                continue;
+            }
+
+            let new_start = (note.start_sec - s).max(0.0);
+            let new_end = (note_end - s).min(duration);
+            let new_dur = (new_end - new_start).max(0.02);
+
+            let new_track = if solo_track.is_some() { 0 } else { note.track };
+
+            if note.key < min_k {
+                min_k = note.key;
+            }
+            if note.key > max_k {
+                max_k = note.key;
+            }
+
+            sliced_notes.push(MidiNote {
+                track: new_track,
+                channel: note.channel,
+                program: note.program,
+                key: note.key,
+                velocity: note.velocity,
+                start_sec: new_start,
+                duration_sec: new_dur,
+            });
+        }
+
+        sliced_notes.sort_by(|a, b| {
+            a.start_sec
+                .partial_cmp(&b.start_sec)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        if min_k > max_k {
+            min_k = self.min_key;
+            max_k = self.max_key;
+        }
+
+        let (track_count, track_names, title) = if let Some(st) = solo_track {
+            let tname = self
+                .track_names
+                .get(st)
+                .cloned()
+                .unwrap_or_else(|| format!("Track {}", st + 1));
+            (
+                1,
+                vec![tname.clone()],
+                format!("{}_{}_slice", self.title, tname),
+            )
+        } else {
+            (
+                self.track_count,
+                self.track_names.clone(),
+                format!("{}_slice", self.title),
+            )
+        };
+
+        Self {
+            title,
+            track_count,
+            track_names,
+            total_notes: sliced_notes.len(),
+            duration_sec: duration,
+            bpm: self.bpm,
+            min_key: min_k,
+            max_key: max_k,
+            notes: sliced_notes,
+        }
+    }
+
+    /// Serializes the score into a Standard MIDI File (`.mid`) byte vector.
+    pub fn to_midi_bytes(&self) -> Result<Vec<u8>, String> {
+        use midly::num::{u4, u7, u15, u24, u28};
+        use midly::{
+            Format, Header, MetaMessage, MidiMessage, Smf, Timing, TrackEvent, TrackEventKind,
+        };
+
+        let ticks_per_beat = 480u16;
+        let header = if self.track_count <= 1 {
+            Header::new(
+                Format::SingleTrack,
+                Timing::Metrical(u15::new(ticks_per_beat)),
+            )
+        } else {
+            Header::new(Format::Parallel, Timing::Metrical(u15::new(ticks_per_beat)))
+        };
+
+        let tempo_bpm = if self.bpm > 20.0 && self.bpm < 400.0 {
+            self.bpm
+        } else {
+            120.0
+        };
+        let tempo_us = (60_000_000.0 / tempo_bpm as f64).round() as u32;
+        let ticks_per_sec = (ticks_per_beat as f64 * tempo_bpm as f64) / 60.0;
+
+        let mut smf = Smf::new(header);
+
+        #[derive(Clone, Copy)]
+        enum NoteEventType {
+            ProgramChange(u8),
+            NoteOff { key: u8, vel: u8 },
+            NoteOn { key: u8, vel: u8 },
+        }
+
+        struct ScheduledEvent {
+            tick: u64,
+            channel: u8,
+            priority: u8, // 0: ProgramChange, 1: NoteOff, 2: NoteOn
+            kind: NoteEventType,
+        }
+
+        let num_tracks = self.track_count.max(1);
+        for t_idx in 0..num_tracks {
+            let mut track_events: Vec<TrackEvent> = Vec::new();
+
+            // Track name
+            if let Some(name) = self.track_names.get(t_idx).filter(|n| !n.is_empty()) {
+                track_events.push(TrackEvent {
+                    delta: u28::new(0),
+                    kind: TrackEventKind::Meta(MetaMessage::TrackName(name.as_bytes())),
+                });
+            }
+
+            // Tempo on Track 0
+            if t_idx == 0 {
+                track_events.push(TrackEvent {
+                    delta: u28::new(0),
+                    kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::new(
+                        tempo_us.min(0x00FF_FFFF),
+                    ))),
+                });
+            }
+
+            // Gather notes for this track
+            let mut sched: Vec<ScheduledEvent> = Vec::new();
+            let mut programs_emitted: HashMap<u8, u8> = HashMap::new();
+
+            for note in self.notes.iter().filter(|n| n.track == t_idx) {
+                let start_tick = (note.start_sec as f64 * ticks_per_sec).round() as u64;
+                let dur_ticks = ((note.duration_sec as f64 * ticks_per_sec).round() as u64).max(1);
+                let end_tick = start_tick + dur_ticks;
+
+                let ch = note.channel.min(15);
+                if programs_emitted.get(&ch) != Some(&note.program) {
+                    programs_emitted.insert(ch, note.program);
+                    sched.push(ScheduledEvent {
+                        tick: start_tick,
+                        channel: ch,
+                        priority: 0,
+                        kind: NoteEventType::ProgramChange(note.program),
+                    });
+                }
+
+                sched.push(ScheduledEvent {
+                    tick: start_tick,
+                    channel: ch,
+                    priority: 2,
+                    kind: NoteEventType::NoteOn {
+                        key: note.key.min(127),
+                        vel: note.velocity.clamp(1, 127),
+                    },
+                });
+
+                sched.push(ScheduledEvent {
+                    tick: end_tick,
+                    channel: ch,
+                    priority: 1,
+                    kind: NoteEventType::NoteOff {
+                        key: note.key.min(127),
+                        vel: 0,
+                    },
+                });
+            }
+
+            sched.sort_by(|a, b| match a.tick.cmp(&b.tick) {
+                std::cmp::Ordering::Equal => a.priority.cmp(&b.priority),
+                other => other,
+            });
+
+            let mut last_tick = 0u64;
+            for ev in sched {
+                let delta = (ev.tick.saturating_sub(last_tick)).min(0x0FFF_FFFF) as u32;
+                last_tick = ev.tick;
+
+                let ch = u4::new(ev.channel);
+                let mid_kind = match ev.kind {
+                    NoteEventType::ProgramChange(prog) => TrackEventKind::Midi {
+                        channel: ch,
+                        message: MidiMessage::ProgramChange {
+                            program: u7::new(prog.min(127)),
+                        },
+                    },
+                    NoteEventType::NoteOn { key, vel } => TrackEventKind::Midi {
+                        channel: ch,
+                        message: MidiMessage::NoteOn {
+                            key: u7::new(key),
+                            vel: u7::new(vel),
+                        },
+                    },
+                    NoteEventType::NoteOff { key, vel } => TrackEventKind::Midi {
+                        channel: ch,
+                        message: MidiMessage::NoteOff {
+                            key: u7::new(key),
+                            vel: u7::new(vel),
+                        },
+                    },
+                };
+
+                track_events.push(TrackEvent {
+                    delta: u28::new(delta),
+                    kind: mid_kind,
+                });
+            }
+
+            // End of track marker
+            track_events.push(TrackEvent {
+                delta: u28::new(0),
+                kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+            });
+
+            smf.tracks.push(track_events);
+        }
+
+        let mut bytes = Vec::new();
+        smf.write(&mut bytes)
+            .map_err(|e| format!("Failed to serialize MIDI: {}", e))?;
+        Ok(bytes)
+    }
+
+    /// Synthesizes the MIDI notes into an in-memory 44.1kHz 16-bit Mono WAV byte buffer,
+    /// optionally filtering to a single soloed track.
+    pub fn synthesize_tracks_to_wav(&self, solo_track: Option<usize>) -> Vec<u8> {
         let sample_rate: u32 = 44100;
         let total_samples = ((self.duration_sec + 0.6) * sample_rate as f32).ceil() as usize;
         let mut buffer = vec![0.0f32; total_samples];
@@ -370,6 +648,12 @@ impl MidiData {
         let mut rng_state: u32 = 123456789;
 
         for note in &self.notes {
+            if let Some(st) = solo_track {
+                if note.track != st {
+                    continue;
+                }
+            }
+
             let start_sample = (note.start_sec * sample_rate as f32) as usize;
             if start_sample >= total_samples {
                 continue;
@@ -451,29 +735,29 @@ impl MidiData {
                         let env = if rel < attack_samples {
                             rel as f32 / attack_samples as f32
                         } else if rel < attack_samples + decay_samples {
-                            let d = (rel - attack_samples) as f32 / decay_samples as f32;
-                            1.0 - 0.25 * d
-                        } else if rel < dur_samples {
+                            1.0 - 0.25 * ((rel - attack_samples) as f32 / decay_samples as f32)
+                        } else if s < start_sample + dur_samples {
                             0.75
                         } else {
-                            let r = (rel - dur_samples) as f32 / release_samples as f32;
-                            (0.75 * (1.0 - r)).max(0.0)
+                            let rel_progress =
+                                (s - (start_sample + dur_samples)) as f32 / release_samples as f32;
+                            0.75 * (1.0 - rel_progress).max(0.0)
                         };
 
                         let p = note_t * freq * std::f32::consts::TAU;
-                        // Deep bass: Sub-octave + Fundamental + 2nd harmonic
-                        let wave = 0.65 * p.sin() + 0.3 * (p * 2.0).sin() + 0.25 * (p * 0.5).sin();
-                        buffer[s] += wave * env * vel_scale;
+                        let wave = (p.sin() + 0.3 * (p * 2.0).sin() + 0.1 * (p * 3.0).sin())
+                            .clamp(-1.0, 1.0);
+                        buffer[s] += wave * env * vel_scale * 1.1;
                     }
                 }
-                InstrumentType::StringsPad => {
+                InstrumentType::Piano => {
                     let dur_samples = (note.duration_sec * sample_rate as f32) as usize;
                     let release_samples = (0.15 * sample_rate as f32) as usize;
                     let end_sample =
                         (start_sample + dur_samples + release_samples).min(total_samples);
                     let freq = note.frequency();
 
-                    let attack_samples = (0.06 * sample_rate as f32) as usize;
+                    let attack_samples = (0.004 * sample_rate as f32) as usize;
 
                     for s in start_sample..end_sample {
                         let note_t = (s - start_sample) as f32 / sample_rate as f32;
@@ -481,28 +765,55 @@ impl MidiData {
 
                         let env = if rel < attack_samples {
                             rel as f32 / attack_samples as f32
-                        } else if rel < dur_samples {
-                            1.0
                         } else {
-                            let r = (rel - dur_samples) as f32 / release_samples as f32;
-                            (1.0 - r).max(0.0)
+                            (-note_t * 3.2).exp()
                         };
 
                         let p = note_t * freq * std::f32::consts::TAU;
-                        // Chorused warm strings
-                        let wave = 0.45 * p.sin()
-                            + 0.25 * (p * 1.003).sin()
-                            + 0.25 * (p * 0.997).sin()
-                            + 0.15 * (p * 2.0).sin();
-                        buffer[s] += wave * env * vel_scale;
+                        let wave = p.sin()
+                            + 0.5 * (p * 2.0).sin() * (-note_t * 4.5).exp()
+                            + 0.25 * (p * 3.0).sin() * (-note_t * 6.0).exp()
+                            + 0.12 * (p * 4.0).sin() * (-note_t * 8.0).exp();
+                        buffer[s] += wave * env * vel_scale * 0.9;
+                    }
+                }
+                InstrumentType::StringsPad => {
+                    let dur_samples = (note.duration_sec * sample_rate as f32) as usize;
+                    let release_samples = (0.4 * sample_rate as f32) as usize;
+                    let end_sample =
+                        (start_sample + dur_samples + release_samples).min(total_samples);
+                    let freq = note.frequency();
+
+                    let attack_samples = (0.12 * sample_rate as f32) as usize;
+
+                    for s in start_sample..end_sample {
+                        let note_t = (s - start_sample) as f32 / sample_rate as f32;
+                        let rel = s - start_sample;
+
+                        let env = if rel < attack_samples {
+                            rel as f32 / attack_samples as f32
+                        } else if s < start_sample + dur_samples {
+                            1.0
+                        } else {
+                            let rel_progress =
+                                (s - (start_sample + dur_samples)) as f32 / release_samples as f32;
+                            (1.0 - rel_progress).max(0.0)
+                        };
+
+                        let p1 = note_t * (freq * 0.998) * std::f32::consts::TAU;
+                        let p2 = note_t * (freq * 1.002) * std::f32::consts::TAU;
+                        let wave = 0.5 * (p1.sin() + p2.sin())
+                            + 0.25 * ((p1 * 2.0).sin() + (p2 * 2.0).sin());
+                        buffer[s] += wave * env * vel_scale * 0.7;
                     }
                 }
                 InstrumentType::Organ => {
                     let dur_samples = (note.duration_sec * sample_rate as f32) as usize;
-                    let release_samples = (0.03 * sample_rate as f32) as usize;
+                    let release_samples = (0.02 * sample_rate as f32) as usize;
                     let end_sample =
                         (start_sample + dur_samples + release_samples).min(total_samples);
                     let freq = note.frequency();
+
                     let attack_samples = (0.005 * sample_rate as f32) as usize;
 
                     for s in start_sample..end_sample {
@@ -511,76 +822,30 @@ impl MidiData {
 
                         let env = if rel < attack_samples {
                             rel as f32 / attack_samples as f32
-                        } else if rel < dur_samples {
-                            0.9
+                        } else if s < start_sample + dur_samples {
+                            1.0
                         } else {
-                            let r = (rel - dur_samples) as f32 / release_samples as f32;
-                            (0.9 * (1.0 - r)).max(0.0)
+                            let rel_progress =
+                                (s - (start_sample + dur_samples)) as f32 / release_samples as f32;
+                            (1.0 - rel_progress).max(0.0)
                         };
 
                         let p = note_t * freq * std::f32::consts::TAU;
-                        // Drawbars additive organ
-                        let wave = 0.5 * p.sin()
-                            + 0.3 * (p * 2.0).sin()
-                            + 0.2 * (p * 3.0).sin()
-                            + 0.15 * (p * 4.0).sin();
-                        buffer[s] += wave * env * vel_scale;
-                    }
-                }
-                InstrumentType::LeadBrass => {
-                    let dur_samples = (note.duration_sec * sample_rate as f32) as usize;
-                    let release_samples = (0.06 * sample_rate as f32) as usize;
-                    let end_sample =
-                        (start_sample + dur_samples + release_samples).min(total_samples);
-                    let freq = note.frequency();
-                    let attack_samples = (0.01 * sample_rate as f32) as usize;
-
-                    for s in start_sample..end_sample {
-                        let note_t = (s - start_sample) as f32 / sample_rate as f32;
-                        let rel = s - start_sample;
-
-                        let env = if rel < attack_samples {
-                            rel as f32 / attack_samples as f32
-                        } else if rel < dur_samples {
-                            0.8
-                        } else {
-                            let r = (rel - dur_samples) as f32 / release_samples as f32;
-                            (0.8 * (1.0 - r)).max(0.0)
-                        };
-
-                        let p = note_t * freq * std::f32::consts::TAU;
-                        // Bright saw brass/lead
-                        let wave = 0.5 * p.sin()
-                            + 0.28 * (p * 2.0).sin()
-                            + 0.18 * (p * 3.0).sin()
-                            + 0.12 * (p * 4.0).sin();
-                        buffer[s] += wave * env * vel_scale;
+                        let wave = p.sin()
+                            + 0.5 * (p * 2.0).sin()
+                            + 0.3 * (p * 3.0).sin()
+                            + 0.2 * (p * 4.0).sin();
+                        buffer[s] += wave * env * vel_scale * 0.6;
                     }
                 }
                 InstrumentType::GuitarPluck => {
                     let dur_samples = (note.duration_sec * sample_rate as f32) as usize;
-                    let release_samples = (0.08 * sample_rate as f32) as usize;
+                    let release_samples = (0.1 * sample_rate as f32) as usize;
                     let end_sample =
                         (start_sample + dur_samples + release_samples).min(total_samples);
                     let freq = note.frequency();
 
-                    for s in start_sample..end_sample {
-                        let t = (s - start_sample) as f32 / sample_rate as f32;
-                        let env = (-t * 6.5).exp().max(0.0);
-                        let p = t * freq * std::f32::consts::TAU;
-                        let wave = p.sin() + 0.35 * (p * 2.0).sin() * (-t * 12.0).exp();
-                        buffer[s] += wave * env * vel_scale;
-                    }
-                }
-                InstrumentType::Piano => {
-                    let dur_samples = (note.duration_sec * sample_rate as f32) as usize;
-                    let release_samples = (0.08 * sample_rate as f32) as usize;
-                    let end_sample =
-                        (start_sample + dur_samples + release_samples).min(total_samples);
-                    let freq = note.frequency();
-
-                    let attack_samples = (0.012 * sample_rate as f32) as usize;
-                    let decay_samples = (0.08 * sample_rate as f32) as usize;
+                    let attack_samples = (0.002 * sample_rate as f32) as usize;
 
                     for s in start_sample..end_sample {
                         let note_t = (s - start_sample) as f32 / sample_rate as f32;
@@ -588,60 +853,93 @@ impl MidiData {
 
                         let env = if rel < attack_samples {
                             rel as f32 / attack_samples as f32
-                        } else if rel < attack_samples + decay_samples {
-                            let d = (rel - attack_samples) as f32 / decay_samples as f32;
-                            1.0 - 0.3 * d
-                        } else if rel < dur_samples {
-                            0.7
                         } else {
-                            let r = (rel - dur_samples) as f32 / release_samples as f32;
-                            (0.7 * (1.0 - r)).max(0.0)
+                            (-note_t * 5.5).exp()
                         };
 
                         let p = note_t * freq * std::f32::consts::TAU;
-                        let wave = 0.7 * p.sin() + 0.2 * (p * 2.0).sin() + 0.1 * (p * 3.0).sin();
-                        buffer[s] += wave * env * vel_scale;
+                        let wave = (p * 0.5).sin().signum() * 0.5 + p.sin() * 0.5;
+                        buffer[s] += wave * env * vel_scale * 0.8;
+                    }
+                }
+                InstrumentType::LeadBrass => {
+                    let dur_samples = (note.duration_sec * sample_rate as f32) as usize;
+                    let release_samples = (0.08 * sample_rate as f32) as usize;
+                    let end_sample =
+                        (start_sample + dur_samples + release_samples).min(total_samples);
+                    let freq = note.frequency();
+
+                    let attack_samples = (0.03 * sample_rate as f32) as usize;
+
+                    for s in start_sample..end_sample {
+                        let note_t = (s - start_sample) as f32 / sample_rate as f32;
+                        let rel = s - start_sample;
+
+                        let env = if rel < attack_samples {
+                            rel as f32 / attack_samples as f32
+                        } else if s < start_sample + dur_samples {
+                            0.95
+                        } else {
+                            let rel_progress =
+                                (s - (start_sample + dur_samples)) as f32 / release_samples as f32;
+                            0.95 * (1.0 - rel_progress).max(0.0)
+                        };
+
+                        let p = note_t * freq * std::f32::consts::TAU;
+                        let wave =
+                            (2.0 * (p / std::f32::consts::TAU).fract() - 1.0) * 0.6 + p.sin() * 0.4;
+                        buffer[s] += wave * env * vel_scale * 0.75;
                     }
                 }
             }
         }
 
-        // Soft clip / normalize
-        let max_val = buffer.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
-        let gain = if max_val > 0.85 { 0.85 / max_val } else { 1.0 };
+        // Soft-clip limiter to avoid harsh digital wrapping
+        let mut max_val: f32 = 0.0;
+        for &sample in &buffer {
+            let abs = sample.abs();
+            if abs > max_val {
+                max_val = abs;
+            }
+        }
 
-        // Encode to WAV format (RIFF header + fmt chunk + data chunk)
-        let mut wav: Vec<u8> = Vec::with_capacity(44 + total_samples * 2);
+        let gain = if max_val > 0.95 { 0.95 / max_val } else { 1.0 };
+
+        // Render 16-bit PCM RIFF WAV
         let num_channels: u16 = 1;
         let bits_per_sample: u16 = 16;
-        let byte_rate = sample_rate * num_channels as u32 * (bits_per_sample as u32 / 8);
+        let byte_rate = sample_rate * num_channels as u32 * (bits_per_sample / 8) as u32;
         let block_align = num_channels * (bits_per_sample / 8);
-        let data_chunk_size = (total_samples * 2) as u32;
-        let riff_chunk_size = 36 + data_chunk_size;
+        let data_size = (buffer.len() * 2) as u32;
 
+        let mut wav = Vec::with_capacity(44 + data_size as usize);
         wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&riff_chunk_size.to_le_bytes());
+        wav.extend_from_slice(&(36 + data_size).to_le_bytes());
         wav.extend_from_slice(b"WAVE");
-
         wav.extend_from_slice(b"fmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes()); // Subchunk1Size
-        wav.extend_from_slice(&1u16.to_le_bytes()); // AudioFormat (1 = PCM)
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
         wav.extend_from_slice(&num_channels.to_le_bytes());
         wav.extend_from_slice(&sample_rate.to_le_bytes());
         wav.extend_from_slice(&byte_rate.to_le_bytes());
         wav.extend_from_slice(&block_align.to_le_bytes());
         wav.extend_from_slice(&bits_per_sample.to_le_bytes());
-
         wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data_chunk_size.to_le_bytes());
+        wav.extend_from_slice(&data_size.to_le_bytes());
 
-        for sample in buffer {
+        for &sample in &buffer {
             let clamped = (sample * gain).clamp(-1.0, 1.0);
-            let pcm = (clamped * 32767.0) as i16;
-            wav.extend_from_slice(&pcm.to_le_bytes());
+            let s16 = (clamped * 32767.0) as i16;
+            wav.extend_from_slice(&s16.to_le_bytes());
         }
 
         wav
+    }
+
+    /// Synthesizes the MIDI notes into an in-memory 44.1kHz 16-bit Mono WAV byte buffer.
+    /// Distinguishes drum channels and synthesizes rich instruments per track/program.
+    pub fn synthesize_to_wav(&self) -> Vec<u8> {
+        self.synthesize_tracks_to_wav(None)
     }
 }
 
@@ -732,5 +1030,106 @@ mod tests {
         assert!(wav.len() > 44);
         assert_eq!(&wav[0..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
+    }
+
+    #[test]
+    fn test_midi_slice_and_export_roundtrip() {
+        let midi = MidiData {
+            title: "Test Composition".to_string(),
+            track_count: 2,
+            track_names: vec!["Lead Synth".to_string(), "Bassline".to_string()],
+            total_notes: 4,
+            duration_sec: 4.0,
+            bpm: 120.0,
+            min_key: 36,
+            max_key: 72,
+            notes: vec![
+                MidiNote {
+                    track: 0,
+                    channel: 0,
+                    program: 80,
+                    key: 60,
+                    velocity: 90,
+                    start_sec: 0.5,
+                    duration_sec: 1.0,
+                },
+                MidiNote {
+                    track: 0,
+                    channel: 0,
+                    program: 80,
+                    key: 64,
+                    velocity: 85,
+                    start_sec: 1.8,
+                    duration_sec: 1.0,
+                },
+                MidiNote {
+                    track: 1,
+                    channel: 1,
+                    program: 38,
+                    key: 36,
+                    velocity: 100,
+                    start_sec: 0.0,
+                    duration_sec: 2.0,
+                },
+                MidiNote {
+                    track: 1,
+                    channel: 1,
+                    program: 38,
+                    key: 38,
+                    velocity: 95,
+                    start_sec: 2.2,
+                    duration_sec: 1.5,
+                },
+            ],
+        };
+
+        // 1. Slice all tracks between 1.0s and 3.0s
+        let slice_all = midi.slice(1.0, 3.0, None);
+        assert_eq!(slice_all.track_count, 2);
+        // All 4 notes intersect [1.0, 3.0]:
+        // Note 0: start 0.5, dur 1.0 -> ends 1.5 > 1.0 (intersects)
+        // Note 1: start 1.8, dur 1.0 -> intersects
+        // Note 2: start 0.0, dur 2.0 -> ends 2.0 > 1.0 (intersects)
+        // Note 3: start 2.2, dur 1.5 -> starts 2.2 < 3.0 (intersects)
+        assert_eq!(slice_all.total_notes, 4);
+        assert!((slice_all.duration_sec - 2.0).abs() < 0.01);
+
+        // Export slice_all to MIDI bytes and re-parse
+        let bytes = slice_all.to_midi_bytes().expect("to_midi_bytes failed");
+        assert!(bytes.starts_with(b"MThd"));
+        let parsed =
+            MidiData::parse_bytes(&bytes, "Parsed".to_string()).expect("parse_bytes failed");
+        assert_eq!(parsed.track_count, 2);
+        assert_eq!(parsed.notes.len(), 4);
+
+        // 2. Slice solo track 1 (Bassline) between 1.0s and 3.0s
+        let slice_solo = midi.slice(1.0, 3.0, Some(1));
+        assert_eq!(slice_solo.track_count, 1);
+        assert_eq!(slice_solo.track_names, vec!["Bassline".to_string()]);
+        assert_eq!(slice_solo.total_notes, 2); // only notes from track 1
+        for n in &slice_solo.notes {
+            assert_eq!(n.track, 0); // remapped to single track 0
+            assert_eq!(n.channel, 1);
+        }
+
+        // Export solo slice to bytes and re-parse
+        let solo_bytes = slice_solo
+            .to_midi_bytes()
+            .expect("solo to_midi_bytes failed");
+        let parsed_solo = MidiData::parse_bytes(&solo_bytes, "Parsed Solo".to_string())
+            .expect("parse solo failed");
+        assert_eq!(parsed_solo.track_count, 1);
+        assert_eq!(parsed_solo.track_names, vec!["Bassline".to_string()]);
+        assert_eq!(parsed_solo.notes.len(), 2);
+
+        // 3. Test solo audio synthesis
+        let wav_solo0 = midi.synthesize_tracks_to_wav(Some(0));
+        let wav_solo1 = midi.synthesize_tracks_to_wav(Some(1));
+        let wav_full = midi.synthesize_tracks_to_wav(None);
+
+        assert!(wav_solo0.len() > 44);
+        assert!(wav_solo1.len() > 44);
+        assert!(wav_full.len() > 44);
+        assert_ne!(wav_solo0, wav_solo1);
     }
 }

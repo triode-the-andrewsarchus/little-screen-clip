@@ -1655,8 +1655,13 @@ impl WorkbenchApp {
 
         if let Some(midi_state) = &mut self.midi_viewer {
             if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                midi_state.stop();
-                self.midi_viewer = None;
+                if midi_state.selected_region.is_some() {
+                    midi_state.selected_region = None;
+                    midi_state.play_stop_time = None;
+                } else {
+                    midi_state.stop();
+                    self.midi_viewer = None;
+                }
                 return true;
             }
             let mut close_midi = false;

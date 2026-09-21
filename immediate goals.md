@@ -1,7 +1,6 @@
 # Overall
 - Use https://github.com/Rust-GPU/rust-gpu to get rendering times down
 - Make sure as much as possible is keyboard driven, like numbers to get to the tools in the image markup editor
-- replace all emoji with SVGs
 
 # Big new features:
 ## Image Studio
@@ -35,8 +34,6 @@
 * Some sort of indication of stereo separation on stereo files
 * Copy spectrum as image, copy waveform as image options
 ## MIDI
-* Ability to select region, copy
-    * Need to test if copying pasting MIDI to bitwig works first
 * I'd like a live system MIDI monitor, similar to the rolling audio meter
 ## PDF
 * add epub support

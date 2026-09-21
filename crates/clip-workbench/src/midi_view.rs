@@ -7,6 +7,8 @@ use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::{self, StatusToast, ZoomAction};
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
+use little_clip_core::HandSide;
+use little_clip_core::ipc::IpcRequest;
 use little_clip_core::presentation::midi::{MidiData, MidiNote};
 use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
 use rodio::{Decoder, Player};
@@ -30,9 +32,15 @@ pub struct MidiViewerState {
     pub view_start_sec: f32,
     pub view_duration_sec: f32,
     pub user_panned_during_playback: bool,
+    #[allow(dead_code)]
     pub was_playing_before_drag: bool,
     pub hovered_note: Option<MidiNote>,
     pub status_toast: StatusToast,
+    pub selected_region: Option<(f32, f32)>,
+    pub solo_track: Option<usize>,
+    pub drag_start_time: Option<f32>,
+    pub is_dragging_selection: bool,
+    pub play_stop_time: Option<f32>,
 }
 
 /// Computes a distinct palette color for notes in a given MIDI track and channel using theme harmonies.
@@ -73,6 +81,11 @@ impl MidiViewerState {
             was_playing_before_drag: false,
             hovered_note: None,
             status_toast: StatusToast::new(),
+            selected_region: None,
+            solo_track: None,
+            drag_start_time: None,
+            is_dragging_selection: false,
+            play_stop_time: None,
             data,
         })
     }
@@ -97,6 +110,11 @@ impl MidiViewerState {
             was_playing_before_drag: false,
             hovered_note: None,
             status_toast: StatusToast::new(),
+            selected_region: None,
+            solo_track: None,
+            drag_start_time: None,
+            is_dragging_selection: false,
+            play_stop_time: None,
             data,
         })
     }
@@ -154,7 +172,7 @@ impl MidiViewerState {
         self.user_panned_during_playback = false;
 
         if self.wav_cache.is_none() {
-            self.wav_cache = Some(self.data.synthesize_to_wav());
+            self.wav_cache = Some(self.data.synthesize_tracks_to_wav(self.solo_track));
         }
 
         let wav_bytes = self.wav_cache.as_ref().unwrap();
@@ -215,6 +233,165 @@ impl MidiViewerState {
         }
     }
 
+    pub fn play_selection(&mut self) {
+        if let Some((s, e)) = self.selected_region {
+            if (e - s).abs() > 0.05 {
+                let start = s.min(e);
+                let end = s.max(e);
+                self.playhead_sec = start;
+                self.play_stop_time = Some(end);
+            } else {
+                self.play_stop_time = None;
+            }
+        } else {
+            self.play_stop_time = None;
+        }
+        self.play();
+    }
+
+    pub fn toggle_solo(&mut self, track_idx: usize) {
+        if self.solo_track == Some(track_idx) {
+            self.solo_track = None;
+        } else {
+            self.solo_track = Some(track_idx);
+        }
+        self.wav_cache = None;
+        if self.is_playing {
+            let cur = self.playhead_sec;
+            let stop_time = self.play_stop_time;
+            self.stop();
+            self.playhead_sec = cur;
+            self.play_stop_time = stop_time;
+            self.play();
+        }
+    }
+
+    pub fn clear_solo(&mut self) {
+        if self.solo_track.is_some() {
+            self.solo_track = None;
+            self.wav_cache = None;
+            if self.is_playing {
+                let cur = self.playhead_sec;
+                let stop_time = self.play_stop_time;
+                self.stop();
+                self.playhead_sec = cur;
+                self.play_stop_time = stop_time;
+                self.play();
+            }
+        }
+    }
+
+    pub fn copy_selection(&mut self, now: f64) -> bool {
+        let (s, e, is_slice) = match self.selected_region {
+            Some((a, b)) if (b - a).abs() > 0.05 => (a.min(b), a.max(b), true),
+            _ => (0.0, self.data.duration_sec.max(0.1), false),
+        };
+
+        let sliced_data = self.data.slice(s, e, self.solo_track);
+        let midi_bytes = match sliced_data.to_midi_bytes() {
+            Ok(b) => b,
+            Err(err) => {
+                self.status_toast
+                    .set(format!("Failed to export MIDI: {err}"), now);
+                return false;
+            }
+        };
+
+        let slice_dir = if let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") {
+            PathBuf::from(rt)
+                .join("little-screen-clip")
+                .join("midi_slices")
+        } else {
+            PathBuf::from("/tmp/little-screen-clip/midi_slices")
+        };
+
+        if let Err(err) = std::fs::create_dir_all(&slice_dir) {
+            tracing::warn!(
+                "Failed to create midi slice directory {}: {err}",
+                slice_dir.display()
+            );
+            self.status_toast
+                .set(format!("Failed to create slice directory: {err}"), now);
+            return false;
+        }
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+
+        let track_suffix = if let Some(st) = self.solo_track {
+            let name = self
+                .data
+                .track_names
+                .get(st)
+                .map(|s| s.replace(|c: char| !c.is_alphanumeric() && c != '_', "_"))
+                .unwrap_or_else(|| format!("track_{}", st + 1));
+            format!("_{name}")
+        } else {
+            String::new()
+        };
+
+        let filename = if is_slice {
+            format!(
+                "midi_slice_{}_{:.1}s-{:.1}s{}.mid",
+                timestamp, s, e, track_suffix
+            )
+        } else {
+            format!("midi_export_{}{}.mid", timestamp, track_suffix)
+        };
+
+        let slice_path = slice_dir.join(filename);
+        if let Err(err) = std::fs::write(&slice_path, &midi_bytes) {
+            self.status_toast
+                .set(format!("Failed to write MIDI file: {err}"), now);
+            return false;
+        }
+
+        let req = IpcRequest::PushFile {
+            path: slice_path.clone(),
+            hand: HandSide::Left,
+        };
+
+        let ipc_sent = crate::send_ipc_request(&req).is_ok();
+        if !ipc_sent {
+            if let Err(error) = little_clip_core::copy_file_uris_to_system_clipboard(
+                std::slice::from_ref(&slice_path),
+            ) {
+                tracing::debug!(%error, "failed to copy MIDI slice to system clipboard");
+            }
+        }
+
+        let solo_info = if let Some(st) = self.solo_track {
+            let name = self
+                .data
+                .track_names
+                .get(st)
+                .map(|s| s.as_str())
+                .unwrap_or("track");
+            format!(" (solo '{name}')")
+        } else {
+            String::new()
+        };
+
+        let desc = if is_slice {
+            format!(
+                "Copied {:.1}s MIDI slice ({} notes{}) to Clipboard & Left Hand!",
+                e - s,
+                sliced_data.total_notes,
+                solo_info
+            )
+        } else {
+            format!(
+                "Copied full MIDI ({} notes{}) to Clipboard & Left Hand!",
+                sliced_data.total_notes, solo_info
+            )
+        };
+
+        self.status_toast.set(desc, now);
+        true
+    }
+
     pub fn pause(&mut self) {
         if let Some(player) = &self.player {
             player.pause();
@@ -231,9 +408,14 @@ impl MidiViewerState {
         self.player = None;
         self._sink = None;
         self.is_playing = false;
-        self.playhead_sec = 0.0;
+        if let Some((s, _)) = self.selected_region {
+            self.playhead_sec = s;
+        } else {
+            self.playhead_sec = 0.0;
+        }
         self.playback_start_instant = None;
         self.playback_start_offset = 0.0;
+        self.play_stop_time = None;
         self.user_panned_during_playback = false;
     }
 
@@ -242,6 +424,17 @@ impl MidiViewerState {
             if let Some(start_inst) = self.playback_start_instant {
                 let elapsed = start_inst.elapsed().as_secs_f32();
                 self.playhead_sec = self.playback_start_offset + elapsed;
+
+                if let Some(stop_time) = self.play_stop_time {
+                    if self.playhead_sec >= stop_time {
+                        self.stop();
+                        if let Some((s, _)) = self.selected_region {
+                            self.playhead_sec = s;
+                        }
+                        return;
+                    }
+                }
+
                 if self.playhead_sec >= self.data.duration_sec {
                     self.stop();
                 } else {
@@ -275,20 +468,39 @@ impl MidiViewerState {
             ui.ctx().request_repaint();
         }
 
-        // 1. Hook up Escape key to immediately exit viewer
+        // 1. Hook up Escape key: clear selection first, or close if no selection
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.stop();
-            *close = true;
-            return;
+            if self.selected_region.is_some() {
+                self.selected_region = None;
+                self.play_stop_time = None;
+            } else {
+                self.stop();
+                *close = true;
+                return;
+            }
         }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
 
         // Handle Space key for Play/Pause
         if ui.input(|i| i.key_pressed(egui::Key::Space)) {
             if self.is_playing {
                 self.pause();
             } else {
-                self.play();
+                self.play_selection();
             }
+        }
+
+        // Handle copy shortcut (Ctrl+C / Cmd+C / egui::Event::Copy)
+        let copy_requested = ui.input(|i| {
+            i.events.iter().any(|e| matches!(e, egui::Event::Copy))
+                || ((i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::C))
+        });
+        if copy_requested {
+            self.copy_selection(now);
         }
 
         // Handle + / - for keyboard zoom
@@ -298,11 +510,6 @@ impl MidiViewerState {
         if ui.input(|i| i.key_pressed(egui::Key::Minus)) {
             self.zoom(1.25, self.playhead_sec);
         }
-
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64();
 
         let bg = crate::hex_to_c32(&palette.theme.background);
         let b_low = crate::hex_to_c32(&palette.theme.b_low);
@@ -330,6 +537,10 @@ impl MidiViewerState {
                 let mut play_clicked = false;
                 let mut pause_clicked = false;
                 let mut stop_clicked = false;
+                let mut copy_clicked = false;
+                let mut clear_sel_clicked = false;
+                let mut clear_solo_clicked = false;
+                let mut toggled_solo_track = None;
                 let mut zoom_action = None;
 
                 let info_text = format!(
@@ -344,9 +555,25 @@ impl MidiViewerState {
                         "mscore",
                         "Open MIDI composition in MuseScore",
                     ).with_icon(Icon::Midi))
-                    .with_footer_hints("Click grid: Seek playhead | Scroll: Pan | +/-: Zoom | Space: Play/Pause | Esc: Close");
+                    .with_footer_hints("Click grid: Seek | Drag: Select region | [Ctrl+C]: Copy slice | Space: Play | Esc: Clear/Close");
 
-                if let Some(ref note) = self.hovered_note {
+                if let Some((s, e)) = self.selected_region {
+                    let min_s = s.min(e);
+                    let max_s = s.max(e);
+                    let solo_suffix = if let Some(st) = self.solo_track {
+                        let name = self.data.track_names.get(st).map(|s| s.as_str()).unwrap_or("Track");
+                        format!(" • Solo: {name}")
+                    } else {
+                        String::new()
+                    };
+                    shell = shell.with_footer_readout(format!(
+                        "Selection: {:.2}s - {:.2}s ({:.2}s{}) • [Ctrl+C] Copy • [Space] Play • [Esc] Clear",
+                        min_s,
+                        max_s,
+                        max_s - min_s,
+                        solo_suffix
+                    ));
+                } else if let Some(ref note) = self.hovered_note {
                     shell = shell.with_footer_readout(format!(
                         "Note: {} (MIDI {}) • Velocity: {} • Time: {:.2}s",
                         note.full_name(),
@@ -404,6 +631,66 @@ impl MidiViewerState {
                                     .color(accent),
                             );
 
+                            ui.add_space(8.0);
+
+                            // Copy selection button
+                            let has_sel = match self.selected_region {
+                                Some((s, e)) => (e - s).abs() > 0.05,
+                                None => false,
+                            };
+                            let copy_label = match (has_sel, self.solo_track) {
+                                (true, Some(st)) => {
+                                    let tname = self.data.track_names.get(st).map(|s| s.as_str()).unwrap_or("Track");
+                                    format!("Copy Solo Slice ({tname}) [Ctrl+C]")
+                                }
+                                (true, None) => "Copy Slice [Ctrl+C]".to_string(),
+                                (false, Some(st)) => {
+                                    let tname = self.data.track_names.get(st).map(|s| s.as_str()).unwrap_or("Track");
+                                    format!("Copy Solo ({tname}) [Ctrl+C]")
+                                }
+                                (false, None) => "Copy MIDI [Ctrl+C]".to_string(),
+                            };
+                            let copy_btn = crate::ui_ext::secondary_button_icon(Some(Icon::Copy), copy_label, b_med, palette)
+                                .min_size(egui::Vec2::new(0.0, 26.0));
+                            if ui.add(copy_btn).on_hover_text("Export selected region (or full score) as .mid to Left Hand & clipboard").clicked() {
+                                copy_clicked = true;
+                            }
+
+                            if let Some((s, e)) = self.selected_region {
+                                if (e - s).abs() > 0.05 {
+                                    ui.add_space(4.0);
+                                    let min_s = s.min(e);
+                                    let max_s = s.max(e);
+                                    ui.label(
+                                        egui::RichText::new(format!("Sel: {:.2}s - {:.2}s", min_s, max_s))
+                                            .small()
+                                            .strong()
+                                            .color(accent),
+                                    );
+                                    let x_btn = egui::Button::new(egui::RichText::new("✕").small())
+                                        .min_size(egui::Vec2::new(18.0, 18.0));
+                                    if ui.add(x_btn).on_hover_text("Clear selection [Esc]").clicked() {
+                                        clear_sel_clicked = true;
+                                    }
+                                }
+                            }
+
+                            if let Some(st) = self.solo_track {
+                                ui.add_space(4.0);
+                                let st_name = self.data.track_names.get(st).cloned().unwrap_or_else(|| format!("Track {}", st + 1));
+                                ui.label(
+                                    egui::RichText::new(format!("Solo: {st_name}"))
+                                        .small()
+                                        .strong()
+                                        .color(pause_color),
+                                );
+                                let unsolo_btn = egui::Button::new(egui::RichText::new("Unsolo").small())
+                                    .min_size(egui::Vec2::new(0.0, 20.0));
+                                if ui.add(unsolo_btn).on_hover_text("Unsolo and preview/copy all tracks").clicked() {
+                                    clear_solo_clicked = true;
+                                }
+                            }
+
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 zoom_action = ui_ext::zoom_control_bar(ui, zoom_pct, palette);
                             });
@@ -414,13 +701,20 @@ impl MidiViewerState {
                     self.stop();
                 }
                 if play_clicked {
-                    self.play();
+                    self.play_selection();
                 }
                 if pause_clicked {
                     self.pause();
                 }
                 if stop_clicked {
                     self.stop();
+                }
+                if copy_clicked {
+                    self.copy_selection(now);
+                }
+                if clear_sel_clicked {
+                    self.selected_region = None;
+                    self.play_stop_time = None;
                 }
                 if let Some(action) = zoom_action {
                     match action {
@@ -429,7 +723,6 @@ impl MidiViewerState {
                         ZoomAction::Fit => self.reset_zoom(),
                     }
                 }
-
 
                 // 2. Track Legend (if multi-track)
                 if self.data.track_count > 1 {
@@ -441,6 +734,14 @@ impl MidiViewerState {
                                 .strong()
                                 .color(f_low),
                         );
+                        if self.solo_track.is_some() {
+                            let all_btn = egui::Button::new(egui::RichText::new("All Tracks").small().strong())
+                                .fill(b_med);
+                            if ui.add(all_btn).on_hover_text("Clear solo and show/copy all tracks").clicked() {
+                                clear_solo_clicked = true;
+                            }
+                            ui.add_space(4.0);
+                        }
                         for t_idx in 0..self.data.track_count {
                             let note_count = self.data.notes.iter().filter(|n| n.track == t_idx).count();
                             if note_count == 0 {
@@ -451,14 +752,67 @@ impl MidiViewerState {
                             let t_color = get_track_color(t_idx, channel, self.data.track_count, palette);
                             let t_name = self.data.track_names.get(t_idx).cloned().unwrap_or_else(|| format!("Track {}", t_idx + 1));
 
-                            ui.label(
-                                egui::RichText::new(format!("● {} ({})", t_name, note_count))
-                                    .small()
-                                    .color(t_color),
+                            let is_solo = self.solo_track == Some(t_idx);
+                            let solo_fill = if is_solo {
+                                pause_color
+                            } else {
+                                b_med
+                            };
+                            let solo_text_col = if is_solo {
+                                bg
+                            } else {
+                                f_high
+                            };
+
+                            let track_label_col = if is_solo {
+                                t_color
+                            } else if self.solo_track.is_some() {
+                                f_low
+                            } else {
+                                t_color
+                            };
+
+                            let track_label_resp = ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("● {} ({})", t_name, note_count))
+                                        .small()
+                                        .color(track_label_col),
+                                )
+                                .sense(egui::Sense::click()),
                             );
-                            ui.add_space(6.0);
+
+                            let solo_btn = egui::Button::new(
+                                egui::RichText::new(if is_solo { "SOLO" } else { "Solo" })
+                                    .small()
+                                    .strong()
+                                    .color(solo_text_col),
+                            )
+                            .fill(solo_fill)
+                            .min_size(egui::Vec2::new(0.0, 18.0));
+
+                            let solo_btn_resp = ui.add(solo_btn);
+
+                            if track_label_resp
+                                .on_hover_text(format!("Solo {} (isolates in playback and copy-out)", t_name))
+                                .clicked()
+                                || solo_btn_resp
+                                    .on_hover_text(format!("Solo {} (isolates in playback and copy-out)", t_name))
+                                    .clicked()
+                            {
+                                toggled_solo_track = Some(t_idx);
+                            }
+
+                            ui.add_space(8.0);
                         }
                     });
+                }
+
+                // Process solo actions AFTER track legend buttons have been rendered and evaluated
+                if clear_solo_clicked {
+                    self.clear_solo();
+                }
+                if let Some(t_idx) = toggled_solo_track {
+                    self.toggle_solo(t_idx);
                 }
 
                 ui.add_space(6.0);
@@ -566,37 +920,50 @@ impl MidiViewerState {
                     self.pan(pan_sec);
                 }
 
-                // Left click / drag to seek playhead smoothly
+                // Primary click and drag: selection & seeking
+                let x_to_time = |x: f32| -> f32 {
+                    let rel = ((x - grid_rect.min.x) / grid_rect.width()).clamp(0.0, 1.0);
+                    self.view_start_sec + rel * self.view_duration_sec
+                };
+
                 if response.drag_started_by(egui::PointerButton::Primary) {
-                    if self.is_playing {
-                        self.was_playing_before_drag = true;
-                        self.pause();
+                    if let Some(pos) = hover_pos {
+                        if pos.x >= grid_rect.min.x {
+                            let t0 = x_to_time(pos.x);
+                            self.drag_start_time = Some(t0);
+                            self.is_dragging_selection = true;
+                        }
                     }
                 }
 
                 if response.dragged_by(egui::PointerButton::Primary) {
-                    if let Some(pos) = hover_pos {
-                        if pos.x >= grid_rect.min.x {
-                            let click_norm = ((pos.x - grid_rect.min.x) / grid_rect.width()).clamp(0.0, 1.0);
-                            let target_sec = self.view_start_sec + click_norm * self.view_duration_sec;
-                            self.playhead_sec = target_sec.clamp(0.0, self.data.duration_sec);
-                            self.user_panned_during_playback = false;
+                    if self.is_dragging_selection {
+                        if let (Some(pos), Some(t0)) = (hover_pos, self.drag_start_time) {
+                            let t_cur = x_to_time(pos.x);
+                            if (t_cur - t0).abs() > 0.03 {
+                                self.selected_region = Some((t0.min(t_cur), t0.max(t_cur)));
+                            }
                         }
                     }
                 }
 
                 if response.drag_stopped() {
-                    if self.was_playing_before_drag {
-                        self.was_playing_before_drag = false;
-                        self.play();
+                    if self.is_dragging_selection {
+                        self.is_dragging_selection = false;
+                        if let Some((s, e)) = self.selected_region {
+                            if (e - s).abs() < 0.05 {
+                                self.selected_region = None;
+                            }
+                        }
                     }
                 }
 
                 if response.clicked() && !response.dragged_by(egui::PointerButton::Secondary) {
                     if let Some(pos) = hover_pos {
                         if pos.x >= grid_rect.min.x {
-                            let click_norm = ((pos.x - grid_rect.min.x) / grid_rect.width()).clamp(0.0, 1.0);
-                            let target_sec = self.view_start_sec + click_norm * self.view_duration_sec;
+                            let target_sec = x_to_time(pos.x);
+                            self.selected_region = None;
+                            self.play_stop_time = None;
                             let was_playing = self.is_playing;
                             if was_playing {
                                 self.stop();
@@ -661,7 +1028,47 @@ impl MidiViewerState {
                     s += step;
                 }
 
-                // Draw Notes (colored per track)
+                // Draw Selection Highlight Overlay
+                if let Some((s, e)) = self.selected_region {
+                    let sel_s = s.min(e).clamp(0.0, self.data.duration_sec);
+                    let sel_e = s.max(e).clamp(0.0, self.data.duration_sec);
+
+                    if sel_e >= view_start && sel_s <= view_end {
+                        let norm_s = (sel_s - view_start) / view_dur;
+                        let norm_e = (sel_e - view_start) / view_dur;
+                        let x_s = grid_rect.min.x + norm_s * grid_rect.width();
+                        let x_e = grid_rect.min.x + norm_e * grid_rect.width();
+                        let x_min = x_s.max(grid_rect.min.x);
+                        let x_max = x_e.min(grid_rect.max.x);
+
+                        if x_max > x_min {
+                            let sel_rect = Rect::from_min_max(
+                                Pos2::new(x_min, grid_rect.min.y),
+                                Pos2::new(x_max, grid_rect.max.y),
+                            );
+                            painter.rect_filled(
+                                sel_rect,
+                                Rounding::ZERO,
+                                Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 45),
+                            );
+                        }
+
+                        if x_s >= grid_rect.min.x && x_s <= grid_rect.max.x {
+                            painter.line_segment(
+                                [Pos2::new(x_s, grid_rect.min.y), Pos2::new(x_s, grid_rect.max.y)],
+                                Stroke::new(1.5_f32, accent),
+                            );
+                        }
+                        if x_e >= grid_rect.min.x && x_e <= grid_rect.max.x {
+                            painter.line_segment(
+                                [Pos2::new(x_e, grid_rect.min.y), Pos2::new(x_e, grid_rect.max.y)],
+                                Stroke::new(1.5_f32, accent),
+                            );
+                        }
+                    }
+                }
+
+                // Draw Notes (colored per track, dimmed if another track is soloed)
                 let mut hovered: Option<MidiNote> = None;
                 let mouse_pos = response.hover_pos();
 
@@ -704,7 +1111,15 @@ impl MidiViewerState {
                             note.key,
                             note.velocity,
                         );
-                        Color32::from_rgb(r, g, b)
+                        if let Some(st) = self.solo_track {
+                            if note.track == st {
+                                Color32::from_rgb(r, g, b)
+                            } else {
+                                Color32::from_rgba_unmultiplied(r / 3, g / 3, b / 3, 50)
+                            }
+                        } else {
+                            Color32::from_rgb(r, g, b)
+                        }
                     };
 
                     painter.rect_filled(note_rect, Rounding::same(2.0), fill_color);
@@ -712,6 +1127,7 @@ impl MidiViewerState {
                 }
 
                 self.hovered_note = hovered;
+
 
                 // Draw Playhead line if in visible window
                 if self.playhead_sec >= view_start && self.playhead_sec <= view_end {
@@ -839,5 +1255,203 @@ mod tests {
             c4, g4,
             "Single-track C4 and G4 must have different chromatic hues"
         );
+    }
+
+    #[test]
+    fn test_midi_viewer_selection_and_solo_copy() {
+        let midi = MidiData {
+            title: "Test Score".to_string(),
+            track_count: 2,
+            track_names: vec!["Melody".to_string(), "Bass".to_string()],
+            total_notes: 4,
+            duration_sec: 5.0,
+            bpm: 120.0,
+            min_key: 36,
+            max_key: 72,
+            notes: vec![
+                MidiNote {
+                    track: 0,
+                    channel: 0,
+                    program: 0,
+                    key: 60,
+                    velocity: 90,
+                    start_sec: 1.0,
+                    duration_sec: 1.0,
+                },
+                MidiNote {
+                    track: 0,
+                    channel: 0,
+                    program: 0,
+                    key: 64,
+                    velocity: 90,
+                    start_sec: 2.5,
+                    duration_sec: 1.0,
+                },
+                MidiNote {
+                    track: 1,
+                    channel: 1,
+                    program: 32,
+                    key: 36,
+                    velocity: 95,
+                    start_sec: 0.5,
+                    duration_sec: 2.0,
+                },
+                MidiNote {
+                    track: 1,
+                    channel: 1,
+                    program: 32,
+                    key: 40,
+                    velocity: 95,
+                    start_sec: 3.0,
+                    duration_sec: 1.5,
+                },
+            ],
+        };
+
+        let mut state = MidiViewerState {
+            path: None,
+            title: "Test Score".to_string(),
+            data: midi,
+            is_playing: false,
+            playhead_sec: 0.0,
+            playback_start_instant: None,
+            playback_start_offset: 0.0,
+            player: None,
+            _sink: None,
+            wav_cache: None,
+            view_start_sec: 0.0,
+            view_duration_sec: 5.0,
+            user_panned_during_playback: false,
+            was_playing_before_drag: false,
+            hovered_note: None,
+            status_toast: StatusToast::new(),
+            selected_region: None,
+            solo_track: None,
+            drag_start_time: None,
+            is_dragging_selection: false,
+            play_stop_time: None,
+        };
+
+        // Test solo toggling
+        state.toggle_solo(1);
+        assert_eq!(state.solo_track, Some(1));
+        state.toggle_solo(1);
+        assert_eq!(state.solo_track, None);
+
+        state.toggle_solo(0);
+        assert_eq!(state.solo_track, Some(0));
+        state.clear_solo();
+        assert_eq!(state.solo_track, None);
+
+        // Test selection and copying
+        state.selected_region = Some((1.0, 3.0));
+        state.solo_track = Some(0);
+
+        let copied = state.copy_selection(1.0);
+        assert!(copied);
+        let msg = state.status_toast.message(1.0).unwrap();
+        assert!(msg.contains("Copied 2.0s MIDI slice"));
+        assert!(msg.contains("solo 'Melody'"));
+    }
+
+    #[test]
+    fn test_midi_viewer_render_ui_tracks_and_legend() {
+        let midi = MidiData {
+            title: "Multi-Track Score".to_string(),
+            track_count: 2,
+            track_names: vec!["Melody".to_string(), "Harmony".to_string()],
+            total_notes: 2,
+            duration_sec: 5.0,
+            bpm: 120.0,
+            min_key: 60,
+            max_key: 64,
+            notes: vec![
+                MidiNote {
+                    track: 0,
+                    channel: 0,
+                    program: 0,
+                    key: 60,
+                    velocity: 80,
+                    start_sec: 0.0,
+                    duration_sec: 1.0,
+                },
+                MidiNote {
+                    track: 1,
+                    channel: 1,
+                    program: 0,
+                    key: 64,
+                    velocity: 80,
+                    start_sec: 1.0,
+                    duration_sec: 1.0,
+                },
+            ],
+        };
+
+        let mut state = MidiViewerState {
+            path: None,
+            title: "Multi-Track Score".to_string(),
+            data: midi,
+            is_playing: false,
+            playhead_sec: 0.0,
+            playback_start_instant: None,
+            playback_start_offset: 0.0,
+            player: None,
+            _sink: None,
+            wav_cache: None,
+            view_start_sec: 0.0,
+            view_duration_sec: 5.0,
+            user_panned_during_playback: false,
+            was_playing_before_drag: false,
+            hovered_note: None,
+            status_toast: StatusToast::new(),
+            selected_region: None,
+            solo_track: None,
+            drag_start_time: None,
+            is_dragging_selection: false,
+            play_stop_time: None,
+        };
+        let palette = little_clip_core::theme::AppPalette::default();
+        let ctx = egui::Context::default();
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::Vec2::new(1000.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut close = false;
+                    state.render_ui(ui, &palette, &mut close);
+                    assert!(!close);
+                });
+            },
+        );
+
+        // Verify solo toggle and render with solo active
+        state.toggle_solo(0);
+        assert_eq!(state.solo_track, Some(0));
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::Vec2::new(1000.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut close = false;
+                    state.render_ui(ui, &palette, &mut close);
+                    assert!(!close);
+                });
+            },
+        );
+
+        state.clear_solo();
+        assert_eq!(state.solo_track, None);
     }
 }
