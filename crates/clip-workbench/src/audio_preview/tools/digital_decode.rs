@@ -5,6 +5,7 @@
 //! plaintext and structured event transcripts.
 
 use super::super::*;
+use crate::icons::Icon;
 use little_clip_ops::digital_decode::{DecodedSymbol, DecoderProtocol, downmix_to_mono};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -942,14 +943,20 @@ impl AudioPreviewState {
 
         // Top Toolbar: Scan button, protocol toggles, playback controls, and summary
         ui.horizontal(|ui| {
+            let b_med = crate::hex_to_c32(&palette.theme.b_med);
             // Play/Pause button
-            let play_label = if self.is_playing {
-                "⏸ Pause"
+            let (play_label, play_icon) = if self.is_playing {
+                ("Pause", Icon::Pause)
             } else {
-                "▶ Play"
+                ("Play", Icon::Play)
             };
             if ui
-                .button(egui::RichText::new(play_label).strong())
+                .add(crate::ui_ext::secondary_button_icon(
+                    Some(play_icon),
+                    play_label,
+                    b_med,
+                    palette,
+                ))
                 .on_hover_text("Play / Pause audio (Space)")
                 .clicked()
             {
@@ -975,15 +982,15 @@ impl AudioPreviewState {
             ui.separator();
 
             // Re-scan button
-            let scan_label = if self.digital_decode.in_progress {
-                "⏳ Scanning…"
+            let (scan_label, scan_icon) = if self.digital_decode.in_progress {
+                ("Scanning…", None)
             } else {
-                "🔄 Re-scan Buffer"
+                ("Re-scan Buffer", Some(Icon::RotateCw))
             };
             if ui
                 .add_enabled(
                     !self.digital_decode.in_progress && self.analysis.is_some(),
-                    egui::Button::new(egui::RichText::new(scan_label).strong()),
+                    crate::ui_ext::secondary_button_icon(scan_icon, scan_label, b_med, palette),
                 )
                 .clicked()
             {
@@ -1050,8 +1057,14 @@ impl AudioPreviewState {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Copy transcript to clipboard button
+                let b_med = crate::hex_to_c32(&palette.theme.b_med);
                 if ui
-                    .button("📋 Copy Transcript")
+                    .add(crate::ui_ext::secondary_button_icon(
+                        Some(Icon::Copy),
+                        "Copy Transcript",
+                        b_med,
+                        palette,
+                    ))
                     .on_hover_text("Copy decoded text to clipboard")
                     .clicked()
                 {
@@ -1271,7 +1284,17 @@ impl AudioPreviewState {
                                     ui.label(format!("{:.0}%", sym.confidence * 100.0));
 
                                     // Action button: Seek & Play
-                                    if ui.small_button("▶ Seek").clicked() {
+                                    if ui
+                                        .add(crate::ui_ext::icon_button(
+                                            Icon::Play,
+                                            12.0,
+                                            crate::hex_to_c32(&palette.theme.b_med),
+                                            None,
+                                            palette,
+                                        ))
+                                        .on_hover_text("Seek to timestamp")
+                                        .clicked()
+                                    {
                                         self.digital_decode.selected_symbol = Some(orig_idx);
                                         seek_to_time = Some(sym.start_sec);
                                     }

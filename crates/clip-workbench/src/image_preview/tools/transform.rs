@@ -52,7 +52,6 @@ impl ImagePreviewState {
         let frame_stroke = hex_to_c32(&palette.theme.b_med);
         let btn_bg = hex_to_c32(&palette.theme.b_med);
         let btn_border = hex_to_c32(&palette.theme.b_low);
-        let btn_fg = contrast_text_c32(btn_bg, Some(hex_to_c32(&palette.theme.f_high)), palette);
 
         egui::Frame::none()
             .fill(frame_bg)
@@ -61,7 +60,7 @@ impl ImagePreviewState {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("🔄 Transforms:")
+                        egui::RichText::new("Transforms:")
                             .strong()
                             .color(hex_to_c32(&palette.harmonies.base)),
                     );
@@ -69,15 +68,12 @@ impl ImagePreviewState {
                     ui.add_space(8.0);
 
                     // Rotate CCW
-                    let ccw_btn = egui::Button::new(
-                        egui::RichText::new("⟲ 90° CCW")
-                            .small()
-                            .strong()
-                            .color(btn_fg),
-                    )
-                    .fill(btn_bg)
-                    .stroke(Stroke::new(1.0_f32, btn_border))
-                    .rounding(Rounding::same(4.0));
+                    let ccw_btn = crate::ui_ext::secondary_button_icon(
+                        Some(Icon::RotateCcw),
+                        "90° CCW",
+                        btn_bg,
+                        palette,
+                    );
                     if ui
                         .add(ccw_btn)
                         .on_hover_text("Rotate 90 degrees counter-clockwise")
@@ -87,15 +83,12 @@ impl ImagePreviewState {
                     }
 
                     // Rotate CW
-                    let cw_btn = egui::Button::new(
-                        egui::RichText::new("⟳ 90° CW")
-                            .small()
-                            .strong()
-                            .color(btn_fg),
-                    )
-                    .fill(btn_bg)
-                    .stroke(Stroke::new(1.0_f32, btn_border))
-                    .rounding(Rounding::same(4.0));
+                    let cw_btn = crate::ui_ext::secondary_button_icon(
+                        Some(Icon::RotateCw),
+                        "90° CW",
+                        btn_bg,
+                        palette,
+                    );
                     if ui
                         .add(cw_btn)
                         .on_hover_text("Rotate 90 degrees clockwise")
@@ -105,12 +98,12 @@ impl ImagePreviewState {
                     }
 
                     // Rotate 180
-                    let r180_btn = egui::Button::new(
-                        egui::RichText::new("180°").small().strong().color(btn_fg),
-                    )
-                    .fill(btn_bg)
-                    .stroke(Stroke::new(1.0_f32, btn_border))
-                    .rounding(Rounding::same(4.0));
+                    let r180_btn = crate::ui_ext::secondary_button_icon(
+                        Some(Icon::Repeat),
+                        "180°",
+                        btn_bg,
+                        palette,
+                    );
                     if ui
                         .add(r180_btn)
                         .on_hover_text("Rotate 180 degrees")
@@ -127,15 +120,12 @@ impl ImagePreviewState {
                     );
 
                     // Flip H
-                    let fh_btn = egui::Button::new(
-                        egui::RichText::new("⇆ Flip Horiz")
-                            .small()
-                            .strong()
-                            .color(btn_fg),
-                    )
-                    .fill(btn_bg)
-                    .stroke(Stroke::new(1.0_f32, btn_border))
-                    .rounding(Rounding::same(4.0));
+                    let fh_btn = crate::ui_ext::secondary_button_icon(
+                        Some(Icon::FlipHorizontal),
+                        "Flip Horiz",
+                        btn_bg,
+                        palette,
+                    );
                     if ui
                         .add(fh_btn)
                         .on_hover_text("Flip horizontally (mirror left-right)")
@@ -145,15 +135,12 @@ impl ImagePreviewState {
                     }
 
                     // Flip V
-                    let fv_btn = egui::Button::new(
-                        egui::RichText::new("⇅ Flip Vert")
-                            .small()
-                            .strong()
-                            .color(btn_fg),
-                    )
-                    .fill(btn_bg)
-                    .stroke(Stroke::new(1.0_f32, btn_border))
-                    .rounding(Rounding::same(4.0));
+                    let fv_btn = crate::ui_ext::secondary_button_icon(
+                        Some(Icon::FlipVertical),
+                        "Flip Vert",
+                        btn_bg,
+                        palette,
+                    );
                     if ui
                         .add(fv_btn)
                         .on_hover_text("Flip vertically (mirror up-down)")
@@ -164,16 +151,12 @@ impl ImagePreviewState {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Revert all
-                        let rev_fg =
-                            contrast_text_c32(btn_bg, Some(hex_to_c32(&palette.diff_del)), palette);
-                        let revert_btn = egui::Button::new(
-                            egui::RichText::new("↺ Revert to Original")
-                                .small()
-                                .color(rev_fg),
-                        )
-                        .fill(btn_bg)
-                        .stroke(Stroke::new(1.0_f32, btn_border))
-                        .rounding(Rounding::same(4.0));
+                        let revert_btn = crate::ui_ext::secondary_button_icon(
+                            Some(Icon::RotateCcw),
+                            "Revert to Original",
+                            btn_bg,
+                            palette,
+                        );
                         if ui.add(revert_btn).clicked() {
                             self.revert_to_original();
                         }

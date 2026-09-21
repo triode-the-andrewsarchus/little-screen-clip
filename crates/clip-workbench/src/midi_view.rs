@@ -3,6 +3,7 @@
 //! Renders multi-track MIDI piano rolls, measure grid lines, note inspection,
 //! and live audio synthesis playback via Rodio.
 
+use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::{self, StatusToast, ZoomAction};
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
@@ -336,14 +337,14 @@ impl MidiViewerState {
                     total_notes, duration_sec, bpm, track_count
                 );
 
-                let mut shell = StudioShell::new(&self.title, "🎹", palette, close)
+                let mut shell = StudioShell::new(&self.title, Icon::Midi, palette, close)
                     .with_badge(info_text, None)
                     .with_escape_hatch(EscapeHatch::primary(
-                        "🎹 MuseScore",
+                        "MuseScore",
                         "mscore",
                         "Open MIDI composition in MuseScore",
-                    ))
-                    .with_footer_hints("🖱 Click grid: Seek playhead | Scroll: Pan | +/-: Zoom | Space: Play/Pause | Esc: Close");
+                    ).with_icon(Icon::Midi))
+                    .with_footer_hints("Click grid: Seek playhead | Scroll: Pan | +/-: Zoom | Space: Play/Pause | Esc: Close");
 
                 if let Some(ref note) = self.hovered_note {
                     shell = shell.with_footer_readout(format!(
@@ -360,7 +361,7 @@ impl MidiViewerState {
                     if let Some(ref p) = self.path {
                         EscapeHatchLauncher::launch("MuseScore", "mscore", p, &mut self.status_toast, now);
                     } else {
-                        self.status_toast.set("⚠️ No on-disk file path for this MIDI stream", now);
+                        self.status_toast.set("No on-disk file path for this MIDI stream", now);
                     }
                 }
 
@@ -375,18 +376,18 @@ impl MidiViewerState {
                         ui.horizontal(|ui| {
                             // Transport controls
                             if is_playing {
-                                let pause_btn = crate::action_button("Pause [Space]", pause_color, palette);
+                                let pause_btn = crate::ui_ext::action_button_icon(Some(Icon::Pause), "Pause [Space]", pause_color, palette);
                                 if ui.add(pause_btn).clicked() {
                                     pause_clicked = true;
                                 }
                             } else {
-                                let play_btn = crate::action_button("Play [Space]", success_color, palette);
+                                let play_btn = crate::ui_ext::action_button_icon(Some(Icon::Play), "Play [Space]", success_color, palette);
                                 if ui.add(play_btn).clicked() {
                                     play_clicked = true;
                                 }
                             }
 
-                            let stop_btn = crate::action_button("Stop", b_med, palette)
+                            let stop_btn = crate::ui_ext::action_button_icon(Some(Icon::Stop), "Stop", b_med, palette)
                                 .min_size(egui::Vec2::new(0.0, 26.0))
                                 .stroke(Stroke::new(1.0_f32, b_low));
                             if ui.add(stop_btn).clicked() {

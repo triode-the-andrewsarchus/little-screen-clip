@@ -130,7 +130,7 @@ impl ImagePreviewState {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("📐 4-Point Deskew:")
+                        egui::RichText::new("4-Point Deskew:")
                             .strong()
                             .color(hex_to_c32(&palette.harmonies.base)),
                     );
@@ -140,11 +140,11 @@ impl ImagePreviewState {
                     // 1. Click 4 Points toggle button
                     let is_placing = self.deskew_state.is_clicking_points;
                     let click_lbl = if is_placing {
-                        format!("🎯 Placing ({}/4)...", self.deskew_state.placed_points.len())
+                        format!("Placing ({}/4)...", self.deskew_state.placed_points.len())
                     } else {
-                        "🎯 Click 4 Points".to_string()
+                        "Click 4 Points".to_string()
                     };
-                    let click_btn = crate::mode_tab_button(&click_lbl, is_placing, palette);
+                    let click_btn = crate::ui_ext::mode_tab_button_icon(Some(Icon::Crosshair), &click_lbl, is_placing, palette);
                     if ui.add(click_btn)
                         .on_hover_text("Click 4 corners directly on the image: Top-Left → Top-Right → Bottom-Right → Bottom-Left")
                         .clicked()
@@ -153,7 +153,7 @@ impl ImagePreviewState {
                             self.deskew_state.cancel_clicking_points();
                         } else {
                             self.deskew_state.start_clicking_points();
-                            self.show_toast("🎯 Click 4 corners: TL → TR → BR → BL");
+                            self.show_toast("Click 4 corners: TL → TR → BR → BL");
                         }
                     }
 
@@ -168,7 +168,7 @@ impl ImagePreviewState {
                     );
 
                     let is_crop_to_quad = self.deskew_state.crop_mode == DeskewCropMode::CropToQuad;
-                    let crop_quad_btn = crate::mode_tab_button("✂ Crop to Quad", is_crop_to_quad, palette);
+                    let crop_quad_btn = crate::ui_ext::mode_tab_button_icon(Some(Icon::Crop), "Crop to Quad", is_crop_to_quad, palette);
                     if ui.add(crop_quad_btn)
                         .on_hover_text("Crop tightly to the 4-point quadrilateral")
                         .clicked()
@@ -177,7 +177,7 @@ impl ImagePreviewState {
                     }
 
                     let is_minimal_crop = self.deskew_state.crop_mode == DeskewCropMode::MinimalCrop;
-                    let minimal_crop_btn = crate::mode_tab_button("🖼 Minimal Crop", is_minimal_crop, palette);
+                    let minimal_crop_btn = crate::ui_ext::mode_tab_button_icon(Some(Icon::Image), "Minimal Crop", is_minimal_crop, palette);
                     if ui.add(minimal_crop_btn)
                         .on_hover_text("Preserve the entire rectified image, cropping only as strictly necessary")
                         .clicked()
@@ -219,16 +219,12 @@ impl ImagePreviewState {
 
                     // 4. Apply Deskew button
                     let apply_bg = hex_to_c32(&palette.diff_add);
-                    let apply_fg = contrast_text_c32(apply_bg, Some(hex_to_c32(&palette.theme.f_high)), palette);
-                    let apply_btn = egui::Button::new(
-                        egui::RichText::new("✓ Apply Deskew (Enter)")
-                            .small()
-                            .strong()
-                            .color(apply_fg),
-                    )
-                    .fill(apply_bg)
-                    .stroke(Stroke::new(1.0_f32, apply_bg))
-                    .rounding(Rounding::same(4.0));
+                    let apply_btn = crate::ui_ext::action_button_icon(
+                        Some(Icon::Check),
+                        "Apply Deskew (Enter)",
+                        apply_bg,
+                        palette,
+                    );
 
                     if ui.add(apply_btn).on_hover_text("Rectify quad perspective into rectangular output (Enter)").clicked() {
                         self.apply_deskew();

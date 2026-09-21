@@ -4,6 +4,8 @@
 //! composition belongs in `shell::StudioPanelLayout`, not in individual tools.
 #![allow(unused_imports)] // Re-exports preserve the parent module's API and test surface.
 
+use crate::icons::Icon;
+
 /// Active image manipulation tool mode selected in the toolbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImageToolMode {
@@ -45,26 +47,49 @@ pub enum ImageToolMode {
 }
 
 impl ImageToolMode {
-    /// Human-readable toolbar label with icon.
+    /// Human-readable toolbar label.
     pub fn label(&self) -> &'static str {
         match self {
             ImageToolMode::View => "[V]iew",
             ImageToolMode::Crop => "[C]rop",
             ImageToolMode::Deskew => "Des[K]ew",
             ImageToolMode::Transform => "[F]lip/Rotate",
-            ImageToolMode::Redact => "█ [X] Redact",
-            ImageToolMode::Markup => "✏ [M]arkup",
+            ImageToolMode::Redact => "[X] Redact",
+            ImageToolMode::Markup => "[M]arkup",
             ImageToolMode::PickColor => "[P]ick Color",
-            ImageToolMode::Resize => "↔ Re[S]ize",
+            ImageToolMode::Resize => "Re[S]ize",
             ImageToolMode::Convert => "Conver[T]",
             ImageToolMode::Ocr => "[O]CR",
-            ImageToolMode::Barcode => "▦ [B]arcode",
+            ImageToolMode::Barcode => "[B]arcode",
             ImageToolMode::Palette => "Palette",
             ImageToolMode::RemoveBg => "[R]emove BG",
             ImageToolMode::DepthMap => "[D]epth Map",
             ImageToolMode::DecorrelationStretch => "Decorrelation Stretch",
             ImageToolMode::FilmSim => "Film [L]ook",
             ImageToolMode::CreativeFx => "Creative FX",
+        }
+    }
+
+    /// SVG vector icon for tool mode tab.
+    pub fn icon(&self) -> Icon {
+        match self {
+            ImageToolMode::View => Icon::Eye,
+            ImageToolMode::Crop => Icon::Crop,
+            ImageToolMode::Deskew => Icon::Grid,
+            ImageToolMode::Transform => Icon::RotateCw,
+            ImageToolMode::Redact => Icon::Shield,
+            ImageToolMode::Markup => Icon::Pencil,
+            ImageToolMode::PickColor => Icon::Eyedropper,
+            ImageToolMode::Resize => Icon::Resize,
+            ImageToolMode::Convert => Icon::Layers,
+            ImageToolMode::Ocr => Icon::Text,
+            ImageToolMode::Barcode => Icon::Barcode,
+            ImageToolMode::Palette => Icon::Palette,
+            ImageToolMode::RemoveBg => Icon::Scissors,
+            ImageToolMode::DepthMap => Icon::Layers,
+            ImageToolMode::DecorrelationStretch => Icon::Droplet,
+            ImageToolMode::FilmSim => Icon::Film,
+            ImageToolMode::CreativeFx => Icon::Wand,
         }
     }
 }

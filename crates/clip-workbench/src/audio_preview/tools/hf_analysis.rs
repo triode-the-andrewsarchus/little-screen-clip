@@ -7,6 +7,7 @@
 //! energy mini-map for navigation.
 
 use super::super::*;
+use crate::icons::Icon;
 use little_clip_ops::hf_audio::{
     HfSpectrogramConfig, apply_ultrasonic_highpass, pitch_shift_realtime,
 };
@@ -320,18 +321,18 @@ impl AudioPreviewState {
         let text_f_high = hex_to_c32(&palette.theme.f_high);
         let accent_base = hex_to_c32(&palette.harmonies.base);
         let accent_cyan = Color32::from_rgb(0, 210, 255);
-        let accent_amber = Color32::from_rgb(255, 185, 0);
 
         // --- TOP TOOLBAR STRIP ---
         ui.horizontal_wrapped(|ui| {
             // Transport controls
-            let play_label = if self.is_playing {
-                "⏸ Pause (Space)"
+            let (play_label, play_icon) = if self.is_playing {
+                ("Pause (Space)", Icon::Pause)
             } else {
-                "▶ Play (Space)"
+                ("Play (Space)", Icon::Play)
             };
             if ui
-                .add(layout::AudioWorkspace::primary_button(
+                .add(layout::AudioWorkspace::primary_button_icon(
+                    Some(play_icon),
                     play_label,
                     accent_base,
                     palette,
@@ -346,8 +347,9 @@ impl AudioPreviewState {
             }
 
             if ui
-                .add(layout::AudioWorkspace::secondary_button(
-                    "⏹ Stop",
+                .add(layout::AudioWorkspace::secondary_button_icon(
+                    Some(Icon::Stop),
+                    "Stop",
                     hex_to_c32(&palette.theme.b_low),
                     palette,
                 ))
@@ -428,21 +430,18 @@ impl AudioPreviewState {
 
             // Ultrasonic High-Pass toggle (> 20 kHz)
             let bandpass_active = self.hf_analysis.ultrasonic_bandpass;
-            let (hp_bg, hp_fg, hp_text) = if bandpass_active {
-                (accent_amber, Color32::BLACK, "🔊 >20 kHz High-Pass ON")
+            let hp_label = if bandpass_active {
+                ">20 kHz High-Pass ON"
             } else {
-                (
-                    hex_to_c32(&palette.theme.b_low),
-                    text_f_med,
-                    "🔈 >20 kHz High-Pass OFF",
-                )
+                ">20 kHz High-Pass OFF"
             };
             if ui
-                .add(
-                    egui::Button::new(egui::RichText::new(hp_text).strong().color(hp_fg))
-                        .fill(hp_bg)
-                        .rounding(4.0_f32),
-                )
+                .add(layout::AudioWorkspace::toggle_button_icon(
+                    Some(Icon::Volume),
+                    hp_label,
+                    bandpass_active,
+                    palette,
+                ))
                 .clicked()
             {
                 self.hf_analysis.ultrasonic_bandpass = !bandpass_active;
@@ -562,11 +561,12 @@ impl AudioPreviewState {
 
                 let mut jump_target = None;
                 if ui
-                    .add(
-                        egui::Button::new("◀ Prev")
-                            .fill(hex_to_c32(&palette.theme.b_low))
-                            .rounding(4.0_f32),
-                    )
+                    .add(layout::AudioWorkspace::secondary_button_icon(
+                        Some(Icon::ArrowLeft),
+                        "Prev",
+                        hex_to_c32(&palette.theme.b_low),
+                        palette,
+                    ))
                     .on_hover_text("Jump to previous ultrasonic chirp")
                     .clicked()
                 {
@@ -586,11 +586,12 @@ impl AudioPreviewState {
                 }
 
                 if ui
-                    .add(
-                        egui::Button::new("Next ▶")
-                            .fill(hex_to_c32(&palette.theme.b_low))
-                            .rounding(4.0_f32),
-                    )
+                    .add(layout::AudioWorkspace::secondary_button_icon(
+                        Some(Icon::ArrowRight),
+                        "Next",
+                        hex_to_c32(&palette.theme.b_low),
+                        palette,
+                    ))
                     .on_hover_text("Jump to next ultrasonic chirp")
                     .clicked()
                 {

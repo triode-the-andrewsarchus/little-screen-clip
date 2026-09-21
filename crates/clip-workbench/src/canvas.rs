@@ -3,6 +3,7 @@
 //! Provides interactive drag-and-drop node graph design, wire connections, parameter tweaking,
 //! recipe loading/saving, and live graph execution.
 
+use crate::icons::Icon;
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, Id, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::SlotManager;
@@ -149,7 +150,7 @@ impl NodeCanvasState {
                 self.node_previews = res.node_previews.clone();
                 self.status_message = Some((
                     format!(
-                        "✔ Executed in {}ms. Output: {}",
+                        "Executed in {}ms. Output: {}",
                         duration,
                         res.left_hand_item
                             .as_ref()
@@ -479,7 +480,7 @@ impl NodeCanvasState {
                         .connections
                         .retain(|c| !(c.to_node == node_id && c.to_pin == *pin_name));
                 }
-                self.status_message = Some(("✔ Deleted wire".to_string(), false));
+                self.status_message = Some(("Deleted wire".to_string(), false));
             }
         }
 
@@ -525,8 +526,7 @@ impl NodeCanvasState {
                 .spawn()
             {
                 Ok(_) => {
-                    self.status_message =
-                        Some((format!("✔ Opened {} in {}", fname, editor), false));
+                    self.status_message = Some((format!("Opened {} in {}", fname, editor), false));
                 }
                 Err(e) => {
                     if editor != "xdg-open" {
@@ -570,14 +570,13 @@ impl NodeCanvasState {
     ) {
         ui.horizontal(|ui| {
             // Group 1: Add Node button (Prominent)
-            if ui
-                .button(
-                    egui::RichText::new("＋ Add Node")
-                        .color(hex_to_c32(&palette.theme.f_high))
-                        .strong(),
-                )
-                .clicked()
-            {
+            let add_btn = crate::ui_ext::action_button_icon(
+                Some(Icon::Plus),
+                "Add Node",
+                hex_to_c32(&palette.theme.b_med),
+                palette,
+            );
+            if ui.add(add_btn).clicked() {
                 self.catalog_open = true;
                 self.catalog_search.clear();
                 self.spawn_node_pos = None;
@@ -586,10 +585,14 @@ impl NodeCanvasState {
             ui.separator();
 
             // Group 2: Recipe Management
+            let new_btn = crate::ui_ext::secondary_button_icon(
+                Some(Icon::Text),
+                "New Recipe",
+                hex_to_c32(&palette.theme.b_low),
+                palette,
+            );
             if ui
-                .button(
-                    egui::RichText::new("📄 New Recipe").color(hex_to_c32(&palette.theme.f_med)),
-                )
+                .add(new_btn)
                 .on_hover_text("Start a fresh recipe from the basic template")
                 .clicked()
             {
@@ -645,8 +648,14 @@ impl NodeCanvasState {
             }
 
             // Direct Save button
+            let save_btn = crate::ui_ext::secondary_button_icon(
+                Some(Icon::Save),
+                "Save",
+                hex_to_c32(&palette.theme.b_low),
+                palette,
+            );
             if ui
-                .button(egui::RichText::new("💾 Save").color(hex_to_c32(&palette.theme.f_med)))
+                .add(save_btn)
                 .on_hover_text("Save changes to this recipe")
                 .clicked()
             {
@@ -669,7 +678,7 @@ impl NodeCanvasState {
                         self.current_recipe_file = Some(path);
                         self.reload_recipes();
                         self.status_message = Some((
-                            format!("✔ Saved recipe '{}'", self.selected_recipe_name),
+                            format!("Saved recipe '{}'", self.selected_recipe_name),
                             false,
                         ));
                     }
@@ -685,10 +694,14 @@ impl NodeCanvasState {
             }
 
             // Save As button
+            let save_as_btn = crate::ui_ext::secondary_button_icon(
+                Some(Icon::Save),
+                "Save As...",
+                hex_to_c32(&palette.theme.b_low),
+                palette,
+            );
             if ui
-                .button(
-                    egui::RichText::new("💾 Save As...").color(hex_to_c32(&palette.theme.f_med)),
-                )
+                .add(save_as_btn)
                 .on_hover_text("Save copy under a new recipe name")
                 .clicked()
             {
@@ -701,16 +714,14 @@ impl NodeCanvasState {
 
             // Group 3: Undo, Redo, Clear
             let undo_enabled = !self.undo_stack.is_empty();
-            let undo_col = if undo_enabled {
-                hex_to_c32(&palette.theme.f_med)
-            } else {
-                hex_to_c32(&palette.theme.f_low)
-            };
+            let undo_btn = crate::ui_ext::secondary_button_icon(
+                Some(Icon::Undo),
+                "Undo",
+                hex_to_c32(&palette.theme.b_low),
+                palette,
+            );
             if ui
-                .add_enabled(
-                    undo_enabled,
-                    egui::Button::new(egui::RichText::new("↶ Undo").color(undo_col)),
-                )
+                .add_enabled(undo_enabled, undo_btn)
                 .on_hover_text("Undo last change (Ctrl+Z)")
                 .clicked()
             {
@@ -718,16 +729,14 @@ impl NodeCanvasState {
             }
 
             let redo_enabled = !self.redo_stack.is_empty();
-            let redo_col = if redo_enabled {
-                hex_to_c32(&palette.theme.f_med)
-            } else {
-                hex_to_c32(&palette.theme.f_low)
-            };
+            let redo_btn = crate::ui_ext::secondary_button_icon(
+                Some(Icon::Redo),
+                "Redo",
+                hex_to_c32(&palette.theme.b_low),
+                palette,
+            );
             if ui
-                .add_enabled(
-                    redo_enabled,
-                    egui::Button::new(egui::RichText::new("↷ Redo").color(redo_col)),
-                )
+                .add_enabled(redo_enabled, redo_btn)
                 .on_hover_text("Redo change (Ctrl+Y or Ctrl+Shift+Z)")
                 .clicked()
             {
@@ -735,8 +744,14 @@ impl NodeCanvasState {
             }
 
             // Clear button
+            let clear_btn = crate::ui_ext::secondary_button_icon(
+                Some(Icon::Trash),
+                "Clear",
+                hex_to_c32(&palette.theme.b_low),
+                palette,
+            );
             if ui
-                .button(egui::RichText::new("🗑 Clear").color(hex_to_c32(&palette.theme.f_med)))
+                .add(clear_btn)
                 .on_hover_text("Clear all nodes from the canvas")
                 .clicked()
             {
@@ -749,8 +764,9 @@ impl NodeCanvasState {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // RUN PIPELINE BUTTON (Themed hero accent)
-                let run_btn = crate::action_button(
-                    "▶  RUN PIPELINE",
+                let run_btn = crate::ui_ext::action_button_icon(
+                    Some(Icon::Play),
+                    "RUN PIPELINE",
                     hex_to_c32(&palette.harmonies.base),
                     palette,
                 )
@@ -819,11 +835,16 @@ impl NodeCanvasState {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    let close_btn = crate::danger_button(
-                                        "✕",
+                                    let close_btn = crate::ui_ext::danger_button_icon(
+                                        Some(Icon::Close),
+                                        "Close",
                                         hex_to_c32(&palette.undo_card_bg),
                                         palette,
-                                    );
+                                    )
+                                    .stroke(egui::Stroke::new(
+                                        1.0_f32,
+                                        hex_to_c32(&palette.undo_border),
+                                    ));
                                     if ui.add(close_btn).clicked() {
                                         self.catalog_open = false;
                                     }
@@ -1023,7 +1044,7 @@ impl NodeCanvasState {
                         match save_recipe(&recipe) {
                             Ok(path) => {
                                 self.status_message =
-                                    Some((format!("✔ Saved recipe '{}'", recipe.name), false));
+                                    Some((format!("Saved recipe '{}'", recipe.name), false));
                                 self.current_recipe_file = Some(path);
                                 self.selected_recipe_name = recipe.name;
                                 self.reload_recipes();
@@ -1222,7 +1243,7 @@ fn draw_active_cable(
         // 7. Floating Connection HUD Badge
         let badge_text = if is_compat {
             format!(
-                "⚡ Connect to {}.{} [{:?}]",
+                "Connect to {}.{} [{:?}]",
                 target.node_title, target.pin_name, target.port_type
             )
         } else {
@@ -1231,7 +1252,7 @@ fn draw_active_cable(
                 .map(|t| format!("{:?}", t))
                 .unwrap_or_else(|| "Any".into());
             format!(
-                "⚠ Connect: {} ➔ {:?} ({}.{})",
+                "Connect: {} -> {:?} ({}.{})",
                 from_t_str, target.port_type, target.node_title, target.pin_name
             )
         };
@@ -1488,18 +1509,12 @@ fn render_node_card(
                         .small(),
                 );
                 let file_fill = hex_to_c32(&palette.theme.b_med);
-                let file_fg = crate::contrast_text_c32(
+                let file_btn = crate::ui_ext::secondary_button_icon(
+                    Some(Icon::Code),
+                    &script_file,
                     file_fill,
-                    Some(hex_to_c32(&palette.harmonies.split_comp_1)),
                     palette,
                 );
-                let file_btn = egui::Button::new(
-                    egui::RichText::new(format!("📄 {}", script_file))
-                        .monospace()
-                        .small()
-                        .color(file_fg),
-                )
-                .fill(file_fill);
 
                 if ui
                     .add(file_btn)
@@ -1512,8 +1527,9 @@ fn render_node_card(
 
             child_ui.add_space(2.0);
 
-            let edit_btn = crate::action_button(
-                "✏  Open in Editor",
+            let edit_btn = crate::ui_ext::action_button_icon(
+                Some(Icon::Pencil),
+                "Open in Editor",
                 hex_to_c32(&palette.harmonies.base),
                 palette,
             )
@@ -1549,7 +1565,7 @@ fn render_node_card(
         painter.text(
             btm_pos,
             egui::Align2::LEFT_BOTTOM,
-            format!("✔ {}", preview_short),
+            format!("{}", preview_short),
             egui::FontId::proportional(9.5 * zoom),
             hex_to_c32(&palette.diff_add),
         );

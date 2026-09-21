@@ -1009,7 +1009,7 @@ impl ImagePreviewState {
 
                             ui.horizontal(|ui| {
                                 ui.label(
-                                    egui::RichText::new("🎞 Film Stock")
+                                    egui::RichText::new("Film Stock")
                                         .strong()
                                         .small()
                                         .color(base_c),
@@ -1020,7 +1020,7 @@ impl ImagePreviewState {
                                         .color(f_low),
                                 );
                                 if self.film_sim_state.is_generating_thumbnails {
-                                    ui.label(egui::RichText::new("⏳").small().color(f_low))
+                                    ui.label(egui::RichText::new("...").small().color(f_low))
                                         .on_hover_text("Generating thumbnails in background…");
                                 }
                             });
@@ -1029,7 +1029,7 @@ impl ImagePreviewState {
                             // Search box
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.film_sim_state.search_query)
-                                    .hint_text("🔍 Filter stocks...")
+                                    .hint_text("Filter stocks...")
                                     .desired_width(left_w - 24.0),
                             );
                             ui.add_space(4.0);
@@ -1335,10 +1335,7 @@ impl ImagePreviewState {
 
                                     // 1. Style
                                     ui.label(
-                                        egui::RichText::new("✨ Style")
-                                            .strong()
-                                            .small()
-                                            .color(base_c),
+                                        egui::RichText::new("Style").strong().small().color(base_c),
                                     );
                                     ui.add_space(4.0);
 
@@ -1396,7 +1393,7 @@ impl ImagePreviewState {
 
                                     // 2. Optical Effects: Halation, Vignette, Light Leak, Grain
                                     ui.label(
-                                        egui::RichText::new("📸 Optics & Effects")
+                                        egui::RichText::new("Optics & Effects")
                                             .strong()
                                             .small()
                                             .color(base_c),
@@ -1408,7 +1405,7 @@ impl ImagePreviewState {
 
                                     if render_context_slider(
                                         ui,
-                                        "🌟 Halation",
+                                        "Halation",
                                         &mut self.film_sim_state.halation,
                                         0.0..=1.0,
                                         0.25,
@@ -1422,7 +1419,7 @@ impl ImagePreviewState {
 
                                     if render_context_slider(
                                         ui,
-                                        "🔘 Vignette",
+                                        "Vignette",
                                         &mut self.film_sim_state.vignette,
                                         0.0..=1.0,
                                         0.35,
@@ -1435,7 +1432,7 @@ impl ImagePreviewState {
                                     ui.add_space(4.0);
 
                                     ui.label(
-                                        egui::RichText::new("💡 Light Leak").small().color(f_med),
+                                        egui::RichText::new("Light Leak").small().color(f_med),
                                     );
                                     egui::ComboBox::from_id_source("film_sim_light_leak_combo")
                                         .selected_text(self.film_sim_state.light_leak.label())
@@ -1464,7 +1461,7 @@ impl ImagePreviewState {
                                     if ui
                                         .checkbox(
                                             &mut grain_on,
-                                            egui::RichText::new("⟁ Grain emulation")
+                                            egui::RichText::new("Grain emulation")
                                                 .small()
                                                 .color(f_med),
                                         )
@@ -1485,7 +1482,7 @@ impl ImagePreviewState {
                                         .min(stocks.len().saturating_sub(1));
                                     let entry = &stocks[idx];
                                     ui.label(
-                                        egui::RichText::new("📋 Stock Info")
+                                        egui::RichText::new("Stock Info")
                                             .strong()
                                             .small()
                                             .color(base_c),
@@ -1585,7 +1582,7 @@ impl ImagePreviewState {
                         // Brightness
                         if render_context_slider(
                             ui,
-                            "☀ Brightness",
+                            "Brightness",
                             &mut self.film_sim_state.brightness,
                             0.1..=4.0,
                             1.0,
@@ -1600,7 +1597,7 @@ impl ImagePreviewState {
                         // Contrast
                         if render_context_slider(
                             ui,
-                            "◑ Contrast",
+                            "Contrast",
                             &mut self.film_sim_state.contrast,
                             -1.0..=1.0,
                             0.0,
@@ -1615,7 +1612,7 @@ impl ImagePreviewState {
                         // Warmth
                         if render_context_slider(
                             ui,
-                            "🌡 Warmth",
+                            "Warmth",
                             &mut self.film_sim_state.warmth,
                             -1.0..=1.0,
                             0.0,
@@ -1630,7 +1627,7 @@ impl ImagePreviewState {
                         // Tint (Green ↔ Magenta)
                         if render_context_slider(
                             ui,
-                            "🧪 Tint",
+                            "Tint",
                             &mut self.film_sim_state.tint,
                             -1.0..=1.0,
                             0.0,
@@ -1645,7 +1642,7 @@ impl ImagePreviewState {
                         // Saturation
                         if render_context_slider(
                             ui,
-                            "🎨 Saturation",
+                            "Saturation",
                             &mut self.film_sim_state.intensity,
                             0.0..=2.0,
                             1.0,
@@ -1660,7 +1657,7 @@ impl ImagePreviewState {
                         // WB Strength
                         if render_context_slider(
                             ui,
-                            "⚖ WB Str",
+                            "WB Str",
                             &mut self.film_sim_state.wb_strength,
                             0.0..=1.0,
                             1.0,
@@ -1708,16 +1705,12 @@ impl ImagePreviewState {
                         ui.add_space(6.0);
 
                         // Auto Levels
-                        let al_fg = contrast_text_c32(diff_mod, Some(f_high), palette);
-                        let al_btn = egui::Button::new(
-                            egui::RichText::new("⚡ Auto Levels")
-                                .small()
-                                .strong()
-                                .color(al_fg),
-                        )
-                        .fill(diff_mod)
-                        .stroke(Stroke::new(1.0_f32, diff_mod))
-                        .rounding(Rounding::same(4.0));
+                        let al_btn = crate::ui_ext::secondary_button_icon(
+                            Some(Icon::Wand),
+                            "Auto Levels",
+                            diff_mod,
+                            palette,
+                        );
                         if ui
                             .add(al_btn)
                             .on_hover_text(
@@ -1729,22 +1722,18 @@ impl ImagePreviewState {
                             self.film_sim_state.warmth = 0.0;
                             self.film_sim_state.tint = 0.0;
                             self.film_sim_state.mark_dirty();
-                            self.show_toast("⚡ Auto levels applied");
+                            self.show_toast("Auto levels applied");
                         }
 
                         ui.add_space(4.0);
 
                         // Auto Enhance
-                        let ae_fg = contrast_text_c32(base_c, Some(f_high), palette);
-                        let ae_btn = egui::Button::new(
-                            egui::RichText::new("✨ Auto Enhance")
-                                .small()
-                                .strong()
-                                .color(ae_fg),
-                        )
-                        .fill(base_c)
-                        .stroke(Stroke::new(1.0_f32, base_c))
-                        .rounding(Rounding::same(4.0));
+                        let ae_btn = crate::ui_ext::secondary_button_icon(
+                            Some(Icon::Sparkles),
+                            "Auto Enhance",
+                            base_c,
+                            palette,
+                        );
                         if ui
                             .add(ae_btn)
                             .on_hover_text(
@@ -1761,21 +1750,17 @@ impl ImagePreviewState {
                             self.film_sim_state.contrast =
                                 (self.film_sim_state.contrast + 0.08).min(1.0);
                             self.film_sim_state.mark_dirty();
-                            self.show_toast("✨ Auto enhance applied");
+                            self.show_toast("Auto enhance applied");
                         }
 
                         // Right aligned: Apply, Reset, Undo
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let apply_fg = contrast_text_c32(diff_add, Some(f_high), palette);
-                            let apply_btn = egui::Button::new(
-                                egui::RichText::new("✓ Apply to Image")
-                                    .small()
-                                    .strong()
-                                    .color(apply_fg),
-                            )
-                            .fill(diff_add)
-                            .stroke(Stroke::new(1.0_f32, diff_add))
-                            .rounding(Rounding::same(4.0));
+                            let apply_btn = crate::ui_ext::action_button_icon(
+                                Some(Icon::Check),
+                                "Apply to Image",
+                                diff_add,
+                                palette,
+                            );
                             let apply_enabled = self.film_sim_state.preview_rgba.is_some();
                             if ui
                                 .add_enabled(apply_enabled, apply_btn)
@@ -1789,16 +1774,12 @@ impl ImagePreviewState {
 
                             ui.add_space(4.0);
 
-                            let reset_fg = contrast_text_c32(b_med, Some(f_med), palette);
-                            let reset_btn = egui::Button::new(
-                                egui::RichText::new("⟲ Reset")
-                                    .small()
-                                    .strong()
-                                    .color(reset_fg),
-                            )
-                            .fill(b_med)
-                            .stroke(Stroke::new(1.0_f32, b_low))
-                            .rounding(Rounding::same(4.0));
+                            let reset_btn = crate::ui_ext::secondary_button_icon(
+                                Some(Icon::RotateCcw),
+                                "Reset",
+                                b_med,
+                                palette,
+                            );
                             if ui
                                 .add(reset_btn)
                                 .on_hover_text("Reset all film sim parameters to defaults")

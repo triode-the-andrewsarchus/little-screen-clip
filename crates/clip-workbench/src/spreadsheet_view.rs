@@ -2,6 +2,7 @@
 //!
 //! Renders multi-sheet tabs, column auto-sizing, cell search filtering, and TSV clipboard exporting.
 
+use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::StatusToast;
 use eframe::egui::{self, Rounding, Stroke, Vec2};
@@ -100,14 +101,17 @@ impl SpreadsheetViewerState {
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 let info_badge = format!("{} rows × {} cols", total_rows, total_cols);
-                let mut shell = StudioShell::new(&self.title, "📊", palette, close)
+                let mut shell = StudioShell::new(&self.title, Icon::Spreadsheet, palette, close)
                     .with_badge(info_badge, None)
-                    .with_escape_hatch(EscapeHatch::primary(
-                        "📊 Calc",
-                        "localc",
-                        "Open spreadsheet in LibreOffice Calc",
-                    ))
-                    .with_footer_hints("🖱 Click cell: Copy | 🔍 Filter cells above | Esc: Close");
+                    .with_escape_hatch(
+                        EscapeHatch::primary(
+                            "Calc",
+                            "localc",
+                            "Open spreadsheet in LibreOffice Calc",
+                        )
+                        .with_icon(Icon::Spreadsheet),
+                    )
+                    .with_footer_hints("Click cell: Copy | Filter cells above | Esc: Close");
 
                 if let Some((r, c)) = self.selected_cell {
                     if let Some(sheet) = self.data.sheets.get(self.active_sheet_idx) {
@@ -128,15 +132,20 @@ impl SpreadsheetViewerState {
                 let mut copy_table_clicked = false;
                 let clicked_hatch = shell.render_header(ui, |ui| {
                     // Copy Table button
-                    let copy_btn = crate::secondary_button("📋 Copy Table", b_med, palette)
-                        .stroke(Stroke::new(1.0_f32, b_low));
+                    let copy_btn = crate::ui_ext::secondary_button_icon(
+                        Some(Icon::Copy),
+                        "Copy Table",
+                        b_med,
+                        palette,
+                    )
+                    .stroke(Stroke::new(1.0_f32, b_low));
                     if ui.add(copy_btn).clicked() {
                         copy_table_clicked = true;
                     }
 
                     // Search box
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new("🔍").small());
+                    Icon::Search.ui(ui, 13.0, crate::hex_to_c32(&palette.theme.f_med));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.search_query)
                             .hint_text("Filter cells...")
@@ -155,7 +164,7 @@ impl SpreadsheetViewerState {
                         );
                     } else {
                         self.status_toast
-                            .set("⚠️ No on-disk file path for this spreadsheet", now);
+                            .set("No on-disk file path for this spreadsheet", now);
                     }
                 }
 

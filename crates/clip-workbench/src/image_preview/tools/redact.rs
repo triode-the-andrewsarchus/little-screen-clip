@@ -126,21 +126,17 @@ impl ImagePreviewState {
 
                     // Burn / Apply Redactions button
                     let has_boxes = !self.redaction_state.boxes.is_empty();
-                    let (burn_bg, burn_stroke, pref_fg) = if has_boxes {
-                        (hex_to_c32(&palette.diff_del), hex_to_c32(&palette.diff_del), hex_to_c32(&palette.theme.f_high))
+                    let burn_bg = if has_boxes {
+                        hex_to_c32(&palette.diff_del)
                     } else {
-                        (btn_bg, btn_border, hex_to_c32(&palette.theme.f_low))
+                        btn_bg
                     };
-                    let burn_fg = contrast_text_c32(burn_bg, Some(pref_fg), palette);
-                    let burn_btn = egui::Button::new(
-                        egui::RichText::new("🔥 Burn / Apply (Enter)")
-                            .small()
-                            .strong()
-                            .color(burn_fg),
-                    )
-                    .fill(burn_bg)
-                    .stroke(Stroke::new(1.0_f32, burn_stroke))
-                    .rounding(Rounding::same(4.0));
+                    let burn_btn = crate::ui_ext::action_button_icon(
+                        Some(Icon::Check),
+                        "Burn / Apply (Enter)",
+                        burn_bg,
+                        palette,
+                    );
 
                     if ui.add_enabled(has_boxes, burn_btn).on_hover_text("Permanently rasterize black bars into image pixels (Enter)").clicked() {
                         self.apply_redactions();
@@ -148,31 +144,24 @@ impl ImagePreviewState {
 
                     // Delete Selected button
                     let has_selection = self.redaction_state.selected_idx.is_some();
-                    let del_fg = contrast_text_c32(btn_bg, Some(if has_selection { hex_to_c32(&palette.diff_del) } else { hex_to_c32(&palette.theme.f_low) }), palette);
-                    let del_btn = egui::Button::new(
-                        egui::RichText::new("🗑 Delete Selected (Del)")
-                            .small()
-                            .strong()
-                            .color(del_fg),
-                    )
-                    .fill(btn_bg)
-                    .stroke(Stroke::new(1.0_f32, if has_selection { hex_to_c32(&palette.diff_del) } else { btn_border }))
-                    .rounding(Rounding::same(4.0));
+                    let del_btn = crate::ui_ext::danger_button_icon(
+                        Some(Icon::Trash),
+                        "Delete Selected (Del)",
+                        btn_bg,
+                        palette,
+                    );
 
                     if ui.add_enabled(has_selection, del_btn).clicked() {
                         self.delete_selected_redaction();
                     }
 
                     // Clear All button
-                    let clear_fg = contrast_text_c32(btn_bg, Some(if has_boxes { hex_to_c32(&palette.theme.f_high) } else { hex_to_c32(&palette.theme.f_low) }), palette);
-                    let clear_btn = egui::Button::new(
-                        egui::RichText::new("✕ Clear All")
-                            .small()
-                            .color(clear_fg),
-                    )
-                    .fill(btn_bg)
-                    .stroke(Stroke::new(1.0_f32, btn_border))
-                    .rounding(Rounding::same(4.0));
+                    let clear_btn = crate::ui_ext::secondary_button_icon(
+                        Some(Icon::Close),
+                        "Clear All",
+                        btn_bg,
+                        palette,
+                    );
 
                     if ui.add_enabled(has_boxes, clear_btn).clicked() {
                         self.clear_all_redactions();
@@ -182,17 +171,12 @@ impl ImagePreviewState {
 
                     // Strip Metadata / EXIF button
                     let has_meta = self.metadata.is_some();
-                    let strip_col = if has_meta { hex_to_c32(&palette.diff_mod) } else { hex_to_c32(&palette.theme.f_low) };
-                    let strip_fg = contrast_text_c32(btn_bg, Some(strip_col), palette);
-                    let strip_btn = egui::Button::new(
-                        egui::RichText::new("🛡️ Strip Metadata / EXIF")
-                            .small()
-                            .strong()
-                            .color(strip_fg),
-                    )
-                    .fill(btn_bg)
-                    .stroke(Stroke::new(1.0_f32, if has_meta { hex_to_c32(&palette.diff_mod) } else { btn_border }))
-                    .rounding(Rounding::same(4.0));
+                    let strip_btn = crate::ui_ext::secondary_button_icon(
+                        Some(Icon::Shield),
+                        "Strip Metadata / EXIF",
+                        btn_bg,
+                        palette,
+                    );
 
                     if ui.add(strip_btn)
                         .on_hover_text(if has_meta {

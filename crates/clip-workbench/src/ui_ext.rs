@@ -1,4 +1,5 @@
 use crate::hex_to_c32;
+use crate::icons::Icon;
 use eframe::egui::{self, Color32, Response, RichText, Rounding, Stroke, Ui, Vec2};
 use little_clip_core::theme::{AppPalette, contrast_ratio};
 
@@ -71,6 +72,16 @@ pub fn mode_tab_button<'a>(
     is_active: bool,
     palette: &AppPalette,
 ) -> egui::Button<'a> {
+    mode_tab_button_icon(None, label, is_active, palette)
+}
+
+/// Mode/tab toggle button with optional SVG icon and guaranteed WCAG contrast in both active and inactive states.
+pub fn mode_tab_button_icon<'a>(
+    icon: Option<Icon>,
+    label: impl Into<String>,
+    is_active: bool,
+    palette: &AppPalette,
+) -> egui::Button<'a> {
     let (bg, border, pref_fg) = if is_active {
         (
             hex_to_c32(&palette.harmonies.base),
@@ -86,9 +97,15 @@ pub fn mode_tab_button<'a>(
     };
     let fg = contrast_text_c32(bg, Some(pref_fg), palette);
     let border_fg = if is_active { fg } else { border };
+    let text = RichText::new(label.into()).small().strong().color(fg);
 
-    egui::Button::new(RichText::new(label.into()).small().strong().color(fg))
-        .fill(bg)
+    let btn = if let Some(ic) = icon {
+        egui::Button::image_and_text(ic.image_tinted(14.0, fg), text)
+    } else {
+        egui::Button::new(text)
+    };
+
+    btn.fill(bg)
         .stroke(Stroke::new(1.0_f32, border_fg))
         .rounding(Rounding::same(4.0))
 }
@@ -99,10 +116,24 @@ pub fn action_button<'a>(
     fill: Color32,
     palette: &AppPalette,
 ) -> egui::Button<'a> {
+    action_button_icon(None, label, fill, palette)
+}
+
+/// Primary action button with an optional SVG icon.
+pub fn action_button_icon<'a>(
+    icon: Option<Icon>,
+    label: impl Into<String>,
+    fill: Color32,
+    palette: &AppPalette,
+) -> egui::Button<'a> {
     let fg = contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_high)), palette);
-    egui::Button::new(RichText::new(label.into()).strong().color(fg))
-        .fill(fill)
-        .rounding(Rounding::same(4.0))
+    let text = RichText::new(label.into()).strong().color(fg);
+    let btn = if let Some(ic) = icon {
+        egui::Button::image_and_text(ic.image_tinted(15.0, fg), text)
+    } else {
+        egui::Button::new(text)
+    };
+    btn.fill(fill).rounding(Rounding::same(4.0))
 }
 
 /// Standard secondary / subtle button (e.g. Reset, Cancel, Clear, Fit) with guaranteed WCAG contrast.
@@ -111,10 +142,24 @@ pub fn secondary_button<'a>(
     fill: Color32,
     palette: &AppPalette,
 ) -> egui::Button<'a> {
+    secondary_button_icon(None, label, fill, palette)
+}
+
+/// Secondary button with an optional SVG icon.
+pub fn secondary_button_icon<'a>(
+    icon: Option<Icon>,
+    label: impl Into<String>,
+    fill: Color32,
+    palette: &AppPalette,
+) -> egui::Button<'a> {
     let fg = contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_med)), palette);
-    egui::Button::new(RichText::new(label.into()).small().color(fg))
-        .fill(fill)
-        .rounding(Rounding::same(4.0))
+    let text = RichText::new(label.into()).small().color(fg);
+    let btn = if let Some(ic) = icon {
+        egui::Button::image_and_text(ic.image_tinted(13.0, fg), text)
+    } else {
+        egui::Button::new(text)
+    };
+    btn.fill(fill).rounding(Rounding::same(4.0))
 }
 
 /// Compact toolbar control with the same contrast and minimum hit target as the
@@ -124,7 +169,17 @@ pub fn compact_toolbar_button<'a>(
     fill: Color32,
     palette: &AppPalette,
 ) -> egui::Button<'a> {
-    secondary_button(label, fill, palette)
+    compact_toolbar_button_icon(None, label, fill, palette)
+}
+
+/// Compact toolbar control with an optional SVG icon.
+pub fn compact_toolbar_button_icon<'a>(
+    icon: Option<Icon>,
+    label: impl Into<String>,
+    fill: Color32,
+    palette: &AppPalette,
+) -> egui::Button<'a> {
+    secondary_button_icon(icon, label, fill, palette)
         .min_size(Vec2::new(0.0, 26.0))
         .rounding(Rounding::same(4.0))
 }
@@ -135,8 +190,40 @@ pub fn danger_button<'a>(
     fill: Color32,
     palette: &AppPalette,
 ) -> egui::Button<'a> {
+    danger_button_icon(None, label, fill, palette)
+}
+
+/// Danger button with an optional SVG icon.
+pub fn danger_button_icon<'a>(
+    icon: Option<Icon>,
+    label: impl Into<String>,
+    fill: Color32,
+    palette: &AppPalette,
+) -> egui::Button<'a> {
     let fg = contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_high)), palette);
-    egui::Button::new(RichText::new(label.into()).small().strong().color(fg))
+    let text = RichText::new(label.into()).small().strong().color(fg);
+    let btn = if let Some(ic) = icon {
+        egui::Button::image_and_text(ic.image_tinted(14.0, fg), text)
+    } else {
+        egui::Button::new(text)
+    };
+    btn.fill(fill).rounding(Rounding::same(4.0))
+}
+
+/// Standalone icon button without text (useful for compact toolbars, zoom controls, playback).
+pub fn icon_button<'a>(
+    icon: Icon,
+    size: f32,
+    fill: Color32,
+    preferred_fg: Option<Color32>,
+    palette: &AppPalette,
+) -> egui::Button<'a> {
+    let fg = contrast_text_c32(
+        fill,
+        preferred_fg.or_else(|| Some(hex_to_c32(&palette.theme.f_high))),
+        palette,
+    );
+    egui::Button::image(icon.image_tinted(size, fg))
         .fill(fill)
         .rounding(Rounding::same(4.0))
 }
@@ -149,8 +236,22 @@ pub trait UiThemedExt {
         is_active: bool,
         palette: &AppPalette,
     ) -> Response;
+    fn mode_tab_icon(
+        &mut self,
+        icon: Option<Icon>,
+        label: impl Into<String>,
+        is_active: bool,
+        palette: &AppPalette,
+    ) -> Response;
     fn action_btn(
         &mut self,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> Response;
+    fn action_btn_icon(
+        &mut self,
+        icon: Option<Icon>,
         label: impl Into<String>,
         fill: Color32,
         palette: &AppPalette,
@@ -161,10 +262,32 @@ pub trait UiThemedExt {
         fill: Color32,
         palette: &AppPalette,
     ) -> Response;
+    fn secondary_btn_icon(
+        &mut self,
+        icon: Option<Icon>,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> Response;
     fn danger_btn(
         &mut self,
         label: impl Into<String>,
         fill: Color32,
+        palette: &AppPalette,
+    ) -> Response;
+    fn danger_btn_icon(
+        &mut self,
+        icon: Option<Icon>,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> Response;
+    fn icon_btn(
+        &mut self,
+        icon: Icon,
+        size: f32,
+        fill: Color32,
+        preferred_fg: Option<Color32>,
         palette: &AppPalette,
     ) -> Response;
     fn contrast_btn(
@@ -186,6 +309,16 @@ impl UiThemedExt for Ui {
         self.add(mode_tab_button(label, is_active, palette))
     }
 
+    fn mode_tab_icon(
+        &mut self,
+        icon: Option<Icon>,
+        label: impl Into<String>,
+        is_active: bool,
+        palette: &AppPalette,
+    ) -> Response {
+        self.add(mode_tab_button_icon(icon, label, is_active, palette))
+    }
+
     fn action_btn(
         &mut self,
         label: impl Into<String>,
@@ -193,6 +326,16 @@ impl UiThemedExt for Ui {
         palette: &AppPalette,
     ) -> Response {
         self.add(action_button(label, fill, palette))
+    }
+
+    fn action_btn_icon(
+        &mut self,
+        icon: Option<Icon>,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> Response {
+        self.add(action_button_icon(icon, label, fill, palette))
     }
 
     fn secondary_btn(
@@ -204,6 +347,16 @@ impl UiThemedExt for Ui {
         self.add(secondary_button(label, fill, palette))
     }
 
+    fn secondary_btn_icon(
+        &mut self,
+        icon: Option<Icon>,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> Response {
+        self.add(secondary_button_icon(icon, label, fill, palette))
+    }
+
     fn danger_btn(
         &mut self,
         label: impl Into<String>,
@@ -211,6 +364,27 @@ impl UiThemedExt for Ui {
         palette: &AppPalette,
     ) -> Response {
         self.add(danger_button(label, fill, palette))
+    }
+
+    fn danger_btn_icon(
+        &mut self,
+        icon: Option<Icon>,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> Response {
+        self.add(danger_button_icon(icon, label, fill, palette))
+    }
+
+    fn icon_btn(
+        &mut self,
+        icon: Icon,
+        size: f32,
+        fill: Color32,
+        preferred_fg: Option<Color32>,
+        palette: &AppPalette,
+    ) -> Response {
+        self.add(icon_button(icon, size, fill, preferred_fg, palette))
     }
 
     fn contrast_btn(
@@ -252,8 +426,8 @@ impl StatusToast {
         }
     }
 
-    pub fn set(&mut self, message: impl Into<String>, now: f64) {
-        self.toast = Some((message.into(), now));
+    pub fn set(&mut self, msg: impl Into<String>, now: f64) {
+        self.toast = Some((msg.into(), now));
     }
 
     pub fn clear(&mut self) {
@@ -261,25 +435,16 @@ impl StatusToast {
     }
 
     pub fn is_active(&self, now: f64) -> bool {
-        self.toast
-            .as_ref()
-            .map_or(false, |(_, ts)| now - ts < self.duration)
+        match &self.toast {
+            Some((_, timestamp)) => now - *timestamp < self.duration,
+            None => false,
+        }
     }
 
     pub fn message(&self, now: f64) -> Option<&str> {
-        self.toast.as_ref().and_then(|(msg, ts)| {
-            if now - ts < self.duration {
-                Some(msg.as_str())
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn render(&self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
-        if let Some(msg) = self.message(now) {
-            let color = hex_to_c32(&palette.diff_add);
-            ui.label(egui::RichText::new(msg).small().color(color));
+        match &self.toast {
+            Some((msg, timestamp)) if now - *timestamp < self.duration => Some(msg.as_str()),
+            _ => None,
         }
     }
 
@@ -313,32 +478,20 @@ impl StatusToast {
                 });
         }
     }
-}
 
-/// Renders a small metadata chip/badge pill with theme-consistent fill and guaranteed contrast.
-pub fn badge_pill(
-    ui: &mut egui::Ui,
-    text: impl AsRef<str>,
-    accent: Option<Color32>,
-    palette: &AppPalette,
-) -> egui::Response {
-    let bg = hex_to_c32(&palette.theme.b_med);
-    let pref_fg = accent.unwrap_or_else(|| hex_to_c32(&palette.theme.f_med));
-    let fg = contrast_text_c32(bg, Some(pref_fg), palette);
-    let frame = egui::Frame::none()
-        .fill(bg)
-        .rounding(Rounding::same(4.0))
-        .inner_margin(egui::Margin::symmetric(6.0, 2.0));
-    frame
-        .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(text.as_ref())
-                    .small()
-                    .strong()
-                    .color(fg),
-            )
-        })
-        .response
+    pub fn render(&mut self, ui: &mut egui::Ui, now: f64, palette: &AppPalette) {
+        if let Some(msg) = self.message(now) {
+            let bg = hex_to_c32(&palette.harmonies.base);
+            let fg = contrast_text_c32(bg, Some(hex_to_c32(&palette.theme.f_high)), palette);
+            egui::Frame::none()
+                .fill(bg)
+                .rounding(Rounding::same(4.0))
+                .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new(msg).small().strong().color(fg));
+                });
+        }
+    }
 }
 
 /// Standard label + value indicator (e.g. "Matches: 120 B" or "Deletions: 4").
@@ -366,6 +519,43 @@ pub fn stat_pill(
     });
 }
 
+/// Renders a standardized status pill for badges and counts.
+pub fn badge_pill(ui: &mut egui::Ui, label: &str, accent: Option<Color32>, palette: &AppPalette) {
+    let bg = accent.unwrap_or_else(|| hex_to_c32(&palette.theme.b_low));
+    let fg = contrast_text_c32(bg, Some(hex_to_c32(&palette.theme.f_high)), palette);
+    egui::Frame::none()
+        .fill(bg)
+        .rounding(Rounding::same(3.0))
+        .inner_margin(egui::Margin::symmetric(6.0, 2.0))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(label).small().color(fg));
+        });
+}
+
+/// Renders a standard labeled readout pair in sidebars (e.g. "Dimensions", "Duration").
+pub fn sidebar_readout(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: impl std::fmt::Display,
+    val_color: Option<Color32>,
+    palette: &AppPalette,
+) {
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(label)
+                .small()
+                .color(hex_to_c32(&palette.theme.f_low)),
+        );
+        let color = val_color.unwrap_or_else(|| hex_to_c32(&palette.harmonies.base));
+        ui.label(
+            egui::RichText::new(format!("{}", value))
+                .font(egui::FontId::monospace(12.0))
+                .strong()
+                .color(color),
+        );
+    });
+}
+
 /// Actions emitted by the zoom control toolbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ZoomAction {
@@ -374,14 +564,15 @@ pub enum ZoomAction {
     Fit,
 }
 
-/// Renders a standardized zoom toolbar with 🔍+, 🔍-, ⟲ Fit buttons and percentage label.
+/// Renders a standardized zoom toolbar with ZoomIn, ZoomOut, ZoomFit SVG icons and percentage label.
 pub fn zoom_control_bar(
     ui: &mut egui::Ui,
     zoom_pct: u32,
     palette: &AppPalette,
 ) -> Option<ZoomAction> {
     let mut action = None;
-    let zoom_in_btn = secondary_button("🔍+", hex_to_c32(&palette.theme.b_low), palette);
+    let btn_bg = hex_to_c32(&palette.theme.b_low);
+    let zoom_in_btn = icon_button(Icon::ZoomIn, 13.0, btn_bg, None, palette);
     if ui
         .add(zoom_in_btn)
         .on_hover_text("Zoom In (+ / Ctrl+Wheel)")
@@ -389,7 +580,7 @@ pub fn zoom_control_bar(
     {
         action = Some(ZoomAction::ZoomIn);
     }
-    let zoom_out_btn = secondary_button("🔍-", hex_to_c32(&palette.theme.b_low), palette);
+    let zoom_out_btn = icon_button(Icon::ZoomOut, 13.0, btn_bg, None, palette);
     if ui
         .add(zoom_out_btn)
         .on_hover_text("Zoom Out (- / Ctrl+Wheel)")
@@ -397,7 +588,7 @@ pub fn zoom_control_bar(
     {
         action = Some(ZoomAction::ZoomOut);
     }
-    let fit_btn = secondary_button("⟲ Fit", hex_to_c32(&palette.theme.b_low), palette);
+    let fit_btn = secondary_button_icon(Some(Icon::ZoomFit), "Fit", btn_bg, palette);
     if ui
         .add(fit_btn)
         .on_hover_text("Fit Track / Window (Ctrl+0)")
@@ -414,11 +605,11 @@ pub fn zoom_control_bar(
     action
 }
 
-/// Renders a standardized view top toolbar header with icon, title, metadata badges slot,
+/// Renders a standardized view top toolbar header with optional SVG icon, title, metadata badges slot,
 /// right-aligned action buttons slot, and a contrast-safe Close \[Esc] button.
 pub fn render_view_header<R>(
     ui: &mut egui::Ui,
-    icon: &str,
+    icon: Option<Icon>,
     title: &str,
     palette: &AppPalette,
     close: &mut bool,
@@ -426,8 +617,8 @@ pub fn render_view_header<R>(
     right_actions: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
     ui.horizontal(|ui| {
-        if !icon.is_empty() {
-            ui.label(egui::RichText::new(icon).size(18.0));
+        if let Some(ic) = icon {
+            ui.add(ic.image_tinted(18.0, hex_to_c32(&palette.harmonies.base)));
         }
         ui.label(
             egui::RichText::new(title)

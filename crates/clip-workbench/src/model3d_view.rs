@@ -4,6 +4,7 @@
 //! painter's algorithm depth sorting, directional shading with material tinting,
 //! wireframe mode, and background async asset parsing.
 
+use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::StatusToast;
 use eframe::egui::{self, Color32, Pos2, Rounding, Stroke, Vec2};
@@ -219,7 +220,7 @@ impl Model3dViewerState {
             .fill(bg)
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
-                let mut shell = StudioShell::new(&self.title, "🧊", palette, close)
+                let mut shell = StudioShell::new(&self.title, Icon::Model3d, palette, close)
                     .with_badge("Parsing 3D Model...".to_string(), None)
                     .with_footer_hints("Loading asset geometry into memory...");
                 let _ = shell.render_header(ui, |_ui| {});
@@ -231,7 +232,7 @@ impl Model3dViewerState {
                 painter.rect_filled(rect, Rounding::same(6.0), b_low);
 
                 let center = rect.center();
-                let text = "⏳ Parsing 3D mesh geometry with Scenix...";
+                let text = "Parsing 3D mesh geometry with Scenix...";
                 painter.text(
                     center,
                     egui::Align2::CENTER_CENTER,
@@ -257,13 +258,16 @@ impl Model3dViewerState {
             .fill(bg)
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
-                let mut shell = StudioShell::new(&self.title, "⚠️", palette, close)
+                let mut shell = StudioShell::new(&self.title, Icon::Alert, palette, close)
                     .with_badge("Failed to load".to_string(), None)
-                    .with_escape_hatch(EscapeHatch::primary(
-                        "🧊 Blender",
-                        "blender",
-                        "Open 3D model in Blender / FreeCAD",
-                    ))
+                    .with_escape_hatch(
+                        EscapeHatch::primary(
+                            "Blender",
+                            "blender",
+                            "Open 3D model in Blender / FreeCAD",
+                        )
+                        .with_icon(Icon::Model3d),
+                    )
                     .with_footer_hints("Press Esc to close");
 
                 let clicked_hatch = shell.render_header(ui, |_ui| {});
@@ -285,7 +289,7 @@ impl Model3dViewerState {
                 let painter = ui.painter_at(rect);
                 painter.rect_filled(rect, Rounding::same(6.0), b_low);
 
-                let text = format!("⚠️ Unable to load 3D model:\n\n{}", err);
+                let text = format!("Unable to load 3D model:\n\n{}", err);
                 painter.text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -325,8 +329,6 @@ impl Model3dViewerState {
         let format_badge = mesh.format.badge_label();
 
         let b_med = crate::hex_to_c32(&palette.theme.b_med);
-        let f_high = crate::hex_to_c32(&palette.theme.f_high);
-        let f_med = crate::hex_to_c32(&palette.theme.f_med);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
 
         let mut auto_rot_clicked = false;
@@ -342,13 +344,13 @@ impl Model3dViewerState {
                     format_badge, tri_count, size_x, size_y, size_z
                 );
 
-                let mut shell = StudioShell::new(&self.title, "🧊", palette, close)
+                let mut shell = StudioShell::new(&self.title, Icon::Model3d, palette, close)
                     .with_badge(info_badge, None)
                     .with_escape_hatch(EscapeHatch::primary(
-                        "🧊 Blender",
+                        "Blender",
                         "blender",
                         "Open 3D model in Blender / FreeCAD",
-                    ))
+                    ).with_icon(Icon::Model3d))
                     .with_footer_hints(
                         "Left Drag: Orbit • Right/Mid Drag: Pan • Scroll: Zoom • Esc: Close",
                     )
@@ -371,7 +373,7 @@ impl Model3dViewerState {
                         );
                     } else {
                         self.status_toast
-                            .set("⚠️ No on-disk file path for this 3D model", now);
+                            .set("No on-disk file path for this 3D model", now);
                     }
                 }
 
@@ -385,58 +387,47 @@ impl Model3dViewerState {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             let auto_rot_bg = if auto_rotate { b_med } else { accent };
-                            let auto_rot_fg =
-                                crate::contrast_text_c32(auto_rot_bg, Some(f_high), palette);
-                            let auto_rot_btn = egui::Button::new(
-                                egui::RichText::new(if auto_rotate {
-                                    "⏸ Pause Rotation"
-                                } else {
-                                    "▶ Auto-Rotate"
-                                })
-                                .small()
-                                .strong()
-                                .color(auto_rot_fg),
-                            )
-                            .fill(auto_rot_bg)
-                            .stroke(Stroke::new(1.0_f32, b_low))
-                            .rounding(Rounding::same(4.0));
+                            let (auto_rot_label, auto_rot_icon) = if auto_rotate {
+                                ("Pause Rotation", Icon::Pause)
+                            } else {
+                                ("Auto-Rotate", Icon::Play)
+                            };
+                            let auto_rot_btn = crate::ui_ext::action_button_icon(
+                                Some(auto_rot_icon),
+                                auto_rot_label,
+                                auto_rot_bg,
+                                palette,
+                            );
                             if ui.add(auto_rot_btn).clicked() {
                                 auto_rot_clicked = true;
                             }
 
                             let wire_bg = if wireframe { accent } else { b_med };
-                            let wire_fg = crate::contrast_text_c32(wire_bg, Some(f_high), palette);
-                            let wire_btn = egui::Button::new(
-                                egui::RichText::new(if wireframe {
-                                    "🎨 Shaded"
-                                } else {
-                                    "📐 Wireframe"
-                                })
-                                .small()
-                                .strong()
-                                .color(wire_fg),
-                            )
-                            .fill(wire_bg)
-                            .stroke(Stroke::new(1.0_f32, b_low))
-                            .rounding(Rounding::same(4.0));
+                            let (wire_label, wire_icon) = if wireframe {
+                                ("Shaded", Icon::Palette)
+                            } else {
+                                ("Wireframe", Icon::Teapot)
+                            };
+                            let wire_btn = crate::ui_ext::action_button_icon(
+                                Some(wire_icon),
+                                wire_label,
+                                wire_bg,
+                                palette,
+                            );
                             if ui.add(wire_btn).clicked() {
                                 wire_clicked = true;
                             }
 
                             let axis_label = match self.up_axis {
-                                UpAxis::ZUp => "⬆ Axis: Z-Up",
-                                UpAxis::YUp => "⬆ Axis: Y-Up",
+                                UpAxis::ZUp => "Axis: Z-Up",
+                                UpAxis::YUp => "Axis: Y-Up",
                             };
-                            let axis_fg = crate::contrast_text_c32(b_med, Some(f_high), palette);
-                            let axis_btn = egui::Button::new(
-                                egui::RichText::new(axis_label)
-                                    .small()
-                                    .strong()
-                                    .color(axis_fg),
-                            )
-                            .fill(b_med)
-                            .stroke(Stroke::new(1.0_f32, b_low))
-                            .rounding(Rounding::same(4.0));
+                            let axis_btn = crate::ui_ext::secondary_button_icon(
+                                Some(Icon::ArrowUp),
+                                axis_label,
+                                b_med,
+                                palette,
+                            );
                             let mut axis_clicked = false;
                             if ui
                                 .add(axis_btn)
@@ -448,13 +439,12 @@ impl Model3dViewerState {
                                 axis_clicked = true;
                             }
 
-                            let reset_fg = crate::contrast_text_c32(b_med, Some(f_med), palette);
-                            let reset_btn = egui::Button::new(
-                                egui::RichText::new("↺ Reset View").small().color(reset_fg),
-                            )
-                            .fill(b_med)
-                            .stroke(Stroke::new(1.0_f32, b_low))
-                            .rounding(Rounding::same(4.0));
+                            let reset_btn = crate::ui_ext::secondary_button_icon(
+                                Some(Icon::RotateCcw),
+                                "Reset View",
+                                b_med,
+                                palette,
+                            );
                             if ui.add(reset_btn).clicked() {
                                 reset_clicked = true;
                             }

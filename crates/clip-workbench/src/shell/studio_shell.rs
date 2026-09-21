@@ -8,10 +8,12 @@ use super::escape_hatch::EscapeHatch;
 use super::panel::PanelState;
 use crate::hex_to_c32;
 use crate::ui_ext::{
-    StatusToast, ZoomAction, contrast_text_c32, mode_tab_button, themed_button, zoom_control_bar,
+    StatusToast, ZoomAction, contrast_text_c32, mode_tab_button, zoom_control_bar,
 };
 use eframe::egui::{self, Color32, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::theme::AppPalette;
+
+use crate::icons::Icon;
 
 /// Badge metadata item rendered in the header.
 pub struct HeaderBadge {
@@ -237,7 +239,7 @@ impl<'a, 'b> PanelBody<'a, 'b> {
 /// The standard StudioShell component builder.
 pub struct StudioShell<'a> {
     pub title: String,
-    pub icon: &'a str,
+    pub icon: Option<Icon>,
     pub palette: &'a AppPalette,
     pub close: &'a mut bool,
     pub badges: Vec<HeaderBadge>,
@@ -249,13 +251,13 @@ pub struct StudioShell<'a> {
 impl<'a> StudioShell<'a> {
     pub fn new(
         title: impl Into<String>,
-        icon: &'a str,
+        icon: impl Into<Option<Icon>>,
         palette: &'a AppPalette,
         close: &'a mut bool,
     ) -> Self {
         Self {
             title: title.into(),
-            icon,
+            icon: icon.into(),
             palette,
             close,
             badges: Vec::new(),
@@ -314,12 +316,8 @@ impl<'a> StudioShell<'a> {
             .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if !self.icon.is_empty() {
-                        ui.label(
-                            egui::RichText::new(self.icon)
-                                .size(18.0)
-                                .color(hex_to_c32(&palette.harmonies.base)),
-                        );
+                    if let Some(icon) = self.icon {
+                        ui.add(icon.image_tinted(18.0, hex_to_c32(&palette.harmonies.base)));
                     }
 
                     ui.label(
@@ -347,9 +345,8 @@ impl<'a> StudioShell<'a> {
                             Some(hex_to_c32(&palette.diff_del)),
                             palette,
                         );
-                        let close_btn = egui::Button::new(
-                            // ASCII label is deliberate: egui's bundled font does not
-                            // contain the decorative multiplication glyph on every host.
+                        let close_btn = egui::Button::image_and_text(
+                            Icon::Close.image_tinted(12.0, close_fg),
                             egui::RichText::new("Close (Esc)")
                                 .small()
                                 .strong()
@@ -378,8 +375,23 @@ impl<'a> StudioShell<'a> {
                                     hex_to_c32(&palette.theme.f_med),
                                 )
                             };
-                            let btn = themed_button(&hatch.label, bg, Some(fg), palette)
-                                .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)));
+                            let contrast_fg = contrast_text_c32(bg, Some(fg), palette);
+                            let text = egui::RichText::new(&hatch.label)
+                                .small()
+                                .strong()
+                                .color(contrast_fg);
+                            let btn = if let Some(icon) = hatch.icon {
+                                egui::Button::image_and_text(
+                                    icon.image_tinted(14.0, contrast_fg),
+                                    text,
+                                )
+                            } else {
+                                egui::Button::new(text)
+                            }
+                            .fill(bg)
+                            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
+                            .rounding(Rounding::same(4.0));
+
                             if ui.add(btn).on_hover_text(&hatch.tooltip).clicked() {
                                 clicked_hatch = Some(idx);
                             }

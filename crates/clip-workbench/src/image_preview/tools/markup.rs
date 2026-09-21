@@ -29,28 +29,27 @@ pub enum MarkupToolType {
 impl MarkupToolType {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Select => "1  ↖ Select",
-            Self::Arrow => "2  ➔ Arrow",
-            Self::Circle => "3  ⭕ Circle",
-            Self::Rectangle => "4  ▢ Rectangle",
-            Self::Line => "5  ╱ Line",
-            Self::Highlighter => "6  🖍 Highlight",
-            Self::StepBadge => "7  ① Step Badge",
-            Self::Text => "8  🗛 Text",
+            Self::Select => "1  Select",
+            Self::Arrow => "2  Arrow",
+            Self::Circle => "3  Circle",
+            Self::Rectangle => "4  Rectangle",
+            Self::Line => "5  Line",
+            Self::Highlighter => "6  Highlight",
+            Self::StepBadge => "7  Step Badge",
+            Self::Text => "8  Text",
         }
     }
 
-    #[allow(dead_code)]
-    pub fn icon(&self) -> &'static str {
+    pub fn icon(&self) -> Icon {
         match self {
-            Self::Select => "↖",
-            Self::Arrow => "➔",
-            Self::Circle => "⭕",
-            Self::Rectangle => "▢",
-            Self::Line => "╱",
-            Self::Highlighter => "🖍",
-            Self::StepBadge => "①",
-            Self::Text => "🗛",
+            Self::Select => Icon::Crosshair,
+            Self::Arrow => Icon::ArrowRight,
+            Self::Circle => Icon::ShapeCircle,
+            Self::Rectangle => Icon::ShapeRect,
+            Self::Line => Icon::ShapeLine,
+            Self::Highlighter => Icon::Highlight,
+            Self::StepBadge => Icon::Badge,
+            Self::Text => Icon::Text,
         }
     }
 }
@@ -265,15 +264,15 @@ impl MarkupShape {
         }
     }
 
-    pub fn type_icon(&self) -> &'static str {
+    pub fn type_icon(&self) -> Icon {
         match self {
-            Self::Arrow { .. } => "➔",
-            Self::Circle { .. } => "⭕",
-            Self::Rectangle { .. } => "▢",
-            Self::Line { .. } => "╱",
-            Self::Highlighter { .. } => "🖍",
-            Self::StepBadge { .. } => "①",
-            Self::Text { .. } => "🗛",
+            Self::Arrow { .. } => Icon::ArrowRight,
+            Self::Circle { .. } => Icon::ShapeCircle,
+            Self::Rectangle { .. } => Icon::ShapeRect,
+            Self::Line { .. } => Icon::ShapeLine,
+            Self::Highlighter { .. } => Icon::Highlight,
+            Self::StepBadge { .. } => Icon::Badge,
+            Self::Text { .. } => Icon::Text,
         }
     }
 }
@@ -421,25 +420,8 @@ impl ImagePreviewState {
 
             for tool in tools {
                 let is_active = self.markup_state.active_tool == tool;
-                let btn_bg = if is_active {
-                    base_accent
-                } else {
-                    hex_to_c32(&palette.theme.b_med)
-                };
-                let btn_fg = contrast_text_c32(btn_bg, Some(f_high), palette);
-
-                let btn = egui::Button::new(
-                    egui::RichText::new(tool.label())
-                        .strong()
-                        .color(btn_fg),
-                )
-                .fill(btn_bg)
-                .stroke(Stroke::new(
-                    1.0_f32,
-                    if is_active { base_accent } else { b_med },
-                ))
-                .rounding(Rounding::same(4.0))
-                .min_size(Vec2::new(ui.available_width(), 28.0));
+                let btn = crate::ui_ext::mode_tab_button_icon(Some(tool.icon()), tool.label(), is_active, palette)
+                    .min_size(Vec2::new(ui.available_width(), 28.0));
 
                 if ui.add(btn).clicked() {
                     self.markup_state.active_tool = tool;
@@ -541,11 +523,10 @@ impl ImagePreviewState {
         let b_low = hex_to_c32(&palette.theme.b_low);
         let f_high = hex_to_c32(&palette.theme.f_high);
         let f_med = hex_to_c32(&palette.theme.f_med);
-        let diff_del = hex_to_c32(&palette.diff_del);
 
         ui.vertical(|ui| {
             ui.heading(
-                egui::RichText::new("⚙ Properties & Layers")
+                egui::RichText::new("Properties & Layers")
                     .strong()
                     .size(15.0)
                     .color(f_high),
@@ -727,18 +708,23 @@ impl ImagePreviewState {
                                         let label_text = match item {
                                             MarkupShape::Text { text, .. } => {
                                                 if text.is_empty() {
-                                                    "🗛 Text Box".to_string()
+                                                    "Text Box".to_string()
                                                 } else {
-                                                    format!("🗛 \"{}\"", text)
+                                                    format!("\"{}\"", text)
                                                 }
                                             }
                                             MarkupShape::StepBadge { number, .. } => {
-                                                format!("① Badge #{}", number)
+                                                format!("Badge #{}", number)
                                             }
-                                            _ => {
-                                                format!("{} {}", item.type_icon(), item.type_name())
-                                            }
+                                            _ => item.type_name().to_string(),
                                         };
+
+                                        let icon_tint = if is_selected {
+                                            hex_to_c32(&palette.harmonies.base)
+                                        } else {
+                                            f_high
+                                        };
+                                        ui.add(item.type_icon().image_tinted(14.0, icon_tint));
 
                                         if ui.selectable_label(is_selected, label_text).clicked() {
                                             self.markup_state.selected_idx = Some(i);
@@ -748,7 +734,13 @@ impl ImagePreviewState {
                                             egui::Layout::right_to_left(egui::Align::Center),
                                             |ui| {
                                                 if ui
-                                                    .small_button("🗑")
+                                                    .add(crate::ui_ext::icon_button(
+                                                        Icon::Trash,
+                                                        12.0,
+                                                        b_med,
+                                                        None,
+                                                        palette,
+                                                    ))
                                                     .on_hover_text("Delete")
                                                     .clicked()
                                                 {
@@ -756,7 +748,13 @@ impl ImagePreviewState {
                                                 }
                                                 if i + 1 < self.markup_state.items.len() {
                                                     if ui
-                                                        .small_button("▲")
+                                                        .add(crate::ui_ext::icon_button(
+                                                            Icon::ArrowUp,
+                                                            12.0,
+                                                            b_med,
+                                                            None,
+                                                            palette,
+                                                        ))
                                                         .on_hover_text("Bring forward")
                                                         .clicked()
                                                     {
@@ -765,7 +763,13 @@ impl ImagePreviewState {
                                                 }
                                                 if i > 0 {
                                                     if ui
-                                                        .small_button("▼")
+                                                        .add(crate::ui_ext::icon_button(
+                                                            Icon::ArrowDown,
+                                                            12.0,
+                                                            b_med,
+                                                            None,
+                                                            palette,
+                                                        ))
                                                         .on_hover_text("Send backward")
                                                         .clicked()
                                                     {
@@ -810,25 +814,17 @@ impl ImagePreviewState {
                 let has_items = !self.markup_state.items.is_empty();
 
                 // Burn / Flatten button
-                let (burn_bg, burn_stroke, pref_fg) = if has_items {
-                    (
-                        hex_to_c32(&palette.diff_del),
-                        hex_to_c32(&palette.diff_del),
-                        hex_to_c32(&palette.theme.f_high),
-                    )
+                let burn_bg = if has_items {
+                    hex_to_c32(&palette.diff_del)
                 } else {
-                    (b_med, b_med, hex_to_c32(&palette.theme.f_low))
+                    b_med
                 };
-                let burn_fg = contrast_text_c32(burn_bg, Some(pref_fg), palette);
-                let burn_btn = egui::Button::new(
-                    egui::RichText::new("🔥 Flatten / Burn Layers (Enter)")
-                        .small()
-                        .strong()
-                        .color(burn_fg),
-                )
-                .fill(burn_bg)
-                .stroke(Stroke::new(1.0_f32, burn_stroke))
-                .rounding(Rounding::same(4.0));
+                let burn_btn = crate::ui_ext::action_button_icon(
+                    Some(Icon::Check),
+                    "Flatten / Burn Layers (Enter)",
+                    burn_bg,
+                    palette,
+                );
 
                 if ui
                     .add_enabled(has_items, burn_btn)
@@ -843,24 +839,19 @@ impl ImagePreviewState {
                 ui.add_space(4.0);
 
                 // Clear All button
-                let clear_btn =
-                    egui::Button::new(egui::RichText::new("✕ Clear All").small().color(
-                        if has_items {
-                            diff_del
-                        } else {
-                            hex_to_c32(&palette.theme.f_low)
-                        },
-                    ))
-                    .fill(b_low)
-                    .stroke(Stroke::new(1.0_f32, b_med))
-                    .rounding(Rounding::same(4.0));
+                let clear_btn = crate::ui_ext::danger_button_icon(
+                    Some(Icon::Close),
+                    "Clear All",
+                    b_low,
+                    palette,
+                );
 
                 if ui.add_enabled(has_items, clear_btn).clicked() {
                     self.markup_state.items.clear();
                     self.markup_state.selected_idx = None;
                     self.markup_state.editing_text_idx = None;
                     self.markup_state.sync_next_badge_number();
-                    self.show_toast("✕ Cleared all markup items");
+                    self.show_toast("Cleared all markup items");
                 }
             });
         });
@@ -2284,7 +2275,7 @@ mod tests {
         };
 
         assert_eq!(shape.type_name(), "Arrow");
-        assert_eq!(shape.type_icon(), "➔");
+        assert_eq!(shape.type_icon(), Icon::ArrowRight);
         assert_eq!(shape.color(), Color32::RED);
         assert_eq!(shape.width(), Some(4.0));
 

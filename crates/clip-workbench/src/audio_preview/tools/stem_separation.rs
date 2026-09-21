@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::icons::Icon;
 
 pub(crate) fn parse_stem_manifest(stdout: &[u8]) -> Result<Vec<(String, PathBuf)>, String> {
     let text = String::from_utf8_lossy(stdout);
@@ -607,15 +608,16 @@ impl AudioPreviewState {
                 let content_start_y = ui.cursor().min.y;
                 layout::AudioWorkspace::control_row(ui, palette, "Separation", |ui| {
                     if self.stem_separation.stems.is_empty() {
-                        let label = if self.stem_separation.in_progress {
-                            "⏳ Separating locally…"
+                        let (label, icon) = if self.stem_separation.in_progress {
+                            ("Separating locally…", None)
                         } else {
-                            "✂ Separate Stems"
+                            ("Separate Stems", Some(Icon::Waves))
                         };
                         if ui
                             .add_enabled(
                                 !self.stem_separation.in_progress,
-                                layout::AudioWorkspace::primary_button(
+                                layout::AudioWorkspace::primary_button_icon(
+                                    icon,
                                     label,
                                     hex_to_c32(&palette.harmonies.base),
                                     palette,
@@ -627,8 +629,9 @@ impl AudioPreviewState {
                         }
                     } else {
                         if ui
-                            .add(layout::AudioWorkspace::secondary_button(
-                                "↻ Separate Again",
+                            .add(layout::AudioWorkspace::secondary_button_icon(
+                                Some(Icon::RotateCw),
+                                "Separate Again",
                                 hex_to_c32(&palette.theme.b_low),
                                 palette,
                             ))
@@ -637,8 +640,9 @@ impl AudioPreviewState {
                             self.start_stem_separation();
                         }
                         if ui
-                            .add(layout::AudioWorkspace::primary_button(
-                                "💾 Save All Stems…",
+                            .add(layout::AudioWorkspace::primary_button_icon(
+                                Some(Icon::Save),
+                                "Save All Stems…",
                                 hex_to_c32(&palette.diff_add),
                                 palette,
                             ))
@@ -692,13 +696,14 @@ impl AudioPreviewState {
                 } else {
                     let duration = self.group_duration();
                     layout::AudioWorkspace::control_row(ui, palette, "All stems", |ui| {
-                        let play_label = if self.stem_separation.group_is_playing {
-                            "⏸ Pause All"
+                        let (play_label, play_icon) = if self.stem_separation.group_is_playing {
+                            ("Pause All", Icon::Pause)
                         } else {
-                            "▶ Play All"
+                            ("Play All", Icon::Play)
                         };
                         if ui
-                            .add(layout::AudioWorkspace::primary_button(
+                            .add(layout::AudioWorkspace::primary_button_icon(
+                                Some(play_icon),
                                 play_label,
                                 if self.stem_separation.group_is_playing {
                                     hex_to_c32(&palette.diff_mod)
@@ -716,8 +721,9 @@ impl AudioPreviewState {
                             }
                         }
                         if ui
-                            .add(layout::AudioWorkspace::secondary_button(
-                                "⏹ Stop All",
+                            .add(layout::AudioWorkspace::secondary_button_icon(
+                                Some(Icon::Stop),
+                                "Stop All",
                                 hex_to_c32(&palette.theme.b_low),
                                 palette,
                             ))

@@ -3,6 +3,7 @@
 //! Renders aligned hex grids, diff blocks, ASCII previews, and interactive navigation
 //! across binary byte buffers.
 
+use crate::icons::Icon;
 use crate::shell::{EscapeHatch, PanelState, StudioShell};
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
@@ -344,16 +345,17 @@ impl BinaryDiffViewState {
 
         let l_size_str = format_bytes_size(self.left_bytes.len());
         let r_size_str = format_bytes_size(self.right_bytes.len());
-        let hatch = EscapeHatch::new("🔬 ImHex", "imhex", "Open in ImHex Hex Editor");
+        let hatch = EscapeHatch::new("ImHex", "imhex", "Open in ImHex Hex Editor")
+            .with_icon(Icon::BinaryDiff);
 
-        let mut shell = StudioShell::new("Binary Diff", "🔬", palette, close_requested)
-            .with_badge(format!("◀ {} ({})", self.left_label, l_size_str), None)
-            .with_badge(format!("▶ {} ({})", self.right_label, r_size_str), None)
+        let mut shell = StudioShell::new("Binary Diff", Icon::BinaryDiff, palette, close_requested)
+            .with_badge(format!("Left: {} ({})", self.left_label, l_size_str), None)
+            .with_badge(format!("Right: {} ({})", self.right_label, r_size_str), None)
             .with_escape_hatch(hatch)
             .with_footer_hints("Navigation: [Esc] Close • [Tab] Mode • [S] Swap • [J/K] Diff Nav • [Search] Hex/ASCII");
 
         if self.is_computing {
-            shell = shell.with_badge("⏳ Computing...", Some(hex_to_c32(&palette.harmonies.base)));
+            shell = shell.with_badge("Computing...", Some(hex_to_c32(&palette.harmonies.base)));
         } else if let Some(ref res) = self.result {
             let pct_color = if res.stats.similarity_pct >= 90.0 {
                 hex_to_c32(&palette.diff_add)
@@ -368,14 +370,14 @@ impl BinaryDiffViewState {
                     Some(pct_color),
                 )
                 .with_badge(
-                    format!("⚡ {} diffs", res.diff_blocks.len()),
+                    format!("{} diffs", res.diff_blocks.len()),
                     Some(hex_to_c32(&palette.diff_del)),
                 )
                 .with_footer_readout(format!(
-                    "Rows: {} • Width: {}B • Mode: {:?}",
-                    res.rows.len(),
-                    self.bytes_per_row,
-                    self.mode
+                    "{} vs {} • Block count: {}",
+                    res.left_label,
+                    res.right_label,
+                    res.diff_blocks.len()
                 ));
         }
 
@@ -385,12 +387,12 @@ impl BinaryDiffViewState {
             .show(ui, |ui| {
                 // Zone 1: Header
                 let clicked_hatch = shell.render_header(ui, |ui| {
-                    let swap_btn = crate::secondary_button("⇄ Swap [S]", hex_to_c32(&palette.theme.b_med), palette);
+                    let swap_btn = crate::ui_ext::secondary_button_icon(Some(Icon::Swap), "Swap [S]", hex_to_c32(&palette.theme.b_med), palette);
                     if ui.add(swap_btn).on_hover_text("Swap operands (S)").clicked() {
                         self.swap_operands();
                     }
 
-                    let copy_btn = crate::secondary_button("📋 Summary", hex_to_c32(&palette.theme.b_med), palette);
+                    let copy_btn = crate::ui_ext::secondary_button_icon(Some(Icon::Copy), "Summary", hex_to_c32(&palette.theme.b_med), palette);
                     if ui.add(copy_btn).clicked() {
                         if let Some(ref res) = self.result {
                             let summary = format!(
@@ -409,7 +411,7 @@ impl BinaryDiffViewState {
                         }
                     }
 
-                    let diff_panel_label = if self.panel_state.right_collapsed { "Diffs ◧" } else { "Diffs ◨" };
+                    let diff_panel_label = if self.panel_state.right_collapsed { "Diffs (Show)" } else { "Diffs (Hide)" };
                     let diff_toggle_btn = crate::mode_tab_button(diff_panel_label, !self.panel_state.right_collapsed, palette);
                     if ui.add(diff_toggle_btn).on_hover_text("Toggle Differences Panel").clicked() {
                         self.panel_state.toggle_right();
@@ -595,11 +597,21 @@ impl BinaryDiffViewState {
 
                     // Right side of bar: Search & Diff nav
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let next_btn = crate::secondary_button("Next [J]", b_med, palette);
+                        let next_btn = crate::ui_ext::secondary_button_icon(
+                            Some(Icon::ArrowDown),
+                            "Next [J]",
+                            b_med,
+                            palette,
+                        );
                         if ui.add(next_btn).clicked() {
                             next_diff = true;
                         }
-                        let prev_btn = crate::secondary_button("Prev [K]", b_med, palette);
+                        let prev_btn = crate::ui_ext::secondary_button_icon(
+                            Some(Icon::ArrowUp),
+                            "Prev [K]",
+                            b_med,
+                            palette,
+                        );
                         if ui.add(prev_btn).clicked() {
                             prev_diff = true;
                         }
@@ -612,11 +624,23 @@ impl BinaryDiffViewState {
                                     .font(FontId::monospace(11.0))
                                     .color(hex_to_c32(&palette.harmonies.base)),
                             );
-                            let down_btn = crate::secondary_button("▼", b_med, palette);
+                            let down_btn = crate::ui_ext::icon_button(
+                                Icon::ArrowDown,
+                                14.0,
+                                b_med,
+                                None,
+                                palette,
+                            );
                             if ui.add(down_btn).clicked() {
                                 next_search = true;
                             }
-                            let up_btn = crate::secondary_button("▲", b_med, palette);
+                            let up_btn = crate::ui_ext::icon_button(
+                                Icon::ArrowUp,
+                                14.0,
+                                b_med,
+                                None,
+                                palette,
+                            );
                             if ui.add(up_btn).clicked() {
                                 prev_search = true;
                             }
@@ -624,7 +648,7 @@ impl BinaryDiffViewState {
 
                         let search_edit = ui.add(
                             egui::TextEdit::singleline(&mut self.search_query)
-                                .hint_text("🔍 Search Hex / ASCII...")
+                                .hint_text("Search Hex / ASCII...")
                                 .desired_width(180.0),
                         );
                         if search_edit.changed() {
@@ -1233,21 +1257,20 @@ impl BinaryDiffViewState {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(
-                                egui::RichText::new(format!(
-                                    "⚡ Diffs ({})",
-                                    res.diff_blocks.len()
-                                ))
-                                .font(FontId::proportional(12.0))
-                                .strong()
-                                .color(hex_to_c32(&palette.diff_mod)),
+                                egui::RichText::new(format!("Diffs ({})", res.diff_blocks.len()))
+                                    .font(FontId::proportional(12.0))
+                                    .strong()
+                                    .color(hex_to_c32(&palette.diff_mod)),
                             );
 
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    let next_btn = crate::secondary_button(
-                                        "▶",
+                                    let next_btn = crate::ui_ext::icon_button(
+                                        Icon::ArrowDown,
+                                        14.0,
                                         hex_to_c32(&palette.theme.b_med),
+                                        None,
                                         palette,
                                     );
                                     if ui
@@ -1257,9 +1280,11 @@ impl BinaryDiffViewState {
                                     {
                                         do_next = true;
                                     }
-                                    let prev_btn = crate::secondary_button(
-                                        "◀",
+                                    let prev_btn = crate::ui_ext::icon_button(
+                                        Icon::ArrowUp,
+                                        14.0,
                                         hex_to_c32(&palette.theme.b_med),
+                                        None,
                                         palette,
                                     );
                                     if ui
@@ -1280,7 +1305,7 @@ impl BinaryDiffViewState {
                     ui.add_space(20.0);
                     ui.vertical_centered(|ui| {
                         ui.label(
-                            egui::RichText::new("✔ Files identical")
+                            egui::RichText::new("Files identical")
                                 .font(FontId::proportional(12.0))
                                 .color(hex_to_c32(&palette.diff_add)),
                         );
@@ -1452,7 +1477,7 @@ impl BinaryDiffViewState {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(
-                                egui::RichText::new("🔍 INSPECT: ")
+                                egui::RichText::new("INSPECT: ")
                                     .font(FontId::proportional(12.0))
                                     .strong()
                                     .color(hex_to_c32(&palette.harmonies.base)),

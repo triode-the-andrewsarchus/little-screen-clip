@@ -6,6 +6,7 @@
 mod tools;
 use tools::*;
 
+use crate::icons::Icon;
 use crate::{contrast_text_c32, hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use image::RgbaImage;
@@ -718,7 +719,7 @@ impl ImagePreviewState {
 
         // Render fallback save-as modal if active
         if self.show_fallback_save_modal {
-            egui::Window::new("💾 Save Image As")
+            egui::Window::new("Save Image As")
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -733,11 +734,12 @@ impl ImagePreviewState {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui
-                            .button(
-                                egui::RichText::new("💾 Save")
-                                    .strong()
-                                    .color(Color32::WHITE),
-                            )
+                            .add(crate::ui_ext::action_button_icon(
+                                Some(Icon::Save),
+                                "Save",
+                                hex_to_c32(&palette.diff_add),
+                                palette,
+                            ))
                             .clicked()
                         {
                             let p = PathBuf::from(&self.fallback_save_path);
@@ -1142,7 +1144,7 @@ impl ImagePreviewState {
 
         let mut shell = crate::shell::StudioShell::new(
             format!("IMAGE STUDIO — {}", self.title),
-            "🖼",
+            Icon::Image,
             palette,
             close,
         )
@@ -1156,7 +1158,8 @@ impl ImagePreviewState {
                 "",
             )
             .with_primary(is_primary_raster)
-            .with_label(format!("🎨 {}", self.external_editor)),
+            .with_icon(Icon::Palette)
+            .with_label(self.external_editor.clone()),
         )
         .with_escape_hatch(
             crate::shell::EscapeHatch::new(
@@ -1165,7 +1168,8 @@ impl ImagePreviewState {
                 "",
             )
             .with_primary(is_primary_svg)
-            .with_label(format!("✒ {}", self.svg_editor)),
+            .with_icon(Icon::Pencil)
+            .with_label(self.svg_editor.clone()),
         )
         .with_escape_hatch(
             crate::shell::EscapeHatch::new(
@@ -1174,7 +1178,8 @@ impl ImagePreviewState {
                 "",
             )
             .with_primary(false)
-            .with_label(format!("👁 {}", self.viewer)),
+            .with_icon(Icon::Eye)
+            .with_label(self.viewer.clone()),
         );
 
         let mut clicked_save_as = false;
@@ -1182,9 +1187,13 @@ impl ImagePreviewState {
 
         let clicked_hatch = shell.render_header(ui, |ui| {
             // Save As button
-            let save_btn =
-                crate::action_button("💾 Save As...", hex_to_c32(&palette.diff_add), palette)
-                    .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.diff_add)));
+            let save_btn = crate::ui_ext::action_button_icon(
+                Some(Icon::Save),
+                "Save As...",
+                hex_to_c32(&palette.diff_add),
+                palette,
+            )
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.diff_add)));
             if ui
                 .add(save_btn)
                 .on_hover_text("Save current image to file (Ctrl+S)")
@@ -1196,8 +1205,9 @@ impl ImagePreviewState {
             ui.add_space(4.0);
 
             // Copy to Clipboard Slot button
-            let copy_btn = crate::action_button(
-                "📋 Copy (Ctrl+C)",
+            let copy_btn = crate::ui_ext::action_button_icon(
+                Some(Icon::Copy),
+                "Copy (Ctrl+C)",
                 hex_to_c32(&palette.harmonies.base),
                 palette,
             )
@@ -1354,7 +1364,12 @@ impl ImagePreviewState {
                         let is_active = self.active_mode == mode
                             || (mode == ImageToolMode::PickColor
                                 && self.active_mode == ImageToolMode::Palette);
-                        let btn = crate::mode_tab_button(mode.label(), is_active, palette);
+                        let btn = crate::ui_ext::mode_tab_button_icon(
+                            Some(mode.icon()),
+                            mode.label(),
+                            is_active,
+                            palette,
+                        );
 
                         if ui.add(btn).clicked() {
                             self.set_tool_mode(mode);
@@ -1363,8 +1378,9 @@ impl ImagePreviewState {
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         // Reset View
-                        let reset_btn = crate::secondary_button(
-                            "⟲ Reset",
+                        let reset_btn = crate::ui_ext::secondary_button_icon(
+                            Some(Icon::RotateCcw),
+                            "Reset",
                             hex_to_c32(&palette.theme.b_med),
                             palette,
                         );
@@ -1392,10 +1408,10 @@ impl ImagePreviewState {
                         }
 
                         // Fit to window
-                        let fit_btn = crate::themed_button(
-                            "⛶ Fit",
+                        let fit_btn = crate::ui_ext::secondary_button_icon(
+                            Some(Icon::ZoomFit),
+                            "Fit",
                             hex_to_c32(&palette.theme.b_med),
-                            Some(hex_to_c32(&palette.harmonies.base)),
                             palette,
                         );
                         if ui
@@ -2657,12 +2673,12 @@ mod tests {
         assert_eq!(ImageToolMode::Crop.label(), "[C]rop");
         assert_eq!(ImageToolMode::Deskew.label(), "Des[K]ew");
         assert_eq!(ImageToolMode::Transform.label(), "[F]lip/Rotate");
-        assert_eq!(ImageToolMode::Redact.label(), "█ [X] Redact");
+        assert_eq!(ImageToolMode::Redact.label(), "[X] Redact");
         assert_eq!(ImageToolMode::PickColor.label(), "[P]ick Color");
-        assert_eq!(ImageToolMode::Resize.label(), "↔ Re[S]ize");
+        assert_eq!(ImageToolMode::Resize.label(), "Re[S]ize");
         assert_eq!(ImageToolMode::Convert.label(), "Conver[T]");
         assert_eq!(ImageToolMode::Ocr.label(), "[O]CR");
-        assert_eq!(ImageToolMode::Barcode.label(), "▦ [B]arcode");
+        assert_eq!(ImageToolMode::Barcode.label(), "[B]arcode");
         assert_eq!(ImageToolMode::RemoveBg.label(), "[R]emove BG");
         assert_eq!(ImageToolMode::DepthMap.label(), "[D]epth Map");
         assert_eq!(

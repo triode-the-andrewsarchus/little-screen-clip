@@ -3,6 +3,7 @@
 //! Provides waveform peak pyramid visualization, scrub playback, slice selection,
 //! and routing to left/right slots.
 
+use crate::icons::Icon;
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use egui::{Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::audio::{PeakBlock, build_peak_pyramid};
@@ -258,7 +259,7 @@ impl RollingAudioStripState {
 
         if self.is_silent() {
             self.status_toast = Some((
-                "⚠️ Buffer is currently silence — play audio through speakers first, then click ⟳ Refresh".to_string(),
+                "Buffer is currently silence — play audio through speakers first, then click Refresh".to_string(),
                 now,
             ));
             return;
@@ -267,7 +268,7 @@ impl RollingAudioStripState {
         let sel_peak = self.selected_region_peak();
         if sel_peak < 0.001 {
             self.status_toast = Some((
-                "⚠️ Selected region is silence — drag over colored waveform peaks to hear audio"
+                "Selected region is silence — drag over colored waveform peaks to hear audio"
                     .to_string(),
                 now,
             ));
@@ -472,8 +473,9 @@ impl RollingAudioStripState {
         ui.vertical(|ui| {
             // Header Row: Badge & Status / Selection info
             ui.horizontal(|ui| {
+                Icon::Microphone.ui(ui, 13.0, hex_to_c32(&palette.harmonies.base));
                 ui.label(
-                    egui::RichText::new("🎙 ROLLING AUDIO")
+                    egui::RichText::new("ROLLING AUDIO")
                         .color(hex_to_c32(&palette.harmonies.base))
                         .strong()
                         .small(),
@@ -486,26 +488,29 @@ impl RollingAudioStripState {
 
                 // Refresh Snapshot button
                 let refresh_btn = ui.add(
-                    crate::secondary_button("⟳ Refresh", hex_to_c32(&palette.theme.b_low), palette)
+                    crate::ui_ext::secondary_button_icon(Some(Icon::RotateCw), "Refresh", hex_to_c32(&palette.theme.b_low), palette)
                         .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med))),
                 );
                 if refresh_btn.clicked() {
                     self.load_snapshot();
                     let peak = self.max_amplitude();
                     if peak < 0.001 {
-                        self.status_toast = Some(("⟳ Snapshot refreshed: buffer is currently silence".to_string(), now));
+                        self.status_toast = Some(("Snapshot refreshed: buffer is currently silence".to_string(), now));
                     } else {
-                        self.status_toast = Some((format!("⟳ Snapshot refreshed ({:.1}s, peak: {:.0}%)", self.duration_sec, peak * 100.0), now));
+                        self.status_toast = Some((format!("Snapshot refreshed ({:.1}s, peak: {:.0}%)", self.duration_sec, peak * 100.0), now));
                     }
                 }
                 refresh_btn.on_hover_text("Reload latest rolling audio buffer from daemon (F5)");
 
                 if self.is_silent() {
-                    ui.label(
-                        egui::RichText::new("⚠️ Buffer is silence (play audio to capture)")
-                            .color(hex_to_c32(&palette.diff_mod))
-                            .small(),
-                    );
+                    ui.horizontal(|ui| {
+                        Icon::Alert.ui(ui, 12.0, hex_to_c32(&palette.diff_mod));
+                        ui.label(
+                            egui::RichText::new("Buffer is silence (play audio to capture)")
+                                .color(hex_to_c32(&palette.diff_mod))
+                                .small(),
+                        );
+                    });
                 } else if let Some((s, e)) = self.selected_region {
                     let sel_dur = (e - s).abs();
                     let s_rel = s - total_dur;
@@ -615,7 +620,7 @@ impl RollingAudioStripState {
                     painter.text(
                         Pos2::new(rect.center().x, center_y),
                         egui::Align2::CENTER_CENTER,
-                        "Capture buffer is currently silence — play audio and click ⟳ Refresh (or press F5)",
+                        "Capture buffer is currently silence — play audio and click Refresh (or press F5)",
                         egui::FontId::proportional(11.0),
                         hex_to_c32_alpha(&palette.theme.f_med, 160),
                     );
@@ -673,7 +678,7 @@ impl RollingAudioStripState {
                 painter.text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    format!("⚠️ {}", err),
+                    format!("{}", err),
                     egui::FontId::proportional(11.0),
                     hex_to_c32(&palette.diff_del),
                 );

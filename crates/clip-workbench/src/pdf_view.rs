@@ -4,6 +4,7 @@
 //! and a right-side large preview canvas of the selected page with live 90° rotation,
 //! page deletion, and dirty state tracking.
 
+use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::StatusToast;
 use eframe::egui::{self, Rounding, Stroke, Vec2};
@@ -290,7 +291,7 @@ impl PdfEditorState {
                     self.dirty = true;
                     self.status_toast.set(
                         format!(
-                            "✔ {} page {}",
+                            "{} page {}",
                             if message.operation == "delete" {
                                 "Deleted"
                             } else {
@@ -372,14 +373,14 @@ impl PdfEditorState {
                 let mut rotate_clicked = false;
                 let mut delete_clicked = false;
 
-                let mut shell = StudioShell::new(&self.title, "📑", palette, close)
+                let mut shell = StudioShell::new(&self.title, Icon::Pdf, palette, close)
                     .with_badge(format!("{} pages", page_count), None)
                     .with_escape_hatch(EscapeHatch::primary(
-                        "📑 Okular",
+                        "Okular",
                         "okular",
                         "Open PDF in external viewer (Okular / Evince)",
-                    ))
-                    .with_footer_hints("🖱 Click thumbnail: Select page | [R] Rotate 90° | [Del] Delete page | Esc: Close");
+                    ).with_icon(Icon::Pdf))
+                    .with_footer_hints("Click thumbnail: Select page | [R] Rotate 90° | [Del] Delete page | Esc: Close");
 
                 if let Some(cur) = self.selected_page {
                     shell = shell.with_footer_readout(format!("Selected: Page {} of {}", cur, page_count));
@@ -387,16 +388,13 @@ impl PdfEditorState {
 
                 let clicked_hatch = shell.render_header(ui, |ui| {
                     // Delete Page Button
-                    let del_fg = crate::contrast_text_c32(warn_bg, Some(warn_accent), palette);
-                    let del_btn = egui::Button::new(
-                        egui::RichText::new("🗑 Delete Page [Del]")
-                            .small()
-                            .strong()
-                            .color(del_fg),
+                    let del_btn = crate::ui_ext::danger_button_icon(
+                        Some(Icon::Trash),
+                        "Delete Page [Del]",
+                        warn_bg,
+                        palette,
                     )
-                    .fill(warn_bg)
-                    .stroke(Stroke::new(1.0_f32, warn_accent))
-                    .rounding(Rounding::same(4.0));
+                    .stroke(egui::Stroke::new(1.0_f32, warn_accent));
                     if ui
                         .add(del_btn)
                         .on_hover_text("Delete selected page from PDF (Hotkey: Del)")
@@ -408,8 +406,12 @@ impl PdfEditorState {
                     ui.add_space(6.0);
 
                     // Rotate 90 CW Button
-                    let rot_btn = crate::secondary_button("↻ Rotate 90° [R]", b_med, palette)
-                        .stroke(Stroke::new(1.0_f32, b_low));
+                    let rot_btn = crate::ui_ext::secondary_button_icon(
+                        Some(Icon::RotateCw),
+                        "Rotate 90° [R]",
+                        b_med,
+                        palette,
+                    );
                     if ui
                         .add(rot_btn)
                         .on_hover_text("Rotate selected page 90° clockwise (Hotkey: R)")

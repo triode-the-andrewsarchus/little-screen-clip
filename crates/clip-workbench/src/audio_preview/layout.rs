@@ -54,7 +54,17 @@ impl AudioWorkspace {
         fill: Color32,
         palette: &AppPalette,
     ) -> egui::Button<'static> {
-        crate::action_button(label, fill, palette).min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
+        Self::primary_button_icon(None, label, fill, palette)
+    }
+
+    pub(super) fn primary_button_icon(
+        icon: Option<crate::icons::Icon>,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> egui::Button<'static> {
+        crate::action_button_icon(icon, label, fill, palette)
+            .min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
     }
 
     pub(super) fn secondary_button(
@@ -62,11 +72,26 @@ impl AudioWorkspace {
         fill: Color32,
         palette: &AppPalette,
     ) -> egui::Button<'static> {
-        let text = crate::contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_med)), palette);
-        egui::Button::new(egui::RichText::new(label.into()).color(text))
-            .fill(fill)
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
-            .rounding(Rounding::same(4.0))
+        Self::secondary_button_icon(None, label, fill, palette)
+    }
+
+    pub(super) fn secondary_button_icon(
+        icon: Option<crate::icons::Icon>,
+        label: impl Into<String>,
+        fill: Color32,
+        palette: &AppPalette,
+    ) -> egui::Button<'static> {
+        crate::secondary_button_icon(icon, label, fill, palette)
+            .min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
+    }
+
+    pub(super) fn toggle_button_icon(
+        icon: Option<crate::icons::Icon>,
+        label: impl Into<String>,
+        is_active: bool,
+        palette: &AppPalette,
+    ) -> egui::Button<'static> {
+        crate::mode_tab_button_icon(icon, label, is_active, palette)
             .min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
     }
 
@@ -194,25 +219,43 @@ impl AudioWorkspace {
         ui: &mut egui::Ui,
         palette: &AppPalette,
     ) -> Option<crate::ui_ext::ZoomAction> {
+        use crate::icons::Icon;
         use crate::ui_ext::ZoomAction;
         let fill = hex_to_c32(&palette.theme.b_low);
         let mut action = None;
         if ui
-            .add(Self::secondary_button("🔍+", fill, palette))
+            .add(crate::ui_ext::icon_button(
+                Icon::ZoomIn,
+                14.0,
+                fill,
+                None,
+                palette,
+            ))
             .on_hover_text("Zoom In (+ / Ctrl+Wheel)")
             .clicked()
         {
             action = Some(ZoomAction::ZoomIn);
         }
         if ui
-            .add(Self::secondary_button("🔍-", fill, palette))
+            .add(crate::ui_ext::icon_button(
+                Icon::ZoomOut,
+                14.0,
+                fill,
+                None,
+                palette,
+            ))
             .on_hover_text("Zoom Out (- / Ctrl+Wheel)")
             .clicked()
         {
             action = Some(ZoomAction::ZoomOut);
         }
         if ui
-            .add(Self::secondary_button("⟲ Fit", fill, palette))
+            .add(crate::ui_ext::secondary_button_icon(
+                Some(Icon::ZoomFit),
+                "Fit",
+                fill,
+                palette,
+            ))
             .on_hover_text("Fit Track / Window (Ctrl+0)")
             .clicked()
         {
@@ -235,7 +278,7 @@ impl AudioWorkspace {
 impl AudioPreviewState {
     fn render_volume_control(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("🔊").color(hex_to_c32(&palette.theme.f_med)));
+            crate::icons::Icon::Volume.ui(ui, 16.0, hex_to_c32(&palette.theme.f_med));
             let mut volume_percent = self.volume * 100.0;
             let changed = crate::shell::render_track_slider(
                 ui,
@@ -279,19 +322,22 @@ impl AudioPreviewState {
         } else {
             format!("Open the source audio in {editor}")
         };
-        let hatch_label = format!(
-            "🔊 {}",
-            if editor.eq_ignore_ascii_case("audacity") {
-                "Audacity"
-            } else {
-                editor
-            }
-        );
-        let hatch = EscapeHatch::primary(hatch_label, editor, editor_tooltip);
+        let hatch_name = if editor.eq_ignore_ascii_case("audacity") {
+            "Audacity"
+        } else {
+            editor
+        };
+        let hatch = EscapeHatch::primary(hatch_name, editor, editor_tooltip)
+            .with_icon(crate::icons::Icon::Volume);
 
-        let mut shell = StudioShell::new("Audio Studio", "🎵", palette, close_requested)
-            .with_badge(format!("{:02}:{:04.1}", mins, secs), None)
-            .with_escape_hatch(hatch);
+        let mut shell = StudioShell::new(
+            "Audio Studio",
+            crate::icons::Icon::Audio,
+            palette,
+            close_requested,
+        )
+        .with_badge(format!("{:02}:{:04.1}", mins, secs), None)
+        .with_escape_hatch(hatch);
 
         if let Some(ref meta) = self.metadata {
             shell = shell
@@ -330,7 +376,8 @@ impl AudioPreviewState {
                 ui.horizontal(|ui| {
                     for &mode in AudioToolMode::ALL {
                         if ui
-                            .add(AudioWorkspace::toggle_button(
+                            .add(crate::ui_ext::mode_tab_button_icon(
+                                Some(mode.icon()),
                                 mode.label(),
                                 self.active_mode == mode,
                                 palette,

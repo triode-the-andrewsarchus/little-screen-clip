@@ -719,7 +719,6 @@ impl ImagePreviewState {
 
         let accent = hex_to_c32(&palette.harmonies.base);
         let surface = hex_to_c32(&palette.theme.b_med);
-        let border = hex_to_c32(&palette.theme.b_low);
         let text = hex_to_c32(&palette.theme.f_med);
         let muted = hex_to_c32(&palette.theme.f_low);
         let success = hex_to_c32(&palette.diff_add);
@@ -809,30 +808,22 @@ impl ImagePreviewState {
                 });
 
                 ui.add_space(6.0);
-                let lock_label = if self.resize_state.lock_aspect {
-                    "🔒 Aspect ratio locked"
+                let lock_icon = if self.resize_state.lock_aspect {
+                    Icon::Lock
                 } else {
-                    "🔓 Aspect ratio unlocked"
+                    Icon::Unlock
                 };
-                let lock_button =
-                    egui::Button::new(egui::RichText::new(lock_label).small().strong().color(
-                        contrast_text_c32(
-                            if self.resize_state.lock_aspect {
-                                accent
-                            } else {
-                                surface
-                            },
-                            Some(text),
-                            palette,
-                        ),
-                    ))
-                    .fill(if self.resize_state.lock_aspect {
-                        accent
-                    } else {
-                        surface
-                    })
-                    .stroke(Stroke::new(1.0_f32, border))
-                    .rounding(Rounding::same(4.0));
+                let lock_label = if self.resize_state.lock_aspect {
+                    "Aspect ratio locked"
+                } else {
+                    "Aspect ratio unlocked"
+                };
+                let lock_button = crate::ui_ext::mode_tab_button_icon(
+                    Some(lock_icon),
+                    lock_label,
+                    self.resize_state.lock_aspect,
+                    palette,
+                );
                 if ui
                     .add_sized([ui.available_width(), 28.0], lock_button)
                     .on_hover_text("Keep width and height proportional")

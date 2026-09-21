@@ -10,7 +10,7 @@ impl ImagePreviewState {
         let frame_bg = hex_to_c32(&palette.theme.b_low);
         let frame_stroke = hex_to_c32(&palette.theme.b_med);
         let btn_bg = hex_to_c32(&palette.theme.b_med);
-        let btn_border = hex_to_c32(&palette.theme.b_low);
+        let _btn_border = hex_to_c32(&palette.theme.b_low);
 
         egui::Frame::none()
             .fill(frame_bg)
@@ -20,7 +20,7 @@ impl ImagePreviewState {
                 ui.vertical(|ui| {
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new("🔍 Inspector:")
+                            egui::RichText::new("Inspector:")
                                 .strong()
                                 .small()
                                 .color(hex_to_c32(&palette.harmonies.base)),
@@ -30,7 +30,7 @@ impl ImagePreviewState {
                             if let Some(cam) = meta.camera_summary() {
                                 crate::ui_ext::badge_pill(
                                     ui,
-                                    &format!("📷 {}", cam),
+                                    &cam,
                                     Some(hex_to_c32(&palette.harmonies.split_comp_1)),
                                     palette,
                                 );
@@ -38,7 +38,7 @@ impl ImagePreviewState {
                             if let Some(exp) = meta.exposure_summary() {
                                 crate::ui_ext::badge_pill(
                                     ui,
-                                    &format!("⚡ {}", exp),
+                                    &exp,
                                     Some(hex_to_c32(&palette.diff_mod)),
                                     palette,
                                 );
@@ -46,7 +46,7 @@ impl ImagePreviewState {
                             if let Some(dt) = &meta.date_time {
                                 crate::ui_ext::badge_pill(
                                     ui,
-                                    &format!("📅 {}", dt),
+                                    dt,
                                     Some(hex_to_c32(&palette.theme.f_med)),
                                     palette,
                                 );
@@ -54,25 +54,17 @@ impl ImagePreviewState {
                             if let Some(gps) = meta.gps_display() {
                                 crate::ui_ext::badge_pill(
                                     ui,
-                                    &format!("📍 {}", gps),
+                                    &gps,
                                     Some(hex_to_c32(&palette.diff_add)),
                                     palette,
                                 );
                                 if let Some(osm) = meta.osm_url() {
-                                    let map_fg = contrast_text_c32(
+                                    let map_btn = crate::ui_ext::secondary_button_icon(
+                                        Some(Icon::Search),
+                                        "Map",
                                         btn_bg,
-                                        Some(hex_to_c32(&palette.diff_add)),
                                         palette,
                                     );
-                                    let map_btn = egui::Button::new(
-                                        egui::RichText::new("🗺️ Map")
-                                            .small()
-                                            .strong()
-                                            .color(map_fg),
-                                    )
-                                    .fill(btn_bg)
-                                    .stroke(Stroke::new(1.0_f32, btn_border))
-                                    .rounding(Rounding::same(4.0));
                                     if ui
                                         .add(map_btn)
                                         .on_hover_text("Open GPS location in OpenStreetMap")
@@ -84,25 +76,17 @@ impl ImagePreviewState {
                             }
 
                             // Drawer toggle button
-                            let toggle_txt = if self.show_metadata_drawer {
-                                "▲ Hide Details"
+                            let (toggle_txt, toggle_icon) = if self.show_metadata_drawer {
+                                ("Hide Details", Icon::ArrowUp)
                             } else {
-                                "▼ EXIF Details"
+                                ("EXIF Details", Icon::ArrowDown)
                             };
-                            let toggle_fg = contrast_text_c32(
+                            let toggle_btn = crate::ui_ext::secondary_button_icon(
+                                Some(toggle_icon),
+                                toggle_txt,
                                 btn_bg,
-                                Some(hex_to_c32(&palette.theme.f_high)),
                                 palette,
                             );
-                            let toggle_btn = egui::Button::new(
-                                egui::RichText::new(toggle_txt)
-                                    .small()
-                                    .strong()
-                                    .color(toggle_fg),
-                            )
-                            .fill(btn_bg)
-                            .stroke(Stroke::new(1.0_f32, btn_border))
-                            .rounding(Rounding::same(4.0));
                             if ui.add(toggle_btn).clicked() {
                                 self.show_metadata_drawer = !self.show_metadata_drawer;
                             }
@@ -259,11 +243,13 @@ impl ImagePreviewState {
                                                         ))
                                                         .small(),
                                                     );
-                                                    let copy_btn = egui::Button::new(
-                                                        egui::RichText::new("📋 Copy").small(),
-                                                    )
-                                                    .fill(btn_bg)
-                                                    .stroke(Stroke::new(1.0_f32, btn_border));
+                                                    let copy_btn =
+                                                        crate::ui_ext::secondary_button_icon(
+                                                            Some(Icon::Copy),
+                                                            "Copy",
+                                                            btn_bg,
+                                                            palette,
+                                                        );
                                                     if ui.add(copy_btn).clicked() {
                                                         ctx.output_mut(|o| {
                                                             o.copied_text =

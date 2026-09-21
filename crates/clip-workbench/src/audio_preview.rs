@@ -54,6 +54,15 @@ impl AudioToolMode {
             Self::HfAnalysis => "[H]F Analysis",
         }
     }
+
+    pub fn icon(self) -> crate::icons::Icon {
+        match self {
+            Self::Inspect => crate::icons::Icon::Scissors,
+            Self::StemSeparation => crate::icons::Icon::Layers,
+            Self::DigitalDecode => crate::icons::Icon::BinaryDiff,
+            Self::HfAnalysis => crate::icons::Icon::Bat,
+        }
+    }
 }
 
 mod layout;

@@ -4,6 +4,7 @@
 //! Okular, MuseScore, Blender, Meld, ImHex) non-destructively, falling back to `xdg-open`
 //! when a configured application executable is not present on the system.
 
+use crate::icons::Icon;
 use crate::ui_ext::StatusToast;
 use std::path::Path;
 use std::process::Command;
@@ -11,6 +12,7 @@ use std::process::Command;
 /// Configuration for an external application escape hatch button.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EscapeHatch {
+    pub icon: Option<Icon>,
     pub label: String,
     pub command: String,
     pub tooltip: String,
@@ -24,6 +26,7 @@ impl EscapeHatch {
         tooltip: impl Into<String>,
     ) -> Self {
         Self {
+            icon: None,
             label: label.into(),
             command: command.into(),
             tooltip: tooltip.into(),
@@ -37,11 +40,17 @@ impl EscapeHatch {
         tooltip: impl Into<String>,
     ) -> Self {
         Self {
+            icon: None,
             label: label.into(),
             command: command.into(),
             tooltip: tooltip.into(),
             is_primary: true,
         }
+    }
+
+    pub fn with_icon(mut self, icon: Icon) -> Self {
+        self.icon = Some(icon);
+        self
     }
 
     pub fn with_primary(mut self, is_primary: bool) -> Self {
@@ -122,12 +131,15 @@ mod tests {
 
     #[test]
     fn test_escape_hatch_builder() {
-        let h = EscapeHatch::new("🎨 Krita", "krita", "Open in Krita");
-        assert_eq!(h.label, "🎨 Krita");
+        let h = EscapeHatch::new("Krita", "krita", "Open in Krita").with_icon(Icon::Palette);
+        assert_eq!(h.label, "Krita");
+        assert_eq!(h.icon, Some(Icon::Palette));
         assert_eq!(h.command, "krita");
         assert!(!h.is_primary);
 
-        let p = EscapeHatch::primary("🔊 Audacity", "audacity", "Open in Audacity");
+        let p = EscapeHatch::primary("Audacity", "audacity", "Open in Audacity")
+            .with_icon(Icon::Volume);
         assert!(p.is_primary);
+        assert_eq!(p.icon, Some(Icon::Volume));
     }
 }

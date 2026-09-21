@@ -334,10 +334,10 @@ impl AudioPreviewState {
         layout::AudioWorkspace::control_bar(ui, palette, |ui| {
             layout::AudioWorkspace::control_group(ui, palette, "Transport", |ui| {
                 // Play / Pause Button
-                let play_icon = if self.is_playing {
-                    "⏸ Pause [Space]"
+                let (play_icon, play_label) = if self.is_playing {
+                    (crate::icons::Icon::Pause, "Pause [Space]")
                 } else {
-                    "▶ Play [Space]"
+                    (crate::icons::Icon::Play, "Play [Space]")
                 };
                 let play_color = if self.is_playing {
                     hex_to_c32(&palette.diff_mod)
@@ -345,9 +345,13 @@ impl AudioPreviewState {
                     hex_to_c32(&palette.diff_add)
                 };
 
-                let play_btn =
-                    layout::AudioWorkspace::primary_button(play_icon, play_color, palette)
-                        .rounding(Rounding::same(6.0));
+                let play_btn = layout::AudioWorkspace::primary_button_icon(
+                    Some(play_icon),
+                    play_label,
+                    play_color,
+                    palette,
+                )
+                .rounding(Rounding::same(6.0));
 
                 if ui.add(play_btn).clicked() {
                     self.toggle_play();
@@ -355,8 +359,9 @@ impl AudioPreviewState {
 
                 ui.add_space(3.0);
 
-                let stop_btn = layout::AudioWorkspace::secondary_button(
-                    "⏹ Stop",
+                let stop_btn = layout::AudioWorkspace::secondary_button_icon(
+                    Some(crate::icons::Icon::Stop),
+                    "Stop",
                     hex_to_c32(&palette.theme.b_low),
                     palette,
                 );
@@ -364,8 +369,9 @@ impl AudioPreviewState {
                     self.stop();
                 }
 
-                let replay_btn = layout::AudioWorkspace::secondary_button(
-                    "⟲ Start",
+                let replay_btn = layout::AudioWorkspace::secondary_button_icon(
+                    Some(crate::icons::Icon::Undo),
+                    "Start",
                     hex_to_c32(&palette.theme.b_low),
                     palette,
                 );
@@ -375,8 +381,9 @@ impl AudioPreviewState {
 
                 ui.add_space(3.0);
 
-                let loop_btn = layout::AudioWorkspace::toggle_button(
-                    "🔁 Loop [L]",
+                let loop_btn = layout::AudioWorkspace::toggle_button_icon(
+                    Some(crate::icons::Icon::Repeat),
+                    "Loop [L]",
                     self.loop_selection,
                     palette,
                 );
@@ -424,8 +431,12 @@ impl AudioPreviewState {
             layout::AudioWorkspace::control_group(ui, palette, "Selection", |ui| {
                 // Mode Toggle: Single Region (default) vs Multi-Region Mode
                 let is_multi = self.selection_mode == SelectionMode::Multi;
-                let mode_btn =
-                    layout::AudioWorkspace::toggle_button("☷ Multi-region [M]", is_multi, palette);
+                let mode_btn = layout::AudioWorkspace::toggle_button_icon(
+                    Some(crate::icons::Icon::Grid),
+                    "Multi-region [M]",
+                    is_multi,
+                    palette,
+                );
                 if ui
                     .add(mode_btn)
                     .on_hover_text(
@@ -442,8 +453,9 @@ impl AudioPreviewState {
                 }
 
                 // Snap to 0-Crossing Toggle
-                let snap_btn = layout::AudioWorkspace::toggle_button(
-                    "∿ Snap 0-Cross [Z]",
+                let snap_btn = layout::AudioWorkspace::toggle_button_icon(
+                    Some(crate::icons::Icon::Waves),
+                    "Snap 0-Cross [Z]",
                     self.snap_zero_crossings,
                     palette,
                 );
@@ -460,11 +472,12 @@ impl AudioPreviewState {
                     .as_ref()
                     .map(|a| a.is_transients_ready)
                     .unwrap_or(false);
-                let trans_btn = layout::AudioWorkspace::toggle_button(
+                let trans_btn = layout::AudioWorkspace::toggle_button_icon(
+                    Some(crate::icons::Icon::Zap),
                     if transients_ready {
-                        "⚡ Transients [T]"
+                        "Transients [T]"
                     } else {
-                        "⏳ Transients…"
+                        "Transients…"
                     },
                     self.show_transients && transients_ready,
                     palette,
@@ -474,7 +487,7 @@ impl AudioPreviewState {
                         self.show_transients = !self.show_transients;
                         let status = if self.show_transients { "ON (Snapping Enabled)" } else { "OFF" };
                         self.status_toast = Some((
-                            format!("⚡ Transients: {}", status),
+                            format!("Transients: {}", status),
                             now,
                         ));
                     }
@@ -489,29 +502,29 @@ impl AudioPreviewState {
                             .text("Sens")
                             .show_value(false);
                         if ui
-                        .add(sens_slider)
-                        .on_hover_text(
-                            "Adjust transient detection from stronger attacks toward softer detail",
-                        )
-                        .changed()
-                    {
-                        self.transient_sensitivity =
-                            transient_sensitivity_from_slider(sensitivity_position);
-                        if let Some(ref mut analysis) = self.analysis {
-                            analysis.recompute_transients(self.transient_sensitivity);
+                            .add(sens_slider)
+                            .on_hover_text(
+                                "Adjust transient detection from stronger attacks toward softer detail",
+                            )
+                            .changed()
+                        {
+                            self.transient_sensitivity =
+                                transient_sensitivity_from_slider(sensitivity_position);
+                            if let Some(ref mut analysis) = self.analysis {
+                                analysis.recompute_transients(self.transient_sensitivity);
+                            }
                         }
                     }
-                    }
                 } else {
-                    ui.add_enabled(false, trans_btn).on_hover_text(
-                        "Audio transients are currently being analyzed in background...",
-                    );
+                    ui.add_enabled(false, trans_btn)
+                        .on_hover_text("Calculating audio spectral flux transients...");
                 }
 
                 ui.add_space(8.0);
 
                 // Trim Silence Button
-                let trim_btn = layout::AudioWorkspace::secondary_button(
+                let trim_btn = layout::AudioWorkspace::secondary_button_icon(
+                    Some(crate::icons::Icon::Scissors),
                     "Trim Silence",
                     hex_to_c32(&palette.theme.b_low),
                     palette,
@@ -533,12 +546,13 @@ impl AudioPreviewState {
                     SelectionMode::Single => {
                         // Copy Slice (Native) Button
                         let copy_label = if self.selection.is_some() {
-                            "📋 Copy Slice [Ctrl+C]"
+                            "Copy Slice [Ctrl+C]"
                         } else {
-                            "📋 Copy Track [Ctrl+C]"
+                            "Copy Track [Ctrl+C]"
                         };
 
-                        let copy_btn = layout::AudioWorkspace::primary_button(
+                        let copy_btn = layout::AudioWorkspace::primary_button_icon(
+                            Some(crate::icons::Icon::Copy),
                             copy_label,
                             hex_to_c32(&palette.harmonies.base),
                             palette,
@@ -585,11 +599,12 @@ impl AudioPreviewState {
 
                         ui.add_space(4.0);
                         let save_label = if self.selection.is_some() {
-                            "💾 Save File... [Ctrl+S]"
+                            "Save File... [Ctrl+S]"
                         } else {
-                            "💾 Save Track... [Ctrl+S]"
+                            "Save Track... [Ctrl+S]"
                         };
-                        let save_btn = layout::AudioWorkspace::primary_button(
+                        let save_btn = layout::AudioWorkspace::primary_button_icon(
+                            Some(crate::icons::Icon::Save),
                             save_label,
                             hex_to_c32(&palette.diff_add),
                             palette,
@@ -602,12 +617,13 @@ impl AudioPreviewState {
                     SelectionMode::Multi => {
                         let count = self.multi_selections.len();
                         let copy_label = if count > 0 {
-                            format!("📋 Copy All ({}) [Ctrl+C]", count)
+                            format!("Copy All ({}) [Ctrl+C]", count)
                         } else {
-                            "📋 Copy Track [Ctrl+C]".to_string()
+                            "Copy Track [Ctrl+C]".to_string()
                         };
 
-                        let copy_btn = layout::AudioWorkspace::primary_button(
+                        let copy_btn = layout::AudioWorkspace::primary_button_icon(
+                            Some(crate::icons::Icon::Copy),
                             copy_label,
                             hex_to_c32(&palette.harmonies.base),
                             palette,
@@ -659,11 +675,12 @@ impl AudioPreviewState {
 
                         ui.add_space(4.0);
                         let save_label = if count > 0 {
-                            format!("💾 Save All ({}) [Ctrl+S]", count)
+                            format!("Save All ({}) [Ctrl+S]", count)
                         } else {
-                            "💾 Save Track [Ctrl+S]".to_string()
+                            "Save Track [Ctrl+S]".to_string()
                         };
-                        let save_btn = layout::AudioWorkspace::primary_button(
+                        let save_btn = layout::AudioWorkspace::primary_button_icon(
+                            Some(crate::icons::Icon::Save),
                             save_label,
                             hex_to_c32(&palette.diff_add),
                             palette,
@@ -760,8 +777,9 @@ impl AudioPreviewState {
                                 ui.label(format!("High pass {hz:.0} Hz"));
                             }
                             if ui
-                                .add(layout::AudioWorkspace::secondary_button(
-                                    "✕ Clear",
+                                .add(layout::AudioWorkspace::secondary_button_icon(
+                                    Some(crate::icons::Icon::Close),
+                                    "Clear",
                                     hex_to_c32(&palette.theme.b_low),
                                     palette,
                                 ))
@@ -831,8 +849,9 @@ impl AudioPreviewState {
                         }
                         if count > 0
                             && ui
-                                .add(layout::AudioWorkspace::secondary_button(
-                                    "🗑 Clear All",
+                                .add(layout::AudioWorkspace::secondary_button_icon(
+                                    Some(crate::icons::Icon::Trash),
+                                    "Clear All",
                                     hex_to_c32(&palette.theme.b_low),
                                     palette,
                                 ))
@@ -915,11 +934,14 @@ impl AudioPreviewState {
                                     Some(hex_to_c32(&palette.diff_del)),
                                     palette,
                                 );
-                                let del_btn =
-                                    egui::Button::new(egui::RichText::new("✕").color(del_fg))
-                                        .fill(del_bg)
-                                        .rounding(Rounding::same(4.0))
-                                        .min_size(Vec2::new(30.0, 30.0));
+                                let del_btn = crate::ui_ext::icon_button(
+                                    crate::icons::Icon::Close,
+                                    11.0,
+                                    del_bg,
+                                    Some(del_fg),
+                                    palette,
+                                )
+                                .min_size(Vec2::new(30.0, 30.0));
                                 if ui
                                     .add(del_btn)
                                     .on_hover_text(format!("Remove slice #{}", idx + 1))

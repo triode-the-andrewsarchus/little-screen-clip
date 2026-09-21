@@ -4,6 +4,7 @@
 //! pixel diffs for bitmap images.
 
 use crate::ansi::ansi_to_layout_job;
+use crate::icons::Icon;
 use crate::send_ipc_request;
 use crate::shell::{EscapeHatch, StudioShell};
 use eframe::egui::{self, Color32, Rounding, Stroke, Vec2};
@@ -26,13 +27,23 @@ pub enum ImageDiffViewMode {
 }
 
 impl ImageDiffViewMode {
-    /// Human-readable display label with icon.
+    /// Human-readable display label.
     pub fn label(&self) -> &'static str {
         match self {
-            ImageDiffViewMode::ThreeUp => "⬌ 3-Up (Base | Compare | Diff)",
-            ImageDiffViewMode::Overlay => "⬡ Overlay",
-            ImageDiffViewMode::MaskOnly => "⬛ Diff Mask (Black)",
-            ImageDiffViewMode::Split => "⬍ Split (Base | Diff)",
+            ImageDiffViewMode::ThreeUp => "3-Up (Base | Comp | Diff)",
+            ImageDiffViewMode::Overlay => "Overlay",
+            ImageDiffViewMode::MaskOnly => "Diff Mask",
+            ImageDiffViewMode::Split => "Split (Base | Diff)",
+        }
+    }
+
+    /// SVG icon for mode tab.
+    pub fn icon(&self) -> Icon {
+        match self {
+            ImageDiffViewMode::ThreeUp => Icon::Grid,
+            ImageDiffViewMode::Overlay => Icon::Layers,
+            ImageDiffViewMode::MaskOnly => Icon::Eye,
+            ImageDiffViewMode::Split => Icon::Diff,
         }
     }
 }
@@ -481,33 +492,30 @@ impl DiffViewerState {
         let success_color = crate::hex_to_c32(&palette.diff_add);
         let del_color = crate::hex_to_c32(&palette.diff_del);
 
-        let hatch = EscapeHatch::new(
-            "🔍 Open in Meld",
-            "meld",
-            "Open comparison in external Meld tool",
-        );
+        let hatch = EscapeHatch::new("Meld", "meld", "Open comparison in external Meld tool")
+            .with_icon(Icon::Diff);
 
         let mut shell = if is_img {
-            let mut s = StudioShell::new("Picture Diff Comparison", "⑂", palette, close_requested)
+            let mut s = StudioShell::new("Picture Diff Comparison", Icon::Diff, palette, close_requested)
                 .with_escape_hatch(hatch)
                 .with_footer_hints("Navigation: [Esc] Close • [Tab/C] Toggle View • [S] Swap Operands • [Ctrl+C] Copy Mask");
 
             if self.is_computing {
                 let elapsed = self.compute_start_time.elapsed().as_secs_f32();
-                s = s.with_badge(format!("⏳ Comparing... ({:.1}s)", elapsed), Some(accent));
+                s = s.with_badge(format!("Comparing... ({:.1}s)", elapsed), Some(accent));
             } else if let Some(res) = &self.image_result {
                 if res.is_identical {
-                    s = s.with_badge("✔ 0 diff pixels • Identical", Some(success_color));
+                    s = s.with_badge("0 diff pixels • Identical", Some(success_color));
                 } else {
                     s = s.with_badge(
                         format!(
-                            "⚡ {} diff pixels ({:.2}%)",
+                            "{} diff pixels ({:.2}%)",
                             res.diff_count, res.diff_percentage
                         ),
                         Some(del_color),
                     );
                 }
-                s = s.with_badge(format!("⛶ {} × {}", res.width, res.height), None);
+                s = s.with_badge(format!("{} × {}", res.width, res.height), None);
                 s = s.with_footer_readout(format!(
                     "Tolerance: {:.2} • {} diff pixels",
                     self.image_options.threshold, res.diff_count
@@ -516,15 +524,15 @@ impl DiffViewerState {
             s
         } else {
             let lines_count = self.result.raw_ansi.lines().count();
-            let mut s = StudioShell::new("Diff Comparison", "⑂", palette, close_requested)
-                .with_badge(format!("⚡ {}", self.result.engine_name), Some(accent))
+            let mut s = StudioShell::new("Diff Comparison", Icon::Diff, palette, close_requested)
+                .with_badge(format!("{}", self.result.engine_name), Some(accent))
                 .with_escape_hatch(hatch)
                 .with_footer_hints("Navigation: [Esc] Close • [Tab/C] Toggle View • [S] Swap Operands • [Ctrl+C] Copy Diff");
 
             if self.result.is_identical {
-                s = s.with_badge("✔ Identical", Some(success_color));
+                s = s.with_badge("Identical", Some(success_color));
             } else {
-                s = s.with_badge(format!("⚡ {} lines in diff", lines_count), None);
+                s = s.with_badge(format!("{} lines in diff", lines_count), None);
             }
             s = s.with_footer_readout(format!(
                 "LHS: {} • RHS: {}",
@@ -540,7 +548,12 @@ impl DiffViewerState {
             .show(ui, |ui| {
                 // Zone 1: Header
                 let clicked_hatch = shell.render_header(ui, |ui| {
-                    let swap_btn = crate::secondary_button("⇄ Swap [S]", b_med, palette);
+                    let swap_btn = crate::ui_ext::secondary_button_icon(
+                        Some(Icon::Swap),
+                        "Swap [S]",
+                        b_med,
+                        palette,
+                    );
                     if ui
                         .add(swap_btn)
                         .on_hover_text("Swap operands (S)")
@@ -550,11 +563,16 @@ impl DiffViewerState {
                     }
 
                     let copy_label = if is_img {
-                        "📋 Copy Diff Mask"
+                        "Copy Diff Mask"
                     } else {
-                        "📋 Copy Diff"
+                        "Copy Diff"
                     };
-                    let copy_btn = crate::secondary_button(copy_label, b_med, palette);
+                    let copy_btn = crate::ui_ext::secondary_button_icon(
+                        Some(Icon::Copy),
+                        copy_label,
+                        b_med,
+                        palette,
+                    );
                     if ui.add(copy_btn).clicked() {
                         if is_img {
                             self.copy_image_diff_to_clipboard(now);
@@ -634,7 +652,7 @@ impl DiffViewerState {
                         ImageDiffViewMode::Split,
                     ] {
                         let is_active = self.image_mode == *mode;
-                        let btn = crate::mode_tab_button(mode.label(), is_active, palette);
+                        let btn = crate::ui_ext::mode_tab_button_icon(Some(mode.icon()), mode.label(), is_active, palette);
                         if ui.add(btn).clicked() {
                             self.image_mode = *mode;
                         }
@@ -858,7 +876,7 @@ impl DiffViewerState {
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
                     ui.label(
-                        egui::RichText::new("⚠️ Unable to Compare Images")
+                        egui::RichText::new("Unable to Compare Images")
                             .color(del_color)
                             .heading(),
                     );
@@ -913,12 +931,17 @@ impl DiffViewerState {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let is_side = self.mode == DiffDisplayMode::SideBySide;
-                    let mode_label = if is_side {
-                        "◫ Side-by-Side"
+                    let (mode_label, mode_icon) = if is_side {
+                        ("Side-by-Side", Icon::Layers)
                     } else {
-                        "≡ Unified"
+                        ("Unified", Icon::Text)
                     };
-                    let btn = crate::mode_tab_button(mode_label, true, palette);
+                    let btn = crate::ui_ext::mode_tab_button_icon(
+                        Some(mode_icon),
+                        mode_label,
+                        true,
+                        palette,
+                    );
                     if ui
                         .add(btn)
                         .on_hover_text("Toggle text diff display mode (Tab / C)")

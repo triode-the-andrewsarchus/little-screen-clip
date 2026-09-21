@@ -3,6 +3,7 @@
 //! Provides syntax-highlighted code inspection, rendered Markdown viewing, text selection and copying,
 //! toggleable line-wrapping, line numbers gutter, regex find toolbar, and external editor escape hatches.
 
+use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
@@ -399,8 +400,7 @@ impl TextPreviewState {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
-        self.status_toast
-            .set("Copied full text to clipboard! 📋", now);
+        self.status_toast.set("Copied full text to clipboard!", now);
     }
 
     /// Renders the complete preview modal UI.
@@ -421,20 +421,21 @@ impl TextPreviewState {
         let total_lines = self.content.lines().count().max(1);
         let total_chars = self.content.chars().count();
         let icon = if self.is_markdown {
-            "📖"
+            Icon::Book
         } else if self.language != "txt" {
-            "📝"
+            Icon::Code
         } else {
-            "📄"
+            Icon::Text
         };
         let lang_label = self.language.to_uppercase();
         let title = self.title.clone();
 
         let editor_hatch = EscapeHatch::new(
-            format!("📝 Open in {}", self.editor_cmd),
+            format!("Open in {}", self.editor_cmd),
             self.editor_cmd.clone(),
             format!("Open in {}", self.editor_cmd),
-        );
+        )
+        .with_icon(Icon::Pencil);
 
         let mut shell = StudioShell::new(title, icon, palette, close)
             .with_badge(lang_label, Some(hex_to_c32(&palette.harmonies.base)))
@@ -515,13 +516,22 @@ impl TextPreviewState {
         ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        let copy_btn =
-            crate::secondary_button("📋 Copy All", hex_to_c32(&palette.theme.b_med), palette);
+        let copy_btn = crate::ui_ext::secondary_button_icon(
+            Some(Icon::Copy),
+            "Copy All",
+            hex_to_c32(&palette.theme.b_med),
+            palette,
+        );
         if ui.add(copy_btn).clicked() {
             self.copy_all_to_clipboard(ctx);
         }
 
-        let find_btn = crate::mode_tab_button("🔍 Find (Ctrl+F)", self.show_find, palette);
+        let find_btn = crate::ui_ext::mode_tab_button_icon(
+            Some(Icon::Search),
+            "Find (Ctrl+F)",
+            self.show_find,
+            palette,
+        );
         if ui.add(find_btn).clicked() {
             self.show_find = !self.show_find;
             if self.show_find {
@@ -532,11 +542,16 @@ impl TextPreviewState {
 
     fn render_header_toggle_buttons(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let wrap_label = if self.wrap_lines {
-            "↩ Wrap: ON"
+            "Wrap: ON"
         } else {
-            "➡ Wrap: OFF"
+            "Wrap: OFF"
         };
-        let wrap_btn = crate::mode_tab_button(wrap_label, self.wrap_lines, palette);
+        let wrap_btn = crate::ui_ext::mode_tab_button_icon(
+            Some(Icon::Wrap),
+            wrap_label,
+            self.wrap_lines,
+            palette,
+        );
         if ui
             .add(wrap_btn)
             .on_hover_text("Toggle line-wrapping on/off")
@@ -547,11 +562,16 @@ impl TextPreviewState {
 
         if self.view_mode == TextViewMode::Raw {
             let num_label = if self.show_line_numbers {
-                "# Lines: ON"
+                "Lines: ON"
             } else {
-                "# Lines: OFF"
+                "Lines: OFF"
             };
-            let num_btn = crate::mode_tab_button(num_label, self.show_line_numbers, palette);
+            let num_btn = crate::ui_ext::mode_tab_button_icon(
+                Some(Icon::Code),
+                num_label,
+                self.show_line_numbers,
+                palette,
+            );
             if ui
                 .add(num_btn)
                 .on_hover_text("Toggle line numbers gutter")
@@ -562,11 +582,12 @@ impl TextPreviewState {
         }
 
         if self.is_markdown {
-            let mode_label = match self.view_mode {
-                TextViewMode::RenderedMarkdown => "📖 Rendered MD",
-                TextViewMode::Raw => "💻 Raw / Code",
+            let (mode_label, mode_icon) = match self.view_mode {
+                TextViewMode::RenderedMarkdown => ("Rendered MD", Icon::Book),
+                TextViewMode::Raw => ("Raw / Code", Icon::Code),
             };
-            let mode_btn = crate::mode_tab_button(
+            let mode_btn = crate::ui_ext::mode_tab_button_icon(
+                Some(mode_icon),
                 mode_label,
                 self.view_mode == TextViewMode::RenderedMarkdown,
                 palette,
@@ -599,11 +620,14 @@ impl TextPreviewState {
             return;
         }
         if let Some(ref err) = self.regex_error {
-            ui.label(
-                egui::RichText::new(format!("⚠ Regex error: {}", err))
-                    .small()
-                    .color(hex_to_c32(&palette.diff_del)),
-            );
+            ui.horizontal(|ui| {
+                Icon::Alert.ui(ui, 13.0, hex_to_c32(&palette.diff_del));
+                ui.label(
+                    egui::RichText::new(format!("Regex error: {}", err))
+                        .small()
+                        .color(hex_to_c32(&palette.diff_del)),
+                );
+            });
         } else if self.matches.is_empty() {
             ui.label(
                 egui::RichText::new("No matches")
@@ -656,7 +680,7 @@ impl TextPreviewState {
             .inner_margin(egui::Margin::symmetric(10.0, 6.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("🔍").size(15.0));
+                    Icon::Search.ui(ui, 15.0, hex_to_c32(&palette.theme.f_med));
 
                     let search_edit = egui::TextEdit::singleline(&mut self.find_query)
                         .hint_text("Find in text (Enter for next, Shift+Enter for prev)...")
@@ -682,8 +706,9 @@ impl TextPreviewState {
 
                     self.render_search_status_label(ui, palette);
 
-                    let prev_btn = crate::secondary_button(
-                        "▲ Prev",
+                    let prev_btn = crate::ui_ext::secondary_button_icon(
+                        Some(Icon::ArrowUp),
+                        "Prev",
                         hex_to_c32(&palette.theme.b_med),
                         palette,
                     );
@@ -691,8 +716,9 @@ impl TextPreviewState {
                         self.prev_match();
                     }
 
-                    let next_btn = crate::secondary_button(
-                        "▼ Next",
+                    let next_btn = crate::ui_ext::secondary_button_icon(
+                        Some(Icon::ArrowDown),
+                        "Next",
                         hex_to_c32(&palette.theme.b_med),
                         palette,
                     );
