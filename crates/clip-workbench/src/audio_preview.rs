@@ -34,17 +34,24 @@ pub enum AudioToolMode {
     Inspect,
     StemSeparation,
     DigitalDecode,
+    HfAnalysis,
 }
 
 impl AudioToolMode {
     /// Order of tools in the shared Audio Studio tab bar.
-    const ALL: &'static [Self] = &[Self::Inspect, Self::StemSeparation, Self::DigitalDecode];
+    const ALL: &'static [Self] = &[
+        Self::Inspect,
+        Self::StemSeparation,
+        Self::DigitalDecode,
+        Self::HfAnalysis,
+    ];
 
     fn label(self) -> &'static str {
         match self {
             Self::Inspect => "[I]nspect & Slice",
             Self::StemSeparation => "[S]tem Separation",
             Self::DigitalDecode => "[D]igital Decode",
+            Self::HfAnalysis => "[H]F Analysis",
         }
     }
 }
@@ -455,6 +462,7 @@ pub struct AudioPreviewState {
     // GPU Textures for Spectrogram & ColorChord Ribbon
     spectrogram_texture: Option<egui::TextureHandle>,
     note_strip_texture: Option<egui::TextureHandle>,
+    pub(crate) inspect_viewport_cache: ViewportSpectrogramCache,
 
     // Audio Playback Engine (rodio)
     player: Option<Player>,
@@ -508,6 +516,7 @@ pub struct AudioPreviewState {
 
     stem_separation: StemSeparationState,
     digital_decode: DigitalDecodeState,
+    pub hf_analysis: HfAnalysisState,
 }
 
 impl AudioPreviewState {
@@ -648,6 +657,8 @@ impl AudioPreviewState {
         self.edited_waveform = None;
         self.spectrogram_texture = None;
         self.note_strip_texture = None;
+        self.hf_analysis.viewport_cache.clear();
+        self.inspect_viewport_cache.clear();
         self.is_loading_analysis = true;
         self.edit_analysis_rx = None;
         self.edit_analysis_observed.clear();
@@ -717,7 +728,12 @@ impl AudioPreviewState {
             .map(|a| a.sample_rate)
             .or_else(|| self.metadata.as_ref().map(|m| m.sample_rate))
             .unwrap_or(44_100) as f32;
-        (20.0, (sample_rate * 0.45).min(20_000.0).max(20.0))
+        let max_hz = if sample_rate > 196_000.0 {
+            sample_rate * 0.5
+        } else {
+            (sample_rate * 0.45).min(20_000.0).max(20.0)
+        };
+        (20.0, max_hz.max(20.0))
     }
 
     fn step_filter_cutoff(
@@ -725,12 +741,19 @@ impl AudioPreviewState {
         wheel_steps: f32,
         kind: SpectrumFilterKind,
         range: (f32, f32),
+        sample_rate: f32,
     ) -> Option<f32> {
         if wheel_steps == 0.0 {
             return current;
         }
         let start = match kind {
-            SpectrumFilterKind::LowPass => range.1.min(12_000.0),
+            SpectrumFilterKind::LowPass => {
+                if sample_rate > 196_000.0 {
+                    range.1
+                } else {
+                    range.1.min(12_000.0)
+                }
+            }
             SpectrumFilterKind::HighPass => 120.0_f32.clamp(range.0, range.1),
         };
         Some((current.unwrap_or(start) * 2.0_f32.powf(wheel_steps / 4.0)).clamp(range.0, range.1))
@@ -744,13 +767,19 @@ impl AudioPreviewState {
     ) {
         let before = self.edit_snapshot();
         let range = self.filter_cutoff_range();
+        let sample_rate = self
+            .analysis
+            .as_ref()
+            .map(|a| a.sample_rate)
+            .or_else(|| self.metadata.as_ref().map(|m| m.sample_rate))
+            .unwrap_or(44_100) as f32;
         match self.selection_mode {
             SelectionMode::Single if self.selection.is_some() => {
                 let cutoff = match kind {
                     SpectrumFilterKind::LowPass => &mut self.single_low_pass_hz,
                     SpectrumFilterKind::HighPass => &mut self.single_high_pass_hz,
                 };
-                *cutoff = Self::step_filter_cutoff(*cutoff, wheel_steps, kind, range);
+                *cutoff = Self::step_filter_cutoff(*cutoff, wheel_steps, kind, range, sample_rate);
             }
             SelectionMode::Multi => {
                 if let Some(index) = self.active_multi_index {
@@ -760,7 +789,13 @@ impl AudioPreviewState {
                     };
                     cutoffs.resize(self.multi_selections.len(), None);
                     if let Some(cutoff) = cutoffs.get_mut(index) {
-                        *cutoff = Self::step_filter_cutoff(*cutoff, wheel_steps, kind, range);
+                        *cutoff = Self::step_filter_cutoff(
+                            *cutoff,
+                            wheel_steps,
+                            kind,
+                            range,
+                            sample_rate,
+                        );
                     }
                 }
             }
@@ -1111,6 +1146,7 @@ impl AudioPreviewState {
             view_duration_sec: initial_viewport.duration_sec,
             spectrogram_texture: None,
             note_strip_texture: None,
+            inspect_viewport_cache: ViewportSpectrogramCache::default(),
             player,
             _sink: sink,
             is_playing: false,
@@ -1150,6 +1186,7 @@ impl AudioPreviewState {
             right_click_hold: None,
             stem_separation: StemSeparationState::default(),
             digital_decode: DigitalDecodeState::default(),
+            hf_analysis: HfAnalysisState::default(),
         }
     }
 
@@ -1632,6 +1669,11 @@ impl AudioPreviewState {
         self.playback_start_offset_sec = s;
         self.playback_start_instant = Some(Instant::now());
 
+        if self.active_mode == AudioToolMode::HfAnalysis {
+            self.play_hf_audio_at(s);
+            return;
+        }
+
         if let Some(ref p) = self.player {
             p.clear();
             if let Ok(file) = File::open(&self.path) {
@@ -1676,6 +1718,11 @@ impl AudioPreviewState {
         // If at end of track, wrap to start
         if self.current_time_sec >= self.duration_sec - 0.05 {
             self.current_time_sec = sel.map(|(s, _)| s).unwrap_or(0.0);
+        }
+
+        if self.active_mode == AudioToolMode::HfAnalysis {
+            self.play_hf_audio_at(self.current_time_sec);
+            return;
         }
 
         if let Some(ref p) = self.player {
@@ -1730,6 +1777,11 @@ impl AudioPreviewState {
         self.current_time_sec = clamped;
         self.playback_start_offset_sec = clamped;
         self.playback_start_instant = Some(Instant::now());
+
+        if self.active_mode == AudioToolMode::HfAnalysis && self.is_playing {
+            self.play_hf_audio_at(clamped);
+            return;
+        }
 
         if let Some(ref p) = self.player {
             if self.is_playing {
@@ -2401,6 +2453,8 @@ impl AudioPreviewState {
             note_strip_rgba,
             note_strip_info,
             spectral_colors,
+            ultrasonic_roi,
+            ultrasonic_peak_times,
         } = progress
         else {
             return;
@@ -2432,8 +2486,12 @@ impl AudioPreviewState {
             analysis.note_strip_rgba = note_strip_rgba;
             analysis.note_strip_info = note_strip_info;
             analysis.spectral_colors = spectral_colors;
+            analysis.ultrasonic_roi = ultrasonic_roi;
+            analysis.ultrasonic_peak_times = ultrasonic_peak_times;
             analysis.is_spectrogram_ready = true;
         }
+        self.inspect_viewport_cache.clear();
+        self.hf_analysis.viewport_cache.clear();
     }
 
     fn poll_edit_analysis(&mut self, ctx: &egui::Context, now: f64) {
@@ -2582,6 +2640,11 @@ impl AudioPreviewState {
             {
                 self.active_mode = AudioToolMode::DigitalDecode;
             }
+            if ctx
+                .input(|i| i.key_pressed(egui::Key::H) && !i.modifiers.command && !i.modifiers.ctrl)
+            {
+                self.active_mode = AudioToolMode::HfAnalysis;
+            }
         }
         // Tool-level shortcuts must win over nested stem editors.
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -2610,6 +2673,9 @@ impl AudioPreviewState {
                 }
                 AudioToolMode::DigitalDecode => {
                     self.render_digital_decode_ui(ui, ctx, palette, close_requested)
+                }
+                AudioToolMode::HfAnalysis => {
+                    self.render_hf_analysis_ui(ui, ctx, palette, close_requested)
                 }
             }
         });
@@ -2794,7 +2860,60 @@ mod tests {
         assert_eq!(state.region_high_pass_hz.first().copied().flatten(), None);
         assert!(state.region_low_pass_hz[0].is_some());
         state.undo();
-        assert_eq!(state.region_low_pass_hz.first().copied().flatten(), None);
+    }
+
+    #[test]
+    fn ultrasonic_filter_cutoff_starts_at_nyquist_for_high_sample_rates() {
+        let mut state = AudioPreviewState::new(
+            PathBuf::from("/__little_clip_missing_filter_test__.wav"),
+            "test".to_string(),
+        );
+        state.metadata = Some(AudioMetadata {
+            channels: 1,
+            sample_rate: 384_000,
+            duration_ms: 60_000,
+            format: "wav".to_string(),
+        });
+        let range = state.filter_cutoff_range();
+        assert_eq!(range, (20.0, 192_000.0));
+
+        let cutoff = AudioPreviewState::step_filter_cutoff(
+            None,
+            0.0,
+            SpectrumFilterKind::LowPass,
+            range,
+            384_000.0,
+        );
+        assert_eq!(cutoff, None);
+
+        // First adjustment starts at half sample rate (192,000 Hz)
+        let cutoff = AudioPreviewState::step_filter_cutoff(
+            None,
+            -4.0,
+            SpectrumFilterKind::LowPass,
+            range,
+            384_000.0,
+        );
+        assert_eq!(cutoff, Some(96_000.0));
+
+        // For standard 44.1k file, range caps at <= 20k and starts at 12k
+        state.metadata = Some(AudioMetadata {
+            channels: 1,
+            sample_rate: 44_100,
+            duration_ms: 60_000,
+            format: "wav".to_string(),
+        });
+        let range_44k = state.filter_cutoff_range();
+        assert_eq!(range_44k.1, 19_845.0);
+
+        let cutoff_44k = AudioPreviewState::step_filter_cutoff(
+            None,
+            -4.0,
+            SpectrumFilterKind::LowPass,
+            range_44k,
+            44_100.0,
+        );
+        assert_eq!(cutoff_44k, Some(6_000.0));
     }
 
     #[test]
@@ -2899,6 +3018,7 @@ mod tests {
         assert_eq!(AudioToolMode::Inspect.label(), "[I]nspect & Slice");
         assert_eq!(AudioToolMode::StemSeparation.label(), "[S]tem Separation");
         assert_eq!(AudioToolMode::DigitalDecode.label(), "[D]igital Decode");
+        assert_eq!(AudioToolMode::HfAnalysis.label(), "[H]F Analysis");
         assert_eq!(AudioToolMode::default(), AudioToolMode::Inspect);
     }
 

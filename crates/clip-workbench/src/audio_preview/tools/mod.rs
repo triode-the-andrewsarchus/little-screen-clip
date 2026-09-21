@@ -1,8 +1,17 @@
 //! Audio Studio tools. The inspect editor is shared by standalone inspection and stem editing.
 mod digital_decode;
+pub(crate) mod hf_analysis;
 mod inspect;
+pub(crate) mod spectrogram_view;
 mod stem_separation;
 pub(super) use digital_decode::DigitalDecodeState;
+#[allow(unused_imports)]
+pub(super) use hf_analysis::{HfAnalysisState, HfPlaybackMode};
+#[allow(unused_imports)]
+pub(super) use spectrogram_view::{
+    ViewportSpectrogramCache, format_time_label, frequency_ticks, paint_frequency_axis_and_grid,
+    paint_spectrogram_surface, render_and_paint_spectrogram, time_ruler_interval,
+};
 pub(super) use stem_separation::StemSeparationState;
 #[cfg(test)]
 pub(super) use stem_separation::{

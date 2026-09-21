@@ -111,6 +111,8 @@ pub struct FullAudioAnalysis {
     pub transients: Vec<f32>,
     pub is_transients_ready: bool,
     pub is_spectrogram_ready: bool,
+    pub ultrasonic_roi: Vec<f32>,
+    pub ultrasonic_peak_times: Vec<f32>,
     pub is_truncated: bool,
     pub truncation_warning: Option<String>,
 }
@@ -132,6 +134,8 @@ pub enum AudioAnalysisProgress {
         note_strip_rgba: Vec<u8>,
         note_strip_info: Vec<ColorChordNoteInfo>,
         spectral_colors: Vec<[u8; 3]>,
+        ultrasonic_roi: Vec<f32>,
+        ultrasonic_peak_times: Vec<f32>,
     },
     /// All processing stages complete.
     Complete,

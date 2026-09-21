@@ -1,4 +1,5 @@
 use super::super::*;
+use little_clip_ops::hf_audio::HfSpectrogramConfig;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CanvasEffect {
@@ -974,7 +975,7 @@ impl AudioPreviewState {
     fn render_waveform_canvas(
         &mut self,
         ui: &mut egui::Ui,
-        _ctx: &egui::Context,
+        ctx: &egui::Context,
         palette: &AppPalette,
         width: f32,
         height: f32,
@@ -1714,23 +1715,7 @@ impl AudioPreviewState {
         );
 
         // Dynamic Time Ticks
-        let interval_sec = if v_dur > 120.0 {
-            30.0
-        } else if v_dur > 30.0 {
-            10.0
-        } else if v_dur > 10.0 {
-            2.0
-        } else if v_dur > 2.0 {
-            0.5
-        } else if v_dur > 0.5 {
-            0.1
-        } else if v_dur > 0.1 {
-            0.02
-        } else if v_dur > 0.02 {
-            0.005
-        } else {
-            0.001
-        };
+        let interval_sec = time_ruler_interval(v_dur);
 
         let first_marker = (v_start / interval_sec).floor() * interval_sec;
         let mut t = first_marker;
@@ -1756,18 +1741,7 @@ impl AudioPreviewState {
                         Stroke::new(1.0_f32, crate::hex_to_c32_alpha(&palette.theme.f_med, 80)),
                     );
                     // Label
-                    let label = if interval_sec >= 1.0 {
-                        let m = (t / 60.0) as u32;
-                        let s = (t % 60.0) as u32;
-                        format!("{:02}:{:02}", m, s)
-                    } else if interval_sec >= 0.01 {
-                        let m = (t / 60.0) as u32;
-                        let s = t % 60.0;
-                        format!("{:02}:{:05.2}", m, s)
-                    } else {
-                        let s = t % 60.0;
-                        format!("{:06.3}s", s)
-                    };
+                    let label = format_time_label(t, interval_sec);
                     painter.text(
                         Pos2::new(x + 3.0, ruler_rect.min.y + 10.0),
                         egui::Align2::LEFT_CENTER,
@@ -2011,53 +1985,37 @@ impl AudioPreviewState {
         }
 
         // 3. VIEW 2: SPECTROGRAM (Spectral Energy Heatmap Over Time)
+        let total_dur = self.duration_sec.max(0.01);
+        let fft_size = if total_dur >= 600.0 { 512 } else { 1024 };
         let nyquist = analysis.sample_rate as f32 * 0.5;
-        let freq_labels = [
-            (20_000.0, "20k"),
-            (10_000.0, "10k"),
-            (5_000.0, "5k"),
-            (1_000.0, "1k"),
-            (100.0, "100"),
-        ];
-        let mut last_label_y = f32::NEG_INFINITY;
-        for (frequency, lbl) in freq_labels {
-            if frequency >= nyquist {
-                continue;
-            }
-            let y = spec_rect.max.y - (frequency / nyquist) * spec_h;
-            if y - last_label_y < 12.0 {
-                continue;
-            }
-            last_label_y = y;
-            painter.text(
-                Pos2::new(track_min_x - 8.0, y),
-                egui::Align2::RIGHT_CENTER,
-                lbl,
-                egui::FontId::monospace(9.0),
-                text_f_med,
-            );
-            painter.line_segment(
-                [Pos2::new(track_min_x, y), Pos2::new(track_max_x, y)],
-                Stroke::new(1.0_f32, border_frame),
-            );
-        }
+        let cfg = HfSpectrogramConfig {
+            fft_size,
+            gain_db: 0.0,
+            range_db: 80.0,
+            contrast: 1.0,
+        };
 
-        if let Some(ref tex) = self.spectrogram_texture {
-            let total_dur = self.duration_sec.max(0.01);
-            let u_start = (v_start / total_dur).clamp(0.0, 1.0);
-            let u_end = ((v_start + v_dur) / total_dur).clamp(0.0, 1.0);
-            let uv = Rect::from_min_max(Pos2::new(u_start, 0.0), Pos2::new(u_end, 1.0));
-            painter.image(tex.id(), spec_rect, uv, Color32::WHITE);
-        } else {
-            painter.rect_filled(spec_rect, Rounding::ZERO, bg_frame);
-            painter.text(
-                spec_rect.center(),
-                egui::Align2::CENTER_CENTER,
-                "⏳ Generating Spectrogram Heatmap...",
-                egui::FontId::proportional(12.0),
-                text_f_low,
-            );
-        }
+        render_and_paint_spectrogram(
+            &mut self.inspect_viewport_cache,
+            ctx,
+            &painter,
+            format!("inspect_vp:{}", self.path.display()),
+            spec_rect,
+            track_min_x,
+            track_max_x,
+            track_min_x - 8.0,
+            v_start,
+            v_dur,
+            total_dur,
+            analysis.sample_rate,
+            &analysis.ch1_samples,
+            self.spectrogram_texture.as_ref(),
+            cfg,
+            bg_frame,
+            text_f_med,
+            Stroke::new(1.0_f32, border_frame),
+            12.0,
+        );
         let cutoff_painter = painter.with_clip_rect(spec_rect);
         for region in &region_edits {
             let x_start = time_to_x(region.start_sec).clamp(track_min_x, track_max_x);

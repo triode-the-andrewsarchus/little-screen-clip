@@ -33,3 +33,4 @@ tempfile = "3.10"
 yodel = { version = "0.2.0", default-features = false, features = ["alloc", "std", "tnc", "aprs", "micE", "kiss", "fx25", "il2p", "wspr", "ft8", "m17"] }
 cwdit-dsp = { git = "https://github.com/swilcox/cw-dit", package = "cwdit-dsp" }
 cwdit-morse = { git = "https://github.com/swilcox/cw-dit", package = "cwdit-morse" }
+realfft = "3.5.0"

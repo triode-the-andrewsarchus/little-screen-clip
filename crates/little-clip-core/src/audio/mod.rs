@@ -360,8 +360,8 @@ mod tests {
         assert_eq!(analysis.overview_peaks2.as_ref().unwrap().len(), 150);
 
         assert_eq!(analysis.spectrogram_width, 150);
-        assert_eq!(analysis.spectrogram_height, 256);
-        assert_eq!(analysis.spectrogram_rgba.len(), 150 * 256 * 4);
+        assert_eq!(analysis.spectrogram_height, 512);
+        assert_eq!(analysis.spectrogram_rgba.len(), 150 * 512 * 4);
 
         assert_eq!(analysis.note_strip_width, 150);
         assert_eq!(analysis.note_strip_height, 48);
@@ -586,6 +586,8 @@ mod tests {
             transients: Vec::new(),
             is_transients_ready: false,
             is_spectrogram_ready: false,
+            ultrasonic_roi: Vec::new(),
+            ultrasonic_peak_times: Vec::new(),
             is_truncated: false,
             truncation_warning: None,
         };
@@ -645,5 +647,16 @@ mod tests {
                 DEFAULT_TRANSIENT_SENSITIVITY,
             ),
         );
+    }
+
+    #[test]
+    fn test_fft_window_size_defaults_to_1024_and_drops_to_512_at_10_minutes() {
+        let path = generate_test_wav();
+        let analysis = compute_full_audio_analysis(&path, 120).expect("analysis failed");
+        let duration_sec = analysis.total_frames as f64 / analysis.sample_rate as f64;
+        assert!(duration_sec < 600.0);
+        // Under 10 minutes: defaults to 1024 FFT -> 512 vertical bins
+        assert_eq!(analysis.spectrogram_height, 512);
+        assert_eq!(analysis.spectrogram_rgba.len(), 120 * 512 * 4);
     }
 }

@@ -49,6 +49,8 @@ pub mod creative_fx;
 
 pub mod digital_decode;
 
+pub mod hf_audio;
+
 /// Error encountered during transformation or diff execution.
 #[derive(Debug, Error)]
 pub enum OpError {

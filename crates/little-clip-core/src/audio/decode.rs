@@ -288,6 +288,14 @@ where
         ));
         return None;
     }
+    let duration_sec = total_frames as f64 / sample_rate as f64;
+    // Default to higher-quality 1024-point FFT (512 frequency bins),
+    // dropping down to standard 512-point FFT (256 frequency bins) if 10 minutes or longer.
+    let (window_size, num_freq_bins) = if duration_sec >= 600.0 {
+        (512, 256)
+    } else {
+        (1024, 512)
+    };
 
     if !region_edits.is_empty() {
         // Earlier selections take precedence when regions overlap, matching the editor view.
@@ -346,6 +354,11 @@ where
     let t_pyramid_elapsed = t_pyramid_start.elapsed();
 
     // 1. Overview Peaks
+    let num_cols = if sample_rate > 196_000 && num_cols == 1200 {
+        3600
+    } else {
+        num_cols
+    };
     let t_overview_start = std::time::Instant::now();
     let mut overview_peaks1 = Vec::with_capacity(num_cols);
     let mut overview_peaks2 = if is_stereo {
@@ -438,7 +451,7 @@ where
         peaks_lvl2_ch1,
         peaks_lvl2_ch2,
         spectrogram_width: num_cols,
-        spectrogram_height: 256,
+        spectrogram_height: num_freq_bins,
         spectrogram_rgba: Vec::new(),
         note_strip_width: num_cols,
         note_strip_height: 48,
@@ -448,6 +461,8 @@ where
         transients: Vec::new(),
         is_transients_ready: false,
         is_spectrogram_ready: false,
+        ultrasonic_roi: Vec::new(),
+        ultrasonic_peak_times: Vec::new(),
         is_truncated,
         truncation_warning: if is_truncated {
             Some(format!(
@@ -481,8 +496,6 @@ where
 
     // Emit Stage 3: Rayon parallel STFT Spectrogram & ColorChord 2-D note strip
     let t_fft_loop_start = std::time::Instant::now();
-    let window_size = 512;
-    let num_freq_bins = 256;
     let mut planner = RealFftPlanner::<f32>::new();
     let r2c = planner.plan_fft_forward(window_size);
 
@@ -502,6 +515,7 @@ where
         spectral_color: [u8; 3],
         note_strip_col_rgba: Vec<u8>,
         note_info: ColorChordNoteInfo,
+        ultrasonic_energy: f32,
     }
 
     let col_results: Vec<ColumnAnalysisResult> = (0..num_cols)
@@ -510,7 +524,25 @@ where
             let mut in_data = r2c.make_input_vec();
             let mut out_data = r2c.make_output_vec();
 
-            let center_frame = (c as f64 / num_cols as f64 * total_frames as f64) as isize;
+            let frame_start = (c as f64 / num_cols as f64 * total_frames as f64) as usize;
+            let frame_end = (((c + 1) as f64 / num_cols as f64 * total_frames as f64) as usize)
+                .min(total_frames);
+
+            let center_frame = if sample_rate > 196_000 && frame_end > frame_start + window_size {
+                let mut peak_val = 0.0f32;
+                let mut peak_idx = (frame_start + frame_end) / 2;
+                for idx in frame_start..frame_end {
+                    let s_abs = mixed_samples[idx].abs();
+                    if s_abs > peak_val {
+                        peak_val = s_abs;
+                        peak_idx = idx;
+                    }
+                }
+                peak_idx as isize
+            } else {
+                ((frame_start + frame_end) / 2) as isize
+            };
+
             for k in 0..window_size {
                 let f_idx = center_frame - (window_size as isize / 2) + k as isize;
                 if f_idx >= 0 && (f_idx as usize) < total_frames {
@@ -540,9 +572,11 @@ where
             }
 
             // 3-band spectral frequency distribution for waveform coloring (Bass / Mid / Treble)
+            // + Ultrasonic energy tracking (> 20 kHz)
             let mut e_bass = 0.0f32;
             let mut e_mid = 0.0f32;
             let mut e_high = 0.0f32;
+            let mut e_ultrasonic = 0.0f32;
             for b in 1..num_freq_bins {
                 let freq = b as f32 * sample_rate as f32 / window_size as f32;
                 let mag =
@@ -554,6 +588,9 @@ where
                     e_mid += energy;
                 } else {
                     e_high += energy;
+                }
+                if freq >= 20_000.0 {
+                    e_ultrasonic += energy;
                 }
             }
             let w_low = e_bass.sqrt() * 1.0;
@@ -687,6 +724,7 @@ where
                 spectral_color,
                 note_strip_col_rgba,
                 note_info,
+                ultrasonic_energy: e_ultrasonic.sqrt(),
             }
         })
         .collect();
@@ -695,6 +733,51 @@ where
     let mut note_strip_rgba = vec![0u8; note_strip_width * note_strip_height * 4];
     let mut spectral_colors = Vec::with_capacity(num_cols);
     let mut note_strip_info = Vec::with_capacity(num_cols);
+
+    let mut max_us = 0.0f32;
+    for res in &col_results {
+        if res.ultrasonic_energy > max_us {
+            max_us = res.ultrasonic_energy;
+        }
+    }
+    let mut ultrasonic_roi = Vec::with_capacity(num_cols);
+    if max_us > 1e-6 {
+        for res in &col_results {
+            ultrasonic_roi.push((res.ultrasonic_energy / max_us).clamp(0.0, 1.0));
+        }
+    } else {
+        ultrasonic_roi.resize(num_cols, 0.0);
+    }
+
+    let mut ultrasonic_peak_times = Vec::new();
+    if max_us >= 1e-4 {
+        let threshold = max_us * 0.25;
+        let mut in_burst = false;
+        let mut burst_peak_val = 0.0f32;
+        let mut burst_peak_col = 0usize;
+
+        for (c, res) in col_results.iter().enumerate() {
+            if res.ultrasonic_energy >= threshold {
+                if !in_burst {
+                    in_burst = true;
+                    burst_peak_val = res.ultrasonic_energy;
+                    burst_peak_col = c;
+                } else if res.ultrasonic_energy > burst_peak_val {
+                    burst_peak_val = res.ultrasonic_energy;
+                    burst_peak_col = c;
+                }
+            } else if in_burst {
+                let t =
+                    (burst_peak_col as f64 / num_cols as f64 * duration_ms as f64 / 1000.0) as f32;
+                ultrasonic_peak_times.push(t);
+                in_burst = false;
+            }
+        }
+        if in_burst {
+            let t = (burst_peak_col as f64 / num_cols as f64 * duration_ms as f64 / 1000.0) as f32;
+            ultrasonic_peak_times.push(t);
+        }
+    }
 
     for (c, res) in col_results.into_iter().enumerate() {
         for row in 0..spectrogram_height {
@@ -733,6 +816,8 @@ where
         note_strip_rgba: note_strip_rgba.clone(),
         note_strip_info: note_strip_info.clone(),
         spectral_colors: spectral_colors.clone(),
+        ultrasonic_roi: ultrasonic_roi.clone(),
+        ultrasonic_peak_times: ultrasonic_peak_times.clone(),
     });
     analysis.spectrogram_width = spectrogram_width;
     analysis.spectrogram_height = spectrogram_height;
@@ -742,6 +827,8 @@ where
     analysis.note_strip_rgba = note_strip_rgba;
     analysis.note_strip_info = note_strip_info;
     analysis.spectral_colors = spectral_colors;
+    analysis.ultrasonic_roi = ultrasonic_roi;
+    analysis.ultrasonic_peak_times = ultrasonic_peak_times;
     analysis.is_spectrogram_ready = true;
 
     if spectral_only {
