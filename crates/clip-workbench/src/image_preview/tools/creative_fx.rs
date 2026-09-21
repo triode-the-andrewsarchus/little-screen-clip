@@ -27,6 +27,7 @@ pub struct CreativeFxState {
     pub cmyk_params: CmykHalftoneParams,
     pub dither_params: DitherPaletteParams,
     pub ntsc_params: NtscParams,
+    pub structure_params: StructureParams,
 
     pub selected_preset_name: String,
 
@@ -65,6 +66,7 @@ impl Default for CreativeFxState {
             cmyk_params: CmykHalftoneParams::default(),
             dither_params: DitherPaletteParams::default(),
             ntsc_params: NtscParams::default(),
+            structure_params: StructureParams::default(),
             selected_preset_name: "Default".to_string(),
             preview_rgba: None,
             preview_texture: None,
@@ -101,6 +103,7 @@ impl CreativeFxState {
             CreativeFxType::CmykHalftone => CreativeFxParams::CmykHalftone(self.cmyk_params),
             CreativeFxType::DitherPalette => CreativeFxParams::DitherPalette(self.dither_params),
             CreativeFxType::Ntsc => CreativeFxParams::Ntsc(self.ntsc_params),
+            CreativeFxType::Structure => CreativeFxParams::Structure(self.structure_params),
         }
     }
 }
@@ -616,6 +619,9 @@ impl ImagePreviewState {
                                                 }
                                                 CreativeFxParams::Ntsc(p) => {
                                                     self.creative_fx_state.ntsc_params = *p;
+                                                }
+                                                CreativeFxParams::Structure(p) => {
+                                                    self.creative_fx_state.structure_params = *p;
                                                 }
                                             }
                                             self.creative_fx_state.mark_dirty();
@@ -1636,6 +1642,54 @@ impl ImagePreviewState {
                                                 }
                                             });
                                         }
+                                        CreativeFxType::Structure => {
+                                            // Structure Amount: -100..+100
+                                            if render_context_slider(
+                                                ui,
+                                                "⚡ Structure Amount (-100: Soften, +100: Enhance)",
+                                                &mut self.creative_fx_state.structure_params.amount,
+                                                -100.0..=100.0,
+                                                35.0,
+                                                "",
+                                                slider_w,
+                                                palette,
+                                            ) {
+                                                self.creative_fx_state.selected_preset_name = "Custom".to_string();
+                                                self.creative_fx_state.mark_dirty();
+                                            }
+                                            ui.add_space(4.0);
+
+                                            // Detail Scale: -50..+50
+                                            if render_context_slider(
+                                                ui,
+                                                "🔍 Detail Scale (-50: Fine, +50: Coarse)",
+                                                &mut self.creative_fx_state.structure_params.detail_scale,
+                                                -50.0..=50.0,
+                                                0.0,
+                                                "",
+                                                slider_w,
+                                                palette,
+                                            ) {
+                                                self.creative_fx_state.selected_preset_name = "Custom".to_string();
+                                                self.creative_fx_state.mark_dirty();
+                                            }
+                                            ui.add_space(4.0);
+
+                                            // Edge Protection: 0..100
+                                            if render_context_slider(
+                                                ui,
+                                                "🛡 Edge Protection (0: Off, 100: Strict)",
+                                                &mut self.creative_fx_state.structure_params.edge_protection,
+                                                0.0..=100.0,
+                                                50.0,
+                                                "",
+                                                slider_w,
+                                                palette,
+                                            ) {
+                                                self.creative_fx_state.selected_preset_name = "Custom".to_string();
+                                                self.creative_fx_state.mark_dirty();
+                                            }
+                                        }
                                     }
 
                                     ui.add_space(8.0);
@@ -1688,6 +1742,9 @@ impl ImagePreviewState {
                                             }
                                             CreativeFxType::Ntsc => {
                                                 self.creative_fx_state.ntsc_params = NtscParams::default();
+                                            }
+                                            CreativeFxType::Structure => {
+                                                self.creative_fx_state.structure_params = StructureParams::default();
                                             }
                                         }
                                         self.creative_fx_state.selected_preset_name = "Default".to_string();

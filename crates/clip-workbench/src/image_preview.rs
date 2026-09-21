@@ -16,8 +16,8 @@ use little_clip_ops::creative_fx::{
     CmykHalftoneParams, CreativeFxParams, CreativeFxType, DitherMethod, DitherPaletteParams,
     LensAberrationParams, NtscChromaLowpass, NtscDemodulation, NtscParams, NtscPhaseShift,
     PaperTint, PixelSortCriteria, PixelSortDirection, PixelSortOrder, PixelSortParams,
-    RetroPalette, TrichromaticMode, TrichromaticParams, VhsTapeSpeed, apply_creative_fx,
-    default_preset_for_fx, presets_for_fx, trichromatic_intersection_box,
+    RetroPalette, StructureParams, TrichromaticMode, TrichromaticParams, VhsTapeSpeed,
+    apply_creative_fx, default_preset_for_fx, presets_for_fx, trichromatic_intersection_box,
 };
 use little_clip_ops::decorrelation_stretch::{
     DecorrelationMatrixMode, DecorrelationStats, DecorrelationStretchParams,
@@ -3069,6 +3069,12 @@ mod tests {
             state.creative_fx_state.ntsc_params.chroma_lowpass,
             NtscChromaLowpass::Full
         );
+        assert_eq!(state.creative_fx_state.structure_params.amount, 35.0);
+        assert_eq!(state.creative_fx_state.structure_params.detail_scale, 0.0);
+        assert_eq!(
+            state.creative_fx_state.structure_params.edge_protection,
+            50.0
+        );
 
         // Switch to Creative FX mode
         state.set_tool_mode(ImageToolMode::CreativeFx);
@@ -3085,6 +3091,20 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
+        assert!(!state.creative_fx_state.is_rendering);
+        assert!(state.creative_fx_state.preview_rgba.is_some());
+        assert_eq!(state.creative_fx_state.render_error, None);
+
+        // Switch to Structure effect and trigger render
+        state.creative_fx_state.selected_fx = CreativeFxType::Structure;
+        state.run_creative_fx_render();
+        assert!(state.creative_fx_state.is_rendering);
+        let deadline_structure = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while state.creative_fx_state.is_rendering && std::time::Instant::now() < deadline_structure
+        {
+            state.poll_creative_fx();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         assert!(!state.creative_fx_state.is_rendering);
         assert!(state.creative_fx_state.preview_rgba.is_some());
         assert_eq!(state.creative_fx_state.render_error, None);

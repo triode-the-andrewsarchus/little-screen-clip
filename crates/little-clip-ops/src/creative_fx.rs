@@ -22,6 +22,7 @@ pub enum CreativeFxType {
     CmykHalftone,
     DitherPalette,
     Ntsc,
+    Structure,
 }
 
 impl CreativeFxType {
@@ -33,6 +34,7 @@ impl CreativeFxType {
             CreativeFxType::CmykHalftone,
             CreativeFxType::DitherPalette,
             CreativeFxType::Ntsc,
+            CreativeFxType::Structure,
         ]
     }
 
@@ -44,6 +46,7 @@ impl CreativeFxType {
             Self::CmykHalftone => "CMYK Halftone",
             Self::DitherPalette => "Dither & Retro Palette",
             Self::Ntsc => "NTSC & VHS Video",
+            Self::Structure => "Structure",
         }
     }
 
@@ -55,6 +58,7 @@ impl CreativeFxType {
             Self::CmykHalftone => "Offset press misregistration & dots",
             Self::DitherPalette => "Ordered dithering & classic hardware",
             Self::Ntsc => "Analog broadcast & magnetic tape emulation",
+            Self::Structure => "Multiscale texture & edge protection",
         }
     }
 
@@ -66,6 +70,7 @@ impl CreativeFxType {
             Self::CmykHalftone => "PRINT & PRESS",
             Self::DitherPalette => "RETRO HARDWARE",
             Self::Ntsc => "ANALOG VIDEO",
+            Self::Structure => "DETAIL & TEXTURE",
         }
     }
 
@@ -77,6 +82,7 @@ impl CreativeFxType {
             Self::CmykHalftone => "🗞",
             Self::DitherPalette => "👾",
             Self::Ntsc => "📺",
+            Self::Structure => "🧱",
         }
     }
 
@@ -109,6 +115,12 @@ impl CreativeFxType {
                 "Accurately emulates analog NTSC composite color television transmission and VHS cassette \
                  recording artifacts, including RF static snow, luma smear, chroma bleed, tracking bars, \
                  and head-switching jitter."
+            }
+            Self::Structure => {
+                "Selectively amplifies naturally occurring fine-to-medium surface textures \
+                 (fabric, foliage, stone, skin detail) while protecting high-contrast object \
+                 boundaries from conventional sharpening halos and ringing. Supports negative \
+                 values for controlled edge-preserving texture smoothing."
             }
         }
     }
@@ -1623,6 +1635,311 @@ pub fn apply_ntsc_effect(img: &RgbaImage, params: &NtscParams) -> RgbaImage {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 7. Structure (Multiscale Detail & Edge Protection)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Parameters for multiscale structure and texture enhancement.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct StructureParams {
+    /// Structure strength (-100.0 to +100.0). Default is 35.0.
+    /// Positive values amplify texture; negative values suppress texture.
+    pub amount: f32,
+    /// Detail scale emphasis (-50.0 to +50.0). Default is 0.0.
+    /// Negative emphasizes fine micro-texture; positive emphasizes coarser structures.
+    pub detail_scale: f32,
+    /// Edge protection sensitivity (0.0 to 100.0). Default is 50.0.
+    /// Higher values protect high-contrast boundaries more aggressively.
+    pub edge_protection: f32,
+}
+
+impl Default for StructureParams {
+    fn default() -> Self {
+        Self {
+            amount: 35.0,
+            detail_scale: 0.0,
+            edge_protection: 50.0,
+        }
+    }
+}
+
+/// Compute 3 integer box blur radii approximating a Gaussian filter of standard deviation sigma.
+pub fn compute_box_radii_3(sigma: f32) -> [usize; 3] {
+    if sigma <= 0.05 {
+        return [0, 0, 0];
+    }
+    let w_ideal = ((12.0 * sigma * sigma / 3.0) + 1.0).sqrt();
+    let mut wl = w_ideal.floor() as usize;
+    if wl % 2 == 0 {
+        wl = wl.saturating_sub(1);
+    }
+    let wu = wl + 2;
+    let m_ideal =
+        (12.0 * sigma * sigma - (3 * wl * wl + 12 * wl + 9) as f32) / (-4.0 * wl as f32 - 4.0);
+    let m = m_ideal.round().clamp(0.0, 3.0) as usize;
+
+    let mut radii = [0usize; 3];
+    for i in 0..3 {
+        let w = if i < m { wl } else { wu };
+        radii[i] = w / 2;
+    }
+    radii
+}
+
+/// 1D horizontal box blur pass using sliding-window summation on rows.
+fn box_blur_horizontal(src: &[f32], dst: &mut [f32], width: usize, _height: usize, r: usize) {
+    if r == 0 || width <= 1 {
+        dst.copy_from_slice(src);
+        return;
+    }
+    let r_i = r as isize;
+    let w_i = width as isize;
+    let inv_w = 1.0 / (2 * r + 1) as f64;
+
+    dst.par_chunks_exact_mut(width)
+        .zip(src.par_chunks_exact(width))
+        .for_each(|(dst_row, src_row)| {
+            let mut sum: f64 = 0.0;
+            for x in -r_i..=r_i {
+                let idx = x.clamp(0, w_i - 1) as usize;
+                sum += src_row[idx] as f64;
+            }
+            dst_row[0] = (sum * inv_w) as f32;
+
+            for x in 1..width {
+                let left_idx = ((x as isize) - r_i - 1).clamp(0, w_i - 1) as usize;
+                let right_idx = ((x as isize) + r_i).clamp(0, w_i - 1) as usize;
+                sum += (src_row[right_idx] as f64) - (src_row[left_idx] as f64);
+                dst_row[x] = (sum * inv_w) as f32;
+            }
+        });
+}
+
+/// Transpose a row-major matrix of dimensions (width, height) to (height, width).
+fn transpose(src: &[f32], dst: &mut [f32], width: usize, height: usize) {
+    dst.par_chunks_exact_mut(height)
+        .enumerate()
+        .for_each(|(x, dst_col)| {
+            for y in 0..height {
+                dst_col[y] = src[y * width + x];
+            }
+        });
+}
+
+/// Fast separable 3-pass box blur approximating Gaussian convolution in O(N) time.
+pub fn fast_gaussian_blur(src: &[f32], dst: &mut [f32], width: usize, height: usize, sigma: f32) {
+    let radii = compute_box_radii_3(sigma);
+    if radii == [0, 0, 0] || width <= 1 || height <= 1 {
+        dst.copy_from_slice(src);
+        return;
+    }
+
+    let mut current = src.to_vec();
+    let mut temp = vec![0.0f32; width * height];
+    let mut transposed = vec![0.0f32; width * height];
+    let mut temp_transposed = vec![0.0f32; width * height];
+
+    for &r in &radii {
+        if r > 0 {
+            // Horizontal blur on rows (width x height)
+            box_blur_horizontal(&current, &mut temp, width, height, r);
+            // Transpose (width x height) -> (height x width)
+            transpose(&temp, &mut transposed, width, height);
+            // Horizontal blur on transposed rows (height x width)
+            box_blur_horizontal(&transposed, &mut temp_transposed, height, width, r);
+            // Transpose back (height x width) -> (width x height)
+            transpose(&temp_transposed, &mut current, height, width);
+        }
+    }
+    dst.copy_from_slice(&current);
+}
+
+/// Compute 2D gradient magnitude using Scharr 3x3 filter.
+fn compute_gradient_magnitude(luma: &[f32], grad: &mut [f32], width: usize, height: usize) {
+    let w = width;
+    let h = height;
+    let w_i = w as isize;
+    let h_i = h as isize;
+
+    grad.par_chunks_exact_mut(w)
+        .enumerate()
+        .for_each(|(y, grad_row)| {
+            let y_prev = ((y as isize) - 1).clamp(0, h_i - 1) as usize;
+            let y_curr = y;
+            let y_next = ((y as isize) + 1).clamp(0, h_i - 1) as usize;
+
+            let row_prev = &luma[y_prev * w..(y_prev + 1) * w];
+            let row_curr = &luma[y_curr * w..(y_curr + 1) * w];
+            let row_next = &luma[y_next * w..(y_next + 1) * w];
+
+            for x in 0..w {
+                let x_prev = ((x as isize) - 1).clamp(0, w_i - 1) as usize;
+                let x_next = ((x as isize) + 1).clamp(0, w_i - 1) as usize;
+
+                let gx = (3.0 * (row_prev[x_next] - row_prev[x_prev])
+                    + 10.0 * (row_curr[x_next] - row_curr[x_prev])
+                    + 3.0 * (row_next[x_next] - row_next[x_prev]))
+                    * (1.0 / 32.0);
+
+                let gy = (3.0 * (row_next[x_prev] - row_prev[x_prev])
+                    + 10.0 * (row_next[x] - row_prev[x])
+                    + 3.0 * (row_next[x_next] - row_prev[x_next]))
+                    * (1.0 / 32.0);
+
+                grad_row[x] = (gx * gx + gy * gy).sqrt();
+            }
+        });
+}
+
+/// Smooth coring function that damps near-zero noise in detail layers.
+#[inline]
+fn soft_core(val: f32, tau: f32) -> f32 {
+    let abs_v = val.abs();
+    if abs_v <= tau * 0.01 {
+        0.0
+    } else {
+        let ratio = abs_v / tau;
+        let factor = (1.0 - (-ratio * ratio).exp()).max(0.0);
+        val * factor
+    }
+}
+
+/// Apply selective multiscale structure and texture enhancement with edge protection.
+pub fn apply_structure(img: &RgbaImage, params: &StructureParams) -> RgbaImage {
+    let (width, height) = (img.width() as usize, img.height() as usize);
+    if width == 0 || height == 0 || params.amount.abs() < 0.001 {
+        return img.clone();
+    }
+
+    let n_pixels = width * height;
+
+    // 1. Convert to OKLab lightness (L) and preserve chromas & alpha
+    let mut luma = vec![0.0f32; n_pixels];
+    let mut chromas = vec![(0.0f32, 0.0f32, 255u8); n_pixels];
+
+    let pixels: Vec<Rgba<u8>> = img.pixels().copied().collect();
+    luma.par_chunks_exact_mut(width)
+        .zip(chromas.par_chunks_exact_mut(width))
+        .zip(pixels.par_chunks_exact(width))
+        .for_each(|((l_row, c_row), p_row)| {
+            for x in 0..width {
+                let p = p_row[x];
+                let r = p[0] as f32 / 255.0;
+                let g = p[1] as f32 / 255.0;
+                let b = p[2] as f32 / 255.0;
+                let (l, a, b_ok) = srgb_to_oklab(r, g, b);
+                l_row[x] = l;
+                c_row[x] = (a, b_ok, p[3]);
+            }
+        });
+
+    // 2. Scale factor based on resolution
+    let min_dim = width.min(height) as f32;
+    let s = (min_dim / 1024.0).powf(0.6).clamp(0.35, 4.0);
+
+    // 3. Compute edge protection mask from gradient magnitude
+    let mut grad_raw = vec![0.0f32; n_pixels];
+    compute_gradient_magnitude(&luma, &mut grad_raw, width, height);
+
+    let mut grad_smooth = vec![0.0f32; n_pixels];
+    fast_gaussian_blur(&grad_raw, &mut grad_smooth, width, height, 2.0 * s);
+
+    let edge_threshold = 0.06 + (100.0 - params.edge_protection.clamp(0.0, 100.0)) * 0.0016;
+
+    // 4. Multiscale decomposition: 4 spatial scale levels
+    let sigma_1 = 1.2 * s;
+    let sigma_2 = 2.8 * s;
+    let sigma_3 = 6.5 * s;
+    let sigma_4 = 15.0 * s;
+
+    let delta_sigma_2 = (sigma_2 * sigma_2 - sigma_1 * sigma_1).max(0.01).sqrt();
+    let delta_sigma_3 = (sigma_3 * sigma_3 - sigma_2 * sigma_2).max(0.01).sqrt();
+    let delta_sigma_4 = (sigma_4 * sigma_4 - sigma_3 * sigma_3).max(0.01).sqrt();
+
+    let mut b1 = vec![0.0f32; n_pixels];
+    fast_gaussian_blur(&luma, &mut b1, width, height, sigma_1);
+
+    let mut b2 = vec![0.0f32; n_pixels];
+    fast_gaussian_blur(&b1, &mut b2, width, height, delta_sigma_2);
+
+    let mut b3 = vec![0.0f32; n_pixels];
+    fast_gaussian_blur(&b2, &mut b3, width, height, delta_sigma_3);
+
+    let mut b4 = vec![0.0f32; n_pixels];
+    fast_gaussian_blur(&b3, &mut b4, width, height, delta_sigma_4);
+
+    // 5. Band weights modulated by detail_scale (-50 to +50)
+    let k = params.detail_scale.clamp(-50.0, 50.0) / 50.0;
+    let (w1, w2, w3, w4) = if k < 0.0 {
+        let abs_k = -k;
+        (
+            0.40 * (1.0 + 0.7 * abs_k),
+            1.00 * (1.0 + 0.3 * abs_k),
+            0.70 * (1.0 - 0.5 * abs_k),
+            0.30 * (1.0 - 0.7 * abs_k),
+        )
+    } else {
+        (
+            0.40 * (1.0 - 0.6 * k),
+            1.00 * (1.0 - 0.2 * k),
+            0.70 * (1.0 + 0.5 * k),
+            0.30 * (1.0 + 0.9 * k),
+        )
+    };
+
+    let tau_core = 0.005;
+
+    // 6. Synthesize output pixels into raw RGBA buffer
+    let mut raw_bytes = vec![0u8; n_pixels * 4];
+
+    raw_bytes
+        .par_chunks_exact_mut(width * 4)
+        .enumerate()
+        .for_each(|(y, out_row_bytes)| {
+            let row_start = y * width;
+            for x in 0..width {
+                let idx = row_start + x;
+                let l_orig = luma[idx];
+
+                // Detail bandpass layers
+                let d1 = l_orig - b1[idx];
+                let d2 = b1[idx] - b2[idx];
+                let d3 = b2[idx] - b3[idx];
+                let d4 = b3[idx] - b4[idx];
+
+                let d1_cored = soft_core(d1, tau_core);
+
+                let total_detail = w1 * d1_cored + w2 * d2 + w3 * d3 + w4 * d4;
+
+                // Soft edge-stop mask: 1.0 in texture/flat areas, drops near boundaries
+                let g = grad_smooth[idx] / edge_threshold;
+                let g3 = g * g * g;
+                let edge_mask = 1.0 / (1.0 + g3);
+
+                let delta = total_detail * edge_mask;
+
+                // Positive amount enhances texture; negative amount suppresses texture
+                let l_new = if params.amount >= 0.0 {
+                    l_orig + (params.amount / 50.0) * delta
+                } else {
+                    l_orig + (params.amount / 100.0) * delta
+                };
+
+                let l_clamped = l_new.clamp(0.0, 1.0);
+                let (a_ok, b_ok, alpha) = chromas[idx];
+                let (r_norm, g_norm, b_norm) = oklab_to_srgb(l_clamped, a_ok, b_ok);
+
+                let px_offset = x * 4;
+                out_row_bytes[px_offset] = (r_norm * 255.0).round().clamp(0.0, 255.0) as u8;
+                out_row_bytes[px_offset + 1] = (g_norm * 255.0).round().clamp(0.0, 255.0) as u8;
+                out_row_bytes[px_offset + 2] = (b_norm * 255.0).round().clamp(0.0, 255.0) as u8;
+                out_row_bytes[px_offset + 3] = alpha;
+            }
+        });
+
+    RgbaImage::from_raw(width as u32, height as u32, raw_bytes).unwrap_or_else(|| img.clone())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Presets & Unified Interface
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1635,6 +1952,7 @@ pub enum CreativeFxParams {
     CmykHalftone(CmykHalftoneParams),
     DitherPalette(DitherPaletteParams),
     Ntsc(NtscParams),
+    Structure(StructureParams),
 }
 
 /// Named preset configuration.
@@ -1748,6 +2066,15 @@ pub fn default_preset_for_fx(fx_type: CreativeFxType) -> CreativeFxPreset {
                 vhs_sharpen: 0.25,
                 vhs_chroma_loss: 0.05,
                 random_seed: 101,
+            }),
+        },
+        CreativeFxType::Structure => CreativeFxPreset {
+            name: "Natural Texture",
+            description: "Balanced organic texture enhancement for everyday photos",
+            params: CreativeFxParams::Structure(StructureParams {
+                amount: 35.0,
+                detail_scale: 0.0,
+                edge_protection: 50.0,
             }),
         },
     }
@@ -2448,6 +2775,71 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                 }),
             },
         ],
+        CreativeFxType::Structure => vec![
+            CreativeFxPreset {
+                name: "Natural Texture",
+                description: "Balanced organic texture enhancement for everyday photos",
+                params: CreativeFxParams::Structure(StructureParams {
+                    amount: 35.0,
+                    detail_scale: 0.0,
+                    edge_protection: 50.0,
+                }),
+            },
+            CreativeFxPreset {
+                name: "Fine Micro-Detail",
+                description: "Crisp emphasis on micro-textures like textile weave and paper grain",
+                params: CreativeFxParams::Structure(StructureParams {
+                    amount: 45.0,
+                    detail_scale: -35.0,
+                    edge_protection: 60.0,
+                }),
+            },
+            CreativeFxPreset {
+                name: "Architectural Clarity",
+                description: "Strong structural relief for masonry, concrete, and urban forms",
+                params: CreativeFxParams::Structure(StructureParams {
+                    amount: 55.0,
+                    detail_scale: 25.0,
+                    edge_protection: 70.0,
+                }),
+            },
+            CreativeFxPreset {
+                name: "Foliage & Landscape",
+                description: "Enhanced depth and definition in grass, leaves, bark, and clouds",
+                params: CreativeFxParams::Structure(StructureParams {
+                    amount: 50.0,
+                    detail_scale: 10.0,
+                    edge_protection: 55.0,
+                }),
+            },
+            CreativeFxPreset {
+                name: "Subtle Definition",
+                description: "Gentle tactile boost without calling attention to processing",
+                params: CreativeFxParams::Structure(StructureParams {
+                    amount: 20.0,
+                    detail_scale: 0.0,
+                    edge_protection: 45.0,
+                }),
+            },
+            CreativeFxPreset {
+                name: "Soft Skin & Tone",
+                description: "Controlled smoothing of blemishes and pores while keeping facial features razor sharp",
+                params: CreativeFxParams::Structure(StructureParams {
+                    amount: -35.0,
+                    detail_scale: -15.0,
+                    edge_protection: 65.0,
+                }),
+            },
+            CreativeFxPreset {
+                name: "Texture Minimizer",
+                description: "Strong texture suppression with pristine boundary preservation",
+                params: CreativeFxParams::Structure(StructureParams {
+                    amount: -70.0,
+                    detail_scale: 0.0,
+                    edge_protection: 80.0,
+                }),
+            },
+        ],
     }
 }
 
@@ -2460,6 +2852,7 @@ pub fn apply_creative_fx(img: &RgbaImage, params: &CreativeFxParams) -> RgbaImag
         CreativeFxParams::CmykHalftone(p) => apply_cmyk_halftone(img, p),
         CreativeFxParams::DitherPalette(p) => apply_dither_palette(img, p),
         CreativeFxParams::Ntsc(p) => apply_ntsc_effect(img, p),
+        CreativeFxParams::Structure(p) => apply_structure(img, p),
     }
 }
 
@@ -2889,5 +3282,299 @@ mod tests {
         let res_tracking = apply_ntsc_effect(&img, &tracking_params);
         assert_eq!(res_tracking.width(), 48);
         assert_eq!(res_tracking.height(), 48);
+    }
+
+    #[test]
+    fn test_structure_identity_at_zero() {
+        let mut img = RgbaImage::new(32, 32);
+        for (x, y, p) in img.enumerate_pixels_mut() {
+            *p = Rgba([(x * 7) as u8, (y * 7) as u8, ((x + y) * 3) as u8, 255]);
+        }
+        let params = StructureParams {
+            amount: 0.0,
+            detail_scale: 0.0,
+            edge_protection: 50.0,
+        };
+        let res = apply_structure(&img, &params);
+        assert_eq!(res.as_raw(), img.as_raw());
+    }
+
+    #[test]
+    fn test_structure_enhances_texture_variance() {
+        // Create an image with mid-frequency texture pattern (checkerboard ripples)
+        let mut img = RgbaImage::new(64, 64);
+        for y in 0..64 {
+            for x in 0..64 {
+                // Base midtone 128 + texture variation +- 15
+                let tex = if ((x / 4) + (y / 4)) % 2 == 0 {
+                    15i16
+                } else {
+                    -15i16
+                };
+                let val = (128 + tex) as u8;
+                img.put_pixel(x, y, Rgba([val, val, val, 255]));
+            }
+        }
+
+        // Calculate variance of original texture patch
+        let calc_variance = |image: &RgbaImage| -> f32 {
+            let mut sum = 0.0f32;
+            let mut sum_sq = 0.0f32;
+            let count = (image.width() * image.height()) as f32;
+            for p in image.pixels() {
+                let v = p[0] as f32;
+                sum += v;
+                sum_sq += v * v;
+            }
+            let mean = sum / count;
+            sum_sq / count - mean * mean
+        };
+
+        let var_orig = calc_variance(&img);
+
+        let params_boost = StructureParams {
+            amount: 60.0,
+            detail_scale: 0.0,
+            edge_protection: 50.0,
+        };
+        let res_boost = apply_structure(&img, &params_boost);
+        let var_boost = calc_variance(&res_boost);
+
+        // Positive structure must amplify texture variance
+        assert!(
+            var_boost > var_orig * 1.15,
+            "Expected texture variance to increase: orig={var_orig}, boost={var_boost}"
+        );
+    }
+
+    #[test]
+    fn test_structure_edge_protection_vs_unsharp_mask() {
+        // Create an image with a high-contrast step edge:
+        // Left half = 30 (dark), Right half = 225 (bright)
+        let mut img = RgbaImage::new(64, 64);
+        for y in 0..64 {
+            for x in 0..64 {
+                let val = if x < 32 { 30u8 } else { 225u8 };
+                img.put_pixel(x, y, Rgba([val, val, val, 255]));
+            }
+        }
+
+        // Naive unsharp mask calculation at edge:
+        // blur with sigma ~2
+        let mut luma = vec![0.0f32; 64 * 64];
+        for (i, p) in img.pixels().enumerate() {
+            luma[i] = p[0] as f32 / 255.0;
+        }
+        let mut blurred = vec![0.0f32; 64 * 64];
+        fast_gaussian_blur(&luma, &mut blurred, 64, 64, 2.0);
+
+        // Naive unsharp mask: out = orig + 1.2 * (orig - blur)
+        // At pixel x=32 (just past edge), blur is ~ (30 + 225)/2 = 127.5
+        // orig - blur = 225 - 127.5 = +97.5 => severe overshoot (halo)!
+        let edge_idx_right = 32 * 64 + 32;
+        let naive_unsharp_overshoot = (luma[edge_idx_right] - blurred[edge_idx_right]) * 1.2;
+
+        // Now run Structure with edge protection
+        let params = StructureParams {
+            amount: 60.0,
+            detail_scale: 0.0,
+            edge_protection: 70.0, // strong edge protection
+        };
+        let res = apply_structure(&img, &params);
+        let struct_luma_edge = res.get_pixel(32, 32)[0] as f32 / 255.0;
+        let struct_overshoot = (struct_luma_edge - luma[edge_idx_right]).abs();
+
+        // Structure overshoot at step edge must be vastly lower than naive unsharp mask
+        assert!(
+            struct_overshoot < naive_unsharp_overshoot * 0.25,
+            "Structure must protect step edges from halos: naive_overshoot={naive_unsharp_overshoot}, struct_overshoot={struct_overshoot}"
+        );
+    }
+
+    #[test]
+    fn test_structure_negative_texture_suppression() {
+        // Create an image with both a strong boundary and fine texture on one side:
+        // x < 32: dark background (val = 40)
+        // x >= 32: textured object (base = 180 + alternating 10)
+        let mut img = RgbaImage::new(64, 64);
+        for y in 0..64 {
+            for x in 0..64 {
+                if x < 32 {
+                    img.put_pixel(x, y, Rgba([40, 40, 40, 255]));
+                } else {
+                    let tex = if ((x / 2) + (y / 2)) % 2 == 0 {
+                        12i16
+                    } else {
+                        -12i16
+                    };
+                    let val = (180 + tex) as u8;
+                    img.put_pixel(x, y, Rgba([val, val, val, 255]));
+                }
+            }
+        }
+
+        // Measure texture variance in the textured region (x >= 40, away from the boundary)
+        let calc_region_variance = |image: &RgbaImage| -> f32 {
+            let mut sum = 0.0f32;
+            let mut sum_sq = 0.0f32;
+            let mut count = 0.0f32;
+            for y in 0..64 {
+                for x in 40..64 {
+                    let v = image.get_pixel(x, y)[0] as f32;
+                    sum += v;
+                    sum_sq += v * v;
+                    count += 1.0;
+                }
+            }
+            let mean = sum / count;
+            sum_sq / count - mean * mean
+        };
+
+        let var_orig = calc_region_variance(&img);
+
+        let params_smooth = StructureParams {
+            amount: -60.0, // negative structure
+            detail_scale: 0.0,
+            edge_protection: 65.0,
+        };
+        let res_smooth = apply_structure(&img, &params_smooth);
+        let var_smooth = calc_region_variance(&res_smooth);
+
+        // Texture variance must be suppressed
+        assert!(
+            var_smooth < var_orig * 0.70,
+            "Expected negative structure to suppress texture variance: orig={var_orig}, smooth={var_smooth}"
+        );
+
+        // Meanwhile, the step boundary at x=31 / x=32 must remain crisp
+        let dark_edge = res_smooth.get_pixel(30, 32)[0];
+        let bright_edge = res_smooth.get_pixel(33, 32)[0];
+        assert!(
+            bright_edge as i16 - dark_edge as i16 > 110,
+            "Boundary contrast should be preserved under negative structure: dark={dark_edge}, bright={bright_edge}"
+        );
+    }
+
+    #[test]
+    fn test_structure_flat_area_coring() {
+        // Create an almost flat image with subtle sub-threshold sensor noise (+-1 sRGB step)
+        let mut img = RgbaImage::new(64, 64);
+        for y in 0..64 {
+            for x in 0..64 {
+                let noise = if (x * 17 + y * 31) % 5 == 0 {
+                    1i16
+                } else {
+                    0i16
+                };
+                let val = (180 + noise) as u8;
+                img.put_pixel(x, y, Rgba([val, val, val, 255]));
+            }
+        }
+
+        let params = StructureParams {
+            amount: 50.0,
+            detail_scale: 0.0,
+            edge_protection: 50.0,
+        };
+        let res = apply_structure(&img, &params);
+
+        // Maximum pixel deviation in flat area should remain tiny (<= 1) due to coring
+        for y in 0..64 {
+            for x in 0..64 {
+                let orig = img.get_pixel(x, y)[0] as i16;
+                let processed = res.get_pixel(x, y)[0] as i16;
+                assert!(
+                    (processed - orig).abs() <= 1,
+                    "Flat area noise should not be amplified: orig={orig}, processed={processed}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_structure_detail_scale_frequency_response() {
+        // Create fine pattern (period 2px) and coarse pattern (period 16px)
+        let mut img_fine = RgbaImage::new(64, 64);
+        let mut img_coarse = RgbaImage::new(64, 64);
+
+        for y in 0..64 {
+            for x in 0..64 {
+                let f_val = if (x % 2) == 0 { 140u8 } else { 116u8 };
+                let c_val = if ((x / 8) % 2) == 0 { 140u8 } else { 116u8 };
+                img_fine.put_pixel(x, y, Rgba([f_val, f_val, f_val, 255]));
+                img_coarse.put_pixel(x, y, Rgba([c_val, c_val, c_val, 255]));
+            }
+        }
+
+        let calc_var = |image: &RgbaImage| -> f32 {
+            let mut sum = 0.0f32;
+            let mut sum_sq = 0.0f32;
+            for p in image.pixels() {
+                let v = p[0] as f32;
+                sum += v;
+                sum_sq += v * v;
+            }
+            let count = (image.width() * image.height()) as f32;
+            let mean = sum / count;
+            sum_sq / count - mean * mean
+        };
+
+        let var_fine_orig = calc_var(&img_fine);
+        let var_coarse_orig = calc_var(&img_coarse);
+
+        // Fine bias (-50 detail_scale)
+        let res_fine_biased = apply_structure(
+            &img_fine,
+            &StructureParams {
+                amount: 50.0,
+                detail_scale: -50.0,
+                edge_protection: 50.0,
+            },
+        );
+        let gain_fine_under_fine_bias = calc_var(&res_fine_biased) / var_fine_orig;
+
+        // Coarse bias (+50 detail_scale)
+        let res_fine_under_coarse_bias = apply_structure(
+            &img_fine,
+            &StructureParams {
+                amount: 50.0,
+                detail_scale: 50.0,
+                edge_protection: 50.0,
+            },
+        );
+        let gain_fine_under_coarse_bias = calc_var(&res_fine_under_coarse_bias) / var_fine_orig;
+
+        // Fine pattern must receive higher gain under fine bias than under coarse bias
+        assert!(
+            gain_fine_under_fine_bias > gain_fine_under_coarse_bias,
+            "Fine bias should boost fine texture more than coarse bias: fine_bias={gain_fine_under_fine_bias}, coarse_bias={gain_fine_under_coarse_bias}"
+        );
+
+        // Similarly for coarse pattern under coarse bias vs fine bias
+        let res_coarse_under_coarse_bias = apply_structure(
+            &img_coarse,
+            &StructureParams {
+                amount: 50.0,
+                detail_scale: 50.0,
+                edge_protection: 50.0,
+            },
+        );
+        let gain_coarse_under_coarse_bias =
+            calc_var(&res_coarse_under_coarse_bias) / var_coarse_orig;
+
+        let res_coarse_under_fine_bias = apply_structure(
+            &img_coarse,
+            &StructureParams {
+                amount: 50.0,
+                detail_scale: -50.0,
+                edge_protection: 50.0,
+            },
+        );
+        let gain_coarse_under_fine_bias = calc_var(&res_coarse_under_fine_bias) / var_coarse_orig;
+
+        assert!(
+            gain_coarse_under_coarse_bias > gain_coarse_under_fine_bias,
+            "Coarse bias should boost coarse structure more than fine bias: coarse_bias={gain_coarse_under_coarse_bias}, fine_bias={gain_coarse_under_fine_bias}"
+        );
     }
 }
