@@ -127,6 +127,34 @@ impl CreativeFxType {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Depth Masking Configuration
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Configuration for masking creative effects using an AI-generated grayscale depth map.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct DepthMaskConfig {
+    /// Whether depth-based masking is enabled for this effect.
+    pub enabled: bool,
+    /// Invert depth polarity (near becomes far, far becomes near).
+    pub invert: bool,
+    /// Depth threshold cut-off (0.0 to 1.0). When 0.0, the full grayscale depth gradient is used continuously.
+    pub threshold: f32,
+    /// Edge feather softness around the depth threshold (0.0 to 1.0).
+    pub feather: f32,
+}
+
+impl Default for DepthMaskConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            invert: false,
+            threshold: 0.0,
+            feather: 0.25,
+        }
+    }
+}
+
 // 1. Lens Chromatic Aberration
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -142,6 +170,8 @@ pub struct LensAberrationParams {
     /// Color balance (-50.0 to +50.0). Default is 0.0.
     /// At +50, aberration is blue/yellow; at -50, aberration is red/blue.
     pub color_balance: f32,
+    /// Depth map mask settings.
+    pub depth_mask: DepthMaskConfig,
 }
 
 impl Default for LensAberrationParams {
@@ -150,6 +180,7 @@ impl Default for LensAberrationParams {
             strength: 25.0,
             falloff: 50.0,
             color_balance: 0.0,
+            depth_mask: DepthMaskConfig::default(),
         }
     }
 }
@@ -282,6 +313,8 @@ pub struct TrichromaticParams {
     pub channels: [ChannelTransform; 3],
     /// Whether to automatically crop to the intersection window containing all 3 channels.
     pub auto_crop: bool,
+    /// Depth map mask settings.
+    pub depth_mask: DepthMaskConfig,
 }
 
 impl Default for TrichromaticParams {
@@ -306,6 +339,7 @@ impl Default for TrichromaticParams {
                 },
             ],
             auto_crop: true,
+            depth_mask: DepthMaskConfig::default(),
         }
     }
 }
@@ -512,6 +546,8 @@ pub struct PixelSortParams {
     pub min_span: usize,
     /// Invert mask selection (sort outside threshold window).
     pub invert_mask: bool,
+    /// Depth map mask settings.
+    pub depth_mask: DepthMaskConfig,
 }
 
 impl Default for PixelSortParams {
@@ -524,6 +560,7 @@ impl Default for PixelSortParams {
             max_threshold: 0.80,
             min_span: 6,
             invert_mask: false,
+            depth_mask: DepthMaskConfig::default(),
         }
     }
 }
@@ -755,6 +792,8 @@ pub struct CmykHalftoneParams {
     pub yellow_offset: [f32; 2],
     /// Black (Key) plate displacement in pixels [dx, dy]. Default [0.0, 0.0].
     pub black_offset: [f32; 2],
+    /// Depth map mask settings.
+    pub depth_mask: DepthMaskConfig,
 }
 
 impl Default for CmykHalftoneParams {
@@ -767,6 +806,7 @@ impl Default for CmykHalftoneParams {
             magenta_offset: [1.0, -1.0],
             yellow_offset: [0.0, 1.5],
             black_offset: [0.0, 0.0],
+            depth_mask: DepthMaskConfig::default(),
         }
     }
 }
@@ -1063,6 +1103,8 @@ pub struct DitherPaletteParams {
     pub dither_strength: f32,
     /// Contrast adjustment (-50.0 to +50.0). Default is 0.0.
     pub contrast: f32,
+    /// Depth map mask settings.
+    pub depth_mask: DepthMaskConfig,
 }
 
 impl Default for DitherPaletteParams {
@@ -1073,6 +1115,7 @@ impl Default for DitherPaletteParams {
             pixel_scale: 2,
             dither_strength: 0.8,
             contrast: 0.0,
+            depth_mask: DepthMaskConfig::default(),
         }
     }
 }
@@ -1453,6 +1496,8 @@ pub struct NtscParams {
     // ── Deterministic Noise ──
     /// Random seed for deterministic noise generation (0 to 1000). Default is 0.
     pub random_seed: i32,
+    /// Depth map mask settings.
+    pub depth_mask: DepthMaskConfig,
 }
 
 impl Default for NtscParams {
@@ -1483,6 +1528,7 @@ impl Default for NtscParams {
             vhs_sharpen: 0.25,
             vhs_chroma_loss: 0.05,
             random_seed: 0,
+            depth_mask: DepthMaskConfig::default(),
         }
     }
 }
@@ -1650,6 +1696,8 @@ pub struct StructureParams {
     /// Edge protection sensitivity (0.0 to 100.0). Default is 50.0.
     /// Higher values protect high-contrast boundaries more aggressively.
     pub edge_protection: f32,
+    /// Depth map mask settings.
+    pub depth_mask: DepthMaskConfig,
 }
 
 impl Default for StructureParams {
@@ -1658,6 +1706,7 @@ impl Default for StructureParams {
             amount: 35.0,
             detail_scale: 0.0,
             edge_protection: 50.0,
+            depth_mask: DepthMaskConfig::default(),
         }
     }
 }
@@ -1955,6 +2004,32 @@ pub enum CreativeFxParams {
     Structure(StructureParams),
 }
 
+impl CreativeFxParams {
+    pub fn depth_mask(&self) -> &DepthMaskConfig {
+        match self {
+            Self::LensAberration(p) => &p.depth_mask,
+            Self::Trichromatic(p) => &p.depth_mask,
+            Self::PixelSort(p) => &p.depth_mask,
+            Self::CmykHalftone(p) => &p.depth_mask,
+            Self::DitherPalette(p) => &p.depth_mask,
+            Self::Ntsc(p) => &p.depth_mask,
+            Self::Structure(p) => &p.depth_mask,
+        }
+    }
+
+    pub fn depth_mask_mut(&mut self) -> &mut DepthMaskConfig {
+        match self {
+            Self::LensAberration(p) => &mut p.depth_mask,
+            Self::Trichromatic(p) => &mut p.depth_mask,
+            Self::PixelSort(p) => &mut p.depth_mask,
+            Self::CmykHalftone(p) => &mut p.depth_mask,
+            Self::DitherPalette(p) => &mut p.depth_mask,
+            Self::Ntsc(p) => &mut p.depth_mask,
+            Self::Structure(p) => &mut p.depth_mask,
+        }
+    }
+}
+
 /// Named preset configuration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreativeFxPreset {
@@ -1973,6 +2048,7 @@ pub fn default_preset_for_fx(fx_type: CreativeFxType) -> CreativeFxPreset {
                 strength: 45.0,
                 falloff: 65.0,
                 color_balance: 0.0,
+                depth_mask: DepthMaskConfig::default(),
             }),
         },
         CreativeFxType::Trichromatic => CreativeFxPreset {
@@ -1998,6 +2074,7 @@ pub fn default_preset_for_fx(fx_type: CreativeFxType) -> CreativeFxPreset {
                     },
                 ],
                 auto_crop: true,
+                depth_mask: DepthMaskConfig::default(),
             }),
         },
         CreativeFxType::PixelSort => CreativeFxPreset {
@@ -2011,6 +2088,7 @@ pub fn default_preset_for_fx(fx_type: CreativeFxType) -> CreativeFxPreset {
                 max_threshold: 0.85,
                 min_span: 8,
                 invert_mask: false,
+                depth_mask: DepthMaskConfig::default(),
             }),
         },
         CreativeFxType::CmykHalftone => CreativeFxPreset {
@@ -2024,6 +2102,7 @@ pub fn default_preset_for_fx(fx_type: CreativeFxType) -> CreativeFxPreset {
                 magenta_offset: [1.0, -1.0],
                 yellow_offset: [0.0, 1.5],
                 black_offset: [0.0, 0.0],
+                depth_mask: DepthMaskConfig::default(),
             }),
         },
         CreativeFxType::DitherPalette => CreativeFxPreset {
@@ -2035,6 +2114,7 @@ pub fn default_preset_for_fx(fx_type: CreativeFxType) -> CreativeFxPreset {
                 pixel_scale: 2,
                 dither_strength: 0.85,
                 contrast: 10.0,
+                depth_mask: DepthMaskConfig::default(),
             }),
         },
         CreativeFxType::Ntsc => CreativeFxPreset {
@@ -2066,6 +2146,7 @@ pub fn default_preset_for_fx(fx_type: CreativeFxType) -> CreativeFxPreset {
                 vhs_sharpen: 0.25,
                 vhs_chroma_loss: 0.05,
                 random_seed: 101,
+                depth_mask: DepthMaskConfig::default(),
             }),
         },
         CreativeFxType::Structure => CreativeFxPreset {
@@ -2075,6 +2156,7 @@ pub fn default_preset_for_fx(fx_type: CreativeFxType) -> CreativeFxPreset {
                 amount: 35.0,
                 detail_scale: 0.0,
                 edge_protection: 50.0,
+                depth_mask: DepthMaskConfig::default(),
             }),
         },
     }
@@ -2091,6 +2173,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     strength: 20.0,
                     falloff: 75.0,
                     color_balance: 0.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2100,6 +2183,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     strength: 45.0,
                     falloff: 60.0,
                     color_balance: 0.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2109,6 +2193,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     strength: 55.0,
                     falloff: 0.0,
                     color_balance: 0.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2118,6 +2203,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     strength: 50.0,
                     falloff: 40.0,
                     color_balance: 50.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2127,6 +2213,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     strength: 60.0,
                     falloff: 30.0,
                     color_balance: -50.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2136,6 +2223,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     strength: 95.0,
                     falloff: 10.0,
                     color_balance: -40.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
         ],
@@ -2163,6 +2251,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                         },
                     ],
                     auto_crop: true,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2188,6 +2277,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                         },
                     ],
                     auto_crop: true,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2213,6 +2303,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                         },
                     ],
                     auto_crop: true,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2238,6 +2329,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                         },
                     ],
                     auto_crop: true,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2263,6 +2355,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                         },
                     ],
                     auto_crop: true,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
         ],
@@ -2278,6 +2371,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     max_threshold: 0.85,
                     min_span: 8,
                     invert_mask: false,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2291,6 +2385,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     max_threshold: 0.95,
                     min_span: 12,
                     invert_mask: false,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2304,6 +2399,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     max_threshold: 1.00,
                     min_span: 5,
                     invert_mask: false,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2317,6 +2413,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     max_threshold: 0.35,
                     min_span: 6,
                     invert_mask: false,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2330,6 +2427,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     max_threshold: 0.90,
                     min_span: 10,
                     invert_mask: false,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2343,6 +2441,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     max_threshold: 0.98,
                     min_span: 3,
                     invert_mask: false,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
         ],
@@ -2358,6 +2457,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     magenta_offset: [1.0, -1.0],
                     yellow_offset: [0.0, 1.5],
                     black_offset: [0.0, 0.0],
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2371,6 +2471,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     magenta_offset: [2.0, -2.5],
                     yellow_offset: [1.0, 3.0],
                     black_offset: [0.0, 0.0],
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2384,6 +2485,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     magenta_offset: [3.0, -3.0],
                     yellow_offset: [-2.0, 4.0],
                     black_offset: [0.5, -0.5],
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2397,6 +2499,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     magenta_offset: [0.0, 0.0],
                     yellow_offset: [0.0, 0.0],
                     black_offset: [0.0, 0.0],
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2410,6 +2513,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     magenta_offset: [3.0, -2.0],
                     yellow_offset: [-3.0, -2.0],
                     black_offset: [1.0, 1.0],
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2423,6 +2527,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     magenta_offset: [7.0, -8.0],
                     yellow_offset: [-6.0, 9.0],
                     black_offset: [3.0, -4.0],
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
         ],
@@ -2436,6 +2541,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     pixel_scale: 2,
                     dither_strength: 0.85,
                     contrast: 10.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2447,6 +2553,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     pixel_scale: 1,
                     dither_strength: 0.90,
                     contrast: 15.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2458,6 +2565,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     pixel_scale: 2,
                     dither_strength: 0.75,
                     contrast: 0.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2469,6 +2577,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     pixel_scale: 2,
                     dither_strength: 0.80,
                     contrast: 10.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2480,6 +2589,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     pixel_scale: 2,
                     dither_strength: 0.70,
                     contrast: 5.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2491,6 +2601,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     pixel_scale: 2,
                     dither_strength: 0.85,
                     contrast: 20.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
         ],
@@ -2524,6 +2635,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     vhs_sharpen: 0.0,
                     vhs_chroma_loss: 0.0,
                     random_seed: 42,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2555,6 +2667,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     vhs_sharpen: 0.25,
                     vhs_chroma_loss: 0.05,
                     random_seed: 101,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2586,6 +2699,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     vhs_sharpen: 0.50,
                     vhs_chroma_loss: 0.20,
                     random_seed: 202,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2617,6 +2731,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     vhs_sharpen: 0.60,
                     vhs_chroma_loss: 0.40,
                     random_seed: 333,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2648,6 +2763,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     vhs_sharpen: 0.0,
                     vhs_chroma_loss: 0.0,
                     random_seed: 777,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2679,6 +2795,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     vhs_sharpen: 0.0,
                     vhs_chroma_loss: 0.0,
                     random_seed: 0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2710,6 +2827,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     vhs_sharpen: 0.85,
                     vhs_chroma_loss: 0.45,
                     random_seed: 555,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2741,6 +2859,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     vhs_sharpen: 0.0,
                     vhs_chroma_loss: 0.0,
                     random_seed: 888,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2772,6 +2891,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     vhs_sharpen: 0.95,
                     vhs_chroma_loss: 0.70,
                     random_seed: 999,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
         ],
@@ -2783,6 +2903,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     amount: 35.0,
                     detail_scale: 0.0,
                     edge_protection: 50.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2792,6 +2913,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     amount: 45.0,
                     detail_scale: -35.0,
                     edge_protection: 60.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2801,6 +2923,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     amount: 55.0,
                     detail_scale: 25.0,
                     edge_protection: 70.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2810,6 +2933,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     amount: 50.0,
                     detail_scale: 10.0,
                     edge_protection: 55.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2819,6 +2943,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     amount: 20.0,
                     detail_scale: 0.0,
                     edge_protection: 45.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2828,6 +2953,7 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     amount: -35.0,
                     detail_scale: -15.0,
                     edge_protection: 65.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
             CreativeFxPreset {
@@ -2837,14 +2963,112 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
                     amount: -70.0,
                     detail_scale: 0.0,
                     edge_protection: 80.0,
+                    depth_mask: DepthMaskConfig::default(),
                 }),
             },
         ],
     }
 }
 
-/// Apply any creative effect using its parameter union.
-pub fn apply_creative_fx(img: &RgbaImage, params: &CreativeFxParams) -> RgbaImage {
+/// Blend original image and creative effect result using a grayscale depth map as a spatial mask.
+pub fn apply_depth_mask(
+    orig: &RgbaImage,
+    fx: &RgbaImage,
+    depth_map: &RgbaImage,
+    config: &DepthMaskConfig,
+) -> RgbaImage {
+    if !config.enabled {
+        return fx.clone();
+    }
+
+    let (width, height) = orig.dimensions();
+    if (width, height) != fx.dimensions() {
+        return fx.clone();
+    }
+
+    let resampled_depth: std::borrow::Cow<'_, RgbaImage> =
+        if depth_map.dimensions() != (width, height) {
+            std::borrow::Cow::Owned(image::imageops::resize(
+                depth_map,
+                width,
+                height,
+                image::imageops::FilterType::Triangle,
+            ))
+        } else {
+            std::borrow::Cow::Borrowed(depth_map)
+        };
+
+    let mut out_bytes = vec![0u8; (width * height * 4) as usize];
+    let orig_raw = orig.as_raw();
+    let fx_raw = fx.as_raw();
+    let depth_raw = resampled_depth.as_raw();
+
+    out_bytes
+        .par_chunks_exact_mut((width * 4) as usize)
+        .zip(orig_raw.par_chunks_exact((width * 4) as usize))
+        .zip(fx_raw.par_chunks_exact((width * 4) as usize))
+        .zip(depth_raw.par_chunks_exact((width * 4) as usize))
+        .for_each(|(((out_row, orig_row), fx_row), depth_row)| {
+            for x in 0..(width as usize) {
+                let px_idx = x * 4;
+                let dr = depth_row[px_idx] as f32 / 255.0;
+                let dg = depth_row[px_idx + 1] as f32 / 255.0;
+                let db = depth_row[px_idx + 2] as f32 / 255.0;
+                let mut d = 0.299 * dr + 0.587 * dg + 0.114 * db;
+
+                if config.invert {
+                    d = 1.0 - d;
+                }
+
+                let weight = if config.threshold > 0.001 {
+                    let feather = config.feather.clamp(0.001, 1.0);
+                    let low = (config.threshold - feather).clamp(0.0, 1.0);
+                    let high = (config.threshold + feather).clamp(0.0, 1.0);
+                    if high <= low {
+                        if d >= config.threshold { 1.0 } else { 0.0 }
+                    } else {
+                        let t = ((d - low) / (high - low)).clamp(0.0, 1.0);
+                        t * t * (3.0 - 2.0 * t)
+                    }
+                } else {
+                    d.clamp(0.0, 1.0)
+                };
+
+                for c in 0..3 {
+                    let orig_c = orig_row[px_idx + c] as f32;
+                    let fx_c = fx_row[px_idx + c] as f32;
+                    let blended = (1.0 - weight) * orig_c + weight * fx_c;
+                    out_row[px_idx + c] = blended.round().clamp(0.0, 255.0) as u8;
+                }
+                out_row[px_idx + 3] = orig_row[px_idx + 3];
+            }
+        });
+
+    RgbaImage::from_raw(width, height, out_bytes).unwrap_or_else(|| fx.clone())
+}
+
+/// Apply a creative effect to an RGBA image with optional depth map masking.
+pub fn apply_creative_fx_with_depth(
+    img: &RgbaImage,
+    depth: Option<&RgbaImage>,
+    params: &CreativeFxParams,
+) -> RgbaImage {
+    let mask_config = params.depth_mask();
+    if mask_config.enabled {
+        if let Some(depth_map) = depth {
+            let fx_result = match params {
+                CreativeFxParams::LensAberration(p) => apply_lens_aberration(img, p),
+                CreativeFxParams::Trichromatic(p) => apply_trichromatic(img, p),
+                CreativeFxParams::PixelSort(p) => apply_pixel_sort(img, p),
+                CreativeFxParams::CmykHalftone(p) => apply_cmyk_halftone(img, p),
+                CreativeFxParams::DitherPalette(p) => apply_dither_palette(img, p),
+                CreativeFxParams::Ntsc(p) => apply_ntsc_effect(img, p),
+                CreativeFxParams::Structure(p) => apply_structure(img, p),
+            };
+            return apply_depth_mask(img, &fx_result, depth_map, mask_config);
+        }
+    }
+
     match params {
         CreativeFxParams::LensAberration(p) => apply_lens_aberration(img, p),
         CreativeFxParams::Trichromatic(p) => apply_trichromatic(img, p),
@@ -2854,6 +3078,11 @@ pub fn apply_creative_fx(img: &RgbaImage, params: &CreativeFxParams) -> RgbaImag
         CreativeFxParams::Ntsc(p) => apply_ntsc_effect(img, p),
         CreativeFxParams::Structure(p) => apply_structure(img, p),
     }
+}
+
+/// Apply any creative effect using its parameter union (without depth masking).
+pub fn apply_creative_fx(img: &RgbaImage, params: &CreativeFxParams) -> RgbaImage {
+    apply_creative_fx_with_depth(img, None, params)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3010,6 +3239,7 @@ mod tests {
                 strength: 50.0,
                 falloff: 0.0,
                 color_balance: 50.0,
+                depth_mask: DepthMaskConfig::default(),
             },
         );
         assert_eq!(res_by.width(), 40);
@@ -3020,6 +3250,7 @@ mod tests {
                 strength: 50.0,
                 falloff: 100.0,
                 color_balance: -50.0,
+                depth_mask: DepthMaskConfig::default(),
             },
         );
         assert_eq!(res_rb.width(), 40);
@@ -3054,6 +3285,7 @@ mod tests {
                 },
             ],
             auto_crop: true,
+            depth_mask: DepthMaskConfig::default(),
         };
 
         let res_rgb = apply_trichromatic(&img, &params_rgb);
@@ -3082,6 +3314,7 @@ mod tests {
                 },
             ],
             auto_crop: true,
+            depth_mask: DepthMaskConfig::default(),
         };
         let res_oklab = apply_trichromatic(&img, &params_oklab);
         assert!(res_oklab.width() > 0 && res_oklab.height() > 0);
@@ -3107,6 +3340,7 @@ mod tests {
                 max_threshold: 0.8,
                 min_span: 4,
                 invert_mask: false,
+                depth_mask: DepthMaskConfig::default(),
             },
         );
         assert_eq!(res_v.width(), 30);
@@ -3123,6 +3357,7 @@ mod tests {
                 max_threshold: 0.9,
                 min_span: 4,
                 invert_mask: false,
+                depth_mask: DepthMaskConfig::default(),
             },
         );
         assert_eq!(res_h.width(), 30);
@@ -3138,6 +3373,7 @@ mod tests {
                 max_threshold: 1.0,
                 min_span: 3,
                 invert_mask: false,
+                depth_mask: DepthMaskConfig::default(),
             },
         );
         assert_eq!(res_d.width(), 30);
@@ -3163,6 +3399,7 @@ mod tests {
             magenta_offset: [1.5, -1.5],
             yellow_offset: [0.0, 2.0],
             black_offset: [0.0, 0.0],
+            depth_mask: DepthMaskConfig::default(),
         };
 
         let res = apply_cmyk_halftone(&img, &params);
@@ -3193,6 +3430,7 @@ mod tests {
                 pixel_scale: 2,
                 dither_strength: 0.8,
                 contrast: 0.0,
+                depth_mask: DepthMaskConfig::default(),
             },
         );
         assert_eq!(res_gb.width(), 32);
@@ -3207,6 +3445,7 @@ mod tests {
                 pixel_scale: 1,
                 dither_strength: 0.9,
                 contrast: 10.0,
+                depth_mask: DepthMaskConfig::default(),
             },
         );
         assert_eq!(res_mac.width(), 32);
@@ -3221,6 +3460,7 @@ mod tests {
                 pixel_scale: 2,
                 dither_strength: 0.7,
                 contrast: -5.0,
+                depth_mask: DepthMaskConfig::default(),
             },
         );
         assert_eq!(res_pico.width(), 32);
@@ -3278,6 +3518,7 @@ mod tests {
             vhs_sharpen: 0.5,
             vhs_chroma_loss: 0.2,
             random_seed: 42,
+            depth_mask: DepthMaskConfig::default(),
         };
         let res_tracking = apply_ntsc_effect(&img, &tracking_params);
         assert_eq!(res_tracking.width(), 48);
@@ -3294,6 +3535,7 @@ mod tests {
             amount: 0.0,
             detail_scale: 0.0,
             edge_protection: 50.0,
+            depth_mask: DepthMaskConfig::default(),
         };
         let res = apply_structure(&img, &params);
         assert_eq!(res.as_raw(), img.as_raw());
@@ -3336,6 +3578,7 @@ mod tests {
             amount: 60.0,
             detail_scale: 0.0,
             edge_protection: 50.0,
+            depth_mask: DepthMaskConfig::default(),
         };
         let res_boost = apply_structure(&img, &params_boost);
         let var_boost = calc_variance(&res_boost);
@@ -3378,7 +3621,8 @@ mod tests {
         let params = StructureParams {
             amount: 60.0,
             detail_scale: 0.0,
-            edge_protection: 70.0, // strong edge protection
+            edge_protection: 70.0, // strong edge protection,
+            depth_mask: DepthMaskConfig::default(),
         };
         let res = apply_structure(&img, &params);
         let struct_luma_edge = res.get_pixel(32, 32)[0] as f32 / 255.0;
@@ -3436,6 +3680,7 @@ mod tests {
             amount: -60.0, // negative structure
             detail_scale: 0.0,
             edge_protection: 65.0,
+            depth_mask: DepthMaskConfig::default(),
         };
         let res_smooth = apply_structure(&img, &params_smooth);
         let var_smooth = calc_region_variance(&res_smooth);
@@ -3475,6 +3720,7 @@ mod tests {
             amount: 50.0,
             detail_scale: 0.0,
             edge_protection: 50.0,
+            depth_mask: DepthMaskConfig::default(),
         };
         let res = apply_structure(&img, &params);
 
@@ -3529,6 +3775,7 @@ mod tests {
                 amount: 50.0,
                 detail_scale: -50.0,
                 edge_protection: 50.0,
+                depth_mask: DepthMaskConfig::default(),
             },
         );
         let gain_fine_under_fine_bias = calc_var(&res_fine_biased) / var_fine_orig;
@@ -3540,6 +3787,7 @@ mod tests {
                 amount: 50.0,
                 detail_scale: 50.0,
                 edge_protection: 50.0,
+                depth_mask: DepthMaskConfig::default(),
             },
         );
         let gain_fine_under_coarse_bias = calc_var(&res_fine_under_coarse_bias) / var_fine_orig;
@@ -3557,6 +3805,7 @@ mod tests {
                 amount: 50.0,
                 detail_scale: 50.0,
                 edge_protection: 50.0,
+                depth_mask: DepthMaskConfig::default(),
             },
         );
         let gain_coarse_under_coarse_bias =
@@ -3568,6 +3817,7 @@ mod tests {
                 amount: 50.0,
                 detail_scale: -50.0,
                 edge_protection: 50.0,
+                depth_mask: DepthMaskConfig::default(),
             },
         );
         let gain_coarse_under_fine_bias = calc_var(&res_coarse_under_fine_bias) / var_coarse_orig;
@@ -3576,5 +3826,72 @@ mod tests {
             gain_coarse_under_coarse_bias > gain_coarse_under_fine_bias,
             "Coarse bias should boost coarse structure more than fine bias: coarse_bias={gain_coarse_under_coarse_bias}, fine_bias={gain_coarse_under_fine_bias}"
         );
+    }
+
+    #[test]
+    fn test_apply_depth_mask_continuous_blending() {
+        let orig = RgbaImage::from_pixel(2, 2, Rgba([0, 0, 0, 255]));
+        let fx = RgbaImage::from_pixel(2, 2, Rgba([200, 200, 200, 255]));
+        let mut depth = RgbaImage::new(2, 2);
+        depth.put_pixel(0, 0, Rgba([0, 0, 0, 255])); // 0% fx -> orig 0
+        depth.put_pixel(1, 0, Rgba([128, 128, 128, 255])); // ~50% fx -> ~100
+        depth.put_pixel(0, 1, Rgba([255, 255, 255, 255])); // 100% fx -> 200
+        depth.put_pixel(1, 1, Rgba([64, 64, 64, 255])); // ~25% fx -> ~50
+
+        let config = DepthMaskConfig {
+            enabled: true,
+            invert: false,
+            threshold: 0.0,
+            feather: 0.1,
+        };
+
+        let masked = apply_depth_mask(&orig, &fx, &depth, &config);
+        assert_eq!(masked.get_pixel(0, 0)[0], 0);
+        let p10 = masked.get_pixel(1, 0)[0];
+        assert!((p10 as i32 - 100).abs() <= 2, "Expected ~100, got {}", p10);
+        assert_eq!(masked.get_pixel(0, 1)[0], 200);
+
+        // Test invert
+        let inv_config = DepthMaskConfig {
+            enabled: true,
+            invert: true,
+            threshold: 0.0,
+            feather: 0.1,
+        };
+        let inv_masked = apply_depth_mask(&orig, &fx, &depth, &inv_config);
+        assert_eq!(inv_masked.get_pixel(0, 0)[0], 200); // 1.0 - 0 = 1.0 fx
+        assert_eq!(inv_masked.get_pixel(0, 1)[0], 0); // 1.0 - 1.0 = 0.0 fx
+    }
+
+    #[test]
+    fn test_apply_depth_mask_threshold_and_disabled() {
+        let orig = RgbaImage::from_pixel(2, 2, Rgba([50, 50, 50, 255]));
+        let fx = RgbaImage::from_pixel(2, 2, Rgba([150, 150, 150, 255]));
+        let mut depth = RgbaImage::new(2, 2);
+        depth.put_pixel(0, 0, Rgba([50, 50, 50, 255])); // below threshold
+        depth.put_pixel(1, 1, Rgba([220, 220, 220, 255])); // above threshold
+
+        // Disabled returns fx
+        let disabled_cfg = DepthMaskConfig {
+            enabled: false,
+            invert: false,
+            threshold: 0.5,
+            feather: 0.1,
+        };
+        let res_dis = apply_depth_mask(&orig, &fx, &depth, &disabled_cfg);
+        assert_eq!(res_dis.get_pixel(0, 0)[0], 150);
+
+        // Threshold 0.5 with feather 0.05
+        let thresh_cfg = DepthMaskConfig {
+            enabled: true,
+            invert: false,
+            threshold: 0.5,
+            feather: 0.05,
+        };
+        let res_thresh = apply_depth_mask(&orig, &fx, &depth, &thresh_cfg);
+        // (0,0) depth is ~0.20 < 0.45 -> weight 0 -> orig (50)
+        assert_eq!(res_thresh.get_pixel(0, 0)[0], 50);
+        // (1,1) depth is ~0.86 > 0.55 -> weight 1 -> fx (150)
+        assert_eq!(res_thresh.get_pixel(1, 1)[0], 150);
     }
 }

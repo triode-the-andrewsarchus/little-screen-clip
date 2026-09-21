@@ -54,6 +54,12 @@ pub struct CreativeFxState {
     // Debounce timer
     pub params_dirty_at: Option<std::time::Instant>,
     pub auto_fitted: bool,
+
+    // Depth mask state
+    pub cached_depth_map: Option<RgbaImage>,
+    pub depth_estimation_in_progress: bool,
+    pub depth_estimation_rx: Option<std::sync::mpsc::Receiver<Result<RgbaImage, String>>>,
+    pub depth_estimation_error: Option<String>,
 }
 
 impl Default for CreativeFxState {
@@ -84,6 +90,10 @@ impl Default for CreativeFxState {
             is_generating_thumbnails: false,
             params_dirty_at: None,
             auto_fitted: false,
+            cached_depth_map: None,
+            depth_estimation_in_progress: false,
+            depth_estimation_rx: None,
+            depth_estimation_error: None,
         }
     }
 }
@@ -91,6 +101,30 @@ impl Default for CreativeFxState {
 impl CreativeFxState {
     pub fn mark_dirty(&mut self) {
         self.params_dirty_at = Some(std::time::Instant::now());
+    }
+
+    pub fn depth_mask_for_active_fx(&self) -> &DepthMaskConfig {
+        match self.selected_fx {
+            CreativeFxType::LensAberration => &self.lens_params.depth_mask,
+            CreativeFxType::Trichromatic => &self.trichromatic_params.depth_mask,
+            CreativeFxType::PixelSort => &self.pixel_sort_params.depth_mask,
+            CreativeFxType::CmykHalftone => &self.cmyk_params.depth_mask,
+            CreativeFxType::DitherPalette => &self.dither_params.depth_mask,
+            CreativeFxType::Ntsc => &self.ntsc_params.depth_mask,
+            CreativeFxType::Structure => &self.structure_params.depth_mask,
+        }
+    }
+
+    pub fn depth_mask_for_active_fx_mut(&mut self) -> &mut DepthMaskConfig {
+        match self.selected_fx {
+            CreativeFxType::LensAberration => &mut self.lens_params.depth_mask,
+            CreativeFxType::Trichromatic => &mut self.trichromatic_params.depth_mask,
+            CreativeFxType::PixelSort => &mut self.pixel_sort_params.depth_mask,
+            CreativeFxType::CmykHalftone => &mut self.cmyk_params.depth_mask,
+            CreativeFxType::DitherPalette => &mut self.dither_params.depth_mask,
+            CreativeFxType::Ntsc => &mut self.ntsc_params.depth_mask,
+            CreativeFxType::Structure => &mut self.structure_params.depth_mask,
+        }
     }
 
     pub fn current_params(&self) -> CreativeFxParams {
@@ -117,6 +151,7 @@ impl ImagePreviewState {
         let input_rgba = self.current_rgba.clone();
         let selected_fx = self.creative_fx_state.selected_fx;
         let params = self.creative_fx_state.current_params();
+        let cached_depth = self.creative_fx_state.cached_depth_map.clone();
 
         let (tx, rx) = std::sync::mpsc::channel::<CreativeFxMsg>();
         self.creative_fx_state.render_rx = Some(rx);
@@ -126,7 +161,7 @@ impl ImagePreviewState {
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
             let process_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                apply_creative_fx(&input_rgba, &params)
+                apply_creative_fx_with_depth(&input_rgba, cached_depth.as_ref(), &params)
             }));
             match process_result {
                 Ok(out_rgba) => {
@@ -151,8 +186,93 @@ impl ImagePreviewState {
         });
     }
 
-    /// Spawn low-priority background thread to generate 42x28 thumbnail previews for all FX.
+    /// Spawn background thread to estimate AI depth map using Depth-Anything V2.
+    pub fn run_depth_estimation_for_fx(&mut self) {
+        if self.creative_fx_state.depth_estimation_in_progress || self.current_rgba.is_empty() {
+            return;
+        }
 
+        if !self.redaction_state.boxes.is_empty() {
+            self.apply_redactions();
+        }
+
+        let base_img = self.current_display_image();
+        let mut png_bytes = Vec::new();
+        if let Err(e) = base_img.write_to(
+            &mut std::io::Cursor::new(&mut png_bytes),
+            image::ImageFormat::Png,
+        ) {
+            self.creative_fx_state.depth_estimation_error =
+                Some(format!("Failed to encode image to PNG: {}", e));
+            return;
+        }
+
+        let depth_script = "scripts/depth_estimation.py";
+        let (cmd_bin, cmd_args) = if std::path::Path::new(depth_script).exists() {
+            (depth_script.to_string(), Vec::new())
+        } else {
+            ("python3".to_string(), vec![depth_script.to_string()])
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel::<Result<RgbaImage, String>>();
+        self.creative_fx_state.depth_estimation_rx = Some(rx);
+        self.creative_fx_state.depth_estimation_in_progress = true;
+        self.creative_fx_state.depth_estimation_error = None;
+
+        std::thread::spawn(move || {
+            let mut cmd = Command::new(&cmd_bin);
+            cmd.args(&cmd_args).arg("-").arg("-");
+
+            let mut child = match cmd
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(Err(format!(
+                        "Failed to launch depth estimation '{}': {}. Ensure Python environment is setup.",
+                        cmd_bin, e
+                    )));
+                    return;
+                }
+            };
+
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                if let Err(e) = stdin.write_all(&png_bytes) {
+                    let _ = tx.send(Err(format!("Failed to write image data to worker: {}", e)));
+                    return;
+                }
+            }
+
+            let output = match child.wait_with_output() {
+                Ok(o) => o,
+                Err(e) => {
+                    let _ = tx.send(Err(format!("Depth estimation process failed: {}", e)));
+                    return;
+                }
+            };
+
+            if !output.status.success() {
+                let err_str = String::from_utf8_lossy(&output.stderr);
+                let _ = tx.send(Err(format!("Depth estimation failed:\n{}", err_str.trim())));
+                return;
+            }
+
+            match image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png) {
+                Ok(dyn_img) => {
+                    let _ = tx.send(Ok(dyn_img.to_rgba8()));
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(format!("Failed to decode output PNG: {}", e)));
+                }
+            }
+        });
+    }
+
+    /// Spawn low-priority background thread to generate 42x28 thumbnail previews for all FX.
     pub fn run_creative_fx_thumbnail_batch(&mut self) {
         if self.current_rgba.is_empty() {
             return;
@@ -180,25 +300,19 @@ impl ImagePreviewState {
                     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         apply_creative_fx(&thumb_base, &preset.params)
                     }));
-                    if let Ok(out_rgba) = res {
-                        if tx
-                            .send(CreativeFxThumbnailMsg {
-                                epoch,
-                                fx_type: *fx,
-                                rgba: out_rgba,
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
+                    if let Ok(rgba) = res {
+                        let _ = tx.send(CreativeFxThumbnailMsg {
+                            epoch,
+                            fx_type: *fx,
+                            rgba,
+                        });
                     }
                 }
             })
             .ok();
     }
 
-    /// Poll messages from Creative FX background render and thumbnail threads.
-
+    /// Poll messages from Creative FX background render, depth estimation, and thumbnail threads.
     pub fn poll_creative_fx(&mut self) {
         if let Some(rx) = self.creative_fx_state.render_rx.take() {
             match rx.try_recv() {
@@ -224,6 +338,30 @@ impl ImagePreviewState {
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.creative_fx_state.is_rendering = false;
+                }
+            }
+        }
+
+        if let Some(rx) = self.creative_fx_state.depth_estimation_rx.take() {
+            match rx.try_recv() {
+                Ok(Ok(depth_rgba)) => {
+                    self.creative_fx_state.cached_depth_map = Some(depth_rgba);
+                    self.creative_fx_state.depth_estimation_in_progress = false;
+                    self.creative_fx_state.depth_estimation_error = None;
+                    self.creative_fx_state
+                        .depth_mask_for_active_fx_mut()
+                        .enabled = true;
+                    self.run_creative_fx_render();
+                }
+                Ok(Err(e)) => {
+                    self.creative_fx_state.depth_estimation_error = Some(e);
+                    self.creative_fx_state.depth_estimation_in_progress = false;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.creative_fx_state.depth_estimation_rx = Some(rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.creative_fx_state.depth_estimation_in_progress = false;
                 }
             }
         }
@@ -1689,6 +1827,134 @@ impl ImagePreviewState {
                                                 self.creative_fx_state.selected_preset_name = "Custom".to_string();
                                                 self.creative_fx_state.mark_dirty();
                                             }
+                                        }
+                                    }
+
+                                    // ── Depth Map Masking Controls ──
+                                    ui.add_space(8.0);
+                                    ui.separator();
+                                    ui.add_space(6.0);
+
+                                    let is_mask_enabled = self.creative_fx_state.depth_mask_for_active_fx().enabled;
+                                    let has_cached_depth = self.creative_fx_state.cached_depth_map.is_some();
+                                    let depth_loading = self.creative_fx_state.depth_estimation_in_progress;
+                                    let diff_del = hex_to_c32(&palette.diff_del);
+
+                                    ui.horizontal(|ui| {
+                                        ui.label(egui::RichText::new("Depth Map Mask").small().strong().color(f_high));
+                                        if has_cached_depth {
+                                            ui.label(egui::RichText::new("• Cached").small().color(diff_add));
+                                        }
+                                    });
+                                    ui.add_space(4.0);
+
+                                    if depth_loading {
+                                        ui.horizontal(|ui| {
+                                            ui.add(egui::Spinner::new().size(14.0).color(base_c));
+                                            ui.add_space(4.0);
+                                            ui.label(
+                                                egui::RichText::new("Estimating depth map with Depth-Anything...")
+                                                    .small()
+                                                    .monospace()
+                                                    .color(base_c),
+                                            );
+                                        });
+                                        ctx.request_repaint();
+                                    } else {
+                                        let mask_btn_text = if is_mask_enabled {
+                                            "🌊 Depth Mask: ON"
+                                        } else {
+                                            "🌊 Use depth map as mask"
+                                        };
+                                        let mask_btn_fill = if is_mask_enabled {
+                                            diff_add
+                                        } else {
+                                            b_med
+                                        };
+                                        let mask_btn_fg = contrast_text_c32(mask_btn_fill, Some(f_high), palette);
+                                        let mask_btn = egui::Button::new(
+                                            egui::RichText::new(mask_btn_text).small().strong().color(mask_btn_fg),
+                                        )
+                                        .fill(mask_btn_fill)
+                                        .stroke(Stroke::new(1.0_f32, if is_mask_enabled { diff_add } else { b_med }))
+                                        .rounding(Rounding::same(4.0))
+                                        .min_size(Vec2::new(full_w, 22.0));
+
+                                        if ui.add(mask_btn).on_hover_text("Use AI monocular depth map to mask this effect (near vs far depth)").clicked() {
+                                            if is_mask_enabled {
+                                                self.creative_fx_state.depth_mask_for_active_fx_mut().enabled = false;
+                                                self.creative_fx_state.mark_dirty();
+                                            } else if has_cached_depth {
+                                                self.creative_fx_state.depth_mask_for_active_fx_mut().enabled = true;
+                                                self.creative_fx_state.mark_dirty();
+                                            } else {
+                                                self.run_depth_estimation_for_fx();
+                                            }
+                                        }
+                                    }
+
+                                    if let Some(err) = &self.creative_fx_state.depth_estimation_error {
+                                        ui.add_space(2.0);
+                                        ui.label(egui::RichText::new(format!("⚠ {}", err)).small().color(diff_del));
+                                    }
+
+                                    if is_mask_enabled {
+                                        ui.add_space(4.0);
+                                        let invert_text = if self.creative_fx_state.depth_mask_for_active_fx().invert {
+                                            "⇄ Invert Mask: ON (Far / Background)"
+                                        } else {
+                                            "⇄ Invert Mask: OFF (Near / Foreground)"
+                                        };
+                                        let inv_btn = egui::Button::new(egui::RichText::new(invert_text).small().color(f_high))
+                                            .fill(b_med)
+                                            .rounding(Rounding::same(3.0))
+                                            .min_size(Vec2::new(full_w, 20.0));
+                                        if ui.add(inv_btn).on_hover_text("Invert depth polarity (swap foreground and background)").clicked() {
+                                            let inv = !self.creative_fx_state.depth_mask_for_active_fx().invert;
+                                            self.creative_fx_state.depth_mask_for_active_fx_mut().invert = inv;
+                                            self.creative_fx_state.mark_dirty();
+                                        }
+
+                                        match cur_fx {
+                                            CreativeFxType::PixelSort
+                                            | CreativeFxType::CmykHalftone
+                                            | CreativeFxType::DitherPalette
+                                            | CreativeFxType::Ntsc
+                                            | CreativeFxType::Structure => {
+                                                ui.add_space(4.0);
+                                                let mut thresh = self.creative_fx_state.depth_mask_for_active_fx().threshold;
+                                                if render_context_slider(
+                                                    ui,
+                                                    "Depth Cutoff (0: Continuous gradient)",
+                                                    &mut thresh,
+                                                    0.0..=1.0,
+                                                    0.0,
+                                                    "",
+                                                    slider_w,
+                                                    palette,
+                                                ) {
+                                                    self.creative_fx_state.depth_mask_for_active_fx_mut().threshold = thresh;
+                                                    self.creative_fx_state.mark_dirty();
+                                                }
+
+                                                if thresh > 0.001 {
+                                                    let mut feather = self.creative_fx_state.depth_mask_for_active_fx().feather;
+                                                    if render_context_slider(
+                                                        ui,
+                                                        "Feather Softness",
+                                                        &mut feather,
+                                                        0.01..=0.50,
+                                                        0.25,
+                                                        "",
+                                                        slider_w,
+                                                        palette,
+                                                    ) {
+                                                        self.creative_fx_state.depth_mask_for_active_fx_mut().feather = feather;
+                                                        self.creative_fx_state.mark_dirty();
+                                                    }
+                                                }
+                                            }
+                                            _ => {}
                                         }
                                     }
 

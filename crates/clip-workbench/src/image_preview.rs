@@ -13,11 +13,12 @@ use little_clip_core::theme::AppPalette;
 use little_clip_core::{AppConfig, ClipItem, CommandRequest, HandSide, IpcRequest};
 use little_clip_ops::barcode::BarcodeDetection;
 use little_clip_ops::creative_fx::{
-    CmykHalftoneParams, CreativeFxParams, CreativeFxType, DitherMethod, DitherPaletteParams,
-    LensAberrationParams, NtscChromaLowpass, NtscDemodulation, NtscParams, NtscPhaseShift,
-    PaperTint, PixelSortCriteria, PixelSortDirection, PixelSortOrder, PixelSortParams,
-    RetroPalette, StructureParams, TrichromaticMode, TrichromaticParams, VhsTapeSpeed,
-    apply_creative_fx, default_preset_for_fx, presets_for_fx, trichromatic_intersection_box,
+    CmykHalftoneParams, CreativeFxParams, CreativeFxType, DepthMaskConfig, DitherMethod,
+    DitherPaletteParams, LensAberrationParams, NtscChromaLowpass, NtscDemodulation, NtscParams,
+    NtscPhaseShift, PaperTint, PixelSortCriteria, PixelSortDirection, PixelSortOrder,
+    PixelSortParams, RetroPalette, StructureParams, TrichromaticMode, TrichromaticParams,
+    VhsTapeSpeed, apply_creative_fx, apply_creative_fx_with_depth, default_preset_for_fx,
+    presets_for_fx, trichromatic_intersection_box,
 };
 use little_clip_ops::decorrelation_stretch::{
     DecorrelationMatrixMode, DecorrelationStats, DecorrelationStretchParams,
@@ -3165,5 +3166,104 @@ mod tests {
         let first_thumb = &state.creative_fx_state.pending_thumbnails[0];
         assert_eq!(first_thumb.1.width(), 42);
         assert_eq!(first_thumb.1.height(), 28);
+    }
+
+    #[test]
+    fn test_creative_fx_depth_mask_workflow() {
+        let config = AppConfig::default();
+        let mut img = RgbaImage::new(16, 16);
+        for p in img.pixels_mut() {
+            *p = image::Rgba([80, 80, 80, 255]);
+        }
+        let mut png_bytes = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut png_bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        let item = ClipItem::from_image(png_bytes, 16, 16, "image/png");
+        let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
+
+        // 1. Verify depth mask is disabled by default across effects
+        assert!(!state.creative_fx_state.depth_mask_for_active_fx().enabled);
+        assert_eq!(
+            state.creative_fx_state.depth_mask_for_active_fx().threshold,
+            0.0
+        );
+        assert_eq!(
+            state.creative_fx_state.depth_mask_for_active_fx().feather,
+            0.25
+        );
+        assert!(!state.creative_fx_state.depth_mask_for_active_fx().invert);
+        assert!(state.creative_fx_state.cached_depth_map.is_none());
+
+        // 2. Set synthetic depth map (left half dark / near, right half bright / far)
+        let mut depth_map = RgbaImage::new(16, 16);
+        for (x, _y, p) in depth_map.enumerate_pixels_mut() {
+            let val = if x < 8 { 0u8 } else { 255u8 };
+            *p = image::Rgba([val, val, val, 255]);
+        }
+        state.creative_fx_state.cached_depth_map = Some(depth_map);
+
+        // 3. Enable depth mask on PixelSort
+        state.creative_fx_state.selected_fx = CreativeFxType::PixelSort;
+        state
+            .creative_fx_state
+            .depth_mask_for_active_fx_mut()
+            .enabled = true;
+        assert!(state.creative_fx_state.depth_mask_for_active_fx().enabled);
+
+        // 4. Render with depth mask
+        state.run_creative_fx_render();
+        assert!(state.creative_fx_state.is_rendering);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while state.creative_fx_state.is_rendering && std::time::Instant::now() < deadline {
+            state.poll_creative_fx();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!state.creative_fx_state.is_rendering);
+        assert!(state.creative_fx_state.preview_rgba.is_some());
+        assert_eq!(state.creative_fx_state.render_error, None);
+
+        // 5. Test mask inversion and threshold
+        state
+            .creative_fx_state
+            .depth_mask_for_active_fx_mut()
+            .invert = true;
+        state
+            .creative_fx_state
+            .depth_mask_for_active_fx_mut()
+            .threshold = 0.5;
+        state
+            .creative_fx_state
+            .depth_mask_for_active_fx_mut()
+            .feather = 0.1;
+        state.run_creative_fx_render();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while state.creative_fx_state.is_rendering && std::time::Instant::now() < deadline {
+            state.poll_creative_fx();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!state.creative_fx_state.is_rendering);
+        assert!(state.creative_fx_state.preview_rgba.is_some());
+
+        // 6. Switch to Structure effect, verify cached depth map is shared
+        state.creative_fx_state.selected_fx = CreativeFxType::Structure;
+        assert!(state.creative_fx_state.cached_depth_map.is_some());
+        state
+            .creative_fx_state
+            .depth_mask_for_active_fx_mut()
+            .enabled = true;
+        state.run_creative_fx_render();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while state.creative_fx_state.is_rendering && std::time::Instant::now() < deadline {
+            state.poll_creative_fx();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!state.creative_fx_state.is_rendering);
+        assert!(state.creative_fx_state.preview_rgba.is_some());
     }
 }
