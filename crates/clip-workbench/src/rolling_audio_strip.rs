@@ -11,7 +11,7 @@ use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::slot::HandSide;
 use little_clip_core::theme::AppPalette;
 use rodio::stream::MixerDeviceSink;
-use rodio::{Decoder, Player, Source};
+use rodio::{Decoder, Player};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
