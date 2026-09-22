@@ -272,7 +272,10 @@ fn generate_aprs_message(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let output_dir = PathBuf::from("/home/vega/Documents/type_testing/decode_testing");
+    let output_dir = std::env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("decode_testing"));
     create_dir_all(&output_dir)?;
     println!(
         "Generating digital decode test suite in: {}",

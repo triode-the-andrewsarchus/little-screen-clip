@@ -41,3 +41,20 @@ Follow the existing Conventional Commit pattern with a concise scope: `feat(imag
 ## Runtime Configuration & Hardware
 
 Do not commit personal display, compositor, or desktop settings. Keep `config.toml` changes reloadable, and preserve virtual-mode behavior when no supported USB display is attached.
+
+## Agent Maintenance & Self-Correction
+During final cleanup, consider whether the work revealed that this file is incomplete, incorrect, or obsolete.
+
+Update it only when work:
+- establishes or changes a durable architectural pattern or convention;
+- changes an interface, invariant, workflow, or constraint documented here;
+- reveals an important non-obvious constraint future agents need to know; or
+- invalidates existing guidance.
+
+Do not update it for ordinary bug fixes, routine features, localized refactors, implementation details, or information readily discoverable from the code.
+
+Prefer correcting or consolidating existing guidance over appending new material. Keep this file concise and current rather than historical.
+
+If the user corrects an assumption or identifies a recurring mistake, consider whether that correction represents a durable project rule.
+If so, update the appropriate guidance so future agents do not repeat it.
+Do not record one-off preferences or task-specific corrections.

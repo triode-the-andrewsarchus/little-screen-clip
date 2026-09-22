@@ -571,39 +571,23 @@ mod tests {
     }
 
     #[test]
-    fn test_profile_deadmau5() {
-        let p = std::path::Path::new(
-            "/mnt/rust/data/MusicJelly/Deadmau5/Some Chords (Single)/Deadmau5 - Some Chords.mp3",
-        );
-        if !p.is_file() {
-            println!("Deadmau5 file not found, skipping profile test.");
-            return;
-        }
+    fn test_profile_full_audio_analysis() {
+        let wav_path = generate_test_wav();
+        let p = &wav_path;
 
         let meta = read_audio_metadata(p).expect("metadata");
-        println!("\n=== PROFILING DEADMAU5 TRACK ===");
-        println!("File: {:?}", p);
-        println!(
-            "Duration: {} ms ({:.2} min), Sample rate: {} Hz, Channels: {}",
-            meta.duration_ms,
-            meta.duration_ms as f64 / 60000.0,
-            meta.sample_rate,
-            meta.channels
-        );
+        assert_eq!(meta.sample_rate, 44100);
+        assert_eq!(meta.channels, 2);
 
         let t_total_start = std::time::Instant::now();
         let analysis = compute_full_audio_analysis(p, 1200).expect("analysis failed");
-        let total_elapsed = t_total_start.elapsed();
+        let _total_elapsed = t_total_start.elapsed();
 
-        println!("Total analysis time: {:?}", total_elapsed);
-        println!("Total frames: {}", analysis.total_frames);
-        println!("Transients: {}", analysis.transients.len());
-        println!("Overview peaks: {}", analysis.overview_peaks1.len());
-        println!(
-            "Spectrogram RGBA bytes: {}",
-            analysis.spectrogram_rgba.len()
-        );
-        println!("Note strip info count: {}", analysis.note_strip_info.len());
+        assert!(analysis.total_frames > 0);
+        assert!(!analysis.overview_peaks1.is_empty());
+        assert!(!analysis.spectrogram_rgba.is_empty());
+
+        let _ = std::fs::remove_file(&wav_path);
     }
 
     #[test]

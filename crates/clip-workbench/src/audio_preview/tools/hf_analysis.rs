@@ -1042,16 +1042,59 @@ mod tests {
         assert_eq!(standard_ratios_196k, &[1.25, 1.5, 2.0, 2.5, 5.0, 10.0]);
     }
 
+    fn generate_synthetic_ultrasonic_wav(
+        sample_rate: u32,
+        duration_sec: f32,
+    ) -> std::path::PathBuf {
+        use std::io::Write;
+        let temp_path = std::env::temp_dir().join(format!("test_bat_{}.wav", uuid::Uuid::new_v4()));
+        let mut file = std::fs::File::create(&temp_path).expect("failed to create temp wav");
+        let num_samples = (sample_rate as f32 * duration_sec) as usize;
+        let num_channels = 1u16;
+        let bits_per_sample = 16u16;
+        let byte_rate = sample_rate * num_channels as u32 * (bits_per_sample as u32 / 8);
+        let block_align = num_channels * (bits_per_sample / 8);
+        let data_len = (num_samples * num_channels as usize * 2) as u32;
+        let riff_len = 36 + data_len;
+
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&riff_len.to_le_bytes()).unwrap();
+        file.write_all(b"WAVE").unwrap();
+        file.write_all(b"fmt ").unwrap();
+        file.write_all(&16u32.to_le_bytes()).unwrap();
+        file.write_all(&1u16.to_le_bytes()).unwrap();
+        file.write_all(&num_channels.to_le_bytes()).unwrap();
+        file.write_all(&sample_rate.to_le_bytes()).unwrap();
+        file.write_all(&byte_rate.to_le_bytes()).unwrap();
+        file.write_all(&block_align.to_le_bytes()).unwrap();
+        file.write_all(&bits_per_sample.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&data_len.to_le_bytes()).unwrap();
+
+        // 30 kHz chirp between 0.5s and 0.6s
+        let chirp_start = (sample_rate as f32 * 0.5) as usize;
+        let chirp_end = (sample_rate as f32 * 0.6) as usize;
+        for i in 0..num_samples {
+            let s = if i >= chirp_start && i < chirp_end {
+                0.8 * (2.0 * std::f32::consts::PI * 30_000.0 * (i - chirp_start) as f32
+                    / sample_rate as f32)
+                    .sin()
+            } else {
+                0.0
+            };
+            let val = (s * 30000.0) as i16;
+            file.write_all(&val.to_le_bytes()).unwrap();
+        }
+        file.flush().unwrap();
+        temp_path
+    }
+
     #[test]
     fn test_bat_file_analysis_and_hf_features() {
-        let bat_path =
-            std::path::Path::new("/home/vega/Documents/type_testing/20260525_023500_BAT.WAV");
-        if !bat_path.exists() {
-            return;
-        }
+        let bat_path = generate_synthetic_ultrasonic_wav(384_000, 1.2);
 
         let res = little_clip_core::audio::compute_audio_analysis_progressive(
-            bat_path,
+            &bat_path,
             600,
             |progress| {
                 if let little_clip_core::audio::AudioAnalysisProgress::Complete = progress {
@@ -1059,7 +1102,7 @@ mod tests {
                 }
             },
         );
-        let analysis = res.expect("bat file should decode and analyze");
+        let analysis = res.expect("synthetic ultrasonic audio should decode and analyze");
         assert_eq!(analysis.sample_rate, 384_000);
         assert!(
             !analysis.ultrasonic_roi.is_empty(),
@@ -1067,16 +1110,16 @@ mod tests {
         );
         assert!(
             !analysis.ultrasonic_peak_times.is_empty(),
-            "Should detect bat chirp peaks"
+            "Should detect chirp peaks"
         );
 
-        // Bat chirps are concentrated around ~50s
-        let has_peak_near_50s = analysis
+        // Chirp is placed at ~0.55s
+        let has_peak_near_chirp = analysis
             .ultrasonic_peak_times
             .iter()
-            .any(|&t| (t - 50.0).abs() < 5.0);
+            .any(|&t| (t - 0.55).abs() < 0.2);
         assert!(
-            has_peak_near_50s,
+            has_peak_near_chirp,
             "Detected peaks: {:?}",
             analysis.ultrasonic_peak_times
         );
@@ -1086,10 +1129,10 @@ mod tests {
         assert_eq!(ticks[0].1, "180k");
         assert_eq!(ticks[1].1, "160k");
 
-        // Verify pitch shifting a 1s snippet of the bat audio
+        // Verify pitch shifting a 0.5s snippet
         let sr = analysis.sample_rate as usize;
-        let snippet_start = (49.8 * sr as f64) as usize;
-        let snippet_end = snippet_start + sr;
+        let snippet_start = (0.4 * sr as f64) as usize;
+        let snippet_end = snippet_start + (0.5 * sr as f64) as usize;
         if snippet_end <= analysis.ch1_samples.len() {
             let snippet = &analysis.ch1_samples[snippet_start..snippet_end];
             let shifted = pitch_shift_realtime(snippet, 10.0);
@@ -1098,7 +1141,7 @@ mod tests {
             assert_eq!(filtered.len(), snippet.len());
         }
 
-        // Verify high-resolution viewport spectrogram rendering on bat call snippet
+        // Verify high-resolution viewport spectrogram rendering on chirp snippet
         let cfg = HfSpectrogramConfig {
             fft_size: 1024,
             gain_db: 0.0,
@@ -1108,7 +1151,7 @@ mod tests {
         let (tex_w, tex_h, vp_rgba) = render_hf_viewport_spectrogram(
             &analysis.ch1_samples,
             analysis.sample_rate,
-            49.8,
+            0.4,
             0.5,
             600,
             cfg,
@@ -1116,6 +1159,8 @@ mod tests {
         assert_eq!(tex_w, 600);
         assert_eq!(tex_h, 512);
         assert_eq!(vp_rgba.len(), 600 * 512 * 4);
+
+        let _ = std::fs::remove_file(&bat_path);
     }
 
     #[test]

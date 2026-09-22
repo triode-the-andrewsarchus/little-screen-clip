@@ -543,16 +543,58 @@ mod tests {
         assert_eq!(rgba4.len(), 150 * 2048 * 4);
     }
 
+    fn generate_synthetic_ultrasonic_wav(
+        sample_rate: u32,
+        duration_sec: f32,
+    ) -> std::path::PathBuf {
+        use std::io::Write;
+        let temp_path =
+            std::env::temp_dir().join(format!("test_ultrasonic_{}.wav", uuid::Uuid::new_v4()));
+        let mut file = std::fs::File::create(&temp_path).expect("failed to create temp wav");
+        let num_samples = (sample_rate as f32 * duration_sec) as usize;
+        let num_channels = 1u16;
+        let bits_per_sample = 16u16;
+        let byte_rate = sample_rate * num_channels as u32 * (bits_per_sample as u32 / 8);
+        let block_align = num_channels * (bits_per_sample / 8);
+        let data_len = (num_samples * num_channels as usize * 2) as u32;
+        let riff_len = 36 + data_len;
+
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&riff_len.to_le_bytes()).unwrap();
+        file.write_all(b"WAVE").unwrap();
+        file.write_all(b"fmt ").unwrap();
+        file.write_all(&16u32.to_le_bytes()).unwrap();
+        file.write_all(&1u16.to_le_bytes()).unwrap();
+        file.write_all(&num_channels.to_le_bytes()).unwrap();
+        file.write_all(&sample_rate.to_le_bytes()).unwrap();
+        file.write_all(&byte_rate.to_le_bytes()).unwrap();
+        file.write_all(&block_align.to_le_bytes()).unwrap();
+        file.write_all(&bits_per_sample.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&data_len.to_le_bytes()).unwrap();
+
+        // 30 kHz chirp between 0.1s and 0.2s
+        let chirp_start = (sample_rate as f32 * 0.1) as usize;
+        let chirp_end = (sample_rate as f32 * 0.2) as usize;
+        for i in 0..num_samples {
+            let s = if i >= chirp_start && i < chirp_end {
+                0.8 * (2.0 * PI * 30_000.0 * (i - chirp_start) as f32 / sample_rate as f32).sin()
+            } else {
+                0.0
+            };
+            let val = (s * 30000.0) as i16;
+            file.write_all(&val.to_le_bytes()).unwrap();
+        }
+        file.flush().unwrap();
+        temp_path
+    }
+
     #[test]
     fn test_render_hf_viewport_spectrogram_on_bat_file() {
-        let bat_path =
-            std::path::Path::new("/home/vega/Documents/type_testing/20260525_023500_BAT.WAV");
-        if !bat_path.exists() {
-            return;
-        }
+        let bat_path = generate_synthetic_ultrasonic_wav(384_000, 0.5);
         let analysis =
-            little_clip_core::audio::compute_audio_analysis_progressive(bat_path, 100, |_| {})
-                .expect("failed to decode BAT.WAV");
+            little_clip_core::audio::compute_audio_analysis_progressive(&bat_path, 100, |_| {})
+                .expect("failed to decode synthetic ultrasonic wav");
         assert_eq!(analysis.sample_rate, 384_000);
 
         let config = HfSpectrogramConfig {
@@ -565,7 +607,7 @@ mod tests {
         let (w, h, rgba) = render_hf_viewport_spectrogram(
             &analysis.ch1_samples,
             analysis.sample_rate,
-            49.8,
+            0.0,
             0.4,
             400,
             config,
@@ -597,5 +639,6 @@ mod tests {
             has_chirp_energy,
             "Should detect high-energy bat chirp in 25-35 kHz band"
         );
+        let _ = std::fs::remove_file(&bat_path);
     }
 }

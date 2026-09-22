@@ -1,15 +1,13 @@
 # Overall
 - Use https://github.com/Rust-GPU/rust-gpu to get rendering times down
 - Make sure as much as possible is keyboard driven, like numbers to get to the tools in the image markup editor
+- Refactor everything to not be pixel based
 
 # Big new features:
+## Text
+* Scrolling should use a VS-Code like minimap instead of a plain scroll bar
 ## Image Studio
-* More image FX
-    * Image → particle system → image
-        * Turn bright pixels into particles, let them flow under gravity/noise/vortices, then accumulate the particles back into an image.
-    * Echo image — repeatedly offset and composite the image.
-    * Edge feedback — edge-detect → amplify → feed back.
-    * https://github.com/Xpktro/bndr port
+* Separate out FX per file
 * Depth-map driven contrast/saturation/brightness adjustment
 ## Audio Studio
 * Resample / change sample rate
@@ -25,23 +23,27 @@
 * Repair
     * Cathar — general-purpose restoration workhorse: de-click, de-crackle, de-clip, de-plosive, de-hum, de-wind, etc.
     * audiojs/denoise — useful lightweight/browser-compatible implementations and a good source of conventional algorithms.
-* De-Verb
-    * BUDDy — experimental/high-quality speech dereverb.
-    * U-DREAM — newer experimental dereverb candidate.
 * Some sort of indication of stereo separation on stereo files
 ## MIDI
-* I'd like a live system MIDI monitor, similar to the rolling audio meter
+* Better sound font / multiple options?
+* The stop button is lower than the play button
+    * This makes me worry the correct button thing we made with safe contrast isn't being used for one of them
 ## PDF
 * add epub support
+* add CBX support
 * convert epub <-> pdf
 ## 3D file viewer
+* open in blender doesn't work.
 * More file support
+* Some sort of false-color would be good.
 ## .ply/.splat preview
 * The thing
 ## Video
 * Basic preview
 * grab selection to clip .mkv/.mp4 or .gif
 ## Diff (both binary and text)
+* The colored background rendering vs the colored numbers can make it low contrast
+* J and K are used for previous/next when arrow keys aren't bound. Bind both.
 - Show SHA1 of each file at top
 ## Color picker
 - Lazy multi-color space color picker
@@ -68,3 +70,20 @@
     - Unit conversion
     - Computer algebra system
 - hardware controller integration - MIDI control?
+
+
+# File Manager
+
+The next phase of this project is a file manager application that integrates with the clipboard. Unlike the workbench UI, which is meant to be an ephermal popup for quick use, this is meant to fundamentally replace a normal file manager like Thunar or Nautilus.
+
+Notably, I prefer the style of navigation like thunar's where typring letters immediately navigates to the match in the folder, not doing a recursive search or filtering
+
+But with a few quirks.
+
+First, we want to have a small preview of the existing clipboard slots. This will need a different render, as while on the big workbench it can take up ~half the screen, in the file manager it simply can't eat that much of the realestate. This should allow for dragging in a file/folder or selection of files/folders to a clipboard slot - fundamentally no different than hitting copy, except with the mouse action to drop it into a specific slot.
+
+Second, it should be able to use all the same previews we've alredy made. This will allow for individual waveforms for audio files, picture thumbnails, midi thumbnails, etc.
+
+Third, the existing small editors should be able to be invoked, but here they should default to saving to the directory they're opened to, asking if it should be a replace (save) or new-name (save-as)
+
+Fourth, 
