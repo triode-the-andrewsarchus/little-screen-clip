@@ -10,8 +10,8 @@ use little_clip_core::audio::{
     AudioAnalysisProgress, AudioFilterChain, AudioMetadata, AudioRegionEdit,
     DEFAULT_TRANSIENT_SENSITIVITY, FullAudioAnalysis, MAX_TRANSIENT_SENSITIVITY,
     MIN_TRANSIENT_SENSITIVITY, apply_audio_gain, compute_audio_analysis_progressive,
-    compute_audio_analysis_progressive_with_edits, compute_audio_spectral_preview_with_edits,
-    read_audio_metadata,
+    compute_audio_analysis_progressive_with_gain_and_edits,
+    compute_audio_spectral_preview_with_gain_and_edits, read_audio_metadata,
 };
 use little_clip_core::ipc::IpcRequest;
 use little_clip_core::theme::AppPalette;
@@ -316,16 +316,23 @@ pub struct RightClickHoldState {
 
 pub const RIGHT_CLICK_HOLD_TIMEOUT: Duration = Duration::from_millis(300);
 
+#[derive(Debug, Clone, Default, PartialEq)]
+struct SessionAudioEdits {
+    track_gain_db: f32,
+    regions: Vec<AudioRegionEdit>,
+}
+
 #[derive(Default)]
 struct PlaybackEdits {
     generation: AtomicU64,
-    regions: RwLock<Vec<AudioRegionEdit>>,
+    edits: RwLock<SessionAudioEdits>,
 }
 
 struct EditedPreviewSource<S> {
     inner: S,
     shared: Arc<PlaybackEdits>,
     generation: u64,
+    track_gain_db: f32,
     regions: Vec<AudioRegionEdit>,
     frame: u64,
     channel: u16,
@@ -347,6 +354,7 @@ impl<S: Source> EditedPreviewSource<S> {
             inner,
             shared,
             generation: u64::MAX,
+            track_gain_db: 0.0,
             regions: Vec::new(),
             frame: 0,
             channel: 0,
@@ -369,8 +377,9 @@ impl<S: Source> Iterator for EditedPreviewSource<S> {
             let generation = self.shared.generation.load(Ordering::Acquire);
             let changed = generation != self.generation;
             if changed {
-                if let Ok(regions) = self.shared.regions.read() {
-                    self.regions.clone_from(&regions);
+                if let Ok(edits) = self.shared.edits.read() {
+                    self.track_gain_db = edits.track_gain_db;
+                    self.regions.clone_from(&edits.regions);
                 }
                 self.generation = generation;
             }
@@ -407,7 +416,7 @@ impl<S: Source> Iterator for EditedPreviewSource<S> {
             self.channel = 0;
             self.frame += 1;
         }
-        let dry = sample;
+        let dry = apply_audio_gain(sample, self.track_gain_db, false);
         let gained = apply_audio_gain(dry, self.gain_db, self.soft_clip);
         let wet = self
             .filters
@@ -446,6 +455,7 @@ impl<S: Source> Source for EditedPreviewSource<S> {
 struct AudioEditSnapshot {
     path: PathBuf,
     duration_sec: f32,
+    track_gain_db: f32,
     selection_mode: SelectionMode,
     selection: Option<(f32, f32)>,
     multi_selections: Vec<(f32, f32)>,
@@ -472,9 +482,9 @@ pub struct AudioPreviewState {
     pub loading_start_time: Instant,
     pub duration_sec: f32,
     edit_analysis_rx: Option<Receiver<AudioAnalysisProgress>>,
-    edit_analysis_observed: Vec<AudioRegionEdit>,
-    edit_analysis_inflight: Vec<AudioRegionEdit>,
-    edit_analysis_displayed: Vec<AudioRegionEdit>,
+    edit_analysis_observed: SessionAudioEdits,
+    edit_analysis_inflight: SessionAudioEdits,
+    edit_analysis_displayed: SessionAudioEdits,
     edit_change_at: Instant,
     edit_analysis_debounce: Duration,
     playback_edits: Arc<PlaybackEdits>,
@@ -505,6 +515,8 @@ pub struct AudioPreviewState {
     undo_stack: Vec<AudioEditSnapshot>,
     redo_stack: Vec<AudioEditSnapshot>,
     last_scroll_edit: Option<(ScrollEditKey, Instant)>,
+    /// Non-destructive gain applied to the entire track before region effects.
+    pub track_gain_db: f32,
     /// Non-destructive gain offsets keyed to multi-region selection indices.
     /// Source samples remain untouched until an export/editor handoff.
     pub region_gain_db: Vec<f32>,
@@ -550,6 +562,7 @@ pub struct AudioPreviewState {
 impl AudioPreviewState {
     const MIN_GAIN_DB: f32 = -60.0;
     const MAX_GAIN_DB: f32 = 40.0; // 100x
+    const NORMALIZE_TARGET_DBFS: f32 = -1.0;
     const MAX_UNDO_STEPS: usize = 50;
     const SCROLL_UNDO_WINDOW: Duration = Duration::from_millis(300);
 
@@ -557,6 +570,7 @@ impl AudioPreviewState {
         AudioEditSnapshot {
             path: self.path.clone(),
             duration_sec: self.duration_sec,
+            track_gain_db: self.track_gain_db,
             selection_mode: self.selection_mode,
             selection: self.selection,
             multi_selections: self.multi_selections.clone(),
@@ -631,6 +645,7 @@ impl AudioPreviewState {
         }
         self.path = snapshot.path;
         self.duration_sec = snapshot.duration_sec;
+        self.track_gain_db = snapshot.track_gain_db;
         self.selection_mode = snapshot.selection_mode;
         self.selection = snapshot.selection;
         self.multi_selections = snapshot.multi_selections;
@@ -693,11 +708,11 @@ impl AudioPreviewState {
         self.inspect_viewport_cache.clear();
         self.is_loading_analysis = true;
         self.edit_analysis_rx = None;
-        self.edit_analysis_observed.clear();
-        self.edit_analysis_inflight.clear();
-        self.edit_analysis_displayed.clear();
-        if let Ok(mut regions) = self.playback_edits.regions.write() {
-            regions.clear();
+        self.edit_analysis_observed = SessionAudioEdits::default();
+        self.edit_analysis_inflight = SessionAudioEdits::default();
+        self.edit_analysis_displayed = SessionAudioEdits::default();
+        if let Ok(mut edits) = self.playback_edits.edits.write() {
+            *edits = SessionAudioEdits::default();
             self.playback_edits
                 .generation
                 .fetch_add(1, Ordering::Release);
@@ -751,6 +766,149 @@ impl AudioPreviewState {
             _ => {}
         }
         self.record_scroll_edit(before, ScrollEditKind::Gain, now);
+    }
+
+    fn peak_amplitude_in_range(&self, range: (f32, f32)) -> Option<f32> {
+        let analysis = self.analysis.as_ref()?;
+        let (start, end) = AudioSelectionModel::clamp_to_duration(
+            AudioSelectionModel::normalize(range),
+            self.duration_sec,
+        );
+        let sample_rate = analysis.sample_rate as f32;
+        let first = ((start * sample_rate).floor() as usize).min(analysis.total_frames);
+        let last = ((end * sample_rate).ceil() as usize).min(analysis.total_frames);
+        if first >= last {
+            return None;
+        }
+        let mut peak = analysis.ch1_samples[first..last]
+            .iter()
+            .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+        if let Some(ch2) = &analysis.ch2_samples {
+            peak = ch2[first..last]
+                .iter()
+                .fold(peak, |peak, sample| peak.max(sample.abs()));
+        }
+        (peak.is_finite() && peak > f32::EPSILON).then_some(peak)
+    }
+
+    fn normalization_gain_db(peak: f32, preceding_gain_db: f32) -> Option<f32> {
+        if !peak.is_finite() || peak <= f32::EPSILON || !preceding_gain_db.is_finite() {
+            return None;
+        }
+        Some(
+            (Self::NORMALIZE_TARGET_DBFS - 20.0 * peak.log10() - preceding_gain_db)
+                .clamp(Self::MIN_GAIN_DB, Self::MAX_GAIN_DB),
+        )
+    }
+
+    fn track_peak_before_track_gain(&self) -> Option<f32> {
+        let regions = self.region_edits();
+        let mut cuts = vec![0.0, self.duration_sec];
+        for region in &regions {
+            let (effect_start, effect_end) = region.effect_bounds(self.duration_sec);
+            cuts.extend([effect_start, region.start_sec, region.end_sec, effect_end]);
+        }
+        cuts.sort_by(f32::total_cmp);
+        cuts.dedup_by(|a, b| (*a - *b).abs() < f32::EPSILON);
+        let mut peak = 0.0_f32;
+        for window in cuts.windows(2) {
+            let (start, end) = (window[0], window[1]);
+            let time = (start + end) * 0.5;
+            let active = regions
+                .iter()
+                .find(|region| region.effect_mix(time, self.duration_sec) > 0.0);
+            let Some(raw_peak) = self.peak_amplitude_in_range((start, end)) else {
+                continue;
+            };
+            if let Some(region) = active {
+                let wet_peak = apply_audio_gain(raw_peak, region.gain_db, region.soft_clip);
+                for at in [start, time, end] {
+                    let mix = region.effect_mix(at, self.duration_sec);
+                    peak = peak.max((raw_peak + (wet_peak - raw_peak) * mix).abs());
+                }
+            } else {
+                peak = peak.max(raw_peak);
+            }
+        }
+        (peak.is_finite() && peak > f32::EPSILON).then_some(peak)
+    }
+
+    fn normalize_track(&mut self, now: f64) {
+        let Some(peak) = self.track_peak_before_track_gain() else {
+            let message = if self.analysis.is_some() {
+                "Track is silent; normalization made no change"
+            } else {
+                "Audio analysis is still loading"
+            };
+            self.status_toast = Some((message.into(), now));
+            return;
+        };
+        let Some(gain_db) = Self::normalization_gain_db(peak, 0.0) else {
+            self.status_toast = Some(("Could not measure the track peak".into(), now));
+            return;
+        };
+        let before = self.edit_snapshot();
+        self.track_gain_db = gain_db;
+        self.record_edit(before);
+        self.status_toast = Some((
+            format!(
+                "Normalized track to {:.1} dBFS (gain {gain_db:+.1} dB)",
+                Self::NORMALIZE_TARGET_DBFS
+            ),
+            now,
+        ));
+    }
+
+    fn normalize_active_region(&mut self, now: f64) {
+        let Some(range) = self.active_selection_range() else {
+            self.normalize_track(now);
+            return;
+        };
+        let Some(peak) = self.peak_amplitude_in_range(range) else {
+            let message = if self.analysis.is_some() {
+                "Selected region is silent; normalization made no change"
+            } else {
+                "Audio analysis is still loading"
+            };
+            self.status_toast = Some((message.into(), now));
+            return;
+        };
+        let Some(gain_db) = Self::normalization_gain_db(peak, self.track_gain_db) else {
+            self.status_toast = Some(("Could not measure the selected peak".into(), now));
+            return;
+        };
+        let before = self.edit_snapshot();
+        let label = match self.selection_mode {
+            SelectionMode::Single => {
+                self.single_region_gain_db = gain_db;
+                "selection".to_string()
+            }
+            SelectionMode::Multi => {
+                let Some(index) = self.active_multi_index else {
+                    self.normalize_track(now);
+                    return;
+                };
+                self.region_gain_db.resize(self.multi_selections.len(), 0.0);
+                self.region_gain_db[index] = gain_db;
+                format!("region #{}", index + 1)
+            }
+        };
+        self.record_edit(before);
+        self.status_toast = Some((
+            format!(
+                "Normalized {label} to {:.1} dBFS (region gain {gain_db:+.1} dB)",
+                Self::NORMALIZE_TARGET_DBFS
+            ),
+            now,
+        ));
+    }
+
+    fn normalize_at_time(&mut self, hovered_time: Option<f32>, now: f64) {
+        if hovered_time.is_some_and(|time| self.focus_region_at_time(time)) {
+            self.normalize_active_region(now);
+        } else {
+            self.normalize_track(now);
+        }
     }
 
     fn crossfade_limit(range: (f32, f32), duration_sec: f32) -> f32 {
@@ -1078,7 +1236,8 @@ impl AudioPreviewState {
         let crossfade_sec = crossfade_sec
             .max(0.0)
             .min(Self::crossfade_limit((start, end), self.duration_sec));
-        let soft_clip = if gain_db <= 0.0 {
+        let effective_gain_db = Self::combined_gain_db(self.track_gain_db, gain_db);
+        let soft_clip = if effective_gain_db <= 0.0 {
             false
         } else if let Some(analysis) = &self.analysis {
             let sample_rate = analysis.sample_rate as f32;
@@ -1094,7 +1253,7 @@ impl AudioPreviewState {
                     let (min, max, _) = analysis.query_peaks(ch, first, last);
                     peak = peak.max(min.abs()).max(max.abs());
                 }
-                peak * 10.0_f32.powf(gain_db / 20.0) > 1.0
+                peak * 10.0_f32.powf(effective_gain_db / 20.0) > 1.0
             }
         } else {
             true
@@ -1182,6 +1341,42 @@ impl AudioPreviewState {
         }
     }
 
+    fn session_audio_edits(&self) -> SessionAudioEdits {
+        SessionAudioEdits {
+            track_gain_db: self.track_gain_db,
+            regions: self.region_edits(),
+        }
+    }
+
+    fn combined_gain_db(track_gain_db: f32, region_gain_db: f32) -> f32 {
+        if track_gain_db == f32::NEG_INFINITY || region_gain_db == f32::NEG_INFINITY {
+            f32::NEG_INFINITY
+        } else {
+            track_gain_db + region_gain_db
+        }
+    }
+
+    fn export_region_edit(
+        &self,
+        start: f32,
+        end: f32,
+        crossfade_sec: f32,
+        region_gain_db: f32,
+        low_pass_hz: Option<f32>,
+        high_pass_hz: Option<f32>,
+    ) -> AudioRegionEdit {
+        let mut region = self.region_edit(
+            start,
+            end,
+            crossfade_sec,
+            region_gain_db,
+            low_pass_hz,
+            high_pass_hz,
+        );
+        region.gain_db = Self::combined_gain_db(self.track_gain_db, region_gain_db);
+        region
+    }
+
     fn gain_filter(gain_db: f32, soft_clip: bool) -> Option<String> {
         if gain_db == 0.0 {
             None
@@ -1267,9 +1462,9 @@ impl AudioPreviewState {
             loading_start_time: Instant::now(),
             duration_sec,
             edit_analysis_rx: None,
-            edit_analysis_observed: Vec::new(),
-            edit_analysis_inflight: Vec::new(),
-            edit_analysis_displayed: Vec::new(),
+            edit_analysis_observed: SessionAudioEdits::default(),
+            edit_analysis_inflight: SessionAudioEdits::default(),
+            edit_analysis_displayed: SessionAudioEdits::default(),
             edit_change_at: Instant::now(),
             edit_analysis_debounce: Duration::from_millis(180),
             playback_edits: Arc::default(),
@@ -1292,6 +1487,7 @@ impl AudioPreviewState {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             last_scroll_edit: None,
+            track_gain_db: 0.0,
             region_gain_db: Vec::new(),
             single_region_gain_db: 0.0,
             region_crossfade_sec: Vec::new(),
@@ -1426,6 +1622,7 @@ impl AudioPreviewState {
         self.view_duration_sec = self.duration_sec;
         self.current_time_sec = start.min(self.duration_sec);
         self.selection = None;
+        self.track_gain_db = 0.0;
         self.clear_multi_regions();
         self.clear_single_region_effects();
         self.restart_session_analysis();
@@ -1445,7 +1642,7 @@ impl AudioPreviewState {
 
     fn session_edit_filter(&self) -> Option<String> {
         let regions = self.region_edits();
-        if regions.is_empty() {
+        if regions.is_empty() && self.track_gain_db == 0.0 {
             return None;
         }
         let mut cuts = vec![0.0, self.duration_sec];
@@ -1455,7 +1652,9 @@ impl AudioPreviewState {
         }
         cuts.sort_by(f32::total_cmp);
         cuts.dedup();
-        let mut filters = Vec::new();
+        let mut filters = Self::gain_filter(self.track_gain_db, false)
+            .into_iter()
+            .collect::<Vec<_>>();
         for pair in cuts.windows(2) {
             let (start, end) = (pair[0], pair[1]);
             if end - start < 0.00001 {
@@ -1509,6 +1708,10 @@ impl AudioPreviewState {
         }
         let mut graph = Vec::new();
         let mut input = "0:a".to_string();
+        if let Some(gain) = Self::gain_filter(self.track_gain_db, false) {
+            graph.push(format!("[0:a]{gain}[track]"));
+            input = "track".to_string();
+        }
         for (index, region) in regions.into_iter().enumerate() {
             let effect = Self::region_filter(region)?;
             let mix = Self::crossfade_mix_expression(region, self.duration_sec);
@@ -2044,9 +2247,17 @@ impl AudioPreviewState {
         };
         let out_filename = format_sample_filename(base_name, start, duration, mode_suffix, "wav");
         let out_path = staging_dir.join(out_filename);
-        let region = self
+        let active_region = self
             .active_region_edit()
             .unwrap_or_else(|| self.region_edit(start, end, 0.0, 0.0, None, None));
+        let region = self.export_region_edit(
+            start,
+            end,
+            0.0,
+            active_region.gain_db,
+            active_region.low_pass_hz,
+            active_region.high_pass_hz,
+        );
 
         let mut cmd = std::process::Command::new("ffmpeg");
         cmd.arg("-y")
@@ -2152,7 +2363,7 @@ impl AudioPreviewState {
             let duration = (e - s).max(0.001);
             let out_filename = format_sample_filename(base_name, s, duration, mode_suffix, "wav");
             let out_path = staging_dir.join(out_filename);
-            let region = self.region_edit(
+            let region = self.export_region_edit(
                 s,
                 e,
                 self.region_crossfade_sec.get(i).copied().unwrap_or(0.0),
@@ -2401,7 +2612,8 @@ impl AudioPreviewState {
                 ),
                 _ => (None, None),
             };
-            let region = self.region_edit(start, end, 0.0, gain_db, low_pass_hz, high_pass_hz);
+            let region =
+                self.export_region_edit(start, end, 0.0, gain_db, low_pass_hz, high_pass_hz);
             if let Some(filter) = Self::region_filter(region) {
                 cmd.arg("-af").arg(filter);
             }
@@ -2705,30 +2917,33 @@ impl AudioPreviewState {
     }
 
     fn poll_edit_analysis(&mut self, ctx: &egui::Context, now: f64) {
-        let regions = self.region_edits();
-        if regions != self.edit_analysis_observed {
+        let edits = self.session_audio_edits();
+        if edits != self.edit_analysis_observed {
             self.edited_waveform = None;
             let old = &self.edit_analysis_observed;
-            let filter_changed = old.len() != regions.len()
+            let filter_changed = old.regions.len() != edits.regions.len()
                 && (old
+                    .regions
                     .iter()
                     .any(|r| r.low_pass_hz.is_some() || r.high_pass_hz.is_some())
-                    || regions
+                    || edits
+                        .regions
                         .iter()
                         .any(|r| r.low_pass_hz.is_some() || r.high_pass_hz.is_some()))
                 || old
+                    .regions
                     .iter()
-                    .zip(&regions)
+                    .zip(&edits.regions)
                     .any(|(a, b)| Self::filter_region_changed(a, b));
             self.edit_analysis_debounce =
                 Duration::from_millis(if filter_changed { 70 } else { 180 });
-            if let Ok(mut playback_regions) = self.playback_edits.regions.write() {
-                playback_regions.clone_from(&regions);
+            if let Ok(mut playback_edits) = self.playback_edits.edits.write() {
+                playback_edits.clone_from(&edits);
                 self.playback_edits
                     .generation
                     .fetch_add(1, Ordering::Release);
             }
-            self.edit_analysis_observed = regions;
+            self.edit_analysis_observed = edits;
             self.edit_change_at = Instant::now();
         }
         if let Some(rx) = self.edit_analysis_rx.take() {
@@ -2783,11 +2998,12 @@ impl AudioPreviewState {
                 ctx.request_repaint_after(debounce - self.edit_change_at.elapsed());
             } else {
                 let path = self.path.clone();
-                let regions = self.edit_analysis_observed.clone();
-                let has_filter = regions
+                let edits = self.edit_analysis_observed.clone();
+                let has_filter = edits
+                    .regions
                     .iter()
                     .any(|region| region.low_pass_hz.is_some() || region.high_pass_hz.is_some());
-                self.edit_analysis_inflight = regions.clone();
+                self.edit_analysis_inflight = edits.clone();
                 let (tx, rx) = channel();
                 std::thread::spawn(move || {
                     let send_progress = |progress| {
@@ -2802,17 +3018,19 @@ impl AudioPreviewState {
                         }
                     };
                     if has_filter {
-                        compute_audio_spectral_preview_with_edits(
+                        compute_audio_spectral_preview_with_gain_and_edits(
                             &path,
                             1200,
-                            &regions,
+                            edits.track_gain_db,
+                            &edits.regions,
                             send_progress,
                         );
                     } else {
-                        compute_audio_analysis_progressive_with_edits(
+                        compute_audio_analysis_progressive_with_gain_and_edits(
                             &path,
                             1200,
-                            &regions,
+                            edits.track_gain_db,
+                            &edits.regions,
                             send_progress,
                         );
                     }
@@ -2899,7 +3117,7 @@ mod tests {
         EditedPreviewSource<rodio::buffer::SamplesBuffer>,
     ) {
         let shared = Arc::<PlaybackEdits>::default();
-        *shared.regions.write().unwrap() = vec![region];
+        shared.edits.write().unwrap().regions = vec![region];
         shared.generation.fetch_add(1, Ordering::Release);
         let source = rodio::buffer::SamplesBuffer::new(
             std::num::NonZeroU16::new(1).unwrap(),
@@ -2933,6 +3151,47 @@ mod tests {
             AudioPreviewState::gain_filter(1.0, false).as_deref(),
             Some("volume=1dB")
         );
+    }
+
+    #[test]
+    fn normalization_gain_targets_minus_one_dbfs_and_accounts_for_track_gain() {
+        let peak = 0.5;
+        let region_gain = AudioPreviewState::normalization_gain_db(peak, -3.0).unwrap();
+        let result_dbfs = 20.0 * peak.log10() - 3.0 + region_gain;
+        assert!((result_dbfs - AudioPreviewState::NORMALIZE_TARGET_DBFS).abs() < 0.000_01);
+        assert_eq!(AudioPreviewState::normalization_gain_db(0.0, 0.0), None);
+    }
+
+    #[test]
+    fn normalization_targets_hovered_region_and_falls_back_to_track() {
+        let (_dir, path) = generate_fixture_wav("normalize", 5.0);
+        let analysis = compute_full_audio_analysis(&path, 50).expect("analysis");
+        let mut state = AudioPreviewState::new(path, "normalize.wav".to_string());
+        state.analysis = Some(analysis);
+        state.selection_mode = SelectionMode::Multi;
+        state.multi_selections = vec![(1.0, 2.0), (3.0, 4.0)];
+        state.region_gain_db = vec![0.0, 0.0];
+        state.track_gain_db = -10.0;
+
+        state.normalize_at_time(Some(3.5), 1.0);
+        assert_eq!(state.active_multi_index, Some(1));
+        assert_eq!(state.track_gain_db, -10.0);
+        assert_eq!(state.region_gain_db[0], 0.0);
+        assert_ne!(state.region_gain_db[1], 0.0);
+        let peak = state.peak_amplitude_in_range((3.0, 4.0)).unwrap();
+        let result_dbfs = 20.0 * peak.log10() + state.track_gain_db + state.region_gain_db[1];
+        assert!((result_dbfs - AudioPreviewState::NORMALIZE_TARGET_DBFS).abs() < 0.000_1);
+        assert!(!state.active_region_edit().unwrap().soft_clip);
+
+        state.undo();
+        state.normalize_at_time(Some(2.5), 2.0);
+        assert_ne!(state.track_gain_db, 0.0);
+        assert_eq!(state.region_gain_db, vec![0.0, 0.0]);
+        let peak = state
+            .peak_amplitude_in_range((0.0, state.duration_sec))
+            .unwrap();
+        let result_dbfs = 20.0 * peak.log10() + state.track_gain_db;
+        assert!((result_dbfs - AudioPreviewState::NORMALIZE_TARGET_DBFS).abs() < 0.000_1);
     }
 
     #[test]
@@ -3299,7 +3558,7 @@ mod tests {
             ..AudioRegionEdit::default()
         });
         assert_eq!(preview.next(), Some(0.0));
-        shared.regions.write().unwrap()[0].gain_db = 0.0;
+        shared.edits.write().unwrap().regions[0].gain_db = 0.0;
         shared.generation.fetch_add(1, Ordering::Release);
         assert_eq!(preview.next(), Some(0.5));
     }

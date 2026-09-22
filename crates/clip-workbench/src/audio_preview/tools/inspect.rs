@@ -97,6 +97,61 @@ fn effect_at_position(pos: Pos2, wave_rect: Rect, spec_rect: Rect) -> Option<Can
 }
 
 impl AudioPreviewState {
+    fn render_normalize_button(&mut self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
+        let button = layout::AudioWorkspace::secondary_button_icon(
+            Some(crate::icons::Icon::Volume),
+            "Normalize Track",
+            hex_to_c32(&palette.theme.b_low),
+            palette,
+        );
+        if ui
+            .add(button)
+            .on_hover_text(
+                "Peak-normalize the entire track to -1 dBFS. Press [N] over a selected region to normalize only that region; elsewhere [N] normalizes the track.",
+            )
+            .clicked()
+        {
+            self.normalize_track(now);
+        }
+    }
+
+    fn render_track_gain_summary(&self, ui: &mut egui::Ui, palette: &AppPalette) {
+        if self.track_gain_db != 0.0 {
+            ui.label(format!("Track gain {:+.1} dB", self.track_gain_db));
+            layout::AudioWorkspace::section_divider(ui, palette);
+        }
+    }
+
+    fn handle_normalize_shortcut(
+        &mut self,
+        ui: &egui::Ui,
+        ctx: &egui::Context,
+        response: &egui::Response,
+        hover_rect: Rect,
+        track_min_x: f32,
+        track_width: f32,
+    ) {
+        let requested = !ctx.wants_keyboard_input()
+            && ui.input(|input| {
+                input.key_pressed(egui::Key::N)
+                    && !input.modifiers.ctrl
+                    && !input.modifiers.command
+                    && !input.modifiers.alt
+            });
+        if !requested {
+            return;
+        }
+        let hovered_time = response
+            .hover_pos()
+            .filter(|position| hover_rect.contains(*position))
+            .map(|position| {
+                let ratio = (position.x - track_min_x) / track_width;
+                (self.view_start_sec + ratio * self.view_duration_sec).clamp(0.0, self.duration_sec)
+            });
+        self.normalize_at_time(hovered_time, ctx.input(|input| input.time));
+        ctx.request_repaint();
+    }
+
     pub(crate) fn render_standard_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -571,6 +626,8 @@ impl AudioPreviewState {
 
                 ui.add_space(8.0);
 
+                self.render_normalize_button(ui, palette, now);
+
                 // Trim Silence Button
                 let trim_btn = layout::AudioWorkspace::secondary_button_icon(
                     Some(crate::icons::Icon::Scissors),
@@ -777,7 +834,7 @@ impl AudioPreviewState {
                             .color(hex_to_c32(&palette.theme.f_med)),
                     );
                     ui.label(
-                        egui::RichText::new("[Shift+Wheel waveform] Gain • [Shift+Wheel spectrum top/bottom] Low/High Pass • [Ctrl+Wheel] Crossfade • [Ctrl+Middle-Click] Clear Crossfade • [Middle-Click] Reset Effect • [Middle-Drag] Pan • [Wheel / +/-] Zoom • [Drag] Select • [Ctrl+C] Copy • [Ctrl+S] Save")
+                        egui::RichText::new("[N] Normalize hovered region / track • [Shift+Wheel waveform] Gain • [Shift+Wheel spectrum top/bottom] Low/High Pass • [Ctrl+Wheel] Crossfade • [Ctrl+Middle-Click] Clear Crossfade • [Middle-Click] Reset Effect • [Middle-Drag] Pan • [Wheel / +/-] Zoom • [Drag] Select • [Ctrl+C] Copy • [Ctrl+S] Save")
                             .small()
                             .color(hex_to_c32(&palette.theme.f_low)),
                     );
@@ -804,6 +861,7 @@ impl AudioPreviewState {
                         .color(hex_to_c32(&palette.theme.f_high)),
                 );
                 layout::AudioWorkspace::section_divider(ui, palette);
+                self.render_track_gain_summary(ui, palette);
                 match self.selection_mode {
                     SelectionMode::Single => {
                         if let Some((start, end)) = self.selection {
@@ -1258,6 +1316,19 @@ impl AudioPreviewState {
         let t_to_x = move |t: f32, start: f32, dur: f32| -> f32 {
             track_min_x + ((t - start) / dur) * track_width
         };
+
+        let selection_hover_rect = Rect::from_min_max(
+            Pos2::new(track_min_x, ruler_rect.max.y),
+            Pos2::new(track_max_x, strip_rect.max.y),
+        );
+        self.handle_normalize_shortcut(
+            ui,
+            ctx,
+            &response,
+            selection_hover_rect,
+            track_min_x,
+            track_width,
+        );
 
         // --- INTERACTIVE MOUSE / INPUT HANDLING (MUTATES SELF BEFORE PAINTING) ---
         if response.hovered() {

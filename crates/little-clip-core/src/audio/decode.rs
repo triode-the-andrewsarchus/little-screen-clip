@@ -98,7 +98,7 @@ pub fn compute_audio_analysis_progressive<F>(
 where
     F: FnMut(AudioAnalysisProgress),
 {
-    compute_audio_analysis_progressive_with_edits(path, num_cols, &[], on_progress)
+    compute_audio_analysis_progressive_with_gain_and_edits(path, num_cols, 0.0, &[], on_progress)
 }
 
 /// Rebuilds analysis from the original file with session edits applied to decoded PCM.
@@ -112,7 +112,34 @@ pub fn compute_audio_analysis_progressive_with_edits<F>(
 where
     F: FnMut(AudioAnalysisProgress),
 {
-    compute_audio_analysis_inner(path, num_cols, region_edits, false, on_progress)
+    compute_audio_analysis_progressive_with_gain_and_edits(
+        path,
+        num_cols,
+        0.0,
+        region_edits,
+        on_progress,
+    )
+}
+
+/// Rebuilds analysis with a track-wide gain applied before any region edits.
+pub fn compute_audio_analysis_progressive_with_gain_and_edits<F>(
+    path: &Path,
+    num_cols: usize,
+    track_gain_db: f32,
+    region_edits: &[AudioRegionEdit],
+    on_progress: F,
+) -> Option<FullAudioAnalysis>
+where
+    F: FnMut(AudioAnalysisProgress),
+{
+    compute_audio_analysis_inner(
+        path,
+        num_cols,
+        track_gain_db,
+        region_edits,
+        false,
+        on_progress,
+    )
 }
 
 /// Prioritizes the spectrum and chord strip for interactive region effect edits.
@@ -128,12 +155,27 @@ pub fn compute_audio_spectral_preview_with_edits<F>(
 where
     F: FnMut(AudioAnalysisProgress),
 {
-    compute_audio_analysis_inner(path, num_cols, regions, true, on_progress)
+    compute_audio_spectral_preview_with_gain_and_edits(path, num_cols, 0.0, regions, on_progress)
+}
+
+/// Rebuilds the spectrum-first preview with track-wide gain applied before region edits.
+pub fn compute_audio_spectral_preview_with_gain_and_edits<F>(
+    path: &Path,
+    num_cols: usize,
+    track_gain_db: f32,
+    regions: &[AudioRegionEdit],
+    on_progress: F,
+) -> Option<FullAudioAnalysis>
+where
+    F: FnMut(AudioAnalysisProgress),
+{
+    compute_audio_analysis_inner(path, num_cols, track_gain_db, regions, true, on_progress)
 }
 
 fn compute_audio_analysis_inner<F>(
     path: &Path,
     num_cols: usize,
+    track_gain_db: f32,
     region_edits: &[AudioRegionEdit],
     spectral_only: bool,
     mut on_progress: F,
@@ -295,6 +337,8 @@ where
     } else {
         (1024, 512)
     };
+
+    apply_track_gain(&mut ch1_samples, ch2_samples.as_deref_mut(), track_gain_db);
 
     if !region_edits.is_empty() {
         // Earlier selections take precedence when regions overlap, matching the editor view.
@@ -857,6 +901,18 @@ where
     on_progress(AudioAnalysisProgress::Complete);
 
     Some(analysis)
+}
+
+fn apply_track_gain(ch1: &mut [f32], ch2: Option<&mut [f32]>, gain_db: f32) {
+    if gain_db == 0.0 {
+        return;
+    }
+    ch1.par_iter_mut()
+        .for_each(|sample| *sample = apply_audio_gain(*sample, gain_db, false));
+    if let Some(ch2) = ch2 {
+        ch2.par_iter_mut()
+            .for_each(|sample| *sample = apply_audio_gain(*sample, gain_db, false));
+    }
 }
 
 /// Decodes the full audio track and computes complete audio analysis synchronously.

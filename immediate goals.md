@@ -12,15 +12,12 @@
     * https://github.com/Xpktro/bndr port
 * Depth-map driven contrast/saturation/brightness adjustment
 ## Audio Studio
-* ctrl+scroll should change the fade of a selection, that way gain/filtering isn't abrupt
-    * Should be equal fade in/out UNLESS selection contains the 1st sample or last sample, in which case don't fade the ends.
 * Resample / change sample rate
 * Channel operations — stereo→mono, extract L/R, swap L/R, invert polarity, perhaps copy L→R/R→L.
 * '+' over sample to get next region of the same size, that way a lot of drums can be extracted quickly.
     * This requires some careful thinking about how to handle 0-crossing and user intent vs the obvious
     * We might need to store the original target transient point targets seprately from the actual selecting boundry
 * Reverse support
-* n to normalize all selections to -6dB
 * Speech Fix
     * DeepFilterNet3 — primary speech denoiser.
     * ClearerVoice/MossFormer2_SE_48K — heavyweight speech rescue.

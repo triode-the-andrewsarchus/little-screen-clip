@@ -100,6 +100,32 @@ mod tests {
     }
 
     #[test]
+    fn track_gain_is_applied_before_region_edits() {
+        let path = generate_test_wav();
+        let original = compute_audio_analysis_progressive(&path, 120, |_| {}).unwrap();
+        let gained = compute_audio_analysis_progressive_with_gain_and_edits(
+            &path,
+            120,
+            -6.0,
+            &[AudioRegionEdit {
+                start_sec: 0.25,
+                end_sec: 0.75,
+                gain_db: 6.0,
+                ..AudioRegionEdit::default()
+            }],
+            |_| {},
+        )
+        .unwrap();
+
+        let outside = 4_000;
+        let inside = 15_000;
+        let expected_outside = apply_audio_gain(original.ch1_samples[outside], -6.0, false);
+        assert!((gained.ch1_samples[outside] - expected_outside).abs() < 0.000_01);
+        assert!((gained.ch1_samples[inside] - original.ch1_samples[inside]).abs() < 0.000_01);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn spectral_preview_prioritizes_filters_and_attenuates_rejected_frequencies() {
         let path = generate_test_wav();
         let original = compute_audio_analysis_progressive(&path, 120, |_| {}).unwrap();
