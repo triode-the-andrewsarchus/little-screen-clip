@@ -650,6 +650,23 @@ pub fn render_view_header<R>(
     .inner
 }
 
+static ZENITY_AVAILABLE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+    if std::path::Path::new("/usr/bin/zenity").exists() {
+        return true;
+    }
+    std::process::Command::new("zenity")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+});
+
+/// Returns whether the `zenity` native dialog utility is installed and available.
+/// The result is cached after the first check to prevent frame drops on the UI thread.
+pub fn is_zenity_available() -> bool {
+    *ZENITY_AVAILABLE
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

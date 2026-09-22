@@ -416,8 +416,7 @@ impl ImagePreviewState {
 
         let target_str = default_target.to_string_lossy().to_string();
 
-        let zenity_available = Path::new("/usr/bin/zenity").exists()
-            || Command::new("zenity").arg("--version").output().is_ok();
+        let zenity_available = crate::ui_ext::is_zenity_available();
 
         if zenity_available {
             let (tx, rx) = std::sync::mpsc::channel();
@@ -464,8 +463,7 @@ impl ImagePreviewState {
 
         let target_str = default_target.to_string_lossy().to_string();
 
-        let zenity_available = Path::new("/usr/bin/zenity").exists()
-            || Command::new("zenity").arg("--version").output().is_ok();
+        let zenity_available = crate::ui_ext::is_zenity_available();
 
         if zenity_available {
             let (tx, rx) = std::sync::mpsc::channel();
