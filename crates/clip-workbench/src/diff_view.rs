@@ -1073,11 +1073,7 @@ impl DiffViewerState {
 
                         ui.add_space(8.0);
 
-                        ui.label(
-                            egui::RichText::new(readout)
-                                .small()
-                                .color(accent),
-                        );
+                        ui.label(egui::RichText::new(readout).small().color(accent));
 
                         ui.add_space(10.0);
 

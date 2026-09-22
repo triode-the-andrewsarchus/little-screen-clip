@@ -2007,14 +2007,7 @@ mod tests {
 
         // Inject an artificial stale message from generation 1
         let (tx, rx) = channel();
-        let dummy_res = compute_binary_diff(
-            "stale",
-            b"A",
-            "stale",
-            b"B",
-            BinaryDiffMode::Raw,
-            16,
-        );
+        let dummy_res = compute_binary_diff("stale", b"A", "stale", b"B", BinaryDiffMode::Raw, 16);
         tx.send((1, dummy_res)).unwrap();
         state.receiver = Some(rx);
 

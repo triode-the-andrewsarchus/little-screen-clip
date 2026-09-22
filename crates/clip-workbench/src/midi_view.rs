@@ -253,8 +253,10 @@ impl MidiViewerState {
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs_f64();
-                self.status_toast
-                    .set("Audio device error: could not open shared audio output", now);
+                self.status_toast.set(
+                    "Audio device error: could not open shared audio output",
+                    now,
+                );
             }
         }
     }

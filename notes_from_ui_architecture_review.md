@@ -1,6 +1,6 @@
 # Non-UI Architecture & Codebase Review Notes
 
-This document records non-UI bugs, anomalies, performance bottlenecks, edge-case panics, threading hazards, and architectural inconsistencies identified across `clip-workbench` and related crates during the UI system architecture review.
+This document records non-UI bugs, anomalies, performance bottlenecks, edge-case panics, threading hazards, and architectural inconsistencies identified across `clip-workbench` and related crates during the UI system architecture review, along with their resolution status. All items have been resolved and verified on the `fix/ui-architecture-review-issues` branch.
 
 ---
 
