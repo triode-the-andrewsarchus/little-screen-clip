@@ -68,6 +68,7 @@ pub struct DiffViewerState {
     pub decode_error: Option<String>,
     pub status_toast: Option<(String, f64)>, // (text, timestamp)
     pub image_receiver: Option<std::sync::mpsc::Receiver<Result<ImageDiffResult, String>>>,
+    pub text_receiver: Option<std::sync::mpsc::Receiver<(DiffResult, egui::text::LayoutJob)>>,
     pub is_computing: bool,
     pub compute_start_time: std::time::Instant,
 }
@@ -115,35 +116,50 @@ fn spawn_image_diff_worker(
     }
 }
 
+fn spawn_text_diff_worker(
+    lhs: &DiffTarget,
+    rhs: &DiffTarget,
+    mode: DiffDisplayMode,
+    width: usize,
+) -> std::sync::mpsc::Receiver<(DiffResult, egui::text::LayoutJob)> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let lhs = lhs.clone();
+    let rhs = rhs.clone();
+    std::thread::spawn(move || {
+        let r = compute_diff(&lhs, &rhs, mode, width);
+        let job = ansi_to_layout_job(&r.raw_ansi, 12.0);
+        let _ = tx.send((r, job));
+    });
+    rx
+}
+
 impl DiffViewerState {
     /// Initializes text or image diff calculation between two comparison targets.
     pub fn new(lhs: DiffTarget, rhs: DiffTarget, mode: DiffDisplayMode) -> Self {
         let is_img = lhs.is_image() && rhs.is_image();
         let image_options = ImageDiffOptions::default();
 
-        let (image_receiver, is_computing, decode_error) = if is_img {
+        let (image_receiver, text_receiver, is_computing, decode_error) = if is_img {
             let (rx, err) = spawn_image_diff_worker(&lhs, &rhs, image_options.clone());
             let computing = rx.is_some();
-            (rx, computing, err)
-        } else {
-            (None, false, None)
-        };
-
-        let (result, layout_job) = if is_img {
-            (
-                compute_diff(&lhs, &rhs, mode, 120),
-                ansi_to_layout_job("", 12.0),
-            )
+            (rx, None, computing, err)
         } else {
             let width = if mode == DiffDisplayMode::SideBySide {
                 150
             } else {
                 120
             };
-            let r = compute_diff(&lhs, &rhs, mode, width);
-            let job = ansi_to_layout_job(&r.raw_ansi, 12.0);
-            (r, job)
+            let rx = spawn_text_diff_worker(&lhs, &rhs, mode, width);
+            (None, Some(rx), true, None)
         };
+
+        let result = DiffResult {
+            engine_name: "Computing...".to_string(),
+            raw_ansi: String::new(),
+            is_identical: false,
+            mode,
+        };
+        let layout_job = ansi_to_layout_job("", 12.0);
 
         Self {
             lhs,
@@ -162,6 +178,7 @@ impl DiffViewerState {
             decode_error,
             status_toast: None,
             image_receiver,
+            text_receiver,
             is_computing,
             compute_start_time: std::time::Instant::now(),
         }
@@ -181,6 +198,13 @@ impl DiffViewerState {
                         self.image_result = None;
                     }
                 }
+            }
+            self.is_computing = false;
+        }
+        if let Some(rx) = self.text_receiver.take() {
+            if let Ok((res, job)) = rx.recv() {
+                self.result = res;
+                self.layout_job = job;
             }
             self.is_computing = false;
         }
@@ -205,8 +229,10 @@ impl DiffViewerState {
             } else {
                 120
             };
-            self.result = compute_diff(&self.lhs, &self.rhs, self.mode, width);
-            self.layout_job = ansi_to_layout_job(&self.result.raw_ansi, 12.0);
+            let rx = spawn_text_diff_worker(&self.lhs, &self.rhs, self.mode, width);
+            self.is_computing = true;
+            self.text_receiver = Some(rx);
+            self.compute_start_time = std::time::Instant::now();
         }
     }
 
@@ -465,6 +491,23 @@ impl DiffViewerState {
             }
 
             self.ensure_image_textures(ctx);
+        } else if self.is_computing {
+            ctx.request_repaint();
+            if let Some(ref rx) = self.text_receiver {
+                match rx.try_recv() {
+                    Ok((res, job)) => {
+                        self.result = res;
+                        self.layout_job = job;
+                        self.is_computing = false;
+                        self.text_receiver = None;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        self.is_computing = false;
+                        self.text_receiver = None;
+                    }
+                }
+            }
         }
 
         // Copy shortcut
@@ -896,6 +939,11 @@ impl DiffViewerState {
         ui: &mut egui::Ui,
         palette: &little_clip_core::theme::AppPalette,
     ) {
+        if self.is_computing {
+            self.render_computing_ui(ui, palette);
+            return;
+        }
+
         let b_low = crate::hex_to_c32(&palette.theme.b_low);
         let b_med = crate::hex_to_c32(&palette.theme.b_med);
 
@@ -966,6 +1014,22 @@ impl DiffViewerState {
         let f_low = crate::hex_to_c32(&palette.theme.f_low);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
 
+        let heading = if self.is_image() {
+            "Comparing Images..."
+        } else {
+            "Computing Diff..."
+        };
+        let bar_text = if self.is_image() {
+            "Parallel Perceptual Diff"
+        } else {
+            "Syntax-Highlighted Diff"
+        };
+        let readout = if self.is_image() {
+            format!("{:.2}s elapsed • multithreaded SIMD comparison", elapsed)
+        } else {
+            format!("{:.2}s elapsed • background syntax diff engine", elapsed)
+        };
+
         ui.centered_and_justified(|ui| {
             egui::Frame::none()
                 .fill(b_med)
@@ -979,7 +1043,7 @@ impl DiffViewerState {
                         ui.add_space(14.0);
 
                         ui.label(
-                            egui::RichText::new("Comparing Images...")
+                            egui::RichText::new(heading)
                                 .heading()
                                 .strong()
                                 .color(f_high),
@@ -991,7 +1055,7 @@ impl DiffViewerState {
                             egui::ProgressBar::new(progress)
                                 .animate(true)
                                 .desired_width(300.0)
-                                .text("Parallel Perceptual Diff"),
+                                .text(bar_text),
                         );
 
                         ui.add_space(12.0);
@@ -1010,12 +1074,9 @@ impl DiffViewerState {
                         ui.add_space(8.0);
 
                         ui.label(
-                            egui::RichText::new(format!(
-                                "{:.2}s elapsed • multithreaded SIMD comparison",
-                                elapsed
-                            ))
-                            .small()
-                            .color(accent),
+                            egui::RichText::new(readout)
+                                .small()
+                                .color(accent),
                         );
 
                         ui.add_space(10.0);
@@ -1144,5 +1205,25 @@ mod tests {
         let result = state.image_result.unwrap();
         assert_eq!((result.width, result.height), (3, 2));
         assert_eq!(result.diff_count, 1);
+    }
+
+    #[test]
+    fn text_diff_state_computes_in_background() {
+        let left = DiffTarget::ClipboardText {
+            label: "Left".to_string(),
+            content: "hello world\nalpha\nbravo".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+        let right = DiffTarget::ClipboardText {
+            label: "Right".to_string(),
+            content: "hello world\ncharlie\nbravo".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+
+        let mut state = DiffViewerState::new(left, right, DiffDisplayMode::Inline);
+        assert!(state.is_computing);
+        state.wait_for_completion();
+        assert!(!state.is_computing);
+        assert!(!state.result.raw_ansi.is_empty());
     }
 }
