@@ -86,7 +86,6 @@ pub fn read_audio_metadata(path: &Path) -> Option<AudioMetadata> {
 /// Decodes audio and computes downsampled peak waveform.
 /// For files exceeding audio_config.max_full_waveform_sec, decodes a snippet
 /// from either the middle (default) or start, as configured.
-
 /// Progressively decodes audio and computes analysis stages:
 /// 1. Waveform samples & peak pyramid (instant interactive waveform)
 /// 2. Transients (instant snapping)
@@ -301,28 +300,30 @@ where
         // Earlier selections take precedence when regions overlap, matching the editor view.
         let mut claimed = vec![false; total_frames];
         for region in region_edits {
-            let start = ((region.start_sec.min(region.end_sec).max(0.0) * sample_rate as f32)
-                as usize)
-                .min(total_frames);
-            let end = ((region.start_sec.max(region.end_sec).max(0.0) * sample_rate as f32)
-                as usize)
-                .min(total_frames);
+            let (effect_start, effect_end) = region.effect_bounds(duration_sec as f32);
+            let start = ((effect_start * sample_rate as f32) as usize).min(total_frames);
+            let end = ((effect_end * sample_rate as f32).ceil() as usize).min(total_frames);
             let mut ch1_filter = AudioFilterChain::new(sample_rate as f32, region);
             let mut ch2_filter = AudioFilterChain::new(sample_rate as f32, region);
             for frame in start..end {
+                let mix = region.effect_mix(frame as f32 / sample_rate as f32, duration_sec as f32);
                 if !claimed[frame] {
-                    claimed[frame] = true;
-                    ch1_samples[frame] = ch1_filter.process(apply_audio_gain(
-                        ch1_samples[frame],
+                    claimed[frame] = mix > 0.0;
+                    let dry_ch1 = ch1_samples[frame];
+                    let wet_ch1 = ch1_filter.process(apply_audio_gain(
+                        dry_ch1,
                         region.gain_db,
                         region.soft_clip,
                     ));
+                    ch1_samples[frame] = dry_ch1 + (wet_ch1 - dry_ch1) * mix;
                     if let Some(ch2) = &mut ch2_samples {
-                        ch2[frame] = ch2_filter.process(apply_audio_gain(
-                            ch2[frame],
+                        let dry_ch2 = ch2[frame];
+                        let wet_ch2 = ch2_filter.process(apply_audio_gain(
+                            dry_ch2,
                             region.gain_db,
                             region.soft_clip,
                         ));
+                        ch2[frame] = dry_ch2 + (wet_ch2 - dry_ch2) * mix;
                     }
                 }
             }

@@ -34,6 +34,41 @@ mod tests {
     }
 
     #[test]
+    fn region_crossfade_mix_extends_outward_and_skips_track_edges() {
+        let edit = AudioRegionEdit {
+            start_sec: 2.0,
+            end_sec: 4.0,
+            crossfade_sec: 1.0,
+            gain_db: -6.0,
+            ..AudioRegionEdit::default()
+        };
+        assert_eq!(edit.effect_bounds(10.0), (1.0, 5.0));
+        assert_eq!(edit.effect_mix(1.0, 10.0), 0.0);
+        assert_eq!(edit.effect_mix(1.5, 10.0), 0.5);
+        assert_eq!(edit.effect_mix(2.0, 10.0), 1.0);
+        assert_eq!(edit.effect_mix(4.5, 10.0), 0.5);
+        assert_eq!(edit.effect_mix(5.0, 10.0), 0.0);
+
+        let start_edge = AudioRegionEdit {
+            start_sec: 0.0,
+            end_sec: 2.0,
+            ..edit
+        };
+        assert_eq!(start_edge.effect_bounds(10.0), (0.0, 3.0));
+        assert_eq!(start_edge.effect_mix(0.0, 10.0), 1.0);
+        assert_eq!(start_edge.effect_mix(2.5, 10.0), 0.5);
+
+        let end_edge = AudioRegionEdit {
+            start_sec: 8.0,
+            end_sec: 10.0,
+            ..edit
+        };
+        assert_eq!(end_edge.effect_bounds(10.0), (7.0, 10.0));
+        assert_eq!(end_edge.effect_mix(7.5, 10.0), 0.5);
+        assert_eq!(end_edge.effect_mix(10.0, 10.0), 1.0);
+    }
+
+    #[test]
     fn session_gain_rebuilds_spectrum_and_notes_without_changing_source() {
         let path = generate_test_wav();
         let original_bytes = std::fs::read(&path).unwrap();
@@ -45,9 +80,7 @@ mod tests {
                 start_sec: 0.25,
                 end_sec: 0.75,
                 gain_db: f32::NEG_INFINITY,
-                soft_clip: false,
-                low_pass_hz: None,
-                high_pass_hz: None,
+                ..AudioRegionEdit::default()
             }],
             |_| {},
         )
@@ -77,10 +110,8 @@ mod tests {
             &[AudioRegionEdit {
                 start_sec: 0.0,
                 end_sec: 1.0,
-                gain_db: 0.0,
-                soft_clip: false,
                 low_pass_hz: Some(300.0),
-                high_pass_hz: None,
+                ..AudioRegionEdit::default()
             }],
             |progress| stages.push(progress),
         )
@@ -113,10 +144,8 @@ mod tests {
             &[AudioRegionEdit {
                 start_sec: 0.0,
                 end_sec: 1.0,
-                gain_db: 0.0,
-                soft_clip: false,
-                low_pass_hz: None,
                 high_pass_hz: Some(1_000.0),
+                ..AudioRegionEdit::default()
             }],
             |_| {},
         )

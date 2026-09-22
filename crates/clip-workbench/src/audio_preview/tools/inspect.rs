@@ -31,6 +31,55 @@ mod effect_tests {
         assert_eq!(effect_at_position(Pos2::new(50.0, 230.0), wave, spec), None);
         assert_eq!(effect_at_position(Pos2::new(110.0, 50.0), wave, spec), None);
     }
+
+    #[test]
+    fn control_wheel_uses_raw_mouse_wheel_events() {
+        let events = [
+            egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Line,
+                delta: Vec2::new(0.0, 1.0),
+                modifiers: egui::Modifiers {
+                    ctrl: true,
+                    ..Default::default()
+                },
+            },
+            egui::Event::Zoom(1.25),
+        ];
+
+        assert_eq!(control_wheel_delta(&events, 300.0), 50.0);
+    }
+
+    #[test]
+    fn control_wheel_ignores_unmodified_wheel_events() {
+        let events = [egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: Vec2::new(0.0, 20.0),
+            modifiers: egui::Modifiers::default(),
+        }];
+
+        assert_eq!(control_wheel_delta(&events, 300.0), 0.0);
+    }
+}
+
+fn control_wheel_delta(events: &[egui::Event], page_size: f32) -> f32 {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            egui::Event::MouseWheel {
+                unit,
+                delta,
+                modifiers,
+            } if modifiers.ctrl => {
+                let points_per_unit = match unit {
+                    egui::MouseWheelUnit::Point => 1.0,
+                    egui::MouseWheelUnit::Line => 50.0,
+                    egui::MouseWheelUnit::Page => page_size,
+                };
+                Some((delta.x + delta.y) * points_per_unit)
+            }
+            _ => None,
+        })
+        .sum()
 }
 
 fn effect_at_position(pos: Pos2, wave_rect: Rect, spec_rect: Rect) -> Option<CanvasEffect> {
@@ -728,7 +777,7 @@ impl AudioPreviewState {
                             .color(hex_to_c32(&palette.theme.f_med)),
                     );
                     ui.label(
-                        egui::RichText::new("[Shift+Wheel waveform] Gain • [Shift+Wheel spectrum top/bottom] Low/High Pass • [Middle-Click] Reset Effect • [Middle-Drag] Pan • [Wheel / +/-] Zoom • [Drag] Select • [Ctrl+C] Copy • [Ctrl+S] Save")
+                        egui::RichText::new("[Shift+Wheel waveform] Gain • [Shift+Wheel spectrum top/bottom] Low/High Pass • [Ctrl+Wheel] Crossfade • [Ctrl+Middle-Click] Clear Crossfade • [Middle-Click] Reset Effect • [Middle-Drag] Pan • [Wheel / +/-] Zoom • [Drag] Select • [Ctrl+C] Copy • [Ctrl+S] Save")
                             .small()
                             .color(hex_to_c32(&palette.theme.f_low)),
                     );
@@ -737,6 +786,12 @@ impl AudioPreviewState {
 
         // Render Save Dialog modal if open
         self.render_save_dialog(ctx, palette, now);
+    }
+
+    fn render_crossfade_label(ui: &mut egui::Ui, crossfade_sec: f32) {
+        if crossfade_sec > 0.0 {
+            ui.label(format!("Crossfade {:.0} ms", crossfade_sec * 1000.0));
+        }
     }
 
     fn render_selection_info_bar(&mut self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
@@ -776,6 +831,7 @@ impl AudioPreviewState {
                             if let Some(hz) = self.single_high_pass_hz {
                                 ui.label(format!("High pass {hz:.0} Hz"));
                             }
+                            Self::render_crossfade_label(ui, self.active_region_crossfade());
                             if ui
                                 .add(layout::AudioWorkspace::secondary_button_icon(
                                     Some(crate::icons::Icon::Close),
@@ -842,6 +898,7 @@ impl AudioPreviewState {
                             {
                                 ui.label(format!("High pass {hz:.0} Hz"));
                             }
+                            Self::render_crossfade_label(ui, self.active_region_crossfade());
                         } else if count == 0 {
                             ui.label("Drag across the waveform to add regions.");
                         } else {
@@ -994,6 +1051,125 @@ impl AudioPreviewState {
         });
     }
 
+    fn handle_crossfade_scroll(
+        &mut self,
+        ui: &mut egui::Ui,
+        response: &egui::Response,
+        control_scroll: f32,
+        wave_rect: Rect,
+        spec_rect: Rect,
+    ) -> bool {
+        if control_scroll.abs() <= 0.1 {
+            return false;
+        }
+        let Some(position) = response
+            .hover_pos()
+            .filter(|position| effect_at_position(*position, wave_rect, spec_rect).is_some())
+        else {
+            return false;
+        };
+        let time = self.view_start_sec
+            + ((position.x - wave_rect.min.x) / wave_rect.width()) * self.view_duration_sec;
+        if !self.focus_region_at_time(time) {
+            return false;
+        }
+        let steps = (control_scroll / 50.0).clamp(-4.0, 4.0);
+        self.adjust_active_region_crossfade(steps, Instant::now());
+        ui.input_mut(|input| input.smooth_scroll_delta = Vec2::ZERO);
+        ui.ctx().request_repaint();
+        true
+    }
+
+    fn reset_canvas_effect(&mut self, effect: Option<CanvasEffect>, crossfade: bool) -> bool {
+        if crossfade {
+            return self.reset_active_region_crossfade();
+        }
+        match effect {
+            Some(CanvasEffect::Gain) => self.reset_active_region_gain(),
+            Some(CanvasEffect::LowPass) => {
+                self.reset_active_region_filter(SpectrumFilterKind::LowPass)
+            }
+            Some(CanvasEffect::HighPass) => {
+                self.reset_active_region_filter(SpectrumFilterKind::HighPass)
+            }
+            None => false,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn paint_hovered_region_crossfade(
+        &self,
+        painter: &egui::Painter,
+        response: &egui::Response,
+        fade_bar: Color32,
+        ruler_rect: Rect,
+        view_top_y: f32,
+        view_bot_y: f32,
+        track_min_x: f32,
+        track_max_x: f32,
+        track_width: f32,
+    ) {
+        let Some(position) = response
+            .hover_pos()
+            .filter(|position| position.y >= view_top_y && position.y <= view_bot_y)
+        else {
+            return;
+        };
+        let time = self.view_start_sec
+            + ((position.x - track_min_x) / track_width) * self.view_duration_sec;
+        let hovered = match self.selection_mode {
+            SelectionMode::Single => self.selection.and_then(|(start, end)| {
+                AudioSelectionModel::contains((start, end), time).then_some((
+                    start.min(end),
+                    start.max(end),
+                    self.single_crossfade_sec,
+                ))
+            }),
+            SelectionMode::Multi => self
+                .multi_selections
+                .iter()
+                .enumerate()
+                .find(|(_, range)| AudioSelectionModel::contains(**range, time))
+                .map(|(index, &(start, end))| {
+                    (
+                        start.min(end),
+                        start.max(end),
+                        self.region_crossfade_sec.get(index).copied().unwrap_or(0.0),
+                    )
+                }),
+        };
+        let Some((start, end, crossfade)) = hovered else {
+            return;
+        };
+        let crossfade = crossfade.min(Self::crossfade_limit((start, end), self.duration_sec));
+        if crossfade <= 0.0 {
+            return;
+        }
+        for time in [
+            (start > 0.0).then_some(start - crossfade),
+            (end < self.duration_sec).then_some(end + crossfade),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            let x = track_min_x
+                + ((time - self.view_start_sec) / self.view_duration_sec.max(0.0001)) * track_width;
+            if x >= track_min_x && x <= track_max_x {
+                painter.line_segment(
+                    [Pos2::new(x, ruler_rect.min.y), Pos2::new(x, view_bot_y)],
+                    Stroke::new(2.0_f32, fade_bar),
+                );
+                painter.line_segment(
+                    [
+                        Pos2::new(x - 4.0, ruler_rect.min.y + 4.0),
+                        Pos2::new(x + 4.0, ruler_rect.min.y + 4.0),
+                    ],
+                    Stroke::new(2.0_f32, fade_bar),
+                );
+            }
+        }
+    }
+
     fn render_waveform_canvas(
         &mut self,
         ui: &mut egui::Ui,
@@ -1120,65 +1296,74 @@ impl AudioPreviewState {
 
             // Read raw_scroll_delta directly to avoid smooth_scroll_delta momentum lingering over multiple frames
             let raw_scroll = ui.input(|i| i.raw_scroll_delta);
+            let combined_scroll = raw_scroll.x + raw_scroll.y;
+            // egui-winit emits Ctrl+wheel as MouseWheel + Zoom, not Scroll, so it never
+            // appears in raw_scroll_delta. Read the raw wheel event for this gesture.
+            let control_scroll =
+                ui.input(|i| control_wheel_delta(&i.raw.events, response.rect.height()));
 
-            if ui.input(|i| i.modifiers.shift) && (raw_scroll.x + raw_scroll.y).abs() > 0.1 {
-                // egui-winit turns Shift+wheel into horizontal Scroll events.
-                let shifted_scroll = raw_scroll.x + raw_scroll.y;
-                let hover_pos = response.hover_pos();
-                let effect =
-                    hover_pos.and_then(|pos| effect_at_position(pos, wave_rect, spec_rect));
-                let hovered_time = hover_pos
-                    .filter(|_| effect.is_some())
-                    .map(|pos| x_to_t(pos.x, self.view_start_sec, self.view_duration_sec));
-                let has_selected_region =
-                    hovered_time.is_some_and(|time| self.focus_region_at_time(time));
-                if has_selected_region {
-                    let steps = (shifted_scroll / 50.0).clamp(-4.0, 4.0);
-                    let edit_time = Instant::now();
-                    match effect {
-                        Some(CanvasEffect::Gain) => {
-                            self.adjust_active_region_gain(steps, edit_time)
+            let crossfade_handled =
+                self.handle_crossfade_scroll(ui, &response, control_scroll, wave_rect, spec_rect);
+            if !crossfade_handled {
+                if ui.input(|i| i.modifiers.shift) && combined_scroll.abs() > 0.1 {
+                    // egui-winit turns Shift+wheel into horizontal Scroll events.
+                    let shifted_scroll = combined_scroll;
+                    let hover_pos = response.hover_pos();
+                    let effect =
+                        hover_pos.and_then(|pos| effect_at_position(pos, wave_rect, spec_rect));
+                    let hovered_time = hover_pos
+                        .filter(|_| effect.is_some())
+                        .map(|pos| x_to_t(pos.x, self.view_start_sec, self.view_duration_sec));
+                    let has_selected_region =
+                        hovered_time.is_some_and(|time| self.focus_region_at_time(time));
+                    if has_selected_region {
+                        let steps = (shifted_scroll / 50.0).clamp(-4.0, 4.0);
+                        let edit_time = Instant::now();
+                        match effect {
+                            Some(CanvasEffect::Gain) => {
+                                self.adjust_active_region_gain(steps, edit_time)
+                            }
+                            Some(CanvasEffect::LowPass) => self.adjust_active_region_filter(
+                                SpectrumFilterKind::LowPass,
+                                steps,
+                                edit_time,
+                            ),
+                            Some(CanvasEffect::HighPass) => self.adjust_active_region_filter(
+                                SpectrumFilterKind::HighPass,
+                                steps,
+                                edit_time,
+                            ),
+                            None => {}
                         }
-                        Some(CanvasEffect::LowPass) => self.adjust_active_region_filter(
-                            SpectrumFilterKind::LowPass,
-                            steps,
-                            edit_time,
-                        ),
-                        Some(CanvasEffect::HighPass) => self.adjust_active_region_filter(
-                            SpectrumFilterKind::HighPass,
-                            steps,
-                            edit_time,
-                        ),
-                        None => {}
+                        // The enclosing stem ScrollArea runs after this child UI.
+                        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+                        ui.ctx().request_repaint();
+                    } else {
+                        // Shift+Wheel pans horizontally when no region is active.
+                        let dt = -(shifted_scroll / 50.0) * self.view_duration_sec * 0.12;
+                        self.pan(dt);
                     }
-                    // The enclosing stem ScrollArea runs after this child UI.
-                    ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
-                    ui.ctx().request_repaint();
-                } else {
-                    // Shift+Wheel pans horizontally when no region is active.
-                    let dt = -(shifted_scroll / 50.0) * self.view_duration_sec * 0.12;
+                } else if raw_scroll.y.abs() > 0.1 {
+                    // Consistent, fine-grained exponential zoom curve:
+                    // Standard step is ~5.5% per wheel notch (50 pt in egui-winit).
+                    // Holding Ctrl or Alt enables ultra-fine zoom (~2.5% per notch).
+                    let is_fine = ui.input(|i| i.modifiers.alt || i.modifiers.ctrl);
+                    let step_ratio: f32 = if is_fine { 1.025 } else { 1.055 };
+                    let steps = (raw_scroll.y / 50.0).clamp(-4.0, 4.0);
+                    let factor = step_ratio.powf(-steps);
+
+                    let anchor = if let Some(pos) = response.hover_pos() {
+                        x_to_t(pos.x, self.view_start_sec, self.view_duration_sec)
+                            .clamp(0.0, self.duration_sec)
+                    } else {
+                        self.current_time_sec
+                    };
+                    self.zoom(factor, anchor);
+                } else if raw_scroll.x.abs() > 0.1 {
+                    // Horizontal wheel pans horizontally
+                    let dt = -(raw_scroll.x / 50.0) * self.view_duration_sec * 0.12;
                     self.pan(dt);
                 }
-            } else if raw_scroll.y.abs() > 0.1 {
-                // Consistent, fine-grained exponential zoom curve:
-                // Standard step is ~5.5% per wheel notch (50 pt in egui-winit).
-                // Holding Ctrl or Alt enables ultra-fine zoom (~2.5% per notch).
-                let is_fine = ui.input(|i| i.modifiers.alt || i.modifiers.ctrl);
-                let step_ratio: f32 = if is_fine { 1.025 } else { 1.055 };
-                let steps = (raw_scroll.y / 50.0).clamp(-4.0, 4.0);
-                let factor = step_ratio.powf(-steps);
-
-                let anchor = if let Some(pos) = response.hover_pos() {
-                    x_to_t(pos.x, self.view_start_sec, self.view_duration_sec)
-                        .clamp(0.0, self.duration_sec)
-                } else {
-                    self.current_time_sec
-                };
-                self.zoom(factor, anchor);
-            } else if raw_scroll.x.abs() > 0.1 {
-                // Horizontal wheel pans horizontally
-                let dt = -(raw_scroll.x / 50.0) * self.view_duration_sec * 0.12;
-                self.pan(dt);
             }
         }
 
@@ -1414,6 +1599,8 @@ impl AudioPreviewState {
                                         self.multi_selections.push((mouse_t, mouse_t));
                                         self.region_gain_db
                                             .resize(self.multi_selections.len(), 0.0);
+                                        self.region_crossfade_sec
+                                            .resize(self.multi_selections.len(), 0.0);
                                         self.region_low_pass_hz
                                             .resize(self.multi_selections.len(), None);
                                         self.region_high_pass_hz
@@ -1585,16 +1772,10 @@ impl AudioPreviewState {
                 let time = x_to_t(pos.x, self.view_start_sec, self.view_duration_sec)
                     .clamp(0.0, self.duration_sec);
                 if self.focus_region_at_time(time) {
-                    let changed = match effect_at_position(pos, wave_rect, spec_rect) {
-                        Some(CanvasEffect::Gain) => self.reset_active_region_gain(),
-                        Some(CanvasEffect::LowPass) => {
-                            self.reset_active_region_filter(SpectrumFilterKind::LowPass)
-                        }
-                        Some(CanvasEffect::HighPass) => {
-                            self.reset_active_region_filter(SpectrumFilterKind::HighPass)
-                        }
-                        None => false,
-                    };
+                    let changed = self.reset_canvas_effect(
+                        effect_at_position(pos, wave_rect, spec_rect),
+                        ui.input(|i| i.modifiers.ctrl),
+                    );
                     if changed {
                         ui.ctx().request_repaint();
                     }
@@ -1686,6 +1867,7 @@ impl AudioPreviewState {
                     if self.multi_selections.is_empty() {
                         self.multi_selections.push((0.0, self.duration_sec));
                         self.region_gain_db = vec![0.0];
+                        self.region_crossfade_sec = vec![0.0];
                         self.region_low_pass_hz = vec![None];
                         self.region_high_pass_hz = vec![None];
                         self.active_multi_index = Some(0);
@@ -1706,9 +1888,10 @@ impl AudioPreviewState {
 
         let region_edits = self.region_edits();
         let gain_at = |time: f32| {
-            region_edits
-                .iter()
-                .find(|region| time >= region.start_sec && time <= region.end_sec)
+            region_edits.iter().find_map(|region| {
+                let mix = region.effect_mix(time, self.duration_sec);
+                (mix > 0.0).then_some((region, mix))
+            })
         };
         let waveform_is_edited = self.edited_waveform.is_some();
         let source_analysis = self.analysis.as_ref().unwrap();
@@ -1867,8 +2050,10 @@ impl AudioPreviewState {
                         samples[f]
                     } else {
                         gain_at(t)
-                            .map(|region| {
-                                apply_audio_gain(samples[f], region.gain_db, region.soft_clip)
+                            .map(|(region, mix)| {
+                                let wet =
+                                    apply_audio_gain(samples[f], region.gain_db, region.soft_clip);
+                                samples[f] + (wet - samples[f]) * mix
                             })
                             .unwrap_or(samples[f])
                     };
@@ -1950,10 +2135,14 @@ impl AudioPreviewState {
                         (min_s, max_s)
                     } else {
                         gain_at(t_mid)
-                            .map(|region| {
+                            .map(|(region, mix)| {
+                                let wet_min =
+                                    apply_audio_gain(min_s, region.gain_db, region.soft_clip);
+                                let wet_max =
+                                    apply_audio_gain(max_s, region.gain_db, region.soft_clip);
                                 (
-                                    apply_audio_gain(min_s, region.gain_db, region.soft_clip),
-                                    apply_audio_gain(max_s, region.gain_db, region.soft_clip),
+                                    min_s + (wet_min - min_s) * mix,
+                                    max_s + (wet_max - max_s) * mix,
                                 )
                             })
                             .unwrap_or((min_s, max_s))
@@ -2303,6 +2492,19 @@ impl AudioPreviewState {
                 }
             }
         }
+
+        // Show the outward crossfade extent only for the region under the pointer.
+        self.paint_hovered_region_crossfade(
+            &painter,
+            &response,
+            hex_to_c32(&palette.diff_mod),
+            ruler_rect,
+            view_top_y,
+            view_bot_y,
+            track_min_x,
+            track_max_x,
+            track_width,
+        );
 
         // 7. UNIFIED PLAYHEAD CURSOR ACROSS ALL 3 VIEWS
         let playhead_x = time_to_x(self.current_time_sec);

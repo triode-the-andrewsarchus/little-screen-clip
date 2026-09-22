@@ -144,16 +144,59 @@ pub enum AudioAnalysisProgress {
 }
 
 /// Session-only gain and filter settings for one selected timeline region.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct AudioRegionEdit {
     pub start_sec: f32,
     pub end_sec: f32,
+    /// Duration of the dry/wet transition extending outward from each region edge.
+    /// A region touching the beginning or end of the track has no transition at that edge.
+    pub crossfade_sec: f32,
     /// `NEG_INFINITY` represents silence and can be raised again later.
     pub gain_db: f32,
     /// Apply soft clipping only when the selected signal would exceed full scale.
     pub soft_clip: bool,
     pub low_pass_hz: Option<f32>,
     pub high_pass_hz: Option<f32>,
+}
+
+impl AudioRegionEdit {
+    /// Bounds over which this edit can affect the track, including outward crossfades.
+    pub fn effect_bounds(self, duration_sec: f32) -> (f32, f32) {
+        let start = self.start_sec.min(self.end_sec).clamp(0.0, duration_sec);
+        let end = self.start_sec.max(self.end_sec).clamp(0.0, duration_sec);
+        let fade = self.crossfade_sec.max(0.0);
+        let fade_start = if start > 0.0 {
+            (start - fade).max(0.0)
+        } else {
+            start
+        };
+        let fade_end = if end < duration_sec {
+            (end + fade).min(duration_sec)
+        } else {
+            end
+        };
+        (fade_start, fade_end)
+    }
+
+    /// Linear wet-signal mix at a point in the track.
+    pub fn effect_mix(self, time_sec: f32, duration_sec: f32) -> f32 {
+        let start = self.start_sec.min(self.end_sec).clamp(0.0, duration_sec);
+        let end = self.start_sec.max(self.end_sec).clamp(0.0, duration_sec);
+        if time_sec >= start && time_sec <= end {
+            return 1.0;
+        }
+        let fade = self.crossfade_sec.max(0.0);
+        if fade <= 0.0 {
+            return 0.0;
+        }
+        if start > 0.0 && time_sec < start {
+            return (1.0 - (start - time_sec) / fade).clamp(0.0, 1.0);
+        }
+        if end < duration_sec && time_sec > end {
+            return (1.0 - (time_sec - end) / fade).clamp(0.0, 1.0);
+        }
+        0.0
+    }
 }
 
 #[derive(Debug, Clone, Copy)]

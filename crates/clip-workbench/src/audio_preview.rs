@@ -119,6 +119,7 @@ enum SpectrumFilterKind {
 enum ScrollEditKind {
     Gain,
     Filter(SpectrumFilterKind),
+    Crossfade,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -330,12 +331,18 @@ struct EditedPreviewSource<S> {
     channel: u16,
     gain_db: f32,
     soft_clip: bool,
+    effect_mix: f32,
+    duration_sec: f32,
     filters: Vec<AudioFilterChain>,
     active_region: Option<usize>,
 }
 
 impl<S: Source> EditedPreviewSource<S> {
     fn new(inner: S, shared: Arc<PlaybackEdits>) -> Self {
+        let duration_sec = inner
+            .total_duration()
+            .map(|duration| duration.as_secs_f32())
+            .unwrap_or(f32::MAX);
         Self {
             inner,
             shared,
@@ -345,6 +352,8 @@ impl<S: Source> EditedPreviewSource<S> {
             channel: 0,
             gain_db: 0.0,
             soft_clip: false,
+            effect_mix: 0.0,
+            duration_sec,
             filters: Vec::new(),
             active_region: None,
         }
@@ -369,7 +378,7 @@ impl<S: Source> Iterator for EditedPreviewSource<S> {
             let active_index = self
                 .regions
                 .iter()
-                .position(|region| time >= region.start_sec && time < region.end_sec);
+                .position(|region| region.effect_mix(time, self.duration_sec) > 0.0);
             if active_index != self.active_region || changed {
                 self.active_region = active_index;
                 self.filters = active_index
@@ -388,6 +397,9 @@ impl<S: Source> Iterator for EditedPreviewSource<S> {
             let active = active_index.map(|index| &self.regions[index]);
             self.gain_db = active.map(|region| region.gain_db).unwrap_or(0.0);
             self.soft_clip = active.is_some_and(|region| region.soft_clip);
+            self.effect_mix = active
+                .map(|region| region.effect_mix(time, self.duration_sec))
+                .unwrap_or(0.0);
         }
         let channel = self.channel as usize;
         self.channel += 1;
@@ -395,13 +407,14 @@ impl<S: Source> Iterator for EditedPreviewSource<S> {
             self.channel = 0;
             self.frame += 1;
         }
-        let sample = apply_audio_gain(sample, self.gain_db, self.soft_clip);
-        Some(
-            self.filters
-                .get_mut(channel)
-                .map(|filter| filter.process(sample))
-                .unwrap_or(sample),
-        )
+        let dry = sample;
+        let gained = apply_audio_gain(dry, self.gain_db, self.soft_clip);
+        let wet = self
+            .filters
+            .get_mut(channel)
+            .map(|filter| filter.process(gained))
+            .unwrap_or(gained);
+        Some(dry + (wet - dry) * self.effect_mix)
     }
 }
 
@@ -439,6 +452,8 @@ struct AudioEditSnapshot {
     active_multi_index: Option<usize>,
     region_gain_db: Vec<f32>,
     single_region_gain_db: f32,
+    region_crossfade_sec: Vec<f32>,
+    single_crossfade_sec: f32,
     single_low_pass_hz: Option<f32>,
     single_high_pass_hz: Option<f32>,
     region_low_pass_hz: Vec<Option<f32>>,
@@ -495,6 +510,10 @@ pub struct AudioPreviewState {
     pub region_gain_db: Vec<f32>,
     /// Non-destructive gain for the single selected region.
     pub single_region_gain_db: f32,
+    /// Symmetric outward crossfade duration for the single selected region.
+    single_crossfade_sec: f32,
+    /// Symmetric outward crossfade durations keyed to multi-region indices.
+    region_crossfade_sec: Vec<f32>,
     single_low_pass_hz: Option<f32>,
     single_high_pass_hz: Option<f32>,
     region_low_pass_hz: Vec<Option<f32>>,
@@ -544,6 +563,8 @@ impl AudioPreviewState {
             active_multi_index: self.active_multi_index,
             region_gain_db: self.region_gain_db.clone(),
             single_region_gain_db: self.single_region_gain_db,
+            region_crossfade_sec: self.region_crossfade_sec.clone(),
+            single_crossfade_sec: self.single_crossfade_sec,
             single_low_pass_hz: self.single_low_pass_hz,
             single_high_pass_hz: self.single_high_pass_hz,
             region_low_pass_hz: self.region_low_pass_hz.clone(),
@@ -616,6 +637,8 @@ impl AudioPreviewState {
         self.active_multi_index = snapshot.active_multi_index;
         self.region_gain_db = snapshot.region_gain_db;
         self.single_region_gain_db = snapshot.single_region_gain_db;
+        self.region_crossfade_sec = snapshot.region_crossfade_sec;
+        self.single_crossfade_sec = snapshot.single_crossfade_sec;
         self.single_low_pass_hz = snapshot.single_low_pass_hz;
         self.single_high_pass_hz = snapshot.single_high_pass_hz;
         self.region_low_pass_hz = snapshot.region_low_pass_hz;
@@ -728,6 +751,86 @@ impl AudioPreviewState {
             _ => {}
         }
         self.record_scroll_edit(before, ScrollEditKind::Gain, now);
+    }
+
+    fn crossfade_limit(range: (f32, f32), duration_sec: f32) -> f32 {
+        let (start, end) = AudioSelectionModel::normalize(range);
+        let left = start.clamp(0.0, duration_sec);
+        let right = (duration_sec - end).clamp(0.0, duration_sec);
+        match (left > 0.0, right > 0.0) {
+            (true, true) => left.min(right),
+            (true, false) => left,
+            (false, true) => right,
+            (false, false) => 0.0,
+        }
+    }
+
+    fn adjust_active_region_crossfade(&mut self, wheel_steps: f32, now: Instant) {
+        let before = self.edit_snapshot();
+        match self.selection_mode {
+            SelectionMode::Single => {
+                if let Some(range) = self.selection {
+                    let limit = Self::crossfade_limit(range, self.duration_sec);
+                    self.single_crossfade_sec =
+                        (self.single_crossfade_sec + wheel_steps * 0.01).clamp(0.0, limit);
+                }
+            }
+            SelectionMode::Multi => {
+                if let Some(index) = self.active_multi_index
+                    && let Some(&range) = self.multi_selections.get(index)
+                {
+                    let limit = Self::crossfade_limit(range, self.duration_sec);
+                    self.region_crossfade_sec
+                        .resize(self.multi_selections.len(), 0.0);
+                    if let Some(crossfade) = self.region_crossfade_sec.get_mut(index) {
+                        *crossfade = (*crossfade + wheel_steps * 0.01).clamp(0.0, limit);
+                    }
+                }
+            }
+        }
+        self.record_scroll_edit(before, ScrollEditKind::Crossfade, now);
+    }
+
+    fn active_region_crossfade(&self) -> f32 {
+        let (range, crossfade) = match self.selection_mode {
+            SelectionMode::Single => (self.selection, self.single_crossfade_sec),
+            SelectionMode::Multi => {
+                let range = self
+                    .active_multi_index
+                    .and_then(|index| self.multi_selections.get(index).copied());
+                let crossfade = self
+                    .active_multi_index
+                    .and_then(|index| self.region_crossfade_sec.get(index).copied())
+                    .unwrap_or(0.0);
+                (range, crossfade)
+            }
+        };
+        range
+            .map(|range| crossfade.min(Self::crossfade_limit(range, self.duration_sec)))
+            .unwrap_or(0.0)
+    }
+
+    fn reset_active_region_crossfade(&mut self) -> bool {
+        let before = self.edit_snapshot();
+        let changed = match self.selection_mode {
+            SelectionMode::Single if self.selection.is_some() => {
+                let changed = self.single_crossfade_sec != 0.0;
+                self.single_crossfade_sec = 0.0;
+                changed
+            }
+            SelectionMode::Multi => self
+                .active_multi_index
+                .and_then(|index| self.region_crossfade_sec.get_mut(index))
+                .map(|crossfade| {
+                    let changed = *crossfade != 0.0;
+                    *crossfade = 0.0;
+                    changed
+                })
+                .unwrap_or(false),
+            _ => false,
+        };
+        self.record_edit(before);
+        changed
     }
 
     fn filter_cutoff_range(&self) -> (f32, f32) {
@@ -854,6 +957,7 @@ impl AudioPreviewState {
 
     fn clear_single_region_effects(&mut self) {
         self.single_region_gain_db = 0.0;
+        self.single_crossfade_sec = 0.0;
         self.single_low_pass_hz = None;
         self.single_high_pass_hz = None;
     }
@@ -861,6 +965,7 @@ impl AudioPreviewState {
     fn clear_multi_regions(&mut self) {
         self.multi_selections.clear();
         self.region_gain_db.clear();
+        self.region_crossfade_sec.clear();
         self.region_low_pass_hz.clear();
         self.region_high_pass_hz.clear();
         self.active_multi_index = None;
@@ -873,6 +978,9 @@ impl AudioPreviewState {
         self.multi_selections.remove(index);
         if index < self.region_gain_db.len() {
             self.region_gain_db.remove(index);
+        }
+        if index < self.region_crossfade_sec.len() {
+            self.region_crossfade_sec.remove(index);
         }
         if index < self.region_low_pass_hz.len() {
             self.region_low_pass_hz.remove(index);
@@ -897,12 +1005,17 @@ impl AudioPreviewState {
         let active = self.active_multi_index;
         let regions = self.multi_selections.clone();
         let gains = self.region_gain_db.clone();
+        let crossfades = self.region_crossfade_sec.clone();
         let low = self.region_low_pass_hz.clone();
         let high = self.region_high_pass_hz.clone();
         self.multi_selections = order.iter().map(|&i| regions[i]).collect();
         self.region_gain_db = order
             .iter()
             .map(|&i| gains.get(i).copied().unwrap_or(0.0))
+            .collect();
+        self.region_crossfade_sec = order
+            .iter()
+            .map(|&i| crossfades.get(i).copied().unwrap_or(0.0))
             .collect();
         self.region_low_pass_hz = order
             .iter()
@@ -957,10 +1070,14 @@ impl AudioPreviewState {
         &self,
         start: f32,
         end: f32,
+        crossfade_sec: f32,
         gain_db: f32,
         low_pass_hz: Option<f32>,
         high_pass_hz: Option<f32>,
     ) -> AudioRegionEdit {
+        let crossfade_sec = crossfade_sec
+            .max(0.0)
+            .min(Self::crossfade_limit((start, end), self.duration_sec));
         let soft_clip = if gain_db <= 0.0 {
             false
         } else if let Some(analysis) = &self.analysis {
@@ -985,6 +1102,7 @@ impl AudioPreviewState {
         AudioRegionEdit {
             start_sec: start.min(end),
             end_sec: start.max(end),
+            crossfade_sec,
             gain_db,
             soft_clip,
             low_pass_hz,
@@ -998,6 +1116,7 @@ impl AudioPreviewState {
                 self.region_edit(
                     start,
                     end,
+                    self.single_crossfade_sec,
                     self.single_region_gain_db,
                     self.single_low_pass_hz,
                     self.single_high_pass_hz,
@@ -1011,6 +1130,7 @@ impl AudioPreviewState {
                         self.region_edit(
                             start,
                             end,
+                            self.region_crossfade_sec.get(index).copied().unwrap_or(0.0),
                             self.region_gain_db.get(index).copied().unwrap_or(0.0),
                             self.region_low_pass_hz.get(index).copied().flatten(),
                             self.region_high_pass_hz.get(index).copied().flatten(),
@@ -1029,6 +1149,7 @@ impl AudioPreviewState {
                     self.region_edit(
                         start,
                         end,
+                        self.single_crossfade_sec,
                         self.single_region_gain_db,
                         self.single_low_pass_hz,
                         self.single_high_pass_hz,
@@ -1044,6 +1165,7 @@ impl AudioPreviewState {
                     self.region_edit(
                         start,
                         end,
+                        self.region_crossfade_sec.get(index).copied().unwrap_or(0.0),
                         gain_db,
                         self.region_low_pass_hz.get(index).copied().flatten(),
                         self.region_high_pass_hz.get(index).copied().flatten(),
@@ -1172,6 +1294,8 @@ impl AudioPreviewState {
             last_scroll_edit: None,
             region_gain_db: Vec::new(),
             single_region_gain_db: 0.0,
+            region_crossfade_sec: Vec::new(),
+            single_crossfade_sec: 0.0,
             single_low_pass_hz: None,
             single_high_pass_hz: None,
             region_low_pass_hz: Vec::new(),
@@ -1354,6 +1478,58 @@ impl AudioPreviewState {
         (!filters.is_empty()).then(|| filters.join(","))
     }
 
+    fn crossfade_mix_expression(region: AudioRegionEdit, duration_sec: f32) -> String {
+        let fade = region.crossfade_sec.max(0.0);
+        if fade <= 0.0 {
+            return format!("between(t,{:.6},{:.6})", region.start_sec, region.end_sec);
+        }
+        let left = if region.start_sec <= 0.0 {
+            "1".to_string()
+        } else {
+            format!(
+                "clip((t-{:.6})/{fade:.6},0,1)",
+                (region.start_sec - fade).max(0.0)
+            )
+        };
+        let right = if region.end_sec >= duration_sec {
+            "1".to_string()
+        } else {
+            format!(
+                "clip(({:.6}-t)/{fade:.6},0,1)",
+                (region.end_sec + fade).min(duration_sec)
+            )
+        };
+        format!("({left})*({right})")
+    }
+
+    fn session_crossfade_filter_complex(&self) -> Option<(String, String)> {
+        let regions = self.region_edits();
+        if !regions.iter().any(|region| region.crossfade_sec > 0.0) {
+            return None;
+        }
+        let mut graph = Vec::new();
+        let mut input = "0:a".to_string();
+        for (index, region) in regions.into_iter().enumerate() {
+            let effect = Self::region_filter(region)?;
+            let mix = Self::crossfade_mix_expression(region, self.duration_sec);
+            let dry = format!("dry{index}");
+            let wet = format!("wet{index}");
+            let dry_mix = format!("dry_mix{index}");
+            let wet_mix = format!("wet_mix{index}");
+            let output = format!("edit{}", index + 1);
+            graph.push(format!("[{input}]asplit=2[{dry}][{wet}]"));
+            graph.push(format!(
+                "[{wet}]{effect},volume='{mix}':eval=frame[{wet_mix}]"
+            ));
+            graph.push(format!("[{dry}]volume='1-({mix})':eval=frame[{dry_mix}]"));
+            graph.push(format!(
+                "[{dry_mix}][{wet_mix}]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[{output}]"
+            ));
+            input = output;
+        }
+        Some((graph.join(";"), format!("[{input}]")))
+    }
+
     fn editor_handoff_path(&self) -> Result<PathBuf, String> {
         let Some(filter) = self.session_edit_filter() else {
             return Ok(self.path.clone());
@@ -1365,10 +1541,15 @@ impl AudioPreviewState {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Could not prepare audio handoff: {e}"))?;
         }
-        let ok = std::process::Command::new("ffmpeg")
-            .args(["-y", "-i"])
-            .arg(&self.path)
-            .args(["-af", &filter, "-c:a", "pcm_s16le"])
+        let mut command = std::process::Command::new("ffmpeg");
+        command.args(["-y", "-i"]).arg(&self.path);
+        if let Some((graph, output)) = self.session_crossfade_filter_complex() {
+            command.args(["-filter_complex", &graph, "-map", &output]);
+        } else {
+            command.args(["-af", &filter]);
+        }
+        let ok = command
+            .args(["-c:a", "pcm_s16le"])
             .arg(&out)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -1571,6 +1752,9 @@ impl AudioPreviewState {
                     };
                     self.region_gain_db.resize(self.multi_selections.len(), 0.0);
                     self.region_gain_db[index] = self.single_region_gain_db;
+                    self.region_crossfade_sec
+                        .resize(self.multi_selections.len(), 0.0);
+                    self.region_crossfade_sec[index] = self.single_crossfade_sec;
                     self.region_low_pass_hz
                         .resize(self.multi_selections.len(), None);
                     self.region_high_pass_hz
@@ -1586,6 +1770,8 @@ impl AudioPreviewState {
                         self.selection = Some(self.multi_selections[idx]);
                         self.single_region_gain_db =
                             self.region_gain_db.get(idx).copied().unwrap_or(0.0);
+                        self.single_crossfade_sec =
+                            self.region_crossfade_sec.get(idx).copied().unwrap_or(0.0);
                         self.single_low_pass_hz =
                             self.region_low_pass_hz.get(idx).copied().flatten();
                         self.single_high_pass_hz =
@@ -1595,6 +1781,8 @@ impl AudioPreviewState {
                     self.selection = Some(*first);
                     self.single_region_gain_db =
                         self.region_gain_db.first().copied().unwrap_or(0.0);
+                    self.single_crossfade_sec =
+                        self.region_crossfade_sec.first().copied().unwrap_or(0.0);
                     self.single_low_pass_hz = self.region_low_pass_hz.first().copied().flatten();
                     self.single_high_pass_hz = self.region_high_pass_hz.first().copied().flatten();
                 }
@@ -1858,7 +2046,7 @@ impl AudioPreviewState {
         let out_path = staging_dir.join(out_filename);
         let region = self
             .active_region_edit()
-            .unwrap_or_else(|| self.region_edit(start, end, 0.0, None, None));
+            .unwrap_or_else(|| self.region_edit(start, end, 0.0, 0.0, None, None));
 
         let mut cmd = std::process::Command::new("ffmpeg");
         cmd.arg("-y")
@@ -1967,6 +2155,7 @@ impl AudioPreviewState {
             let region = self.region_edit(
                 s,
                 e,
+                self.region_crossfade_sec.get(i).copied().unwrap_or(0.0),
                 self.region_gain_db.get(i).copied().unwrap_or(0.0),
                 self.region_low_pass_hz.get(i).copied().flatten(),
                 self.region_high_pass_hz.get(i).copied().flatten(),
@@ -2212,7 +2401,7 @@ impl AudioPreviewState {
                 ),
                 _ => (None, None),
             };
-            let region = self.region_edit(start, end, gain_db, low_pass_hz, high_pass_hz);
+            let region = self.region_edit(start, end, 0.0, gain_db, low_pass_hz, high_pass_hz);
             if let Some(filter) = Self::region_filter(region) {
                 cmd.arg("-af").arg(filter);
             }
@@ -2503,6 +2692,18 @@ impl AudioPreviewState {
         self.hf_analysis.viewport_cache.clear();
     }
 
+    fn filter_region_changed(a: &AudioRegionEdit, b: &AudioRegionEdit) -> bool {
+        a.low_pass_hz != b.low_pass_hz
+            || a.high_pass_hz != b.high_pass_hz
+            || ((a.start_sec != b.start_sec
+                || a.end_sec != b.end_sec
+                || a.crossfade_sec != b.crossfade_sec)
+                && (a.low_pass_hz.is_some()
+                    || a.high_pass_hz.is_some()
+                    || b.low_pass_hz.is_some()
+                    || b.high_pass_hz.is_some()))
+    }
+
     fn poll_edit_analysis(&mut self, ctx: &egui::Context, now: f64) {
         let regions = self.region_edits();
         if regions != self.edit_analysis_observed {
@@ -2515,15 +2716,10 @@ impl AudioPreviewState {
                     || regions
                         .iter()
                         .any(|r| r.low_pass_hz.is_some() || r.high_pass_hz.is_some()))
-                || old.iter().zip(&regions).any(|(a, b)| {
-                    a.low_pass_hz != b.low_pass_hz
-                        || a.high_pass_hz != b.high_pass_hz
-                        || ((a.start_sec != b.start_sec || a.end_sec != b.end_sec)
-                            && (a.low_pass_hz.is_some()
-                                || a.high_pass_hz.is_some()
-                                || b.low_pass_hz.is_some()
-                                || b.high_pass_hz.is_some()))
-                });
+                || old
+                    .iter()
+                    .zip(&regions)
+                    .any(|(a, b)| Self::filter_region_changed(a, b));
             self.edit_analysis_debounce =
                 Duration::from_millis(if filter_changed { 70 } else { 180 });
             if let Ok(mut playback_regions) = self.playback_edits.regions.write() {
@@ -2696,6 +2892,24 @@ mod tests {
     use super::*;
     use little_clip_core::audio::compute_full_audio_analysis;
 
+    fn preview_source_with_region(
+        region: AudioRegionEdit,
+    ) -> (
+        Arc<PlaybackEdits>,
+        EditedPreviewSource<rodio::buffer::SamplesBuffer>,
+    ) {
+        let shared = Arc::<PlaybackEdits>::default();
+        *shared.regions.write().unwrap() = vec![region];
+        shared.generation.fetch_add(1, Ordering::Release);
+        let source = rodio::buffer::SamplesBuffer::new(
+            std::num::NonZeroU16::new(1).unwrap(),
+            std::num::NonZeroU32::new(4).unwrap(),
+            vec![0.5; 8],
+        );
+        let preview = EditedPreviewSource::new(source, Arc::clone(&shared));
+        (shared, preview)
+    }
+
     #[test]
     fn region_gain_reaches_silence_recovers_and_caps_at_100x() {
         assert_eq!(AudioPreviewState::step_gain_db(0.0, 100.0), 40.0);
@@ -2719,6 +2933,43 @@ mod tests {
             AudioPreviewState::gain_filter(1.0, false).as_deref(),
             Some("volume=1dB")
         );
+    }
+
+    #[test]
+    fn crossfade_scroll_is_symmetric_clamped_and_resettable() {
+        let mut state = AudioPreviewState::new(
+            PathBuf::from("/__little_clip_missing_crossfade__.wav"),
+            "test".to_string(),
+        );
+        state.duration_sec = 10.0;
+        state.selection = Some((3.0, 7.0));
+        state.adjust_active_region_crossfade(5.0, Instant::now());
+        assert!((state.single_crossfade_sec - 0.05).abs() < f32::EPSILON);
+        assert_eq!(
+            state.active_region_edit().unwrap().effect_bounds(10.0),
+            (2.95, 7.05)
+        );
+
+        state.adjust_active_region_crossfade(1_000.0, Instant::now());
+        assert_eq!(state.single_crossfade_sec, 3.0);
+        assert_eq!(
+            state.active_region_edit().unwrap().effect_bounds(10.0),
+            (0.0, 10.0)
+        );
+        assert!(state.reset_active_region_crossfade());
+        assert_eq!(state.single_crossfade_sec, 0.0);
+
+        state.selection = Some((0.0, 2.0));
+        state.adjust_active_region_crossfade(100.0, Instant::now());
+        let edit = state.active_region_edit().unwrap();
+        assert_eq!(edit.effect_bounds(10.0), (0.0, 3.0));
+        assert_eq!(edit.effect_mix(0.0, 10.0), 1.0);
+        assert_eq!(edit.effect_mix(2.5, 10.0), 0.5);
+        state.single_region_gain_db = -6.0;
+        let (graph, output) = state.session_crossfade_filter_complex().unwrap();
+        assert!(graph.contains("clip((3.000000-t)/1.000000,0,1)"));
+        assert!(graph.contains("amix=inputs=2"));
+        assert_eq!(output, "[edit1]");
     }
 
     #[test]
@@ -2975,6 +3226,44 @@ mod tests {
     }
 
     #[test]
+    fn editor_handoff_renders_crossfade_filter_graph() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source.wav");
+        let generated = std::process::Command::new("ffmpeg")
+            .args([
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=frequency=440:duration=1",
+                "-c:a",
+                "pcm_s16le",
+            ])
+            .arg(&source)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        assert!(generated);
+
+        let mut state = AudioPreviewState::new(source, "test".to_string());
+        state.duration_sec = 1.0;
+        state.selection = Some((0.4, 0.6));
+        state.single_region_gain_db = -6.0;
+        state.single_crossfade_sec = 0.2;
+        let rendered = state.editor_handoff_path().unwrap();
+        assert!(rendered.is_file());
+        let _ = std::fs::remove_file(rendered);
+    }
+
+    #[test]
     fn sorting_and_removing_multi_regions_keeps_their_effects_attached() {
         let mut state = AudioPreviewState::new(
             PathBuf::from("/__little_clip_missing_region_sort__.wav"),
@@ -2982,43 +3271,54 @@ mod tests {
         );
         state.multi_selections = vec![(4.0, 5.0), (1.0, 2.0)];
         state.region_gain_db = vec![6.0, -3.0];
+        state.region_crossfade_sec = vec![0.4, 0.1];
         state.region_low_pass_hz = vec![Some(2_000.0), None];
         state.region_high_pass_hz = vec![None, Some(200.0)];
         state.active_multi_index = Some(0);
         state.sort_multi_regions();
         assert_eq!(state.multi_selections, vec![(1.0, 2.0), (4.0, 5.0)]);
         assert_eq!(state.region_gain_db, vec![-3.0, 6.0]);
+        assert_eq!(state.region_crossfade_sec, vec![0.1, 0.4]);
         assert_eq!(state.region_low_pass_hz, vec![None, Some(2_000.0)]);
         assert_eq!(state.region_high_pass_hz, vec![Some(200.0), None]);
         assert_eq!(state.active_multi_index, Some(1));
         state.remove_multi_region(0);
         assert_eq!(state.multi_selections, vec![(4.0, 5.0)]);
         assert_eq!(state.region_gain_db, vec![6.0]);
+        assert_eq!(state.region_crossfade_sec, vec![0.4]);
         assert_eq!(state.region_low_pass_hz, vec![Some(2_000.0)]);
         assert_eq!(state.active_multi_index, Some(0));
     }
 
     #[test]
     fn playback_reads_updated_session_gain_without_restarting_source() {
-        let shared = Arc::<PlaybackEdits>::default();
-        *shared.regions.write().unwrap() = vec![AudioRegionEdit {
+        let (shared, mut preview) = preview_source_with_region(AudioRegionEdit {
             start_sec: 0.0,
             end_sec: 1.0,
             gain_db: f32::NEG_INFINITY,
-            soft_clip: false,
-            low_pass_hz: None,
-            high_pass_hz: None,
-        }];
-        shared.generation.fetch_add(1, Ordering::Release);
-        let source = rodio::buffer::SamplesBuffer::new(
-            std::num::NonZeroU16::new(1).unwrap(),
-            std::num::NonZeroU32::new(4).unwrap(),
-            vec![0.5; 8],
-        );
-        let mut preview = EditedPreviewSource::new(source, Arc::clone(&shared));
+            ..AudioRegionEdit::default()
+        });
         assert_eq!(preview.next(), Some(0.0));
         shared.regions.write().unwrap()[0].gain_db = 0.0;
         shared.generation.fetch_add(1, Ordering::Release);
+        assert_eq!(preview.next(), Some(0.5));
+    }
+
+    #[test]
+    fn playback_blends_gain_across_region_crossfades() {
+        let (_, mut preview) = preview_source_with_region(AudioRegionEdit {
+            start_sec: 0.5,
+            end_sec: 1.0,
+            crossfade_sec: 0.5,
+            gain_db: f32::NEG_INFINITY,
+            ..AudioRegionEdit::default()
+        });
+        assert_eq!(preview.next(), Some(0.5));
+        assert_eq!(preview.next(), Some(0.25));
+        assert_eq!(preview.next(), Some(0.0));
+        assert_eq!(preview.next(), Some(0.0));
+        assert_eq!(preview.next(), Some(0.0));
+        assert_eq!(preview.next(), Some(0.25));
         assert_eq!(preview.next(), Some(0.5));
     }
 
