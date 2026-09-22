@@ -14,6 +14,7 @@ use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
 use rodio::{Decoder, Player};
 use std::io::Cursor;
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, channel};
 use std::time::Instant;
 
 /// Interactive UI state for piano roll inspection and MIDI playback.
@@ -41,6 +42,9 @@ pub struct MidiViewerState {
     pub drag_start_time: Option<f32>,
     pub is_dragging_selection: bool,
     pub play_stop_time: Option<f32>,
+    pub is_synthesizing: bool,
+    pub pending_play: bool,
+    synth_rx: Option<Receiver<(Option<usize>, Vec<u8>)>>,
 }
 
 /// Computes a distinct palette color for notes in a given MIDI track and channel using theme harmonies.
@@ -86,6 +90,9 @@ impl MidiViewerState {
             drag_start_time: None,
             is_dragging_selection: false,
             play_stop_time: None,
+            is_synthesizing: false,
+            pending_play: false,
+            synth_rx: None,
             data,
         })
     }
@@ -115,6 +122,9 @@ impl MidiViewerState {
             drag_start_time: None,
             is_dragging_selection: false,
             play_stop_time: None,
+            is_synthesizing: false,
+            pending_play: false,
+            synth_rx: None,
             data,
         })
     }
@@ -172,7 +182,24 @@ impl MidiViewerState {
         self.user_panned_during_playback = false;
 
         if self.wav_cache.is_none() {
-            self.wav_cache = Some(self.data.synthesize_tracks_to_wav(self.solo_track));
+            self.pending_play = true;
+            if !self.is_synthesizing {
+                self.is_synthesizing = true;
+                let (tx, rx) = channel();
+                self.synth_rx = Some(rx);
+                let data = self.data.clone();
+                let solo = self.solo_track;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs_f64();
+                self.status_toast.set("Synthesizing audio…", now);
+                std::thread::spawn(move || {
+                    let wav = data.synthesize_tracks_to_wav(solo);
+                    let _ = tx.send((solo, wav));
+                });
+            }
+            return;
         }
 
         let wav_bytes = self.wav_cache.as_ref().unwrap();
@@ -256,6 +283,9 @@ impl MidiViewerState {
             self.solo_track = Some(track_idx);
         }
         self.wav_cache = None;
+        self.pending_play = false;
+        self.is_synthesizing = false;
+        self.synth_rx = None;
         if self.is_playing {
             let cur = self.playhead_sec;
             let stop_time = self.play_stop_time;
@@ -270,6 +300,9 @@ impl MidiViewerState {
         if self.solo_track.is_some() {
             self.solo_track = None;
             self.wav_cache = None;
+            self.pending_play = false;
+            self.is_synthesizing = false;
+            self.synth_rx = None;
             if self.is_playing {
                 let cur = self.playhead_sec;
                 let stop_time = self.play_stop_time;
@@ -396,6 +429,7 @@ impl MidiViewerState {
         if let Some(player) = &self.player {
             player.pause();
         }
+        self.pending_play = false;
         self.is_playing = false;
         self.playback_start_instant = None;
         self.user_panned_during_playback = false;
@@ -407,6 +441,7 @@ impl MidiViewerState {
         }
         self.player = None;
         self._sink = None;
+        self.pending_play = false;
         self.is_playing = false;
         if let Some((s, _)) = self.selected_region {
             self.playhead_sec = s;
@@ -420,6 +455,20 @@ impl MidiViewerState {
     }
 
     pub fn update_playback(&mut self) {
+        if let Some(ref rx) = self.synth_rx {
+            if let Ok((solo, wav)) = rx.try_recv() {
+                self.is_synthesizing = false;
+                self.synth_rx = None;
+                if self.solo_track == solo {
+                    self.wav_cache = Some(wav);
+                    if self.pending_play {
+                        self.pending_play = false;
+                        self.play();
+                    }
+                }
+            }
+        }
+
         if self.is_playing {
             if let Some(start_inst) = self.playback_start_instant {
                 let elapsed = start_inst.elapsed().as_secs_f32();
@@ -464,7 +513,7 @@ impl MidiViewerState {
         close: &mut bool,
     ) {
         self.update_playback();
-        if self.is_playing {
+        if self.is_playing || self.is_synthesizing {
             ui.ctx().request_repaint();
         }
 
@@ -608,7 +657,12 @@ impl MidiViewerState {
                                     pause_clicked = true;
                                 }
                             } else {
-                                let play_btn = crate::ui_ext::action_button_icon(Some(Icon::Play), "Play [Space]", success_color, palette);
+                                let play_label = if self.is_synthesizing {
+                                    "⏳ Synthesizing…"
+                                } else {
+                                    "Play [Space]"
+                                };
+                                let play_btn = crate::ui_ext::action_button_icon(Some(Icon::Play), play_label, success_color, palette);
                                 if ui.add(play_btn).clicked() {
                                     play_clicked = true;
                                 }
@@ -1330,6 +1384,9 @@ mod tests {
             drag_start_time: None,
             is_dragging_selection: false,
             play_stop_time: None,
+            is_synthesizing: false,
+            pending_play: false,
+            synth_rx: None,
         };
 
         // Test solo toggling
@@ -1409,6 +1466,9 @@ mod tests {
             drag_start_time: None,
             is_dragging_selection: false,
             play_stop_time: None,
+            is_synthesizing: false,
+            pending_play: false,
+            synth_rx: None,
         };
         let palette = little_clip_core::theme::AppPalette::default();
         let ctx = egui::Context::default();
