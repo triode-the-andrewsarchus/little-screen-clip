@@ -340,7 +340,7 @@ impl PdfEditorState {
 
         // Ensure textures loaded
         for page in &mut self.pages {
-            if page.texture.is_none() {
+            if page.texture.is_none() && !page.png_bytes.is_empty() {
                 if let Ok(img) = image::load_from_memory(&page.png_bytes) {
                     let rgba = img.to_rgba8();
                     let color_img = egui::ColorImage::from_rgba_unmultiplied(
@@ -352,6 +352,8 @@ impl PdfEditorState {
                         color_img,
                         egui::TextureOptions::LINEAR,
                     ));
+                    page.png_bytes.clear();
+                    page.png_bytes.shrink_to_fit();
                 }
             }
         }
