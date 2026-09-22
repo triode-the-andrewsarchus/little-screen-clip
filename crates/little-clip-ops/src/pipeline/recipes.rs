@@ -88,6 +88,8 @@ pub fn load_all_recipes() -> Vec<Recipe> {
 }
 
 /// Serializes a recipe into its YAML file on disk.
+/// If an existing file with the same slug belongs to a recipe with a different name,
+/// an incrementing numeric suffix is appended to prevent silent data overwrite.
 pub fn save_recipe(recipe: &Recipe) -> Result<PathBuf, std::io::Error> {
     let dir = ensure_recipes_dir_and_defaults()?;
     let safe_name: String = recipe
@@ -101,8 +103,26 @@ pub fn save_recipe(recipe: &Recipe) -> Result<PathBuf, std::io::Error> {
             }
         })
         .collect();
-    let filename = format!("{}.yaml", safe_name.to_lowercase());
-    let path = dir.join(filename);
+    let base_slug = if safe_name.trim_matches('_').is_empty() {
+        "recipe".to_string()
+    } else {
+        safe_name.to_lowercase()
+    };
+
+    let mut path = dir.join(format!("{}.yaml", base_slug));
+    let mut counter = 1;
+
+    while path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(existing) = serde_yaml::from_str::<Recipe>(&content) {
+                if existing.name == recipe.name {
+                    break;
+                }
+            }
+        }
+        path = dir.join(format!("{}_{}.yaml", base_slug, counter));
+        counter += 1;
+    }
 
     let yaml = serde_yaml::to_string(recipe)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
@@ -608,5 +628,48 @@ mod tests {
         // Clean up test files
         let _ = fs::remove_file(py_path);
         let _ = fs::remove_file(sh_path);
+    }
+
+    #[test]
+    fn test_save_recipe_collision_prevention() {
+        let recipe1 = Recipe {
+            name: "Collision Test".to_string(),
+            description: "First recipe".to_string(),
+            input_type: RecipeInputType::Any,
+            tags: vec![],
+            graph: NodeGraph {
+                nodes: vec![],
+                connections: vec![],
+                pan: [0.0, 0.0],
+                zoom: 1.0,
+            },
+        };
+        let recipe2 = Recipe {
+            name: "Collision_Test".to_string(),
+            description: "Second recipe differing only in slug separator".to_string(),
+            input_type: RecipeInputType::Any,
+            tags: vec![],
+            graph: NodeGraph {
+                nodes: vec![],
+                connections: vec![],
+                pan: [0.0, 0.0],
+                zoom: 1.0,
+            },
+        };
+
+        let path1 = save_recipe(&recipe1).expect("saved first recipe");
+        let path2 = save_recipe(&recipe2).expect("saved second recipe");
+
+        assert_ne!(path1, path2, "Colliding names must produce distinct files");
+        assert!(path1.exists());
+        assert!(path2.exists());
+
+        // Resaving recipe1 should update path1 in place without creating a new file
+        let path1_again = save_recipe(&recipe1).expect("resaved first recipe");
+        assert_eq!(path1, path1_again);
+
+        // Cleanup
+        let _ = fs::remove_file(path1);
+        let _ = fs::remove_file(path2);
     }
 }
