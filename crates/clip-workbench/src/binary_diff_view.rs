@@ -108,7 +108,8 @@ pub struct BinaryDiffViewState {
     pub bytes_per_row: usize,
     pub result: Option<BinaryDiffResult>,
     pub is_computing: bool,
-    pub receiver: Option<Receiver<BinaryDiffResult>>,
+    pub current_generation: u64,
+    pub receiver: Option<Receiver<(u64, BinaryDiffResult)>>,
     // Navigation & search state
     pub search_query: String,
     pub search_matches: Vec<usize>,
@@ -141,10 +142,11 @@ impl BinaryDiffViewState {
         let l_b = left_bytes.clone();
         let r_lbl = right_label.clone();
         let r_b = right_bytes.clone();
+        let generation = 1;
 
         thread::spawn(move || {
             let res = compute_binary_diff(&l_lbl, &l_b, &r_lbl, &r_b, mode, bytes_per_row);
-            let _ = tx.send(res);
+            let _ = tx.send((generation, res));
         });
 
         Self {
@@ -158,6 +160,7 @@ impl BinaryDiffViewState {
             bytes_per_row,
             result: None,
             is_computing: true,
+            current_generation: generation,
             receiver: Some(rx),
             search_query: String::new(),
             search_matches: Vec::new(),
@@ -177,6 +180,8 @@ impl BinaryDiffViewState {
 
     pub fn recompute(&mut self) {
         self.is_computing = true;
+        self.current_generation = self.current_generation.wrapping_add(1);
+        let generation = self.current_generation;
         let (tx, rx) = channel();
         let l_lbl = self.left_label.clone();
         let l_b = self.left_bytes.clone();
@@ -187,7 +192,7 @@ impl BinaryDiffViewState {
 
         thread::spawn(move || {
             let res = compute_binary_diff(&l_lbl, &l_b, &r_lbl, &r_b, mode, bpr);
-            let _ = tx.send(res);
+            let _ = tx.send((generation, res));
         });
 
         self.receiver = Some(rx);
@@ -315,12 +320,14 @@ impl BinaryDiffViewState {
         if self.is_computing {
             ctx.request_repaint();
             if let Some(ref rx) = self.receiver {
-                if let Ok(res) = rx.try_recv() {
-                    self.result = Some(res);
-                    self.is_computing = false;
-                    self.receiver = None;
-                    if !self.search_query.is_empty() {
-                        self.update_search();
+                if let Ok((req_gen, res)) = rx.try_recv() {
+                    if req_gen == self.current_generation {
+                        self.result = Some(res);
+                        self.is_computing = false;
+                        self.receiver = None;
+                        if !self.search_query.is_empty() {
+                            self.update_search();
+                        }
                     }
                 }
             }
@@ -1734,7 +1741,7 @@ mod tests {
 
         // Wait for worker thread result
         if let Some(rx) = state.receiver.take() {
-            let res = rx.recv().expect("computed result");
+            let (_gen, res) = rx.recv().expect("computed result");
             state.result = Some(res);
             state.is_computing = false;
         }
@@ -1763,7 +1770,7 @@ mod tests {
 
         // Drain recomputed worker thread
         if let Some(rx) = state.receiver.take() {
-            let res = rx.recv().expect("swapped result");
+            let (_gen, res) = rx.recv().expect("swapped result");
             state.result = Some(res);
             state.is_computing = false;
         }
@@ -1981,5 +1988,46 @@ mod tests {
         nav.prev_search_match();
         assert_eq!(nav.current_search_idx, 2);
         assert_eq!(nav.scroll_target_row, Some(12));
+    }
+
+    #[test]
+    fn test_stale_generation_discarded() {
+        let mut state = BinaryDiffViewState::new(
+            "file_a.bin".to_string(),
+            b"A".to_vec(),
+            "file_b.bin".to_string(),
+            b"B".to_vec(),
+        );
+
+        let initial_gen = state.current_generation;
+        assert_eq!(initial_gen, 1);
+
+        state.recompute();
+        assert_eq!(state.current_generation, 2);
+
+        // Inject an artificial stale message from generation 1
+        let (tx, rx) = channel();
+        let dummy_res = compute_binary_diff(
+            "stale",
+            b"A",
+            "stale",
+            b"B",
+            BinaryDiffMode::Raw,
+            16,
+        );
+        tx.send((1, dummy_res)).unwrap();
+        state.receiver = Some(rx);
+
+        // Poll receiver with generation 2 active
+        if let Some(ref rx) = state.receiver {
+            if let Ok((req_gen, res)) = rx.try_recv() {
+                if req_gen == state.current_generation {
+                    state.result = Some(res);
+                }
+            }
+        }
+
+        // Stale result should NOT have been applied
+        assert!(state.result.is_none());
     }
 }
