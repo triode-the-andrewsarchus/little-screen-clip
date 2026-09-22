@@ -238,18 +238,22 @@ impl WorkbenchApp {
         let mut polled_state = state.clone();
         let mut previous_summary = SlotStateSummary::from_manager(&polled_state);
 
-        // Poll compact cards, then hydrate only slots whose item identity changed.
+        // Poll compact cards with adaptive backoff, then hydrate only slots whose item identity changed.
         std::thread::spawn(move || {
+            let mut poll_interval_ms = 250u64;
             loop {
-                std::thread::sleep(Duration::from_millis(250));
+                std::thread::sleep(Duration::from_millis(poll_interval_ms));
                 let Ok(IpcResponse::StateSummary(summary)) =
                     send_ipc_request(&IpcRequest::GetStateSummary)
                 else {
+                    poll_interval_ms = (poll_interval_ms + 100).min(1000);
                     continue;
                 };
                 if summary == previous_summary {
+                    poll_interval_ms = (poll_interval_ms + 50).min(1000);
                     continue;
                 }
+                poll_interval_ms = 250;
 
                 let mut hydration_failed = false;
                 for slot in SlotId::all() {
