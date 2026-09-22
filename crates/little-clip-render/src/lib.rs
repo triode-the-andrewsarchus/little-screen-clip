@@ -44,6 +44,116 @@ pub enum RenderError {
 
 pub mod markdown;
 
+/// Canonical slot layout geometry computed by `little-clip-render`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlotLayoutRect {
+    pub slot_id: SlotId,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub is_hero: bool,
+}
+
+/// Computes pixel-exact slot layout bounding boxes matching hardware display rendering.
+pub fn compute_slot_layout(left_priors: usize) -> Vec<SlotLayoutRect> {
+    let mut layout = Vec::with_capacity(7);
+
+    // 1. [Undo] (x: 0, w: 240)
+    layout.push(SlotLayoutRect {
+        slot_id: SlotId::Undo,
+        x: 0,
+        y: 0,
+        width: 240,
+        height: SCREEN_HEIGHT,
+        is_hero: false,
+    });
+
+    // 2. [Left hand] (x: 240, w: 360) - Hero Left
+    layout.push(SlotLayoutRect {
+        slot_id: SlotId::LeftHand,
+        x: 240,
+        y: 0,
+        width: 360,
+        height: SCREEN_HEIGHT,
+        is_hero: true,
+    });
+
+    // 3. [L prior(1)] (x: 600, w: 240)
+    layout.push(SlotLayoutRect {
+        slot_id: SlotId::LeftPrior1,
+        x: 600,
+        y: 0,
+        width: 240,
+        height: SCREEN_HEIGHT,
+        is_hero: false,
+    });
+
+    // 4. [L prior(2)] (x: 840, w: 240)
+    layout.push(SlotLayoutRect {
+        slot_id: SlotId::LeftPrior2,
+        x: 840,
+        y: 0,
+        width: 240,
+        height: SCREEN_HEIGHT,
+        is_hero: false,
+    });
+
+    if left_priors >= 3 {
+        // 5. [L prior(3)] (x: 1080, w: 240)
+        layout.push(SlotLayoutRect {
+            slot_id: SlotId::LeftPrior3,
+            x: 1080,
+            y: 0,
+            width: 240,
+            height: SCREEN_HEIGHT,
+            is_hero: false,
+        });
+
+        // 6. [R prior(1)] (x: 1320, w: 240)
+        layout.push(SlotLayoutRect {
+            slot_id: SlotId::RightPrior1,
+            x: 1320,
+            y: 0,
+            width: 240,
+            height: SCREEN_HEIGHT,
+            is_hero: false,
+        });
+    } else {
+        // 5. [R prior(2)] (x: 1080, w: 240)
+        layout.push(SlotLayoutRect {
+            slot_id: SlotId::RightPrior2,
+            x: 1080,
+            y: 0,
+            width: 240,
+            height: SCREEN_HEIGHT,
+            is_hero: false,
+        });
+
+        // 6. [R prior(1)] (x: 1320, w: 240)
+        layout.push(SlotLayoutRect {
+            slot_id: SlotId::RightPrior1,
+            x: 1320,
+            y: 0,
+            width: 240,
+            height: SCREEN_HEIGHT,
+            is_hero: false,
+        });
+    }
+
+    // 7. [Right hand] (x: 1560, w: 360) - Hero Right
+    layout.push(SlotLayoutRect {
+        slot_id: SlotId::RightHand,
+        x: 1560,
+        y: 0,
+        width: 360,
+        height: SCREEN_HEIGHT,
+        is_hero: true,
+    });
+
+    layout
+}
+
 /// Font style variants supported by the screen renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontStyle {
@@ -286,115 +396,19 @@ impl ScreenRenderer {
         let (bg_r, bg_g, bg_b, bg_a) = parse_hex_color(&self.palette.background);
         pixmap.fill(Color::from_rgba8(bg_r, bg_g, bg_b, bg_a));
 
-        // 1. [Undo] (x: 0, w: 240)
-        self.draw_slot_card(
-            &mut pixmap,
-            manager,
-            SlotId::Undo,
-            0,
-            0,
-            240,
-            SCREEN_HEIGHT,
-            false,
-        );
-
-        // 2. [Left hand] (x: 240, w: 360) - Hero Left
-        self.draw_slot_card(
-            &mut pixmap,
-            manager,
-            SlotId::LeftHand,
-            240,
-            0,
-            360,
-            SCREEN_HEIGHT,
-            true,
-        );
-
-        // 3. [L prior(1)] (x: 600, w: 240)
-        self.draw_slot_card(
-            &mut pixmap,
-            manager,
-            SlotId::LeftPrior1,
-            600,
-            0,
-            240,
-            SCREEN_HEIGHT,
-            false,
-        );
-
-        // 4. [L prior(2)] (x: 840, w: 240)
-        self.draw_slot_card(
-            &mut pixmap,
-            manager,
-            SlotId::LeftPrior2,
-            840,
-            0,
-            240,
-            SCREEN_HEIGHT,
-            false,
-        );
-
-        if self.config.slots.left_priors >= 3 {
-            // 5. [L prior(3)] (x: 1080, w: 240)
+        // Render slots according to canonical layout
+        for slot in compute_slot_layout(self.config.slots.left_priors) {
             self.draw_slot_card(
                 &mut pixmap,
                 manager,
-                SlotId::LeftPrior3,
-                1080,
-                0,
-                240,
-                SCREEN_HEIGHT,
-                false,
-            );
-
-            // 6. [R prior(1)] (x: 1320, w: 240)
-            self.draw_slot_card(
-                &mut pixmap,
-                manager,
-                SlotId::RightPrior1,
-                1320,
-                0,
-                240,
-                SCREEN_HEIGHT,
-                false,
-            );
-        } else {
-            // 5. [R prior(2)] (x: 1080, w: 240)
-            self.draw_slot_card(
-                &mut pixmap,
-                manager,
-                SlotId::RightPrior2,
-                1080,
-                0,
-                240,
-                SCREEN_HEIGHT,
-                false,
-            );
-
-            // 6. [R prior(1)] (x: 1320, w: 240)
-            self.draw_slot_card(
-                &mut pixmap,
-                manager,
-                SlotId::RightPrior1,
-                1320,
-                0,
-                240,
-                SCREEN_HEIGHT,
-                false,
+                slot.slot_id,
+                slot.x,
+                slot.y,
+                slot.width,
+                slot.height,
+                slot.is_hero,
             );
         }
-
-        // 7. [Right hand] (x: 1560, w: 360) - Hero Right
-        self.draw_slot_card(
-            &mut pixmap,
-            manager,
-            SlotId::RightHand,
-            1560,
-            0,
-            360,
-            SCREEN_HEIGHT,
-            true,
-        );
 
         // Draw Debug Handler badge in bottom left of screen if enabled
         if self.config.display.show_debug_handler {

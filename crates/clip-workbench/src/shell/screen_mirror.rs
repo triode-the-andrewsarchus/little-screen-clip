@@ -13,60 +13,18 @@ pub const SCREEN_HEIGHT: f32 = 462.0;
 
 /// Returns the sequence of slot IDs and their native pixel bounding boxes (0..1920, 0..462).
 pub fn slot_rects(left_priors: usize) -> Vec<(SlotId, Rect)> {
-    let mut rects = Vec::with_capacity(7);
-
-    // 1. Undo slot: 0..240
-    rects.push((
-        SlotId::Undo,
-        Rect::from_min_size(Pos2::new(0.0, 0.0), Vec2::new(240.0, SCREEN_HEIGHT)),
-    ));
-
-    // 2. Left Hand slot: 240..600
-    rects.push((
-        SlotId::LeftHand,
-        Rect::from_min_size(Pos2::new(240.0, 0.0), Vec2::new(360.0, SCREEN_HEIGHT)),
-    ));
-
-    // 3. Left Prior 1: 600..840
-    rects.push((
-        SlotId::LeftPrior1,
-        Rect::from_min_size(Pos2::new(600.0, 0.0), Vec2::new(240.0, SCREEN_HEIGHT)),
-    ));
-
-    // 4. Left Prior 2: 840..1080
-    rects.push((
-        SlotId::LeftPrior2,
-        Rect::from_min_size(Pos2::new(840.0, 0.0), Vec2::new(240.0, SCREEN_HEIGHT)),
-    ));
-
-    // 5. Middle slots: 1080..1320 and 1320..1560
-    if left_priors >= 3 {
-        rects.push((
-            SlotId::LeftPrior3,
-            Rect::from_min_size(Pos2::new(1080.0, 0.0), Vec2::new(240.0, SCREEN_HEIGHT)),
-        ));
-        rects.push((
-            SlotId::RightPrior1,
-            Rect::from_min_size(Pos2::new(1320.0, 0.0), Vec2::new(240.0, SCREEN_HEIGHT)),
-        ));
-    } else {
-        rects.push((
-            SlotId::RightPrior2,
-            Rect::from_min_size(Pos2::new(1080.0, 0.0), Vec2::new(240.0, SCREEN_HEIGHT)),
-        ));
-        rects.push((
-            SlotId::RightPrior1,
-            Rect::from_min_size(Pos2::new(1320.0, 0.0), Vec2::new(240.0, SCREEN_HEIGHT)),
-        ));
-    }
-
-    // 6. Right Hand slot: 1560..1920
-    rects.push((
-        SlotId::RightHand,
-        Rect::from_min_size(Pos2::new(1560.0, 0.0), Vec2::new(360.0, SCREEN_HEIGHT)),
-    ));
-
-    rects
+    little_clip_render::compute_slot_layout(left_priors)
+        .into_iter()
+        .map(|slot| {
+            (
+                slot.slot_id,
+                Rect::from_min_size(
+                    Pos2::new(slot.x as f32, slot.y as f32),
+                    Vec2::new(slot.width as f32, slot.height as f32),
+                ),
+            )
+        })
+        .collect()
 }
 
 /// Resolves a native screen x-coordinate (0.0 ..= 1920.0) into the corresponding `SlotId`.
