@@ -2598,7 +2598,14 @@ impl AudioPreviewState {
         self.save_dialog_open = true;
     }
 
-    pub fn start_browse_directory(&mut self) {
+    pub fn start_browse_directory(&mut self, now: f64) {
+        if !crate::ui_ext::is_zenity_available() {
+            self.status_toast = Some((
+                "⚠️ Zenity not found; enter destination path directly".to_string(),
+                now,
+            ));
+            return;
+        }
         let (tx, rx) = channel();
         self.browse_rx = Some(rx);
         let start_dir = self.save_destination_dir.clone();
@@ -2776,6 +2783,15 @@ impl AudioPreviewState {
             return;
         }
 
+        if let Some(rx) = &self.browse_rx {
+            if let Ok(res) = rx.try_recv() {
+                if let Some(dir) = res {
+                    self.save_destination_dir = dir;
+                }
+                self.browse_rx = None;
+            }
+        }
+
         let mut close_dialog = false;
         let mut trigger_save = false;
 
@@ -2815,7 +2831,7 @@ impl AudioPreviewState {
                     );
                     if ui.add(layout::AudioWorkspace::secondary_button("Browse...", hex_to_c32(&palette.theme.b_low), palette))
                         .on_hover_text("Choose destination folder via file manager dialog").clicked() {
-                        self.start_browse_directory();
+                        self.start_browse_directory(now);
                     }
                 });
 
