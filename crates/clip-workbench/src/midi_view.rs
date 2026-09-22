@@ -10,7 +10,7 @@ use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::HandSide;
 use little_clip_core::ipc::IpcRequest;
 use little_clip_core::presentation::midi::{MidiData, MidiNote};
-use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
+use rodio::stream::MixerDeviceSink;
 use rodio::{Decoder, Player};
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -226,15 +226,14 @@ impl MidiViewerState {
             return;
         };
 
-        match DeviceSinkBuilder::open_default_sink() {
-            Ok(sink) => {
+        match crate::ui_ext::new_shared_audio_player() {
+            Some(player) => {
                 let cursor = Cursor::new(sliced_wav);
                 match Decoder::new(cursor) {
                     Ok(source) => {
-                        let player = Player::connect_new(sink.mixer());
                         player.append(source);
                         self.player = Some(player);
-                        self._sink = Some(sink);
+                        self._sink = None;
                         self.is_playing = true;
                         self.playback_start_instant = Some(Instant::now());
                         self.playback_start_offset = self.playhead_sec;
@@ -249,13 +248,13 @@ impl MidiViewerState {
                     }
                 }
             }
-            Err(e) => {
+            None => {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs_f64();
                 self.status_toast
-                    .set(format!("Audio device error: {}", e), now);
+                    .set("Audio device error: could not open shared audio output", now);
             }
         }
     }

@@ -15,7 +15,7 @@ use little_clip_core::audio::{
 };
 use little_clip_core::ipc::IpcRequest;
 use little_clip_core::theme::AppPalette;
-use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
+use rodio::stream::MixerDeviceSink;
 use rodio::{Decoder, Player, Source};
 use std::fs::File;
 use std::io::BufReader;
@@ -1438,12 +1438,8 @@ impl AudioPreviewState {
             });
         });
 
-        // Initialize rodio playback engine
-        let mut sink = DeviceSinkBuilder::open_default_sink().ok();
-        if let Some(ref mut s) = sink {
-            s.log_on_drop(false);
-        }
-        let player = sink.as_ref().map(|s| Player::connect_new(s.mixer()));
+        // Initialize rodio playback engine using shared application sink
+        let player = crate::ui_ext::new_shared_audio_player();
         if let Some(ref p) = player {
             p.set_volume(0.8);
         }
@@ -1474,7 +1470,7 @@ impl AudioPreviewState {
             note_strip_texture: None,
             inspect_viewport_cache: ViewportSpectrogramCache::default(),
             player,
-            _sink: sink,
+            _sink: None,
             is_playing: false,
             playback_start_instant: None,
             playback_start_offset_sec: 0.0,

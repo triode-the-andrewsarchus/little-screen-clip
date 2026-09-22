@@ -231,18 +231,13 @@ impl AudioPreviewState {
                 StemSeparationMsg::Success(stems) => {
                     let editor = self.audio_editor.clone();
                     let volume = self.volume;
-                    let mut group_sink = DeviceSinkBuilder::open_default_sink().ok();
-                    if let Some(sink) = &mut group_sink {
-                        sink.log_on_drop(false);
-                    }
                     self.stem_separation.stems = stems
                         .into_iter()
                         .map(|(name, path)| {
-                            let group_player = group_sink.as_ref().map(|sink| {
-                                let player = Player::connect_new(sink.mixer());
-                                player.set_volume(volume);
-                                player
-                            });
+                            let group_player = crate::ui_ext::new_shared_audio_player();
+                            if let Some(ref p) = group_player {
+                                p.set_volume(volume);
+                            }
                             let mut preview = AudioPreviewState::new(
                                 path,
                                 format!("{} stem — {}", name.to_uppercase(), self.title),
@@ -257,7 +252,7 @@ impl AudioPreviewState {
                             }
                         })
                         .collect();
-                    self.stem_separation.group_sink = group_sink;
+                    self.stem_separation.group_sink = None;
                     self.stem_separation.group_current_time_sec = 0.0;
                     self.stem_separation.group_is_playing = false;
                     self.stem_separation.selected_stem = 0;

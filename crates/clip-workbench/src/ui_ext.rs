@@ -667,6 +667,22 @@ pub fn is_zenity_available() -> bool {
     *ZENITY_AVAILABLE
 }
 
+static SHARED_AUDIO_SINK: std::sync::LazyLock<Option<rodio::stream::MixerDeviceSink>> =
+    std::sync::LazyLock::new(|| {
+        rodio::stream::DeviceSinkBuilder::open_default_sink().ok().map(|mut s| {
+            s.log_on_drop(false);
+            s
+        })
+    });
+
+/// Creates a new `rodio::Player` connected to the shared application audio sink.
+/// This avoids opening competing audio hardware sinks across preview widgets.
+pub fn new_shared_audio_player() -> Option<rodio::Player> {
+    SHARED_AUDIO_SINK
+        .as_ref()
+        .map(|s| rodio::Player::connect_new(s.mixer()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

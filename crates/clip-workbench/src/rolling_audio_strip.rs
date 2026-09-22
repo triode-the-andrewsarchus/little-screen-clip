@@ -10,8 +10,8 @@ use little_clip_core::audio::{PeakBlock, build_peak_pyramid};
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::slot::HandSide;
 use little_clip_core::theme::AppPalette;
-use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
-use rodio::{Decoder, Player};
+use rodio::stream::MixerDeviceSink;
+use rodio::{Decoder, Player, Source};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -99,11 +99,7 @@ impl RollingAudioStripState {
     }
     /// Creates a new rolling audio strip state and loads the latest daemon snapshot.
     pub fn new() -> Self {
-        let mut sink = DeviceSinkBuilder::open_default_sink().ok();
-        if let Some(ref mut s) = sink {
-            s.log_on_drop(false);
-        }
-        let player = sink.as_ref().map(|s| Player::connect_new(s.mixer()));
+        let player = crate::ui_ext::new_shared_audio_player();
         if let Some(ref p) = player {
             p.set_volume(1.0);
         }
@@ -122,7 +118,7 @@ impl RollingAudioStripState {
             selected_region: None,
             drag_start_time: None,
             is_dragging: false,
-            _sink: sink,
+            _sink: None,
             player,
             is_playing: false,
             playhead_sec: 0.0,
@@ -163,17 +159,12 @@ impl RollingAudioStripState {
     }
 
     pub fn ensure_player(&mut self) -> Option<&Player> {
-        if self.player.is_none() || self._sink.is_none() {
-            let mut sink = DeviceSinkBuilder::open_default_sink().ok();
-            if let Some(ref mut s) = sink {
-                s.log_on_drop(false);
-            }
-            let player = sink.as_ref().map(|s| Player::connect_new(s.mixer()));
+        if self.player.is_none() {
+            let player = crate::ui_ext::new_shared_audio_player();
             if let Some(ref p) = player {
                 p.set_volume(1.0);
             }
             self.player = player;
-            self._sink = sink;
         }
         self.player.as_ref()
     }
