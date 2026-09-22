@@ -18,6 +18,41 @@ pub struct CreativeFxThumbnailMsg {
     pub rgba: RgbaImage,
 }
 
+fn render_creative_fx_mask_loading(ui: &mut egui::Ui, label: &str, color: Color32) {
+    ui.horizontal(|ui| {
+        ui.add(egui::Spinner::new().size(14.0).color(color));
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(label).small().monospace().color(color));
+    });
+}
+
+fn render_creative_fx_mask_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    active: bool,
+    loading: bool,
+    width: f32,
+    palette: &AppPalette,
+) -> egui::Response {
+    let fill = if active {
+        hex_to_c32(&palette.diff_add)
+    } else {
+        hex_to_c32(&palette.theme.b_med)
+    };
+    let foreground = contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_high)), palette);
+    let button = egui::Button::new(
+        egui::RichText::new(label)
+            .small()
+            .strong()
+            .color(foreground),
+    )
+    .fill(fill)
+    .stroke(Stroke::new(1.0_f32, fill))
+    .rounding(Rounding::same(4.0))
+    .min_size(Vec2::new(width, 22.0));
+    ui.add_enabled(!loading, button)
+}
+
 /// All state for the Creative FX tab.
 pub struct CreativeFxState {
     pub selected_fx: CreativeFxType,
@@ -60,6 +95,12 @@ pub struct CreativeFxState {
     pub depth_estimation_in_progress: bool,
     pub depth_estimation_rx: Option<std::sync::mpsc::Receiver<Result<RgbaImage, String>>>,
     pub depth_estimation_error: Option<String>,
+
+    // Background-removal alpha mask state
+    pub cached_background_removal: Option<RgbaImage>,
+    pub alpha_mask_in_progress: bool,
+    pub alpha_mask_rx: Option<std::sync::mpsc::Receiver<Result<RgbaImage, String>>>,
+    pub alpha_mask_error: Option<String>,
 }
 
 impl Default for CreativeFxState {
@@ -94,6 +135,10 @@ impl Default for CreativeFxState {
             depth_estimation_in_progress: false,
             depth_estimation_rx: None,
             depth_estimation_error: None,
+            cached_background_removal: None,
+            alpha_mask_in_progress: false,
+            alpha_mask_rx: None,
+            alpha_mask_error: None,
         }
     }
 }
@@ -152,6 +197,7 @@ impl ImagePreviewState {
         let selected_fx = self.creative_fx_state.selected_fx;
         let params = self.creative_fx_state.current_params();
         let cached_depth = self.creative_fx_state.cached_depth_map.clone();
+        let cached_background_removal = self.creative_fx_state.cached_background_removal.clone();
 
         let (tx, rx) = std::sync::mpsc::channel::<CreativeFxMsg>();
         self.creative_fx_state.render_rx = Some(rx);
@@ -161,7 +207,12 @@ impl ImagePreviewState {
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
             let process_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                apply_creative_fx_with_depth(&input_rgba, cached_depth.as_ref(), &params)
+                apply_creative_fx_with_masks(
+                    &input_rgba,
+                    cached_depth.as_ref(),
+                    cached_background_removal.as_ref(),
+                    &params,
+                )
             }));
             match process_result {
                 Ok(out_rgba) => {
@@ -272,6 +323,43 @@ impl ImagePreviewState {
         });
     }
 
+    /// Spawn automatic FeyNoBg removal to provide an alpha mask for Creative FX.
+    pub fn run_alpha_mask_for_fx(&mut self) {
+        if self.creative_fx_state.alpha_mask_in_progress || self.current_rgba.is_empty() {
+            return;
+        }
+
+        if !self.redaction_state.boxes.is_empty() {
+            self.apply_redactions();
+        }
+
+        let base_img = self.current_display_image();
+        let mut png_bytes = Vec::new();
+        if let Err(error) = base_img.write_to(
+            &mut std::io::Cursor::new(&mut png_bytes),
+            image::ImageFormat::Png,
+        ) {
+            self.creative_fx_state.alpha_mask_error =
+                Some(format!("Failed to encode image to PNG: {}", error));
+            return;
+        }
+
+        let configured_cmd = self.bg_removal_cmd.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<Result<RgbaImage, String>>();
+        self.creative_fx_state.alpha_mask_rx = Some(rx);
+        self.creative_fx_state.alpha_mask_in_progress = true;
+        self.creative_fx_state.alpha_mask_error = None;
+
+        std::thread::spawn(move || {
+            let result = super::background_removal::remove_background_rgba(
+                &png_bytes,
+                configured_cmd.as_deref(),
+                None,
+            );
+            let _ = tx.send(result);
+        });
+    }
+
     /// Spawn low-priority background thread to generate 42x28 thumbnail previews for all FX.
     pub fn run_creative_fx_thumbnail_batch(&mut self) {
         if self.current_rgba.is_empty() {
@@ -348,6 +436,8 @@ impl ImagePreviewState {
                     self.creative_fx_state.cached_depth_map = Some(depth_rgba);
                     self.creative_fx_state.depth_estimation_in_progress = false;
                     self.creative_fx_state.depth_estimation_error = None;
+                    self.creative_fx_state.depth_mask_for_active_fx_mut().source =
+                        CreativeFxMaskSource::DepthMap;
                     self.creative_fx_state
                         .depth_mask_for_active_fx_mut()
                         .enabled = true;
@@ -362,6 +452,32 @@ impl ImagePreviewState {
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.creative_fx_state.depth_estimation_in_progress = false;
+                }
+            }
+        }
+
+        if let Some(rx) = self.creative_fx_state.alpha_mask_rx.take() {
+            match rx.try_recv() {
+                Ok(Ok(removal_result)) => {
+                    self.creative_fx_state.cached_background_removal = Some(removal_result);
+                    self.creative_fx_state.alpha_mask_in_progress = false;
+                    self.creative_fx_state.alpha_mask_error = None;
+                    self.creative_fx_state.depth_mask_for_active_fx_mut().source =
+                        CreativeFxMaskSource::BackgroundRemovalAlpha;
+                    self.creative_fx_state
+                        .depth_mask_for_active_fx_mut()
+                        .enabled = true;
+                    self.run_creative_fx_render();
+                }
+                Ok(Err(error)) => {
+                    self.creative_fx_state.alpha_mask_error = Some(error);
+                    self.creative_fx_state.alpha_mask_in_progress = false;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.creative_fx_state.alpha_mask_rx = Some(rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.creative_fx_state.alpha_mask_in_progress = false;
                 }
             }
         }
@@ -412,6 +528,229 @@ impl ImagePreviewState {
         self.creative_fx_state.pending_thumbnails.clear();
         self.run_creative_fx_thumbnail_batch();
         self.show_toast(format!("✨ {} applied", fx_name));
+    }
+
+    fn toggle_creative_fx_mask_source(&mut self, source: CreativeFxMaskSource) {
+        let active = {
+            let config = self.creative_fx_state.depth_mask_for_active_fx();
+            config.enabled && config.source == source
+        };
+        if active {
+            self.creative_fx_state
+                .depth_mask_for_active_fx_mut()
+                .enabled = false;
+            self.creative_fx_state.mark_dirty();
+            return;
+        }
+
+        let cached = match source {
+            CreativeFxMaskSource::DepthMap => self.creative_fx_state.cached_depth_map.is_some(),
+            CreativeFxMaskSource::BackgroundRemovalAlpha => {
+                self.creative_fx_state.cached_background_removal.is_some()
+            }
+        };
+        if cached {
+            let config = self.creative_fx_state.depth_mask_for_active_fx_mut();
+            config.source = source;
+            config.enabled = true;
+            self.creative_fx_state.mark_dirty();
+        } else {
+            match source {
+                CreativeFxMaskSource::DepthMap => self.run_depth_estimation_for_fx(),
+                CreativeFxMaskSource::BackgroundRemovalAlpha => self.run_alpha_mask_for_fx(),
+            }
+        }
+    }
+
+    fn render_creative_fx_mask_sources(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: &AppPalette,
+        full_w: f32,
+    ) {
+        let f_high = hex_to_c32(&palette.theme.f_high);
+        let base_c = hex_to_c32(&palette.harmonies.base);
+        let diff_del = hex_to_c32(&palette.diff_del);
+        let config = *self.creative_fx_state.depth_mask_for_active_fx();
+        let depth_active = config.enabled && config.source == CreativeFxMaskSource::DepthMap;
+        let alpha_active =
+            config.enabled && config.source == CreativeFxMaskSource::BackgroundRemovalAlpha;
+        let has_depth = self.creative_fx_state.cached_depth_map.is_some();
+        let has_alpha = self.creative_fx_state.cached_background_removal.is_some();
+        let depth_loading = self.creative_fx_state.depth_estimation_in_progress;
+        let alpha_loading = self.creative_fx_state.alpha_mask_in_progress;
+        let mask_loading = depth_loading || alpha_loading;
+
+        ui.label(
+            egui::RichText::new("Masking")
+                .small()
+                .strong()
+                .color(f_high),
+        );
+        ui.add_space(4.0);
+
+        if depth_loading {
+            render_creative_fx_mask_loading(
+                ui,
+                "Estimating depth map with Depth-Anything...",
+                base_c,
+            );
+            ctx.request_repaint();
+        } else if alpha_loading {
+            render_creative_fx_mask_loading(ui, "Removing background with FeyNoBg...", base_c);
+            ctx.request_repaint();
+        }
+
+        let depth_label = if depth_active {
+            "🌊 Depth Mask: ON"
+        } else if has_depth {
+            "🌊 Depth map • cached"
+        } else {
+            "🌊 Use depth map as mask"
+        };
+        if render_creative_fx_mask_button(
+            ui,
+            depth_label,
+            depth_active,
+            mask_loading,
+            full_w,
+            palette,
+        )
+        .on_hover_text("Use AI monocular depth to mask this effect")
+        .clicked()
+        {
+            self.toggle_creative_fx_mask_source(CreativeFxMaskSource::DepthMap);
+        }
+
+        ui.add_space(3.0);
+        let alpha_label = if alpha_active {
+            "✂ Removal Alpha: ON"
+        } else if has_alpha {
+            "✂ Removal alpha • cached"
+        } else {
+            "✂ Use removal alpha as mask"
+        };
+        if render_creative_fx_mask_button(
+            ui,
+            alpha_label,
+            alpha_active,
+            mask_loading,
+            full_w,
+            palette,
+        )
+        .on_hover_text("Use the previous Remove BG result, or run automatic FeyNoBg removal")
+        .clicked()
+        {
+            self.toggle_creative_fx_mask_source(CreativeFxMaskSource::BackgroundRemovalAlpha);
+        }
+
+        if let Some(error) = &self.creative_fx_state.depth_estimation_error {
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new(format!("⚠ {}", error))
+                    .small()
+                    .color(diff_del),
+            );
+        }
+        if let Some(error) = &self.creative_fx_state.alpha_mask_error {
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new(format!("⚠ {}", error))
+                    .small()
+                    .color(diff_del),
+            );
+        }
+    }
+
+    fn render_creative_fx_mask_options(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &AppPalette,
+        cur_fx: CreativeFxType,
+        full_w: f32,
+        slider_w: f32,
+    ) {
+        let config = *self.creative_fx_state.depth_mask_for_active_fx();
+        if !config.enabled {
+            return;
+        }
+
+        let b_med = hex_to_c32(&palette.theme.b_med);
+        let f_high = hex_to_c32(&palette.theme.f_high);
+        ui.add_space(4.0);
+        let invert_text = match (config.source, config.invert) {
+            (CreativeFxMaskSource::DepthMap, true) => "⇄ Invert Mask: ON (Far / Background)",
+            (CreativeFxMaskSource::DepthMap, false) => "⇄ Invert Mask: OFF (Near / Foreground)",
+            (CreativeFxMaskSource::BackgroundRemovalAlpha, true) => {
+                "⇄ Invert Mask: ON (Background)"
+            }
+            (CreativeFxMaskSource::BackgroundRemovalAlpha, false) => {
+                "⇄ Invert Mask: OFF (Foreground)"
+            }
+        };
+        let invert_button =
+            egui::Button::new(egui::RichText::new(invert_text).small().color(f_high))
+                .fill(b_med)
+                .rounding(Rounding::same(3.0))
+                .min_size(Vec2::new(full_w, 20.0));
+        if ui
+            .add(invert_button)
+            .on_hover_text("Swap the foreground and background mask regions")
+            .clicked()
+        {
+            self.creative_fx_state.depth_mask_for_active_fx_mut().invert = !config.invert;
+            self.creative_fx_state.mark_dirty();
+        }
+
+        let supports_depth_cutoff = matches!(
+            cur_fx,
+            CreativeFxType::PixelSort
+                | CreativeFxType::CmykHalftone
+                | CreativeFxType::DitherPalette
+                | CreativeFxType::Ntsc
+                | CreativeFxType::Structure
+        );
+        if config.source != CreativeFxMaskSource::DepthMap || !supports_depth_cutoff {
+            return;
+        }
+
+        ui.add_space(4.0);
+        let mut threshold = config.threshold;
+        if render_context_slider(
+            ui,
+            "Depth Cutoff (0: Continuous gradient)",
+            &mut threshold,
+            0.0..=1.0,
+            0.0,
+            "",
+            slider_w,
+            palette,
+        ) {
+            self.creative_fx_state
+                .depth_mask_for_active_fx_mut()
+                .threshold = threshold;
+            self.creative_fx_state.mark_dirty();
+        }
+
+        if threshold > 0.001 {
+            let mut feather = config.feather;
+            if render_context_slider(
+                ui,
+                "Feather Softness",
+                &mut feather,
+                0.01..=0.50,
+                0.25,
+                "",
+                slider_w,
+                palette,
+            ) {
+                self.creative_fx_state
+                    .depth_mask_for_active_fx_mut()
+                    .feather = feather;
+                self.creative_fx_state.mark_dirty();
+            }
+        }
     }
 
     /// Full 3-panel Creative FX viewport (Left: FX list; Center: Split Canvas; Right: Controls).
@@ -1830,137 +2169,19 @@ impl ImagePreviewState {
                                         }
                                     }
 
-                                    // ── Depth Map Masking Controls ──
+                                    // ── Masking Controls ──
+                                    ui.add_space(8.0);
+                                    ui.separator();
+                                    ui.add_space(6.0);
+                                    self.render_creative_fx_mask_sources(ui, ctx, palette, full_w);
+                                    self.render_creative_fx_mask_options(
+                                        ui, palette, cur_fx, full_w, slider_w,
+                                    );
+
                                     ui.add_space(8.0);
                                     ui.separator();
                                     ui.add_space(6.0);
 
-                                    let is_mask_enabled = self.creative_fx_state.depth_mask_for_active_fx().enabled;
-                                    let has_cached_depth = self.creative_fx_state.cached_depth_map.is_some();
-                                    let depth_loading = self.creative_fx_state.depth_estimation_in_progress;
-                                    let diff_del = hex_to_c32(&palette.diff_del);
-
-                                    ui.horizontal(|ui| {
-                                        ui.label(egui::RichText::new("Depth Map Mask").small().strong().color(f_high));
-                                        if has_cached_depth {
-                                            ui.label(egui::RichText::new("• Cached").small().color(diff_add));
-                                        }
-                                    });
-                                    ui.add_space(4.0);
-
-                                    if depth_loading {
-                                        ui.horizontal(|ui| {
-                                            ui.add(egui::Spinner::new().size(14.0).color(base_c));
-                                            ui.add_space(4.0);
-                                            ui.label(
-                                                egui::RichText::new("Estimating depth map with Depth-Anything...")
-                                                    .small()
-                                                    .monospace()
-                                                    .color(base_c),
-                                            );
-                                        });
-                                        ctx.request_repaint();
-                                    } else {
-                                        let mask_btn_text = if is_mask_enabled {
-                                            "🌊 Depth Mask: ON"
-                                        } else {
-                                            "🌊 Use depth map as mask"
-                                        };
-                                        let mask_btn_fill = if is_mask_enabled {
-                                            diff_add
-                                        } else {
-                                            b_med
-                                        };
-                                        let mask_btn_fg = contrast_text_c32(mask_btn_fill, Some(f_high), palette);
-                                        let mask_btn = egui::Button::new(
-                                            egui::RichText::new(mask_btn_text).small().strong().color(mask_btn_fg),
-                                        )
-                                        .fill(mask_btn_fill)
-                                        .stroke(Stroke::new(1.0_f32, if is_mask_enabled { diff_add } else { b_med }))
-                                        .rounding(Rounding::same(4.0))
-                                        .min_size(Vec2::new(full_w, 22.0));
-
-                                        if ui.add(mask_btn).on_hover_text("Use AI monocular depth map to mask this effect (near vs far depth)").clicked() {
-                                            if is_mask_enabled {
-                                                self.creative_fx_state.depth_mask_for_active_fx_mut().enabled = false;
-                                                self.creative_fx_state.mark_dirty();
-                                            } else if has_cached_depth {
-                                                self.creative_fx_state.depth_mask_for_active_fx_mut().enabled = true;
-                                                self.creative_fx_state.mark_dirty();
-                                            } else {
-                                                self.run_depth_estimation_for_fx();
-                                            }
-                                        }
-                                    }
-
-                                    if let Some(err) = &self.creative_fx_state.depth_estimation_error {
-                                        ui.add_space(2.0);
-                                        ui.label(egui::RichText::new(format!("⚠ {}", err)).small().color(diff_del));
-                                    }
-
-                                    if is_mask_enabled {
-                                        ui.add_space(4.0);
-                                        let invert_text = if self.creative_fx_state.depth_mask_for_active_fx().invert {
-                                            "⇄ Invert Mask: ON (Far / Background)"
-                                        } else {
-                                            "⇄ Invert Mask: OFF (Near / Foreground)"
-                                        };
-                                        let inv_btn = egui::Button::new(egui::RichText::new(invert_text).small().color(f_high))
-                                            .fill(b_med)
-                                            .rounding(Rounding::same(3.0))
-                                            .min_size(Vec2::new(full_w, 20.0));
-                                        if ui.add(inv_btn).on_hover_text("Invert depth polarity (swap foreground and background)").clicked() {
-                                            let inv = !self.creative_fx_state.depth_mask_for_active_fx().invert;
-                                            self.creative_fx_state.depth_mask_for_active_fx_mut().invert = inv;
-                                            self.creative_fx_state.mark_dirty();
-                                        }
-
-                                        match cur_fx {
-                                            CreativeFxType::PixelSort
-                                            | CreativeFxType::CmykHalftone
-                                            | CreativeFxType::DitherPalette
-                                            | CreativeFxType::Ntsc
-                                            | CreativeFxType::Structure => {
-                                                ui.add_space(4.0);
-                                                let mut thresh = self.creative_fx_state.depth_mask_for_active_fx().threshold;
-                                                if render_context_slider(
-                                                    ui,
-                                                    "Depth Cutoff (0: Continuous gradient)",
-                                                    &mut thresh,
-                                                    0.0..=1.0,
-                                                    0.0,
-                                                    "",
-                                                    slider_w,
-                                                    palette,
-                                                ) {
-                                                    self.creative_fx_state.depth_mask_for_active_fx_mut().threshold = thresh;
-                                                    self.creative_fx_state.mark_dirty();
-                                                }
-
-                                                if thresh > 0.001 {
-                                                    let mut feather = self.creative_fx_state.depth_mask_for_active_fx().feather;
-                                                    if render_context_slider(
-                                                        ui,
-                                                        "Feather Softness",
-                                                        &mut feather,
-                                                        0.01..=0.50,
-                                                        0.25,
-                                                        "",
-                                                        slider_w,
-                                                        palette,
-                                                    ) {
-                                                        self.creative_fx_state.depth_mask_for_active_fx_mut().feather = feather;
-                                                        self.creative_fx_state.mark_dirty();
-                                                    }
-                                                }
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-
-                                    ui.add_space(8.0);
-                                    ui.separator();
-                                    ui.add_space(6.0);
 
                                     // ── Action Buttons ──
                                     let apply_fg = contrast_text_c32(diff_add, Some(f_high), palette);

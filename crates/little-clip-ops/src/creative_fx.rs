@@ -128,15 +128,30 @@ impl CreativeFxType {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
-// Depth Masking Configuration
+// Creative FX Masking Configuration
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Configuration for masking creative effects using an AI-generated grayscale depth map.
+/// Source used to spatially mask a creative effect.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CreativeFxMaskSource {
+    /// Luminance from an AI-generated depth map.
+    #[default]
+    DepthMap,
+    /// Alpha from a background-removal result.
+    BackgroundRemovalAlpha,
+}
+
+/// Configuration for spatially masking creative effects.
+///
+/// The historical type name is retained for API and serialized-data compatibility.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct DepthMaskConfig {
-    /// Whether depth-based masking is enabled for this effect.
+    /// Whether masking is enabled for this effect.
     pub enabled: bool,
-    /// Invert depth polarity (near becomes far, far becomes near).
+    /// The mutually exclusive source of mask values.
+    #[serde(default)]
+    pub source: CreativeFxMaskSource,
+    /// Invert mask polarity.
     pub invert: bool,
     /// Depth threshold cut-off (0.0 to 1.0). When 0.0, the full grayscale depth gradient is used continuously.
     pub threshold: f32,
@@ -148,6 +163,7 @@ impl Default for DepthMaskConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            source: CreativeFxMaskSource::DepthMap,
             invert: false,
             threshold: 0.0,
             feather: 0.25,
@@ -2970,12 +2986,19 @@ pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
     }
 }
 
-/// Blend original image and creative effect result using a grayscale depth map as a spatial mask.
-pub fn apply_depth_mask(
+#[derive(Clone, Copy)]
+enum MaskValueChannel {
+    Luminance,
+    Alpha,
+}
+
+/// Blend an original image and creative effect result using a spatial mask.
+fn apply_spatial_mask(
     orig: &RgbaImage,
     fx: &RgbaImage,
-    depth_map: &RgbaImage,
+    mask_image: &RgbaImage,
     config: &DepthMaskConfig,
+    channel: MaskValueChannel,
 ) -> RgbaImage {
     if !config.enabled {
         return fx.clone();
@@ -2986,52 +3009,58 @@ pub fn apply_depth_mask(
         return fx.clone();
     }
 
-    let resampled_depth: std::borrow::Cow<'_, RgbaImage> =
-        if depth_map.dimensions() != (width, height) {
+    let resampled_mask: std::borrow::Cow<'_, RgbaImage> =
+        if mask_image.dimensions() != (width, height) {
             std::borrow::Cow::Owned(image::imageops::resize(
-                depth_map,
+                mask_image,
                 width,
                 height,
                 image::imageops::FilterType::Triangle,
             ))
         } else {
-            std::borrow::Cow::Borrowed(depth_map)
+            std::borrow::Cow::Borrowed(mask_image)
         };
 
     let mut out_bytes = vec![0u8; (width * height * 4) as usize];
     let orig_raw = orig.as_raw();
     let fx_raw = fx.as_raw();
-    let depth_raw = resampled_depth.as_raw();
+    let mask_raw = resampled_mask.as_raw();
 
     out_bytes
         .par_chunks_exact_mut((width * 4) as usize)
         .zip(orig_raw.par_chunks_exact((width * 4) as usize))
         .zip(fx_raw.par_chunks_exact((width * 4) as usize))
-        .zip(depth_raw.par_chunks_exact((width * 4) as usize))
-        .for_each(|(((out_row, orig_row), fx_row), depth_row)| {
+        .zip(mask_raw.par_chunks_exact((width * 4) as usize))
+        .for_each(|(((out_row, orig_row), fx_row), mask_row)| {
             for x in 0..(width as usize) {
                 let px_idx = x * 4;
-                let dr = depth_row[px_idx] as f32 / 255.0;
-                let dg = depth_row[px_idx + 1] as f32 / 255.0;
-                let db = depth_row[px_idx + 2] as f32 / 255.0;
-                let mut d = 0.299 * dr + 0.587 * dg + 0.114 * db;
+                let mut d = match channel {
+                    MaskValueChannel::Luminance => {
+                        let r = mask_row[px_idx] as f32 / 255.0;
+                        let g = mask_row[px_idx + 1] as f32 / 255.0;
+                        let b = mask_row[px_idx + 2] as f32 / 255.0;
+                        0.299 * r + 0.587 * g + 0.114 * b
+                    }
+                    MaskValueChannel::Alpha => mask_row[px_idx + 3] as f32 / 255.0,
+                };
 
                 if config.invert {
                     d = 1.0 - d;
                 }
 
-                let weight = if config.threshold > 0.001 {
-                    let feather = config.feather.clamp(0.001, 1.0);
-                    let low = (config.threshold - feather).clamp(0.0, 1.0);
-                    let high = (config.threshold + feather).clamp(0.0, 1.0);
-                    if high <= low {
-                        if d >= config.threshold { 1.0 } else { 0.0 }
-                    } else {
-                        let t = ((d - low) / (high - low)).clamp(0.0, 1.0);
-                        t * t * (3.0 - 2.0 * t)
+                let weight = match channel {
+                    MaskValueChannel::Luminance if config.threshold > 0.001 => {
+                        let feather = config.feather.clamp(0.001, 1.0);
+                        let low = (config.threshold - feather).clamp(0.0, 1.0);
+                        let high = (config.threshold + feather).clamp(0.0, 1.0);
+                        if high <= low {
+                            if d >= config.threshold { 1.0 } else { 0.0 }
+                        } else {
+                            let t = ((d - low) / (high - low)).clamp(0.0, 1.0);
+                            t * t * (3.0 - 2.0 * t)
+                        }
                     }
-                } else {
-                    d.clamp(0.0, 1.0)
+                    _ => d.clamp(0.0, 1.0),
                 };
 
                 for c in 0..3 {
@@ -3047,28 +3076,7 @@ pub fn apply_depth_mask(
     RgbaImage::from_raw(width, height, out_bytes).unwrap_or_else(|| fx.clone())
 }
 
-/// Apply a creative effect to an RGBA image with optional depth map masking.
-pub fn apply_creative_fx_with_depth(
-    img: &RgbaImage,
-    depth: Option<&RgbaImage>,
-    params: &CreativeFxParams,
-) -> RgbaImage {
-    let mask_config = params.depth_mask();
-    if mask_config.enabled {
-        if let Some(depth_map) = depth {
-            let fx_result = match params {
-                CreativeFxParams::LensAberration(p) => apply_lens_aberration(img, p),
-                CreativeFxParams::Trichromatic(p) => apply_trichromatic(img, p),
-                CreativeFxParams::PixelSort(p) => apply_pixel_sort(img, p),
-                CreativeFxParams::CmykHalftone(p) => apply_cmyk_halftone(img, p),
-                CreativeFxParams::DitherPalette(p) => apply_dither_palette(img, p),
-                CreativeFxParams::Ntsc(p) => apply_ntsc_effect(img, p),
-                CreativeFxParams::Structure(p) => apply_structure(img, p),
-            };
-            return apply_depth_mask(img, &fx_result, depth_map, mask_config);
-        }
-    }
-
+fn render_creative_fx(img: &RgbaImage, params: &CreativeFxParams) -> RgbaImage {
     match params {
         CreativeFxParams::LensAberration(p) => apply_lens_aberration(img, p),
         CreativeFxParams::Trichromatic(p) => apply_trichromatic(img, p),
@@ -3080,9 +3088,72 @@ pub fn apply_creative_fx_with_depth(
     }
 }
 
+/// Blend original image and creative effect result using a grayscale depth map as a spatial mask.
+pub fn apply_depth_mask(
+    orig: &RgbaImage,
+    fx: &RgbaImage,
+    depth_map: &RgbaImage,
+    config: &DepthMaskConfig,
+) -> RgbaImage {
+    apply_spatial_mask(orig, fx, depth_map, config, MaskValueChannel::Luminance)
+}
+
+/// Blend original image and creative effect result using a background-removal alpha channel.
+pub fn apply_alpha_mask(
+    orig: &RgbaImage,
+    fx: &RgbaImage,
+    removal_result: &RgbaImage,
+    config: &DepthMaskConfig,
+) -> RgbaImage {
+    apply_spatial_mask(orig, fx, removal_result, config, MaskValueChannel::Alpha)
+}
+
+/// Apply a creative effect with the mask selected by the effect configuration.
+pub fn apply_creative_fx_with_masks(
+    img: &RgbaImage,
+    depth: Option<&RgbaImage>,
+    background_removal: Option<&RgbaImage>,
+    params: &CreativeFxParams,
+) -> RgbaImage {
+    let mask_config = params.depth_mask();
+    if mask_config.enabled {
+        let mask = match mask_config.source {
+            CreativeFxMaskSource::DepthMap => {
+                depth.map(|image| (image, MaskValueChannel::Luminance))
+            }
+            CreativeFxMaskSource::BackgroundRemovalAlpha => {
+                background_removal.map(|image| (image, MaskValueChannel::Alpha))
+            }
+        };
+        if let Some((mask_image, channel)) = mask {
+            let fx_result = render_creative_fx(img, params);
+            return apply_spatial_mask(img, &fx_result, mask_image, mask_config, channel);
+        }
+    }
+
+    render_creative_fx(img, params)
+}
+
+/// Apply a creative effect to an RGBA image with optional depth map masking.
+pub fn apply_creative_fx_with_depth(
+    img: &RgbaImage,
+    depth: Option<&RgbaImage>,
+    params: &CreativeFxParams,
+) -> RgbaImage {
+    let mask_config = params.depth_mask();
+    if mask_config.enabled
+        && let Some(depth_map) = depth
+    {
+        let fx_result = render_creative_fx(img, params);
+        return apply_depth_mask(img, &fx_result, depth_map, mask_config);
+    }
+
+    render_creative_fx(img, params)
+}
+
 /// Apply any creative effect using its parameter union (without depth masking).
 pub fn apply_creative_fx(img: &RgbaImage, params: &CreativeFxParams) -> RgbaImage {
-    apply_creative_fx_with_depth(img, None, params)
+    render_creative_fx(img, params)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -3840,6 +3911,7 @@ mod tests {
 
         let config = DepthMaskConfig {
             enabled: true,
+            source: CreativeFxMaskSource::DepthMap,
             invert: false,
             threshold: 0.0,
             feather: 0.1,
@@ -3854,6 +3926,7 @@ mod tests {
         // Test invert
         let inv_config = DepthMaskConfig {
             enabled: true,
+            source: CreativeFxMaskSource::DepthMap,
             invert: true,
             threshold: 0.0,
             feather: 0.1,
@@ -3874,6 +3947,7 @@ mod tests {
         // Disabled returns fx
         let disabled_cfg = DepthMaskConfig {
             enabled: false,
+            source: CreativeFxMaskSource::DepthMap,
             invert: false,
             threshold: 0.5,
             feather: 0.1,
@@ -3884,6 +3958,7 @@ mod tests {
         // Threshold 0.5 with feather 0.05
         let thresh_cfg = DepthMaskConfig {
             enabled: true,
+            source: CreativeFxMaskSource::DepthMap,
             invert: false,
             threshold: 0.5,
             feather: 0.05,
@@ -3893,5 +3968,37 @@ mod tests {
         assert_eq!(res_thresh.get_pixel(0, 0)[0], 50);
         // (1,1) depth is ~0.86 > 0.55 -> weight 1 -> fx (150)
         assert_eq!(res_thresh.get_pixel(1, 1)[0], 150);
+    }
+
+    #[test]
+    fn test_apply_alpha_mask_and_inversion() {
+        let orig = RgbaImage::from_pixel(3, 1, Rgba([20, 20, 20, 255]));
+        let fx = RgbaImage::from_pixel(3, 1, Rgba([220, 220, 220, 255]));
+        let mut removal = RgbaImage::new(3, 1);
+        removal.put_pixel(0, 0, Rgba([255, 255, 255, 0]));
+        removal.put_pixel(1, 0, Rgba([0, 0, 0, 255]));
+        removal.put_pixel(2, 0, Rgba([0, 0, 0, 128]));
+
+        let foreground = DepthMaskConfig {
+            enabled: true,
+            source: CreativeFxMaskSource::BackgroundRemovalAlpha,
+            invert: false,
+            // A depth threshold must not quantize background-removal alpha.
+            threshold: 0.9,
+            feather: 0.25,
+        };
+        let masked = apply_alpha_mask(&orig, &fx, &removal, &foreground);
+        assert_eq!(masked.get_pixel(0, 0)[0], 20);
+        assert_eq!(masked.get_pixel(1, 0)[0], 220);
+        assert!((masked.get_pixel(2, 0)[0] as i16 - 120).abs() <= 1);
+
+        let background = DepthMaskConfig {
+            invert: true,
+            ..foreground
+        };
+        let inverted = apply_alpha_mask(&orig, &fx, &removal, &background);
+        assert_eq!(inverted.get_pixel(0, 0)[0], 220);
+        assert_eq!(inverted.get_pixel(1, 0)[0], 20);
+        assert!((inverted.get_pixel(2, 0)[0] as i16 - 120).abs() <= 1);
     }
 }

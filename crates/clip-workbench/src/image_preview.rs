@@ -14,11 +14,11 @@ use little_clip_core::theme::AppPalette;
 use little_clip_core::{AppConfig, ClipItem, CommandRequest, HandSide, IpcRequest};
 use little_clip_ops::barcode::BarcodeDetection;
 use little_clip_ops::creative_fx::{
-    CmykHalftoneParams, CreativeFxParams, CreativeFxType, DepthMaskConfig, DitherMethod,
-    DitherPaletteParams, LensAberrationParams, NtscChromaLowpass, NtscDemodulation, NtscParams,
-    NtscPhaseShift, PaperTint, PixelSortCriteria, PixelSortDirection, PixelSortOrder,
+    CmykHalftoneParams, CreativeFxMaskSource, CreativeFxParams, CreativeFxType, DepthMaskConfig,
+    DitherMethod, DitherPaletteParams, LensAberrationParams, NtscChromaLowpass, NtscDemodulation,
+    NtscParams, NtscPhaseShift, PaperTint, PixelSortCriteria, PixelSortDirection, PixelSortOrder,
     PixelSortParams, RetroPalette, StructureParams, TrichromaticMode, TrichromaticParams,
-    VhsTapeSpeed, apply_creative_fx, apply_creative_fx_with_depth, default_preset_for_fx,
+    VhsTapeSpeed, apply_creative_fx, apply_creative_fx_with_masks, default_preset_for_fx,
     presets_for_fx, trichromatic_intersection_box,
 };
 use little_clip_ops::decorrelation_stretch::{
@@ -2417,6 +2417,12 @@ mod tests {
         // Verify transparent pixel was applied on left half
         assert_eq!(state.current_rgba.get_pixel(10, 10)[3], 0);
         assert_eq!(state.current_rgba.get_pixel(60, 60)[3], 255);
+        let cached_removal = state
+            .creative_fx_state
+            .cached_background_removal
+            .as_ref()
+            .expect("Remove BG result should be cached for Creative FX");
+        assert_eq!(cached_removal.as_raw(), state.current_rgba.as_raw());
 
         // Test Undo
         state.undo();
@@ -3371,5 +3377,50 @@ mod tests {
         }
         assert!(!state.creative_fx_state.is_rendering);
         assert!(state.creative_fx_state.preview_rgba.is_some());
+    }
+
+    #[test]
+    fn test_creative_fx_alpha_mask_runs_fey_nobg_without_prompt() {
+        let config = AppConfig::default();
+        let img = RgbaImage::from_pixel(16, 16, image::Rgba([80, 80, 80, 255]));
+        let mut png_bytes = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut png_bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        let item = ClipItem::from_image(png_bytes, 16, 16, "image/png");
+        let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
+
+        let mock_script = "import sys, io\nfrom PIL import Image\nassert '--prompt' not in sys.argv, 'Creative FX must use FeyNoBg without a prompt'\nimg = Image.open(io.BytesIO(sys.stdin.buffer.read())).convert('RGBA')\nfor y in range(img.height):\n    for x in range(img.width):\n        img.putpixel((x, y), (*img.getpixel((x, y))[:3], 0 if x < 8 else 255))\nbuf = io.BytesIO()\nimg.save(buf, format='PNG')\nsys.stdout.buffer.write(buf.getvalue())\n";
+        let script_path = std::env::temp_dir().join("mock_nobg_fx_worker.py");
+        std::fs::write(&script_path, mock_script).unwrap();
+        state.bg_removal_cmd = Some(format!("python3 {}", script_path.display()));
+        state.multimatte_prompt = "person in red".to_string();
+
+        state.run_alpha_mask_for_fx();
+        assert!(state.creative_fx_state.alpha_mask_in_progress);
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while state.creative_fx_state.alpha_mask_in_progress && std::time::Instant::now() < deadline
+        {
+            state.poll_creative_fx();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        assert!(!state.creative_fx_state.alpha_mask_in_progress);
+        assert_eq!(state.creative_fx_state.alpha_mask_error, None);
+        let removal = state
+            .creative_fx_state
+            .cached_background_removal
+            .as_ref()
+            .expect("FeyNoBg result should be cached");
+        assert_eq!(removal.get_pixel(2, 2)[3], 0);
+        assert_eq!(removal.get_pixel(12, 2)[3], 255);
+        assert_eq!(state.current_rgba.get_pixel(2, 2)[3], 255);
+
+        let mask = state.creative_fx_state.depth_mask_for_active_fx();
+        assert!(mask.enabled);
+        assert_eq!(mask.source, CreativeFxMaskSource::BackgroundRemovalAlpha);
     }
 }

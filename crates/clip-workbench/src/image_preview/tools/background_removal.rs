@@ -10,6 +10,70 @@ pub enum BgRemovalMsg {
     Error(String),
 }
 
+pub(super) fn remove_background_rgba(
+    png_bytes: &[u8],
+    configured_cmd: Option<&str>,
+    prompt: Option<&str>,
+) -> Result<RgbaImage, String> {
+    let (cmd_bin, cmd_args) = if let Some(cmd) = configured_cmd {
+        let parts: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
+        if parts.is_empty() {
+            ("scripts/remove_bg.py".to_string(), Vec::new())
+        } else {
+            (parts[0].clone(), parts[1..].to_vec())
+        }
+    } else if std::path::Path::new("scripts/remove_bg.py").exists() {
+        ("scripts/remove_bg.py".to_string(), Vec::new())
+    } else {
+        (
+            "python3".to_string(),
+            vec!["scripts/remove_bg.py".to_string()],
+        )
+    };
+
+    let mut cmd = Command::new(&cmd_bin);
+    cmd.args(&cmd_args);
+    if let Some(prompt) = prompt {
+        cmd.arg("--prompt").arg(prompt);
+    }
+    cmd.arg("-").arg("-");
+
+    let mut child = cmd
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| {
+            format!(
+                "Failed to launch background removal process '{}': {}. Ensure Python with nobg is installed.",
+                cmd_bin, e
+            )
+        })?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        stdin
+            .write_all(png_bytes)
+            .map_err(|e| format!("Failed to write image data to worker: {}", e))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Worker process failed: {}", e))?;
+    if !output.status.success() {
+        let err_str = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "Background removal failed (exit code {:?}):\n{}",
+            output.status.code(),
+            err_str.trim()
+        ));
+    }
+
+    image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
+        .map(|image| image.to_rgba8())
+        .map_err(|e| format!("Failed to decode output PNG: {}", e))
+}
+
 impl ImagePreviewState {
     pub fn run_background_removal(&mut self) {
         if self.bg_removal_in_progress {
@@ -30,31 +94,6 @@ impl ImagePreviewState {
             return;
         }
 
-        // Determine executable command
-        let (cmd_bin, cmd_args) = if let Some(ref cmd) = self.bg_removal_cmd {
-            let parts: Vec<String> = cmd.split_whitespace().map(|s| s.to_string()).collect();
-            if !parts.is_empty() {
-                (parts[0].clone(), parts[1..].to_vec())
-            } else {
-                ("scripts/remove_bg.py".to_string(), Vec::new())
-            }
-        } else {
-            let candidates = ["scripts/remove_bg.py", "./scripts/remove_bg.py"];
-            let mut found = None;
-            for path in &candidates {
-                if std::path::Path::new(path).exists() {
-                    found = Some((path.to_string(), Vec::new()));
-                    break;
-                }
-            }
-            found.unwrap_or_else(|| {
-                (
-                    "python3".to_string(),
-                    vec!["scripts/remove_bg.py".to_string()],
-                )
-            })
-        };
-
         let prompt_opt = if !self.multimatte_prompt.trim().is_empty() {
             Some(self.multimatte_prompt.trim().to_string())
         } else {
@@ -72,6 +111,7 @@ impl ImagePreviewState {
         self.bg_removal_status = Some(status_desc);
         self.bg_removal_error = None;
 
+        let configured_cmd = self.bg_removal_cmd.clone();
         let thread_prompt = prompt_opt.clone();
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
@@ -83,77 +123,21 @@ impl ImagePreviewState {
             };
             let _ = tx_prog.send(BgRemovalMsg::Progress(init_msg));
 
-            let mut cmd = Command::new(&cmd_bin);
-            cmd.args(&cmd_args);
-            if let Some(ref p) = thread_prompt {
-                cmd.arg("--prompt").arg(p);
-            }
-            cmd.arg("-").arg("-");
-
-            let mut child = match cmd
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    let _ = tx.send(BgRemovalMsg::Error(format!(
-                        "Failed to launch background removal process '{}': {}. Ensure Python with nobg is installed.",
-                        cmd_bin, e
-                    )));
-                    return;
-                }
-            };
-
-            if let Some(mut stdin) = child.stdin.take() {
-                use std::io::Write;
-                if let Err(e) = stdin.write_all(&png_bytes) {
-                    let _ = tx.send(BgRemovalMsg::Error(format!(
-                        "Failed to write image data to worker: {}",
-                        e
-                    )));
-                    return;
-                }
-            }
-
-            let output = match child.wait_with_output() {
-                Ok(o) => o,
-                Err(e) => {
-                    let _ = tx.send(BgRemovalMsg::Error(format!("Worker process failed: {}", e)));
-                    return;
-                }
-            };
-
-            if !output.status.success() {
-                let err_str = String::from_utf8_lossy(&output.stderr);
-                let _ = tx.send(BgRemovalMsg::Error(format!(
-                    "Background removal failed (exit code {:?}):\n{}",
-                    output.status.code(),
-                    err_str.trim()
-                )));
-                return;
-            }
-
-            let res_img = match image::load_from_memory_with_format(
-                &output.stdout,
-                image::ImageFormat::Png,
+            match remove_background_rgba(
+                &png_bytes,
+                configured_cmd.as_deref(),
+                thread_prompt.as_deref(),
             ) {
-                Ok(dyn_img) => dyn_img.to_rgba8(),
-                Err(e) => {
-                    let _ = tx.send(BgRemovalMsg::Error(format!(
-                        "Failed to decode output PNG: {}",
-                        e
-                    )));
-                    return;
+                Ok(result_rgba) => {
+                    let _ = tx.send(BgRemovalMsg::Success {
+                        result_rgba,
+                        duration_ms: start.elapsed().as_millis(),
+                    });
                 }
-            };
-
-            let duration_ms = start.elapsed().as_millis();
-            let _ = tx.send(BgRemovalMsg::Success {
-                result_rgba: res_img,
-                duration_ms,
-            });
+                Err(error) => {
+                    let _ = tx.send(BgRemovalMsg::Error(error));
+                }
+            }
         });
     }
 
@@ -191,6 +175,7 @@ impl ImagePreviewState {
         }
 
         if let Some((result_rgba, duration_ms)) = success_data {
+            self.creative_fx_state.cached_background_removal = Some(result_rgba.clone());
             self.undo_stack.push(self.current_rgba.clone());
             self.redo_stack.clear();
             self.current_rgba = result_rgba;
