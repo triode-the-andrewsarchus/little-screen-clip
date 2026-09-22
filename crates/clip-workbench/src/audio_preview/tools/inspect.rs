@@ -803,6 +803,44 @@ impl AudioPreviewState {
                         }
                     }
                 }
+
+                ui.add_space(6.0);
+
+                let has_analysis = self.analysis.is_some();
+
+                let copy_wave_btn = layout::AudioWorkspace::secondary_button_icon(
+                    Some(crate::icons::Icon::Copy),
+                    "Copy Waveform Image",
+                    hex_to_c32(&palette.theme.b_low),
+                    palette,
+                );
+                if ui
+                    .add_enabled(has_analysis, copy_wave_btn)
+                    .on_hover_text(
+                        "Copy rendered waveform image with axes and tick marks to clipboard",
+                    )
+                    .clicked()
+                {
+                    self.copy_waveform_image(palette, now);
+                }
+
+                ui.add_space(4.0);
+
+                let copy_spec_btn = layout::AudioWorkspace::secondary_button_icon(
+                    Some(crate::icons::Icon::Copy),
+                    "Copy Spectrum Image",
+                    hex_to_c32(&palette.theme.b_low),
+                    palette,
+                );
+                if ui
+                    .add_enabled(has_analysis, copy_spec_btn)
+                    .on_hover_text(
+                        "Copy rendered spectrum heatmap with frequency axes and timestamp ruler to clipboard",
+                    )
+                    .clicked()
+                {
+                    self.copy_spectrum_image(palette, now);
+                }
             });
         });
 

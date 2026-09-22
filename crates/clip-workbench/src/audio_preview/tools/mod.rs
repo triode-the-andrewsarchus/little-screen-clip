@@ -1,10 +1,12 @@
 //! Audio Studio tools. The inspect editor is shared by standalone inspection and stem editing.
 mod digital_decode;
+pub(crate) mod export_image;
 pub(crate) mod hf_analysis;
 mod inspect;
 pub(crate) mod spectrogram_view;
 mod stem_separation;
 pub(super) use digital_decode::DigitalDecodeState;
+pub(super) use export_image::{render_spectrum_image, render_waveform_image};
 #[allow(unused_imports)]
 pub(super) use hf_analysis::{HfAnalysisState, HfPlaybackMode};
 #[allow(unused_imports)]

@@ -29,7 +29,6 @@
     * BUDDy — experimental/high-quality speech dereverb.
     * U-DREAM — newer experimental dereverb candidate.
 * Some sort of indication of stereo separation on stereo files
-* Copy spectrum as image, copy waveform as image options
 ## MIDI
 * I'd like a live system MIDI monitor, similar to the rolling audio meter
 ## PDF

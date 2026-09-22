@@ -2443,6 +2443,99 @@ impl AudioPreviewState {
         }
     }
 
+    pub fn copy_waveform_image(&mut self, palette: &AppPalette, now: f64) {
+        let Some(ref source_analysis) = self.analysis else {
+            self.status_toast = Some(("⚠️ Waveform analysis not yet available".to_string(), now));
+            return;
+        };
+        let analysis = self.edited_waveform.as_ref().unwrap_or(source_analysis);
+        let (font_reg, _, _, font_mono) = little_clip_render::ScreenRenderer::load_fonts();
+        let region_edits = self.region_edits();
+
+        match tools::render_waveform_image(
+            analysis,
+            source_analysis,
+            &region_edits,
+            self.view_start_sec,
+            self.view_duration_sec,
+            self.duration_sec,
+            palette,
+            font_mono.as_ref(),
+            font_reg.as_ref(),
+        ) {
+            Ok(png_bytes) => {
+                let req = IpcRequest::PushImage {
+                    bytes: png_bytes.clone(),
+                    mime: "image/png".to_string(),
+                    hand: little_clip_core::HandSide::Left,
+                };
+                let _ = crate::send_ipc_request(&req);
+
+                let bytes_for_cmd = png_bytes;
+                std::thread::spawn(move || {
+                    if let Err(error) = little_clip_core::copy_bytes_to_system_clipboard(
+                        &bytes_for_cmd,
+                        "image/png",
+                    ) {
+                        tracing::debug!(%error, "failed to copy waveform image to system clipboard");
+                    }
+                });
+
+                self.status_toast =
+                    Some(("📋 Waveform image copied to clipboard".to_string(), now));
+            }
+            Err(err) => {
+                tracing::warn!("Failed to render waveform image: {err}");
+                self.status_toast = Some((format!("⚠️ Failed to render waveform: {err}"), now));
+            }
+        }
+    }
+
+    pub fn copy_spectrum_image(&mut self, palette: &AppPalette, now: f64) {
+        let Some(ref source_analysis) = self.analysis else {
+            self.status_toast = Some(("⚠️ Spectrum analysis not yet available".to_string(), now));
+            return;
+        };
+        let analysis = self.edited_waveform.as_ref().unwrap_or(source_analysis);
+        let (font_reg, _, _, font_mono) = little_clip_render::ScreenRenderer::load_fonts();
+
+        match tools::render_spectrum_image(
+            analysis,
+            self.view_start_sec,
+            self.view_duration_sec,
+            self.duration_sec,
+            palette,
+            font_mono.as_ref(),
+            font_reg.as_ref(),
+        ) {
+            Ok(png_bytes) => {
+                let req = IpcRequest::PushImage {
+                    bytes: png_bytes.clone(),
+                    mime: "image/png".to_string(),
+                    hand: little_clip_core::HandSide::Left,
+                };
+                let _ = crate::send_ipc_request(&req);
+
+                let bytes_for_cmd = png_bytes;
+                std::thread::spawn(move || {
+                    if let Err(error) = little_clip_core::copy_bytes_to_system_clipboard(
+                        &bytes_for_cmd,
+                        "image/png",
+                    ) {
+                        tracing::debug!(%error, "failed to copy spectrum image to system clipboard");
+                    }
+                });
+
+                self.status_toast =
+                    Some(("📋 Spectrum image copied to clipboard".to_string(), now));
+            }
+            Err(err) => {
+                tracing::warn!("Failed to render spectrum image: {err}");
+                self.status_toast = Some((format!("⚠️ Failed to render spectrum: {err}"), now));
+            }
+        }
+    }
+
     pub fn reset_save_filenames(&mut self) {
         let base_name = self
             .path
