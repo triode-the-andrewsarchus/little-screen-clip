@@ -78,6 +78,22 @@ fn map_syntect_color_to_theme(
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
 static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
+const MINIMAP_COLUMNS: usize = 96;
+const MINIMAP_WIDTH: f32 = 112.0;
+
+/// A syntax-colored, character-free slice of one source line for the minimap.
+#[derive(Debug, Clone)]
+struct MinimapSegment {
+    start_column: usize,
+    end_column: usize,
+    color: syntect::highlighting::Color,
+}
+
+#[derive(Debug, Clone, Default)]
+struct MinimapLine {
+    segments: Vec<MinimapSegment>,
+}
+
 /// View mode for markdown vs raw code inspection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextViewMode {
@@ -122,10 +138,17 @@ pub struct TextPreviewState {
 
     // Scroll state
     pub scroll_to_line: Option<usize>,
+    /// Exact pixel offset requested by minimap navigation.
+    scroll_to_offset: Option<f32>,
     /// Byte offsets for each line. This is built once when the preview opens so
     /// large files do not allocate/scan all lines every repaint.
     line_starts: Vec<usize>,
     pub minimap_fraction: f32,
+    minimap_view_fraction: f32,
+    minimap_content_height: f32,
+    minimap_viewport_height: f32,
+    minimap_lines: Option<Vec<MinimapLine>>,
+    minimap_overflows: bool,
 }
 
 fn line_start_offsets(text: &str) -> Vec<usize> {
@@ -183,8 +206,14 @@ impl TextPreviewState {
             focus_find_input: false,
             status_toast: crate::ui_ext::StatusToast::new(),
             scroll_to_line: None,
+            scroll_to_offset: None,
             line_starts,
             minimap_fraction: 0.0,
+            minimap_view_fraction: 1.0,
+            minimap_content_height: 1.0,
+            minimap_viewport_height: 1.0,
+            minimap_lines: None,
+            minimap_overflows: false,
         }
     }
 
@@ -230,8 +259,14 @@ impl TextPreviewState {
             focus_find_input: false,
             status_toast: crate::ui_ext::StatusToast::new(),
             scroll_to_line: None,
+            scroll_to_offset: None,
             line_starts,
             minimap_fraction: 0.0,
+            minimap_view_fraction: 1.0,
+            minimap_content_height: 1.0,
+            minimap_viewport_height: 1.0,
+            minimap_lines: None,
+            minimap_overflows: false,
         })
     }
 
@@ -785,7 +820,9 @@ impl TextPreviewState {
             .auto_shrink([false, false])
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
 
-        if let Some(target_line) = self.scroll_to_line.take() {
+        if let Some(offset) = self.scroll_to_offset.take() {
+            scroll_area = scroll_area.vertical_scroll_offset(offset);
+        } else if let Some(target_line) = self.scroll_to_line.take() {
             let approx_y = (target_line.saturating_sub(5)) as f32 * 18.0;
             scroll_area = scroll_area.vertical_scroll_offset(approx_y);
         }
@@ -804,9 +841,12 @@ impl TextPreviewState {
                 // virtual ScrollArea with a one-row-high clip rect on some egui backends.
                 // Reserve the viewport explicitly before asking it to virtualize rows.
                 let surface_size = ui.available_size();
-                let minimap_width = 14.0;
+                // The scroll area reports its actual content height below. Use that
+                // measurement from the previous frame to avoid showing a minimap for
+                // files that fit, while still allowing wrapping to affect overflow.
+                let show_minimap = self.minimap_overflows;
+                let minimap_width = if show_minimap { MINIMAP_WIDTH } else { 0.0 };
                 let editor_width = (surface_size.x - minimap_width - 6.0).max(64.0);
-                let mut minimap_metrics = (0.0_f32, surface_size.y.max(1.0));
                 ui.horizontal(|ui| {
                     ui.allocate_ui_with_layout(
                         Vec2::new(editor_width, surface_size.y.max(1.0)),
@@ -863,38 +903,37 @@ impl TextPreviewState {
                             self.minimap_fraction = (output.state.offset.y
                                 / (output.content_size.y - output.inner_rect.height()).max(1.0))
                             .clamp(0.0, 1.0);
-                            minimap_metrics = (output.inner_rect.height(), output.content_size.y);
+                            self.minimap_view_fraction = (output.inner_rect.height()
+                                / output.content_size.y.max(1.0))
+                            .clamp(0.0, 1.0);
+                            self.minimap_content_height = output.content_size.y;
+                            self.minimap_viewport_height = output.inner_rect.height();
+                            self.minimap_overflows =
+                                output.content_size.y > output.inner_rect.height();
+                            if self.minimap_overflows && self.minimap_lines.is_none() {
+                                self.minimap_lines =
+                                    Some(build_minimap_lines(&self.content, syntax));
+                            }
                         },
                     );
-                    let (map_rect, response) = ui.allocate_exact_size(
-                        Vec2::new(minimap_width, surface_size.y.max(1.0)),
-                        egui::Sense::click_and_drag(),
-                    );
-                    ui.painter().rect_filled(
-                        map_rect,
-                        Rounding::same(2.0),
-                        hex_to_c32(&palette.theme.b_med),
-                    );
-                    let thumb_h = (map_rect.height() * minimap_metrics.0
-                        / minimap_metrics.1.max(1.0))
-                    .clamp(12.0, map_rect.height());
-                    let thumb_y =
-                        map_rect.top() + (map_rect.height() - thumb_h) * self.minimap_fraction;
-                    ui.painter().rect_filled(
-                        egui::Rect::from_min_size(
-                            egui::pos2(map_rect.left(), thumb_y),
-                            Vec2::new(map_rect.width(), thumb_h),
-                        ),
-                        Rounding::same(2.0),
-                        hex_to_c32(&palette.harmonies.base),
-                    );
-                    if let Some(pointer) = response
-                        .interact_pointer_pos()
-                        .filter(|_| response.clicked() || response.dragged())
-                    {
-                        let fraction = ((pointer.y - map_rect.top()) / map_rect.height().max(1.0))
-                            .clamp(0.0, 1.0);
-                        self.scroll_to_line = Some((fraction * total_lines as f32) as usize);
+                    if show_minimap {
+                        if let Some(fraction) = render_code_minimap(
+                            ui,
+                            self.minimap_lines.as_deref().unwrap_or_default(),
+                            surface_size.y.max(1.0),
+                            self.minimap_fraction,
+                            self.minimap_view_fraction,
+                            palette,
+                        ) {
+                            let max_offset = (self.minimap_content_height
+                                - self.minimap_viewport_height)
+                                .max(0.0);
+                            self.scroll_to_offset = Some(
+                                (fraction * self.minimap_content_height
+                                    - self.minimap_viewport_height * 0.5)
+                                    .clamp(0.0, max_offset),
+                            );
+                        }
                     }
                 });
             });
@@ -1057,6 +1096,116 @@ fn find_syntax(lang: &str) -> &'static SyntaxReference {
     ps.find_syntax_by_token(lang)
         .or_else(|| ps.find_syntax_by_extension(lang))
         .unwrap_or_else(|| ps.find_syntax_plain_text())
+}
+
+/// Precomputes compact syntax spans once, avoiding text layout and per-frame parsing.
+fn build_minimap_lines(text: &str, syntax: &SyntaxReference) -> Vec<MinimapLine> {
+    let syn_theme = &THEME_SET.themes["base16-eighties.dark"];
+    let mut highlighter = HighlightLines::new(syntax, syn_theme);
+
+    text.split('\n')
+        .map(|line| {
+            let mut column = 0;
+            let mut segments = Vec::new();
+            for (style, token) in highlighter
+                .highlight_line(line, &SYNTAX_SET)
+                .unwrap_or_default()
+            {
+                let token_width = token.chars().count();
+                let leading_space = token.len() - token.trim_start().len();
+                let trailing_space = token.len() - token.trim_end().len();
+                let visible_start = column + token[..leading_space].chars().count();
+                let visible_end =
+                    column + token_width.saturating_sub(token[..trailing_space].chars().count());
+                if visible_start < visible_end && visible_start < MINIMAP_COLUMNS {
+                    segments.push(MinimapSegment {
+                        start_column: visible_start,
+                        end_column: visible_end.min(MINIMAP_COLUMNS),
+                        color: style.foreground,
+                    });
+                }
+                column += token_width;
+            }
+            MinimapLine { segments }
+        })
+        .collect()
+}
+
+/// Draws a VS Code-style overview from syntax-colored rectangles, not glyphs.
+fn render_code_minimap(
+    ui: &mut egui::Ui,
+    lines: &[MinimapLine],
+    height: f32,
+    scroll_fraction: f32,
+    view_fraction: f32,
+    palette: &AppPalette,
+) -> Option<f32> {
+    let (map_rect, response) = ui.allocate_exact_size(
+        Vec2::new(MINIMAP_WIDTH, height),
+        egui::Sense::click_and_drag(),
+    );
+    let painter = ui.painter();
+    painter.rect_filled(
+        map_rect,
+        Rounding::same(3.0),
+        hex_to_c32(&palette.theme.b_med),
+    );
+
+    let content_rect = map_rect.shrink2(Vec2::new(4.0, 3.0));
+    let line_count = lines.len().max(1);
+    // Do not emit thousands of tiny shapes for large sources. Each sampled row
+    // still represents its source position, retaining the document's color rhythm.
+    let stride =
+        ((line_count as f32 / content_rect.height().ceil().max(1.0)).ceil() as usize).max(1);
+    for line_index in (0..lines.len()).step_by(stride) {
+        let row_top =
+            content_rect.top() + content_rect.height() * line_index as f32 / line_count as f32;
+        let row_bottom = (content_rect.top()
+            + content_rect.height() * (line_index + stride).min(line_count) as f32
+                / line_count as f32)
+            .max(row_top + 1.0)
+            .min(content_rect.bottom());
+        for segment in &lines[line_index].segments {
+            let x_start = content_rect.left()
+                + content_rect.width() * segment.start_column as f32 / MINIMAP_COLUMNS as f32;
+            let x_end = content_rect.left()
+                + content_rect.width() * segment.end_column as f32 / MINIMAP_COLUMNS as f32;
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    egui::pos2(x_start, row_top),
+                    egui::pos2(x_end, row_bottom),
+                ),
+                Rounding::ZERO,
+                map_syntect_color_to_theme(segment.color, palette),
+            );
+        }
+    }
+
+    let view_height = (content_rect.height() * view_fraction)
+        .clamp(12.0_f32.min(content_rect.height()), content_rect.height());
+    let view_top = content_rect.top()
+        + (content_rect.height() - view_height) * scroll_fraction.clamp(0.0, 1.0);
+    let view_rect = egui::Rect::from_min_size(
+        egui::pos2(content_rect.left(), view_top),
+        Vec2::new(content_rect.width(), view_height),
+    );
+    painter.rect_filled(
+        view_rect,
+        Rounding::ZERO,
+        hex_to_c32_alpha(&palette.harmonies.base, 45),
+    );
+    painter.rect_stroke(
+        view_rect,
+        Rounding::ZERO,
+        Stroke::new(1.0_f32, hex_to_c32(&palette.harmonies.base)),
+    );
+
+    response
+        .interact_pointer_pos()
+        .filter(|_| response.clicked() || response.dragged())
+        .map(|pointer| {
+            ((pointer.y - content_rect.top()) / content_rect.height().max(1.0)).clamp(0.0, 1.0)
+        })
 }
 
 fn compute_highlight_matches(
@@ -1365,6 +1514,18 @@ mod tests {
         assert!(!state.is_markdown);
         assert_eq!(state.view_mode, TextViewMode::Raw);
         assert!(state.show_line_numbers);
+    }
+
+    #[test]
+    fn test_minimap_cache_uses_syntax_colored_blocks() {
+        let lines =
+            build_minimap_lines("fn main() {\n    let answer = 42;\n}\n", find_syntax("rs"));
+
+        assert_eq!(lines.len(), 4, "one minimap row per source line");
+        assert!(lines.iter().take(3).all(|line| !line.segments.is_empty()));
+        assert!(lines.iter().flat_map(|line| &line.segments).all(|segment| {
+            segment.start_column < segment.end_column && segment.end_column <= MINIMAP_COLUMNS
+        }));
     }
 
     #[test]
