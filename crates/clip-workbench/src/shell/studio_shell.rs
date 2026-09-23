@@ -401,7 +401,7 @@ impl<'a> StudioShell<'a> {
             .inner_margin(egui::Margin::symmetric(14.0, 8.0))
             .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if let Some(icon) = self.icon {
                         ui.add(icon.image_tinted(18.0, hex_to_c32(&palette.harmonies.base)));
                     }
@@ -421,75 +421,63 @@ impl<'a> StudioShell<'a> {
                         crate::ui_ext::badge_pill(ui, &b.text, b.accent, palette);
                         ui.add_space(4.0);
                     }
+                });
 
-                    // Right side actions
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Close button
-                        let close_bg = hex_to_c32(&palette.theme.b_med);
-                        let close_fg = contrast_text_c32(
-                            close_bg,
-                            Some(hex_to_c32(&palette.diff_del)),
-                            palette,
-                        );
-                        let close_btn = egui::Button::image_and_text(
-                            Icon::Close.image_tinted(CONTROL_ICON_SIZE, close_fg),
-                            egui::RichText::new("Close (Esc)").strong().color(close_fg),
-                        )
-                        .fill(close_bg)
+                ui.horizontal_wrapped(|ui| {
+                    // Close remains reachable even when action groups wrap.
+                    let close_bg = hex_to_c32(&palette.theme.b_med);
+                    let close_fg =
+                        contrast_text_c32(close_bg, Some(hex_to_c32(&palette.diff_del)), palette);
+                    let close_btn = egui::Button::image_and_text(
+                        Icon::Close.image_tinted(CONTROL_ICON_SIZE, close_fg),
+                        egui::RichText::new("Close (Esc)").strong().color(close_fg),
+                    )
+                    .fill(close_bg)
+                    .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
+                    .rounding(Rounding::same(4.0))
+                    .min_size(Vec2::new(0.0, CONTROL_HEIGHT));
+
+                    if ui.add(close_btn).clicked() {
+                        *self.close = true;
+                    }
+
+                    right_actions(ui);
+
+                    // Escape Hatches
+                    for (idx, hatch) in self.escape_hatches.iter().enumerate() {
+                        let (bg, fg) = if hatch.is_primary {
+                            (
+                                hex_to_c32(&palette.harmonies.base),
+                                hex_to_c32(&palette.theme.f_high),
+                            )
+                        } else {
+                            (
+                                hex_to_c32(&palette.theme.b_med),
+                                hex_to_c32(&palette.theme.f_med),
+                            )
+                        };
+                        let contrast_fg = contrast_text_c32(bg, Some(fg), palette);
+                        let text = egui::RichText::new(&hatch.label)
+                            .strong()
+                            .color(contrast_fg);
+                        let btn = if let Some(icon) = hatch.icon {
+                            egui::Button::image_and_text(
+                                icon.image_tinted(CONTROL_ICON_SIZE, contrast_fg),
+                                text,
+                            )
+                        } else {
+                            egui::Button::new(text)
+                        }
+                        .fill(bg)
                         .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
                         .rounding(Rounding::same(4.0))
-                        .min_size(Vec2::new(0.0, CONTROL_HEIGHT));
+                        .min_size(Vec2::new(hatch_width, CONTROL_HEIGHT));
 
-                        if ui.add(close_btn).clicked() {
-                            *self.close = true;
+                        if ui.add(btn).on_hover_text(&hatch.tooltip).clicked() {
+                            clicked_hatch = Some(idx);
                         }
-
-                        ui.add_space(8.0);
-
-                        // Escape Hatches
-                        for (idx, hatch) in self.escape_hatches.iter().enumerate() {
-                            let (bg, fg) = if hatch.is_primary {
-                                (
-                                    hex_to_c32(&palette.harmonies.base),
-                                    hex_to_c32(&palette.theme.f_high),
-                                )
-                            } else {
-                                (
-                                    hex_to_c32(&palette.theme.b_med),
-                                    hex_to_c32(&palette.theme.f_med),
-                                )
-                            };
-                            let contrast_fg = contrast_text_c32(bg, Some(fg), palette);
-                            let text = egui::RichText::new(&hatch.label)
-                                .strong()
-                                .color(contrast_fg);
-                            let btn = if let Some(icon) = hatch.icon {
-                                egui::Button::image_and_text(
-                                    icon.image_tinted(CONTROL_ICON_SIZE, contrast_fg),
-                                    text,
-                                )
-                            } else {
-                                egui::Button::new(text)
-                            }
-                            .fill(bg)
-                            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
-                            .rounding(Rounding::same(4.0))
-                            .min_size(Vec2::new(hatch_width, CONTROL_HEIGHT));
-
-                            if ui.add(btn).on_hover_text(&hatch.tooltip).clicked() {
-                                clicked_hatch = Some(idx);
-                            }
-                            ui.add_space(4.0);
-                        }
-
-                        if !self.escape_hatches.is_empty() {
-                            ui.separator();
-                            ui.add_space(4.0);
-                        }
-
-                        // Custom right actions (Save As, Copy, etc.)
-                        right_actions(ui);
-                    });
+                        ui.add_space(4.0);
+                    }
                 });
             });
 
