@@ -17,32 +17,6 @@ pub enum CommonShortcut {
 pub struct ShortcutDispatcher;
 
 impl ShortcutDispatcher {
-    /// Handles the hierarchical Escape cancellation stack:
-    /// 1. If `can_cancel_task` is true, calls `cancel_task()`.
-    /// 2. Else if `can_reset_tool` is true, calls `reset_tool()`.
-    /// 3. Else, sets `*close = true`.
-    pub fn handle_escape(
-        ui: &egui::Ui,
-        can_cancel_task: bool,
-        cancel_task: impl FnOnce(),
-        can_reset_tool: bool,
-        reset_tool: impl FnOnce(),
-        close: &mut bool,
-    ) -> bool {
-        if ui.input(|i| i.key_pressed(Key::Escape)) {
-            if can_cancel_task {
-                cancel_task();
-            } else if can_reset_tool {
-                reset_tool();
-            } else {
-                *close = true;
-            }
-            true
-        } else {
-            false
-        }
-    }
-
     /// Evaluates common global studio shortcuts when keyboard focus is not inside a text field.
     pub fn check_common(ctx: &egui::Context) -> Option<CommonShortcut> {
         if ctx.wants_keyboard_input() {

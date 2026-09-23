@@ -680,51 +680,6 @@ pub fn zoom_control_bar(
     action
 }
 
-/// Renders a standardized view top toolbar header with optional SVG icon, title, metadata badges slot,
-/// right-aligned action buttons slot, and a contrast-safe Close \[Esc] button.
-pub fn render_view_header<R>(
-    ui: &mut egui::Ui,
-    icon: Option<Icon>,
-    title: &str,
-    palette: &AppPalette,
-    close: &mut bool,
-    badges: impl FnOnce(&mut egui::Ui),
-    right_actions: impl FnOnce(&mut egui::Ui) -> R,
-) -> R {
-    ui.horizontal(|ui| {
-        if let Some(ic) = icon {
-            ui.add(ic.image_tinted(18.0, hex_to_c32(&palette.harmonies.base)));
-        }
-        ui.label(
-            egui::RichText::new(title)
-                .strong()
-                .size(17.0)
-                .color(hex_to_c32(&palette.theme.f_high)),
-        );
-        badges(ui);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let close_bg = hex_to_c32(&palette.theme.b_med);
-            let close_fg =
-                contrast_text_c32(close_bg, Some(hex_to_c32(&palette.diff_del)), palette);
-            let close_btn = egui::Button::new(
-                egui::RichText::new("Close (Esc)")
-                    .small()
-                    .strong()
-                    .color(close_fg),
-            )
-            .fill(close_bg)
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
-            .rounding(Rounding::same(4.0));
-            if ui.add(close_btn).clicked() {
-                *close = true;
-            }
-            right_actions(ui)
-        })
-        .inner
-    })
-    .inner
-}
-
 static ZENITY_AVAILABLE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
     if std::path::Path::new("/usr/bin/zenity").exists() {
         return true;

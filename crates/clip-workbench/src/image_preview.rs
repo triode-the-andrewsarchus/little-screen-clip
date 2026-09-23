@@ -35,6 +35,36 @@ use filmr::film::FilmStyle;
 use filmr::light_leak::{LightLeak, LightLeakConfig, LightLeakShape};
 use filmr::processor::{OutputMode, SimulationConfig, WhiteBalanceMode};
 
+fn image_editor_hatch(
+    friendly_label: &str,
+    default_command: &str,
+    configured_command: &str,
+) -> crate::shell::EscapeHatch {
+    let executable_name = Path::new(configured_command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or(configured_command);
+    let label = if executable_name.eq_ignore_ascii_case(default_command) {
+        friendly_label
+    } else {
+        executable_name
+    };
+    let availability = if little_clip_core::command_available(configured_command).is_some() {
+        format!("Configured executable: {configured_command}.")
+    } else {
+        format!(
+            "{configured_command} is unavailable; opening falls back to the system default viewer."
+        )
+    };
+
+    crate::shell::EscapeHatch::new(
+        label,
+        configured_command,
+        format!("Open the current image with {configured_command}. {availability}"),
+    )
+}
+
 pub struct ImagePreviewState {
     pub path: Option<PathBuf>,
     pub title: String,
@@ -1159,34 +1189,19 @@ impl ImagePreviewState {
         .with_badge(fmt_str, Some(hex_to_c32(&palette.diff_add)))
         .with_badge(size_str, Some(hex_to_c32(&palette.diff_mod)))
         .with_escape_hatch(
-            crate::shell::EscapeHatch::new(
-                &self.external_editor,
-                "Open in Krita (Full Photo & Painting Studio)",
-                "",
-            )
-            .with_primary(is_primary_raster)
-            .with_icon(Icon::Palette)
-            .with_label(self.external_editor.clone()),
+            image_editor_hatch("Krita", "krita", &self.external_editor)
+                .with_primary(is_primary_raster)
+                .with_icon(Icon::Palette),
         )
         .with_escape_hatch(
-            crate::shell::EscapeHatch::new(
-                &self.svg_editor,
-                "Open file in Inkscape (Vector Editor)",
-                "",
-            )
-            .with_primary(is_primary_svg)
-            .with_icon(Icon::Pencil)
-            .with_label(self.svg_editor.clone()),
+            image_editor_hatch("Inkscape", "inkscape", &self.svg_editor)
+                .with_primary(is_primary_svg)
+                .with_icon(Icon::Pencil),
         )
         .with_escape_hatch(
-            crate::shell::EscapeHatch::new(
-                &self.viewer,
-                format!("Open in external viewer ({})", self.viewer),
-                "",
-            )
-            .with_primary(false)
-            .with_icon(Icon::Eye)
-            .with_label(self.viewer.clone()),
+            image_editor_hatch("Nomacs", "nomacs", &self.viewer)
+                .with_primary(false)
+                .with_icon(Icon::Eye),
         );
 
         let mut clicked_save_as = false;
@@ -1237,22 +1252,8 @@ impl ImagePreviewState {
             self.copy_to_clipboard_slot();
         }
 
-        if let Some(idx) = clicked_hatch {
-            match idx {
-                0 => {
-                    let ed = self.external_editor.clone();
-                    self.launch_external_app(&ed, ctx, close);
-                }
-                1 => {
-                    let ed = self.svg_editor.clone();
-                    self.launch_external_app(&ed, ctx, close);
-                }
-                2 => {
-                    let v = self.viewer.clone();
-                    self.launch_external_app(&v, ctx, close);
-                }
-                _ => {}
-            }
+        if let Some(hatch) = clicked_hatch.and_then(|idx| shell.escape_hatches.get(idx)) {
+            self.launch_external_app(&hatch.command, ctx, close);
         }
     }
 
@@ -1800,6 +1801,33 @@ fn render_svg_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_editor_hatch_keeps_configured_command_and_fallback_help_together() {
+        let hatch = image_editor_hatch("Inkscape", "inkscape", "/missing/path/inkscape");
+
+        assert_eq!(hatch.label, "Inkscape");
+        assert_eq!(hatch.command, "/missing/path/inkscape");
+        assert!(
+            hatch
+                .tooltip
+                .contains("/missing/path/inkscape is unavailable")
+        );
+        assert!(hatch.tooltip.contains("system default viewer"));
+    }
+
+    #[test]
+    fn image_editor_hatch_displays_custom_executable_name_and_target() {
+        let hatch = image_editor_hatch("Inkscape", "inkscape", "/opt/custom-tools/vector-editor");
+
+        assert_eq!(hatch.label, "vector-editor");
+        assert_eq!(hatch.command, "/opt/custom-tools/vector-editor");
+        assert!(
+            hatch
+                .tooltip
+                .contains("with /opt/custom-tools/vector-editor")
+        );
+    }
 
     #[test]
     fn save_dialog_owns_image_shortcuts_until_dismissed() {
