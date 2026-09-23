@@ -8,12 +8,13 @@ use little_clip_core::theme::{AppPalette, contrast_ratio};
 pub const CONTROL_HEIGHT: f32 = 36.0;
 pub const CONTROL_ICON_SIZE: f32 = 18.0;
 
-/// Set readable workbench defaults, including egui's `.small()` style.
+/// Set readable workbench defaults. Secondary text uses color and weight for
+/// hierarchy; `.small()` must remain as legible as ordinary control labels.
 pub fn configure_workbench_style(ctx: &egui::Context) {
     ctx.style_mut(|style| {
         style.text_styles.insert(
             TextStyle::Small,
-            FontId::new(14.0, FontFamily::Proportional),
+            FontId::new(16.0, FontFamily::Proportional),
         );
         style
             .text_styles
