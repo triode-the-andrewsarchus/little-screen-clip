@@ -5,8 +5,9 @@
 use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::StatusToast;
-use eframe::egui::{self, Rounding, Stroke, Vec2};
+use eframe::egui::{self, FontId, Rounding, Stroke, TextStyle, Vec2};
 use little_clip_ops::spreadsheet::{SpreadsheetData, SpreadsheetSheet};
+use std::ops::Range;
 use std::path::PathBuf;
 
 /// Interactive UI state for multi-sheet spreadsheet data tables and search filters.
@@ -19,6 +20,25 @@ pub struct SpreadsheetViewerState {
     pub selected_cell: Option<(usize, usize)>, // (row, col)
     pub status_toast: StatusToast,
     pub scroll_offset: Vec2,
+    filtered_sheet_idx: Option<usize>,
+    filtered_query: String,
+    filtered_rows: Vec<usize>,
+    column_width_cache: Vec<Option<Vec<f32>>>,
+    measured_font: Option<FontId>,
+}
+
+fn visible_row_range(offset: f32, viewport_height: f32, total: usize, stride: f32) -> Range<usize> {
+    if total == 0 {
+        return 0..0;
+    }
+    let stride = stride.max(1.0);
+    let first = ((offset.max(0.0) / stride).floor() as usize)
+        .min(total - 1)
+        .saturating_sub(1);
+    let last = (((offset + viewport_height).max(0.0) / stride).ceil() as usize + 1)
+        .min(total)
+        .max(first + 1);
+    first..last
 }
 
 /// Returns the standard spreadsheet column label (e.g. 0 -> "A", 25 -> "Z", 26 -> "AA").
@@ -39,6 +59,7 @@ impl SpreadsheetViewerState {
     /// Creates a new spreadsheet viewer state from parsed spreadsheet data.
     pub fn new(data: SpreadsheetData, path: Option<PathBuf>) -> Self {
         let title = data.title.clone();
+        let column_width_cache = vec![None; data.sheets.len()];
         Self {
             title,
             path,
@@ -48,6 +69,11 @@ impl SpreadsheetViewerState {
             selected_cell: None,
             status_toast: StatusToast::new(),
             scroll_offset: Vec2::ZERO,
+            filtered_sheet_idx: None,
+            filtered_query: String::new(),
+            filtered_rows: Vec::new(),
+            column_width_cache,
+            measured_font: None,
         }
     }
 
@@ -220,41 +246,71 @@ impl SpreadsheetViewerState {
                 }
 
                 let query = self.search_query.trim().to_lowercase();
-                let visible_rows: Vec<(usize, &Vec<String>)> = sheet
-                    .rows
-                    .iter()
-                    .enumerate()
-                    .filter(|(r_idx, row)| {
-                        if query.is_empty() {
-                            true
-                        } else {
-                            *r_idx == 0 || row.iter().any(|c| c.to_lowercase().contains(&query))
-                        }
-                    })
-                    .collect();
+                if self.filtered_sheet_idx != Some(self.active_sheet_idx)
+                    || self.filtered_query != query
+                {
+                    self.filtered_rows = sheet
+                        .rows
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(row_idx, row)| {
+                            (query.is_empty()
+                                || row_idx == 0
+                                || row.iter().any(|cell| cell.to_lowercase().contains(&query)))
+                            .then_some(row_idx)
+                        })
+                        .collect();
+                    self.filtered_sheet_idx = Some(self.active_sheet_idx);
+                    self.filtered_query = query.clone();
+                    self.scroll_offset.y = 0.0;
+                }
+                let visible_rows = &self.filtered_rows;
 
                 let col_count = sheet.total_cols;
-                let mut col_widths = vec![90.0f32; col_count];
-                for row in sheet.rows.iter().take(40) {
-                    for (c_idx, cell) in row.iter().enumerate() {
-                        if c_idx < col_widths.len() {
-                            let w = (cell.len() as f32 * 8.5 + 24.0).clamp(90.0, 300.0);
-                            if w > col_widths[c_idx] {
-                                col_widths[c_idx] = w;
+                let font_id = TextStyle::Small.resolve(ui.style());
+                if self.measured_font.as_ref() != Some(&font_id) {
+                    self.column_width_cache.fill(None);
+                    self.measured_font = Some(font_id.clone());
+                }
+                if self.column_width_cache[self.active_sheet_idx].is_none() {
+                    let mut measured = vec![0.0f32; col_count];
+                    ui.fonts(|fonts| {
+                        for row in sheet.rows.iter().take(40) {
+                            for (column, cell) in row.iter().enumerate().take(col_count) {
+                                let width = fonts
+                                    .layout_no_wrap(
+                                        cell.clone(),
+                                        font_id.clone(),
+                                        egui::Color32::WHITE,
+                                    )
+                                    .size()
+                                    .x;
+                                measured[column] = measured[column].max(width);
                             }
                         }
-                    }
+                    });
+                    self.column_width_cache[self.active_sheet_idx] = Some(measured);
                 }
+                let min_col_width = ui.spacing().interact_size.x.max(90.0);
+                let max_col_width = (ui.available_width() * 0.35).clamp(180.0, 420.0);
+                let cell_padding = ui.spacing().button_padding.x * 2.0 + 16.0;
+                let col_widths: Vec<f32> = self.column_width_cache[self.active_sheet_idx]
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|width| (width + cell_padding).clamp(min_col_width, max_col_width))
+                    .collect();
 
                 let corner_width = 48.0;
-                let header_height = 26.0;
-                let row_height = 26.0;
+                let row_height = ui.spacing().interact_size.y.max(26.0);
+                let header_height = row_height;
                 let table_spacing = Vec2::new(1.0, 1.0);
 
                 let total_content_width: f32 = col_widths.iter().sum::<f32>()
                     + (col_widths.len().saturating_sub(1) as f32 * table_spacing.x);
+                let row_stride = row_height + table_spacing.y;
                 let total_content_height =
-                    visible_rows.len() as f32 * (row_height + table_spacing.y);
+                    (visible_rows.len() as f32 * row_stride - table_spacing.y).max(0.0);
 
                 let avail_w = ui.available_width();
                 let avail_h = (ui.available_height() - 32.0).max(100.0);
@@ -362,16 +418,22 @@ impl SpreadsheetViewerState {
                     ui.painter()
                         .rect_filled(row_strip_rect, Rounding::ZERO, b_low);
 
+                    let gutter_rows = visible_row_range(
+                        self.scroll_offset.y,
+                        avail_h,
+                        visible_rows.len(),
+                        row_stride,
+                    );
                     let row_strip_ui_rect = egui::Rect::from_min_max(
                         egui::pos2(
                             row_strip_rect.min.x,
-                            row_strip_rect.min.y - self.scroll_offset.y,
+                            row_strip_rect.min.y - self.scroll_offset.y
+                                + gutter_rows.start as f32 * row_stride,
                         ),
                         egui::pos2(
                             row_strip_rect.max.x,
                             row_strip_rect.min.y - self.scroll_offset.y
-                                + total_content_height
-                                + 500.0,
+                                + gutter_rows.end as f32 * row_stride,
                         ),
                     );
 
@@ -380,11 +442,11 @@ impl SpreadsheetViewerState {
                     row_child_ui.set_clip_rect(row_strip_rect);
                     row_child_ui.spacing_mut().item_spacing = table_spacing;
 
-                    for (r_idx, row) in &visible_rows {
-                        let is_selected_row = self
-                            .selected_cell
-                            .map(|(r, _)| r == *r_idx)
-                            .unwrap_or(false);
+                    row_child_ui.skip_ahead_auto_ids(gutter_rows.start);
+                    for &r_idx in &visible_rows[gutter_rows] {
+                        let row = &sheet.rows[r_idx];
+                        let is_selected_row =
+                            self.selected_cell.map(|(r, _)| r == r_idx).unwrap_or(false);
                         let row_bg = if is_selected_row { accent } else { b_low };
                         let text_color = if is_selected_row {
                             crate::contrast_text_c32(
@@ -409,7 +471,7 @@ impl SpreadsheetViewerState {
 
                         let resp = row_child_ui.add(row_btn);
                         if resp.clicked() {
-                            clicked_row = Some((*r_idx, (*row).clone()));
+                            clicked_row = Some((r_idx, row.clone()));
                         }
                         resp.on_hover_text(format!("Row {}\nClick to copy row", r_idx + 1));
                     }
@@ -425,14 +487,31 @@ impl SpreadsheetViewerState {
                         .auto_shrink([false, false])
                         .max_width(grid_w)
                         .max_height(avail_h)
-                        .show(ui, |ui| {
+                        .show_viewport(ui, |ui, viewport| {
                             ui.spacing_mut().item_spacing = table_spacing;
-                            ui.vertical(|ui| {
-                                for (r_idx, row) in &visible_rows {
-                                    let is_header = *r_idx == 0;
+                            ui.set_min_size(Vec2::new(total_content_width, total_content_height));
+                            let rows = visible_row_range(
+                                viewport.min.y,
+                                viewport.height(),
+                                visible_rows.len(),
+                                row_stride,
+                            );
+                            let row_rect = egui::Rect::from_min_size(
+                                egui::pos2(
+                                    ui.max_rect().left(),
+                                    ui.max_rect().top() + rows.start as f32 * row_stride,
+                                ),
+                                Vec2::new(total_content_width, rows.len() as f32 * row_stride),
+                            );
+                            ui.allocate_ui_at_rect(row_rect, |ui| {
+                                ui.spacing_mut().item_spacing = table_spacing;
+                                ui.skip_ahead_auto_ids(rows.start);
+                                for &r_idx in &visible_rows[rows] {
+                                    let row = &sheet.rows[r_idx];
+                                    let is_header = r_idx == 0;
                                     let row_bg = if is_header {
                                         b_med
-                                    } else if *r_idx % 2 == 1 {
+                                    } else if r_idx % 2 == 1 {
                                         b_low
                                     } else {
                                         bg
@@ -447,7 +526,7 @@ impl SpreadsheetViewerState {
                                                 col_widths.get(c_idx).copied().unwrap_or(90.0);
 
                                             let is_selected =
-                                                self.selected_cell == Some((*r_idx, c_idx));
+                                                self.selected_cell == Some((r_idx, c_idx));
                                             let is_match = !query.is_empty()
                                                 && cell_val.to_lowercase().contains(&query);
 
@@ -486,7 +565,7 @@ impl SpreadsheetViewerState {
                                             let resp = ui.add(btn);
                                             if resp.clicked() {
                                                 clicked_cell =
-                                                    Some((*r_idx, c_idx, cell_val.to_string()));
+                                                    Some((r_idx, c_idx, cell_val.to_string()));
                                             }
                                             if !cell_val.is_empty() {
                                                 resp.on_hover_text(format!(
@@ -566,6 +645,87 @@ impl SpreadsheetViewerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_range_tracks_scroll_with_bounded_overscan() {
+        assert_eq!(visible_row_range(0.0, 270.0, 2000, 27.0), 0..11);
+        assert_eq!(visible_row_range(27000.0, 270.0, 2000, 27.0), 999..1011);
+        assert_eq!(visible_row_range(80000.0, 270.0, 2000, 27.0), 1998..2000);
+        assert_eq!(visible_row_range(0.0, 270.0, 0, 27.0), 0..0);
+    }
+
+    #[test]
+    fn large_sheet_renders_only_visible_cells() {
+        let rows = std::iter::once(vec!["Name".into(), "Value".into()])
+            .chain((0..5000).map(|row| vec![format!("Row {row}"), row.to_string()]))
+            .collect();
+        let data = SpreadsheetData {
+            title: "Large sheet".into(),
+            sheets: vec![SpreadsheetSheet::new("Data".into(), rows)],
+        };
+        let mut state = SpreadsheetViewerState::new(data, None);
+        let palette = little_clip_core::theme::AppPalette::default();
+        let ctx = egui::Context::default();
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(900.0, 620.0),
+            )),
+            ..Default::default()
+        };
+        let output = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut close = false;
+                state.render_ui(ui, ctx, &palette, &mut close);
+                assert!(!close);
+            });
+        });
+
+        assert_eq!(state.filtered_rows.len(), 5001);
+        assert!(
+            output.shapes.len() < 1000,
+            "rendered {} shapes for a 5,001-row sheet",
+            output.shapes.len()
+        );
+
+        state.search_query = "Row 4975".into();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                state.render_ui(ui, ctx, &palette, &mut false);
+            });
+        });
+        assert_eq!(state.filtered_rows, vec![0, 4976]);
+    }
+
+    #[test]
+    fn column_widths_follow_rendered_text_width() {
+        let data = SpreadsheetData {
+            title: "Widths".into(),
+            sheets: vec![SpreadsheetSheet::new(
+                "Data".into(),
+                vec![vec!["W".repeat(20), "i".repeat(20)]],
+            )],
+        };
+        let mut state = SpreadsheetViewerState::new(data, None);
+        let palette = little_clip_core::theme::AppPalette::default();
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(900.0, 620.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                });
+            },
+        );
+        let measured = state.column_width_cache[0].as_ref().unwrap();
+        assert!(measured[0] > measured[1] * 2.0);
+    }
 
     #[test]
     fn test_col_label() {
