@@ -4,7 +4,7 @@ use super::*;
 pub(super) struct AudioWorkspace;
 
 impl AudioWorkspace {
-    const BUTTON_HEIGHT: f32 = 30.0;
+    const BUTTON_HEIGHT: f32 = crate::ui_ext::CONTROL_HEIGHT;
     const TIME_READOUT_WIDTH: f32 = 242.0;
 
     fn fixed_readout(ui: &mut egui::Ui, text: &str, width: f32, color: Color32) {

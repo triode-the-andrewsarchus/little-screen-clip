@@ -2648,6 +2648,7 @@ fn main() -> Result<(), eframe::Error> {
         "clip-workbench",
         options,
         Box::new(move |cc| {
+            ui_ext::configure_workbench_style(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
             Box::new(WorkbenchApp::new(
                 state,

@@ -1,7 +1,40 @@
 use crate::hex_to_c32;
 use crate::icons::Icon;
-use eframe::egui::{self, Color32, Response, RichText, Rounding, Stroke, Ui, Vec2};
+use eframe::egui::{
+    self, Color32, FontFamily, FontId, Response, RichText, Rounding, Stroke, TextStyle, Ui, Vec2,
+};
 use little_clip_core::theme::{AppPalette, contrast_ratio};
+
+pub const CONTROL_HEIGHT: f32 = 36.0;
+pub const CONTROL_ICON_SIZE: f32 = 18.0;
+
+/// Set readable workbench defaults, including egui's `.small()` style.
+pub fn configure_workbench_style(ctx: &egui::Context) {
+    ctx.style_mut(|style| {
+        style.text_styles.insert(
+            TextStyle::Small,
+            FontId::new(14.0, FontFamily::Proportional),
+        );
+        style
+            .text_styles
+            .insert(TextStyle::Body, FontId::new(16.0, FontFamily::Proportional));
+        style.text_styles.insert(
+            TextStyle::Button,
+            FontId::new(16.0, FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            TextStyle::Heading,
+            FontId::new(22.0, FontFamily::Proportional),
+        );
+        style.text_styles.insert(
+            TextStyle::Monospace,
+            FontId::new(15.0, FontFamily::Monospace),
+        );
+        style.spacing.interact_size.y = CONTROL_HEIGHT;
+        style.spacing.button_padding = Vec2::new(10.0, 6.0);
+        style.spacing.item_spacing = Vec2::new(8.0, 6.0);
+    });
+}
 
 /// Calculates an effective foreground Color32 that meets WCAG 2.1 4.5:1 contrast
 /// against `bg`. If `bg` is semi-transparent, it is alpha-composited against
@@ -97,10 +130,10 @@ pub fn mode_tab_button_icon<'a>(
     };
     let fg = contrast_text_c32(bg, Some(pref_fg), palette);
     let border_fg = if is_active { fg } else { border };
-    let text = RichText::new(label.into()).small().strong().color(fg);
+    let text = RichText::new(label.into()).strong().color(fg);
 
     let btn = if let Some(ic) = icon {
-        egui::Button::image_and_text(ic.image_tinted(14.0, fg), text)
+        egui::Button::image_and_text(ic.image_tinted(CONTROL_ICON_SIZE, fg), text)
     } else {
         egui::Button::new(text)
     };
@@ -108,6 +141,7 @@ pub fn mode_tab_button_icon<'a>(
     btn.fill(bg)
         .stroke(Stroke::new(1.0_f32, border_fg))
         .rounding(Rounding::same(4.0))
+        .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
 
 /// Standard primary action button (e.g. Copy, Save, Apply) with guaranteed WCAG contrast.
@@ -129,11 +163,13 @@ pub fn action_button_icon<'a>(
     let fg = contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_high)), palette);
     let text = RichText::new(label.into()).strong().color(fg);
     let btn = if let Some(ic) = icon {
-        egui::Button::image_and_text(ic.image_tinted(15.0, fg), text)
+        egui::Button::image_and_text(ic.image_tinted(CONTROL_ICON_SIZE, fg), text)
     } else {
         egui::Button::new(text)
     };
-    btn.fill(fill).rounding(Rounding::same(4.0))
+    btn.fill(fill)
+        .rounding(Rounding::same(4.0))
+        .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
 
 /// Standard secondary / subtle button (e.g. Reset, Cancel, Clear, Fit) with guaranteed WCAG contrast.
@@ -153,13 +189,15 @@ pub fn secondary_button_icon<'a>(
     palette: &AppPalette,
 ) -> egui::Button<'a> {
     let fg = contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_med)), palette);
-    let text = RichText::new(label.into()).small().color(fg);
+    let text = RichText::new(label.into()).color(fg);
     let btn = if let Some(ic) = icon {
-        egui::Button::image_and_text(ic.image_tinted(13.0, fg), text)
+        egui::Button::image_and_text(ic.image_tinted(CONTROL_ICON_SIZE, fg), text)
     } else {
         egui::Button::new(text)
     };
-    btn.fill(fill).rounding(Rounding::same(4.0))
+    btn.fill(fill)
+        .rounding(Rounding::same(4.0))
+        .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
 
 /// Compact toolbar control with the same contrast and minimum hit target as the
@@ -180,8 +218,6 @@ pub fn compact_toolbar_button_icon<'a>(
     palette: &AppPalette,
 ) -> egui::Button<'a> {
     secondary_button_icon(icon, label, fill, palette)
-        .min_size(Vec2::new(0.0, 26.0))
-        .rounding(Rounding::same(4.0))
 }
 
 /// Standard danger / escape / dismiss button (e.g. Close, Delete, Burn) with guaranteed WCAG contrast.
@@ -201,13 +237,15 @@ pub fn danger_button_icon<'a>(
     palette: &AppPalette,
 ) -> egui::Button<'a> {
     let fg = contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_high)), palette);
-    let text = RichText::new(label.into()).small().strong().color(fg);
+    let text = RichText::new(label.into()).strong().color(fg);
     let btn = if let Some(ic) = icon {
-        egui::Button::image_and_text(ic.image_tinted(14.0, fg), text)
+        egui::Button::image_and_text(ic.image_tinted(CONTROL_ICON_SIZE, fg), text)
     } else {
         egui::Button::new(text)
     };
-    btn.fill(fill).rounding(Rounding::same(4.0))
+    btn.fill(fill)
+        .rounding(Rounding::same(4.0))
+        .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
 
 /// Standalone icon button without text (useful for compact toolbars, zoom controls, playback).
@@ -226,6 +264,7 @@ pub fn icon_button<'a>(
     egui::Button::image(icon.image_tinted(size, fg))
         .fill(fill)
         .rounding(Rounding::same(4.0))
+        .min_size(Vec2::splat(CONTROL_HEIGHT))
 }
 
 /// Trait providing high-level, contrast-safe button widgets directly on `egui::Ui`.
