@@ -506,79 +506,83 @@ impl SpreadsheetViewerState {
                             ui.allocate_ui_at_rect(row_rect, |ui| {
                                 ui.spacing_mut().item_spacing = table_spacing;
                                 ui.skip_ahead_auto_ids(rows.start);
-                                for &r_idx in &visible_rows[rows] {
-                                    let row = &sheet.rows[r_idx];
-                                    let is_header = r_idx == 0;
-                                    let row_bg = if is_header {
-                                        b_med
-                                    } else if r_idx % 2 == 1 {
-                                        b_low
-                                    } else {
-                                        bg
-                                    };
+                                ui.vertical(|ui| {
+                                    for &r_idx in &visible_rows[rows] {
+                                        let row = &sheet.rows[r_idx];
+                                        let is_header = r_idx == 0;
+                                        let row_bg = if is_header {
+                                            b_med
+                                        } else if r_idx % 2 == 1 {
+                                            b_low
+                                        } else {
+                                            bg
+                                        };
 
-                                    ui.horizontal(|ui| {
-                                        ui.spacing_mut().item_spacing = table_spacing;
-                                        for c_idx in 0..col_count {
-                                            let cell_val =
-                                                row.get(c_idx).map(|s| s.as_str()).unwrap_or("");
-                                            let cell_w =
-                                                col_widths.get(c_idx).copied().unwrap_or(90.0);
+                                        ui.horizontal(|ui| {
+                                            ui.spacing_mut().item_spacing = table_spacing;
+                                            for c_idx in 0..col_count {
+                                                let cell_val = row
+                                                    .get(c_idx)
+                                                    .map(|s| s.as_str())
+                                                    .unwrap_or("");
+                                                let cell_w =
+                                                    col_widths.get(c_idx).copied().unwrap_or(90.0);
 
-                                            let is_selected =
-                                                self.selected_cell == Some((r_idx, c_idx));
-                                            let is_match = !query.is_empty()
-                                                && cell_val.to_lowercase().contains(&query);
+                                                let is_selected =
+                                                    self.selected_cell == Some((r_idx, c_idx));
+                                                let is_match = !query.is_empty()
+                                                    && cell_val.to_lowercase().contains(&query);
 
-                                            let cell_bg = if is_selected {
-                                                accent
-                                            } else if is_match {
-                                                warn_accent
-                                            } else {
-                                                row_bg
-                                            };
+                                                let cell_bg = if is_selected {
+                                                    accent
+                                                } else if is_match {
+                                                    warn_accent
+                                                } else {
+                                                    row_bg
+                                                };
 
-                                            let pref_text_color = if is_header {
-                                                accent
-                                            } else if is_selected {
-                                                crate::hex_to_c32(&palette.theme.f_inv)
-                                            } else {
-                                                f_high
-                                            };
-                                            let text_color = crate::contrast_text_c32(
-                                                cell_bg,
-                                                Some(pref_text_color),
-                                                palette,
-                                            );
+                                                let pref_text_color = if is_header {
+                                                    accent
+                                                } else if is_selected {
+                                                    crate::hex_to_c32(&palette.theme.f_inv)
+                                                } else {
+                                                    f_high
+                                                };
+                                                let text_color = crate::contrast_text_c32(
+                                                    cell_bg,
+                                                    Some(pref_text_color),
+                                                    palette,
+                                                );
 
-                                            let btn = egui::Button::new(
-                                                egui::RichText::new(cell_val)
-                                                    .small()
-                                                    .strong()
-                                                    .color(text_color),
-                                            )
-                                            .fill(cell_bg)
-                                            .min_size(Vec2::new(cell_w, row_height))
-                                            .stroke(Stroke::new(0.5_f32, b_med))
-                                            .rounding(Rounding::ZERO);
+                                                let btn = egui::Button::new(
+                                                    egui::RichText::new(cell_val)
+                                                        .small()
+                                                        .strong()
+                                                        .color(text_color),
+                                                )
+                                                .fill(cell_bg)
+                                                .min_size(Vec2::new(cell_w, row_height))
+                                                .stroke(Stroke::new(0.5_f32, b_med))
+                                                .rounding(Rounding::ZERO);
 
-                                            let resp = ui.add(btn);
-                                            if resp.clicked() {
-                                                clicked_cell =
-                                                    Some((r_idx, c_idx, cell_val.to_string()));
+                                                let resp = ui.add(btn);
+                                                if resp.clicked() {
+                                                    clicked_cell =
+                                                        Some((r_idx, c_idx, cell_val.to_string()));
+                                                }
+                                                if !cell_val.is_empty() {
+                                                    resp.on_hover_text(format!(
+                                                        "Row {}, Col {} ({})\nClick to copy: {}",
+                                                        r_idx + 1,
+                                                        c_idx + 1,
+                                                        col_label(c_idx),
+                                                        cell_val
+                                                    ));
+                                                }
                                             }
-                                            if !cell_val.is_empty() {
-                                                resp.on_hover_text(format!(
-                                                    "Row {}, Col {} ({})\nClick to copy: {}",
-                                                    r_idx + 1,
-                                                    c_idx + 1,
-                                                    col_label(c_idx),
-                                                    cell_val
-                                                ));
-                                            }
-                                        }
-                                    });
-                                }
+                                        });
+                                    }
+                                });
                             });
                         });
 
@@ -686,6 +690,18 @@ mod tests {
             output.shapes.len() < 1000,
             "rendered {} shapes for a 5,001-row sheet",
             output.shapes.len()
+        );
+        let text_y = |label: &str| {
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == label => Some(text.pos.y),
+                _ => None,
+            })
+        };
+        let first_gutter = text_y("1").expect("first row number is visible");
+        let first_cell = text_y("Name").expect("first row is visible");
+        assert!(
+            (first_gutter - first_cell).abs() <= 2.0,
+            "gutter y={first_gutter}, cell y={first_cell}"
         );
 
         state.search_query = "Row 4975".into();
