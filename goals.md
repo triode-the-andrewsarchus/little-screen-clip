@@ -5,10 +5,9 @@
 
 # Big new features:
 ## Text
-* Scrolling should use a VS-Code like minimap instead of a plain scroll bar
 ## Image Studio
-* Separate out FX per file
 * Depth-map driven contrast/saturation/brightness adjustment
+* mask zoom
 ## Audio Studio
 * Resample / change sample rate
 * Channel operations — stereo→mono, extract L/R, swap L/R, invert polarity, perhaps copy L→R/R→L.
@@ -43,7 +42,6 @@
 * grab selection to clip .mkv/.mp4 or .gif
 ## Diff (both binary and text)
 * The colored background rendering vs the colored numbers can make it low contrast
-* J and K are used for previous/next when arrow keys aren't bound. Bind both.
 - Show SHA1 of each file at top
 ## Color picker
 - Lazy multi-color space color picker
