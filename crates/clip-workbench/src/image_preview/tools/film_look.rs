@@ -994,7 +994,7 @@ impl ImagePreviewState {
         }
 
         // ── 1. LEFT PANEL: Film Stock Picker with Async 42x28 Mini-Photos ──
-        crate::shell::StudioPanelLayout::show_center(ui, left, |ui| {
+        crate::shell::StudioPanelLayout::show_region(ui, left, |ui| {
             egui::Frame::none()
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
@@ -1139,7 +1139,7 @@ impl ImagePreviewState {
         });
 
         // ── 2. CENTER PANEL: Split-view Comparison Canvas ──
-        crate::shell::StudioPanelLayout::show_center(ui, panels.center, |ui| {
+        crate::shell::StudioPanelLayout::show_region(ui, panels.center, |ui| {
             egui::Frame::none()
                 .fill(hex_to_c32(&palette.theme.background))
                 .rounding(Rounding::same(4.0))
@@ -1284,7 +1284,7 @@ impl ImagePreviewState {
         });
 
         // ── 3. RIGHT PANEL: Style + Optical Effects + Stock Info ──
-        crate::shell::StudioPanelLayout::show_center(ui, right, |ui| {
+        crate::shell::StudioPanelLayout::show_region(ui, right, |ui| {
             egui::Frame::none()
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
@@ -1496,7 +1496,7 @@ impl ImagePreviewState {
         });
 
         // ── BOTTOM STRIP: Context Sliders + WB Controls + Action Buttons ───────────
-        crate::shell::StudioPanelLayout::show_center(ui, bottom, |ui| {
+        crate::shell::StudioPanelLayout::show_region(ui, bottom, |ui| {
             egui::Frame::none()
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))

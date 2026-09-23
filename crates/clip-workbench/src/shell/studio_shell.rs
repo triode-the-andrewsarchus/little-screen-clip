@@ -277,8 +277,8 @@ impl StudioPanelLayout {
         });
     }
 
-    /// Render uncluttered center content inside its exact canvas rectangle.
-    pub fn show_center(ui: &mut egui::Ui, rect: Rect, add_contents: impl FnOnce(&mut egui::Ui)) {
+    /// Render content in an exact clipped region, regardless of its panel role.
+    pub fn show_region(ui: &mut egui::Ui, rect: Rect, add_contents: impl FnOnce(&mut egui::Ui)) {
         ui.allocate_ui_at_rect(rect, |ui| {
             ui.set_clip_rect(rect);
             ui.set_min_size(rect.size());
@@ -608,7 +608,7 @@ impl<'a> StudioShell<'a> {
             StudioPanelLayout::show_side(ui, rect, "studio_shell_left", self.palette, left_fn);
         }
         if let Some(center_fn) = body.center.take() {
-            StudioPanelLayout::show_center(ui, panels.center, center_fn);
+            StudioPanelLayout::show_region(ui, panels.center, center_fn);
         }
         if let (Some(rect), Some(right_fn)) = (panels.right, body.right.take()) {
             StudioPanelLayout::show_side(ui, rect, "studio_shell_right", self.palette, right_fn);

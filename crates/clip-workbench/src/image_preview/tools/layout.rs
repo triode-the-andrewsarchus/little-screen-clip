@@ -104,7 +104,7 @@ impl ImagePreviewState {
             );
         }
 
-        crate::shell::StudioPanelLayout::show_center(ui, panels.center, |ui| {
+        crate::shell::StudioPanelLayout::show_region(ui, panels.center, |ui| {
             self.render_viewport(ui, ctx, palette);
         });
 
