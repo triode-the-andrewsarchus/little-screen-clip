@@ -6,7 +6,7 @@
 use eframe::egui;
 use little_clip_core::color::parse_hex_color_rgba_or_white as parse_hex_color_rgba;
 use little_clip_core::config::WorkbenchAppearance;
-use little_clip_core::ipc::{IpcRequest, IpcResponse, SlotStateSummary};
+use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::presentation::{
     model3d::is_3d_model_file,
     network_preview::{NetworkPreview, detect_network_preview},
@@ -25,7 +25,7 @@ use little_clip_render::{SCREEN_HEIGHT, SCREEN_WIDTH, ScreenRenderer};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 mod ansi;
@@ -42,6 +42,7 @@ mod popup;
 mod rolling_audio_strip;
 pub mod shell;
 mod spreadsheet_view;
+mod state_sync;
 mod stl_view;
 mod text_preview;
 mod ui_appearance;
@@ -239,56 +240,7 @@ impl WorkbenchApp {
         let renderer = ScreenRenderer::new(config.clone())
             .unwrap_or_else(|_| ScreenRenderer::fallback(config.clone()));
 
-        let (state_tx, state_rx) = channel::<SlotManager>();
-        let mut polled_state = state.clone();
-        let mut previous_summary = SlotStateSummary::from_manager(&polled_state);
-
-        // Poll compact cards with adaptive backoff, then hydrate only slots whose item identity changed.
-        std::thread::spawn(move || {
-            let mut poll_interval_ms = 250u64;
-            loop {
-                std::thread::sleep(Duration::from_millis(poll_interval_ms));
-                let Ok(IpcResponse::StateSummary(summary)) =
-                    send_ipc_request(&IpcRequest::GetStateSummary)
-                else {
-                    poll_interval_ms = (poll_interval_ms + 100).min(1000);
-                    continue;
-                };
-                if summary == previous_summary {
-                    poll_interval_ms = (poll_interval_ms + 50).min(1000);
-                    continue;
-                }
-                poll_interval_ms = 250;
-
-                let mut hydration_failed = false;
-                for slot in SlotId::all() {
-                    if summary.card(slot) == previous_summary.card(slot) {
-                        continue;
-                    }
-                    match send_ipc_request(&IpcRequest::GetSlotItem(slot)) {
-                        Ok(IpcResponse::SlotItem(item)) => {
-                            *polled_state
-                                .get_mut(slot)
-                                .expect("all SlotId values are valid") = item;
-                        }
-                        _ => {
-                            hydration_failed = true;
-                            break;
-                        }
-                    }
-                }
-                if hydration_failed {
-                    continue;
-                }
-
-                polled_state.cursor = summary.cursor;
-                polled_state.selected = summary.selected.clone();
-                previous_summary = summary;
-                if state_tx.send(polled_state.clone()).is_err() {
-                    break; // UI closed
-                }
-            }
-        });
+        let state_rx = state_sync::spawn_state_poller(state.clone());
 
         let canvas_state = NodeCanvasState::new();
         let recipes = load_all_recipes();

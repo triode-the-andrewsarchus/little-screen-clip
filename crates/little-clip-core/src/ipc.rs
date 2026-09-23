@@ -3,7 +3,7 @@
 //! Defines JSON-serializable request/response commands sent across the UNIX domain socket
 //! (`/tmp/little-clipd.sock`).
 
-use crate::item::{ClipItem, PayloadKind};
+use crate::item::{ClipItem, ClipPayload, PayloadKind};
 use crate::slot::{HandSide, SlotId, SlotManager};
 use serde::{Deserialize, Serialize};
 
@@ -162,6 +162,19 @@ pub struct SlotCard {
     pub item_id: uuid::Uuid,
     /// Payload category, without its content or user-supplied display labels.
     pub payload_kind: PayloadKind,
+    /// Completion phase of any background-generated preview for this item.
+    /// Missing on older daemons, which clients may poll as a compatibility fallback.
+    #[serde(default)]
+    pub preview_phase: Option<PreviewPhase>,
+}
+
+/// Compact preview readiness marker used to refresh long-lived clients.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum PreviewPhase {
+    NotApplicable,
+    Pending,
+    Ready,
+    Enhanced,
 }
 
 /// Compact state projection for long-lived IPC clients.
@@ -201,10 +214,34 @@ impl SlotStateSummary {
 
 impl SlotCard {
     fn from_item(slot: SlotId, item: &ClipItem) -> Self {
+        let preview_phase = match &item.payload {
+            ClipPayload::AudioRef {
+                waveform: Some(waveform),
+                ..
+            } if waveform.spectral_colors.is_some() => PreviewPhase::Enhanced,
+            ClipPayload::AudioRef {
+                waveform: Some(_), ..
+            }
+            | ClipPayload::Image {
+                thumbnail: Some(_), ..
+            }
+            | ClipPayload::Animation {
+                thumbnail: Some(_), ..
+            } => PreviewPhase::Ready,
+            ClipPayload::MultiImage { thumbnails, .. } if !thumbnails.is_empty() => {
+                PreviewPhase::Ready
+            }
+            ClipPayload::AudioRef { .. }
+            | ClipPayload::Image { .. }
+            | ClipPayload::Animation { .. }
+            | ClipPayload::MultiImage { .. } => PreviewPhase::Pending,
+            _ => PreviewPhase::NotApplicable,
+        };
         Self {
             slot,
             item_id: item.id,
             payload_kind: item.kind(),
+            preview_phase: Some(preview_phase),
         }
     }
 }
@@ -287,6 +324,19 @@ mod tests {
             first.card(SlotId::LeftHand).unwrap().payload_kind,
             PayloadKind::Text
         );
+        assert_eq!(
+            first.card(SlotId::LeftHand).unwrap().preview_phase,
+            Some(PreviewPhase::NotApplicable)
+        );
+
+        // Existing daemons omit the new field; the workbench can still poll them.
+        let mut legacy_json: serde_json::Value = serde_json::from_str(&json).unwrap();
+        legacy_json["cards"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("preview_phase");
+        let legacy: SlotStateSummary = serde_json::from_value(legacy_json).unwrap();
+        assert_eq!(legacy.card(SlotId::LeftHand).unwrap().preview_phase, None);
 
         manager.push_left(ClipItem::from_text("replacement"));
         let second = SlotStateSummary::from_manager(&manager);
@@ -295,5 +345,60 @@ mod tests {
             second.card(SlotId::LeftHand).unwrap().item_id
         );
         assert!(second.card(SlotId::LeftPrior1).is_some());
+    }
+
+    #[test]
+    fn state_summary_tracks_async_audio_preview_completion_without_replacing_item() {
+        let mut item = ClipItem::from_text("audio");
+        item.payload = ClipPayload::AudioRef {
+            path: "/tmp/preview.wav".into(),
+            duration_ms: 1000,
+            sample_rate: 44100,
+            channels: 1,
+            format: "WAV".into(),
+            waveform: None,
+        };
+        let item_id = item.id;
+        let mut manager = SlotManager::new();
+        manager.push_left(item);
+
+        let pending = SlotStateSummary::from_manager(&manager);
+        assert_eq!(
+            pending.card(SlotId::LeftHand).unwrap().preview_phase,
+            Some(PreviewPhase::Pending)
+        );
+
+        let waveform = crate::audio::AudioWaveform {
+            channels: 1,
+            sample_rate: 44100,
+            duration_ms: 1000,
+            ch1_peaks: vec![0.5],
+            ch2_peaks: None,
+            spectral_colors: None,
+            is_snippet: false,
+            snippet_start_ms: 0,
+            snippet_duration_ms: 0,
+        };
+        assert!(manager.update_audio_waveform(item_id, waveform));
+        let ready = SlotStateSummary::from_manager(&manager);
+        assert_eq!(ready.card(SlotId::LeftHand).unwrap().item_id, item_id);
+        assert_eq!(
+            ready.card(SlotId::LeftHand).unwrap().preview_phase,
+            Some(PreviewPhase::Ready)
+        );
+        assert_ne!(pending, ready);
+
+        assert!(manager.attach_audio_spectral_colors(item_id, vec![[1, 2, 3]]));
+        let enhanced = SlotStateSummary::from_manager(&manager);
+        assert_eq!(
+            enhanced.card(SlotId::LeftHand).unwrap().preview_phase,
+            Some(PreviewPhase::Enhanced)
+        );
+        assert_ne!(ready, enhanced);
+        assert!(
+            !serde_json::to_string(&enhanced)
+                .unwrap()
+                .contains("preview.wav")
+        );
     }
 }

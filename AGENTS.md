@@ -44,6 +44,8 @@ Do not commit personal display, compositor, or desktop settings. Keep `config.to
 
 The workbench must remain a non-resizable, centered, single-instance popup for Niri's fixed-size floating behavior. Screen-adaptive sizing must be resolved before the window opens, with fixed-size hints in place at mapping; do not enable window resizing/maximizing or resize a visible window to fit. Internal panels may resize independently. Repeated `launch.sh ui` calls should focus the existing popup without requiring a Niri keybinding change.
 
+Async preview completion updates an existing clipboard item in place. Keep `SlotStateSummary` sensitive to preview readiness so open workbenches rehydrate the affected slot and repaint the mirror; item ID and payload kind alone do not reveal these updates.
+
 Workbench Dark/Light appearance is independent of the Hundred Rabbits theme used by the USB display. Keep workbench colors centralized in `clip-workbench/src/ui_appearance.rs` and preserve the display theme when changing appearance.
 
 ## Agent Maintenance & Self-Correction
