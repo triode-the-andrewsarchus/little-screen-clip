@@ -1368,7 +1368,7 @@ impl ImagePreviewState {
                                     );
                                     ui.label(
                                         egui::RichText::new("(auto-cropped to 3-channel overlap)")
-                                            .size(9.0)
+                                            .small()
                                             .color(f_low),
                                     );
                                 }
@@ -1662,7 +1662,7 @@ impl ImagePreviewState {
                                     // Cyan plate
                                     ui.label(
                                         egui::RichText::new("Cyan Plate Offset")
-                                            .size(10.0)
+                                            .small()
                                             .color(f_med),
                                     );
                                     if render_context_slider(
@@ -1698,7 +1698,7 @@ impl ImagePreviewState {
                                     // Magenta plate
                                     ui.label(
                                         egui::RichText::new("Magenta Plate Offset")
-                                            .size(10.0)
+                                            .small()
                                             .color(f_med),
                                     );
                                     if render_context_slider(
@@ -1734,7 +1734,7 @@ impl ImagePreviewState {
                                     // Yellow plate
                                     ui.label(
                                         egui::RichText::new("Yellow Plate Offset")
-                                            .size(10.0)
+                                            .small()
                                             .color(f_med),
                                     );
                                     if render_context_slider(
@@ -1770,7 +1770,7 @@ impl ImagePreviewState {
                                     // Black (Key) plate
                                     ui.label(
                                         egui::RichText::new("Black (Key) Plate Offset")
-                                            .size(10.0)
+                                            .small()
                                             .color(f_med),
                                     );
                                     if render_context_slider(
@@ -2017,7 +2017,7 @@ impl ImagePreviewState {
                                     // Demodulation Filter
                                     ui.label(
                                         egui::RichText::new("Demodulation Filter")
-                                            .size(10.0)
+                                            .small()
                                             .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
@@ -2056,7 +2056,7 @@ impl ImagePreviewState {
                                     // Scanline Phase Shift
                                     ui.label(
                                         egui::RichText::new("Subcarrier Phase Shift (Dot Crawl)")
-                                            .size(10.0)
+                                            .small()
                                             .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
@@ -2096,7 +2096,7 @@ impl ImagePreviewState {
                                     // Chroma Lowpass
                                     ui.label(
                                         egui::RichText::new("Chroma Lowpass Filter")
-                                            .size(10.0)
+                                            .small()
                                             .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
@@ -2387,9 +2387,7 @@ impl ImagePreviewState {
                                     if self.creative_fx_state.ntsc_params.vhs_enabled {
                                         ui.add_space(2.0);
                                         ui.label(
-                                            egui::RichText::new("Tape Speed")
-                                                .size(10.0)
-                                                .color(f_med),
+                                            egui::RichText::new("Tape Speed").small().color(f_med),
                                         );
                                         ui.horizontal_wrapped(|ui| {
                                             for speed in [
@@ -2522,7 +2520,7 @@ impl ImagePreviewState {
                                     ui.vertical(|ui| {
                                         ui.label(
                                             egui::RichText::new("🎲 Noise Random Seed")
-                                                .size(10.0)
+                                                .small()
                                                 .color(f_med),
                                         );
                                         ui.spacing_mut().slider_width = slider_w;
