@@ -41,6 +41,38 @@ fn visible_row_range(offset: f32, viewport_height: f32, total: usize, stride: f3
     first..last
 }
 
+fn column_offsets(widths: &[f32], spacing: f32) -> Vec<f32> {
+    let mut offsets = Vec::with_capacity(widths.len() + 1);
+    offsets.push(0.0);
+    for (index, width) in widths.iter().enumerate() {
+        let gap = if index + 1 < widths.len() {
+            spacing
+        } else {
+            0.0
+        };
+        offsets.push(offsets[index] + width + gap);
+    }
+    offsets
+}
+
+fn visible_column_range(offset: f32, viewport_width: f32, offsets: &[f32]) -> Range<usize> {
+    let total = offsets.len().saturating_sub(1);
+    if total == 0 {
+        return 0..0;
+    }
+    let left = offset.max(0.0);
+    let first = offsets[1..]
+        .partition_point(|end| *end <= left)
+        .min(total - 1)
+        .saturating_sub(1);
+    let last = offsets[..total]
+        .partition_point(|start| *start < left + viewport_width.max(0.0))
+        .saturating_add(1)
+        .min(total)
+        .max(first + 1);
+    first..last
+}
+
 /// Returns the standard spreadsheet column label (e.g. 0 -> "A", 25 -> "Z", 26 -> "AA").
 pub fn col_label(mut idx: usize) -> String {
     let mut s = String::new();
@@ -306,8 +338,8 @@ impl SpreadsheetViewerState {
                 let header_height = row_height;
                 let table_spacing = Vec2::new(1.0, 1.0);
 
-                let total_content_width: f32 = col_widths.iter().sum::<f32>()
-                    + (col_widths.len().saturating_sub(1) as f32 * table_spacing.x);
+                let col_offsets = column_offsets(&col_widths, table_spacing.x);
+                let total_content_width = *col_offsets.last().unwrap_or(&0.0);
                 let row_stride = row_height + table_spacing.y;
                 let total_content_height =
                     (visible_rows.len() as f32 * row_stride - table_spacing.y).max(0.0);
@@ -367,7 +399,10 @@ impl SpreadsheetViewerState {
                     header_child_ui.set_clip_rect(col_header_rect);
                     header_child_ui.spacing_mut().item_spacing = table_spacing;
 
-                    for (c_idx, &cell_w) in col_widths.iter().enumerate() {
+                    let header_columns =
+                        visible_column_range(self.scroll_offset.x, grid_w, &col_offsets);
+                    for c_idx in header_columns {
+                        let cell_w = col_widths[c_idx];
                         let is_selected_col =
                             self.selected_cell.map(|(_, c)| c == c_idx).unwrap_or(false);
                         let col_bg = if is_selected_col { accent } else { b_med };
@@ -393,7 +428,14 @@ impl SpreadsheetViewerState {
                         .stroke(Stroke::new(0.5_f32, b_low))
                         .rounding(Rounding::ZERO);
 
-                        let resp = header_child_ui.add(col_btn);
+                        let cell_rect = egui::Rect::from_min_size(
+                            egui::pos2(
+                                col_header_ui_rect.min.x + col_offsets[c_idx],
+                                col_header_rect.min.y,
+                            ),
+                            Vec2::new(cell_w, header_height),
+                        );
+                        let resp = header_child_ui.put(cell_rect, col_btn);
                         if resp.clicked() {
                             clicked_col = Some(c_idx);
                         }
@@ -496,6 +538,11 @@ impl SpreadsheetViewerState {
                                 visible_rows.len(),
                                 row_stride,
                             );
+                            let columns = visible_column_range(
+                                viewport.min.x,
+                                viewport.width(),
+                                &col_offsets,
+                            );
                             let row_rect = egui::Rect::from_min_size(
                                 egui::pos2(
                                     ui.max_rect().left(),
@@ -520,7 +567,12 @@ impl SpreadsheetViewerState {
 
                                         ui.horizontal(|ui| {
                                             ui.spacing_mut().item_spacing = table_spacing;
-                                            for c_idx in 0..col_count {
+                                            if columns.start > 0 {
+                                                ui.add_space(
+                                                    col_offsets[columns.start] - table_spacing.x,
+                                                );
+                                            }
+                                            for c_idx in columns.clone() {
                                                 let cell_val = row
                                                     .get(c_idx)
                                                     .map(|s| s.as_str())
@@ -656,6 +708,66 @@ mod tests {
         assert_eq!(visible_row_range(27000.0, 270.0, 2000, 27.0), 999..1011);
         assert_eq!(visible_row_range(80000.0, 270.0, 2000, 27.0), 1998..2000);
         assert_eq!(visible_row_range(0.0, 270.0, 0, 27.0), 0..0);
+    }
+
+    #[test]
+    fn visible_columns_follow_measured_widths() {
+        let offsets = column_offsets(&[100.0, 120.0, 80.0, 90.0], 1.0);
+        assert_eq!(offsets, vec![0.0, 101.0, 222.0, 303.0, 393.0]);
+        assert_eq!(visible_column_range(0.0, 100.0, &offsets), 0..2);
+        assert_eq!(visible_column_range(230.0, 80.0, &offsets), 1..4);
+        assert_eq!(visible_column_range(1000.0, 80.0, &offsets), 2..4);
+        assert_eq!(visible_column_range(0.0, 80.0, &[0.0]), 0..0);
+    }
+
+    #[test]
+    fn wide_sheet_renders_only_visible_columns_with_aligned_header() {
+        let first_row = (0..1000)
+            .map(|column| {
+                if column == 0 {
+                    "A (1)".to_string()
+                } else {
+                    format!("Cell {column}")
+                }
+            })
+            .collect();
+        let data = SpreadsheetData {
+            title: "Wide sheet".into(),
+            sheets: vec![SpreadsheetSheet::new("Data".into(), vec![first_row])],
+        };
+        let mut state = SpreadsheetViewerState::new(data, None);
+        let palette = little_clip_core::theme::AppPalette::default();
+        let ctx = egui::Context::default();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(900.0, 620.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                });
+            },
+        );
+
+        assert!(
+            output.shapes.len() < 1000,
+            "rendered {} shapes for a 1,000-column sheet",
+            output.shapes.len()
+        );
+        let matching_x: Vec<f32> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "A (1)" => Some(text.pos.x),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(matching_x.len(), 2);
+        assert!((matching_x[0] - matching_x[1]).abs() <= 2.0);
     }
 
     #[test]
