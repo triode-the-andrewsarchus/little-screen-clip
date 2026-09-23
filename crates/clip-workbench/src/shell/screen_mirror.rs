@@ -80,10 +80,11 @@ impl<'a> ScreenMirrorWidget<'a> {
     }
 
     pub fn show(mut self, ui: &mut egui::Ui, palette: &AppPalette) -> Option<MirrorAction> {
-        let available = ui.available_size();
-        let size = fitted_mirror_size(available);
-        let (space, _) =
-            ui.allocate_exact_size(Vec2::new(available.x, size.y), egui::Sense::hover());
+        // A top panel computes its own height from its children, so its reported
+        // available height can be zero before this widget has allocated space.
+        let width = ui.available_width();
+        let size = fitted_mirror_size(Vec2::new(width, ui.ctx().screen_rect().height()));
+        let (space, _) = ui.allocate_exact_size(Vec2::new(width, size.y), egui::Sense::hover());
         let rect = Rect::from_center_size(space.center(), size);
         let response = ui.interact(
             rect,

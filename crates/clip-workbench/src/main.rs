@@ -2585,6 +2585,10 @@ fn main() -> Result<(), eframe::Error> {
         }
     }
 
+    let Some(_instance_lock) = popup::claim_instance() else {
+        return Ok(());
+    };
+
     let state = match send_ipc_request(&IpcRequest::GetState) {
         Ok(IpcResponse::State(s)) => s,
         _ => SlotManager::default(),
@@ -2602,6 +2606,7 @@ fn main() -> Result<(), eframe::Error> {
         ..Default::default()
     };
 
+    popup::center_when_mapped();
     eframe::run_native(
         "clip-workbench",
         options,

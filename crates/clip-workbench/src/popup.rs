@@ -1,6 +1,8 @@
 //! Screen-relative sizing for the fixed-size workbench popup.
 
-use std::time::Duration;
+use std::fs::{File, OpenOptions};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use eframe::egui::{Vec2, ViewportBuilder};
 use little_clip_core::process::CommandRequest;
@@ -18,6 +20,117 @@ struct Output {
 struct LogicalOutput {
     width: u32,
     height: u32,
+}
+
+#[derive(Deserialize)]
+struct NiriWindow {
+    id: u64,
+    app_id: Option<String>,
+    pid: Option<u32>,
+}
+
+fn instance_lock_path() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("little-clip-{}", unsafe { libc::geteuid() }))
+        })
+        .join("clip-workbench.lock")
+}
+
+/// Hold the file for the lifetime of the popup. A second invocation raises it.
+pub(crate) fn claim_instance() -> Option<File> {
+    let path = instance_lock_path();
+    if let Some(parent) = path.parent()
+        && let Err(err) = std::fs::create_dir_all(parent)
+    {
+        eprintln!("Cannot create workbench runtime directory: {err}");
+        return None;
+    }
+    let file = match OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("Cannot open workbench instance lock: {err}");
+            return None;
+        }
+    };
+    match file.try_lock() {
+        Ok(()) => Some(file),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            focus_existing();
+            None
+        }
+        Err(err) => {
+            eprintln!("Cannot lock workbench instance: {err}");
+            None
+        }
+    }
+}
+
+fn niri_window_id(pid: Option<u32>) -> Option<u64> {
+    let output = CommandRequest::new("niri")
+        .args(["msg", "--json", "windows"])
+        .timeout(Duration::from_millis(250))
+        .max_output_bytes(1024 * 1024)
+        .run()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    serde_json::from_slice::<Vec<NiriWindow>>(&output.stdout)
+        .ok()?
+        .into_iter()
+        .find(|window| {
+            window.app_id.as_deref() == Some("little-clip-workbench")
+                && pid.is_none_or(|pid| window.pid == Some(pid))
+        })
+        .map(|window| window.id)
+}
+
+fn niri_action(action: &str, id: u64) {
+    let id = id.to_string();
+    if let Err(err) = CommandRequest::new("niri")
+        .args(["msg", "action", action, "--id", &id])
+        .timeout(Duration::from_millis(250))
+        .max_output_bytes(4096)
+        .run()
+    {
+        tracing::warn!(%err, %action, "Niri popup action failed");
+    }
+}
+
+fn wait_for_window(pid: Option<u32>) -> Option<u64> {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if let Some(id) = niri_window_id(pid) {
+            return Some(id);
+        }
+        std::thread::sleep(Duration::from_millis(30));
+    }
+    None
+}
+
+fn focus_existing() {
+    if std::env::var_os("NIRI_SOCKET").is_some()
+        && let Some(id) = wait_for_window(None)
+    {
+        niri_action("focus-window", id);
+    }
+}
+
+pub(crate) fn center_when_mapped() {
+    if std::env::var_os("NIRI_SOCKET").is_some() {
+        std::thread::spawn(|| {
+            if let Some(id) = wait_for_window(Some(std::process::id())) {
+                niri_action("center-window", id);
+            }
+        });
+    }
 }
 
 fn size_from_output(json: &[u8]) -> Result<Vec2, String> {
