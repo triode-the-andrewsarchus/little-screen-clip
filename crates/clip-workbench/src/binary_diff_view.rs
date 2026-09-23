@@ -135,7 +135,7 @@ impl BinaryDiffViewState {
         right_bytes: Vec<u8>,
     ) -> Self {
         let mode = BinaryDiffMode::Aligned;
-        let bytes_per_row = 16;
+        let bytes_per_row = 32;
 
         let (tx, rx) = channel();
         let l_lbl = left_label.clone();
@@ -207,6 +207,56 @@ impl BinaryDiffViewState {
     pub fn toggle_mode(&mut self) {
         self.mode = self.mode.toggled();
         self.recompute();
+    }
+
+    fn set_bytes_per_row(&mut self, bytes_per_row: usize) {
+        if self.bytes_per_row != bytes_per_row {
+            self.bytes_per_row = bytes_per_row;
+            self.recompute();
+        }
+    }
+
+    fn handle_global_shortcuts(&mut self, ctx: &egui::Context, close_requested: &mut bool) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            *close_requested = true;
+        }
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
+            self.toggle_mode();
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::S)) {
+            self.swap_operands();
+        }
+        if ctx.input(|i| {
+            i.key_pressed(egui::Key::J)
+                || i.key_pressed(egui::Key::ArrowRight)
+                || i.key_pressed(egui::Key::ArrowDown)
+        }) {
+            self.next_diff();
+        }
+        if ctx.input(|i| {
+            i.key_pressed(egui::Key::K)
+                || i.key_pressed(egui::Key::ArrowLeft)
+                || i.key_pressed(egui::Key::ArrowUp)
+        }) {
+            self.prev_diff();
+        }
+        let bytes_per_row = ctx.input(|i| {
+            if i.key_pressed(egui::Key::Num0) {
+                Some(8)
+            } else if i.key_pressed(egui::Key::Num1) {
+                Some(16)
+            } else if i.key_pressed(egui::Key::Num2) {
+                Some(32)
+            } else {
+                None
+            }
+        });
+        if let Some(bytes_per_row) = bytes_per_row {
+            self.set_bytes_per_row(bytes_per_row);
+        }
     }
 
     pub fn next_diff(&mut self) {
@@ -333,22 +383,7 @@ impl BinaryDiffViewState {
             }
         }
 
-        // Global shortcuts
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            *close_requested = true;
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::Tab)) && !ctx.wants_keyboard_input() {
-            self.toggle_mode();
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::S)) && !ctx.wants_keyboard_input() {
-            self.swap_operands();
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::J)) && !ctx.wants_keyboard_input() {
-            self.next_diff();
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::K)) && !ctx.wants_keyboard_input() {
-            self.prev_diff();
-        }
+        self.handle_global_shortcuts(ctx, close_requested);
 
         let l_size_str = format_bytes_size(self.left_bytes.len());
         let r_size_str = format_bytes_size(self.right_bytes.len());
@@ -359,7 +394,7 @@ impl BinaryDiffViewState {
             .with_badge(format!("Left: {} ({})", self.left_label, l_size_str), None)
             .with_badge(format!("Right: {} ({})", self.right_label, r_size_str), None)
             .with_escape_hatch(hatch)
-            .with_footer_hints("Navigation: [Esc] Close • [Tab] Mode • [S] Swap • [J/K] Diff Nav • [Search] Hex/ASCII");
+            .with_footer_hints("Navigation: [Esc] Close • [Tab] Mode • [S] Swap • [J/K/←/↑/→/↓] Diff Nav • [0/1/2] Width • [Search] Hex/ASCII");
 
         if self.is_computing {
             shell = shell.with_badge("Computing...", Some(hex_to_c32(&palette.harmonies.base)));
@@ -543,9 +578,8 @@ impl BinaryDiffViewState {
                     for &w in &[8, 16, 32] {
                         let is_active = self.bytes_per_row == w;
                         let btn = crate::mode_tab_button(format!("{}B", w), is_active, palette);
-                        if ui.add(btn).clicked() && self.bytes_per_row != w {
-                            self.bytes_per_row = w;
-                            self.recompute();
+                        if ui.add(btn).clicked() {
+                            self.set_bytes_per_row(w);
                         }
                     }
 
@@ -1715,6 +1749,24 @@ fn format_bytes_size(len: usize) -> String {
 mod tests {
     use super::*;
 
+    fn trigger_global_shortcut(state: &mut BinaryDiffViewState, key: egui::Key) {
+        let ctx = egui::Context::default();
+        ctx.begin_frame(egui::RawInput {
+            events: vec![egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        });
+        let mut close_requested = false;
+        state.handle_global_shortcuts(&ctx, &mut close_requested);
+        let _ = ctx.end_frame();
+        assert!(!close_requested);
+    }
+
     #[test]
     fn test_byte_subtle_color_endpoints_and_interpolation() {
         // 0x00: slightly blue
@@ -1738,6 +1790,7 @@ mod tests {
             "file_b.bin".to_string(),
             b"HELLO RUSTY BINARY TEST".to_vec(),
         );
+        assert_eq!(state.bytes_per_row, 32);
 
         // Wait for worker thread result
         if let Some(rx) = state.receiver.take() {
@@ -1782,6 +1835,50 @@ mod tests {
         assert_eq!(state.mode, BinaryDiffMode::Aligned);
         state.toggle_mode();
         assert_eq!(state.mode, BinaryDiffMode::Raw);
+    }
+
+    #[test]
+    fn test_global_shortcuts_navigate_diffs_and_switch_widths() {
+        let left_bytes = vec![0; 24];
+        let mut right_bytes = left_bytes.clone();
+        right_bytes[0] = 1;
+        right_bytes[16] = 1;
+        let mut state = BinaryDiffViewState::new(
+            "file_a.bin".to_string(),
+            left_bytes.clone(),
+            "file_b.bin".to_string(),
+            right_bytes.clone(),
+        );
+        state.result = Some(compute_binary_diff(
+            "file_a.bin",
+            &left_bytes,
+            "file_b.bin",
+            &right_bytes,
+            BinaryDiffMode::Aligned,
+            8,
+        ));
+        state.is_computing = false;
+
+        for key in [egui::Key::J, egui::Key::ArrowRight, egui::Key::ArrowDown] {
+            state.nav.current_diff_idx = 0;
+            state.current_diff_idx = 0;
+            trigger_global_shortcut(&mut state, key);
+            assert_eq!(state.current_diff_idx, 1);
+        }
+        for key in [egui::Key::K, egui::Key::ArrowLeft, egui::Key::ArrowUp] {
+            state.nav.current_diff_idx = 1;
+            state.current_diff_idx = 1;
+            trigger_global_shortcut(&mut state, key);
+            assert_eq!(state.current_diff_idx, 0);
+        }
+        for (key, expected_width) in [
+            (egui::Key::Num0, 8),
+            (egui::Key::Num1, 16),
+            (egui::Key::Num2, 32),
+        ] {
+            trigger_global_shortcut(&mut state, key);
+            assert_eq!(state.bytes_per_row, expected_width);
+        }
     }
 
     #[test]
