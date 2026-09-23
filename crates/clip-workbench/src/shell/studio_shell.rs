@@ -16,6 +16,9 @@ use little_clip_core::theme::AppPalette;
 
 use crate::icons::Icon;
 
+const MIN_CANVAS_WIDTH: f32 = 320.0;
+const MIN_RAIL_WIDTH: f32 = 160.0;
+
 /// Badge metadata item rendered in the header.
 pub struct HeaderBadge {
     pub text: String,
@@ -112,8 +115,6 @@ impl StudioPanelLayout {
     }
 
     fn rects(self, available: Rect) -> StudioPanelRects {
-        const MIN_CANVAS_WIDTH: f32 = 320.0;
-        const MIN_RAIL_WIDTH: f32 = 160.0;
         let gap = self.gap.max(0.0);
         let bottom_height = if self.bottom {
             self.bottom_height.min((available.height() * 0.3).max(0.0))
@@ -146,60 +147,80 @@ impl StudioPanelLayout {
         let horizontal_gaps = gap * f32::from(count);
         let rail_space = main.width() - horizontal_gaps - MIN_CANVAS_WIDTH;
         if rail_space >= f32::from(count) * MIN_RAIL_WIDTH {
-            let left_preferred = if self.left {
-                self.left_width.max(MIN_RAIL_WIDTH)
-            } else {
-                0.0
-            };
-            let right_preferred = if self.right {
-                self.right_width.max(MIN_RAIL_WIDTH)
-            } else {
-                0.0
-            };
-            let extra =
-                (left_preferred + right_preferred - f32::from(count) * MIN_RAIL_WIDTH).max(0.0);
-            let fraction = if extra > 0.0 {
-                ((rail_space - f32::from(count) * MIN_RAIL_WIDTH) / extra).min(1.0)
-            } else {
-                0.0
-            };
-            let left_width = if self.left {
-                MIN_RAIL_WIDTH + (left_preferred - MIN_RAIL_WIDTH) * fraction
-            } else {
-                0.0
-            };
-            let right_width = if self.right {
-                MIN_RAIL_WIDTH + (right_preferred - MIN_RAIL_WIDTH) * fraction
-            } else {
-                0.0
-            };
-            let left = self
-                .left
-                .then(|| Rect::from_min_size(main.min, Vec2::new(left_width, main.height())));
-            let right = self.right.then(|| {
-                Rect::from_min_size(
-                    egui::pos2(main.right() - right_width, main.top()),
-                    Vec2::new(right_width, main.height()),
-                )
-            });
-            let center = Rect::from_min_max(
-                egui::pos2(
-                    main.left() + left_width + if self.left { gap } else { 0.0 },
-                    main.top(),
-                ),
-                egui::pos2(
-                    main.right() - right_width - if self.right { gap } else { 0.0 },
-                    main.bottom(),
-                ),
-            );
-            return StudioPanelRects {
-                left,
-                center,
-                right,
-                bottom,
-            };
+            return self.horizontal_rects(main, bottom, gap, rail_space);
         }
 
+        self.compact_rects(main, bottom, gap, count)
+    }
+
+    fn horizontal_rects(
+        self,
+        main: Rect,
+        bottom: Option<Rect>,
+        gap: f32,
+        rail_space: f32,
+    ) -> StudioPanelRects {
+        let count = u8::from(self.left) + u8::from(self.right);
+        let left_preferred = if self.left {
+            self.left_width.max(MIN_RAIL_WIDTH)
+        } else {
+            0.0
+        };
+        let right_preferred = if self.right {
+            self.right_width.max(MIN_RAIL_WIDTH)
+        } else {
+            0.0
+        };
+        let extra = (left_preferred + right_preferred - f32::from(count) * MIN_RAIL_WIDTH).max(0.0);
+        let fraction = if extra > 0.0 {
+            ((rail_space - f32::from(count) * MIN_RAIL_WIDTH) / extra).min(1.0)
+        } else {
+            0.0
+        };
+        let left_width = if self.left {
+            MIN_RAIL_WIDTH + (left_preferred - MIN_RAIL_WIDTH) * fraction
+        } else {
+            0.0
+        };
+        let right_width = if self.right {
+            MIN_RAIL_WIDTH + (right_preferred - MIN_RAIL_WIDTH) * fraction
+        } else {
+            0.0
+        };
+        let left = self
+            .left
+            .then(|| Rect::from_min_size(main.min, Vec2::new(left_width, main.height())));
+        let right = self.right.then(|| {
+            Rect::from_min_size(
+                egui::pos2(main.right() - right_width, main.top()),
+                Vec2::new(right_width, main.height()),
+            )
+        });
+        let center = Rect::from_min_max(
+            egui::pos2(
+                main.left() + left_width + if self.left { gap } else { 0.0 },
+                main.top(),
+            ),
+            egui::pos2(
+                main.right() - right_width - if self.right { gap } else { 0.0 },
+                main.bottom(),
+            ),
+        );
+        StudioPanelRects {
+            left,
+            center,
+            right,
+            bottom,
+        }
+    }
+
+    fn compact_rects(
+        self,
+        main: Rect,
+        bottom: Option<Rect>,
+        gap: f32,
+        count: u8,
+    ) -> StudioPanelRects {
         // Compact hosts retain a full-width canvas and put scrollable tools in
         // a bounded row below it. This is also safe for unexpected narrow hosts.
         let rail_height = (main.height() * 0.3).min(180.0);

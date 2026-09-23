@@ -1337,7 +1337,7 @@ impl ImagePreviewState {
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
             .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     // Tool Modes
                     let modes = [
                         ImageToolMode::View,
@@ -1358,46 +1358,24 @@ impl ImagePreviewState {
                         ImageToolMode::CreativeFx,
                     ];
 
-                    let active_label = if self.active_mode == ImageToolMode::Palette {
-                        ImageToolMode::PickColor.label()
-                    } else {
-                        self.active_mode.label()
-                    };
-                    ui.label("Tool:");
-                    egui::ComboBox::from_id_source("image_studio_tool")
-                        .selected_text(active_label)
-                        .width(crate::ui_ext::equal_button_width(
-                            ui,
-                            &["Decorrelation Stretch"],
-                            false,
-                        ))
-                        .show_ui(ui, |ui| {
-                            egui::ScrollArea::vertical()
-                                .max_height((ui.ctx().screen_rect().height() * 0.65).min(480.0))
-                                .show(ui, |ui| {
-                                    for mode in modes {
-                                        let selected = self.active_mode == mode
-                                            || (mode == ImageToolMode::PickColor
-                                                && self.active_mode == ImageToolMode::Palette);
-                                        let button = crate::ui_ext::mode_tab_button_icon(
-                                            Some(mode.icon()),
-                                            mode.label(),
-                                            selected,
-                                            palette,
-                                        )
-                                        .min_size(Vec2::new(
-                                            ui.available_width(),
-                                            crate::ui_ext::CONTROL_HEIGHT,
-                                        ));
-                                        if ui.add(button).clicked() {
-                                            self.set_tool_mode(mode);
-                                            ui.close_menu();
-                                        }
-                                    }
-                                });
-                        });
+                    for mode in modes {
+                        let selected = self.active_mode == mode
+                            || (mode == ImageToolMode::PickColor
+                                && self.active_mode == ImageToolMode::Palette);
+                        let button = crate::ui_ext::mode_tab_button_icon(
+                            Some(mode.icon()),
+                            mode.label(),
+                            selected,
+                            palette,
+                        );
+                        if ui.add(button).clicked() {
+                            self.set_tool_mode(mode);
+                        }
+                    }
+                });
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         // Reset View
                         let reset_btn = crate::ui_ext::secondary_button_icon(
                             Some(Icon::RotateCcw),

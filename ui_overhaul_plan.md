@@ -4,7 +4,7 @@ Status: implementation underway on `feat/workbench-ui-overhaul`. The audit below
 
 Reviewed against commit `36e609847d99141e42764a602f748a36eee25e74` on 2026-09-22 (America/Chicago). This is a source audit, not a live visual or interaction test. Findings marked as risks need reproduction during the baseline phase. This proposal supersedes the old `ui_architecture_design.md` as a planning reference; that document describes some changes already implemented and some abstractions that remain unused.
 
-Implemented first: focused-output sizing before the fixed popup maps, shared readable text and control dimensions, aligned studio/audio controls, compact Image Studio tool navigation, non-overlapping shared panel geometry, header wrapping, and corrected translucent-color contrast math. Film Look and Creative FX still use independent panel layout code; the remaining stages below are pending.
+Implemented first: focused-output sizing before the fixed popup maps, shared readable text and control dimensions, aligned studio/audio controls, one-click Image Studio tool buttons that wrap with available width, non-overlapping shared panel geometry, header wrapping, and corrected translucent-color contrast math. Film Look and Creative FX still use independent panel layout code; the remaining stages below are pending.
 
 ## 1. Recommended direction
 
@@ -131,7 +131,7 @@ Choose arrangements from the available host rectangle, including embedded previe
 
 - **Wide:** tool/preset rail, flexible canvas, and inspector visible; user-adjustable splits. Extra width primarily benefits the canvas, comparison panes, grids, and thumbnails rather than stretching text forms indefinitely.
 - **Standard:** canvas and one appropriate control rail visible; secondary panels can collapse or share tabs. Preserve the user's manual choices whenever they fit.
-- **Compact landscape:** one reachable Tools/Inspector drawer at a time; canvas remains useful. Navigation labels can move into a menu, but active tool and essential actions remain visible. A drawer must fit and scroll within available height.
+- **Compact landscape:** one reachable Tools/Inspector drawer at a time; canvas remains useful. Every Image Studio tool stays one click away through wrapping buttons. A drawer must fit and scroll within available height.
 
 Breakpoints follow the sum of actual region minimums, gaps, and readable control widths. Store one layout policy rather than hardcoding unrelated breakpoints in every view. Re-evaluate when host space, internal splits, or UI scale changes; responsiveness does not require interactive resizing of the outer popup.
 
