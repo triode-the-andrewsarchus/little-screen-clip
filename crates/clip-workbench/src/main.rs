@@ -37,6 +37,7 @@ mod image_preview;
 mod midi_view;
 mod model3d_view;
 mod pdf_view;
+mod popup;
 mod rolling_audio_strip;
 pub mod shell;
 mod spreadsheet_view;
@@ -2633,12 +2634,13 @@ fn main() -> Result<(), eframe::Error> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1180.0, 680.0])
             .with_resizable(false)
             .with_decorations(true)
             .with_app_id("little-clip-workbench")
             .with_window_type(egui::viewport::X11WindowType::Dialog)
             .with_title("Little Screen Clip — Crafting Workbench"),
+        window_builder: Some(Box::new(popup::window_builder)),
+        persist_window: false,
         ..Default::default()
     };
 
