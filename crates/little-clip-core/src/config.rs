@@ -152,6 +152,24 @@ impl ImageConfig {
     }
 }
 
+/// Desktop appearance choices are separate from hardware display themes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkbenchAppearance {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl WorkbenchAppearance {
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Dark => Self::Light,
+            Self::Light => Self::Dark,
+        }
+    }
+}
+
 /// Workbench application editor settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkbenchConfig {
@@ -159,11 +177,17 @@ pub struct WorkbenchConfig {
     /// Defaults to None, which falls back to $VISUAL, $EDITOR, or "xdg-open".
     #[serde(default)]
     pub editor: Option<String>,
+    /// Desktop workbench appearance, independent of the hardware display theme.
+    #[serde(default)]
+    pub appearance: WorkbenchAppearance,
 }
 
 impl Default for WorkbenchConfig {
     fn default() -> Self {
-        Self { editor: None }
+        Self {
+            editor: None,
+            appearance: WorkbenchAppearance::default(),
+        }
     }
 }
 
@@ -729,6 +753,27 @@ impl AppConfig {
         Ok(())
     }
 
+    /// Save only the desktop appearance, preserving the display theme and other settings.
+    pub fn save_workbench_appearance_to_file(
+        appearance: WorkbenchAppearance,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let path = find_config_file_path();
+        let current = if path.exists() {
+            std::fs::read_to_string(&path)?
+        } else {
+            String::new()
+        };
+        let value = match appearance {
+            WorkbenchAppearance::Dark => "dark",
+            WorkbenchAppearance::Light => "light",
+        };
+        std::fs::write(
+            &path,
+            update_setting_in_text(&current, "workbench", "appearance", value),
+        )?;
+        Ok(())
+    }
+
     /// Non-destructively clears color overrides in `config.toml` by commenting them out,
     /// preserving all user comments and other configuration sections.
     pub fn clear_overrides_in_file() -> Result<(), Box<dyn std::error::Error>> {
@@ -760,35 +805,36 @@ pub fn find_config_file_path() -> PathBuf {
 /// Non-destructively updates the `theme = "..."` entry under `[colors]` in TOML text,
 /// preserving all existing comments, other sections, indentation, and formatting.
 pub fn update_theme_in_text(text: &str, new_theme: &str) -> String {
+    update_setting_in_text(text, "colors", "theme", new_theme)
+}
+
+/// Update one quoted string setting without rewriting the rest of the TOML file.
+fn update_setting_in_text(text: &str, table: &str, setting: &str, value: &str) -> String {
     let mut output = Vec::new();
-    let mut in_colors = false;
-    let mut theme_updated = false;
-    let mut colors_found = false;
+    let mut in_table = false;
+    let mut updated = false;
+    let mut table_found = false;
 
     for line in text.lines() {
         let trimmed = line.trim();
         // Check for table header like [colors] or [display]
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            if in_colors && !theme_updated {
-                output.push(format!("theme = \"{}\"", new_theme));
-                theme_updated = true;
+            if in_table && !updated {
+                output.push(format!("{setting} = \"{value}\""));
+                updated = true;
             }
-            if trimmed == "[colors]" {
-                in_colors = true;
-                colors_found = true;
-            } else {
-                in_colors = false;
-            }
+            in_table = trimmed == format!("[{table}]");
+            table_found |= in_table;
             output.push(line.to_string());
             continue;
         }
 
-        if in_colors && !theme_updated {
+        if in_table && !updated {
             let key = trimmed.split('=').next().unwrap_or("").trim();
-            if key == "theme" {
+            if key == setting {
                 let leading: String = line.chars().take_while(|c| c.is_whitespace()).collect();
-                output.push(format!("{}theme = \"{}\"", leading, new_theme));
-                theme_updated = true;
+                output.push(format!("{leading}{setting} = \"{value}\""));
+                updated = true;
                 continue;
             }
         }
@@ -796,16 +842,16 @@ pub fn update_theme_in_text(text: &str, new_theme: &str) -> String {
         output.push(line.to_string());
     }
 
-    if in_colors && !theme_updated {
-        output.push(format!("theme = \"{}\"", new_theme));
+    if in_table && !updated {
+        output.push(format!("{setting} = \"{value}\""));
     }
 
-    if !colors_found {
+    if !table_found {
         if !output.is_empty() && !output.last().map(|s| s.is_empty()).unwrap_or(false) {
             output.push(String::new());
         }
-        output.push("[colors]".to_string());
-        output.push(format!("theme = \"{}\"", new_theme));
+        output.push(format!("[{table}]"));
+        output.push(format!("{setting} = \"{value}\""));
     }
 
     let mut res = output.join("\n");
@@ -887,6 +933,27 @@ editor = "audacity"
         assert!(!updated.contains("theme = \"apollo\""));
         assert!(updated.contains("left_hand_border = \"#6366f1\""));
         assert!(updated.contains("[audio]\neditor = \"audacity\""));
+    }
+
+    #[test]
+    fn workbench_appearance_updates_without_touching_display_theme() {
+        let original = "[colors]\ntheme = \"zenburn\"\n\n[workbench]\n# editor preference\neditor = \"code\"\n";
+        let updated = update_setting_in_text(original, "workbench", "appearance", "light");
+        assert!(updated.contains("theme = \"zenburn\""));
+        assert!(updated.contains("# editor preference\neditor = \"code\""));
+        let config: AppConfig = toml::from_str(&updated).unwrap();
+        assert_eq!(config.workbench.appearance, WorkbenchAppearance::Light);
+        assert_eq!(config.colors.theme, "zenburn");
+
+        let reversed = update_setting_in_text(&updated, "workbench", "appearance", "dark");
+        assert_eq!(reversed.matches("appearance =").count(), 1);
+        assert_eq!(
+            toml::from_str::<AppConfig>(&reversed)
+                .unwrap()
+                .workbench
+                .appearance,
+            WorkbenchAppearance::Dark
+        );
     }
 
     #[test]

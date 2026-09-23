@@ -5,6 +5,7 @@
 
 use eframe::egui;
 use little_clip_core::color::parse_hex_color_rgba_or_white as parse_hex_color_rgba;
+use little_clip_core::config::WorkbenchAppearance;
 use little_clip_core::ipc::{IpcRequest, IpcResponse, SlotStateSummary};
 use little_clip_core::presentation::{
     model3d::is_3d_model_file,
@@ -43,6 +44,7 @@ pub mod shell;
 mod spreadsheet_view;
 mod stl_view;
 mod text_preview;
+mod ui_appearance;
 pub mod ui_ext;
 
 use icons::Icon;
@@ -96,7 +98,7 @@ pub(crate) fn hex_to_c32_alpha(hex: &str, alpha: u8) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(r, g, b, alpha)
 }
 
-fn apply_theme_to_egui(ctx: &egui::Context, palette: &AppPalette) {
+fn apply_workbench_palette_to_egui(ctx: &egui::Context, palette: &AppPalette) {
     let mut visuals = if palette.is_dark {
         egui::Visuals::dark()
     } else {
@@ -200,6 +202,7 @@ struct WorkbenchApp {
     selected_slots: Vec<SlotId>,
     status_msg: Option<String>,
     renderer: ScreenRenderer,
+    ui_palette: AppPalette,
     mirror_texture: Option<egui::TextureHandle>,
     dirty_mirror: bool,
     in_app_prompt: Option<InAppPromptState>,
@@ -218,7 +221,7 @@ struct WorkbenchApp {
     available_themes: Vec<Theme>,
     theme_search: String,
     theme_filter: ThemeFilter,
-    theme_applied: bool,
+    appearance_applied: bool,
 }
 
 impl WorkbenchApp {
@@ -232,6 +235,7 @@ impl WorkbenchApp {
         let mut config = AppConfig::load();
         // Desktop monitor mirror is always upright (no 180 flip)
         config.display.rotate_180 = false;
+        let ui_palette = ui_appearance::palette(config.workbench.appearance);
         let renderer = ScreenRenderer::new(config.clone())
             .unwrap_or_else(|_| ScreenRenderer::fallback(config.clone()));
 
@@ -318,6 +322,7 @@ impl WorkbenchApp {
             selected_slots: vec![SlotId::LeftHand],
             status_msg: None,
             renderer,
+            ui_palette,
             mirror_texture: None,
             dirty_mirror: true,
             in_app_prompt: None,
@@ -336,7 +341,7 @@ impl WorkbenchApp {
             available_themes,
             theme_search: String::new(),
             theme_filter: ThemeFilter::All,
-            theme_applied: false,
+            appearance_applied: false,
         };
 
         if start_with_binary_diff {
@@ -346,6 +351,17 @@ impl WorkbenchApp {
         }
 
         app
+    }
+
+    fn toggle_appearance(&mut self, ctx: &egui::Context) {
+        let appearance = self.config.workbench.appearance.toggled();
+        self.config.workbench.appearance = appearance;
+        self.ui_palette = ui_appearance::palette(appearance);
+        apply_workbench_palette_to_egui(ctx, &self.ui_palette);
+        if let Err(err) = AppConfig::save_workbench_appearance_to_file(appearance) {
+            self.status_msg = Some(format!("Could not save workbench appearance: {err}"));
+        }
+        ctx.request_repaint();
     }
 
     fn open_diff_viewer(&mut self) {
@@ -652,9 +668,13 @@ fn recipe_needs_prompt(recipe: &Recipe, state: &SlotManager) -> Option<(String, 
 impl eframe::App for WorkbenchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Apply theme to egui on first frame or theme changes
-        if !self.theme_applied {
-            apply_theme_to_egui(ctx, &self.renderer.palette);
-            self.theme_applied = true;
+        if !self.appearance_applied {
+            apply_workbench_palette_to_egui(ctx, &self.ui_palette);
+            self.appearance_applied = true;
+        }
+
+        if ctx.input(|input| input.key_pressed(egui::Key::F6)) {
+            self.toggle_appearance(ctx);
         }
 
         // Live state update from background daemon poller
@@ -684,9 +704,9 @@ impl eframe::App for WorkbenchApp {
         self.handle_global_shortcuts(ctx);
 
         // Top Header Panel: Mirror of Trofeo Screen + Tabs
-        let header_bg = hex_to_c32(&self.renderer.palette.background);
-        let brand_color = hex_to_c32(&self.renderer.palette.left_hand_border);
-        let sub_color = hex_to_c32(&self.renderer.palette.subtitle_color);
+        let header_bg = hex_to_c32(&self.ui_palette.background);
+        let brand_color = hex_to_c32(&self.ui_palette.left_hand_border);
+        let sub_color = hex_to_c32(&self.ui_palette.subtitle_color);
 
         egui::TopBottomPanel::top("header_panel")
             .frame(
@@ -695,7 +715,7 @@ impl eframe::App for WorkbenchApp {
                     .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
             )
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.heading(
                         egui::RichText::new("LITTLE SCREEN CLIP")
                             .color(brand_color)
@@ -705,14 +725,31 @@ impl eframe::App for WorkbenchApp {
                         egui::RichText::new("— Ambient Dual-Hand Live Mirror").color(sub_color),
                     );
 
-                    // View Mode Switcher Tabs on the Right
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let appearance_label = match self.config.workbench.appearance {
+                        WorkbenchAppearance::Dark => "Light mode [F6]",
+                        WorkbenchAppearance::Light => "Dark mode [F6]",
+                    };
+                    if ui
+                        .add(ui_ext::secondary_button(
+                            appearance_label,
+                            hex_to_c32(&self.ui_palette.theme.b_med),
+                            &self.ui_palette,
+                        ))
+                        .on_hover_text("Change the workbench appearance; the hardware display theme stays the same")
+                        .clicked()
+                    {
+                        self.toggle_appearance(ctx);
+                    }
+                });
+
+                // All workbench sections remain one click away on compact screens.
+                ui.horizontal_wrapped(|ui| {
                         let is_themes = self.view == WorkbenchView::Themes;
                         let themes_btn = ui_ext::mode_tab_button_icon(
                             Some(Icon::Palette),
-                            "Themes [F4]",
+                            "Display Themes [F4]",
                             is_themes,
-                            &self.renderer.palette,
+                            &self.ui_palette,
                         );
                         if ui.add(themes_btn).clicked() {
                             self.view = if is_themes {
@@ -727,7 +764,7 @@ impl eframe::App for WorkbenchApp {
                             Some(Icon::Settings),
                             "Auto-Actions [F3]",
                             is_auto,
-                            &self.renderer.palette,
+                            &self.ui_palette,
                         );
                         if ui.add(auto_btn).clicked() {
                             self.view = if is_auto {
@@ -742,7 +779,7 @@ impl eframe::App for WorkbenchApp {
                             Some(Icon::Search),
                             "Quick Palette [F2]",
                             is_pal,
-                            &self.renderer.palette,
+                            &self.ui_palette,
                         );
                         if ui.add(pal_tab).clicked() {
                             self.view = WorkbenchView::Palette;
@@ -753,12 +790,11 @@ impl eframe::App for WorkbenchApp {
                             Some(Icon::NodeTree),
                             "Big Node Machine [F1]",
                             is_node,
-                            &self.renderer.palette,
+                            &self.ui_palette,
                         );
                         if ui.add(node_tab).clicked() {
                             self.view = WorkbenchView::NodeMachine;
                         }
-                    });
                 });
 
                 ui.add_space(8.0);
@@ -885,15 +921,15 @@ impl eframe::App for WorkbenchApp {
             egui::TopBottomPanel::bottom("rolling_audio_strip_panel")
                 .frame(
                     egui::Frame::none()
-                        .fill(crate::hex_to_c32(&self.renderer.palette.theme.background))
+                        .fill(crate::hex_to_c32(&self.ui_palette.theme.background))
                         .inner_margin(egui::Margin::symmetric(14.0, 6.0))
                         .stroke(egui::Stroke::new(
                             1.0_f32,
-                            crate::hex_to_c32(&self.renderer.palette.theme.b_med),
+                            crate::hex_to_c32(&self.ui_palette.theme.b_med),
                         )),
                 )
                 .show(ctx, |ui| {
-                    strip.render_ui(ui, ctx, &self.renderer.palette, &mut open_full_editor);
+                    strip.render_ui(ui, ctx, &self.ui_palette, &mut open_full_editor);
                 });
         }
 
@@ -917,7 +953,7 @@ impl eframe::App for WorkbenchApp {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.visuals_mut().override_text_color = Some(hex_to_c32(&self.renderer.palette.title_color));
+            ui.visuals_mut().override_text_color = Some(hex_to_c32(&self.ui_palette.title_color));
 
             match self.view {
                 WorkbenchView::Palette => {
@@ -937,23 +973,23 @@ impl eframe::App for WorkbenchApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new(format!("Selected ({}): {}", self.selected_slots.len(), slot_labels.join(" + ")))
-                                .color(hex_to_c32(&self.renderer.palette.harmonies.base))
+                                .color(hex_to_c32(&self.ui_palette.harmonies.base))
                                 .strong(),
                         );
                         ui.label(
                             egui::RichText::new(" • [Space] Hands  |  [1] L+L1  |  [2] L+L2  |  [3] 3 Left  |  [0] L only")
-                                .color(hex_to_c32(&self.renderer.palette.theme.f_low))
+                                .color(hex_to_c32(&self.ui_palette.theme.f_low))
                                 .small(),
                         );
 
                         if let Some((path, title)) = first_audio_item {
                             ui.add_space(8.0);
-                            let audio_bg = hex_to_c32(&self.renderer.palette.diff_add);
+                            let audio_bg = hex_to_c32(&self.ui_palette.diff_add);
                             let audio_btn = ui_ext::action_button_icon(
                                 Some(Icon::Audio),
                                 "Preview & Slice Audio",
                                 audio_bg,
-                                &self.renderer.palette,
+                                &self.ui_palette,
                             );
                             if ui.add(audio_btn).clicked() {
                                 self.audio_preview = Some(AudioPreviewState::new(path, title).with_editor(self.config.audio.editor.clone()));
@@ -962,12 +998,12 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some(img_item) = first_image_item {
                             ui.add_space(8.0);
-                            let img_bg = hex_to_c32(&self.renderer.palette.harmonies.base);
+                            let img_bg = hex_to_c32(&self.ui_palette.harmonies.base);
                             let img_btn = ui_ext::action_button_icon(
                                 Some(Icon::Image),
                                 "Preview & Edit Image",
                                 img_bg,
-                                &self.renderer.palette,
+                                &self.ui_palette,
                             );
                             if ui.add(img_btn).clicked() {
                                 if let Ok(state) = ImagePreviewState::from_item(img_item, &self.config) {
@@ -1002,12 +1038,12 @@ impl eframe::App for WorkbenchApp {
                         };
                         if has_two_images {
                             ui.add_space(8.0);
-                            let diff_bg = hex_to_c32(&self.renderer.palette.harmonies.warm_attention);
+                            let diff_bg = hex_to_c32(&self.ui_palette.harmonies.warm_attention);
                             let diff_btn = ui_ext::action_button_icon(
                                 Some(Icon::Diff),
                                 "Compare Images",
                                 diff_bg,
-                                &self.renderer.palette,
+                                &self.ui_palette,
                             );
                             if ui.add(diff_btn).on_hover_text("Open interactive visual diff comparing the 2 images").clicked() {
                                 open_diff_requested = true;
@@ -1062,12 +1098,12 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some(pdf_path) = first_pdf_item {
                             ui.add_space(8.0);
-                            let pdf_bg = hex_to_c32(&self.renderer.palette.diff_del);
+                            let pdf_bg = hex_to_c32(&self.ui_palette.diff_del);
                             let pdf_btn = ui_ext::action_button_icon(
                                 Some(Icon::Pdf),
                                 "Edit PDF",
                                 pdf_bg,
-                                &self.renderer.palette,
+                                &self.ui_palette,
                             );
                             if ui.add(pdf_btn).on_hover_text("Open PDF Page Editor (Delete / Rotate pages)").clicked() {
                                 self.pdf_viewer = Some(PdfEditorState::new(pdf_path));
@@ -1076,12 +1112,12 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some((data, path)) = first_spreadsheet_item {
                             ui.add_space(8.0);
-                            let sheet_bg = hex_to_c32(&self.renderer.palette.harmonies.triadic_1);
+                            let sheet_bg = hex_to_c32(&self.ui_palette.harmonies.triadic_1);
                             let sheet_btn = ui_ext::action_button_icon(
                                 Some(Icon::Spreadsheet),
                                 "View Spreadsheet",
                                 sheet_bg,
-                                &self.renderer.palette,
+                                &self.ui_palette,
                             );
                             if ui.add(sheet_btn).on_hover_text("Open full multi-sheet X/Y scrollable table").clicked() {
                                 self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, path));
@@ -1090,12 +1126,12 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some(midi_path) = first_midi_item {
                             ui.add_space(8.0);
-                            let midi_bg = hex_to_c32(&self.renderer.palette.harmonies.triadic_2);
+                            let midi_bg = hex_to_c32(&self.ui_palette.harmonies.triadic_2);
                             let midi_btn = ui_ext::action_button_icon(
                                 Some(Icon::Midi),
                                 "MIDI Piano Roll",
                                 midi_bg,
-                                &self.renderer.palette,
+                                &self.ui_palette,
                             );
                             if ui.add(midi_btn).on_hover_text("Open interactive MIDI piano roll visualizer & synth audio").clicked() {
                                 if let Ok(st) = MidiViewerState::from_file(midi_path) {
@@ -1106,14 +1142,14 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some(model_path) = first_3d_model_item {
                             ui.add_space(8.0);
-                            let model_bg = hex_to_c32(&self.renderer.palette.harmonies.split_comp_1);
+                            let model_bg = hex_to_c32(&self.ui_palette.harmonies.split_comp_1);
                             let ext = model_path.extension().and_then(|s| s.to_str()).unwrap_or("3D").to_ascii_uppercase();
                             let btn_text = format!("3D {} Model", ext);
                             let model_btn = ui_ext::action_button_icon(
                                 Some(Icon::Model3d),
                                 &btn_text,
                                 model_bg,
-                                &self.renderer.palette,
+                                &self.ui_palette,
                             );
                             if ui.add(model_btn).on_hover_text("Open interactive 3D orbit viewer (pan, zoom, rotate)").clicked() {
                                 self.model3d_viewer = Some(
@@ -1131,13 +1167,13 @@ impl eframe::App for WorkbenchApp {
                             let trimmed = text.trim();
                             if let Some(conv) = detect_unit_conversion(trimmed) {
                                 ui.add_space(8.0);
-                                let unit_bg = hex_to_c32(&self.renderer.palette.harmonies.split_comp_2);
+                                let unit_bg = hex_to_c32(&self.ui_palette.harmonies.split_comp_2);
                                 let label = conv.summary_line();
                                 let btn = ui_ext::action_button_icon(
                                     Some(Icon::Swap),
                                     &label,
                                     unit_bg,
-                                    &self.renderer.palette,
+                                    &self.ui_palette,
                                 );
                                 if ui.add(btn).on_hover_text("Click to copy converted unit").clicked() {
                                     ui.output_mut(|o| o.copied_text = conv.primary_conversion.clone());
@@ -1145,7 +1181,7 @@ impl eframe::App for WorkbenchApp {
                                 }
                             } else if let Some(net) = detect_network_preview(trimmed) {
                                 ui.add_space(8.0);
-                                let net_bg = hex_to_c32(&self.renderer.palette.diff_mod);
+                                let net_bg = hex_to_c32(&self.ui_palette.diff_mod);
                                 let (label, net_icon) = match &net {
                                     NetworkPreview::Ip { ip, rfc_class, .. } => (format!("{} ({})", ip, rfc_class), Icon::Link),
                                     NetworkPreview::Mac { formatted, vendor, .. } => (format!("{} ({})", formatted, vendor), Icon::Zap),
@@ -1154,7 +1190,7 @@ impl eframe::App for WorkbenchApp {
                                     Some(net_icon),
                                     &label,
                                     net_bg,
-                                    &self.renderer.palette,
+                                    &self.ui_palette,
                                 );
                                 if ui.add(btn).on_hover_text("Network address info (Click to copy summary)").clicked() {
                                     let lines = net.summary_lines().join("\n");
@@ -1163,13 +1199,13 @@ impl eframe::App for WorkbenchApp {
                                 }
                             } else if let Some(ts) = detect_timestamp(trimmed) {
                                 ui.add_space(8.0);
-                                let ts_bg = hex_to_c32(&self.renderer.palette.harmonies.tetradic_1);
+                                let ts_bg = hex_to_c32(&self.ui_palette.harmonies.tetradic_1);
                                 let label = format!("{} ({})", ts.human_readable, ts.relative);
                                 let btn = ui_ext::action_button_icon(
                                     Some(Icon::Calendar),
                                     &label,
                                     ts_bg,
-                                    &self.renderer.palette,
+                                    &self.ui_palette,
                                 );
                                 if ui.add(btn).on_hover_text(format!("UTC: {}\nEpoch: {}\nClick to copy ISO 8601", ts.utc_iso, ts.epoch_sec)).clicked() {
                                     ui.output_mut(|o| o.copied_text = ts.utc_iso.clone());
@@ -1185,12 +1221,12 @@ impl eframe::App for WorkbenchApp {
                             } else {
                                 ("View Text / Code", Icon::Text)
                             };
-                            let txt_bg = hex_to_c32(&self.renderer.palette.harmonies.tetradic_2);
+                            let txt_bg = hex_to_c32(&self.ui_palette.harmonies.tetradic_2);
                             let txt_btn = ui_ext::action_button_icon(
                                 Some(txt_icon),
                                 label,
                                 txt_bg,
-                                &self.renderer.palette,
+                                &self.ui_palette,
                             );
                             if ui.add(txt_btn).on_hover_text("Open big text preview (syntax highlighting, line wrapping, search, and editor export)").clicked() {
                                 if let Some(p) = file_p {
@@ -1215,7 +1251,7 @@ impl eframe::App for WorkbenchApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("Action > ")
-                                .color(hex_to_c32(&self.renderer.palette.harmonies.base))
+                                .color(hex_to_c32(&self.ui_palette.harmonies.base))
                                 .strong(),
                         );
                         let audio_region_active = self.is_audio_region_active();
@@ -1253,16 +1289,16 @@ impl eframe::App for WorkbenchApp {
                             ui.add_space(10.0);
                             ui.label(
                                 egui::RichText::new("No matching actions or recipes found.")
-                                    .color(hex_to_c32(&self.renderer.palette.theme.f_low))
+                                    .color(hex_to_c32(&self.ui_palette.theme.f_low))
                                     .italics(),
                             );
                         } else {
                             for (idx, act) in filtered.iter().enumerate() {
                                 let is_selected = idx == self.selected_action_index;
                                 let bg = if is_selected {
-                                    hex_to_c32(&self.renderer.palette.theme.b_med)
+                                    hex_to_c32(&self.ui_palette.theme.b_med)
                                 } else {
-                                    hex_to_c32(&self.renderer.palette.theme.b_low)
+                                    hex_to_c32(&self.ui_palette.theme.b_low)
                                 };
 
                                 let frame = egui::Frame::none()
@@ -1273,17 +1309,17 @@ impl eframe::App for WorkbenchApp {
                                 frame.show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         let preferred_fg = if is_selected {
-                                            hex_to_c32(&self.renderer.palette.theme.f_high)
+                                            hex_to_c32(&self.ui_palette.theme.f_high)
                                         } else {
-                                            hex_to_c32(&self.renderer.palette.theme.f_med)
+                                            hex_to_c32(&self.ui_palette.theme.f_med)
                                         };
-                                        let label_color = contrast_text_c32(bg, Some(preferred_fg), &self.renderer.palette);
+                                        let label_color = contrast_text_c32(bg, Some(preferred_fg), &self.ui_palette);
 
                                         ui.label(egui::RichText::new(act.label()).color(label_color).strong());
                                         let cat_color = if act.category() == "Recipe" {
-                                            hex_to_c32(&self.renderer.palette.harmonies.triadic_1)
+                                            hex_to_c32(&self.ui_palette.harmonies.triadic_1)
                                         } else {
-                                            hex_to_c32(&self.renderer.palette.theme.f_med)
+                                            hex_to_c32(&self.ui_palette.theme.f_med)
                                         };
                                         ui.label(
                                             egui::RichText::new(format!("[{}]", act.category()))
@@ -1294,7 +1330,7 @@ impl eframe::App for WorkbenchApp {
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                             ui.label(
                                                 egui::RichText::new(act.description())
-                                                    .color(hex_to_c32(&self.renderer.palette.theme.f_low))
+                                                    .color(hex_to_c32(&self.ui_palette.theme.f_low))
                                                     .small(),
                                             );
                                         });
@@ -1307,7 +1343,7 @@ impl eframe::App for WorkbenchApp {
 
                     if let Some(msg) = &self.status_msg {
                         ui.add_space(6.0);
-                        ui.label(egui::RichText::new(msg).color(hex_to_c32(&self.renderer.palette.diff_del)));
+                        ui.label(egui::RichText::new(msg).color(hex_to_c32(&self.ui_palette.diff_del)));
                     }
 
                     // Footer hints
@@ -1316,13 +1352,13 @@ impl eframe::App for WorkbenchApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("[Enter] Execute & Paste  |  [F2 / Tab] Big Node Machine  |  [Esc] Dismiss")
-                                .color(hex_to_c32(&self.renderer.palette.theme.f_low))
+                                .color(hex_to_c32(&self.ui_palette.theme.f_low))
                                 .small(),
                         );
                     });
                 }
                 WorkbenchView::NodeMachine => {
-                    let action = self.canvas_state.ui(ui, &self.state, &self.renderer.palette);
+                    let action = self.canvas_state.ui(ui, &self.state, &self.ui_palette);
                     if let Some(CanvasAction::RunPipeline) = action {
                         if let Ok(yaml) = serde_yaml::to_string(&self.canvas_state.graph) {
                             let _ = send_ipc_request(&IpcRequest::ExecuteGraphYaml { yaml });
@@ -1336,7 +1372,7 @@ impl eframe::App for WorkbenchApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("[Right/Mid Drag] Pan Canvas  |  [Scroll] Zoom  |  [F2] Quick Palette  |  [Esc] Dismiss")
-                                .color(hex_to_c32(&self.renderer.palette.theme.f_low))
+                                .color(hex_to_c32(&self.ui_palette.theme.f_low))
                                 .small(),
                         );
                     });
@@ -1344,23 +1380,23 @@ impl eframe::App for WorkbenchApp {
                 WorkbenchView::AutoActions => {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
-                        Icon::Settings.ui(ui, 18.0, hex_to_c32(&self.renderer.palette.harmonies.base));
+                        Icon::Settings.ui(ui, 18.0, hex_to_c32(&self.ui_palette.harmonies.base));
                         ui.heading(
                             egui::RichText::new("Matched Auto-Actions")
-                                .color(hex_to_c32(&self.renderer.palette.harmonies.base))
+                                .color(hex_to_c32(&self.ui_palette.harmonies.base))
                                 .strong(),
                         );
                         ui.label(
                             egui::RichText::new("— Actions trigger automatically on clipboard match")
-                                .color(hex_to_c32(&self.renderer.palette.theme.f_med)),
+                                .color(hex_to_c32(&self.ui_palette.theme.f_med)),
                         );
                     });
                     ui.add_space(8.0);
 
                     egui::ScrollArea::vertical().show(ui, |ui| {
                         // Card 1: URL Tracking Cleaner
-                        let card_bg = hex_to_c32(&self.renderer.palette.theme.b_low);
-                        let card_stroke = hex_to_c32(&self.renderer.palette.theme.b_med);
+                        let card_bg = hex_to_c32(&self.ui_palette.theme.b_low);
+                        let card_stroke = hex_to_c32(&self.ui_palette.theme.b_med);
                         egui::Frame::none()
                             .fill(card_bg)
                             .stroke(egui::Stroke::new(1.0_f32, card_stroke))
@@ -1369,7 +1405,7 @@ impl eframe::App for WorkbenchApp {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     let mut trim = self.config.auto_actions.trim_link_tracking;
-                                    let title_color = contrast_text_c32(card_bg, Some(hex_to_c32(&self.renderer.palette.theme.f_high)), &self.renderer.palette);
+                                    let title_color = contrast_text_c32(card_bg, Some(hex_to_c32(&self.ui_palette.theme.f_high)), &self.ui_palette);
                                     let cb = ui.checkbox(
                                         &mut trim,
                                         egui::RichText::new("Clean Tracking from Links")
@@ -1387,11 +1423,11 @@ impl eframe::App for WorkbenchApp {
 
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         let (status_text, badge_bg, pref_fg) = if trim {
-                                            ("ENABLED", hex_to_c32(&self.renderer.palette.diff_add), hex_to_c32(&self.renderer.palette.theme.f_high))
+                                            ("ENABLED", hex_to_c32(&self.ui_palette.diff_add), hex_to_c32(&self.ui_palette.theme.f_high))
                                         } else {
-                                            ("DISABLED", hex_to_c32(&self.renderer.palette.theme.b_med), hex_to_c32(&self.renderer.palette.theme.f_med))
+                                            ("DISABLED", hex_to_c32(&self.ui_palette.theme.b_med), hex_to_c32(&self.ui_palette.theme.f_med))
                                         };
-                                        let badge_fg = contrast_text_c32(badge_bg, Some(pref_fg), &self.renderer.palette);
+                                        let badge_fg = contrast_text_c32(badge_bg, Some(pref_fg), &self.ui_palette);
                                         egui::Frame::none()
                                             .fill(badge_bg)
                                             .rounding(egui::Rounding::same(4.0))
@@ -1407,7 +1443,7 @@ impl eframe::App for WorkbenchApp {
                                     egui::RichText::new(
                                         "Automatically strips tracking queries (utm_source, utm_medium, fbclid, gclid, twclid, si, etc.) when any HTTP or HTTPS URL is copied to the clipboard.",
                                     )
-                                    .color(hex_to_c32(&self.renderer.palette.theme.f_high)),
+                                    .color(hex_to_c32(&self.ui_palette.theme.f_high)),
                                 );
                                 ui.add_space(4.0);
                                 ui.label(
@@ -1415,7 +1451,7 @@ impl eframe::App for WorkbenchApp {
                                         "↳ Behavior: Cleaned link is placed directly into the active hand; original untracked URL is preserved in Undo [Z] for instant bypass.",
                                     )
                                     .small()
-                                    .color(hex_to_c32(&self.renderer.palette.theme.f_med)),
+                                    .color(hex_to_c32(&self.ui_palette.theme.f_med)),
                                 );
                             });
 
@@ -1426,7 +1462,7 @@ impl eframe::App for WorkbenchApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("[Click] Toggle Setting  |  [Esc] Dismiss")
-                                .color(hex_to_c32(&self.renderer.palette.theme.f_low))
+                                .color(hex_to_c32(&self.ui_palette.theme.f_low))
                                 .small(),
                         );
                     });
@@ -1458,8 +1494,8 @@ impl WorkbenchApp {
             let mut close_prompt = false;
             let mut submit_text: Option<String> = None;
 
-            let modal_bg = hex_to_c32(&self.renderer.palette.theme.b_low);
-            let modal_stroke = hex_to_c32(&self.renderer.palette.harmonies.base);
+            let modal_bg = hex_to_c32(&self.ui_palette.theme.b_low);
+            let modal_stroke = hex_to_c32(&self.ui_palette.harmonies.base);
             egui::Window::new(format!("Input Required — {}", prompt.recipe_name))
                 .collapsible(false)
                 .resizable(false)
@@ -1477,11 +1513,11 @@ impl WorkbenchApp {
                         Icon::Sparkles.ui(
                             ui,
                             18.0,
-                            hex_to_c32(&self.renderer.palette.harmonies.triadic_1),
+                            hex_to_c32(&self.ui_palette.harmonies.triadic_1),
                         );
                         ui.heading(
                             egui::RichText::new(&prompt.recipe_name)
-                                .color(hex_to_c32(&self.renderer.palette.theme.f_high))
+                                .color(hex_to_c32(&self.ui_palette.theme.f_high))
                                 .strong(),
                         );
                     });
@@ -1489,7 +1525,7 @@ impl WorkbenchApp {
                     ui.add_space(8.0);
                     ui.label(
                         egui::RichText::new(&prompt.message)
-                            .color(hex_to_c32(&self.renderer.palette.theme.f_med))
+                            .color(hex_to_c32(&self.ui_palette.theme.f_med))
                             .size(13.0),
                     );
 
@@ -1510,11 +1546,11 @@ impl WorkbenchApp {
 
                     ui.add_space(14.0);
                     ui.horizontal(|ui| {
-                        let sub_bg = hex_to_c32(&self.renderer.palette.harmonies.base);
+                        let sub_bg = hex_to_c32(&self.ui_palette.harmonies.base);
                         let sub_fg = contrast_text_c32(
                             sub_bg,
-                            Some(hex_to_c32(&self.renderer.palette.theme.f_high)),
-                            &self.renderer.palette,
+                            Some(hex_to_c32(&self.ui_palette.theme.f_high)),
+                            &self.ui_palette,
                         );
                         let submit_btn = ui.add(
                             egui::Button::new(
@@ -1525,11 +1561,11 @@ impl WorkbenchApp {
                             .fill(sub_bg),
                         );
 
-                        let can_bg = hex_to_c32(&self.renderer.palette.theme.b_med);
+                        let can_bg = hex_to_c32(&self.ui_palette.theme.b_med);
                         let can_fg = contrast_text_c32(
                             can_bg,
-                            Some(hex_to_c32(&self.renderer.palette.theme.f_med)),
-                            &self.renderer.palette,
+                            Some(hex_to_c32(&self.ui_palette.theme.f_med)),
+                            &self.ui_palette,
                         );
                         let cancel_btn = ui.add(
                             egui::Button::new(egui::RichText::new("Cancel [Esc]").color(can_fg))
@@ -1567,7 +1603,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    diff_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_diff);
+                    diff_state.render_ui(ui, ctx, &self.ui_palette, &mut close_diff);
                 });
 
             if close_diff {
@@ -1581,12 +1617,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    binary_diff_state.render_ui(
-                        ui,
-                        ctx,
-                        &self.renderer.palette,
-                        &mut close_binary_diff,
-                    );
+                    binary_diff_state.render_ui(ui, ctx, &self.ui_palette, &mut close_binary_diff);
                 });
 
             if close_binary_diff {
@@ -1604,7 +1635,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    audio_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_audio);
+                    audio_state.render_ui(ui, ctx, &self.ui_palette, &mut close_audio);
                 });
 
             if close_audio {
@@ -1619,7 +1650,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    image_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_image);
+                    image_state.render_ui(ui, ctx, &self.ui_palette, &mut close_image);
                 });
 
             if close_image {
@@ -1637,7 +1668,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    sheet_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_sheet);
+                    sheet_state.render_ui(ui, ctx, &self.ui_palette, &mut close_sheet);
                 });
 
             if close_sheet {
@@ -1651,7 +1682,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    pdf_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_pdf);
+                    pdf_state.render_ui(ui, ctx, &self.ui_palette, &mut close_pdf);
                 });
 
             if close_pdf {
@@ -1678,7 +1709,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    midi_state.render_ui(ui, &self.renderer.palette, &mut close_midi);
+                    midi_state.render_ui(ui, &self.ui_palette, &mut close_midi);
                 });
 
             if close_midi {
@@ -1693,7 +1724,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    model_state.render_ui(ui, &self.renderer.palette, &mut close_model);
+                    model_state.render_ui(ui, &self.ui_palette, &mut close_model);
                 });
 
             if close_model {
@@ -1707,7 +1738,7 @@ impl WorkbenchApp {
             egui::CentralPanel::default()
                 .frame(egui::Frame::none())
                 .show(ctx, |ui| {
-                    text_state.render_ui(ui, ctx, &self.renderer.palette, &mut close_text);
+                    text_state.render_ui(ui, ctx, &self.ui_palette, &mut close_text);
                 });
 
             if close_text {
@@ -2041,14 +2072,14 @@ impl WorkbenchApp {
     }
 
     fn render_themes_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let palette = self.renderer.palette.clone();
+        let palette = self.ui_palette.clone();
         let active_theme_name = self.config.colors.theme.clone();
 
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             Icon::Palette.ui(ui, 18.0, hex_to_c32(&palette.left_hand_border));
             ui.heading(
-                egui::RichText::new("Hundred Rabbits Themes")
+                egui::RichText::new("Hardware Display Themes")
                     .color(hex_to_c32(&palette.left_hand_border))
                     .strong(),
             );
@@ -2084,7 +2115,7 @@ impl WorkbenchApp {
                     self.config.colors.clear_overrides();
                     let _ = little_clip_core::config::AppConfig::clear_overrides_in_file();
                     self.renderer.set_config(self.config.clone());
-                    apply_theme_to_egui(ctx, &self.renderer.palette);
+                    apply_workbench_palette_to_egui(ctx, &self.ui_palette);
                     self.dirty_mirror = true;
                     let _ = send_ipc_request(&IpcRequest::ReloadConfig);
                     self.status_msg = Some("Color overrides cleared — pure theme restored".to_string());
@@ -2361,7 +2392,7 @@ impl WorkbenchApp {
                     self.config.colors.theme = theme.name.clone();
                     let _ = little_clip_core::config::AppConfig::save_theme_to_file(&theme.name);
                     self.renderer.set_config(self.config.clone());
-                    apply_theme_to_egui(ctx, &self.renderer.palette);
+                    apply_workbench_palette_to_egui(ctx, &self.ui_palette);
                     self.dirty_mirror = true;
                     let _ = send_ipc_request(&IpcRequest::ReloadConfig);
                     self.status_msg = Some(format!("Theme '{}' activated", theme.name));
