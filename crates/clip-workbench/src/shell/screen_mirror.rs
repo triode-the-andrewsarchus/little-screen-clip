@@ -11,6 +11,16 @@ use little_clip_core::theme::AppPalette;
 pub const SCREEN_WIDTH: f32 = 1920.0;
 pub const SCREEN_HEIGHT: f32 = 462.0;
 
+/// Keep the physical display's aspect ratio while reserving room for workbench content.
+pub fn fitted_mirror_size(available: Vec2) -> Vec2 {
+    let aspect = SCREEN_HEIGHT / SCREEN_WIDTH;
+    let width = available
+        .x
+        .max(0.0)
+        .min((available.y.max(0.0) * 0.4) / aspect);
+    Vec2::new(width, width * aspect)
+}
+
 /// Returns the sequence of slot IDs and their native pixel bounding boxes (0..1920, 0..462).
 pub fn slot_rects(left_priors: usize) -> Vec<(SlotId, Rect)> {
     little_clip_render::compute_slot_layout(left_priors)
@@ -69,12 +79,9 @@ impl<'a> ScreenMirrorWidget<'a> {
     }
 
     pub fn show(self, ui: &mut egui::Ui, palette: &AppPalette) -> Option<MirrorAction> {
-        let avail_w = ui.available_width();
-        let aspect = SCREEN_HEIGHT / SCREEN_WIDTH;
-        let target_h = avail_w * aspect;
+        let size = fitted_mirror_size(ui.available_size());
 
-        let (rect, response) =
-            ui.allocate_exact_size(Vec2::new(avail_w, target_h), egui::Sense::click_and_drag());
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
 
         let painter = ui.painter_at(rect);
         let mut action = None;
@@ -173,6 +180,16 @@ impl<'a> ScreenMirrorWidget<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mirror_uses_width_on_standard_host_and_height_on_ultrawide_host() {
+        let standard = fitted_mirror_size(Vec2::new(900.0, 600.0));
+        assert_eq!(standard.x, 900.0);
+        let ultrawide = fitted_mirror_size(Vec2::new(2_000.0, 700.0));
+        assert!(ultrawide.x < 2_000.0);
+        assert!((ultrawide.y - 280.0).abs() < 0.01);
+        assert!((ultrawide.y / ultrawide.x - SCREEN_HEIGHT / SCREEN_WIDTH).abs() < 0.0001);
+    }
 
     #[test]
     fn test_slot_rects_geometry() {

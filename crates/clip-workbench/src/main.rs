@@ -775,13 +775,18 @@ impl eframe::App for WorkbenchApp {
 
                 // Draw Full-Width Pixel-Perfect Mirror Texture
                 if let Some(ref texture) = self.mirror_texture {
-                    let avail_w = ui.available_width();
-                    let aspect = SCREEN_HEIGHT as f32 / SCREEN_WIDTH as f32; // 462 / 1920 ≈ 0.2406
-                    let target_h = avail_w * aspect;
+                    let available = ui.available_size();
+                    let mirror_size = crate::shell::screen_mirror::fitted_mirror_size(available);
+                    let (space, _) = ui.allocate_exact_size(
+                        egui::vec2(available.x, mirror_size.y),
+                        egui::Sense::hover(),
+                    );
+                    let mirror_rect = egui::Rect::from_center_size(space.center(), mirror_size);
 
-                    let response = ui.add(
+                    let response = ui.put(
+                        mirror_rect,
                         egui::Image::new(texture)
-                            .fit_to_exact_size(egui::vec2(avail_w, target_h))
+                            .fit_to_exact_size(mirror_size)
                             .sense(egui::Sense::click_and_drag()),
                     );
 
