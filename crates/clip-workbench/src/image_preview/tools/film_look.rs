@@ -973,7 +973,8 @@ impl ImagePreviewState {
 
         let panel_layout = ImageToolMode::FilmSim
             .panel_layout()
-            .expect("Film Look has a panel layout");
+            .expect("Film Look has a panel layout")
+            .with_panel_sizes(&self.panel_state);
         let panels = panel_layout.allocate(ui);
         let left = panels.left.expect("Film Look has a stock browser");
         let right = panels.right.expect("Film Look has an inspector");
@@ -1783,6 +1784,13 @@ impl ImagePreviewState {
                         });
                 });
         });
+        crate::shell::StudioPanelLayout::show_resize_handles(
+            ui,
+            &panels,
+            &mut self.panel_state,
+            palette,
+            "film_look",
+        );
     }
 
     /// Split-view comparison painter for the Film Sim tab center canvas.

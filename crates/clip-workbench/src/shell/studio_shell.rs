@@ -5,7 +5,9 @@
 //! and bottom status footers.
 
 use super::escape_hatch::EscapeHatch;
-use super::panel::PanelState;
+use super::panel::{
+    PANEL_MAX_HEIGHT, PANEL_MAX_WIDTH, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH, PanelState,
+};
 use crate::hex_to_c32;
 use crate::ui_ext::{
     CONTROL_HEIGHT, CONTROL_ICON_SIZE, StatusToast, ZoomAction, contrast_text_c32,
@@ -91,6 +93,17 @@ impl StudioPanelLayout {
         Self::default()
     }
 
+    /// Apply the user's preferred internal split sizes without changing which
+    /// regions this workspace owns. The solver still shrinks them when needed.
+    pub fn with_panel_sizes(mut self, state: &PanelState) -> Self {
+        self.left_width = state.left_width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+        self.right_width = state.right_width.clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+        self.bottom_height = state
+            .bottom_height
+            .clamp(PANEL_MIN_HEIGHT, PANEL_MAX_HEIGHT);
+        self
+    }
+
     pub fn with_left(mut self) -> Self {
         self.left = true;
         self
@@ -112,6 +125,140 @@ impl StudioPanelLayout {
         let rects = self.rects(available);
         ui.allocate_rect(available, egui::Sense::hover());
         rects
+    }
+
+    /// Draw and handle split grips in the gutters of an allocated workspace.
+    /// Compact rails sit below the canvas, so width grips are only shown when
+    /// the corresponding rail actually borders the canvas horizontally.
+    pub fn show_resize_handles(
+        ui: &mut egui::Ui,
+        rects: &StudioPanelRects,
+        state: &mut PanelState,
+        palette: &AppPalette,
+        id: impl std::hash::Hash,
+    ) {
+        let id = ui.id().with(id);
+        if let Some(left) = rects.left
+            && left.right() < rects.center.left()
+            && left.bottom() > rects.center.top()
+        {
+            let gutter = Rect::from_center_size(
+                egui::pos2((left.right() + rects.center.left()) * 0.5, left.center().y),
+                Vec2::new(12.0, left.height()),
+            );
+            let response = Self::resize_handle(ui, gutter, id.with("left"), true, palette)
+                .on_hover_text("Drag or use arrow keys to resize tools; double-click to reset");
+            if response.double_clicked() {
+                state.left_width = super::panel::PANEL_LEFT_DEFAULT_WIDTH;
+            } else {
+                state.left_width = (state.left_width + Self::resize_delta(ui, &response, true))
+                    .clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+            }
+        }
+        if let Some(right) = rects.right
+            && right.left() > rects.center.right()
+            && right.bottom() > rects.center.top()
+        {
+            let gutter = Rect::from_center_size(
+                egui::pos2(
+                    (right.left() + rects.center.right()) * 0.5,
+                    right.center().y,
+                ),
+                Vec2::new(12.0, right.height()),
+            );
+            let response = Self::resize_handle(ui, gutter, id.with("right"), true, palette)
+                .on_hover_text("Drag or use arrow keys to resize inspector; double-click to reset");
+            if response.double_clicked() {
+                state.right_width = super::panel::PANEL_RIGHT_DEFAULT_WIDTH;
+            } else {
+                state.right_width = (state.right_width - Self::resize_delta(ui, &response, true))
+                    .clamp(PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+            }
+        }
+        let content_bottom = rects
+            .left
+            .into_iter()
+            .chain(rects.right)
+            .fold(rects.center.bottom(), |edge, rail| edge.max(rail.bottom()));
+        if let Some(bottom) = rects.bottom
+            && bottom.top() > content_bottom
+        {
+            let gutter = Rect::from_center_size(
+                egui::pos2(bottom.center().x, (bottom.top() + content_bottom) * 0.5),
+                Vec2::new(bottom.width(), 12.0),
+            );
+            let response = Self::resize_handle(ui, gutter, id.with("bottom"), false, palette)
+                .on_hover_text("Drag or use arrow keys to resize controls; double-click to reset");
+            if response.double_clicked() {
+                state.bottom_height = super::panel::PANEL_BOTTOM_DEFAULT_HEIGHT;
+            } else {
+                state.bottom_height = (state.bottom_height
+                    - Self::resize_delta(ui, &response, false))
+                .clamp(PANEL_MIN_HEIGHT, PANEL_MAX_HEIGHT);
+            }
+        }
+    }
+
+    fn resize_delta(ui: &egui::Ui, response: &egui::Response, horizontal: bool) -> f32 {
+        if response.dragged() {
+            return if horizontal {
+                response.drag_delta().x
+            } else {
+                response.drag_delta().y
+            };
+        }
+        if !response.has_focus() {
+            return 0.0;
+        }
+        ui.input_mut(|input| {
+            let (negative, positive) = if horizontal {
+                (egui::Key::ArrowLeft, egui::Key::ArrowRight)
+            } else {
+                (egui::Key::ArrowUp, egui::Key::ArrowDown)
+            };
+            if input.consume_key(egui::Modifiers::NONE, negative) {
+                -8.0
+            } else if input.consume_key(egui::Modifiers::NONE, positive) {
+                8.0
+            } else {
+                0.0
+            }
+        })
+    }
+
+    fn resize_handle(
+        ui: &mut egui::Ui,
+        rect: Rect,
+        id: egui::Id,
+        horizontal: bool,
+        palette: &AppPalette,
+    ) -> egui::Response {
+        let response = ui
+            .interact(rect, id, egui::Sense::click_and_drag())
+            .on_hover_cursor(if horizontal {
+                egui::CursorIcon::ResizeHorizontal
+            } else {
+                egui::CursorIcon::ResizeVertical
+            });
+        if response.clicked() || response.drag_started() {
+            response.request_focus();
+        }
+        let grip = Rect::from_center_size(
+            rect.center(),
+            if horizontal {
+                Vec2::new(3.0, 34.0)
+            } else {
+                Vec2::new(34.0, 3.0)
+            },
+        );
+        let color = if response.hovered() || response.dragged() {
+            &palette.harmonies.base
+        } else {
+            &palette.theme.f_low
+        };
+        ui.painter()
+            .rect_filled(grip, Rounding::same(2.0), hex_to_c32(color));
+        response
     }
 
     fn rects(self, available: Rect) -> StudioPanelRects {
@@ -617,6 +764,13 @@ impl<'a> StudioShell<'a> {
         if let (Some(rect), Some(bottom_fn)) = (panels.bottom, body.bottom.take()) {
             StudioPanelLayout::show_bottom(ui, rect, self.palette, bottom_fn);
         }
+        StudioPanelLayout::show_resize_handles(
+            ui,
+            &panels,
+            panel_state,
+            self.palette,
+            "studio_shell_panels",
+        );
     }
 }
 
@@ -647,6 +801,109 @@ mod tests {
         assert_eq!(rects.right.unwrap().width(), 280.0);
         assert!(rects.bottom.is_none());
         assert!(rects.center.width() > 600.0);
+    }
+
+    #[test]
+    fn preferred_split_sizes_apply_without_changing_the_outer_workspace() {
+        let state = PanelState {
+            left_width: 320.0,
+            right_width: 210.0,
+            bottom_height: 180.0,
+            ..PanelState::default()
+        };
+        let layout = StudioPanelLayout::default()
+            .with_left()
+            .with_right()
+            .with_bottom()
+            .with_panel_sizes(&state);
+        let rects = run_layout(layout, Vec2::new(1_200.0, 700.0));
+        assert_eq!(rects.left.unwrap().width(), 320.0);
+        assert_eq!(rects.right.unwrap().width(), 210.0);
+        assert_eq!(rects.bottom.unwrap().height(), 180.0);
+        assert!(rects.center.width() >= MIN_CANVAS_WIDTH);
+        assert_eq!(state.left_width, 320.0);
+
+        let compact = run_layout(layout, Vec2::new(700.0, 500.0));
+        assert!(compact.center.width() >= MIN_CANVAS_WIDTH);
+        assert_eq!(state.left_width, 320.0);
+    }
+
+    #[test]
+    fn dragging_a_split_changes_only_the_internal_panel_preference() {
+        let ctx = egui::Context::default();
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let layout = StudioPanelLayout::default().with_left();
+        let size = Vec2::new(1_200.0, 700.0);
+        let mut state = PanelState::default();
+        let mut initial_rects = None;
+        let frame = |input: egui::RawInput,
+                     state: &mut PanelState,
+                     output: &mut Option<StudioPanelRects>| {
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.set_min_size(size);
+                    ui.set_max_size(size);
+                    let rects = layout.with_panel_sizes(state).allocate(ui);
+                    *output = Some(rects);
+                    StudioPanelLayout::show_resize_handles(
+                        ui,
+                        &rects,
+                        state,
+                        &palette,
+                        "drag_test",
+                    );
+                });
+            });
+        };
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)),
+            ..Default::default()
+        };
+        frame(input.clone(), &mut state, &mut initial_rects);
+        let rects = initial_rects.unwrap();
+        let left = rects.left.unwrap();
+        let start = egui::pos2((left.right() + rects.center.left()) * 0.5, left.center().y);
+        let mut press = input.clone();
+        press.time = Some(0.1);
+        press.events.push(egui::Event::PointerButton {
+            pos: start,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        frame(press, &mut state, &mut initial_rects);
+
+        let mut drag = input.clone();
+        drag.time = Some(0.2);
+        drag.events
+            .push(egui::Event::PointerMoved(start + Vec2::new(40.0, 0.0)));
+        frame(drag, &mut state, &mut initial_rects);
+        assert!(state.left_width > crate::shell::PANEL_LEFT_DEFAULT_WIDTH);
+        assert_eq!(initial_rects.unwrap().center.right(), rects.center.right());
+
+        let mut release = input.clone();
+        release.time = Some(0.3);
+        release.events.push(egui::Event::PointerButton {
+            pos: start + Vec2::new(40.0, 0.0),
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        frame(release, &mut state, &mut initial_rects);
+        let dragged_width = state.left_width;
+
+        let mut key = input;
+        key.time = Some(0.4);
+        key.events.push(egui::Event::Key {
+            key: egui::Key::ArrowRight,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        frame(key, &mut state, &mut initial_rects);
+        assert_eq!(state.left_width, dragged_width + 8.0);
     }
 
     #[test]

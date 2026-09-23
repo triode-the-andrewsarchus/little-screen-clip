@@ -83,6 +83,7 @@ pub struct ImagePreviewState {
 
     // Active Tool Mode
     pub active_mode: ImageToolMode,
+    pub panel_state: crate::shell::PanelState,
 
     // Configured External Programs
     pub external_editor: String,
@@ -233,6 +234,10 @@ impl ImagePreviewState {
             zoom: 1.0,
             auto_fitted: false,
             active_mode: ImageToolMode::View,
+            panel_state: crate::shell::PanelState {
+                bottom_height: 160.0,
+                ..Default::default()
+            },
             external_editor: config.image.external_editor.clone(),
             svg_editor: config.image.svg_editor.clone(),
             viewer: config.image.viewer.clone(),

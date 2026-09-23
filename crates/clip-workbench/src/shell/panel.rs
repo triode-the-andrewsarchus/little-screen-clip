@@ -1,4 +1,4 @@
-//! Standard multi-panel layout design tokens and persistent sidebar state.
+//! Standard multi-panel layout design tokens and per-session sidebar state.
 //!
 //! Provides standardized widths for left sidebars (e.g. presets, thumbnails, sheets),
 //! right sidebars (e.g. inspectors, property sliders, diff lists), and bottom drawers,
@@ -16,6 +16,7 @@ pub const PANEL_MIN_HEIGHT: f32 = 60.0;
 pub const PANEL_MAX_HEIGHT: f32 = 300.0;
 
 /// Interactive sizing and collapsed state for multi-panel workbench studio views.
+/// Preferences remain in the owning studio session; disk persistence is separate.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PanelState {
     pub left_width: f32,

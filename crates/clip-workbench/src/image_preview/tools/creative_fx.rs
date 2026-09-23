@@ -793,7 +793,8 @@ impl ImagePreviewState {
 
         let panel_layout = ImageToolMode::CreativeFx
             .panel_layout()
-            .expect("Creative FX has a panel layout");
+            .expect("Creative FX has a panel layout")
+            .with_panel_sizes(&self.panel_state);
         let panels = panel_layout.allocate(ui);
         let left = panels.left.expect("Creative FX has a browser rail");
         let right = panels.right.expect("Creative FX has an inspector rail");
@@ -2708,6 +2709,13 @@ impl ImagePreviewState {
                         });
                 });
         });
+        crate::shell::StudioPanelLayout::show_resize_handles(
+            ui,
+            &panels,
+            &mut self.panel_state,
+            palette,
+            "creative_fx",
+        );
     }
 
     /// Split-view comparison painter for the Creative FX tab center canvas.

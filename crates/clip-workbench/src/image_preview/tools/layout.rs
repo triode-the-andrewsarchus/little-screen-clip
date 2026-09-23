@@ -80,7 +80,8 @@ impl ImagePreviewState {
         let layout = self
             .active_mode
             .panel_layout()
-            .expect("panel workspace requested for a non-panel image tool");
+            .expect("panel workspace requested for a non-panel image tool")
+            .with_panel_sizes(&self.panel_state);
         let panels = layout.allocate(ui);
 
         if let Some(rect) = panels.left {
@@ -125,6 +126,14 @@ impl ImagePreviewState {
                 },
             );
         }
+
+        crate::shell::StudioPanelLayout::show_resize_handles(
+            ui,
+            &panels,
+            &mut self.panel_state,
+            palette,
+            ("image_tool", self.active_mode as u8),
+        );
     }
 }
 
