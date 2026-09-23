@@ -52,6 +52,7 @@ pub fn slot_at_x(native_x: f32, left_priors: usize) -> SlotId {
 pub enum MirrorAction {
     Click(SlotId),
     DoubleClick(SlotId),
+    Context(SlotId),
     DropSwap { from: SlotId, to: SlotId },
 }
 
@@ -78,15 +79,29 @@ impl<'a> ScreenMirrorWidget<'a> {
         }
     }
 
-    pub fn show(self, ui: &mut egui::Ui, palette: &AppPalette) -> Option<MirrorAction> {
-        let size = fitted_mirror_size(ui.available_size());
+    pub fn show(mut self, ui: &mut egui::Ui, palette: &AppPalette) -> Option<MirrorAction> {
+        let available = ui.available_size();
+        let size = fitted_mirror_size(available);
+        let (space, _) =
+            ui.allocate_exact_size(Vec2::new(available.x, size.y), egui::Sense::hover());
+        let rect = Rect::from_center_size(space.center(), size);
+        let response = ui.interact(
+            rect,
+            ui.make_persistent_id("screen_mirror"),
+            egui::Sense::click_and_drag(),
+        );
 
-        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+        let hovered_slot = response.hover_pos().map(|pos| {
+            let native_x =
+                ((pos.x - rect.min.x) / rect.width() * SCREEN_WIDTH).clamp(0.0, SCREEN_WIDTH - 1.0);
+            slot_at_x(native_x, self.left_priors)
+        });
+        self.paint(ui, palette, rect, hovered_slot);
+        self.handle_interaction(ui, &response, hovered_slot)
+    }
 
+    fn paint(&self, ui: &egui::Ui, palette: &AppPalette, rect: Rect, hovered_slot: Option<SlotId>) {
         let painter = ui.painter_at(rect);
-        let mut action = None;
-
-        // 1. Draw texture background
         if let Some(tex) = self.mirror_texture {
             painter.image(
                 tex.id(),
@@ -101,13 +116,6 @@ impl<'a> ScreenMirrorWidget<'a> {
         // Scale factor from native screen coordinates to UI rect
         let scale_x = rect.width() / SCREEN_WIDTH;
         let scale_y = rect.height() / SCREEN_HEIGHT;
-
-        // 2. Draw active selections and hover states
-        let hover_pos = response.hover_pos();
-        let hovered_slot = hover_pos.map(|p| {
-            let nat_x = ((p.x - rect.min.x) / scale_x).clamp(0.0, SCREEN_WIDTH - 1.0);
-            slot_at_x(nat_x, self.left_priors)
-        });
 
         let slots = slot_rects(self.left_priors);
         for (slot_id, nat_rect) in &slots {
@@ -142,35 +150,50 @@ impl<'a> ScreenMirrorWidget<'a> {
                 );
             }
         }
+    }
 
-        // 3. Interactions: click, double click, and drag-and-drop
-        if response.clicked() {
-            if let Some(s) = hovered_slot {
-                action = Some(MirrorAction::Click(s));
-            }
-        }
-        if response.double_clicked() {
-            if let Some(s) = hovered_slot {
-                action = Some(MirrorAction::DoubleClick(s));
-            }
+    fn handle_interaction(
+        &mut self,
+        ui: &egui::Ui,
+        response: &egui::Response,
+        hovered_slot: Option<SlotId>,
+    ) -> Option<MirrorAction> {
+        let mut action = if response.secondary_clicked() {
+            hovered_slot.map(MirrorAction::Context)
+        } else if response.double_clicked() {
+            hovered_slot.map(MirrorAction::DoubleClick)
+        } else if response.clicked() {
+            hovered_slot.map(MirrorAction::Click)
+        } else {
+            None
+        };
+
+        if response.drag_started() && hovered_slot != Some(SlotId::Undo) {
+            *self.dragging_slot = hovered_slot;
         }
 
-        if response.drag_started() {
-            if let Some(s) = hovered_slot {
-                *self.dragging_slot = Some(s);
+        if response.dragged() {
+            if let Some(source) = *self.dragging_slot {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                egui::show_tooltip_at_pointer(ui.ctx(), egui::Id::new("slot_drag_tip"), |ui| {
+                    ui.label(format!(
+                        "Dragging {} (drop on another slot to swap)",
+                        source.label()
+                    ));
+                });
             }
         }
 
         if response.drag_stopped() {
-            if let (Some(from_slot), Some(to_slot)) = (*self.dragging_slot, hovered_slot) {
-                if from_slot != to_slot {
-                    action = Some(MirrorAction::DropSwap {
-                        from: from_slot,
-                        to: to_slot,
-                    });
-                }
-            }
-            *self.dragging_slot = None;
+            action = self
+                .dragging_slot
+                .take()
+                .zip(hovered_slot)
+                .and_then(|(from, to)| {
+                    (from != to && to != SlotId::Undo)
+                        .then_some(MirrorAction::DropSwap { from, to })
+                })
+                .or(action);
         }
 
         action

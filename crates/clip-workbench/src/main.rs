@@ -364,6 +364,154 @@ impl WorkbenchApp {
         ctx.request_repaint();
     }
 
+    fn render_workbench_header(&mut self, ctx: &egui::Context) {
+        // Top Header Panel: Mirror of Trofeo Screen + Tabs
+        let header_bg = hex_to_c32(&self.ui_palette.background);
+        let brand_color = hex_to_c32(&self.ui_palette.left_hand_border);
+        let sub_color = hex_to_c32(&self.ui_palette.subtitle_color);
+
+        egui::TopBottomPanel::top("header_panel")
+            .frame(
+                egui::Frame::none()
+                    .fill(header_bg)
+                    .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
+            )
+            .show(ctx, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.heading(
+                        egui::RichText::new("LITTLE SCREEN CLIP")
+                            .color(brand_color)
+                            .strong(),
+                    );
+                    ui.label(
+                        egui::RichText::new("— Ambient Dual-Hand Live Mirror").color(sub_color),
+                    );
+
+                    let appearance_label = match self.config.workbench.appearance {
+                        WorkbenchAppearance::Dark => "Light mode [F6]",
+                        WorkbenchAppearance::Light => "Dark mode [F6]",
+                    };
+                    if ui
+                        .add(ui_ext::secondary_button(
+                            appearance_label,
+                            hex_to_c32(&self.ui_palette.theme.b_med),
+                            &self.ui_palette,
+                        ))
+                        .on_hover_text("Change the workbench appearance; the hardware display theme stays the same")
+                        .clicked()
+                    {
+                        self.toggle_appearance(ctx);
+                    }
+                });
+
+                // All workbench sections remain one click away on compact screens.
+                ui.horizontal_wrapped(|ui| {
+                        let is_themes = self.view == WorkbenchView::Themes;
+                        let themes_btn = ui_ext::mode_tab_button_icon(
+                            Some(Icon::Palette),
+                            "Display Themes [F4]",
+                            is_themes,
+                            &self.ui_palette,
+                        );
+                        if ui.add(themes_btn).clicked() {
+                            self.view = if is_themes {
+                                WorkbenchView::Palette
+                            } else {
+                                WorkbenchView::Themes
+                            };
+                        }
+
+                        let is_auto = self.view == WorkbenchView::AutoActions;
+                        let auto_btn = ui_ext::mode_tab_button_icon(
+                            Some(Icon::Settings),
+                            "Auto-Actions [F3]",
+                            is_auto,
+                            &self.ui_palette,
+                        );
+                        if ui.add(auto_btn).clicked() {
+                            self.view = if is_auto {
+                                WorkbenchView::Palette
+                            } else {
+                                WorkbenchView::AutoActions
+                            };
+                        }
+
+                        let is_pal = self.view == WorkbenchView::Palette;
+                        let pal_tab = ui_ext::mode_tab_button_icon(
+                            Some(Icon::Search),
+                            "Quick Palette [F2]",
+                            is_pal,
+                            &self.ui_palette,
+                        );
+                        if ui.add(pal_tab).clicked() {
+                            self.view = WorkbenchView::Palette;
+                        }
+
+                        let is_node = self.view == WorkbenchView::NodeMachine;
+                        let node_tab = ui_ext::mode_tab_button_icon(
+                            Some(Icon::NodeTree),
+                            "Big Node Machine [F1]",
+                            is_node,
+                            &self.ui_palette,
+                        );
+                        if ui.add(node_tab).clicked() {
+                            self.view = WorkbenchView::NodeMachine;
+                        }
+                });
+
+                ui.add_space(8.0);
+
+                // Re-render mirror if dirty
+                if self.dirty_mirror || self.mirror_texture.is_none() {
+                    self.update_mirror_texture(ctx);
+                }
+
+                let mirror_action = ScreenMirrorWidget::new(
+                    self.mirror_texture.as_ref(),
+                    self.config.slots.left_priors,
+                    &mut self.dragging_slot,
+                    &self.selected_slots,
+                )
+                .show(ui, &self.ui_palette);
+
+                self.handle_mirror_action(mirror_action);
+            });
+    }
+
+    fn handle_mirror_action(&mut self, action: Option<MirrorAction>) {
+        match action {
+            Some(MirrorAction::Click(slot) | MirrorAction::DoubleClick(slot)) => {
+                if slot != SlotId::Undo {
+                    if let Some(index) = self
+                        .selected_slots
+                        .iter()
+                        .position(|&selected| selected == slot)
+                    {
+                        if self.selected_slots.len() > 1 {
+                            self.selected_slots.remove(index);
+                        }
+                    } else {
+                        self.selected_slots.push(slot);
+                    }
+                    self.dirty_mirror = true;
+                    self.selected_action_index = 0;
+                }
+            }
+            Some(MirrorAction::Context(slot)) => {
+                if let Some(item) = self.state.get(slot).cloned() {
+                    self.open_slot_preview_modal(&item);
+                }
+            }
+            Some(MirrorAction::DropSwap { from, to }) => {
+                let _ = send_ipc_request(&IpcRequest::SwapSlots(from, to));
+                self.state.swap_slots(from, to);
+                self.dirty_mirror = true;
+                self.status_msg = Some(format!("Swapped {} and {}", from.label(), to.label()));
+            }
+            None => {}
+        }
+    }
+
     fn open_diff_viewer(&mut self) {
         let (lhs_target, rhs_target) = if self.selected_slots.len() >= 2 {
             let items: Vec<&ClipItem> = self
@@ -703,217 +851,7 @@ impl eframe::App for WorkbenchApp {
 
         self.handle_global_shortcuts(ctx);
 
-        // Top Header Panel: Mirror of Trofeo Screen + Tabs
-        let header_bg = hex_to_c32(&self.ui_palette.background);
-        let brand_color = hex_to_c32(&self.ui_palette.left_hand_border);
-        let sub_color = hex_to_c32(&self.ui_palette.subtitle_color);
-
-        egui::TopBottomPanel::top("header_panel")
-            .frame(
-                egui::Frame::none()
-                    .fill(header_bg)
-                    .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
-            )
-            .show(ctx, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.heading(
-                        egui::RichText::new("LITTLE SCREEN CLIP")
-                            .color(brand_color)
-                            .strong(),
-                    );
-                    ui.label(
-                        egui::RichText::new("— Ambient Dual-Hand Live Mirror").color(sub_color),
-                    );
-
-                    let appearance_label = match self.config.workbench.appearance {
-                        WorkbenchAppearance::Dark => "Light mode [F6]",
-                        WorkbenchAppearance::Light => "Dark mode [F6]",
-                    };
-                    if ui
-                        .add(ui_ext::secondary_button(
-                            appearance_label,
-                            hex_to_c32(&self.ui_palette.theme.b_med),
-                            &self.ui_palette,
-                        ))
-                        .on_hover_text("Change the workbench appearance; the hardware display theme stays the same")
-                        .clicked()
-                    {
-                        self.toggle_appearance(ctx);
-                    }
-                });
-
-                // All workbench sections remain one click away on compact screens.
-                ui.horizontal_wrapped(|ui| {
-                        let is_themes = self.view == WorkbenchView::Themes;
-                        let themes_btn = ui_ext::mode_tab_button_icon(
-                            Some(Icon::Palette),
-                            "Display Themes [F4]",
-                            is_themes,
-                            &self.ui_palette,
-                        );
-                        if ui.add(themes_btn).clicked() {
-                            self.view = if is_themes {
-                                WorkbenchView::Palette
-                            } else {
-                                WorkbenchView::Themes
-                            };
-                        }
-
-                        let is_auto = self.view == WorkbenchView::AutoActions;
-                        let auto_btn = ui_ext::mode_tab_button_icon(
-                            Some(Icon::Settings),
-                            "Auto-Actions [F3]",
-                            is_auto,
-                            &self.ui_palette,
-                        );
-                        if ui.add(auto_btn).clicked() {
-                            self.view = if is_auto {
-                                WorkbenchView::Palette
-                            } else {
-                                WorkbenchView::AutoActions
-                            };
-                        }
-
-                        let is_pal = self.view == WorkbenchView::Palette;
-                        let pal_tab = ui_ext::mode_tab_button_icon(
-                            Some(Icon::Search),
-                            "Quick Palette [F2]",
-                            is_pal,
-                            &self.ui_palette,
-                        );
-                        if ui.add(pal_tab).clicked() {
-                            self.view = WorkbenchView::Palette;
-                        }
-
-                        let is_node = self.view == WorkbenchView::NodeMachine;
-                        let node_tab = ui_ext::mode_tab_button_icon(
-                            Some(Icon::NodeTree),
-                            "Big Node Machine [F1]",
-                            is_node,
-                            &self.ui_palette,
-                        );
-                        if ui.add(node_tab).clicked() {
-                            self.view = WorkbenchView::NodeMachine;
-                        }
-                });
-
-                ui.add_space(8.0);
-
-                // Re-render mirror if dirty
-                if self.dirty_mirror || self.mirror_texture.is_none() {
-                    self.update_mirror_texture(ctx);
-                }
-
-                let left_priors = self.config.slots.left_priors;
-                let get_slot_from_rel_x = |rel_x: f32| -> SlotId {
-                    crate::shell::screen_mirror::slot_at_x(rel_x, left_priors)
-                };
-
-                // Draw Full-Width Pixel-Perfect Mirror Texture
-                if let Some(ref texture) = self.mirror_texture {
-                    let available = ui.available_size();
-                    let mirror_size = crate::shell::screen_mirror::fitted_mirror_size(available);
-                    let (space, _) = ui.allocate_exact_size(
-                        egui::vec2(available.x, mirror_size.y),
-                        egui::Sense::hover(),
-                    );
-                    let mirror_rect = egui::Rect::from_center_size(space.center(), mirror_size);
-
-                    let response = ui.put(
-                        mirror_rect,
-                        egui::Image::new(texture)
-                            .fit_to_exact_size(mirror_size)
-                            .sense(egui::Sense::click_and_drag()),
-                    );
-
-                    // Drag-and-drop slot swapping
-                    if response.drag_started() {
-                        if let Some(pos) = response.interact_pointer_pos() {
-                            let rect = response.rect;
-                            let rel_x = (pos.x - rect.min.x) / rect.width() * SCREEN_WIDTH as f32;
-                            let source = get_slot_from_rel_x(rel_x);
-                            if source != SlotId::Undo {
-                                self.dragging_slot = Some(source);
-                            }
-                        }
-                    }
-
-                    if response.dragged() {
-                        if let Some(source) = self.dragging_slot {
-                            ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-                            egui::show_tooltip_at_pointer(
-                                ctx,
-                                egui::Id::new("slot_drag_tip"),
-                                |ui| {
-                                    ui.label(format!(
-                                        "Dragging {} (drop on another slot to swap)",
-                                        source.label()
-                                    ));
-                                },
-                            );
-                        }
-                    }
-
-                    if response.drag_stopped() {
-                        if let Some(source) = self.dragging_slot.take() {
-                            if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
-                                let rect = response.rect;
-                                if rect.contains(pos) {
-                                    let rel_x =
-                                        (pos.x - rect.min.x) / rect.width() * SCREEN_WIDTH as f32;
-                                    let target = get_slot_from_rel_x(rel_x);
-                                    if target != source && target != SlotId::Undo {
-                                        let _ = send_ipc_request(&IpcRequest::SwapSlots(
-                                            source, target,
-                                        ));
-                                        self.state.swap_slots(source, target);
-                                        self.dirty_mirror = true;
-                                        self.status_msg = Some(format!(
-                                            "Swapped {} and {}",
-                                            source.label(),
-                                            target.label()
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Allow clicking directly on the mirror slots to toggle selection
-                    if response.clicked() {
-                        if let Some(pos) = response.interact_pointer_pos() {
-                            let rect = response.rect;
-                            let rel_x = (pos.x - rect.min.x) / rect.width() * SCREEN_WIDTH as f32;
-                            let clicked_slot = get_slot_from_rel_x(rel_x);
-
-                            if clicked_slot != SlotId::Undo {
-                                if let Some(p) =
-                                    self.selected_slots.iter().position(|&s| s == clicked_slot)
-                                {
-                                    if self.selected_slots.len() > 1 {
-                                        self.selected_slots.remove(p);
-                                    }
-                                } else {
-                                    self.selected_slots.push(clicked_slot);
-                                }
-                                self.dirty_mirror = true;
-                                self.selected_action_index = 0;
-                            }
-                        }
-                    } else if response.secondary_clicked() {
-                        if let Some(pos) = response.interact_pointer_pos() {
-                            let rect = response.rect;
-                            let rel_x = (pos.x - rect.min.x) / rect.width() * SCREEN_WIDTH as f32;
-                            let clicked_slot = get_slot_from_rel_x(rel_x);
-
-                            let item = self.state.get(clicked_slot).cloned();
-                            if let Some(item) = item {
-                                self.open_slot_preview_modal(&item);
-                            }
-                        }
-                    }
-                }
-            });
+        self.render_workbench_header(ctx);
 
         let mut open_full_editor: Option<(PathBuf, Option<(f32, f32)>)> = None;
 
