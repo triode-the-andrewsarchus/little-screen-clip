@@ -27,6 +27,12 @@ struct NiriWindow {
     id: u64,
     app_id: Option<String>,
     pid: Option<u32>,
+    layout: Option<NiriWindowLayout>,
+}
+
+#[derive(Deserialize)]
+struct NiriWindowLayout {
+    window_size: [u32; 2],
 }
 
 fn instance_lock_path() -> PathBuf {
@@ -72,7 +78,24 @@ pub(crate) fn claim_instance() -> Option<File> {
     }
 }
 
-fn niri_window_id(pid: Option<u32>) -> Option<u64> {
+fn window_id_from_json(json: &[u8], pid: Option<u32>, expected_size: Option<Vec2>) -> Option<u64> {
+    serde_json::from_slice::<Vec<NiriWindow>>(json)
+        .ok()?
+        .into_iter()
+        .find(|window| {
+            window.app_id.as_deref() == Some("little-clip-workbench")
+                && pid.is_none_or(|pid| window.pid == Some(pid))
+                && expected_size.is_none_or(|size| {
+                    window.layout.as_ref().is_some_and(|layout| {
+                        (layout.window_size[0] as f32 - size.x).abs() <= 2.0
+                            && (layout.window_size[1] as f32 - size.y).abs() <= 2.0
+                    })
+                })
+        })
+        .map(|window| window.id)
+}
+
+fn niri_window_id(pid: Option<u32>, expected_size: Option<Vec2>) -> Option<u64> {
     let output = CommandRequest::new("niri")
         .args(["msg", "--json", "windows"])
         .timeout(Duration::from_millis(250))
@@ -82,14 +105,7 @@ fn niri_window_id(pid: Option<u32>) -> Option<u64> {
     if !output.status.success() {
         return None;
     }
-    serde_json::from_slice::<Vec<NiriWindow>>(&output.stdout)
-        .ok()?
-        .into_iter()
-        .find(|window| {
-            window.app_id.as_deref() == Some("little-clip-workbench")
-                && pid.is_none_or(|pid| window.pid == Some(pid))
-        })
-        .map(|window| window.id)
+    window_id_from_json(&output.stdout, pid, expected_size)
 }
 
 fn niri_action(action: &str, id: u64) {
@@ -104,10 +120,10 @@ fn niri_action(action: &str, id: u64) {
     }
 }
 
-fn wait_for_window(pid: Option<u32>) -> Option<u64> {
+fn wait_for_window(pid: Option<u32>, expected_size: Option<Vec2>) -> Option<u64> {
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
-        if let Some(id) = niri_window_id(pid) {
+        if let Some(id) = niri_window_id(pid, expected_size) {
             return Some(id);
         }
         std::thread::sleep(Duration::from_millis(30));
@@ -117,7 +133,7 @@ fn wait_for_window(pid: Option<u32>) -> Option<u64> {
 
 fn focus_existing() {
     if std::env::var_os("NIRI_SOCKET").is_some()
-        && let Some(id) = wait_for_window(None)
+        && let Some(id) = wait_for_window(None, None)
     {
         niri_action("focus-window", id);
     }
@@ -125,8 +141,9 @@ fn focus_existing() {
 
 pub(crate) fn center_when_mapped() {
     if std::env::var_os("NIRI_SOCKET").is_some() {
-        std::thread::spawn(|| {
-            if let Some(id) = wait_for_window(Some(std::process::id())) {
+        let expected_size = discover_size().unwrap_or(FALLBACK_SIZE);
+        std::thread::spawn(move || {
+            if let Some(id) = wait_for_window(Some(std::process::id()), Some(expected_size)) {
                 niri_action("center-window", id);
             }
         });
@@ -190,6 +207,22 @@ pub(crate) fn window_builder(viewport: ViewportBuilder) -> ViewportBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waits_for_scaled_window_to_reach_final_logical_size() {
+        let expected = Vec2::new(2355.0, 1324.0);
+        let startup = br#"[{"id":42,"app_id":"little-clip-workbench","pid":123,"layout":{"window_size":[4710,2648]}}]"#;
+        let mapped = br#"[{"id":42,"app_id":"little-clip-workbench","pid":123,"layout":{"window_size":[2355,1324]}}]"#;
+        assert_eq!(
+            window_id_from_json(startup, Some(123), Some(expected)),
+            None
+        );
+        assert_eq!(
+            window_id_from_json(mapped, Some(123), Some(expected)),
+            Some(42)
+        );
+        assert_eq!(window_id_from_json(mapped, Some(456), Some(expected)), None);
+    }
 
     #[test]
     fn uses_logical_dimensions_without_applying_output_scale_twice() {
