@@ -8,7 +8,8 @@ use super::escape_hatch::EscapeHatch;
 use super::panel::PanelState;
 use crate::hex_to_c32;
 use crate::ui_ext::{
-    StatusToast, ZoomAction, contrast_text_c32, mode_tab_button, zoom_control_bar,
+    CONTROL_HEIGHT, CONTROL_ICON_SIZE, StatusToast, ZoomAction, contrast_text_c32,
+    equal_button_width, mode_tab_button, zoom_control_bar,
 };
 use eframe::egui::{self, Color32, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::theme::AppPalette;
@@ -309,6 +310,15 @@ impl<'a> StudioShell<'a> {
     ) -> Option<usize> {
         let palette = self.palette;
         let mut clicked_hatch = None;
+        let hatch_width = equal_button_width(
+            ui,
+            &self
+                .escape_hatches
+                .iter()
+                .map(|hatch| hatch.label.as_str())
+                .collect::<Vec<_>>(),
+            true,
+        );
 
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_low))
@@ -323,7 +333,7 @@ impl<'a> StudioShell<'a> {
                     ui.label(
                         egui::RichText::new(&self.title)
                             .strong()
-                            .size(17.0)
+                            .size(22.0)
                             .color(hex_to_c32(&palette.theme.f_high)),
                     );
 
@@ -346,15 +356,13 @@ impl<'a> StudioShell<'a> {
                             palette,
                         );
                         let close_btn = egui::Button::image_and_text(
-                            Icon::Close.image_tinted(12.0, close_fg),
-                            egui::RichText::new("Close (Esc)")
-                                .small()
-                                .strong()
-                                .color(close_fg),
+                            Icon::Close.image_tinted(CONTROL_ICON_SIZE, close_fg),
+                            egui::RichText::new("Close (Esc)").strong().color(close_fg),
                         )
                         .fill(close_bg)
                         .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
-                        .rounding(Rounding::same(4.0));
+                        .rounding(Rounding::same(4.0))
+                        .min_size(Vec2::new(0.0, CONTROL_HEIGHT));
 
                         if ui.add(close_btn).clicked() {
                             *self.close = true;
@@ -377,12 +385,11 @@ impl<'a> StudioShell<'a> {
                             };
                             let contrast_fg = contrast_text_c32(bg, Some(fg), palette);
                             let text = egui::RichText::new(&hatch.label)
-                                .small()
                                 .strong()
                                 .color(contrast_fg);
                             let btn = if let Some(icon) = hatch.icon {
                                 egui::Button::image_and_text(
-                                    icon.image_tinted(14.0, contrast_fg),
+                                    icon.image_tinted(CONTROL_ICON_SIZE, contrast_fg),
                                     text,
                                 )
                             } else {
@@ -390,7 +397,8 @@ impl<'a> StudioShell<'a> {
                             }
                             .fill(bg)
                             .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
-                            .rounding(Rounding::same(4.0));
+                            .rounding(Rounding::same(4.0))
+                            .min_size(Vec2::new(hatch_width, CONTROL_HEIGHT));
 
                             if ui.add(btn).on_hover_text(&hatch.tooltip).clicked() {
                                 clicked_hatch = Some(idx);

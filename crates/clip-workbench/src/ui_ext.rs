@@ -36,6 +36,29 @@ pub fn configure_workbench_style(ctx: &egui::Context) {
     });
 }
 
+/// Minimum width shared by related buttons, measured from their longest label.
+pub fn equal_button_width(ui: &Ui, labels: &[&str], with_icon: bool) -> f32 {
+    let font = TextStyle::Button.resolve(ui.style());
+    let text_width = ui.fonts(|fonts| {
+        labels
+            .iter()
+            .map(|label| {
+                fonts
+                    .layout_no_wrap((*label).to_owned(), font.clone(), Color32::WHITE)
+                    .size()
+                    .x
+            })
+            .fold(0.0_f32, f32::max)
+    });
+    text_width
+        + 2.0 * ui.spacing().button_padding.x
+        + if with_icon {
+            CONTROL_ICON_SIZE + ui.spacing().icon_spacing
+        } else {
+            0.0
+        }
+}
+
 /// Calculates an effective foreground Color32 that meets WCAG 2.1 4.5:1 contrast
 /// against `bg`. If `bg` is semi-transparent, it is alpha-composited against
 /// the theme's background to calculate the true perceived contrast on screen.

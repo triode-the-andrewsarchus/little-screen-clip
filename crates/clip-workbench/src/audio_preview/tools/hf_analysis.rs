@@ -330,13 +330,21 @@ impl AudioPreviewState {
             } else {
                 ("Play (Space)", Icon::Play)
             };
+            let transport_width =
+                crate::ui_ext::equal_button_width(ui, &["Play (Space)", "Pause (Space)"], true);
             if ui
-                .add(layout::AudioWorkspace::primary_button_icon(
-                    Some(play_icon),
-                    play_label,
-                    accent_base,
-                    palette,
-                ))
+                .add(
+                    layout::AudioWorkspace::primary_button_icon(
+                        Some(play_icon),
+                        play_label,
+                        accent_base,
+                        palette,
+                    )
+                    .min_size(egui::Vec2::new(
+                        transport_width,
+                        crate::ui_ext::CONTROL_HEIGHT,
+                    )),
+                )
                 .clicked()
             {
                 if self.is_playing {
@@ -361,69 +369,65 @@ impl AudioPreviewState {
             ui.separator();
 
             // Playback Mode selection
-            ui.label(egui::RichText::new("Mode:").color(text_f_med).strong());
-            for mode in [
-                HfPlaybackMode::Normal,
-                HfPlaybackMode::TimeExpansion,
-                HfPlaybackMode::PitchShift,
-            ] {
-                let is_sel = self.hf_analysis.mode == mode;
-                let (btn_bg, btn_fg) = if is_sel {
-                    (accent_base, Color32::WHITE)
-                } else {
-                    (hex_to_c32(&palette.theme.b_low), text_f_med)
-                };
-                if ui
-                    .add(
-                        egui::Button::new(egui::RichText::new(mode.label()).strong().color(btn_fg))
-                            .fill(btn_bg)
-                            .rounding(4.0_f32),
-                    )
-                    .clicked()
-                {
-                    self.hf_analysis.mode = mode;
-                    if self.is_playing {
-                        self.play_hf_audio_at(self.current_time_sec);
-                    }
-                }
-            }
-
-            // Ratio selection for Time Expansion or Pitch Shift
-            if self.hf_analysis.mode != HfPlaybackMode::Normal {
-                ui.separator();
-                ui.label(egui::RichText::new("Ratio:").color(text_f_med).strong());
-                let available = HfAnalysisState::available_ratios(sample_rate);
-                for &r in available {
-                    let is_sel = (self.hf_analysis.ratio - r).abs() < 1e-4;
-                    let (btn_bg, btn_fg) = if is_sel {
-                        (accent_cyan, Color32::BLACK)
-                    } else {
-                        (hex_to_c32(&palette.theme.b_low), text_f_med)
-                    };
-                    let label = if (r - r.round()).abs() < 1e-4 {
-                        format!("{:.0}x", r)
-                    } else {
-                        format!("{:.2}x", r)
-                    };
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Mode:").color(text_f_med).strong());
+                let mode_width = crate::ui_ext::equal_button_width(
+                    ui,
+                    &["Normal (1.0x)", "Time Expansion", "Pitch Shift"],
+                    false,
+                );
+                for mode in [
+                    HfPlaybackMode::Normal,
+                    HfPlaybackMode::TimeExpansion,
+                    HfPlaybackMode::PitchShift,
+                ] {
+                    let is_sel = self.hf_analysis.mode == mode;
                     if ui
                         .add(
-                            egui::Button::new(
-                                egui::RichText::new(label)
-                                    .monospace()
-                                    .strong()
-                                    .color(btn_fg),
+                            layout::AudioWorkspace::toggle_button_icon(
+                                None,
+                                mode.label(),
+                                is_sel,
+                                palette,
                             )
-                            .fill(btn_bg)
-                            .rounding(4.0_f32),
+                            .min_size(egui::Vec2::new(mode_width, crate::ui_ext::CONTROL_HEIGHT)),
                         )
                         .clicked()
                     {
-                        self.hf_analysis.ratio = r;
+                        self.hf_analysis.mode = mode;
                         if self.is_playing {
                             self.play_hf_audio_at(self.current_time_sec);
                         }
                     }
                 }
+            });
+
+            // Ratio selection for Time Expansion or Pitch Shift
+            if self.hf_analysis.mode != HfPlaybackMode::Normal {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Ratio:").color(text_f_med).strong());
+                    let available = HfAnalysisState::available_ratios(sample_rate);
+                    for &r in available {
+                        let is_sel = (self.hf_analysis.ratio - r).abs() < 1e-4;
+                        let label = if (r - r.round()).abs() < 1e-4 {
+                            format!("{:.0}x", r)
+                        } else {
+                            format!("{:.2}x", r)
+                        };
+                        if ui
+                            .add(layout::AudioWorkspace::toggle_button_icon(
+                                None, label, is_sel, palette,
+                            ))
+                            .clicked()
+                        {
+                            self.hf_analysis.ratio = r;
+                            if self.is_playing {
+                                self.play_hf_audio_at(self.current_time_sec);
+                            }
+                        }
+                    }
+                });
             }
 
             ui.separator();
@@ -435,13 +439,24 @@ impl AudioPreviewState {
             } else {
                 ">20 kHz High-Pass OFF"
             };
+            let highpass_width = crate::ui_ext::equal_button_width(
+                ui,
+                &[">20 kHz High-Pass ON", ">20 kHz High-Pass OFF"],
+                true,
+            );
             if ui
-                .add(layout::AudioWorkspace::toggle_button_icon(
-                    Some(Icon::Volume),
-                    hp_label,
-                    bandpass_active,
-                    palette,
-                ))
+                .add(
+                    layout::AudioWorkspace::toggle_button_icon(
+                        Some(Icon::Volume),
+                        hp_label,
+                        bandpass_active,
+                        palette,
+                    )
+                    .min_size(egui::Vec2::new(
+                        highpass_width,
+                        crate::ui_ext::CONTROL_HEIGHT,
+                    )),
+                )
                 .clicked()
             {
                 self.hf_analysis.ultrasonic_bandpass = !bandpass_active;
