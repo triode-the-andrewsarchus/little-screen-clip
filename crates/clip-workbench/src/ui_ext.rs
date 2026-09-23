@@ -61,23 +61,23 @@ pub fn equal_button_width(ui: &Ui, labels: &[&str], with_icon: bool) -> f32 {
 
 /// Calculates an effective foreground Color32 that meets WCAG 2.1 4.5:1 contrast
 /// against `bg`. If `bg` is semi-transparent, it is alpha-composited against
-/// the theme's background to calculate the true perceived contrast on screen.
+/// the theme's panel background. Call `contrast_text_c32_on` for another surface.
 pub fn contrast_text_c32(
     bg: Color32,
     preferred_fg: Option<Color32>,
     palette: &AppPalette,
 ) -> Color32 {
-    let effective_bg = if bg.a() < 255 {
-        let alpha = bg.a() as f32 / 255.0;
-        let parent_rgb = palette.rgba(&palette.theme.b_low);
-        (
-            (bg.r() as f32 * alpha + parent_rgb.0 as f32 * (1.0 - alpha)).round() as u8,
-            (bg.g() as f32 * alpha + parent_rgb.1 as f32 * (1.0 - alpha)).round() as u8,
-            (bg.b() as f32 * alpha + parent_rgb.2 as f32 * (1.0 - alpha)).round() as u8,
-        )
-    } else {
-        (bg.r(), bg.g(), bg.b())
-    };
+    contrast_text_c32_on(bg, hex_to_c32(&palette.theme.b_low), preferred_fg, palette)
+}
+
+/// Choose readable text for a fill painted over a known opaque surface.
+pub fn contrast_text_c32_on(
+    bg: Color32,
+    surface: Color32,
+    preferred_fg: Option<Color32>,
+    palette: &AppPalette,
+) -> Color32 {
+    let effective_bg = composited_rgb(bg, surface);
 
     if let Some(pref) = preferred_fg {
         let pref_rgb = (pref.r(), pref.g(), pref.b());
@@ -93,6 +93,18 @@ pub fn contrast_text_c32(
     let pref_hex = preferred_fg.map(|c| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()));
     let fg_hex = palette.contrast_pair_fg(&hex_bg, pref_hex.as_deref());
     hex_to_c32(&fg_hex)
+}
+
+fn composited_rgb(fill: Color32, surface: Color32) -> (u8, u8, u8) {
+    let foreground = egui::Rgba::from(fill);
+    let background = egui::Rgba::from(surface);
+    let remaining = 1.0 - foreground.a();
+    let result = Color32::from(egui::Rgba::from_rgb(
+        foreground.r() + background.r() * remaining,
+        foreground.g() + background.g() * remaining,
+        foreground.b() + background.b() * remaining,
+    ));
+    (result.r(), result.g(), result.b())
 }
 
 /// Builds an `egui::Button` where the text color is GUARANTEED to meet WCAG 2.1 4.5:1
@@ -754,6 +766,18 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
+    fn translucent_fill_is_composited_in_linear_light() {
+        let red = Color32::from_rgba_unmultiplied(255, 0, 0, 128);
+        let over_white = composited_rgb(red, Color32::WHITE);
+        let over_black = composited_rgb(red, Color32::BLACK);
+        assert_eq!(over_white.0, 255);
+        assert!((186..=189).contains(&over_white.1));
+        assert_eq!(over_white.1, over_white.2);
+        assert!((186..=189).contains(&over_black.0));
+        assert_eq!((over_black.1, over_black.2), (0, 0));
+    }
+
+    #[test]
     fn test_contrast_text_guarantee() {
         let theme = Theme::apollo();
         let palette = AppPalette::from_theme(&theme, &HashMap::new());
@@ -871,18 +895,7 @@ mod tests {
             for (name, bg, pref) in test_cases {
                 let fg = contrast_text_c32(bg, pref, &palette);
 
-                // Compute effective bg (composited over b_low if semi-transparent)
-                let effective_bg = if bg.a() < 255 {
-                    let alpha = bg.a() as f32 / 255.0;
-                    let parent_rgb = palette.rgba(&palette.theme.b_low);
-                    (
-                        (bg.r() as f32 * alpha + parent_rgb.0 as f32 * (1.0 - alpha)).round() as u8,
-                        (bg.g() as f32 * alpha + parent_rgb.1 as f32 * (1.0 - alpha)).round() as u8,
-                        (bg.b() as f32 * alpha + parent_rgb.2 as f32 * (1.0 - alpha)).round() as u8,
-                    )
-                } else {
-                    (bg.r(), bg.g(), bg.b())
-                };
+                let effective_bg = composited_rgb(bg, hex_to_c32(&palette.theme.b_low));
 
                 let fg_rgb = (fg.r(), fg.g(), fg.b());
                 let ratio = contrast_ratio(effective_bg, fg_rgb);
