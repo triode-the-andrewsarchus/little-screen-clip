@@ -96,6 +96,7 @@ pub struct ImagePreviewState {
     // File Dialog & Save-As
     pub save_dialog_rx: Option<std::sync::mpsc::Receiver<PathBuf>>,
     pub show_fallback_save_modal: bool,
+    fallback_save_needs_focus: bool,
     pub fallback_save_path: String,
 
     // File Size Optimizer Async Worker
@@ -244,6 +245,7 @@ impl ImagePreviewState {
             status_toast: None,
             save_dialog_rx: None,
             show_fallback_save_modal: false,
+            fallback_save_needs_focus: false,
             fallback_save_path: String::new(),
             optimizer_rx: None,
             optimizer_status: None,
@@ -447,6 +449,7 @@ impl ImagePreviewState {
         } else {
             self.fallback_save_path = target_str;
             self.show_fallback_save_modal = true;
+            self.fallback_save_needs_focus = true;
         }
     }
 
@@ -495,6 +498,7 @@ impl ImagePreviewState {
         } else {
             self.fallback_save_path = target_str;
             self.show_fallback_save_modal = true;
+            self.fallback_save_needs_focus = true;
         }
     }
 
@@ -720,20 +724,38 @@ impl ImagePreviewState {
             }
         }
 
-        // Render fallback save-as modal if active
-        if self.show_fallback_save_modal {
+        // Keep ownership for this whole frame, even if Save or Cancel closes the dialog.
+        let save_modal_active = self.show_fallback_save_modal;
+        if save_modal_active {
+            egui::Area::new(egui::Id::new("image_save_backdrop"))
+                .order(egui::Order::Middle)
+                .fixed_pos(ctx.screen_rect().min)
+                .show(ctx, |ui| {
+                    let rect = ctx.screen_rect();
+                    ui.allocate_rect(rect, egui::Sense::click());
+                    ui.painter().rect_filled(
+                        rect,
+                        0.0,
+                        hex_to_c32_alpha(&palette.theme.background, 180),
+                    );
+                });
             egui::Window::new("Save Image As")
                 .collapsible(false)
                 .resizable(false)
+                .movable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     ui.add_space(4.0);
                     ui.label(egui::RichText::new("Enter destination file path:").strong());
                     ui.add_space(4.0);
-                    ui.add(
+                    let path_field = ui.add(
                         egui::TextEdit::singleline(&mut self.fallback_save_path)
                             .desired_width(380.0),
                     );
+                    if self.fallback_save_needs_focus {
+                        path_field.request_focus();
+                        self.fallback_save_needs_focus = false;
+                    }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui
@@ -748,16 +770,25 @@ impl ImagePreviewState {
                             let p = PathBuf::from(&self.fallback_save_path);
                             self.save_image_to_path(&p);
                             self.show_fallback_save_modal = false;
+                            self.fallback_save_needs_focus = false;
                         }
                         if ui.button("Cancel").clicked() {
                             self.show_fallback_save_modal = false;
+                            self.fallback_save_needs_focus = false;
                         }
                     });
                 });
         }
 
+        if save_modal_active && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.show_fallback_save_modal = false;
+            self.fallback_save_needs_focus = false;
+            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        }
+        let image_shortcuts_enabled = !save_modal_active && !ctx.wants_keyboard_input();
+
         // Global hotkey handling
-        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if image_shortcuts_enabled && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             if self.ocr_state.in_progress {
                 self.cancel_ocr();
             } else if self.active_mode == ImageToolMode::Crop
@@ -796,85 +827,58 @@ impl ImagePreviewState {
                 return;
             }
         }
-        if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Z)) {
+        if image_shortcuts_enabled
+            && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Z))
+        {
             if ui.input(|i| i.modifiers.shift) {
                 self.redo();
             } else {
                 self.undo();
             }
         }
-        if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Y)) {
+        if image_shortcuts_enabled
+            && ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Y))
+        {
             self.redo();
         }
-        if self.active_mode == ImageToolMode::Crop && ui.input(|i| i.key_pressed(egui::Key::Enter))
-        {
-            self.apply_crop();
-        }
-        if self.active_mode == ImageToolMode::Deskew
-            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-        {
-            self.apply_deskew();
-        }
-        if self.active_mode == ImageToolMode::Redact
-            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-        {
-            self.apply_redactions();
-        }
-        if self.active_mode == ImageToolMode::Markup
-            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-            && self.markup_state.editing_text_idx.is_none()
-        {
-            self.apply_flatten_markup();
-        }
-        if self.active_mode == ImageToolMode::Resize
-            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-        {
-            if self.resize_state.sub_tab == ResizeSubTab::Pixels {
-                self.apply_pixel_resize(
-                    self.resize_state.target_width,
-                    self.resize_state.target_height,
-                    self.resize_state.filter,
-                );
+        let enter_pressed = !save_modal_active && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let enter_from_field = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
+        if enter_pressed && (image_shortcuts_enabled || enter_from_field) {
+            match self.active_mode {
+                ImageToolMode::Crop if image_shortcuts_enabled => self.apply_crop(),
+                ImageToolMode::Deskew if image_shortcuts_enabled => self.apply_deskew(),
+                ImageToolMode::Redact if image_shortcuts_enabled => self.apply_redactions(),
+                ImageToolMode::Markup
+                    if image_shortcuts_enabled && self.markup_state.editing_text_idx.is_none() =>
+                {
+                    self.apply_flatten_markup();
+                }
+                ImageToolMode::Resize
+                    if image_shortcuts_enabled
+                        && self.resize_state.sub_tab == ResizeSubTab::Pixels =>
+                {
+                    self.apply_pixel_resize(
+                        self.resize_state.target_width,
+                        self.resize_state.target_height,
+                        self.resize_state.filter,
+                    );
+                }
+                ImageToolMode::RemoveBg => self.run_background_removal(),
+                ImageToolMode::DepthMap if image_shortcuts_enabled => self.run_depth_estimation(),
+                ImageToolMode::Convert
+                    if image_shortcuts_enabled && self.convert_state.output_is_current() =>
+                {
+                    self.apply_converted_to_canvas();
+                }
+                ImageToolMode::Ocr => self.run_ocr(),
+                ImageToolMode::Barcode if image_shortcuts_enabled => self.run_barcode_scan(),
+                ImageToolMode::DecorrelationStretch if image_shortcuts_enabled => {
+                    self.apply_decorrelation_stretch();
+                }
+                _ => {}
             }
         }
-        if self.active_mode == ImageToolMode::RemoveBg
-            && ui.input(|i| {
-                i.key_pressed(egui::Key::Enter)
-                    && (!ctx.wants_keyboard_input() || i.modifiers.ctrl || i.modifiers.command)
-            })
-        {
-            self.run_background_removal();
-        }
-        if self.active_mode == ImageToolMode::DepthMap
-            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-        {
-            self.run_depth_estimation();
-        }
-        if self.active_mode == ImageToolMode::Convert
-            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-            && self.convert_state.output_is_current()
-        {
-            self.apply_converted_to_canvas();
-        }
-        if self.active_mode == ImageToolMode::Ocr
-            && ui.input(|i| {
-                i.key_pressed(egui::Key::Enter)
-                    && (!ctx.wants_keyboard_input() || i.modifiers.ctrl || i.modifiers.command)
-            })
-        {
-            self.run_ocr();
-        }
-        if self.active_mode == ImageToolMode::Barcode
-            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-        {
-            self.run_barcode_scan();
-        }
-        if self.active_mode == ImageToolMode::DecorrelationStretch
-            && ui.input(|i| i.key_pressed(egui::Key::Enter))
-        {
-            self.apply_decorrelation_stretch();
-        }
-        if !ctx.wants_keyboard_input() {
+        if image_shortcuts_enabled {
             if self.active_mode == ImageToolMode::Redact {
                 let del_pressed = ui.input(|i| {
                     i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
@@ -1069,7 +1073,7 @@ impl ImagePreviewState {
         }
 
         // Copy to clipboard slot (Ctrl+C / Cmd+C) at any point
-        if !ctx.wants_keyboard_input() {
+        if image_shortcuts_enabled {
             let copy_requested = ui.input(|i| {
                 i.events.iter().any(|e| matches!(e, egui::Event::Copy))
                     || (i.key_pressed(egui::Key::C)
@@ -1796,6 +1800,95 @@ fn render_svg_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_dialog_owns_image_shortcuts_until_dismissed() {
+        let image = RgbaImage::new(100, 100);
+        let mut png = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut state = ImagePreviewState::from_bytes_with_meta(
+            png,
+            "image/png".into(),
+            None,
+            "Test image".into(),
+            &AppConfig::default(),
+        )
+        .unwrap();
+        state.active_mode = ImageToolMode::Crop;
+        state.crop_state.normalized_rect =
+            Rect::from_min_max(Pos2::new(0.1, 0.1), Pos2::new(0.6, 0.6));
+        state.undo_stack.push(state.current_rgba.clone());
+        state.show_fallback_save_modal = true;
+        state.fallback_save_needs_focus = true;
+        state.fallback_save_path = "test.png".into();
+
+        fn key_frame(
+            state: &mut ImagePreviewState,
+            ctx: &egui::Context,
+            palette: &AppPalette,
+            key: egui::Key,
+            modifiers: egui::Modifiers,
+        ) -> bool {
+            let mut close = false;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(960.0, 720.0))),
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, palette, &mut close);
+                    });
+                },
+            );
+            close
+        }
+
+        let ctx = egui::Context::default();
+        let palette = AppPalette::default();
+        assert!(!key_frame(
+            &mut state,
+            &ctx,
+            &palette,
+            egui::Key::F12,
+            egui::Modifiers::NONE
+        ));
+        assert!(ctx.wants_keyboard_input());
+        assert!(!key_frame(
+            &mut state,
+            &ctx,
+            &palette,
+            egui::Key::Enter,
+            egui::Modifiers::NONE
+        ));
+        assert_eq!(state.current_rgba.dimensions(), (100, 100));
+        assert!(!key_frame(
+            &mut state,
+            &ctx,
+            &palette,
+            egui::Key::Z,
+            egui::Modifiers::COMMAND
+        ));
+        assert_eq!(state.undo_stack.len(), 1);
+        assert!(!key_frame(
+            &mut state,
+            &ctx,
+            &palette,
+            egui::Key::Escape,
+            egui::Modifiers::NONE
+        ));
+        assert!(!state.show_fallback_save_modal);
+        assert_eq!(state.crop_state.normalized_rect.min, Pos2::new(0.1, 0.1));
+    }
 
     #[test]
     fn test_load_png_and_meta() {
