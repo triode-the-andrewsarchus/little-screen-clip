@@ -42,6 +42,8 @@ Follow the existing Conventional Commit pattern with a concise scope: `feat(imag
 
 Do not commit personal display, compositor, or desktop settings. Keep `config.toml` changes reloadable, and preserve virtual-mode behavior when no supported USB display is attached.
 
+The workbench must remain a non-resizable popup for Niri's fixed-size floating behavior. Screen-adaptive sizing must be resolved before the window opens, with fixed-size hints in place at mapping; do not enable window resizing/maximizing or resize a visible window to fit. Internal panels may resize independently.
+
 ## Agent Maintenance & Self-Correction
 During final cleanup, consider whether the work revealed that this file is incomplete, incorrect, or obsolete.
 
