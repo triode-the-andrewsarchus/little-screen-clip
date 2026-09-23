@@ -175,9 +175,9 @@ pub struct ScreenRenderer {
     pub(crate) font_bold: Option<Font>,
     pub(crate) font_italic: Option<Font>,
     pub(crate) font_mono: Option<Font>,
-    /// Active styling and theme configuration.
+    /// Active display configuration, including the shared appearance mode.
     pub config: AppConfig,
-    /// Resolved active theme palette.
+    /// Resolved fixed Light/Dark palette.
     pub palette: AppPalette,
 }
 
@@ -392,7 +392,7 @@ impl ScreenRenderer {
         let mut pixmap = Pixmap::new(SCREEN_WIDTH, SCREEN_HEIGHT)
             .ok_or_else(|| RenderError::ImageEncode("Failed to allocate pixmap".to_string()))?;
 
-        // Background: Configurable canvas color
+        // Background: fixed canvas color for the shared appearance mode.
         let (bg_r, bg_g, bg_b, bg_a) = parse_hex_color(&self.palette.background);
         pixmap.fill(Color::from_rgba8(bg_r, bg_g, bg_b, bg_a));
 
@@ -562,6 +562,7 @@ impl ScreenRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use little_clip_core::config::WorkbenchAppearance;
     use little_clip_core::spreadsheet;
     use little_clip_core::{ClipItem, ClipPayload};
 
@@ -679,6 +680,21 @@ mod tests {
         assert_eq!(blank_jpeg[1], 0xD8);
         // Verify well under the hardware 450 KB limit
         assert!(blank_jpeg.len() < 100_000);
+    }
+
+    #[test]
+    fn switching_appearance_changes_the_little_screen_frame() {
+        let mut config = AppConfig::default();
+        config.display.show_debug_handler = false;
+        let mut renderer = ScreenRenderer::fallback(config.clone());
+        let manager = SlotManager::default();
+        let dark = renderer.render_pixmap(&manager).unwrap();
+
+        config.workbench.appearance = WorkbenchAppearance::Light;
+        renderer.set_config(config);
+        let light = renderer.render_pixmap(&manager).unwrap();
+        assert_ne!(dark.data(), light.data());
+        assert_eq!(renderer.palette.theme_name, "fixed-light");
     }
 
     #[test]

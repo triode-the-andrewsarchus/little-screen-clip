@@ -1,6 +1,6 @@
 //! Application configuration definitions and TOML serialization/deserialization.
 //!
-//! Defines schemas and default values for display preferences, color themes, audio settings,
+//! Defines schemas and default values for display preferences, appearance, audio settings,
 //! image/vector external editors, workbench text editors, and automatic clipboard actions.
 
 use serde::{Deserialize, Serialize};
@@ -13,9 +13,6 @@ pub struct AppConfig {
     /// Display options (rotation, animations, debug badges, elision character).
     #[serde(default)]
     pub display: DisplayConfig,
-    /// Color theme palette for canvas, slots, borders, and text.
-    #[serde(default)]
-    pub colors: ColorConfig,
     /// Audio preview, capture, and waveform settings.
     #[serde(default)]
     pub audio: AudioConfig,
@@ -152,7 +149,7 @@ impl ImageConfig {
     }
 }
 
-/// Desktop appearance choices are separate from hardware display themes.
+/// Shared appearance choice for the workbench and hardware display.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkbenchAppearance {
@@ -177,7 +174,7 @@ pub struct WorkbenchConfig {
     /// Defaults to None, which falls back to $VISUAL, $EDITOR, or "xdg-open".
     #[serde(default)]
     pub editor: Option<String>,
-    /// Desktop workbench appearance, independent of the hardware display theme.
+    /// Fixed Light/Dark palette used by both workbench and display.
     #[serde(default)]
     pub appearance: WorkbenchAppearance,
 }
@@ -420,220 +417,10 @@ impl Default for DisplayConfig {
     }
 }
 
-fn default_theme() -> String {
-    "apollo".to_string()
-}
-
-/// Theme color palette for backgrounds, slot card fills, borders, and text labels.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ColorConfig {
-    /// Active Hundred Rabbits theme name (e.g. "apollo", "peppermint", "nord").
-    #[serde(default = "default_theme")]
-    pub theme: String,
-
-    /// Optional override: Main canvas background color.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub background: Option<String>,
-    /// Optional override: Background fill for Left Hand and Right Hand cards.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hero_card_bg: Option<String>,
-    /// Optional override: Background fill for L Prior and R Prior cards.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prior_card_bg: Option<String>,
-    /// Optional override: Background fill for Undo card.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub undo_card_bg: Option<String>,
-
-    // Border Colors
-    /// Optional override: Border stroke color for the Undo slot.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub undo_border: Option<String>,
-    /// Optional override: Border stroke color for the Left Hand slot.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub left_hand_border: Option<String>,
-    /// Optional override: Border stroke color for Left Prior 1.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub left_prior1_border: Option<String>,
-    /// Optional override: Border stroke color for Left Prior 2.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub left_prior2_border: Option<String>,
-    /// Optional override: Border stroke color for Left Prior 3.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub left_prior3_border: Option<String>,
-    /// Optional override: Border stroke color for Right Prior 2.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub right_prior2_border: Option<String>,
-    /// Optional override: Border stroke color for Right Prior 1.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub right_prior1_border: Option<String>,
-    /// Optional override: Border stroke color for the Right Hand slot.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub right_hand_border: Option<String>,
-    /// Optional override: Focused cursor border color.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor_border: Option<String>,
-    /// Optional override: Multi-selected slot border color.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selected_border: Option<String>,
-
-    // Text & Element Colors
-    /// Optional override: Primary title font color.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title_color: Option<String>,
-    /// Optional override: Secondary subtitle font color.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subtitle_color: Option<String>,
-    /// Optional override: Body text color.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub body_color: Option<String>,
-    /// Optional override: URL text highlight color.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub url_color: Option<String>,
-    /// Optional override: Debug handler badge background.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub debug_badge_bg: Option<String>,
-    /// Optional override: Debug handler badge text.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub debug_badge_text: Option<String>,
-}
-
-impl ColorConfig {
-    /// Resolves the full `AppPalette` using the specified theme and any explicit overrides.
-    pub fn resolve_palette(&self) -> crate::theme::AppPalette {
-        let themes_dir = crate::theme::find_themes_dir();
-        let theme_file = themes_dir.join(format!("{}.svg", self.theme));
-        let theme = if theme_file.exists() {
-            crate::theme::Theme::from_file(&theme_file)
-                .unwrap_or_else(|_| crate::theme::Theme::apollo())
-        } else {
-            crate::theme::Theme::apollo()
-        };
-
-        let mut overrides = std::collections::HashMap::new();
-        if let Some(v) = &self.background {
-            overrides.insert("background".to_string(), v.clone());
-        }
-        if let Some(v) = &self.hero_card_bg {
-            overrides.insert("hero_card_bg".to_string(), v.clone());
-        }
-        if let Some(v) = &self.prior_card_bg {
-            overrides.insert("prior_card_bg".to_string(), v.clone());
-        }
-        if let Some(v) = &self.undo_card_bg {
-            overrides.insert("undo_card_bg".to_string(), v.clone());
-        }
-
-        if let Some(v) = &self.undo_border {
-            overrides.insert("undo_border".to_string(), v.clone());
-        }
-        if let Some(v) = &self.left_hand_border {
-            overrides.insert("left_hand_border".to_string(), v.clone());
-        }
-        if let Some(v) = &self.left_prior1_border {
-            overrides.insert("left_prior1_border".to_string(), v.clone());
-        }
-        if let Some(v) = &self.left_prior2_border {
-            overrides.insert("left_prior2_border".to_string(), v.clone());
-        }
-        if let Some(v) = &self.left_prior3_border {
-            overrides.insert("left_prior3_border".to_string(), v.clone());
-        }
-        if let Some(v) = &self.right_prior2_border {
-            overrides.insert("right_prior2_border".to_string(), v.clone());
-        }
-        if let Some(v) = &self.right_prior1_border {
-            overrides.insert("right_prior1_border".to_string(), v.clone());
-        }
-        if let Some(v) = &self.right_hand_border {
-            overrides.insert("right_hand_border".to_string(), v.clone());
-        }
-        if let Some(v) = &self.cursor_border {
-            overrides.insert("cursor_border".to_string(), v.clone());
-        }
-        if let Some(v) = &self.selected_border {
-            overrides.insert("selected_border".to_string(), v.clone());
-        }
-
-        if let Some(v) = &self.title_color {
-            overrides.insert("title_color".to_string(), v.clone());
-        }
-        if let Some(v) = &self.subtitle_color {
-            overrides.insert("subtitle_color".to_string(), v.clone());
-        }
-        if let Some(v) = &self.body_color {
-            overrides.insert("body_color".to_string(), v.clone());
-        }
-        if let Some(v) = &self.url_color {
-            overrides.insert("url_color".to_string(), v.clone());
-        }
-        if let Some(v) = &self.debug_badge_bg {
-            overrides.insert("debug_badge_bg".to_string(), v.clone());
-        }
-        if let Some(v) = &self.debug_badge_text {
-            overrides.insert("debug_badge_text".to_string(), v.clone());
-        }
-
-        crate::theme::AppPalette::from_theme(&theme, &overrides)
-    }
-
-    /// Clears all manual overrides, reverting to purely theme-derived colors.
-    pub fn clear_overrides(&mut self) {
-        self.background = None;
-        self.hero_card_bg = None;
-        self.prior_card_bg = None;
-        self.undo_card_bg = None;
-        self.undo_border = None;
-        self.left_hand_border = None;
-        self.left_prior1_border = None;
-        self.left_prior2_border = None;
-        self.left_prior3_border = None;
-        self.right_prior2_border = None;
-        self.right_prior1_border = None;
-        self.right_hand_border = None;
-        self.cursor_border = None;
-        self.selected_border = None;
-        self.title_color = None;
-        self.subtitle_color = None;
-        self.body_color = None;
-        self.url_color = None;
-        self.debug_badge_bg = None;
-        self.debug_badge_text = None;
-    }
-}
-
-impl Default for ColorConfig {
-    fn default() -> Self {
-        Self {
-            theme: default_theme(),
-            background: None,
-            hero_card_bg: None,
-            prior_card_bg: None,
-            undo_card_bg: None,
-            undo_border: None,
-            left_hand_border: None,
-            left_prior1_border: None,
-            left_prior2_border: None,
-            left_prior3_border: None,
-            right_prior2_border: None,
-            right_prior1_border: None,
-            right_hand_border: None,
-            cursor_border: None,
-            selected_border: None,
-            title_color: None,
-            subtitle_color: None,
-            body_color: None,
-            url_color: None,
-            debug_badge_bg: None,
-            debug_badge_text: None,
-        }
-    }
-}
-
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             display: DisplayConfig::default(),
-            colors: ColorConfig::default(),
             audio: AudioConfig::default(),
             workbench: WorkbenchConfig::default(),
             image: ImageConfig::default(),
@@ -720,40 +507,12 @@ impl AppConfig {
         Ok(config)
     }
 
-    /// Resolves the active theme and color overrides into the unified `AppPalette`.
+    /// Resolves the shared fixed Light/Dark colors for the workbench and display.
     pub fn resolve_palette(&self) -> crate::theme::AppPalette {
-        self.colors.resolve_palette()
+        crate::theme::AppPalette::for_appearance(self.workbench.appearance)
     }
 
-    /// Saves the current configuration to disk (non-destructively updating theme).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if reading or writing the configuration file fails.
-    pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
-        Self::save_theme_to_file(&self.colors.theme)
-    }
-
-    /// Non-destructively updates the active theme in `config.toml` without modifying comments,
-    /// display rotation, or other user configuration settings.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if reading or writing the configuration file fails.
-    pub fn save_theme_to_file(new_theme: &str) -> Result<(), Box<dyn std::error::Error>> {
-        let path = find_config_file_path();
-        if path.exists() {
-            let content = std::fs::read_to_string(&path)?;
-            let updated = update_theme_in_text(&content, new_theme);
-            std::fs::write(&path, updated)?;
-        } else {
-            let new_content = format!("[colors]\ntheme = \"{}\"\n", new_theme);
-            std::fs::write(&path, new_content)?;
-        }
-        Ok(())
-    }
-
-    /// Save only the desktop appearance, preserving the display theme and other settings.
+    /// Save the shared appearance choice, preserving all other settings.
     pub fn save_workbench_appearance_to_file(
         appearance: WorkbenchAppearance,
     ) -> Result<(), Box<dyn std::error::Error>> {
@@ -773,18 +532,6 @@ impl AppConfig {
         )?;
         Ok(())
     }
-
-    /// Non-destructively clears color overrides in `config.toml` by commenting them out,
-    /// preserving all user comments and other configuration sections.
-    pub fn clear_overrides_in_file() -> Result<(), Box<dyn std::error::Error>> {
-        let path = find_config_file_path();
-        if path.exists() {
-            let content = std::fs::read_to_string(&path)?;
-            let updated = clear_overrides_in_text(&content);
-            std::fs::write(&path, updated)?;
-        }
-        Ok(())
-    }
 }
 
 /// Finds the active config file path, prioritizing local `config.toml` if present.
@@ -802,12 +549,6 @@ pub fn find_config_file_path() -> PathBuf {
     }
 }
 
-/// Non-destructively updates the `theme = "..."` entry under `[colors]` in TOML text,
-/// preserving all existing comments, other sections, indentation, and formatting.
-pub fn update_theme_in_text(text: &str, new_theme: &str) -> String {
-    update_setting_in_text(text, "colors", "theme", new_theme)
-}
-
 /// Update one quoted string setting without rewriting the rest of the TOML file.
 fn update_setting_in_text(text: &str, table: &str, setting: &str, value: &str) -> String {
     let mut output = Vec::new();
@@ -817,7 +558,7 @@ fn update_setting_in_text(text: &str, table: &str, setting: &str, value: &str) -
 
     for line in text.lines() {
         let trimmed = line.trim();
-        // Check for table header like [colors] or [display]
+        // Check for a table header such as [workbench] or [display].
         if trimmed.starts_with('[') && trimmed.ends_with(']') {
             if in_table && !updated {
                 output.push(format!("{setting} = \"{value}\""));
@@ -861,39 +602,6 @@ fn update_setting_in_text(text: &str, table: &str, setting: &str, value: &str) -
     res
 }
 
-/// Non-destructively clears overrides under `[colors]` by commenting out non-theme key-values,
-/// preserving all comments and other configuration sections.
-pub fn clear_overrides_in_text(text: &str) -> String {
-    let mut output = Vec::new();
-    let mut in_colors = false;
-
-    for line in text.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-            in_colors = trimmed == "[colors]";
-            output.push(line.to_string());
-            continue;
-        }
-
-        if in_colors && !trimmed.starts_with('#') && trimmed.contains('=') {
-            let key = trimmed.split('=').next().unwrap_or("").trim();
-            if key != "theme" {
-                // Comment out this override line
-                output.push(format!("# {}", line));
-                continue;
-            }
-        }
-
-        output.push(line.to_string());
-    }
-
-    let mut res = output.join("\n");
-    if text.ends_with('\n') {
-        res.push('\n');
-    }
-    res
-}
-
 /// Computes the default user configuration file path according to XDG base directory specifications.
 pub fn get_user_config_path() -> Option<PathBuf> {
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
@@ -910,40 +618,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_non_destructive_update_theme_preserves_everything() {
-        let original = r##"# Main Header Comment
-[display]
-rotate_180 = true # Must be preserved!
-show_debug_handler = false
-
-[colors]
-# Theme comment
-theme = "apollo"
-# An override comment
-left_hand_border = "#6366f1"
-
-[audio]
-editor = "audacity"
-"##;
-
-        let updated = update_theme_in_text(original, "boysenberry");
-        assert!(updated.contains("rotate_180 = true # Must be preserved!"));
-        assert!(updated.contains("# Main Header Comment"));
-        assert!(updated.contains("theme = \"boysenberry\""));
-        assert!(!updated.contains("theme = \"apollo\""));
-        assert!(updated.contains("left_hand_border = \"#6366f1\""));
-        assert!(updated.contains("[audio]\neditor = \"audacity\""));
-    }
-
-    #[test]
-    fn workbench_appearance_updates_without_touching_display_theme() {
+    fn workbench_appearance_save_preserves_unrelated_config() {
         let original = "[colors]\ntheme = \"zenburn\"\n\n[workbench]\n# editor preference\neditor = \"code\"\n";
         let updated = update_setting_in_text(original, "workbench", "appearance", "light");
         assert!(updated.contains("theme = \"zenburn\""));
         assert!(updated.contains("# editor preference\neditor = \"code\""));
         let config: AppConfig = toml::from_str(&updated).unwrap();
         assert_eq!(config.workbench.appearance, WorkbenchAppearance::Light);
-        assert_eq!(config.colors.theme, "zenburn");
 
         let reversed = update_setting_in_text(&updated, "workbench", "appearance", "dark");
         assert_eq!(reversed.matches("appearance =").count(), 1);
@@ -957,23 +638,28 @@ editor = "audacity"
     }
 
     #[test]
-    fn test_non_destructive_clear_overrides() {
-        let original = r##"[display]
-rotate_180 = true
+    fn fixed_display_palette_follows_shared_appearance_and_ignores_legacy_colors() {
+        let config: AppConfig = toml::from_str(
+            r##"[colors]
+theme = "zenburn"
+background = "#010101"
 
-[colors]
-theme = "apollo"
-hero_card_bg = "#181b26"
-left_hand_border = "#6366f1"
-# Existing comment
-"##;
+[workbench]
+appearance = "light"
+"##,
+        )
+        .unwrap();
+        let light = config.resolve_palette();
+        assert_eq!(light.theme_name, "fixed-light");
+        assert_ne!(light.background, "#010101");
+        assert!(!light.is_dark);
 
-        let cleared = clear_overrides_in_text(original);
-        assert!(cleared.contains("rotate_180 = true"));
-        assert!(cleared.contains("theme = \"apollo\""));
-        assert!(cleared.contains("# hero_card_bg = \"#181b26\""));
-        assert!(cleared.contains("# left_hand_border = \"#6366f1\""));
-        assert!(cleared.contains("# Existing comment"));
+        let mut dark_config = config;
+        dark_config.workbench.appearance = WorkbenchAppearance::Dark;
+        let dark = dark_config.resolve_palette();
+        assert_eq!(dark.theme_name, "fixed-dark");
+        assert!(dark.is_dark);
+        assert_ne!(light.background, dark.background);
     }
 
     #[test]

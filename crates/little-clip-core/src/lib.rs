@@ -54,9 +54,7 @@ pub use clipboard::{
     ClipboardError, copy_bytes_to_system_clipboard, copy_file_uris_to_system_clipboard,
     copy_text_to_system_clipboard, file_uri_list,
 };
-pub use config::{
-    AppConfig, AudioConfig, AudioSamplePosition, ColorConfig, DisplayConfig, Model3dConfig,
-};
+pub use config::{AppConfig, AudioConfig, AudioSamplePosition, DisplayConfig, Model3dConfig};
 pub use ipc::{IpcRequest, IpcResponse};
 pub use item::{ClipItem, ClipPayload, ImageThumbnail, PayloadKind};
 pub use jobs::{BackgroundJobs, JobError, JobTicket};

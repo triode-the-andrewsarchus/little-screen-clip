@@ -17,9 +17,7 @@ use little_clip_core::presentation::{
     timestamps::detect_timestamp,
     units::detect_unit_conversion,
 };
-use little_clip_core::theme::{
-    AppPalette, DerivedHarmonies, Theme, find_themes_dir, load_themes_from_dir,
-};
+use little_clip_core::theme::AppPalette;
 use little_clip_core::{
     AppConfig, BackgroundJobs, ClipItem, ClipPayload, JobError, JobTicket, SlotId, SlotManager,
 };
@@ -74,14 +72,6 @@ use spreadsheet_view::SpreadsheetViewerState;
 use text_preview::TextPreviewState;
 pub use ui_ext::*;
 
-/// Filter category for theme selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ThemeFilter {
-    All,
-    Dark,
-    Light,
-}
-
 /// Primary navigation view tabs in the desktop workbench.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WorkbenchView {
@@ -91,8 +81,6 @@ enum WorkbenchView {
     NodeMachine,
     /// Automated action trigger rules configuration.
     AutoActions,
-    /// Hundred Rabbits color themes selector and live config editor.
-    Themes,
 }
 
 pub(crate) fn hex_to_c32(hex: &str) -> egui::Color32 {
@@ -103,60 +91,6 @@ pub(crate) fn hex_to_c32(hex: &str) -> egui::Color32 {
 pub(crate) fn hex_to_c32_alpha(hex: &str, alpha: u8) -> egui::Color32 {
     let (r, g, b, _) = parse_hex_color_rgba(hex);
     egui::Color32::from_rgba_unmultiplied(r, g, b, alpha)
-}
-
-fn apply_workbench_palette_to_egui(ctx: &egui::Context, palette: &AppPalette) {
-    let mut visuals = if palette.is_dark {
-        egui::Visuals::dark()
-    } else {
-        egui::Visuals::light()
-    };
-
-    visuals.panel_fill = hex_to_c32(&palette.background);
-    visuals.window_fill = hex_to_c32(&palette.prior_card_bg);
-    visuals.extreme_bg_color = hex_to_c32(&palette.hero_card_bg);
-
-    let noninter_bg = hex_to_c32(&palette.prior_card_bg);
-    visuals.widgets.noninteractive.bg_fill = noninter_bg;
-    visuals.widgets.noninteractive.fg_stroke.color =
-        contrast_text_c32(noninter_bg, Some(hex_to_c32(&palette.title_color)), palette);
-    visuals.widgets.noninteractive.bg_stroke.color = hex_to_c32(&palette.b_low);
-
-    let inactive_bg = hex_to_c32(&palette.undo_card_bg);
-    visuals.widgets.inactive.bg_fill = inactive_bg;
-    visuals.widgets.inactive.fg_stroke.color = contrast_text_c32(
-        inactive_bg,
-        Some(hex_to_c32(&palette.subtitle_color)),
-        palette,
-    );
-    visuals.widgets.inactive.bg_stroke.color = hex_to_c32(&palette.b_low);
-
-    let hovered_bg = hex_to_c32(&palette.prior_card_bg);
-    visuals.widgets.hovered.bg_fill = hovered_bg;
-    visuals.widgets.hovered.fg_stroke.color =
-        contrast_text_c32(hovered_bg, Some(hex_to_c32(&palette.title_color)), palette);
-    visuals.widgets.hovered.bg_stroke.color = hex_to_c32(&palette.left_hand_border);
-
-    let active_bg = hex_to_c32(&palette.hero_card_bg);
-    visuals.widgets.active.bg_fill = active_bg;
-    visuals.widgets.active.fg_stroke.color =
-        contrast_text_c32(active_bg, Some(hex_to_c32(&palette.f_high)), palette);
-    visuals.widgets.active.bg_stroke.color = hex_to_c32(&palette.cursor_border);
-
-    let open_bg = hex_to_c32(&palette.hero_card_bg);
-    visuals.widgets.open.bg_fill = open_bg;
-    visuals.widgets.open.fg_stroke.color =
-        contrast_text_c32(open_bg, Some(hex_to_c32(&palette.f_high)), palette);
-    visuals.widgets.open.bg_stroke.color = hex_to_c32(&palette.cursor_border);
-
-    let sel_bg = hex_to_c32(&palette.left_hand_border);
-    visuals.selection.bg_fill = sel_bg;
-    visuals.selection.stroke.color =
-        contrast_text_c32(sel_bg, Some(hex_to_c32(&palette.f_high)), palette);
-
-    visuals.hyperlink_color = hex_to_c32(&palette.url_color);
-
-    ctx.set_visuals(visuals);
 }
 
 /// Action item displayed in the command palette search list.
@@ -239,9 +173,6 @@ struct WorkbenchApp {
     rolling_audio_strip: Option<RollingAudioStripState>,
     dragging_slot: Option<SlotId>,
     config: AppConfig,
-    available_themes: Vec<Theme>,
-    theme_search: String,
-    theme_filter: ThemeFilter,
     appearance_applied: bool,
 }
 
@@ -278,11 +209,6 @@ impl WorkbenchApp {
 
         let rolling_audio_strip = Some(RollingAudioStripState::new());
 
-        let mut available_themes = load_themes_from_dir(find_themes_dir());
-        if available_themes.is_empty() {
-            available_themes.push(Theme::apollo());
-        }
-
         let mut app = Self {
             state,
             state_rx,
@@ -312,9 +238,6 @@ impl WorkbenchApp {
             rolling_audio_strip,
             dragging_slot: None,
             config,
-            available_themes,
-            theme_search: String::new(),
-            theme_filter: ThemeFilter::All,
             appearance_applied: false,
         };
 
@@ -331,9 +254,21 @@ impl WorkbenchApp {
         let appearance = self.config.workbench.appearance.toggled();
         self.config.workbench.appearance = appearance;
         self.ui_palette = ui_appearance::palette(appearance);
-        apply_workbench_palette_to_egui(ctx, &self.ui_palette);
-        if let Err(err) = AppConfig::save_workbench_appearance_to_file(appearance) {
-            self.status_msg = Some(format!("Could not save workbench appearance: {err}"));
+        ui_appearance::apply_visuals(ctx, &self.ui_palette);
+        self.renderer.set_config(self.config.clone());
+        self.dirty_mirror = true;
+        match AppConfig::save_workbench_appearance_to_file(appearance) {
+            Ok(()) => {
+                // The daemon reloads the same fixed palette; do not wait for IPC in a UI frame.
+                std::thread::spawn(|| {
+                    if let Err(err) = send_ipc_request(&IpcRequest::ReloadConfig) {
+                        tracing::warn!(%err, "Could not reload display appearance");
+                    }
+                });
+            }
+            Err(err) => {
+                self.status_msg = Some(format!("Could not save appearance: {err}"));
+            }
         }
         ctx.request_repaint();
     }
@@ -362,8 +297,8 @@ impl WorkbenchApp {
                     );
 
                     let appearance_label = match self.config.workbench.appearance {
-                        WorkbenchAppearance::Dark => "Light mode [F6]",
-                        WorkbenchAppearance::Light => "Dark mode [F6]",
+                        WorkbenchAppearance::Dark => "Light mode [F4/F6]",
+                        WorkbenchAppearance::Light => "Dark mode [F4/F6]",
                     };
                     if ui
                         .add(ui_ext::secondary_button(
@@ -371,7 +306,9 @@ impl WorkbenchApp {
                             hex_to_c32(&self.ui_palette.theme.b_med),
                             &self.ui_palette,
                         ))
-                        .on_hover_text("Change the workbench appearance; the hardware display theme stays the same")
+                        .on_hover_text(
+                            "Switch the workbench and little screen to the other color mode",
+                        )
                         .clicked()
                     {
                         self.toggle_appearance(ctx);
@@ -384,57 +321,42 @@ impl WorkbenchApp {
 
                 // All workbench sections remain one click away on compact screens.
                 ui.horizontal_wrapped(|ui| {
-                        let is_themes = self.view == WorkbenchView::Themes;
-                        let themes_btn = ui_ext::mode_tab_button_icon(
-                            Some(Icon::Palette),
-                            "Display Themes [F4]",
-                            is_themes,
-                            &self.ui_palette,
-                        );
-                        if ui.add(themes_btn).clicked() {
-                            self.view = if is_themes {
-                                WorkbenchView::Palette
-                            } else {
-                                WorkbenchView::Themes
-                            };
-                        }
+                    let is_auto = self.view == WorkbenchView::AutoActions;
+                    let auto_btn = ui_ext::mode_tab_button_icon(
+                        Some(Icon::Settings),
+                        "Auto-Actions [F3]",
+                        is_auto,
+                        &self.ui_palette,
+                    );
+                    if ui.add(auto_btn).clicked() {
+                        self.view = if is_auto {
+                            WorkbenchView::Palette
+                        } else {
+                            WorkbenchView::AutoActions
+                        };
+                    }
 
-                        let is_auto = self.view == WorkbenchView::AutoActions;
-                        let auto_btn = ui_ext::mode_tab_button_icon(
-                            Some(Icon::Settings),
-                            "Auto-Actions [F3]",
-                            is_auto,
-                            &self.ui_palette,
-                        );
-                        if ui.add(auto_btn).clicked() {
-                            self.view = if is_auto {
-                                WorkbenchView::Palette
-                            } else {
-                                WorkbenchView::AutoActions
-                            };
-                        }
+                    let is_pal = self.view == WorkbenchView::Palette;
+                    let pal_tab = ui_ext::mode_tab_button_icon(
+                        Some(Icon::Search),
+                        "Quick Palette [F2]",
+                        is_pal,
+                        &self.ui_palette,
+                    );
+                    if ui.add(pal_tab).clicked() {
+                        self.view = WorkbenchView::Palette;
+                    }
 
-                        let is_pal = self.view == WorkbenchView::Palette;
-                        let pal_tab = ui_ext::mode_tab_button_icon(
-                            Some(Icon::Search),
-                            "Quick Palette [F2]",
-                            is_pal,
-                            &self.ui_palette,
-                        );
-                        if ui.add(pal_tab).clicked() {
-                            self.view = WorkbenchView::Palette;
-                        }
-
-                        let is_node = self.view == WorkbenchView::NodeMachine;
-                        let node_tab = ui_ext::mode_tab_button_icon(
-                            Some(Icon::NodeTree),
-                            "Big Node Machine [F1]",
-                            is_node,
-                            &self.ui_palette,
-                        );
-                        if ui.add(node_tab).clicked() {
-                            self.view = WorkbenchView::NodeMachine;
-                        }
+                    let is_node = self.view == WorkbenchView::NodeMachine;
+                    let node_tab = ui_ext::mode_tab_button_icon(
+                        Some(Icon::NodeTree),
+                        "Big Node Machine [F1]",
+                        is_node,
+                        &self.ui_palette,
+                    );
+                    if ui.add(node_tab).clicked() {
+                        self.view = WorkbenchView::NodeMachine;
+                    }
                 });
 
                 ui.add_space(8.0);
@@ -803,11 +725,11 @@ impl eframe::App for WorkbenchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Apply theme to egui on first frame or theme changes
         if !self.appearance_applied {
-            apply_workbench_palette_to_egui(ctx, &self.ui_palette);
+            ui_appearance::apply_visuals(ctx, &self.ui_palette);
             self.appearance_applied = true;
         }
 
-        if ctx.input(|input| input.key_pressed(egui::Key::F6)) {
+        if ctx.input(|input| input.key_pressed(egui::Key::F4) || input.key_pressed(egui::Key::F6)) {
             self.toggle_appearance(ctx);
         }
 
@@ -1406,9 +1328,6 @@ impl eframe::App for WorkbenchApp {
                         );
                     });
                 }
-                WorkbenchView::Themes => {
-                    self.render_themes_view(ui, ctx);
-                }
             }
         });
     }
@@ -1888,8 +1807,7 @@ impl WorkbenchApp {
                     strip.selected_region = None;
                     strip.stop();
                 }
-            } else if self.view == WorkbenchView::AutoActions || self.view == WorkbenchView::Themes
-            {
+            } else if self.view == WorkbenchView::AutoActions {
                 self.view = WorkbenchView::Palette;
             } else {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1954,21 +1872,13 @@ impl WorkbenchApp {
         if ctx.input(|i| i.key_pressed(egui::Key::F2)) {
             self.view = match self.view {
                 WorkbenchView::Palette => WorkbenchView::NodeMachine,
-                WorkbenchView::NodeMachine | WorkbenchView::AutoActions | WorkbenchView::Themes => {
-                    WorkbenchView::Palette
-                }
+                WorkbenchView::NodeMachine | WorkbenchView::AutoActions => WorkbenchView::Palette,
             };
         }
         if ctx.input(|i| i.key_pressed(egui::Key::F3)) {
             self.view = match self.view {
                 WorkbenchView::AutoActions => WorkbenchView::Palette,
                 _ => WorkbenchView::AutoActions,
-            };
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::F4)) {
-            self.view = match self.view {
-                WorkbenchView::Themes => WorkbenchView::Palette,
-                _ => WorkbenchView::Themes,
             };
         }
     }
@@ -2077,338 +1987,6 @@ impl WorkbenchApp {
         if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
             self.execute_current_action(ctx);
         }
-    }
-
-    fn render_themes_view(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let palette = self.ui_palette.clone();
-        let active_theme_name = self.config.colors.theme.clone();
-
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            Icon::Palette.ui(ui, 18.0, hex_to_c32(&palette.left_hand_border));
-            ui.heading(
-                egui::RichText::new("Hardware Display Themes")
-                    .color(hex_to_c32(&palette.left_hand_border))
-                    .strong(),
-            );
-            ui.label(
-                egui::RichText::new(format!("— Active: {}", active_theme_name))
-                    .color(hex_to_c32(&palette.title_color))
-                    .strong(),
-            );
-
-            // Active theme tag
-            egui::Frame::none()
-                .fill(hex_to_c32(&palette.b_low))
-                .stroke(egui::Stroke::new(1.0_f32, hex_to_c32(&palette.left_hand_border)))
-                .rounding(egui::Rounding::same(4.0))
-                .inner_margin(egui::Margin::symmetric(8.0, 3.0))
-                .show(ui, |ui| {
-                    ui.label(
-                        egui::RichText::new(if palette.is_dark { "Dark" } else { "Light" })
-                            .small()
-                            .color(hex_to_c32(&palette.subtitle_color)),
-                    );
-                });
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let reset_btn = ui_ext::secondary_button_icon(Some(Icon::RotateCcw), "Reset Overrides", hex_to_c32(&palette.undo_card_bg), &palette)
-                    .stroke(egui::Stroke::new(1.0_f32, hex_to_c32(&palette.undo_border)));
-
-                if ui
-                    .add(reset_btn)
-                    .on_hover_text("Clear all manual color overrides in config.toml to restore pure theme colors")
-                    .clicked()
-                {
-                    self.config.colors.clear_overrides();
-                    let _ = little_clip_core::config::AppConfig::clear_overrides_in_file();
-                    self.renderer.set_config(self.config.clone());
-                    apply_workbench_palette_to_egui(ctx, &self.ui_palette);
-                    self.dirty_mirror = true;
-                    let _ = send_ipc_request(&IpcRequest::ReloadConfig);
-                    self.status_msg = Some("Color overrides cleared — pure theme restored".to_string());
-                }
-            });
-        });
-
-        ui.add_space(8.0);
-
-        // Filter and Search Bar
-        ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut self.theme_search)
-                    .hint_text("Search themes (e.g. apollo, peppermint, nord, paper)...")
-                    .desired_width(320.0),
-            );
-
-            if !self.theme_search.is_empty() {
-                let clear_btn = ui_ext::compact_toolbar_button_icon(
-                    Some(Icon::Close),
-                    "Clear search",
-                    hex_to_c32(&palette.theme.b_low),
-                    &palette,
-                );
-                if ui.add(clear_btn).clicked() {
-                    self.theme_search.clear();
-                }
-            }
-
-            ui.add_space(12.0);
-
-            // Filter chips
-            let all_sel = self.theme_filter == ThemeFilter::All;
-            if ui
-                .selectable_label(all_sel, format!("All ({})", self.available_themes.len()))
-                .clicked()
-            {
-                self.theme_filter = ThemeFilter::All;
-            }
-
-            let dark_count = self.available_themes.iter().filter(|t| t.is_dark()).count();
-            let dark_sel = self.theme_filter == ThemeFilter::Dark;
-            if ui
-                .selectable_label(dark_sel, format!("Dark ({})", dark_count))
-                .clicked()
-            {
-                self.theme_filter = ThemeFilter::Dark;
-            }
-
-            let light_count = self.available_themes.len().saturating_sub(dark_count);
-            let light_sel = self.theme_filter == ThemeFilter::Light;
-            if ui
-                .selectable_label(light_sel, format!("Light ({})", light_count))
-                .clicked()
-            {
-                self.theme_filter = ThemeFilter::Light;
-            }
-        });
-
-        ui.add_space(10.0);
-
-        let query = self.theme_search.trim().to_lowercase();
-        let filtered: Vec<&Theme> = self
-            .available_themes
-            .iter()
-            .filter(|t| {
-                if !query.is_empty() && !t.name.to_lowercase().contains(&query) {
-                    return false;
-                }
-                match self.theme_filter {
-                    ThemeFilter::All => true,
-                    ThemeFilter::Dark => t.is_dark(),
-                    ThemeFilter::Light => !t.is_dark(),
-                }
-            })
-            .collect();
-
-        if filtered.is_empty() {
-            ui.label(
-                egui::RichText::new("No themes match your search criteria.")
-                    .color(hex_to_c32(&palette.subtitle_color))
-                    .italics(),
-            );
-            return;
-        }
-
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            let row_w = ui.available_width() - 8.0;
-
-            for theme in filtered {
-                let is_active = theme.name == active_theme_name;
-                let card_id = ui.make_persistent_id(format!("theme_bar_{}", theme.name));
-
-                let card_bg = hex_to_c32(&theme.background);
-                let border_color = if is_active {
-                    hex_to_c32(&palette.cursor_border)
-                } else {
-                    hex_to_c32(&theme.b_low)
-                };
-
-                let card_stroke =
-                    egui::Stroke::new(if is_active { 2.0_f32 } else { 1.0_f32 }, border_color);
-
-                let frame_resp = egui::Frame::none()
-                    .fill(card_bg)
-                    .stroke(card_stroke)
-                    .rounding(egui::Rounding::same(6.0))
-                    .inner_margin(egui::Margin::symmetric(14.0, 9.0))
-                    .show(ui, |ui| {
-                        ui.set_width(row_w);
-
-                        ui.horizontal(|ui| {
-                            // Left side: Theme name and Light/Dark tag
-                            let title_color = hex_to_c32(&theme.f_high);
-                            ui.label(
-                                egui::RichText::new(&theme.name)
-                                    .strong()
-                                    .size(15.0)
-                                    .color(title_color),
-                            );
-
-                            ui.label(
-                                egui::RichText::new(if theme.is_dark() { "Dark" } else { "Light" })
-                                    .size(11.0)
-                                    .color(hex_to_c32(&theme.f_low)),
-                            );
-
-                            // Right side: Active badge, harmonies, swatches
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if is_active {
-                                        egui::Frame::none()
-                                            .fill(hex_to_c32(&palette.b_low))
-                                            .stroke(egui::Stroke::new(
-                                                1.0_f32,
-                                                hex_to_c32(&palette.cursor_border),
-                                            ))
-                                            .rounding(egui::Rounding::same(4.0))
-                                            .inner_margin(egui::Margin::symmetric(8.0, 3.0))
-                                            .show(ui, |ui| {
-                                                ui.horizontal(|ui| {
-                                                    Icon::Check.ui(
-                                                        ui,
-                                                        11.0,
-                                                        hex_to_c32(&palette.cursor_border),
-                                                    );
-                                                    ui.label(
-                                                        egui::RichText::new("ACTIVE")
-                                                            .size(11.0)
-                                                            .strong()
-                                                            .color(hex_to_c32(
-                                                                &palette.cursor_border,
-                                                            )),
-                                                    );
-                                                });
-                                            });
-                                    }
-
-                                    ui.add_space(8.0);
-
-                                    // 5 Harmony dots
-                                    let harmonies = DerivedHarmonies::from_base_hex(
-                                        &theme.f_med,
-                                        theme.is_dark(),
-                                    );
-                                    let harm_swatches = [
-                                        ("Cur", &harmonies.tetradic_2, "Cursor (Tetradic Accent)"),
-                                        ("Tri2", &harmonies.triadic_2, "Prior Slot (Triadic 2)"),
-                                        ("Tri1", &harmonies.triadic_1, "Prior Slot (Triadic 1)"),
-                                        (
-                                            "RH",
-                                            &harmonies.complementary,
-                                            "Right Hand (Complementary)",
-                                        ),
-                                        ("LH", &harmonies.base, "Left Hand (Base Accent)"),
-                                    ];
-
-                                    for (_id, hex, label) in harm_swatches {
-                                        let c = hex_to_c32(hex);
-                                        let (rect, resp) = ui.allocate_exact_size(
-                                            egui::vec2(12.0, 12.0),
-                                            egui::Sense::hover(),
-                                        );
-                                        ui.painter().circle_filled(rect.center(), 4.5, c);
-                                        ui.painter().circle_stroke(
-                                            rect.center(),
-                                            4.5,
-                                            egui::Stroke::new(
-                                                0.5_f32,
-                                                hex_to_c32_alpha(&theme.f_high, 60),
-                                            ),
-                                        );
-                                        resp.on_hover_ui(|ui| {
-                                            ui.label(
-                                                egui::RichText::new(format!("{}: {}", label, hex))
-                                                    .small(),
-                                            );
-                                        });
-                                    }
-
-                                    ui.add_space(6.0);
-                                    ui.label(
-                                        egui::RichText::new("•")
-                                            .size(10.0)
-                                            .color(hex_to_c32(&theme.f_low)),
-                                    );
-                                    ui.add_space(6.0);
-
-                                    // 9 Theme swatches (displayed right-to-left: b_inv down to background)
-                                    let swatches = [
-                                        ("b_inv", &theme.b_inv, "Background Inverted (Badges)"),
-                                        ("b_low", &theme.b_low, "Background Low (Undo / Recessed)"),
-                                        (
-                                            "b_med",
-                                            &theme.b_med,
-                                            "Background Medium (History Cards)",
-                                        ),
-                                        ("b_high", &theme.b_high, "Background High (Hero Cards)"),
-                                        ("f_inv", &theme.f_inv, "Foreground Inverted (Overlays)"),
-                                        ("f_low", &theme.f_low, "Foreground Low (Muted Subtitles)"),
-                                        (
-                                            "f_med",
-                                            &theme.f_med,
-                                            "Foreground Medium (Primary Accent)",
-                                        ),
-                                        ("f_high", &theme.f_high, "Foreground High (Headlines)"),
-                                        ("background", &theme.background, "Canvas Background"),
-                                    ];
-
-                                    for (_id, hex, label) in swatches {
-                                        let c = hex_to_c32(hex);
-                                        let (rect, resp) = ui.allocate_exact_size(
-                                            egui::vec2(15.0, 13.0),
-                                            egui::Sense::hover(),
-                                        );
-                                        ui.painter().rect(
-                                            rect,
-                                            2.0,
-                                            c,
-                                            egui::Stroke::new(
-                                                0.5_f32,
-                                                hex_to_c32_alpha(&theme.f_high, 40),
-                                            ),
-                                        );
-                                        resp.on_hover_ui(|ui| {
-                                            ui.label(
-                                                egui::RichText::new(format!("{}: {}", label, hex))
-                                                    .small()
-                                                    .strong(),
-                                            );
-                                        });
-                                    }
-                                },
-                            );
-                        });
-                    });
-
-                // Make the entire frame clickable
-                let mut card_resp =
-                    ui.interact(frame_resp.response.rect, card_id, egui::Sense::click());
-                if !is_active {
-                    card_resp = card_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-                    if card_resp.hovered() {
-                        ui.painter().rect_stroke(
-                            frame_resp.response.rect,
-                            6.0,
-                            egui::Stroke::new(1.5_f32, hex_to_c32(&theme.f_med)),
-                        );
-                    }
-                }
-
-                if card_resp.clicked() && !is_active {
-                    self.config.colors.theme = theme.name.clone();
-                    let _ = little_clip_core::config::AppConfig::save_theme_to_file(&theme.name);
-                    self.renderer.set_config(self.config.clone());
-                    apply_workbench_palette_to_egui(ctx, &self.ui_palette);
-                    self.dirty_mirror = true;
-                    let _ = send_ipc_request(&IpcRequest::ReloadConfig);
-                    self.status_msg = Some(format!("Theme '{}' activated", theme.name));
-                }
-
-                ui.add_space(5.0);
-            }
-        });
     }
 }
 
@@ -2575,7 +2153,7 @@ fn run_prompt_modal(
         options,
         Box::new(move |cc| {
             ui_ext::configure_workbench_style(&cc.egui_ctx);
-            apply_workbench_palette_to_egui(&cc.egui_ctx, &palette);
+            ui_appearance::apply_visuals(&cc.egui_ctx, &palette);
             egui_extras::install_image_loaders(&cc.egui_ctx);
             Box::new(PromptApp::new(
                 title,

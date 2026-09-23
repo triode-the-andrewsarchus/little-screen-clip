@@ -7,6 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::color::parse_hex_color_rgba_or_white as parse_hex_color_rgba;
+use crate::config::WorkbenchAppearance;
 
 /// Represents the 9 standard colors defined in a Hundred Rabbits theme.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -498,11 +499,43 @@ pub struct AppPalette {
 
 impl Default for AppPalette {
     fn default() -> Self {
-        Self::from_theme(&Theme::apollo(), &HashMap::new())
+        Self::for_appearance(WorkbenchAppearance::Dark)
     }
 }
 
 impl AppPalette {
+    /// Fixed application colors shared by the workbench and little-screen renderer.
+    /// `Theme` is temporarily used as the palette input while legacy callers migrate.
+    pub fn for_appearance(appearance: WorkbenchAppearance) -> Self {
+        let (background, f_high, f_med, f_low, f_inv, b_high, b_med, b_low, b_inv, link) =
+            match appearance {
+                WorkbenchAppearance::Dark => (
+                    "#151c24", "#f5f2e9", "#d6dce0", "#aab6c1", "#111923", "#243440", "#273541",
+                    "#1e2a35", "#ffb385", "#79b8ec",
+                ),
+                WorkbenchAppearance::Light => (
+                    "#f4f2ea", "#17242f", "#45505b", "#586977", "#fffdf7", "#fffaf1", "#e3e7e7",
+                    "#e9edeb", "#a44a37", "#215c84",
+                ),
+            };
+        let theme = Theme {
+            name: format!("fixed-{appearance:?}").to_lowercase(),
+            background: background.into(),
+            f_high: f_high.into(),
+            f_med: f_med.into(),
+            f_low: f_low.into(),
+            f_inv: f_inv.into(),
+            b_high: b_high.into(),
+            b_med: b_med.into(),
+            b_low: b_low.into(),
+            b_inv: b_inv.into(),
+        };
+        Self::from_theme(
+            &theme,
+            &HashMap::from([("url_color".to_owned(), link.to_owned())]),
+        )
+    }
+
     /// Builds a fully resolved AppPalette from a Theme and optional user overrides.
     pub fn from_theme(theme: &Theme, overrides: &HashMap<String, String>) -> Self {
         let is_dark = theme.is_dark();

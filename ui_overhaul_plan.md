@@ -4,7 +4,9 @@ Status: implementation underway on `feat/workbench-ui-overhaul`. The audit below
 
 Reviewed against commit `36e609847d99141e42764a602f748a36eee25e74` on 2026-09-22 (America/Chicago). This is a source audit, not a live visual or interaction test. Findings marked as risks need reproduction during the baseline phase. This proposal supersedes the old `ui_architecture_design.md` as a planning reference; that document describes some changes already implemented and some abstractions that remain unused.
 
-Implemented first: focused-output sizing before the fixed popup maps, shared readable text and control dimensions, aligned studio/audio controls, one-click Image Studio tool buttons that wrap with available width, non-overlapping shared panel geometry now used by Film Look and Creative FX, header wrapping, bounded mirror height, one shared interactive mirror widget, and corrected translucent-color contrast math. Workbench Dark/Light palettes and the prompt appearance are independent of the hardware display theme. The UI still consumes the legacy `AppPalette` shape; migration to semantic color roles and the remaining stages below are pending.
+Implemented first: focused-output sizing before the fixed popup maps, shared readable text and control dimensions, aligned studio/audio controls, one-click Image Studio tool buttons that wrap with available width, non-overlapping shared panel geometry now used by Film Look and Creative FX, header wrapping, bounded mirror height, one shared interactive mirror widget, and corrected translucent-color contrast math. The UI still consumes the legacy `AppPalette` shape; migration to semantic color roles and the remaining stages below are pending.
+
+**Scope correction, 2026-09-23:** Retire the runtime Hundred Rabbits theme system for both workbench and little screen. Use centrally defined fixed Light/Dark palettes, switched together by the sole appearance choice. This supersedes the earlier instructions below to preserve display themes, selectors, and overrides. Preserve all other user actions and outputs. The current implementation is transitional until the theme code and configuration paths are removed.
 
 ## 1. Recommended direction
 
@@ -16,7 +18,7 @@ Primary decisions:
 
 - Use one typography and control geometry system across all views. Button importance changes color and emphasis, not font size or height.
 - Keep the workbench a non-resizable popup for Niri. Determine its screen-relative size before opening on every invocation; base internal layouts on the resulting logical space.
-- Give the workbench two designed color modes, Light and Dark. Retain the color-theory machinery and separately preserve hardware display themes.
+- Give the app designed fixed Light/Dark colors, with centralized roles and useful color-theory derivations. Remove runtime SVG theme selection and overrides for the hardware display as well.
 - Evolve `StudioShell` into a host that actually owns layout, focus, overlays, and status. Keep specialized image, timeline, table, and comparison bodies.
 - Separate document/session state, preview rendering, editing controls, and application services so previews can be embedded in a future file manager.
 - Prefer an egui upgrade followed by a bounded `egui_taffy` layout trial. Reuse the existing background executor; do not add three libraries merely because they are available.
