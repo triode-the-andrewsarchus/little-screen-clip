@@ -199,6 +199,7 @@ struct WorkbenchApp {
     canvas_state: NodeCanvasState,
     recipes: Vec<Recipe>,
     search_query: String,
+    palette_search_needs_focus: bool,
     selected_action_index: usize,
     selected_slots: Vec<SlotId>,
     status_msg: Option<String>,
@@ -270,6 +271,7 @@ impl WorkbenchApp {
             canvas_state,
             recipes,
             search_query: String::new(),
+            palette_search_needs_focus: true,
             selected_action_index: 0,
             selected_slots: vec![SlotId::LeftHand],
             status_msg: None,
@@ -791,6 +793,7 @@ impl eframe::App for WorkbenchApp {
         }
 
         if self.render_modal_viewers(ctx) {
+            self.palette_search_needs_focus = true;
             return;
         }
 
@@ -844,6 +847,10 @@ impl eframe::App for WorkbenchApp {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(hex_to_c32(&self.ui_palette.title_color));
+
+            if self.view != WorkbenchView::Palette {
+                self.palette_search_needs_focus = true;
+            }
 
             match self.view {
                 WorkbenchView::Palette => {
@@ -1137,7 +1144,7 @@ impl eframe::App for WorkbenchApp {
 
                     ui.add_space(6.0);
 
-                    // Search input (autofocused)
+                    // Focus on entry, then leave keyboard focus under the user's control.
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("Action > ")
@@ -1155,7 +1162,10 @@ impl eframe::App for WorkbenchApp {
                             text_edit,
                         );
                         if !audio_region_active {
-                            response.request_focus();
+                            if self.palette_search_needs_focus {
+                                response.request_focus();
+                                self.palette_search_needs_focus = false;
+                            }
                         } else {
                             if response.has_focus() {
                                 ctx.memory_mut(|m| m.surrender_focus(response.id));
@@ -1166,6 +1176,7 @@ impl eframe::App for WorkbenchApp {
                                     strip.stop();
                                 }
                                 response.request_focus();
+                                self.palette_search_needs_focus = false;
                             }
                         }
                     });
