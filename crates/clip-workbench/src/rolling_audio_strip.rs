@@ -10,13 +10,28 @@ use little_clip_core::audio::{PeakBlock, build_peak_pyramid};
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::slot::HandSide;
 use little_clip_core::theme::AppPalette;
+use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use rodio::stream::MixerDeviceSink;
 use rodio::{Decoder, Player};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::time::{Duration, Instant};
 use tracing::{error, info};
+
+struct RollingSnapshot {
+    path: PathBuf,
+    duration_sec: f32,
+    sample_rate: u32,
+    channels: u16,
+    mono_samples: Vec<f32>,
+    peaks_lvl0: Vec<PeakBlock>,
+    peaks_lvl1: Vec<PeakBlock>,
+    peaks_lvl2: Vec<PeakBlock>,
+}
+
+type SnapshotReceiver = Receiver<Result<Result<RollingSnapshot, String>, JobError>>;
 
 /// UI and playback state for the rolling audio snapshot quick-strip widget.
 pub struct RollingAudioStripState {
@@ -30,6 +45,8 @@ pub struct RollingAudioStripState {
     pub peaks_lvl2: Vec<PeakBlock>,
     pub is_loaded: bool,
     pub error_msg: Option<String>,
+    snapshot_job: Option<(JobTicket, SnapshotReceiver)>,
+    snapshot_feedback: bool,
 
     // Region selection & dragging
     pub selected_region: Option<(f32, f32)>, // (start_sec, end_sec)
@@ -115,6 +132,8 @@ impl RollingAudioStripState {
             peaks_lvl2: Vec::new(),
             is_loaded: false,
             error_msg: None,
+            snapshot_job: None,
+            snapshot_feedback: false,
             selected_region: None,
             drag_start_time: None,
             is_dragging: false,
@@ -128,11 +147,21 @@ impl RollingAudioStripState {
             status_toast: None,
         };
 
-        state.load_snapshot();
+        state.start_snapshot_load(false);
         state
     }
 
     pub fn max_amplitude(&self) -> f32 {
+        let blocks = if !self.peaks_lvl2.is_empty() {
+            &self.peaks_lvl2
+        } else {
+            &self.peaks_lvl0
+        };
+        if !blocks.is_empty() {
+            return blocks.iter().fold(0.0f32, |peak, block| {
+                peak.max(block.min.abs()).max(block.max.abs())
+            });
+        }
         self.mono_samples
             .iter()
             .fold(0.0f32, |m, &s| m.max(s.abs()))
@@ -169,54 +198,76 @@ impl RollingAudioStripState {
         self.player.as_ref()
     }
 
-    /// Fetches a frozen rolling audio snapshot from the daemon via IPC
+    /// Starts fetching a frozen rolling audio snapshot without blocking the UI.
     pub fn load_snapshot(&mut self) {
-        match crate::send_ipc_request(&IpcRequest::GetRollingAudio) {
-            Ok(IpcResponse::RollingAudio {
-                path,
-                duration_secs,
-                sample_rate,
-                channels,
-            }) => {
-                info!(
-                    "Rolling audio snapshot received: {:?} ({:.2}s, {}Hz, ch={})",
-                    path, duration_secs, sample_rate, channels
-                );
-                self.path = Some(path.clone());
-                self.duration_sec = duration_secs;
-                self.sample_rate = sample_rate;
-                self.channels = channels;
+        self.start_snapshot_load(true);
+    }
 
-                match load_pcm16_samples(&path) {
-                    Ok((mono, sr, _ch)) => {
-                        let (l0, l1, l2) = build_peak_pyramid(&mono, sr as f32);
-                        self.mono_samples = mono;
-                        self.peaks_lvl0 = l0;
-                        self.peaks_lvl1 = l1;
-                        self.peaks_lvl2 = l2;
-                        self.is_loaded = true;
-                        self.error_msg = None;
+    fn start_snapshot_load(&mut self, feedback: bool) {
+        if let Some((ticket, _)) = self.snapshot_job.take() {
+            ticket.cancel();
+        }
+        let job = BackgroundJobs::global().submit(Duration::from_secs(20), fetch_snapshot);
+        self.snapshot_job = Some(job);
+        self.snapshot_feedback = feedback;
+        self.error_msg = None;
+    }
 
-                        let peak = self.max_amplitude();
-                        info!(
-                            "Decoded snapshot: {:.2}s, peak amplitude: {:.4}",
-                            duration_secs, peak
-                        );
-                    }
-                    Err(e) => {
-                        error!("Failed to decode snapshot WAV: {}", e);
-                        self.error_msg = Some(format!("Failed to decode WAV: {}", e));
-                    }
+    fn poll_snapshot(&mut self, ctx: &egui::Context) {
+        let Some((_, receiver)) = &self.snapshot_job else {
+            return;
+        };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(80));
+                return;
+            }
+            Err(TryRecvError::Disconnected) => Err(JobError::Cancelled),
+        };
+        self.snapshot_job = None;
+        let feedback = std::mem::take(&mut self.snapshot_feedback);
+        let now = ctx.input(|input| input.time);
+        match result {
+            Ok(Ok(snapshot)) => {
+                self.stop();
+                self.selected_region = None;
+                self.drag_start_time = None;
+                self.is_dragging = false;
+                self.playhead_sec = 0.0;
+                self.duration_sec = snapshot.duration_sec;
+                self.sample_rate = snapshot.sample_rate;
+                self.channels = snapshot.channels;
+                self.path = Some(snapshot.path);
+                self.mono_samples = snapshot.mono_samples;
+                self.peaks_lvl0 = snapshot.peaks_lvl0;
+                self.peaks_lvl1 = snapshot.peaks_lvl1;
+                self.peaks_lvl2 = snapshot.peaks_lvl2;
+                self.is_loaded = true;
+                self.error_msg = None;
+                if feedback {
+                    let peak = self.max_amplitude();
+                    let message = if peak < 0.001 {
+                        "Snapshot refreshed: buffer is currently silence".to_string()
+                    } else {
+                        format!(
+                            "Snapshot refreshed ({:.1}s, peak: {:.0}%)",
+                            self.duration_sec,
+                            peak * 100.0
+                        )
+                    };
+                    self.status_toast = Some((message, now));
                 }
             }
-            Ok(IpcResponse::Error { error }) => {
-                self.error_msg = Some(error);
+            Ok(Err(message)) => {
+                error!("Failed to refresh rolling audio snapshot: {message}");
+                self.error_msg = Some(message.clone());
+                self.status_toast = Some((message, now));
             }
-            Ok(_) => {
-                self.error_msg = Some("Unexpected response from daemon".to_string());
-            }
-            Err(e) => {
-                self.error_msg = Some(format!("IPC connection error: {}", e));
+            Err(error) => {
+                let message = format!("Rolling audio refresh failed: {error}");
+                self.error_msg = Some(message.clone());
+                self.status_toast = Some((message, now));
             }
         }
     }
@@ -439,6 +490,113 @@ impl RollingAudioStripState {
         }
     }
 
+    fn render_header(&mut self, ui: &mut egui::Ui, palette: &AppPalette, total_dur: f32) {
+        // Header Row: Badge & Status / Selection info
+        ui.horizontal(|ui| {
+            Icon::Microphone.ui(ui, 13.0, hex_to_c32(&palette.harmonies.base));
+            ui.label(
+                egui::RichText::new("ROLLING AUDIO")
+                    .color(hex_to_c32(&palette.harmonies.base))
+                    .strong()
+                    .small(),
+            );
+            ui.label(
+                egui::RichText::new(format!("({:.0}s snapshot)", total_dur))
+                    .color(hex_to_c32(&palette.theme.f_med))
+                    .small(),
+            );
+
+            // Refresh Snapshot button
+            let refresh_label = if self.snapshot_job.is_some() {
+                "Refreshing…"
+            } else {
+                "Refresh"
+            };
+            let refresh_btn = ui.add_enabled(
+                self.snapshot_job.is_none(),
+                crate::ui_ext::secondary_button_icon(
+                    Some(Icon::RotateCw),
+                    refresh_label,
+                    hex_to_c32(&palette.theme.b_low),
+                    palette,
+                )
+                .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med))),
+            );
+            if refresh_btn.clicked() {
+                self.load_snapshot();
+            }
+            refresh_btn.on_hover_text("Reload latest rolling audio buffer from daemon (F5)");
+
+            if self.snapshot_job.is_some() && !self.is_loaded {
+                ui.label(
+                    egui::RichText::new("Loading audio snapshot…")
+                        .color(hex_to_c32(&palette.theme.f_med))
+                        .small(),
+                );
+            } else if let Some(error) = &self.error_msg {
+                ui.label(
+                    egui::RichText::new("Refresh failed — retry")
+                        .color(hex_to_c32(&palette.diff_del))
+                        .small(),
+                )
+                .on_hover_text(error);
+            } else if self.is_silent() {
+                ui.horizontal(|ui| {
+                    Icon::Alert.ui(ui, 12.0, hex_to_c32(&palette.diff_mod));
+                    ui.label(
+                        egui::RichText::new("Buffer is silence (play audio to capture)")
+                            .color(hex_to_c32(&palette.diff_mod))
+                            .small(),
+                    );
+                });
+            } else if let Some((s, e)) = self.selected_region {
+                let sel_dur = (e - s).abs();
+                let s_rel = s - total_dur;
+                let e_rel = e - total_dur;
+                ui.label(
+                    egui::RichText::new(format!(
+                        "• Selected: {:.1}s to {:.1}s ({:.2}s)",
+                        s_rel, e_rel, sel_dur
+                    ))
+                    .color(hex_to_c32(&palette.harmonies.base))
+                    .strong()
+                    .small(),
+                );
+                ui.label(
+                    egui::RichText::new("[Space] Play  [Ctrl+C] Copy  [Esc] Clear")
+                        .color(hex_to_c32(&palette.theme.f_med))
+                        .small(),
+                );
+            } else {
+                ui.label(
+                    egui::RichText::new(
+                        "• Drag on waveform to select  |  Right-click: Full Editor",
+                    )
+                    .color(hex_to_c32(&palette.theme.f_low))
+                    .small(),
+                );
+            }
+
+            if let Some((ref msg, _)) = self.status_toast {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let color = if self.error_msg.as_deref() == Some(msg.as_str()) {
+                        &palette.diff_del
+                    } else {
+                        &palette.diff_add
+                    };
+                    ui.label(
+                        egui::RichText::new(msg)
+                            .color(hex_to_c32(color))
+                            .strong()
+                            .small(),
+                    );
+                });
+            }
+        });
+
+        ui.add_space(2.0);
+    }
+
     pub fn render_ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -446,6 +604,7 @@ impl RollingAudioStripState {
         palette: &AppPalette,
         open_full_editor: &mut Option<(PathBuf, Option<(f32, f32)>)>,
     ) {
+        self.poll_snapshot(ctx);
         self.update_playback();
         if self.is_playing {
             ctx.request_repaint();
@@ -462,85 +621,7 @@ impl RollingAudioStripState {
         let total_dur = self.duration_sec.max(0.1);
 
         ui.vertical(|ui| {
-            // Header Row: Badge & Status / Selection info
-            ui.horizontal(|ui| {
-                Icon::Microphone.ui(ui, 13.0, hex_to_c32(&palette.harmonies.base));
-                ui.label(
-                    egui::RichText::new("ROLLING AUDIO")
-                        .color(hex_to_c32(&palette.harmonies.base))
-                        .strong()
-                        .small(),
-                );
-                ui.label(
-                    egui::RichText::new(format!("({:.0}s snapshot)", total_dur))
-                        .color(hex_to_c32(&palette.theme.f_med))
-                        .small(),
-                );
-
-                // Refresh Snapshot button
-                let refresh_btn = ui.add(
-                    crate::ui_ext::secondary_button_icon(Some(Icon::RotateCw), "Refresh", hex_to_c32(&palette.theme.b_low), palette)
-                        .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med))),
-                );
-                if refresh_btn.clicked() {
-                    self.load_snapshot();
-                    let peak = self.max_amplitude();
-                    if peak < 0.001 {
-                        self.status_toast = Some(("Snapshot refreshed: buffer is currently silence".to_string(), now));
-                    } else {
-                        self.status_toast = Some((format!("Snapshot refreshed ({:.1}s, peak: {:.0}%)", self.duration_sec, peak * 100.0), now));
-                    }
-                }
-                refresh_btn.on_hover_text("Reload latest rolling audio buffer from daemon (F5)");
-
-                if self.is_silent() {
-                    ui.horizontal(|ui| {
-                        Icon::Alert.ui(ui, 12.0, hex_to_c32(&palette.diff_mod));
-                        ui.label(
-                            egui::RichText::new("Buffer is silence (play audio to capture)")
-                                .color(hex_to_c32(&palette.diff_mod))
-                                .small(),
-                        );
-                    });
-                } else if let Some((s, e)) = self.selected_region {
-                    let sel_dur = (e - s).abs();
-                    let s_rel = s - total_dur;
-                    let e_rel = e - total_dur;
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "• Selected: {:.1}s to {:.1}s ({:.2}s)",
-                            s_rel, e_rel, sel_dur
-                        ))
-                        .color(hex_to_c32(&palette.harmonies.base))
-                        .strong()
-                        .small(),
-                    );
-                    ui.label(
-                        egui::RichText::new("[Space] Play  [Ctrl+C] Copy  [Esc] Clear")
-                            .color(hex_to_c32(&palette.theme.f_med))
-                            .small(),
-                    );
-                } else {
-                    ui.label(
-                        egui::RichText::new("• Drag on waveform to select  |  Right-click: Full Editor")
-                            .color(hex_to_c32(&palette.theme.f_low))
-                            .small(),
-                    );
-                }
-
-                if let Some((ref msg, _)) = self.status_toast {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(msg)
-                                .color(hex_to_c32(&palette.diff_add))
-                                .strong()
-                                .small(),
-                        );
-                    });
-                }
-            });
-
-            ui.add_space(2.0);
+            self.render_header(ui, palette, total_dur);
 
             // Waveform Canvas
             let canvas_h = 44.0;
@@ -548,10 +629,6 @@ impl RollingAudioStripState {
                 Vec2::new(total_w, canvas_h),
                 egui::Sense::click_and_drag(),
             );
-
-            if self.selected_region.is_some() {
-                response.request_focus();
-            }
 
             let painter = ui.painter_at(rect);
 
@@ -665,6 +742,14 @@ impl RollingAudioStripState {
                     }
                     painter.add(egui::Shape::mesh(mesh));
                 }
+            } else if self.snapshot_job.is_some() {
+                painter.text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "Loading rolling audio…",
+                    egui::FontId::proportional(14.0),
+                    hex_to_c32(&palette.theme.f_med),
+                );
             } else if let Some(ref err) = self.error_msg {
                 painter.text(
                     rect.center(),
@@ -726,6 +811,7 @@ impl RollingAudioStripState {
             };
 
             if response.drag_started() {
+                response.request_focus();
                 if self.is_playing {
                     self.stop();
                 }
@@ -763,6 +849,47 @@ impl RollingAudioStripState {
             }
         });
     }
+}
+
+impl Drop for RollingAudioStripState {
+    fn drop(&mut self) {
+        if let Some((ticket, _)) = &self.snapshot_job {
+            ticket.cancel();
+        }
+    }
+}
+
+fn fetch_snapshot() -> Result<RollingSnapshot, String> {
+    let (path, duration_sec, sample_rate, channels) =
+        match crate::send_ipc_request(&IpcRequest::GetRollingAudio) {
+            Ok(IpcResponse::RollingAudio {
+                path,
+                duration_secs,
+                sample_rate,
+                channels,
+            }) => (path, duration_secs, sample_rate, channels),
+            Ok(IpcResponse::Error { error }) => return Err(error),
+            Ok(_) => return Err("Unexpected response from daemon".to_string()),
+            Err(error) => return Err(format!("IPC connection error: {error}")),
+        };
+    info!(
+        "Rolling audio snapshot received: {:?} ({:.2}s, {}Hz, ch={})",
+        path, duration_sec, sample_rate, channels
+    );
+    let (mono_samples, decoded_rate, decoded_channels) =
+        load_pcm16_samples(&path).map_err(|error| format!("Failed to decode WAV: {error}"))?;
+    let (peaks_lvl0, peaks_lvl1, peaks_lvl2) =
+        build_peak_pyramid(&mono_samples, decoded_rate as f32);
+    Ok(RollingSnapshot {
+        path,
+        duration_sec,
+        sample_rate: decoded_rate,
+        channels: decoded_channels,
+        mono_samples,
+        peaks_lvl0,
+        peaks_lvl1,
+        peaks_lvl2,
+    })
 }
 
 fn aggregate_blocks(blocks: &[PeakBlock]) -> (f32, f32, [u8; 3]) {
@@ -876,6 +1003,98 @@ mod tests {
     use super::*;
     use little_clip_core::rolling_audio::RollingAudioBuffer;
 
+    fn complete_snapshot(
+        strip: &mut RollingAudioStripState,
+        result: Result<RollingSnapshot, String>,
+    ) {
+        let (ticket, _) = BackgroundJobs::global().submit(Duration::from_secs(1), || ());
+        ticket.cancel();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        strip.snapshot_job = Some((ticket, receiver));
+        sender.send(Ok(result)).unwrap();
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| strip.poll_snapshot(ctx));
+    }
+
+    fn empty_test_strip() -> RollingAudioStripState {
+        RollingAudioStripState {
+            path: None,
+            duration_sec: 0.0,
+            sample_rate: 48000,
+            channels: 2,
+            mono_samples: Vec::new(),
+            peaks_lvl0: Vec::new(),
+            peaks_lvl1: Vec::new(),
+            peaks_lvl2: Vec::new(),
+            is_loaded: false,
+            error_msg: None,
+            snapshot_job: None,
+            snapshot_feedback: false,
+            selected_region: None,
+            drag_start_time: None,
+            is_dragging: false,
+            _sink: None,
+            player: None,
+            is_playing: false,
+            playhead_sec: 0.0,
+            playback_start_instant: None,
+            playback_start_offset_sec: 0.0,
+            play_stop_time: None,
+            status_toast: None,
+        }
+    }
+
+    #[test]
+    fn completed_snapshot_replaces_waveform_and_clears_old_selection() {
+        let mut strip = empty_test_strip();
+        strip.selected_region = Some((3.0, 7.0));
+        strip.is_loaded = true;
+        strip.mono_samples = vec![0.0; 16];
+
+        let samples = vec![0.0, 0.5, -0.75, 0.0];
+        let (peaks_lvl0, peaks_lvl1, peaks_lvl2) = build_peak_pyramid(&samples, 48000.0);
+        strip.snapshot_feedback = true;
+        complete_snapshot(
+            &mut strip,
+            Ok(RollingSnapshot {
+                path: PathBuf::from("new-snapshot.wav"),
+                duration_sec: 0.5,
+                sample_rate: 48000,
+                channels: 1,
+                mono_samples: samples.clone(),
+                peaks_lvl0,
+                peaks_lvl1,
+                peaks_lvl2,
+            }),
+        );
+
+        assert_eq!(strip.path.as_deref(), Some(Path::new("new-snapshot.wav")));
+        assert_eq!(strip.mono_samples, samples);
+        assert_eq!(strip.max_amplitude(), 0.75);
+        assert_eq!(strip.sample_rate, 48000);
+        assert_eq!(strip.channels, 1);
+        assert!(strip.selected_region.is_none());
+        assert!(strip.snapshot_job.is_none());
+        assert!(strip.error_msg.is_none());
+        assert!(strip.status_toast.as_ref().unwrap().0.contains("75%"));
+    }
+
+    #[test]
+    fn failed_snapshot_keeps_existing_waveform_and_reports_error() {
+        let mut strip = empty_test_strip();
+        strip.path = Some(PathBuf::from("previous.wav"));
+        strip.is_loaded = true;
+        strip.mono_samples = vec![0.25, -0.5];
+        strip.selected_region = Some((0.1, 0.2));
+        complete_snapshot(&mut strip, Err("daemon unavailable".into()));
+
+        assert_eq!(strip.path.as_deref(), Some(Path::new("previous.wav")));
+        assert_eq!(strip.mono_samples, vec![0.25, -0.5]);
+        assert_eq!(strip.selected_region, Some((0.1, 0.2)));
+        assert_eq!(strip.error_msg.as_deref(), Some("daemon unavailable"));
+        assert!(strip.snapshot_job.is_none());
+    }
+
     #[test]
     fn test_rolling_strip_play_selection() {
         let mut strip = RollingAudioStripState::new();
@@ -916,29 +1135,17 @@ mod tests {
         assert!(!l1.is_empty());
         assert!(!l2.is_empty());
 
-        let strip = RollingAudioStripState {
-            path: Some(wav_path.clone()),
-            duration_sec: 2.0,
-            sample_rate: sr,
-            channels: ch,
-            mono_samples: mono,
-            peaks_lvl0: l0,
-            peaks_lvl1: l1,
-            peaks_lvl2: l2,
-            is_loaded: true,
-            error_msg: None,
-            selected_region: Some((0.5, 1.2)),
-            drag_start_time: None,
-            is_dragging: false,
-            _sink: None,
-            player: None,
-            is_playing: false,
-            playhead_sec: 0.0,
-            playback_start_instant: None,
-            playback_start_offset_sec: 0.0,
-            play_stop_time: None,
-            status_toast: None,
-        };
+        let mut strip = empty_test_strip();
+        strip.path = Some(wav_path.clone());
+        strip.duration_sec = 2.0;
+        strip.sample_rate = sr;
+        strip.channels = ch;
+        strip.mono_samples = mono;
+        strip.peaks_lvl0 = l0;
+        strip.peaks_lvl1 = l1;
+        strip.peaks_lvl2 = l2;
+        strip.is_loaded = true;
+        strip.selected_region = Some((0.5, 1.2));
 
         let (mn, mx, rgb) = strip.query_peaks(0, 44100);
         assert!(mn <= mx);
@@ -958,29 +1165,13 @@ mod tests {
         buf.push_samples(&samples);
         buf.write_wav(&wav_path).unwrap();
 
-        let mut strip = RollingAudioStripState {
-            path: Some(wav_path.clone()),
-            duration_sec: 2.0,
-            sample_rate: 44100,
-            channels: 2,
-            mono_samples: vec![0.05; 44100 * 2],
-            peaks_lvl0: Vec::new(),
-            peaks_lvl1: Vec::new(),
-            peaks_lvl2: Vec::new(),
-            is_loaded: true,
-            error_msg: None,
-            selected_region: Some((0.2, 0.8)),
-            drag_start_time: None,
-            is_dragging: false,
-            _sink: None,
-            player: None,
-            is_playing: false,
-            playhead_sec: 0.0,
-            playback_start_instant: None,
-            playback_start_offset_sec: 0.0,
-            play_stop_time: None,
-            status_toast: None,
-        };
+        let mut strip = empty_test_strip();
+        strip.path = Some(wav_path.clone());
+        strip.duration_sec = 2.0;
+        strip.sample_rate = 44100;
+        strip.mono_samples = vec![0.05; 44100 * 2];
+        strip.is_loaded = true;
+        strip.selected_region = Some((0.2, 0.8));
 
         assert!(strip.selected_region.is_some());
         // Verify region can be cleared
@@ -992,29 +1183,12 @@ mod tests {
 
     #[test]
     fn test_amplitude_and_silence_detection() {
-        let mut strip = RollingAudioStripState {
-            path: None,
-            duration_sec: 10.0,
-            sample_rate: 44100,
-            channels: 2,
-            mono_samples: vec![0.0; 44100 * 10],
-            peaks_lvl0: Vec::new(),
-            peaks_lvl1: Vec::new(),
-            peaks_lvl2: Vec::new(),
-            is_loaded: true,
-            error_msg: None,
-            selected_region: Some((2.0, 5.0)),
-            drag_start_time: None,
-            is_dragging: false,
-            _sink: None,
-            player: None,
-            is_playing: false,
-            playhead_sec: 0.0,
-            playback_start_instant: None,
-            playback_start_offset_sec: 0.0,
-            play_stop_time: None,
-            status_toast: None,
-        };
+        let mut strip = empty_test_strip();
+        strip.duration_sec = 10.0;
+        strip.sample_rate = 44100;
+        strip.mono_samples = vec![0.0; 44100 * 10];
+        strip.is_loaded = true;
+        strip.selected_region = Some((2.0, 5.0));
 
         assert!(strip.is_silent());
         assert_eq!(strip.max_amplitude(), 0.0);
@@ -1047,29 +1221,14 @@ mod tests {
 
         let (l0, l1, l2) = build_peak_pyramid(&mono, sr as f32);
 
-        let strip = RollingAudioStripState {
-            path: None,
-            duration_sec: 2.0,
-            sample_rate: sr,
-            channels: 2,
-            mono_samples: mono,
-            peaks_lvl0: l0,
-            peaks_lvl1: l1,
-            peaks_lvl2: l2,
-            is_loaded: true,
-            error_msg: None,
-            selected_region: None,
-            drag_start_time: None,
-            is_dragging: false,
-            _sink: None,
-            player: None,
-            is_playing: false,
-            playhead_sec: 0.0,
-            playback_start_instant: None,
-            playback_start_offset_sec: 0.0,
-            play_stop_time: None,
-            status_toast: None,
-        };
+        let mut strip = empty_test_strip();
+        strip.duration_sec = 2.0;
+        strip.sample_rate = sr;
+        strip.mono_samples = mono;
+        strip.peaks_lvl0 = l0;
+        strip.peaks_lvl1 = l1;
+        strip.peaks_lvl2 = l2;
+        strip.is_loaded = true;
 
         // At frame 48000 (1.0s):
         // Querying around 47500..48500 (span = 1000 => lvl0 blocks):

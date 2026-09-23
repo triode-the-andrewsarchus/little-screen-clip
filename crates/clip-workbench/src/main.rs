@@ -1825,18 +1825,6 @@ impl WorkbenchApp {
         }
         if let Some(strip) = &mut self.rolling_audio_strip {
             strip.load_snapshot();
-            let now = ctx.input(|i| i.time);
-            let peak = strip.max_amplitude();
-            let toast_msg = if peak < 0.001 {
-                "⟳ Snapshot refreshed: buffer is currently silence".to_string()
-            } else {
-                format!(
-                    "⟳ Snapshot refreshed ({:.1}s, peak: {:.0}%)",
-                    strip.duration_sec,
-                    peak * 100.0
-                )
-            };
-            strip.status_toast = Some((toast_msg, now));
         }
     }
 
