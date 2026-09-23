@@ -2485,9 +2485,7 @@ impl eframe::App for PromptApp {
 
                 ui.add_space(8.0);
                 ui.label(
-                    egui::RichText::new(&self.message)
-                        .color(hex_to_c32(&self.palette.theme.f_med))
-                        .size(13.0),
+                    egui::RichText::new(&self.message).color(hex_to_c32(&self.palette.theme.f_med)),
                 );
 
                 ui.add_space(12.0);
@@ -2509,32 +2507,18 @@ impl eframe::App for PromptApp {
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
                     let sub_bg = hex_to_c32(&self.palette.harmonies.base);
-                    let sub_fg = contrast_text_c32(
+                    let submit_btn = ui.add(ui_ext::action_button(
+                        "Execute & Run [Enter]",
                         sub_bg,
-                        Some(hex_to_c32(&self.palette.theme.f_high)),
                         &self.palette,
-                    );
-                    let submit_btn = ui.add(
-                        egui::Button::new(
-                            egui::RichText::new("Execute & Run [Enter]")
-                                .color(sub_fg)
-                                .strong(),
-                        )
-                        .fill(sub_bg)
-                        .min_size(egui::vec2(140.0, 32.0)),
-                    );
+                    ));
 
                     let can_bg = hex_to_c32(&self.palette.theme.b_med);
-                    let can_fg = contrast_text_c32(
+                    let cancel_btn = ui.add(ui_ext::secondary_button(
+                        "Cancel [Esc]",
                         can_bg,
-                        Some(hex_to_c32(&self.palette.theme.f_med)),
                         &self.palette,
-                    );
-                    let cancel_btn = ui.add(
-                        egui::Button::new(egui::RichText::new("Cancel [Esc]").color(can_fg))
-                            .fill(can_bg)
-                            .min_size(egui::vec2(80.0, 32.0)),
-                    );
+                    ));
 
                     if submit_btn.clicked() || enter {
                         let text = self.input_text.clone();
@@ -2566,12 +2550,10 @@ fn run_prompt_modal(
     recipe_name: Option<String>,
 ) -> Result<(), eframe::Error> {
     let config = AppConfig::load();
-    let renderer = ScreenRenderer::new(config.clone())
-        .unwrap_or_else(|_| ScreenRenderer::fallback(config.clone()));
-    let palette = renderer.palette;
+    let palette = ui_appearance::palette(config.workbench.appearance);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([480.0, 180.0])
+            .with_inner_size([560.0, 240.0])
             .with_resizable(false)
             .with_decorations(true)
             .with_app_id("little-clip-prompt")
@@ -2584,6 +2566,8 @@ fn run_prompt_modal(
         "clip-prompt",
         options,
         Box::new(move |cc| {
+            ui_ext::configure_workbench_style(&cc.egui_ctx);
+            apply_workbench_palette_to_egui(&cc.egui_ctx, &palette);
             egui_extras::install_image_loaders(&cc.egui_ctx);
             Box::new(PromptApp::new(
                 title,
