@@ -548,7 +548,7 @@ impl StatusToast {
                 .rounding(Rounding::same(4.0))
                 .inner_margin(egui::Margin::symmetric(8.0, 4.0))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new(msg).size(11.0).color(fg));
+                    ui.label(egui::RichText::new(msg).small().color(fg));
                 });
         }
     }
@@ -580,13 +580,13 @@ pub fn stat_pill(
         ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
         ui.label(
             egui::RichText::new(format!("{}:", label))
-                .font(egui::FontId::proportional(12.0))
+                .small()
                 .color(hex_to_c32(&palette.theme.f_low)),
         );
         let color = val_color.unwrap_or_else(|| hex_to_c32(&palette.harmonies.base));
         ui.label(
             egui::RichText::new(format!("{}", value))
-                .font(egui::FontId::monospace(12.0))
+                .monospace()
                 .strong()
                 .color(color),
         );
@@ -623,7 +623,7 @@ pub fn sidebar_readout(
         let color = val_color.unwrap_or_else(|| hex_to_c32(&palette.harmonies.base));
         ui.label(
             egui::RichText::new(format!("{}", value))
-                .font(egui::FontId::monospace(12.0))
+                .monospace()
                 .strong()
                 .color(color),
         );
@@ -646,7 +646,7 @@ pub fn zoom_control_bar(
 ) -> Option<ZoomAction> {
     let mut action = None;
     let btn_bg = hex_to_c32(&palette.theme.b_low);
-    let zoom_in_btn = icon_button(Icon::ZoomIn, 13.0, btn_bg, None, palette);
+    let zoom_in_btn = icon_button(Icon::ZoomIn, CONTROL_ICON_SIZE, btn_bg, None, palette);
     if ui
         .add(zoom_in_btn)
         .on_hover_text("Zoom In (+ / Ctrl+Wheel)")
@@ -654,7 +654,7 @@ pub fn zoom_control_bar(
     {
         action = Some(ZoomAction::ZoomIn);
     }
-    let zoom_out_btn = icon_button(Icon::ZoomOut, 13.0, btn_bg, None, palette);
+    let zoom_out_btn = icon_button(Icon::ZoomOut, CONTROL_ICON_SIZE, btn_bg, None, palette);
     if ui
         .add(zoom_out_btn)
         .on_hover_text("Zoom Out (- / Ctrl+Wheel)")
