@@ -55,8 +55,8 @@ pub struct StudioPanelRects {
 
 /// Shared image/audio studio workspace geometry.
 ///
-/// Film Look and Creative FX establish the canonical dimensions: a 240 px
-/// browser/control rail, a flexible center canvas, and a 280 px inspector.
+/// The preferred rails frame a flexible canvas. When those preferences no
+/// longer fit, rails shrink; on compact hosts they move below the canvas.
 /// Every region is optional except the center.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StudioPanelLayout {
@@ -106,45 +106,121 @@ impl StudioPanelLayout {
     /// Reserve the complete workspace and return exact, non-overlapping zones.
     pub fn allocate(self, ui: &mut egui::Ui) -> StudioPanelRects {
         let available = ui.available_rect_before_wrap();
-        let bottom_gap = if self.bottom { self.gap } else { 0.0 };
-        let main_bottom = if self.bottom {
-            (available.bottom() - self.bottom_height - bottom_gap).max(available.top() + 1.0)
-        } else {
-            available.bottom()
-        };
-        let main = Rect::from_min_max(available.min, egui::pos2(available.right(), main_bottom));
+        let rects = self.rects(available);
+        ui.allocate_rect(available, egui::Sense::hover());
+        rects
+    }
 
-        let left_gap = if self.left { self.gap } else { 0.0 };
-        let right_gap = if self.right { self.gap } else { 0.0 };
-        let left = self.left.then(|| {
-            Rect::from_min_size(
-                main.min,
-                Vec2::new(self.left_width.min(main.width()), main.height()),
-            )
-        });
-        let right = self.right.then(|| {
-            Rect::from_min_size(
-                egui::pos2(
-                    (main.right() - self.right_width).max(main.left()),
-                    main.top(),
-                ),
-                Vec2::new(self.right_width.min(main.width()), main.height()),
-            )
-        });
-        let center_left = left.map_or(main.left(), |rect| rect.right() + left_gap);
-        let center_right = right.map_or(main.right(), |rect| rect.left() - right_gap);
-        let center = Rect::from_min_max(
-            egui::pos2(center_left.min(center_right), main.top()),
-            egui::pos2(center_right.max(center_left), main.bottom()),
-        );
+    fn rects(self, available: Rect) -> StudioPanelRects {
+        const MIN_CANVAS_WIDTH: f32 = 320.0;
+        const MIN_RAIL_WIDTH: f32 = 160.0;
+        let gap = self.gap.max(0.0);
+        let bottom_height = if self.bottom {
+            self.bottom_height.min((available.height() * 0.3).max(0.0))
+        } else {
+            0.0
+        };
+        let bottom_gap = if bottom_height > 0.0 { gap } else { 0.0 };
+        let main_bottom = (available.bottom() - bottom_height - bottom_gap).max(available.top());
+        let main = Rect::from_min_max(available.min, egui::pos2(available.right(), main_bottom));
         let bottom = self.bottom.then(|| {
             Rect::from_min_max(
-                egui::pos2(available.left(), main_bottom + bottom_gap),
+                egui::pos2(
+                    available.left(),
+                    (main_bottom + bottom_gap).min(available.bottom()),
+                ),
                 available.max,
             )
         });
 
-        ui.allocate_rect(available, egui::Sense::hover());
+        let count = u8::from(self.left) + u8::from(self.right);
+        if count == 0 {
+            return StudioPanelRects {
+                left: None,
+                center: main,
+                right: None,
+                bottom,
+            };
+        }
+
+        let horizontal_gaps = gap * f32::from(count);
+        let rail_space = main.width() - horizontal_gaps - MIN_CANVAS_WIDTH;
+        if rail_space >= f32::from(count) * MIN_RAIL_WIDTH {
+            let left_preferred = if self.left {
+                self.left_width.max(MIN_RAIL_WIDTH)
+            } else {
+                0.0
+            };
+            let right_preferred = if self.right {
+                self.right_width.max(MIN_RAIL_WIDTH)
+            } else {
+                0.0
+            };
+            let extra =
+                (left_preferred + right_preferred - f32::from(count) * MIN_RAIL_WIDTH).max(0.0);
+            let fraction = if extra > 0.0 {
+                ((rail_space - f32::from(count) * MIN_RAIL_WIDTH) / extra).min(1.0)
+            } else {
+                0.0
+            };
+            let left_width = if self.left {
+                MIN_RAIL_WIDTH + (left_preferred - MIN_RAIL_WIDTH) * fraction
+            } else {
+                0.0
+            };
+            let right_width = if self.right {
+                MIN_RAIL_WIDTH + (right_preferred - MIN_RAIL_WIDTH) * fraction
+            } else {
+                0.0
+            };
+            let left = self
+                .left
+                .then(|| Rect::from_min_size(main.min, Vec2::new(left_width, main.height())));
+            let right = self.right.then(|| {
+                Rect::from_min_size(
+                    egui::pos2(main.right() - right_width, main.top()),
+                    Vec2::new(right_width, main.height()),
+                )
+            });
+            let center = Rect::from_min_max(
+                egui::pos2(
+                    main.left() + left_width + if self.left { gap } else { 0.0 },
+                    main.top(),
+                ),
+                egui::pos2(
+                    main.right() - right_width - if self.right { gap } else { 0.0 },
+                    main.bottom(),
+                ),
+            );
+            return StudioPanelRects {
+                left,
+                center,
+                right,
+                bottom,
+            };
+        }
+
+        // Compact hosts retain a full-width canvas and put scrollable tools in
+        // a bounded row below it. This is also safe for unexpected narrow hosts.
+        let rail_height = (main.height() * 0.3).min(180.0);
+        let rail_gap = gap.min((main.height() - rail_height).max(0.0));
+        let center_bottom = main.bottom() - rail_height - rail_gap;
+        let center = Rect::from_min_max(main.min, egui::pos2(main.right(), center_bottom));
+        let rail_top = center_bottom + rail_gap;
+        let rail_width =
+            ((main.width() - if count == 2 { gap } else { 0.0 }) / f32::from(count)).max(0.0);
+        let left = self.left.then(|| {
+            Rect::from_min_size(
+                egui::pos2(main.left(), rail_top),
+                Vec2::new(rail_width, rail_height),
+            )
+        });
+        let right = self.right.then(|| {
+            Rect::from_min_size(
+                egui::pos2(main.right() - rail_width, rail_top),
+                Vec2::new(rail_width, rail_height),
+            )
+        });
         StudioPanelRects {
             left,
             center,
@@ -587,5 +663,38 @@ mod tests {
         assert_eq!(rects.bottom.unwrap().height(), 96.0);
         assert_eq!(rects.left.unwrap().height(), rects.center.height());
         assert_eq!(rects.right.unwrap().height(), rects.center.height());
+    }
+
+    #[test]
+    fn constrained_panels_keep_canvas_usable_without_overlap() {
+        let layout = StudioPanelLayout::default()
+            .with_left()
+            .with_right()
+            .with_bottom();
+        for size in [
+            Vec2::new(900.0, 540.0),
+            Vec2::new(680.0, 420.0),
+            Vec2::new(480.0, 320.0),
+        ] {
+            let host = Rect::from_min_size(egui::Pos2::ZERO, size);
+            let rects = layout.rects(host);
+            let regions = [
+                rects.left.unwrap(),
+                rects.center,
+                rects.right.unwrap(),
+                rects.bottom.unwrap(),
+            ];
+            assert!(rects.center.width() >= 320.0);
+            assert!(rects.center.height() > 0.0);
+            for (index, first) in regions.iter().enumerate() {
+                assert!(host.contains(first.min) && host.contains(first.max));
+                for second in &regions[index + 1..] {
+                    assert!(
+                        first.intersect(*second).is_negative(),
+                        "regions overlap at {size:?}: {first:?} {second:?}"
+                    );
+                }
+            }
+        }
     }
 }
