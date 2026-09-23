@@ -10,14 +10,19 @@ use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::presentation::{
     model3d::is_3d_model_file,
     network_preview::{NetworkPreview, detect_network_preview},
-    spreadsheet::{detect_csv_text, is_spreadsheet_file, load_spreadsheet},
+    spreadsheet::{
+        SpreadsheetData, detect_csv_text, is_spreadsheet_file, load_spreadsheet,
+        looks_like_csv_text,
+    },
     timestamps::detect_timestamp,
     units::detect_unit_conversion,
 };
 use little_clip_core::theme::{
     AppPalette, DerivedHarmonies, Theme, find_themes_dir, load_themes_from_dir,
 };
-use little_clip_core::{AppConfig, ClipItem, SlotId, SlotManager};
+use little_clip_core::{
+    AppConfig, BackgroundJobs, ClipItem, ClipPayload, JobError, JobTicket, SlotId, SlotManager,
+};
 use little_clip_ops::pipeline::recipes::{find_recipe_by_name, load_all_recipes};
 use little_clip_ops::pipeline::types::{NodeKind, Recipe};
 use little_clip_ops::{OpDescriptor, get_applicable_ops};
@@ -25,6 +30,7 @@ use little_clip_render::{SCREEN_HEIGHT, SCREEN_WIDTH, ScreenRenderer};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
@@ -192,6 +198,14 @@ struct InAppPromptState {
     first_frame: bool,
 }
 
+enum SpreadsheetLoadSource {
+    File(PathBuf),
+    Text { content: Arc<str>, title: String },
+}
+
+type SpreadsheetLoadReceiver =
+    Receiver<Result<Result<(SpreadsheetData, Option<PathBuf>), String>, JobError>>;
+
 struct WorkbenchApp {
     state: SlotManager,
     state_rx: Receiver<SlotManager>,
@@ -213,6 +227,11 @@ struct WorkbenchApp {
     audio_preview: Option<AudioPreviewState>,
     image_preview: Option<ImagePreviewState>,
     spreadsheet_viewer: Option<SpreadsheetViewerState>,
+    spreadsheet_load_job: Option<(
+        JobTicket,
+        SpreadsheetLoadReceiver,
+        Option<(Arc<str>, String)>,
+    )>,
     pdf_viewer: Option<PdfEditorState>,
     midi_viewer: Option<MidiViewerState>,
     model3d_viewer: Option<Model3dViewerState>,
@@ -285,6 +304,7 @@ impl WorkbenchApp {
             audio_preview,
             image_preview,
             spreadsheet_viewer: None,
+            spreadsheet_load_job: None,
             pdf_viewer: None,
             midi_viewer: None,
             model3d_viewer: None,
@@ -355,6 +375,10 @@ impl WorkbenchApp {
                         .clicked()
                     {
                         self.toggle_appearance(ctx);
+                    }
+                    if self.spreadsheet_load_job.is_some() {
+                        ui.spinner();
+                        ui.label("Opening spreadsheet…");
                     }
                 });
 
@@ -767,6 +791,14 @@ fn recipe_needs_prompt(recipe: &Recipe, state: &SlotManager) -> Option<(String, 
     None
 }
 
+impl Drop for WorkbenchApp {
+    fn drop(&mut self) {
+        if let Some((ticket, _, _)) = &self.spreadsheet_load_job {
+            ticket.cancel();
+        }
+    }
+}
+
 impl eframe::App for WorkbenchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Apply theme to egui on first frame or theme changes
@@ -791,6 +823,8 @@ impl eframe::App for WorkbenchApp {
             self.dirty_mirror = true;
             ctx.request_repaint();
         }
+
+        self.poll_spreadsheet_load(ctx);
 
         if self.render_modal_viewers(ctx) {
             self.palette_search_needs_focus = true;
@@ -866,6 +900,7 @@ impl eframe::App for WorkbenchApp {
                     });
 
                     let mut open_diff_requested = false;
+                    let mut open_spreadsheet_requested = None;
 
                     ui.horizontal(|ui| {
                         ui.label(
@@ -950,14 +985,14 @@ impl eframe::App for WorkbenchApp {
                         let first_pdf_item = self.selected_slots.iter().find_map(|s| {
                             self.state.get(*s).and_then(|it| it.file_path()).filter(|p| little_clip_core::pdf::is_pdf_path(p))
                         });
-                        let first_spreadsheet_item = self.selected_slots.iter().find_map(|s| {
-                            let it = self.state.get(*s)?;
-                            if let Some(p) = it.file_path().filter(|p| is_spreadsheet_file(p)) {
-                                load_spreadsheet(&p).ok().map(|data| (data, Some(p)))
-                            } else if let Some(txt) = it.to_clipboard_text() {
-                                detect_csv_text(txt.trim()).map(|data| (data, None))
-                            } else {
-                                None
+                        let first_spreadsheet_slot = self.selected_slots.iter().copied().find(|slot| {
+                            let Some(item) = self.state.get(*slot) else { return false; };
+                            if item.file_path().is_some_and(|p| is_spreadsheet_file(&p)) {
+                                return true;
+                            }
+                            match &item.payload {
+                                ClipPayload::Text(text) | ClipPayload::Markdown(text) => looks_like_csv_text(text),
+                                _ => false,
                             }
                         });
                         let first_midi_item = self.selected_slots.iter().find_map(|s| {
@@ -1007,17 +1042,17 @@ impl eframe::App for WorkbenchApp {
                             }
                         }
 
-                        if let Some((data, path)) = first_spreadsheet_item {
+                        if let Some(slot) = first_spreadsheet_slot {
                             ui.add_space(8.0);
                             let sheet_bg = hex_to_c32(&self.ui_palette.harmonies.triadic_1);
                             let sheet_btn = ui_ext::action_button_icon(
                                 Some(Icon::Spreadsheet),
-                                "View Spreadsheet",
+                                if self.spreadsheet_load_job.is_some() { "Opening Spreadsheet…" } else { "View Spreadsheet" },
                                 sheet_bg,
                                 &self.ui_palette,
                             );
-                            if ui.add(sheet_btn).on_hover_text("Open full multi-sheet X/Y scrollable table").clicked() {
-                                self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, path));
+                            if ui.add_enabled(self.spreadsheet_load_job.is_none(), sheet_btn).on_hover_text("Open full multi-sheet X/Y scrollable table").clicked() {
+                                open_spreadsheet_requested = Some(slot);
                             }
                         }
 
@@ -1140,6 +1175,9 @@ impl eframe::App for WorkbenchApp {
 
                     if open_diff_requested {
                         self.open_diff_viewer();
+                    }
+                    if let Some(slot) = open_spreadsheet_requested {
+                        self.open_spreadsheet_item(slot);
                     }
 
                     ui.add_space(6.0);
@@ -1651,6 +1689,87 @@ impl WorkbenchApp {
         false
     }
 
+    fn start_spreadsheet_load(&mut self, source: SpreadsheetLoadSource) {
+        if let Some((ticket, _, _)) = self.spreadsheet_load_job.take() {
+            ticket.cancel();
+        }
+        let fallback = match &source {
+            SpreadsheetLoadSource::Text { content, title } => {
+                Some((Arc::clone(content), title.clone()))
+            }
+            SpreadsheetLoadSource::File(_) => None,
+        };
+        let job = BackgroundJobs::global().submit(Duration::from_secs(30), move || match source {
+            SpreadsheetLoadSource::File(path) => {
+                load_spreadsheet(&path).map(|data| (data, Some(path)))
+            }
+            SpreadsheetLoadSource::Text { content, .. } => detect_csv_text(&content)
+                .map(|data| (data, None))
+                .ok_or_else(|| "Clipboard text is not a valid table".to_string()),
+        });
+        self.spreadsheet_load_job = Some((job.0, job.1, fallback));
+        self.status_msg = None;
+    }
+
+    fn poll_spreadsheet_load(&mut self, ctx: &egui::Context) {
+        let Some((_, receiver, _)) = &self.spreadsheet_load_job else {
+            return;
+        };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(80));
+                return;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(JobError::Cancelled),
+        };
+        let (_, _, fallback) = self.spreadsheet_load_job.take().unwrap();
+        match result {
+            Ok(Ok((data, path))) => {
+                self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, path));
+                ctx.request_repaint();
+            }
+            failure => {
+                if let Some((content, title)) = fallback {
+                    self.text_preview = Some(TextPreviewState::from_text(
+                        content.to_string(),
+                        Some(title),
+                        &self.config,
+                    ));
+                } else {
+                    self.status_msg = Some(match failure {
+                        Ok(Err(error)) => format!("Spreadsheet: {error}"),
+                        Err(error) => format!("Spreadsheet load failed: {error}"),
+                        Ok(Ok(_)) => unreachable!(),
+                    });
+                }
+            }
+        }
+    }
+
+    fn open_spreadsheet_item(&mut self, slot: SlotId) {
+        let source = self.state.get(slot).and_then(|item| {
+            if let Some(path) = item.file_path().filter(|p| is_spreadsheet_file(p)) {
+                Some(SpreadsheetLoadSource::File(path))
+            } else {
+                match &item.payload {
+                    ClipPayload::Text(text) | ClipPayload::Markdown(text)
+                        if looks_like_csv_text(text) =>
+                    {
+                        Some(SpreadsheetLoadSource::Text {
+                            content: Arc::from(text.as_str()),
+                            title: item.title.clone(),
+                        })
+                    }
+                    _ => None,
+                }
+            }
+        });
+        if let Some(source) = source {
+            self.start_spreadsheet_load(source);
+        }
+    }
+
     fn open_slot_file_preview(&mut self, fp: &std::path::Path, is_image: bool) {
         if fp
             .extension()
@@ -1669,10 +1788,7 @@ impl WorkbenchApp {
         } else if little_clip_core::pdf::is_pdf_path(fp) {
             self.pdf_viewer = Some(PdfEditorState::new(fp.to_path_buf()));
         } else if is_spreadsheet_file(fp) {
-            if let Ok(data) = load_spreadsheet(fp) {
-                self.spreadsheet_viewer =
-                    Some(SpreadsheetViewerState::new(data, Some(fp.to_path_buf())));
-            }
+            self.start_spreadsheet_load(SpreadsheetLoadSource::File(fp.to_path_buf()));
         } else if is_image || is_image_path(fp) {
             if let Ok(editor) = ImagePreviewState::from_path(fp.to_path_buf(), &self.config) {
                 self.image_preview = Some(editor);
@@ -1690,8 +1806,11 @@ impl WorkbenchApp {
             self.open_slot_file_preview(p, false);
             return;
         }
-        if let Some(data) = detect_csv_text(text.trim()) {
-            self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, None));
+        if looks_like_csv_text(text) {
+            self.start_spreadsheet_load(SpreadsheetLoadSource::Text {
+                content: Arc::from(text),
+                title: title.to_string(),
+            });
         } else {
             self.text_preview = Some(TextPreviewState::from_text(
                 text.to_string(),

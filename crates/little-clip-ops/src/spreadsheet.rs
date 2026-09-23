@@ -120,25 +120,49 @@ pub fn parse_csv_string(csv_text: &str) -> Vec<Vec<String>> {
     rows
 }
 
-/// Detects if raw clipboard text is genuinely a formatted CSV / TSV table
-pub fn detect_csv_text(text: &str) -> Option<SpreadsheetData> {
-    let trimmed = text.trim();
-    let lines: Vec<&str> = trimmed
+/// Fast first-pass check for delimited clipboard text. Full parsing and shape
+/// validation still happen in [`detect_csv_text`] when the table is opened.
+pub fn looks_like_csv_text(text: &str) -> bool {
+    candidate_delimiter(text).is_some()
+}
+
+fn looks_like_comma_prose(sample: &[&str], comma_count: usize) -> bool {
+    let sentence_lines = sample
+        .iter()
+        .filter(|line| line.ends_with('.') || line.ends_with('!') || line.ends_with('?'))
+        .count();
+    if sentence_lines >= 2 {
+        return true;
+    }
+    let spaced_commas: usize = sample.iter().map(|line| line.matches(", ").count()).sum();
+    comma_count > 0
+        && spaced_commas == comma_count
+        && sample
+            .iter()
+            .map(|line| line.split_whitespace().count())
+            .sum::<usize>()
+            / sample.len()
+            > 6
+}
+
+fn candidate_delimiter(text: &str) -> Option<char> {
+    let lines: Vec<&str> = text
+        .trim()
         .lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
+        .take(5)
         .collect();
     if lines.len() < 2 {
         return None;
     }
 
-    let sample = &lines[..lines.len().min(5)];
-    let comma_count: usize = sample.iter().map(|l| l.matches(',').count()).sum();
-    let tab_count: usize = sample.iter().map(|l| l.matches('\t').count()).sum();
-    let semi_count: usize = sample.iter().map(|l| l.matches(';').count()).sum();
+    let comma_count: usize = lines.iter().map(|l| l.matches(',').count()).sum();
+    let tab_count: usize = lines.iter().map(|l| l.matches('\t').count()).sum();
+    let semi_count: usize = lines.iter().map(|l| l.matches(';').count()).sum();
 
     // Must have at least 1 delimiter per line on average
-    if comma_count < sample.len() && tab_count < sample.len() && semi_count < sample.len() {
+    if comma_count < lines.len() && tab_count < lines.len() && semi_count < lines.len() {
         return None;
     }
 
@@ -150,27 +174,17 @@ pub fn detect_csv_text(text: &str) -> Option<SpreadsheetData> {
         ','
     };
 
-    // If delimiter is comma, guard against English prose punctuation
-    if delimiter == ',' {
-        // If lines end with sentence punctuation ('.', '!', '?'), it's prose sentences
-        let sentences_ending_with_period = sample
-            .iter()
-            .filter(|l| l.ends_with('.') || l.ends_with('!') || l.ends_with('?'))
-            .count();
-        if sentences_ending_with_period >= 2 {
-            return None;
-        }
-
-        // If all commas in sample have spaces after them, check if lines look like long prose
-        let space_after_commas: usize = sample.iter().map(|l| l.matches(", ").count()).sum();
-        if comma_count > 0 && space_after_commas == comma_count {
-            let total_words: usize = sample.iter().map(|l| l.split_whitespace().count()).sum();
-            if total_words / sample.len() > 6 {
-                return None;
-            }
-        }
+    if delimiter == ',' && looks_like_comma_prose(&lines, comma_count) {
+        return None;
     }
 
+    Some(delimiter)
+}
+
+/// Detects if raw clipboard text is genuinely a formatted CSV / TSV table.
+pub fn detect_csv_text(text: &str) -> Option<SpreadsheetData> {
+    let trimmed = text.trim();
+    let delimiter = candidate_delimiter(trimmed)?;
     let rows = parse_csv_string(trimmed);
     if rows.len() < 2 {
         return None;
@@ -301,6 +315,7 @@ mod tests {
     fn test_detect_csv_text_rejects_prose() {
         // Two sentences with commas should NOT be recognized as CSV
         let prose = "Hello, my friend.\nHow are you, today?";
+        assert!(!looks_like_csv_text(prose));
         assert!(detect_csv_text(prose).is_none());
 
         // Multi-line prose with punctuation
@@ -315,10 +330,18 @@ mod tests {
     #[test]
     fn test_detect_tsv() {
         let tsv = "Name\tAge\tCity\nAlice\t30\tNYC\nBob\t25\tSF";
+        assert!(looks_like_csv_text(tsv));
         let res = detect_csv_text(tsv);
         assert!(res.is_some());
         let sheet = &res.unwrap().sheets[0];
         assert_eq!(sheet.total_rows, 3);
         assert_eq!(sheet.total_cols, 3);
+    }
+
+    #[test]
+    fn candidate_check_defers_full_table_validation() {
+        let inconsistent = "Name,Age\nAlice,30\nBob,27\nCarol,34,Extra";
+        assert!(looks_like_csv_text(inconsistent));
+        assert!(detect_csv_text(inconsistent).is_none());
     }
 }
