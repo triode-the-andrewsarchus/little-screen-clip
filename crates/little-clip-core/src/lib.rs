@@ -36,9 +36,7 @@ pub mod staging;
 pub mod syntax;
 pub mod theme;
 pub use color::parse_hex_color;
-pub use theme::{
-    AppPalette, DerivedHarmonies, Oklab, Oklch, Theme, find_themes_dir, load_themes_from_dir,
-};
+pub use theme::{AppPalette, DerivedHarmonies, Oklab, Oklch, Theme};
 
 pub use animation::{
     AnimationThumbnail, decode_animated_bytes, decode_animated_gif_or_webp,

@@ -1,15 +1,12 @@
-//! Hundred Rabbits Theme parser, Oklab perceptual color space calculations,
-//! and full application palette derivation with user overrides.
+//! Fixed application palettes and Oklab perceptual color space calculations.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
-use std::path::{Path, PathBuf};
 
 use crate::color::parse_hex_color_rgba_or_white as parse_hex_color_rgba;
 use crate::config::WorkbenchAppearance;
 
-/// Represents the 9 standard colors defined in a Hundred Rabbits theme.
+/// Transitional base-color container for the fixed Light/Dark palettes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Theme {
     pub name: String,
@@ -52,7 +49,7 @@ pub fn contrast_ratio(rgb1: (u8, u8, u8), rgb2: (u8, u8, u8)) -> f32 {
 }
 
 impl Theme {
-    /// Apollo built-in default theme.
+    /// Legacy fallback used only by the transitional palette adapter.
     pub fn apollo() -> Self {
         Self {
             name: "apollo".to_string(),
@@ -135,116 +132,6 @@ impl Theme {
             "#ffffff".to_string()
         }
     }
-
-    /// Parses a Hundred Rabbits SVG theme content.
-    pub fn from_svg(name: &str, svg_content: &str) -> Result<Self, String> {
-        let mut map = HashMap::new();
-
-        for line in svg_content.lines() {
-            let line = line.trim();
-            if !line.contains("<rect") && !line.contains("<circle") {
-                continue;
-            }
-
-            let id = extract_attr(line, "id");
-            let fill = extract_attr(line, "fill");
-
-            if let (Some(id_val), Some(fill_val)) = (id, fill) {
-                map.insert(id_val, fill_val);
-            }
-        }
-
-        let get_color = |id: &str| -> Result<String, String> {
-            map.get(id)
-                .cloned()
-                .ok_or_else(|| format!("Theme SVG '{}' missing id '{}'", name, id))
-        };
-
-        Ok(Self {
-            name: name.to_string(),
-            background: get_color("background")?,
-            f_high: get_color("f_high")?,
-            f_med: get_color("f_med")?,
-            f_low: get_color("f_low")?,
-            f_inv: get_color("f_inv")?,
-            b_high: get_color("b_high")?,
-            b_med: get_color("b_med")?,
-            b_low: get_color("b_low")?,
-            b_inv: get_color("b_inv")?,
-        })
-    }
-
-    /// Loads a theme from an SVG file path.
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, String> {
-        let path = path.as_ref();
-        let name = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "theme".to_string());
-        let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
-        Self::from_svg(&name, &content)
-    }
-}
-
-fn extract_attr(line: &str, attr: &str) -> Option<String> {
-    for quote in ['"', '\''] {
-        let search = format!("{attr}={quote}");
-        if let Some(pos) = line.find(&search) {
-            let rest = &line[pos + search.len()..];
-            if let Some(end) = rest.find(quote) {
-                return Some(rest[..end].to_string());
-            }
-        }
-    }
-    None
-}
-
-/// Discovers all SVG themes in a directory.
-pub fn load_themes_from_dir<P: AsRef<Path>>(dir: P) -> Vec<Theme> {
-    let mut themes = Vec::new();
-    let dir = dir.as_ref();
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("svg") {
-                if let Ok(theme) = Theme::from_file(&path) {
-                    themes.push(theme);
-                }
-            }
-        }
-    }
-    themes.sort_by(|a, b| a.name.cmp(&b.name));
-    themes
-}
-
-/// Helper to locate the `themes` directory from current working dir or workspace ancestors.
-pub fn find_themes_dir() -> PathBuf {
-    let candidates = [
-        PathBuf::from("themes"),
-        PathBuf::from("../themes"),
-        PathBuf::from("../../themes"),
-    ];
-    for c in &candidates {
-        if c.is_dir() {
-            return c.clone();
-        }
-    }
-    // Fallback: search relative to current executable if possible
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(parent) = exe.parent() {
-            let rel = parent.join("themes");
-            if rel.is_dir() {
-                return rel;
-            }
-            if let Some(grandparent) = parent.parent() {
-                let rel = grandparent.join("themes");
-                if rel.is_dir() {
-                    return rel;
-                }
-            }
-        }
-    }
-    PathBuf::from("themes")
 }
 
 // -----------------------------------------------------------------------------
@@ -783,42 +670,15 @@ mod tests {
     }
 
     #[test]
-    fn test_contrast_calculation_and_selection() {
-        // Black vs White contrast is 21:1
-        let cr = contrast_ratio((0, 0, 0), (255, 255, 255));
-        assert!((cr - 21.0).abs() < 0.1);
-
-        let theme = Theme::apollo();
-        // On dark background (#28211c), preferred f_high (#ffefc9) has great contrast
-        let fg_on_dark = theme.contrast_pair_fg(&theme.background, Some(&theme.f_high));
-        assert_eq!(fg_on_dark, theme.f_high);
-
-        // On a light background that matches f_high, contrast_pair_fg should choose a dark color
-        let fg_on_light = theme.contrast_pair_fg("#ffffff", Some(&theme.f_high));
-        assert_ne!(fg_on_light, "#ffffff");
-        let (fg_r, fg_g, fg_b, _) = parse_hex_color_rgba(&fg_on_light);
-        let ratio = contrast_ratio((255, 255, 255), (fg_r, fg_g, fg_b));
-        assert!(ratio >= 4.5);
-    }
-
-    #[test]
-    fn test_theme_from_svg() {
-        let svg = r##"<svg width="96px" height="64px">
-  <rect width="96" height="64" id="background" fill="#28211c"/>
-  <circle cx='56' cy='24' r='8' id='f_high' fill='#ffefc9'/>
-  <circle cx='72' cy='24' r='8' id='f_med' fill='#9f9fa2'/>
-  <circle cx="40" cy="40" r="8" id="f_low" fill="#a3832c"/>
-  <circle cx="24" cy="24" r="8" id="f_inv" fill="#666666"/>
-  <circle cx='40' cy='24' r='8' id='b_high' fill='#aa0000'/>
-  <circle cx="24" cy="40" r="8" id="b_med" fill="#214c05"/>
-  <circle cx="56" cy="40" r="8" id="b_low" fill="#48413a"/>
-  <circle cx="72" cy="40" r="8" id="b_inv" fill="#4cb1cf"/>
-</svg>"##;
-        let theme = Theme::from_svg("garden", svg).expect("parse failed");
-        assert_eq!(theme.name, "garden");
-        assert_eq!(theme.background, "#28211c");
-        assert_eq!(theme.f_high, "#ffefc9");
-        assert_eq!(theme.b_inv, "#4cb1cf");
+    fn fixed_palette_contrast_is_sufficient_in_both_appearances() {
+        assert!((contrast_ratio((0, 0, 0), (255, 255, 255)) - 21.0).abs() < 0.1);
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
+            let fg = palette.contrast_pair_fg(&palette.background, Some(&palette.title_color));
+            let (br, bg, bb, _) = parse_hex_color_rgba(&palette.background);
+            let (fr, fg, fb, _) = parse_hex_color_rgba(&fg);
+            assert!(contrast_ratio((br, bg, bb), (fr, fg, fb)) >= 4.5);
+        }
     }
 
     #[test]
@@ -831,182 +691,68 @@ mod tests {
     }
 
     #[test]
-    fn test_palette_with_overrides() {
-        let theme = Theme::apollo();
-        let mut overrides = HashMap::new();
-        overrides.insert("left_hand_border".to_string(), "#123456".to_string());
-
-        let palette = AppPalette::from_theme(&theme, &overrides);
-        assert_eq!(palette.left_hand_border, "#123456");
-        assert_eq!(palette.background, theme.background);
-    }
-
-    #[test]
-    fn test_load_all_hundredrabbits_themes() {
-        let dir = find_themes_dir();
-        if dir.exists() {
-            let themes = load_themes_from_dir(&dir);
-            assert!(
-                themes.len() >= 40,
-                "Expected at least 40 themes, found {}",
-                themes.len()
-            );
-            // Verify 'apollo' exists
-            let apollo = themes.iter().find(|t| t.name == "apollo");
-            assert!(apollo.is_some(), "apollo theme should exist");
-        }
-    }
-
-    #[test]
-    fn test_all_themes_button_contrast() {
-        let dir = find_themes_dir();
-        if !dir.exists() {
-            return;
-        }
-        let themes = load_themes_from_dir(&dir);
-        assert!(!themes.is_empty());
-
-        for theme in themes {
-            let palette = AppPalette::from_theme(&theme, &HashMap::new());
+    fn fixed_palette_button_surfaces_meet_contrast_in_both_appearances() {
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
             let surfaces = [
-                ("harmonies.base", &palette.harmonies.base),
-                (
-                    "harmonies.warm_attention",
-                    &palette.harmonies.warm_attention,
-                ),
-                ("diff_add", &palette.diff_add),
-                ("diff_del", &palette.diff_del),
-                ("b_med", &palette.theme.b_med),
-                ("b_low", &palette.theme.b_low),
-                ("undo_card_bg", &palette.undo_card_bg),
-                ("hero_card_bg", &palette.hero_card_bg),
-                ("prior_card_bg", &palette.prior_card_bg),
+                &palette.harmonies.base,
+                &palette.harmonies.warm_attention,
+                &palette.diff_add,
+                &palette.diff_del,
+                &palette.theme.b_med,
+                &palette.theme.b_low,
+                &palette.undo_card_bg,
+                &palette.hero_card_bg,
+                &palette.prior_card_bg,
             ];
 
-            for (name, surf) in surfaces {
-                let fg = palette.contrast_pair_fg(surf, Some(&palette.theme.f_high));
-                let (br, bg, bb, _) = parse_hex_color_rgba(surf);
-                let (fr, fg_val, fb, _) = parse_hex_color_rgba(&fg);
-                let ratio = contrast_ratio((br, bg, bb), (fr, fg_val, fb));
+            for surface in surfaces {
+                let fg = palette.contrast_pair_fg(surface, Some(&palette.theme.f_high));
+                let (br, bg, bb, _) = parse_hex_color_rgba(surface);
+                let (fr, fg, fb, _) = parse_hex_color_rgba(&fg);
                 assert!(
-                    ratio >= 4.5,
-                    "Theme '{}' on surface '{}' ({}) with fg '{}' has contrast ratio {:.2} < 4.5",
-                    theme.name,
-                    name,
-                    surf,
-                    fg,
-                    ratio
+                    contrast_ratio((br, bg, bb), (fr, fg, fb)) >= 4.5,
+                    "{appearance:?} palette has insufficient text contrast on {surface}"
                 );
             }
         }
     }
 
     #[test]
-    fn test_zenburn_midi_colors_vibrancy() {
-        let dir = find_themes_dir();
-        let zenburn_file = dir.join("zenburn.svg");
-        if !zenburn_file.exists() {
-            return;
+    fn fixed_palette_midi_pitch_classes_are_distinct_in_both_appearances() {
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
+            let c4 = palette.midi_note_color(0, 0, 1, 60, 100);
+            let e4 = palette.midi_note_color(0, 0, 1, 64, 100);
+            let g4 = palette.midi_note_color(0, 0, 1, 67, 100);
+            assert_ne!(c4, e4, "{appearance:?}: C4 and E4 should differ");
+            assert_ne!(e4, g4, "{appearance:?}: E4 and G4 should differ");
+            assert_eq!(c4, palette.midi_note_color(0, 0, 1, 72, 100));
         }
-        let theme = Theme::from_file(&zenburn_file).expect("zenburn load failed");
-        let palette = AppPalette::from_theme(&theme, &HashMap::new());
-
-        // Test track colors
-        let t0 = palette.midi_track_color(0, 0, 4);
-        let t1 = palette.midi_track_color(1, 0, 4);
-        let drums = palette.midi_track_color(2, 9, 4);
-
-        assert_ne!(t0, t1, "Track 0 and Track 1 should have distinct colors");
-        assert_ne!(t0, drums, "Melodic and drum channels should be distinct");
-
-        // Convert t0 to Oklch and check chroma
-        let oklch0 = Oklab::from_rgb(t0.0, t0.1, t0.2).to_oklch();
-        assert!(
-            oklch0.c >= 0.16,
-            "Zenburn track 0 chroma should be vibrant (>= 0.16), got {:.3}",
-            oklch0.c
-        );
-
-        // Check contrast against b_low (canvas background)
-        let (br, bg, bb, _) = parse_hex_color_rgba(&palette.theme.b_low);
-        let cr0 = contrast_ratio((br, bg, bb), t0);
-        assert!(
-            cr0 >= 3.0,
-            "Zenburn note should have >= 3.0:1 contrast against b_low, got {:.2}",
-            cr0
-        );
-
-        // Test soft velocity note is still legible
-        let soft_note = palette.midi_note_color(0, 0, 4, 60, 25);
-        let cr_soft = contrast_ratio((br, bg, bb), soft_note);
-        assert!(
-            cr_soft >= 2.5,
-            "Soft velocity note should remain legible, got {:.2}",
-            cr_soft
-        );
     }
 
     #[test]
-    fn test_midi_single_track_pitch_differentiation() {
-        let theme = Theme::apollo();
-        let palette = AppPalette::from_theme(&theme, &HashMap::new());
-
-        // Single-track piano notes of different pitch classes
-        let c4 = palette.midi_note_color(0, 0, 1, 60, 100);
-        let e4 = palette.midi_note_color(0, 0, 1, 64, 100);
-        let g4 = palette.midi_note_color(0, 0, 1, 67, 100);
-
-        assert_ne!(
-            c4, e4,
-            "C4 and E4 should have different colors in single-track"
-        );
-        assert_ne!(
-            e4, g4,
-            "E4 and G4 should have different colors in single-track"
-        );
-
-        // Octaves of same pitch class should share hue
-        let c5 = palette.midi_note_color(0, 0, 1, 72, 100);
-        assert_eq!(
-            c4, c5,
-            "Octaves (C4 and C5) should share the same pitch-class color"
-        );
-    }
-
-    #[test]
-    fn test_midi_colors_across_all_themes() {
-        let dir = find_themes_dir();
-        if !dir.exists() {
-            return;
-        }
-        let themes = load_themes_from_dir(&dir);
-        for theme in themes {
-            let palette = AppPalette::from_theme(&theme, &HashMap::new());
+    fn fixed_palette_midi_colors_remain_distinct_and_legible_in_both_appearances() {
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
             let (br, bg, bb, _) = parse_hex_color_rgba(&palette.theme.b_low);
+            let tracks: Vec<_> = (0..4)
+                .map(|track| palette.midi_track_color(track, 0, 4))
+                .collect();
+            let drums = palette.midi_track_color(0, 9, 4);
 
-            // Test 4 tracks + drum channel
-            for track in 0..4 {
-                let col = palette.midi_track_color(track, 0, 4);
-                let cr = contrast_ratio((br, bg, bb), col);
+            assert_ne!(tracks[0], tracks[1], "{appearance:?} tracks should differ");
+            assert_ne!(tracks[0], drums, "{appearance:?} drums should differ");
+            for color in tracks.into_iter().chain([drums]) {
                 assert!(
-                    cr >= 2.5,
-                    "Theme '{}' track {} note color {:?} has low contrast {:.2} against b_low",
-                    theme.name,
-                    track,
-                    col,
-                    cr
+                    contrast_ratio((br, bg, bb), color) >= 2.5,
+                    "{appearance:?} MIDI color {color:?} lacks contrast against display surface"
                 );
             }
-
-            // Drums
-            let drum_col = palette.midi_track_color(0, 9, 4);
-            let cr_drum = contrast_ratio((br, bg, bb), drum_col);
+            let soft_note = palette.midi_note_color(0, 0, 4, 60, 25);
             assert!(
-                cr_drum >= 2.5,
-                "Theme '{}' drum note color {:?} has low contrast {:.2} against b_low",
-                theme.name,
-                drum_col,
-                cr_drum
+                contrast_ratio((br, bg, bb), soft_note) >= 2.5,
+                "{appearance:?} soft-velocity MIDI note lacks contrast"
             );
         }
     }

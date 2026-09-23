@@ -4,7 +4,7 @@
 
 This is a Rust 2024 Cargo workspace. Shared clipboard models, configuration, IPC, colors, and media helpers live in `crates/little-clip-core`. Keep hardware and USB-display code in `little-clip-driver`, rendering in `little-clip-render`, and transformations and pipeline operations in `little-clip-ops`. The `little-clipd`, `clipctl`, and `clip-workbench` crates provide the daemon, CLI, and egui workbench binaries.
 
-Root `themes/` contains legacy SVG themes scheduled for removal by the UI overhaul; `scripts/` contains supporting Python tools, `config.toml` holds runtime defaults, and `launch.sh` manages local builds and services.
+Root `scripts/` contains supporting Python tools, `config.toml` holds runtime defaults, and `launch.sh` manages local builds and services.
 
 ## Build, Test, and Development Commands
 
@@ -46,7 +46,7 @@ The workbench must remain a non-resizable, centered, single-instance popup for N
 
 Async preview completion updates an existing clipboard item in place. Keep `SlotStateSummary` sensitive to preview readiness so open workbenches rehydrate the affected slot and repaint the mirror; item ID and payload kind alone do not reveal these updates.
 
-The UI overhaul is retiring runtime Hundred Rabbits themes and per-color overrides, including on the USB display. Define fixed Light/Dark base colors centrally in core and switch workbench and display together; keep semantic desktop roles in `clip-workbench/src/ui_appearance.rs`. Existing theme loaders/assets are transitional code to remove, not a convention to preserve. Do not rewrite a user's personal `config.toml` while migrating it.
+Runtime Hundred Rabbits themes and per-color overrides are retired, including on the USB display. Define fixed Light/Dark base colors centrally in core and switch workbench and display together; keep semantic desktop roles in `clip-workbench/src/ui_appearance.rs`. The remaining `Theme`/`AppPalette::from_theme` adapter is transitional until callers migrate. Do not rewrite a user's personal `config.toml` while migrating it.
 
 ## Agent Maintenance & Self-Correction
 During final cleanup, consider whether the work revealed that this file is incomplete, incorrect, or obsolete.

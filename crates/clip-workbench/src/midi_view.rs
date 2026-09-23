@@ -1260,56 +1260,57 @@ impl MidiViewerState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use little_clip_core::theme::{AppPalette, Theme, find_themes_dir};
-    use std::collections::HashMap;
+    use little_clip_core::config::WorkbenchAppearance;
+    use little_clip_core::theme::AppPalette;
 
     #[test]
     fn test_midi_view_track_colors() {
-        let theme = Theme::apollo();
-        let palette = AppPalette::from_theme(&theme, &HashMap::new());
-
-        let t0 = get_track_color(0, 0, 4, &palette);
-        let t1 = get_track_color(1, 0, 4, &palette);
-        let drums = get_track_color(2, 9, 4, &palette);
-
-        assert_ne!(t0, t1, "Track 0 and Track 1 should be distinct colors");
-        assert_ne!(t0, drums, "Melodic and drum tracks should be distinct");
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
+            let t0 = get_track_color(0, 0, 4, &palette);
+            let t1 = get_track_color(1, 0, 4, &palette);
+            let drums = get_track_color(2, 9, 4, &palette);
+            assert_ne!(t0, t1, "{appearance:?}: tracks should be distinct");
+            assert_ne!(
+                t0, drums,
+                "{appearance:?}: melodic and drum tracks should differ"
+            );
+        }
     }
 
     #[test]
-    fn test_midi_view_note_colors_vibrancy_zenburn() {
-        let dir = find_themes_dir();
-        let zenburn_path = dir.join("zenburn.svg");
-        if !zenburn_path.exists() {
-            return;
+    fn fixed_appearance_midi_notes_are_vibrant_and_distinct() {
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
+            let note_c = palette.midi_note_color(0, 0, 4, 60, 100);
+            let note_d = palette.midi_note_color(1, 0, 4, 62, 100);
+            assert_ne!(note_c, note_d, "{appearance:?}: track notes should differ");
+            let chroma = little_clip_core::theme::Oklab::from_rgb(note_c.0, note_c.1, note_c.2)
+                .to_oklch()
+                .c;
+            assert!(
+                chroma >= 0.15,
+                "{appearance:?}: note chroma {chroma:.3} is muted"
+            );
+            let (r, g, b, _) = palette.rgba(&palette.theme.b_low);
+            assert!(
+                little_clip_core::theme::contrast_ratio((r, g, b), note_c) >= 2.5,
+                "{appearance:?}: MIDI note lacks contrast against display surface"
+            );
         }
-        let theme = Theme::from_file(&zenburn_path).expect("failed to load zenburn");
-        let palette = AppPalette::from_theme(&theme, &HashMap::new());
-
-        let note_c = palette.midi_note_color(0, 0, 4, 60, 100);
-        let note_d = palette.midi_note_color(1, 0, 4, 62, 100);
-
-        assert_ne!(note_c, note_d);
-        // Ensure note_c is not dark or muted (r + g + b should indicate good brightness)
-        let brightness = note_c.0 as u32 + note_c.1 as u32 + note_c.2 as u32;
-        assert!(
-            brightness >= 350,
-            "Note brightness should be vibrant in Zenburn, got {}",
-            brightness
-        );
     }
 
     #[test]
     fn test_midi_view_single_track_pitch_differentiation() {
-        let theme = Theme::apollo();
-        let palette = AppPalette::from_theme(&theme, &HashMap::new());
-
-        let c4 = palette.midi_note_color(0, 0, 1, 60, 100);
-        let g4 = palette.midi_note_color(0, 0, 1, 67, 100);
-        assert_ne!(
-            c4, g4,
-            "Single-track C4 and G4 must have different chromatic hues"
-        );
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
+            let c4 = palette.midi_note_color(0, 0, 1, 60, 100);
+            let g4 = palette.midi_note_color(0, 0, 1, 67, 100);
+            assert_ne!(
+                c4, g4,
+                "{appearance:?}: C4 and G4 should have distinct hues"
+            );
+        }
     }
 
     #[test]

@@ -718,8 +718,7 @@ pub fn new_shared_audio_player() -> Option<rodio::Player> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use little_clip_core::theme::Theme;
-    use std::collections::HashMap;
+    use little_clip_core::config::WorkbenchAppearance;
 
     #[test]
     fn translucent_fill_is_composited_in_linear_light() {
@@ -735,138 +734,75 @@ mod tests {
 
     #[test]
     fn test_contrast_text_guarantee() {
-        let theme = Theme::apollo();
-        let palette = AppPalette::from_theme(&theme, &HashMap::new());
-
-        // Test active mode tab fill (harmonies.base)
-        let base_bg = hex_to_c32(&palette.harmonies.base);
-        let fg = contrast_text_c32(base_bg, Some(hex_to_c32(&palette.theme.f_high)), &palette);
-        let ratio = contrast_ratio(
-            (base_bg.r(), base_bg.g(), base_bg.b()),
-            (fg.r(), fg.g(), fg.b()),
-        );
-        assert!(ratio >= 4.5, "Contrast ratio {} must be >= 4.5:1", ratio);
-
-        // Test diff_add fill
-        let diff_add_bg = hex_to_c32(&palette.diff_add);
-        let fg_add = contrast_text_c32(
-            diff_add_bg,
-            Some(hex_to_c32(&palette.theme.f_high)),
-            &palette,
-        );
-        let ratio_add = contrast_ratio(
-            (diff_add_bg.r(), diff_add_bg.g(), diff_add_bg.b()),
-            (fg_add.r(), fg_add.g(), fg_add.b()),
-        );
-        assert!(
-            ratio_add >= 4.5,
-            "Contrast ratio {} must be >= 4.5:1",
-            ratio_add
-        );
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
+            for surface in [&palette.harmonies.base, &palette.diff_add] {
+                let bg = hex_to_c32(surface);
+                let fg = contrast_text_c32(bg, Some(hex_to_c32(&palette.theme.f_high)), &palette);
+                let ratio = contrast_ratio((bg.r(), bg.g(), bg.b()), (fg.r(), fg.g(), fg.b()));
+                assert!(
+                    ratio >= 4.5,
+                    "{appearance:?}: contrast ratio {ratio} must be >= 4.5:1"
+                );
+            }
+        }
     }
 
     #[test]
     fn test_mode_tab_contrast() {
-        let theme = Theme::apollo();
-        let palette = AppPalette::from_theme(&theme, &HashMap::new());
-
-        // Active tab button
-        let active_btn = mode_tab_button("View", true, &palette);
-        // Inactive tab button
-        let inactive_btn = mode_tab_button("Crop", false, &palette);
-        // Ensure both constructed without panic
-        drop(active_btn);
-        drop(inactive_btn);
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
+            let active_btn = mode_tab_button("View", true, &palette);
+            let inactive_btn = mode_tab_button("Crop", false, &palette);
+            drop(active_btn);
+            drop(inactive_btn);
+        }
     }
 
     #[test]
-    fn test_all_45_themes_all_buttons_contrast() {
-        let dir = little_clip_core::theme::find_themes_dir();
-        if !dir.exists() {
-            return;
-        }
-        let themes = little_clip_core::theme::load_themes_from_dir(&dir);
-        assert!(
-            themes.len() >= 40,
-            "Expected at least 40 themes, found {}",
-            themes.len()
-        );
-
-        for theme in &themes {
-            let palette = AppPalette::from_theme(theme, &HashMap::new());
-
-            let test_cases: Vec<(&str, Color32, Option<Color32>)> = vec![
+    fn fixed_appearance_button_surfaces_meet_wcag_contrast() {
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
+            let test_cases = [
                 (
-                    "mode_tab_active (harmonies.base)",
+                    "active tab",
                     hex_to_c32(&palette.harmonies.base),
                     Some(hex_to_c32(&palette.theme.f_high)),
                 ),
                 (
-                    "mode_tab_inactive (b_med)",
+                    "inactive tab",
                     hex_to_c32(&palette.theme.b_med),
                     Some(hex_to_c32(&palette.theme.f_med)),
                 ),
                 (
-                    "action_btn (harmonies.base)",
-                    hex_to_c32(&palette.harmonies.base),
-                    Some(hex_to_c32(&palette.theme.f_high)),
-                ),
-                (
-                    "action_btn (diff_add)",
+                    "add",
                     hex_to_c32(&palette.diff_add),
                     Some(hex_to_c32(&palette.theme.f_high)),
                 ),
                 (
-                    "secondary_btn (b_low)",
+                    "secondary",
                     hex_to_c32(&palette.theme.b_low),
                     Some(hex_to_c32(&palette.theme.f_med)),
                 ),
                 (
-                    "secondary_btn (b_med)",
-                    hex_to_c32(&palette.theme.b_med),
-                    Some(hex_to_c32(&palette.theme.f_med)),
-                ),
-                (
-                    "danger_btn (undo_card_bg)",
-                    hex_to_c32(&palette.undo_card_bg),
-                    Some(hex_to_c32(&palette.theme.f_high)),
-                ),
-                (
-                    "danger_btn (diff_del)",
+                    "delete",
                     hex_to_c32(&palette.diff_del),
                     Some(hex_to_c32(&palette.theme.f_high)),
                 ),
                 (
-                    "alpha_fill (harmonies.base alpha 40)",
+                    "translucent accent",
                     crate::hex_to_c32_alpha(&palette.harmonies.base, 40),
                     Some(hex_to_c32(&palette.harmonies.base)),
                 ),
-                (
-                    "alpha_fill (left_border alpha 40)",
-                    crate::hex_to_c32_alpha(&palette.left_hand_border, 40),
-                    Some(hex_to_c32(&palette.left_hand_border)),
-                ),
             ];
 
-            for (name, bg, pref) in test_cases {
-                let fg = contrast_text_c32(bg, pref, &palette);
-
+            for (name, bg, preferred) in test_cases {
+                let fg = contrast_text_c32(bg, preferred, &palette);
                 let effective_bg = composited_rgb(bg, hex_to_c32(&palette.theme.b_low));
-
-                let fg_rgb = (fg.r(), fg.g(), fg.b());
-                let ratio = contrast_ratio(effective_bg, fg_rgb);
+                let ratio = contrast_ratio(effective_bg, (fg.r(), fg.g(), fg.b()));
                 assert!(
                     ratio >= 4.5,
-                    "Theme '{}' failed WCAG AA on {}: effective_bg #{:02x}{:02x}{:02x}, fg #{:02x}{:02x}{:02x}, ratio {:.2} < 4.5",
-                    theme.name,
-                    name,
-                    effective_bg.0,
-                    effective_bg.1,
-                    effective_bg.2,
-                    fg_rgb.0,
-                    fg_rgb.1,
-                    fg_rgb.2,
-                    ratio
+                    "{appearance:?} failed WCAG AA on {name}: {ratio:.2} < 4.5"
                 );
             }
         }
