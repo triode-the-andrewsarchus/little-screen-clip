@@ -17,10 +17,12 @@ pub struct WorkbenchColors {
     pub raised: Color32,
     pub text_primary: Color32,
     pub text_secondary: Color32,
+    pub text_muted: Color32,
     pub border: Color32,
     pub accent: Color32,
     pub focus: Color32,
     pub link: Color32,
+    pub danger: Color32,
 }
 
 impl WorkbenchColors {
@@ -32,10 +34,12 @@ impl WorkbenchColors {
             raised: hex_to_c32(&palette.hero_card_bg),
             text_primary: hex_to_c32(&palette.title_color),
             text_secondary: hex_to_c32(&palette.subtitle_color),
+            text_muted: hex_to_c32(&palette.theme.f_low),
             border: hex_to_c32(&palette.b_low),
             accent: hex_to_c32(&palette.left_hand_border),
             focus: hex_to_c32(&palette.cursor_border),
             link: hex_to_c32(&palette.url_color),
+            danger: hex_to_c32(&palette.diff_del),
         }
     }
 }
@@ -136,6 +140,8 @@ mod tests {
             let visuals = ctx.style().visuals.clone();
             assert!(ratio(colors.canvas, colors.text_primary) >= 4.5);
             assert!(ratio(colors.panel, colors.text_secondary) >= 4.5);
+            assert!(ratio(colors.recessed, colors.text_muted) >= 4.5);
+            assert!(ratio(colors.recessed, colors.accent) >= 3.0);
             assert!(ratio(colors.panel, colors.link) >= 4.5);
             assert!(ratio(colors.panel, colors.accent) >= 3.0);
             for widget in [

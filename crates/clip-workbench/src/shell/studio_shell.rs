@@ -9,6 +9,7 @@ use super::panel::{
     PANEL_MAX_HEIGHT, PANEL_MAX_WIDTH, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH, PanelState,
 };
 use crate::hex_to_c32;
+use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext::{
     CONTROL_HEIGHT, CONTROL_ICON_SIZE, StatusToast, ZoomAction, contrast_text_c32,
     equal_button_width, mode_tab_button, zoom_control_bar,
@@ -553,6 +554,7 @@ impl<'a> StudioShell<'a> {
         right_actions: impl FnOnce(&mut egui::Ui),
     ) -> Option<usize> {
         let palette = self.palette;
+        let colors = WorkbenchColors::from_palette(palette);
         let mut clicked_hatch = None;
         let hatch_width = equal_button_width(
             ui,
@@ -565,20 +567,20 @@ impl<'a> StudioShell<'a> {
         );
 
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.b_low))
+            .fill(colors.recessed)
             .inner_margin(egui::Margin::symmetric(14.0, 8.0))
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(1.0_f32, colors.panel))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if let Some(icon) = self.icon {
-                        ui.add(icon.image_tinted(18.0, hex_to_c32(&palette.harmonies.base)));
+                        ui.add(icon.image_tinted(18.0, colors.accent));
                     }
 
                     ui.label(
                         egui::RichText::new(&self.title)
                             .strong()
                             .size(22.0)
-                            .color(hex_to_c32(&palette.theme.f_high)),
+                            .color(colors.text_primary),
                     );
 
                     ui.add_space(8.0);
@@ -593,15 +595,9 @@ impl<'a> StudioShell<'a> {
                         // Place the actions at the far right of the title row.
                         for (idx, hatch) in self.escape_hatches.iter().enumerate().rev() {
                             let (bg, fg) = if hatch.is_primary {
-                                (
-                                    hex_to_c32(&palette.harmonies.base),
-                                    hex_to_c32(&palette.theme.f_high),
-                                )
+                                (colors.accent, colors.text_primary)
                             } else {
-                                (
-                                    hex_to_c32(&palette.theme.b_med),
-                                    hex_to_c32(&palette.theme.f_med),
-                                )
+                                (colors.panel, colors.text_secondary)
                             };
                             let contrast_fg = contrast_text_c32(bg, Some(fg), palette);
                             let text = egui::RichText::new(&hatch.label)
@@ -616,7 +612,7 @@ impl<'a> StudioShell<'a> {
                                 egui::Button::new(text)
                             }
                             .fill(bg)
-                            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
+                            .stroke(Stroke::new(1.0_f32, colors.recessed))
                             .rounding(Rounding::same(4.0))
                             .min_size(Vec2::new(hatch_width, CONTROL_HEIGHT));
 
@@ -628,18 +624,14 @@ impl<'a> StudioShell<'a> {
 
                         right_actions(ui);
 
-                        let close_bg = hex_to_c32(&palette.theme.b_med);
-                        let close_fg = contrast_text_c32(
-                            close_bg,
-                            Some(hex_to_c32(&palette.diff_del)),
-                            palette,
-                        );
+                        let close_bg = colors.panel;
+                        let close_fg = contrast_text_c32(close_bg, Some(colors.danger), palette);
                         let close_btn = egui::Button::image_and_text(
                             Icon::Close.image_tinted(CONTROL_ICON_SIZE, close_fg),
                             egui::RichText::new("Close (Esc)").strong().color(close_fg),
                         )
                         .fill(close_bg)
-                        .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
+                        .stroke(Stroke::new(1.0_f32, colors.recessed))
                         .rounding(Rounding::same(4.0))
                         .min_size(Vec2::new(0.0, CONTROL_HEIGHT));
 
@@ -665,11 +657,12 @@ impl<'a> StudioShell<'a> {
         mut on_zoom: impl FnMut(ZoomAction),
     ) {
         let palette = self.palette;
+        let colors = WorkbenchColors::from_palette(palette);
 
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.b_low))
+            .fill(colors.recessed)
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(1.0_f32, colors.panel))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for &mode in modes {
@@ -695,28 +688,24 @@ impl<'a> StudioShell<'a> {
     /// Renders Zone 4 (Status & Shortcut Help Footer).
     pub fn render_footer(&self, ui: &mut egui::Ui, toast: &Option<(String, f64)>, now: f64) {
         let palette = self.palette;
+        let colors = WorkbenchColors::from_palette(palette);
 
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.b_low))
+            .fill(colors.recessed)
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     if let Some(hints) = self.footer_hints {
-                        ui.label(
-                            egui::RichText::new(hints)
-                                .small()
-                                .color(hex_to_c32(&palette.theme.f_low)),
-                        );
+                        ui.label(egui::RichText::new(hints).color(colors.text_muted));
                     }
 
                     if let Some(ref readout) = self.footer_readout {
                         ui.add_space(12.0);
                         ui.label(
                             egui::RichText::new(readout)
-                                .small()
                                 .strong()
                                 .monospace()
-                                .color(hex_to_c32(&palette.harmonies.base)),
+                                .color(colors.accent),
                         );
                     }
 
