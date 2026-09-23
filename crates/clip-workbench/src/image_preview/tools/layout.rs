@@ -10,7 +10,10 @@ impl ImageToolMode {
             | Self::DecorrelationStretch
             | Self::CreativeFx
             | Self::Markup => Some(base.with_left().with_right()),
-            Self::FilmSim => Some(base.with_left().with_right().with_bottom()),
+            Self::FilmSim => Some(crate::shell::StudioPanelLayout {
+                bottom_height: 160.0,
+                ..base.with_left().with_right().with_bottom()
+            }),
             Self::Resize | Self::Convert | Self::RemoveBg => Some(base.with_left()),
             _ => None,
         }
