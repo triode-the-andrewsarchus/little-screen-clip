@@ -374,6 +374,7 @@ impl ImagePreviewState {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("✂ Crop Mode:")
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .strong()
                             .color(hex_to_c32(&palette.harmonies.base)),
                     );
@@ -381,7 +382,7 @@ impl ImagePreviewState {
                     ui.add_space(8.0);
                     ui.label(
                         egui::RichText::new("Ratio:")
-                            .small()
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .color(hex_to_c32(&palette.theme.f_med)),
                     );
 
@@ -394,7 +395,8 @@ impl ImagePreviewState {
 
                     for r in ratios {
                         let is_sel = self.crop_state.ratio == r;
-                        let btn = crate::mode_tab_button(r.label(), is_sel, palette);
+                        let btn = crate::mode_tab_button(r.label(), is_sel, palette)
+                            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                         if ui.add(btn).clicked() {
                             self.crop_state.set_ratio(
@@ -411,7 +413,8 @@ impl ImagePreviewState {
                             "✓ Apply Crop (Enter)",
                             hex_to_c32(&palette.diff_add),
                             palette,
-                        );
+                        )
+                        .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                         if ui.add(apply_btn).clicked() {
                             self.apply_crop();
@@ -422,7 +425,8 @@ impl ImagePreviewState {
                             "✕ Full Image",
                             hex_to_c32(&palette.theme.b_med),
                             palette,
-                        );
+                        )
+                        .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                         if ui.add(reset_crop_btn).clicked() {
                             self.crop_state.normalized_rect =
@@ -439,13 +443,14 @@ impl ImagePreviewState {
                             );
                             let undo_btn = egui::Button::new(
                                 egui::RichText::new("⟲ Undo (Ctrl+Z)")
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .strong()
                                     .color(undo_fg),
                             )
                             .fill(undo_bg)
                             .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
-                            .rounding(Rounding::same(4.0));
+                            .rounding(Rounding::same(4.0))
+                            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                             if ui.add(undo_btn).clicked() {
                                 self.undo();
