@@ -292,18 +292,22 @@ impl ImagePreviewState {
         );
         ui.label(
             egui::RichText::new("Choose an output format and compare it on the canvas.")
-                .size(11.5)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .color(muted),
         );
         ui.add_space(6.0);
         ui.allocate_ui_with_layout(
-            Vec2::new(ui.available_width(), 18.0),
+            Vec2::new(ui.available_width(), crate::ui_ext::CONTROL_HEIGHT),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
                 if let Some(error) = &self.convert_state.render_error {
                     ui.add(
-                        egui::Label::new(egui::RichText::new(error).size(11.5).color(warning))
-                            .truncate(true),
+                        egui::Label::new(
+                            egui::RichText::new(error)
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
+                                .color(warning),
+                        )
+                        .truncate(true),
                     );
                 } else if self.convert_state.is_pending() {
                     ui.add(egui::Spinner::new().size(13.0).color(accent));
@@ -313,7 +317,7 @@ impl ImagePreviewState {
                         } else {
                             "Waiting for changes…"
                         })
-                        .size(11.5)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .color(accent),
                     );
                 }
@@ -323,7 +327,7 @@ impl ImagePreviewState {
         ui.add_space(12.0);
         ui.label(
             egui::RichText::new("OUTPUT FORMAT")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
@@ -342,7 +346,7 @@ impl ImagePreviewState {
                 let foreground = contrast_text_c32(fill, Some(text), palette);
                 let button = egui::Button::new(
                     egui::RichText::new(label)
-                        .size(12.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(foreground),
                 )
@@ -352,7 +356,11 @@ impl ImagePreviewState {
                     if active { foreground } else { border },
                 ))
                 .rounding(Rounding::same(4.0));
-                if ui.add_sized([format_width, 30.0], button).clicked() && !active {
+                if ui
+                    .add_sized([format_width, crate::ui_ext::CONTROL_HEIGHT], button)
+                    .clicked()
+                    && !active
+                {
                     self.convert_state.target_format = format;
                     match format {
                         ConvertTargetFormat::Png => self.convert_state.lossless = true,
@@ -369,7 +377,7 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("ENCODING")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
@@ -379,26 +387,26 @@ impl ImagePreviewState {
             ConvertTargetFormat::Png => {
                 ui.label(
                     egui::RichText::new("Lossless PNG")
-                        .size(13.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(text),
                 );
                 ui.label(
                     egui::RichText::new("Preserves every pixel and transparency.")
-                        .size(11.5)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .color(muted),
                 );
             }
             ConvertTargetFormat::Jpeg => {
                 ui.label(
                     egui::RichText::new("Lossy JPEG")
-                        .size(13.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(text),
                 );
                 ui.label(
                     egui::RichText::new("Small files; transparency is flattened.")
-                        .size(11.5)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .color(muted),
                 );
             }
@@ -408,7 +416,7 @@ impl ImagePreviewState {
                     .checkbox(
                         &mut lossless,
                         egui::RichText::new("Lossless WebP")
-                            .size(13.0)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .strong()
                             .color(text),
                     )
@@ -424,7 +432,7 @@ impl ImagePreviewState {
                     } else {
                         "Compresses for a smaller output file."
                     })
-                    .size(11.5)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(muted),
                 );
             }
@@ -435,14 +443,14 @@ impl ImagePreviewState {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("Quality")
-                        .size(12.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(text),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(format!("{}%", self.convert_state.quality))
-                            .size(12.0)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .monospace()
                             .color(accent),
                     );
@@ -476,7 +484,12 @@ impl ImagePreviewState {
                 .add_enabled_ui(
                     !self.convert_state.is_running_optipng
                         && self.convert_state.output_is_current(),
-                    |ui| ui.add_sized([ui.available_width(), 30.0], optimize),
+                    |ui| {
+                        ui.add_sized(
+                            [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
+                            optimize,
+                        )
+                    },
                 )
                 .inner
                 .on_hover_text("Losslessly reduce the encoded PNG file size")
@@ -491,7 +504,7 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("FILE SIZE")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
@@ -500,18 +513,26 @@ impl ImagePreviewState {
         let original_size = self.file_size_bytes;
         let converted_size = self.convert_state.encoded_bytes.len();
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Original").size(12.0).color(muted));
+            ui.label(
+                egui::RichText::new("Original")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(muted),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(format_bytes_size(original_size))
-                        .size(12.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .monospace()
                         .color(text),
                 );
             });
         });
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Converted").size(12.0).color(muted));
+            ui.label(
+                egui::RichText::new("Converted")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(muted),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(if converted_size == 0 {
@@ -519,7 +540,7 @@ impl ImagePreviewState {
                     } else {
                         format_bytes_size(converted_size)
                     })
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .monospace()
                     .color(text),
                 );
@@ -531,11 +552,15 @@ impl ImagePreviewState {
                 (converted_size as f64 - original_size as f64) / original_size as f64 * 100.0;
             let delta_color = if delta <= 0.0 { success } else { warning };
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Difference").size(12.0).color(muted));
+                ui.label(
+                    egui::RichText::new("Difference")
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(muted),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(format!("{:+.1}%", delta))
-                            .size(12.0)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .strong()
                             .monospace()
                             .color(delta_color),
@@ -548,7 +573,7 @@ impl ImagePreviewState {
             let saved = before.saturating_sub(after);
             ui.label(
                 egui::RichText::new(format!("OptiPNG saved {}", format_bytes_size(saved)))
-                    .size(11.5)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .strong()
                     .color(success),
             );
@@ -557,7 +582,7 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("Drag the canvas divider to compare before and after.")
-                .size(11.5)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .italics()
                 .color(muted),
         );
@@ -568,7 +593,7 @@ impl ImagePreviewState {
         let save = crate::action_button(format!("Save as .{}", extension), accent, palette);
         if ui
             .add_enabled_ui(output_ready, |ui| {
-                ui.add_sized([ui.available_width(), 32.0], save)
+                ui.add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], save)
             })
             .inner
             .on_hover_text(format!("Export the converted image as .{}", extension))
@@ -581,7 +606,7 @@ impl ImagePreviewState {
         let apply = crate::secondary_button("Apply to canvas (Enter)", success, palette);
         if ui
             .add_enabled_ui(output_ready, |ui| {
-                ui.add_sized([ui.available_width(), 30.0], apply)
+                ui.add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], apply)
             })
             .inner
             .on_hover_text("Use the converted image as the active editor canvas")
@@ -593,7 +618,7 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("COPY TO SLOT")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
@@ -602,7 +627,7 @@ impl ImagePreviewState {
         ui.horizontal(|ui| {
             let left = crate::secondary_button("Left hand", surface, palette);
             if ui
-                .add_sized([slot_width, 28.0], left)
+                .add_sized([slot_width, crate::ui_ext::CONTROL_HEIGHT], left)
                 .on_hover_text("Copy the converted image to the Left Hand slot")
                 .clicked()
             {
@@ -611,7 +636,7 @@ impl ImagePreviewState {
 
             let right = crate::secondary_button("Right hand", surface, palette);
             if ui
-                .add_sized([slot_width, 28.0], right)
+                .add_sized([slot_width, crate::ui_ext::CONTROL_HEIGHT], right)
                 .on_hover_text("Copy the converted image to the Right Hand slot")
                 .clicked()
             {
