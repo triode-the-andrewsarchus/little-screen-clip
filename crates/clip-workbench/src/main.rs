@@ -834,9 +834,9 @@ impl eframe::App for WorkbenchApp {
                                 .strong(),
                         );
                         ui.label(
-                            egui::RichText::new(" • [Space] Hands  |  [1] L+L1  |  [2] L+L2  |  [3] 3 Left  |  [0] L only")
-                                .color(hex_to_c32(&self.ui_palette.theme.f_low))
-                                .small(),
+                                egui::RichText::new(" • [Space] Hands  |  [1] L+L1  |  [2] L+L2  |  [3] 3 Left  |  [0] L only")
+                                    .color(hex_to_c32(&self.ui_palette.theme.f_low))
+                                    .size(BODY_FONT_SIZE),
                         );
 
                         if let Some((path, title)) = first_audio_item {
@@ -1188,14 +1188,14 @@ impl eframe::App for WorkbenchApp {
                                         ui.label(
                                             egui::RichText::new(format!("[{}]", act.category()))
                                                 .color(cat_color)
-                                                .small()
+                                                .size(BODY_FONT_SIZE)
                                                 .strong(),
                                         );
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                             ui.label(
                                                 egui::RichText::new(act.description())
                                                     .color(hex_to_c32(&self.ui_palette.theme.f_low))
-                                                    .small(),
+                                                    .size(BODY_FONT_SIZE),
                                             );
                                         });
                                     });
@@ -1217,7 +1217,7 @@ impl eframe::App for WorkbenchApp {
                         ui.label(
                             egui::RichText::new("[Enter] Execute & Paste  |  [F2 / Tab] Big Node Machine  |  [Esc] Dismiss")
                                 .color(hex_to_c32(&self.ui_palette.theme.f_low))
-                                .small(),
+                                .size(BODY_FONT_SIZE),
                         );
                     });
                 }
@@ -1237,7 +1237,7 @@ impl eframe::App for WorkbenchApp {
                         ui.label(
                             egui::RichText::new("[Right/Mid Drag] Pan Canvas  |  [Scroll] Zoom  |  [F2] Quick Palette  |  [Esc] Dismiss")
                                 .color(hex_to_c32(&self.ui_palette.theme.f_low))
-                                .small(),
+                                .size(BODY_FONT_SIZE),
                         );
                     });
                 }
@@ -1274,7 +1274,7 @@ impl eframe::App for WorkbenchApp {
                                         &mut trim,
                                         egui::RichText::new("Clean Tracking from Links")
                                             .strong()
-                                            .size(15.0)
+                                            .size(BODY_FONT_SIZE)
                                             .color(title_color),
                                     );
                                     if cb.changed() {
@@ -1297,7 +1297,7 @@ impl eframe::App for WorkbenchApp {
                                             .rounding(egui::Rounding::same(4.0))
                                             .inner_margin(egui::Margin::symmetric(8.0, 3.0))
                                             .show(ui, |ui| {
-                                                ui.label(egui::RichText::new(status_text).size(11.0).strong().color(badge_fg));
+                                                ui.label(egui::RichText::new(status_text).size(BODY_FONT_SIZE).strong().color(badge_fg));
                                             });
                                     });
                                 });
@@ -1314,7 +1314,7 @@ impl eframe::App for WorkbenchApp {
                                     egui::RichText::new(
                                         "↳ Behavior: Cleaned link is placed directly into the active hand; original untracked URL is preserved in Undo [Z] for instant bypass.",
                                     )
-                                    .small()
+                                    .size(BODY_FONT_SIZE)
                                     .color(hex_to_c32(&self.ui_palette.theme.f_med)),
                                 );
                             });
@@ -1327,7 +1327,7 @@ impl eframe::App for WorkbenchApp {
                         ui.label(
                             egui::RichText::new("[Click] Toggle Setting  |  [Esc] Dismiss")
                                 .color(hex_to_c32(&self.ui_palette.theme.f_low))
-                                .small(),
+                                .size(BODY_FONT_SIZE),
                         );
                     });
                 }
