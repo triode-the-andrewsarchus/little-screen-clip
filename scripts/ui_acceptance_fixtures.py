@@ -132,6 +132,105 @@ def stl_fixture(out: Path) -> None:
     )
 
 
+def pdf_fixture(out: Path) -> None:
+    # Small hand-built PDF keeps this generator dependency-free and byte-stable.
+    def text_stream(label: bytes) -> bytes:
+        content = b"BT /F1 18 Tf 40 140 Td (" + label + b") Tj ET"
+        return b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n" + content + b"\nendstream"
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R >>",
+        text_stream(b"Fixture page one"),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>",
+        text_stream(b"Fixture page two"),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    data = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(data))
+        data.extend(f"{number} 0 obj\n".encode("ascii") + body + b"\nendobj\n")
+    xref = len(data)
+    data.extend(f"xref\n0 {len(offsets)}\n0000000000 65535 f \n".encode("ascii"))
+    for offset in offsets[1:]:
+        data.extend(f"{offset:010} 00000 n \n".encode("ascii"))
+    data.extend(f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii"))
+    (out / "document-two-page.pdf").write_bytes(data)
+
+
+def midi_fixture(out: Path) -> None:
+    def vlq(value: int) -> bytes:
+        encoded = [value & 0x7F]
+        value >>= 7
+        while value:
+            encoded.insert(0, (value & 0x7F) | 0x80)
+            value >>= 7
+        return bytes(encoded)
+
+    def track(events: bytes) -> bytes:
+        return b"MTrk" + struct.pack(">I", len(events)) + events
+
+    tempo = track(b"\x00\xff\x51\x03\x07\xa1\x20\x00\xff\x2f\x00")
+    melody_events = b"\x00\xc0\x00" + b"\x00\x90\x3c\x64" + vlq(480) + b"\x80\x3c\x00\x00\xff\x2f\x00"
+    bass_events = b"\x00\xc1\x21" + b"\x00\x91\x30\x50" + vlq(960) + b"\x81\x30\x00\x00\xff\x2f\x00"
+    payload = b"MThd" + struct.pack(">IHHH", 6, 1, 3, 480) + tempo + track(melody_events) + track(bass_events)
+    (out / "music-three-track.mid").write_bytes(payload)
+
+
+def exif_tiff_fixture(out: Path) -> None:
+    # Minimal little-endian RGB TIFF with Orientation and DateTime EXIF tags.
+    width, height = 48, 32
+    pixels = bytes(channel for y in range(height) for x in range(width) for channel in (x * 255 // (width - 1), y * 255 // (height - 1), 96))
+    entries = [
+        (256, 4, 1, width), (257, 4, 1, height), (258, 3, 3, None),
+        (259, 3, 1, 1), (262, 3, 1, 2), (273, 4, 1, None),
+        (274, 3, 1, 6), (277, 3, 1, 3), (278, 4, 1, height),
+        (279, 4, 1, len(pixels)), (284, 3, 1, 1), (306, 2, 20, None),
+    ]
+    ifd_offset = 8
+    extra_offset = ifd_offset + 2 + len(entries) * 12 + 4
+    bits_offset = extra_offset
+    datetime_offset = bits_offset + 6
+    pixel_offset = datetime_offset + 20
+    values = {258: bits_offset, 273: pixel_offset, 306: datetime_offset}
+    data = bytearray(b"II*\x00" + struct.pack("<I", ifd_offset))
+    data.extend(struct.pack("<H", len(entries)))
+    for tag, kind, count, value in entries:
+        value = values.get(tag, value)
+        if kind == 3 and count == 1:
+            packed_value = struct.pack("<H", value) + b"\x00\x00"
+        elif kind == 4:
+            packed_value = struct.pack("<I", value)
+        else:
+            packed_value = struct.pack("<I", value)
+        data.extend(struct.pack("<HHI", tag, kind, count) + packed_value)
+    data.extend(b"\x00\x00\x00\x00")
+    data.extend(struct.pack("<HHH", 8, 8, 8))
+    data.extend(b"2026:01:02 03:04:05\x00")
+    data.extend(pixels)
+    (out / "image-exif.tiff").write_bytes(data)
+
+
+def svg_fixture(out: Path) -> None:
+    (out / "image-simple.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90" viewBox="0 0 160 90">'
+        '<rect width="160" height="90" fill="#243b53"/><circle cx="80" cy="45" r="28" fill="#f0b429"/>'
+        '<text x="80" y="84" text-anchor="middle" fill="white">CLIP SVG</text></svg>\n', encoding="utf-8")
+
+
+def validate_added_fixtures(out: Path) -> None:
+    pdf = (out / "document-two-page.pdf").read_bytes()
+    midi = (out / "music-three-track.mid").read_bytes()
+    tiff = (out / "image-exif.tiff").read_bytes()
+    svg = (out / "image-simple.svg").read_text(encoding="utf-8")
+    assert pdf.startswith(b"%PDF-1.4") and b"/Count 2" in pdf
+    assert midi[:4] == b"MThd" and struct.unpack_from(">H", midi, 10)[0] == 3
+    assert tiff[:4] == b"II*\x00" and struct.pack("<H", 274) in tiff and b"2026:01:02 03:04:05" in tiff
+    assert svg.startswith("<svg ") and "<circle" in svg
+
+
 def generate(out: Path, large_audio_seconds: int = WAV_LARGE_SECONDS) -> list[Path]:
     out.mkdir(parents=True, exist_ok=True)
     names = [
@@ -139,6 +238,7 @@ def generate(out: Path, large_audio_seconds: int = WAV_LARGE_SECONDS) -> list[Pa
         "sheet-wide.csv", "sheet-tall.csv", "binary-left.bin", "binary-right.bin",
         "image-transparent.png", "audio-stereo.wav", f"audio-large-{large_audio_seconds}s.wav",
         "audio-silence-transient.wav", "model-simple.stl",
+        "document-two-page.pdf", "music-three-track.mid", "image-exif.tiff", "image-simple.svg",
     ]
     conflicts = [name for name in names if (out / name).exists()]
     if conflicts:
@@ -149,6 +249,11 @@ def generate(out: Path, large_audio_seconds: int = WAV_LARGE_SECONDS) -> list[Pa
     image_fixture(out)
     audio_fixtures(out, large_audio_seconds)
     stl_fixture(out)
+    pdf_fixture(out)
+    midi_fixture(out)
+    exif_tiff_fixture(out)
+    svg_fixture(out)
+    validate_added_fixtures(out)
     return [out / name for name in names]
 
 
@@ -159,9 +264,9 @@ def main() -> None:
             "text-large-1m2.txt, markdown-long.md, ansi-color.txt, sheet-wide.csv, "
             "sheet-tall.csv, binary-left.bin, binary-right.bin, image-transparent.png, "
             "audio-stereo.wav, audio-large-<seconds>s.wav, audio-silence-transient.wav, and "
-            "model-simple.stl. The large WAV defaults to 30 seconds (~5.3 MB); use "
-            "--large-audio-seconds 300 for 300 seconds (~53 MB). PDF and MIDI fixtures "
-            "are deferred.\n\n"
+            "model-simple.stl, document-two-page.pdf, music-three-track.mid, image-exif.tiff, "
+            "and image-simple.svg. The large WAV defaults to 30 seconds (~5.3 MB); use "
+            "--large-audio-seconds 300 for 300 seconds (~53 MB).\n\n"
             "Exact command: python3 scripts/ui_acceptance_fixtures.py --output-dir /tmp/clip-ui-fixtures"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
