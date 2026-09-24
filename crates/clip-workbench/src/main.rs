@@ -827,7 +827,7 @@ impl eframe::App for WorkbenchApp {
                     let mut open_diff_requested = false;
                     let mut open_spreadsheet_requested = None;
 
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.label(
                             egui::RichText::new(format!("Selected ({}): {}", self.selected_slots.len(), slot_labels.join(" + ")))
                                 .color(hex_to_c32(&self.ui_palette.harmonies.base))
