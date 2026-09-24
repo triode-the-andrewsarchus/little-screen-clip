@@ -749,8 +749,15 @@ impl eframe::App for WorkbenchApp {
 
         self.appearance_sync.poll(ctx);
         self.appearance_sync.render(ctx, &self.ui_palette);
-        self.poll_spreadsheet_load(ctx);
 
+        if self.render_modal_viewers(ctx) {
+            self.palette_search_needs_focus = true;
+            return;
+        }
+
+        // Hold completed table loads while another viewer is active. Its receiver keeps
+        // the result until the current session closes, so it cannot open underneath it.
+        self.poll_spreadsheet_load(ctx);
         if self.render_modal_viewers(ctx) {
             self.palette_search_needs_focus = true;
             return;
