@@ -650,7 +650,10 @@ impl MidiViewerState {
                     .stroke(Stroke::new(1.0_f32, b_med))
                     .inner_margin(egui::Margin::symmetric(14.0, 6.0))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
+                        // Keep every transport and zoom action visible on compact popup widths.
+                        // The wrapped layout preserves the one-click controls while allowing the
+                        // rightmost zoom group to continue on the next row when needed.
+                        ui.horizontal_wrapped(|ui| {
                             // Transport controls
                             if is_playing {
                                 let pause_btn = crate::ui_ext::action_button_icon(Some(Icon::Pause), "Pause [Space]", pause_color, palette);
