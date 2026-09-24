@@ -32,11 +32,11 @@ Use standard `rustfmt` output (four-space indentation). Name modules, functions,
 
 ## Testing Guidelines
 
-Keep unit tests beside the code in `#[cfg(test)]` modules. Use descriptive `snake_case` test names that state the expected behavior, such as `parses_valid_theme_colors`. Add targeted tests for new transformations, parsing or configuration behavior, rendering, and testable UI logic. Run the affected crate’s tests during development and `cargo test --workspace` before submitting broader changes.
+Keep unit tests beside the code in `#[cfg(test)]` modules. Use descriptive `snake_case` test names that state the expected behavior, such as `fixed_palette_text_is_readable`. Add targeted tests for new transformations, parsing or configuration behavior, rendering, and testable UI logic. Run the affected crate’s tests during development and `cargo test --workspace` before submitting broader changes.
 
 ## Commit & Pull Request Guidelines
 
-Follow the existing Conventional Commit pattern with a concise scope: `feat(image): add film simulation controls`, `refactor(ui): extract shared toolbar`, or `feat(theme): improve contrast`. Use imperative summaries. Pull requests should explain the behavior change, list validation commands and results, link relevant issues when available, and include screenshots or GIFs for workbench or theme changes.
+Follow the existing Conventional Commit pattern with a concise scope: `feat(image): add film simulation controls`, `refactor(ui): extract shared toolbar`, or `feat(ui): improve contrast`. Use imperative summaries. Pull requests should explain the behavior change, list validation commands and results, link relevant issues when available, and include screenshots or GIFs for workbench changes.
 
 ## Runtime Configuration & Hardware
 
@@ -49,6 +49,8 @@ Async preview completion updates an existing clipboard item in place. Keep `Slot
 `WorkbenchApp` owns one active `ViewerSession` at a time. CLI previews queued at startup open in their established order; asynchronous completions must wait for the active session to close rather than replace or appear behind it.
 
 Runtime Hundred Rabbits themes and per-color overrides are retired, including on the USB display. Define fixed Light/Dark base colors in core's `palette::BaseColors` and access them through `AppPalette.colors`; switch workbench and display together. Keep egui-specific semantic roles in `clip-workbench/src/ui_appearance.rs`. Do not reintroduce raw `Theme` fields or rewrite a user's personal `config.toml` while migrating it.
+
+The comparison text viewport uses one dark `console_surface` in both appearances so terminal ANSI colors remain readable. Keep this surface in the central palette; ANSI escape colors represent data, not workbench chrome.
 
 ## Agent Maintenance & Self-Correction
 During final cleanup, consider whether the work revealed that this file is incomplete, incorrect, or obsolete.
