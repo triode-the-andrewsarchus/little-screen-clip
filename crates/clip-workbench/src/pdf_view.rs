@@ -38,6 +38,7 @@ pub struct PdfPageItem {
     pub page_num: usize,
     pub png_bytes: Vec<u8>,
     pub texture: Option<egui::TextureHandle>,
+    pub error: Option<String>,
     pub width: u32,
     pub height: u32,
     #[allow(dead_code)]
@@ -152,6 +153,7 @@ impl PdfEditorState {
                 page_num,
                 png_bytes: Vec::new(),
                 texture: None,
+                error: None,
                 width: 0,
                 height: 0,
                 rotation: 0,
@@ -197,10 +199,14 @@ impl PdfEditorState {
                 match rx.try_recv() {
                     Ok(message) => {
                         if let Some(page) = self.pages.get_mut(message.page_num.saturating_sub(1)) {
-                            if let Ok((png_bytes, width, height)) = message.result {
-                                page.png_bytes = png_bytes;
-                                page.width = width;
-                                page.height = height;
+                            match message.result {
+                                Ok((png_bytes, width, height)) => {
+                                    page.png_bytes = png_bytes;
+                                    page.width = width;
+                                    page.height = height;
+                                    page.error = None;
+                                }
+                                Err(error) => page.error = Some(error),
                             }
                         }
                     }
@@ -377,20 +383,23 @@ impl PdfEditorState {
         // Ensure textures loaded
         for page in &mut self.pages {
             if page.texture.is_none() && !page.png_bytes.is_empty() {
-                if let Ok(img) = image::load_from_memory(&page.png_bytes) {
-                    let rgba = img.to_rgba8();
-                    let color_img = egui::ColorImage::from_rgba_unmultiplied(
-                        [rgba.width() as usize, rgba.height() as usize],
-                        rgba.as_raw(),
-                    );
-                    page.texture = Some(ctx.load_texture(
-                        format!("pdf_page_{}", page.page_num),
-                        color_img,
-                        egui::TextureOptions::LINEAR,
-                    ));
-                    page.png_bytes.clear();
-                    page.png_bytes.shrink_to_fit();
+                match image::load_from_memory(&page.png_bytes) {
+                    Ok(img) => {
+                        let rgba = img.to_rgba8();
+                        let color_img = egui::ColorImage::from_rgba_unmultiplied(
+                            [rgba.width() as usize, rgba.height() as usize],
+                            rgba.as_raw(),
+                        );
+                        page.texture = Some(ctx.load_texture(
+                            format!("pdf_page_{}", page.page_num),
+                            color_img,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                    }
+                    Err(error) => page.error = Some(format!("PDF preview decode failed: {error}")),
                 }
+                page.png_bytes.clear();
+                page.png_bytes.shrink_to_fit();
             }
         }
 
@@ -533,6 +542,7 @@ impl PdfEditorState {
                                                     Option<egui::TextureId>,
                                                     u32,
                                                     u32,
+                                                    bool,
                                                 )> = self
                                                     .pages
                                                     .iter()
@@ -542,11 +552,12 @@ impl PdfEditorState {
                                                             p.texture.as_ref().map(|t| t.id()),
                                                             p.width,
                                                             p.height,
+                                                            p.error.is_some(),
                                                         )
                                                     })
                                                     .collect();
 
-                                                for (page_num, tex_id_opt, w, h) in pages_clone {
+                                                for (page_num, tex_id_opt, w, h, failed) in pages_clone {
                                                     let is_selected =
                                                         self.selected_page == Some(page_num);
 
@@ -587,7 +598,7 @@ impl PdfEditorState {
                                                                         self.selected_page = Some(page_num);
                                                                     }
                                                                 } else {
-                                                                    let placeholder = egui::Button::new("...")
+                                                                    let placeholder = egui::Button::new(if failed { "Unavailable" } else { "…" })
                                                                         .min_size(Vec2::new(thumb_w, thumb_h));
                                                                     if ui.add(placeholder).clicked() {
                                                                         self.selected_page = Some(page_num);
@@ -689,6 +700,12 @@ impl PdfEditorState {
                                                     tex.id(),
                                                     Vec2::new(draw_w, draw_h),
                                                 ));
+                                            } else if let Some(error) = &page.error {
+                                                ui.label(
+                                                    egui::RichText::new(error)
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                                                        .color(colors.danger),
+                                                );
                                             } else {
                                                 ui.spinner();
                                             }
@@ -696,7 +713,11 @@ impl PdfEditorState {
                                     } else {
                                         ui.centered_and_justified(|ui| {
                                             ui.label(
-                                                egui::RichText::new("No page selected.")
+                                                egui::RichText::new(if metadata_loading {
+                                                    "Loading PDF pages…"
+                                                } else {
+                                                    "No page selected."
+                                                })
                                                     .color(colors.text_muted),
                                             );
                                         });
@@ -745,5 +766,37 @@ mod tests {
         assert_eq!(state.page_count, 1);
         assert_eq!(state.selected_page, Some(1));
         assert!(state.status_toast.message(0.0).is_some());
+    }
+
+    #[test]
+    fn failed_page_raster_is_reported_instead_of_spinning_forever() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = PdfEditorState::new(temp.path().join("missing.pdf"));
+        let (sender, receiver) = channel();
+        state.preview_rx = Some(receiver);
+        state.previews_loading = true;
+        state.pages.push(PdfPageItem {
+            page_num: 1,
+            png_bytes: Vec::new(),
+            texture: None,
+            error: None,
+            width: 0,
+            height: 0,
+            rotation: 0,
+        });
+        sender
+            .send(PdfPreviewMsg {
+                page_num: 1,
+                result: Err("raster failed".to_owned()),
+            })
+            .unwrap();
+        drop(sender);
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            state.poll_preview_worker(ctx)
+        });
+        assert_eq!(state.pages[0].error.as_deref(), Some("raster failed"));
+        assert!(!state.previews_loading);
     }
 }
