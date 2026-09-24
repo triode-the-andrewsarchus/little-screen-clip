@@ -1009,17 +1009,21 @@ impl ImagePreviewState {
                         ui.label(
                             egui::RichText::new("Film Stock")
                                 .strong()
-                                .small()
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(base_c),
                         );
                         ui.label(
                             egui::RichText::new(format!("({})", stocks.len()))
-                                .small()
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(f_low),
                         );
                         if self.film_sim_state.is_generating_thumbnails {
-                            ui.label(egui::RichText::new("...").small().color(f_low))
-                                .on_hover_text("Generating thumbnails in background…");
+                            ui.label(
+                                egui::RichText::new("...")
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                                    .color(f_low),
+                            )
+                            .on_hover_text("Generating thumbnails in background…");
                         }
                     });
                     ui.add_space(4.0);
@@ -1058,7 +1062,7 @@ impl ImagePreviewState {
                                     }
                                     ui.label(
                                         egui::RichText::new(entry.brand.to_uppercase())
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .strong()
                                             .color(base_c),
                                     );
@@ -1105,7 +1109,7 @@ impl ImagePreviewState {
                                             ui.vertical(|ui| {
                                                 ui.label(
                                                     egui::RichText::new(entry.name)
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .strong()
                                                         .color(name_col),
                                                 );
@@ -1265,7 +1269,7 @@ impl ImagePreviewState {
                             spinner_pos,
                             egui::Align2::CENTER_CENTER,
                             "⏳ Rendering film simulation…",
-                            egui::FontId::proportional(12.0),
+                            egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                             f_med,
                         );
                     }
@@ -1277,7 +1281,7 @@ impl ImagePreviewState {
                             err_pos,
                             egui::Align2::LEFT_TOP,
                             format!("⚠ {}", err),
-                            egui::FontId::proportional(11.0),
+                            egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                             hex_to_c32(&palette.diff_del),
                         );
                     }
@@ -1302,7 +1306,12 @@ impl ImagePreviewState {
                             ui.set_width(right_w - 24.0);
 
                             // 1. Style
-                            ui.label(egui::RichText::new("Style").strong().small().color(base_c));
+                            ui.label(
+                                egui::RichText::new("Style")
+                                    .strong()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                                    .color(base_c),
+                            );
                             ui.add_space(4.0);
 
                             let styles = [
@@ -1329,12 +1338,15 @@ impl ImagePreviewState {
                                     (b_med, f_med)
                                 };
                                 let btn = egui::Button::new(
-                                    egui::RichText::new(*label).small().strong().color(s_fg),
+                                    egui::RichText::new(*label)
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                                        .strong()
+                                        .color(s_fg),
                                 )
                                 .fill(s_bg)
                                 .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                 .rounding(Rounding::same(4.0))
-                                .min_size(Vec2::new(right_w - 28.0, 20.0));
+                                .min_size(Vec2::new(right_w - 28.0, crate::ui_ext::CONTROL_HEIGHT));
 
                                 if ui.add(btn).on_hover_text(*tooltip).clicked() && !sel {
                                     self.film_sim_state.style = *style;
@@ -1351,7 +1363,7 @@ impl ImagePreviewState {
                             ui.label(
                                 egui::RichText::new("Optics & Effects")
                                     .strong()
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(base_c),
                             );
                             ui.add_space(4.0);
@@ -1387,7 +1399,11 @@ impl ImagePreviewState {
                             }
                             ui.add_space(4.0);
 
-                            ui.label(egui::RichText::new("Light Leak").small().color(f_med));
+                            ui.label(
+                                egui::RichText::new("Light Leak")
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                                    .color(f_med),
+                            );
                             egui::ComboBox::from_id_source("film_sim_light_leak_combo")
                                 .selected_text(self.film_sim_state.light_leak.label())
                                 .width(full_w)
@@ -1413,7 +1429,9 @@ impl ImagePreviewState {
                             if ui
                                 .checkbox(
                                     &mut grain_on,
-                                    egui::RichText::new("Grain emulation").small().color(f_med),
+                                    egui::RichText::new("Grain emulation")
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                                        .color(f_med),
                                 )
                                 .changed()
                             {
@@ -1434,7 +1452,7 @@ impl ImagePreviewState {
                             ui.label(
                                 egui::RichText::new("Stock Info")
                                     .strong()
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(base_c),
                             );
                             ui.add_space(4.0);
@@ -1443,39 +1461,65 @@ impl ImagePreviewState {
                             egui::Grid::new("film_sim_stock_meta_grid")
                                 .spacing(Vec2::new(6.0, 3.0))
                                 .show(ui, |ui| {
-                                    ui.label(egui::RichText::new("Brand:").small().color(f_med));
                                     ui.label(
-                                        egui::RichText::new(entry.brand).small().color(f_high),
+                                        egui::RichText::new("Brand:")
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                                            .color(f_med),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(entry.brand)
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                                            .color(f_high),
                                     );
                                     ui.end_row();
 
-                                    ui.label(egui::RichText::new("Film:").small().color(f_med));
-                                    ui.label(egui::RichText::new(entry.name).small().color(f_high));
+                                    ui.label(
+                                        egui::RichText::new("Film:")
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                                            .color(f_med),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(entry.name)
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                                            .color(f_high),
+                                    );
                                     ui.end_row();
 
-                                    ui.label(egui::RichText::new("ISO:").small().color(f_med));
+                                    ui.label(
+                                        egui::RichText::new("ISO:")
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                                            .color(f_med),
+                                    );
                                     ui.label(
                                         egui::RichText::new(format!("{}", entry.iso))
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_high),
                                     );
                                     ui.end_row();
 
-                                    ui.label(egui::RichText::new("Type:").small().color(f_med));
+                                    ui.label(
+                                        egui::RichText::new("Type:")
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                                            .color(f_med),
+                                    );
                                     ui.label(
                                         egui::RichText::new(entry.film_type_label)
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_high),
                                     );
                                     ui.end_row();
 
-                                    ui.label(egui::RichText::new("Res:").small().color(f_med));
+                                    ui.label(
+                                        egui::RichText::new("Res:")
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                                            .color(f_med),
+                                    );
                                     ui.label(
                                         egui::RichText::new(format!(
                                             "{:.0} lp/mm",
                                             stock_built.resolution_lp_mm
                                         ))
-                                        .small()
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                         .color(f_low),
                                     );
                                     ui.end_row();
@@ -1488,7 +1532,7 @@ impl ImagePreviewState {
                                         "⏱ {:.2}s",
                                         self.film_sim_state.last_render_duration_ms as f64 / 1000.0
                                     ))
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(f_low),
                                 );
                             }
@@ -1610,7 +1654,10 @@ impl ImagePreviewState {
                                 // Row 2: WB Mode Selector + Auto Presets + Actions
                                 ui.horizontal(|ui| {
                                     ui.label(
-                                        egui::RichText::new("WB:").small().strong().color(base_c),
+                                        egui::RichText::new("WB:")
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                                            .strong()
+                                            .color(base_c),
                                     );
                                     let wb_modes = [
                                         (WhiteBalanceMode::Auto, "Auto"),
@@ -1627,7 +1674,7 @@ impl ImagePreviewState {
                                         };
                                         let b = egui::Button::new(
                                             egui::RichText::new(label)
-                                                .small()
+                                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                                 .strong()
                                                 .color(btn_fg),
                                         )
@@ -1637,7 +1684,7 @@ impl ImagePreviewState {
                                             if sel { base_c } else { b_low },
                                         ))
                                         .rounding(Rounding::same(3.0))
-                                        .min_size(Vec2::new(36.0, 18.0));
+                                        .min_size(Vec2::new(36.0, crate::ui_ext::CONTROL_HEIGHT));
                                         if ui.add(b).clicked() && !sel {
                                             self.film_sim_state.wb_mode = mode;
                                             self.film_sim_state.mark_dirty();
@@ -1764,7 +1811,7 @@ impl ImagePreviewState {
                                                 );
                                                 let undo_btn = egui::Button::new(
                                                     egui::RichText::new("⟲ Undo (Ctrl+Z)")
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .strong()
                                                         .color(undo_fg),
                                                 )
@@ -1821,10 +1868,16 @@ impl ImagePreviewState {
 
         // HUD badges
         let badge_bg = hex_to_c32_alpha(&palette.theme.b_low, 210);
+        let badge_font = egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE);
+        let orig_badge_w = painter
+            .layout_no_wrap("ORIGINAL".to_owned(), badge_font.clone(), b_med)
+            .size()
+            .x
+            + 20.0;
 
         let orig_rect = Rect::from_min_size(
             Pos2::new(img_rect.min.x + 10.0, img_rect.min.y + 10.0),
-            Vec2::new(100.0, 22.0),
+            Vec2::new(orig_badge_w, crate::ui_ext::CONTROL_HEIGHT),
         );
         painter.rect_filled(orig_rect, Rounding::same(4.0), badge_bg);
         painter.rect_stroke(orig_rect, Rounding::same(4.0), Stroke::new(1.0_f32, b_med));
@@ -1832,7 +1885,7 @@ impl ImagePreviewState {
             orig_rect.center(),
             egui::Align2::CENTER_CENTER,
             "ORIGINAL",
-            egui::FontId::proportional(11.0),
+            badge_font.clone(),
             hex_to_c32(&palette.theme.f_med),
         );
 
@@ -1850,10 +1903,14 @@ impl ImagePreviewState {
                 self.film_sim_state.last_render_duration_ms as f64 / 1000.0
             )
         };
-        let sim_badge_w = (sim_label.len() as f32 * 6.5).max(130.0);
+        let sim_badge_w = painter
+            .layout_no_wrap(sim_label.clone(), badge_font.clone(), base_c)
+            .size()
+            .x
+            + 20.0;
         let sim_rect = Rect::from_min_size(
             Pos2::new(img_rect.max.x - sim_badge_w - 10.0, img_rect.min.y + 10.0),
-            Vec2::new(sim_badge_w, 22.0),
+            Vec2::new(sim_badge_w, crate::ui_ext::CONTROL_HEIGHT),
         );
         painter.rect_filled(sim_rect, Rounding::same(4.0), badge_bg);
         painter.rect_stroke(sim_rect, Rounding::same(4.0), Stroke::new(1.0_f32, base_c));
@@ -1861,7 +1918,7 @@ impl ImagePreviewState {
             sim_rect.center(),
             egui::Align2::CENTER_CENTER,
             sim_label,
-            egui::FontId::proportional(10.0),
+            badge_font,
             base_c,
         );
     }
