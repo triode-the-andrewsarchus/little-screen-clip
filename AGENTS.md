@@ -48,7 +48,7 @@ Async preview completion updates an existing clipboard item in place. Keep `Slot
 
 `WorkbenchApp` owns one active `ViewerSession` at a time. CLI previews queued at startup open in their established order; asynchronous completions must wait for the active session to close rather than replace or appear behind it.
 
-Runtime Hundred Rabbits themes and per-color overrides are retired, including on the USB display. Define fixed Light/Dark base colors centrally in core and switch workbench and display together; keep semantic desktop roles in `clip-workbench/src/ui_appearance.rs`. The remaining `Theme`-shaped palette fields are transitional until callers migrate. Do not rewrite a user's personal `config.toml` while migrating it.
+Runtime Hundred Rabbits themes and per-color overrides are retired, including on the USB display. Define fixed Light/Dark base colors in core's `BaseColors` and access them through `AppPalette.colors`; switch workbench and display together. Keep egui-specific semantic roles in `clip-workbench/src/ui_appearance.rs`. The remaining `Theme`-shaped palette fields are transitional until callers migrate. Do not rewrite a user's personal `config.toml` while migrating it.
 
 ## Agent Maintenance & Self-Correction
 During final cleanup, consider whether the work revealed that this file is incomplete, incorrect, or obsolete.
