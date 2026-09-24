@@ -3,13 +3,55 @@
 //! Converts terminal color codes, bold, italic, and underline markers into styled [`egui::text::LayoutJob`]s.
 
 use eframe::egui::{self, Color32, FontId, Stroke};
+use little_clip_core::config::WorkbenchAppearance;
+use little_clip_core::palette::AppPalette;
+
+use crate::ui_ext::contrast_text_c32_on;
 
 /// Converts raw ANSI terminal escape sequences into a styled [`egui::text::LayoutJob`].
 pub fn ansi_to_layout_job(ansi_text: &str, font_size: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     job.wrap = egui::text::TextWrapping::no_max_width();
 
-    let def_fg = Color32::from_rgb(226, 232, 240); // Slate 200
+    let palette = AppPalette::for_appearance(WorkbenchAppearance::Dark);
+    let console = crate::hex_to_c32(&palette.colors.console_surface);
+    let append_chunk = |job: &mut egui::text::LayoutJob,
+                        chunk: &str,
+                        foreground: Color32,
+                        background: Color32,
+                        dim: bool,
+                        underlined: bool| {
+        if chunk.is_empty() {
+            return;
+        }
+        let preferred = if dim {
+            Color32::from_rgb(
+                (foreground.r() as f32 * 0.8) as u8,
+                (foreground.g() as f32 * 0.8) as u8,
+                (foreground.b() as f32 * 0.8) as u8,
+            )
+        } else {
+            foreground
+        };
+        let color = contrast_text_c32_on(background, console, Some(preferred), &palette);
+        job.append(
+            chunk,
+            0.0,
+            egui::TextFormat {
+                font_id: FontId::monospace(font_size),
+                color,
+                background,
+                underline: if underlined {
+                    Stroke::new(1.0_f32, color)
+                } else {
+                    Stroke::NONE
+                },
+                ..Default::default()
+            },
+        );
+    };
+
+    let def_fg = crate::hex_to_c32(&palette.colors.text_secondary);
     let mut cur_fg = def_fg;
     let mut cur_bg = Color32::TRANSPARENT;
     let mut _is_bold = false;
@@ -24,36 +66,14 @@ pub fn ansi_to_layout_job(ansi_text: &str, font_size: f32) -> egui::text::Layout
         if bytes[i] == 0x1b && i + 1 < bytes.len() && bytes[i + 1] == b'[' {
             // Flush current text segment
             if i > text_start {
-                let chunk = &ansi_text[text_start..i];
-                if !chunk.is_empty() {
-                    let mut color = cur_fg;
-                    if is_dim {
-                        color = Color32::from_rgba_unmultiplied(
-                            (color.r() as f32 * 0.7) as u8,
-                            (color.g() as f32 * 0.7) as u8,
-                            (color.b() as f32 * 0.7) as u8,
-                            200,
-                        );
-                    }
-
-                    let underline = if is_underlined {
-                        Stroke::new(1.0_f32, color)
-                    } else {
-                        Stroke::NONE
-                    };
-
-                    job.append(
-                        chunk,
-                        0.0,
-                        egui::TextFormat {
-                            font_id: FontId::monospace(font_size),
-                            color,
-                            background: cur_bg,
-                            underline,
-                            ..Default::default()
-                        },
-                    );
-                }
+                append_chunk(
+                    &mut job,
+                    &ansi_text[text_start..i],
+                    cur_fg,
+                    cur_bg,
+                    is_dim,
+                    is_underlined,
+                );
             }
 
             // Parse escape code
@@ -172,29 +192,14 @@ pub fn ansi_to_layout_job(ansi_text: &str, font_size: f32) -> egui::text::Layout
 
     // Flush remaining text
     if text_start < ansi_text.len() {
-        let chunk = &ansi_text[text_start..];
-        if !chunk.is_empty() {
-            let mut color = cur_fg;
-            if is_dim {
-                color = Color32::from_rgba_unmultiplied(
-                    (color.r() as f32 * 0.7) as u8,
-                    (color.g() as f32 * 0.7) as u8,
-                    (color.b() as f32 * 0.7) as u8,
-                    200,
-                );
-            }
-
-            job.append(
-                chunk,
-                0.0,
-                egui::TextFormat {
-                    font_id: FontId::monospace(font_size),
-                    color,
-                    background: cur_bg,
-                    ..Default::default()
-                },
-            );
-        }
+        append_chunk(
+            &mut job,
+            &ansi_text[text_start..],
+            cur_fg,
+            cur_bg,
+            is_dim,
+            is_underlined,
+        );
     }
 
     job
@@ -287,6 +292,35 @@ mod tests {
         let job = ansi_to_layout_job(text, 12.0);
         assert_eq!(job.text, "custom colored");
         assert_eq!(job.sections.len(), 1);
-        assert_eq!(job.sections[0].format.color, Color32::from_rgb(123, 45, 67));
+        let console = crate::hex_to_c32(
+            &AppPalette::for_appearance(WorkbenchAppearance::Dark)
+                .colors
+                .console_surface,
+        );
+        let text = job.sections[0].format.color;
+        assert!(
+            little_clip_core::palette::contrast_ratio(
+                (console.r(), console.g(), console.b()),
+                (text.r(), text.g(), text.b())
+            ) >= 4.5
+        );
+    }
+
+    #[test]
+    fn unreadable_256_color_is_replaced_and_trailing_underline_is_preserved() {
+        let job = ansi_to_layout_job("\x1b[4;38;5;0mblack", 15.0);
+        let console = crate::hex_to_c32(
+            &AppPalette::for_appearance(WorkbenchAppearance::Dark)
+                .colors
+                .console_surface,
+        );
+        let format = &job.sections[0].format;
+        assert!(
+            little_clip_core::palette::contrast_ratio(
+                (console.r(), console.g(), console.b()),
+                (format.color.r(), format.color.g(), format.color.b())
+            ) >= 4.5
+        );
+        assert_ne!(format.underline, Stroke::NONE);
     }
 }
