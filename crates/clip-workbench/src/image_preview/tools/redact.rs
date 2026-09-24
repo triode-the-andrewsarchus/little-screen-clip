@@ -100,11 +100,11 @@ impl ImagePreviewState {
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
             .stroke(Stroke::new(1.0_f32, frame_stroke))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(
                         egui::RichText::new("Privacy Redaction:")
                             .strong()
-                            .small()
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .color(hex_to_c32(&palette.diff_del)),
                     );
 
@@ -118,7 +118,7 @@ impl ImagePreviewState {
                     };
                     ui.label(
                         egui::RichText::new(count_str)
-                            .small()
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .color(hex_to_c32(&palette.theme.f_med)),
                     );
 
@@ -193,11 +193,12 @@ impl ImagePreviewState {
                         if !self.undo_stack.is_empty() {
                             let undo_fg = contrast_text_c32(btn_bg, Some(hex_to_c32(&palette.diff_mod)), palette);
                             let undo_btn = egui::Button::new(
-                                egui::RichText::new("⟲ Undo (Ctrl+Z)").small().strong().color(undo_fg),
+                                egui::RichText::new("⟲ Undo (Ctrl+Z)").size(crate::ui_ext::BODY_FONT_SIZE).strong().color(undo_fg),
                             )
                             .fill(btn_bg)
                             .stroke(Stroke::new(1.0_f32, btn_border))
-                            .rounding(Rounding::same(4.0));
+                            .rounding(Rounding::same(4.0))
+                            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
                             if ui.add(undo_btn).clicked() {
                                 self.undo();
                             }
