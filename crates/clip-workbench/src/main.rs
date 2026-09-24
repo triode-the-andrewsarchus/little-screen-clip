@@ -33,6 +33,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 mod ansi;
+mod appearance_sync;
 mod audio_preview;
 mod binary_diff_view;
 mod canvas;
@@ -52,6 +53,7 @@ mod text_preview;
 mod ui_appearance;
 pub mod ui_ext;
 
+use appearance_sync::AppearanceSync;
 use icons::Icon;
 
 use audio_preview::AudioPreviewState;
@@ -151,6 +153,7 @@ struct WorkbenchApp {
     selected_action_index: usize,
     selected_slots: Vec<SlotId>,
     status_msg: Option<String>,
+    appearance_sync: AppearanceSync,
     renderer: ScreenRenderer,
     ui_palette: AppPalette,
     mirror_texture: Option<egui::TextureHandle>,
@@ -220,6 +223,7 @@ impl WorkbenchApp {
             selected_action_index: 0,
             selected_slots: vec![SlotId::LeftHand],
             status_msg: None,
+            appearance_sync: AppearanceSync::default(),
             renderer,
             ui_palette,
             mirror_texture: None,
@@ -251,6 +255,7 @@ impl WorkbenchApp {
     }
 
     fn toggle_appearance(&mut self, ctx: &egui::Context) {
+        self.appearance_sync.clear();
         let appearance = self.config.workbench.appearance.toggled();
         self.config.workbench.appearance = appearance;
         self.ui_palette = ui_appearance::palette(appearance);
@@ -259,15 +264,11 @@ impl WorkbenchApp {
         self.dirty_mirror = true;
         match AppConfig::save_workbench_appearance_to_file(appearance) {
             Ok(()) => {
-                // The daemon reloads the same fixed palette; do not wait for IPC in a UI frame.
-                std::thread::spawn(|| {
-                    if let Err(err) = send_ipc_request(&IpcRequest::ReloadConfig) {
-                        tracing::warn!(%err, "Could not reload display appearance");
-                    }
-                });
+                self.appearance_sync.begin();
             }
             Err(err) => {
-                self.status_msg = Some(format!("Could not save appearance: {err}"));
+                self.appearance_sync
+                    .set_error(format!("Could not save appearance: {err}"));
             }
         }
         ctx.request_repaint();
@@ -746,6 +747,8 @@ impl eframe::App for WorkbenchApp {
             ctx.request_repaint();
         }
 
+        self.appearance_sync.poll(ctx);
+        self.appearance_sync.render(ctx, &self.ui_palette);
         self.poll_spreadsheet_load(ctx);
 
         if self.render_modal_viewers(ctx) {
@@ -1993,8 +1996,19 @@ impl WorkbenchApp {
 pub(crate) fn send_ipc_request(
     req: &IpcRequest,
 ) -> Result<IpcResponse, Box<dyn std::error::Error>> {
+    send_ipc_request_with_timeout(req, None)
+}
+
+fn send_ipc_request_with_timeout(
+    req: &IpcRequest,
+    timeout: Option<Duration>,
+) -> Result<IpcResponse, Box<dyn std::error::Error>> {
     let sock_path = get_socket_path();
     let mut stream = UnixStream::connect(&sock_path)?;
+    if let Some(timeout) = timeout {
+        stream.set_read_timeout(Some(timeout))?;
+        stream.set_write_timeout(Some(timeout))?;
+    }
 
     let json = serde_json::to_string(req)?;
     stream.write_all(json.as_bytes())?;
