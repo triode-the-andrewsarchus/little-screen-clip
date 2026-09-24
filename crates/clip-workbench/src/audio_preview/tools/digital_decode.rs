@@ -1048,7 +1048,7 @@ impl AudioPreviewState {
         ui.add_space(4.0);
 
         // Transcript Panel Tabs & Filter Bar
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.selectable_value(
                 &mut self.digital_decode.transcript_tab,
                 TranscriptTab::Plaintext,
@@ -1062,7 +1062,12 @@ impl AudioPreviewState {
 
             ui.add_space(16.0);
             ui.label(egui::RichText::new("Filter:").color(text_f_med));
-            ui.text_edit_singleline(&mut self.digital_decode.filter_text);
+            let filter_width = (ui.available_width() - 160.0).max(120.0);
+            ui.add_sized(
+                egui::vec2(filter_width, crate::ui_ext::CONTROL_HEIGHT),
+                egui::TextEdit::singleline(&mut self.digital_decode.filter_text)
+                    .font(egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE)),
+            );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Copy transcript to clipboard button
