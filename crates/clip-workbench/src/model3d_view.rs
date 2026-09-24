@@ -237,7 +237,7 @@ impl Model3dViewerState {
                     center,
                     egui::Align2::CENTER_CENTER,
                     text,
-                    egui::FontId::proportional(16.0),
+                    egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                     f_high,
                 );
             });
@@ -294,7 +294,7 @@ impl Model3dViewerState {
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
                     text,
-                    egui::FontId::proportional(15.0),
+                    egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                     f_high,
                 );
             });
