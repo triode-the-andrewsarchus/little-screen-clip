@@ -22,7 +22,7 @@ impl ImagePreviewState {
                         ui.label(
                             egui::RichText::new("Inspector:")
                                 .strong()
-                                .small()
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(hex_to_c32(&palette.harmonies.base)),
                         );
 
@@ -95,7 +95,7 @@ impl ImagePreviewState {
                                 egui::RichText::new(
                                     "Clean Image (No EXIF or metadata tags detected)",
                                 )
-                                .small()
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(hex_to_c32(&palette.theme.f_med)),
                             );
                         }
@@ -108,7 +108,7 @@ impl ImagePreviewState {
                             );
                             ui.label(
                                 egui::RichText::new(dim_str)
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(hex_to_c32(&palette.theme.f_low)),
                             );
                         });
@@ -132,61 +132,77 @@ impl ImagePreviewState {
                                                 ui.label(
                                                     egui::RichText::new("Camera Make:")
                                                         .strong()
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .color(hex_to_c32(&palette.theme.f_med)),
                                                 );
-                                                ui.label(egui::RichText::new(m).small());
+                                                ui.label(
+                                                    egui::RichText::new(m)
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
+                                                );
                                                 ui.end_row();
                                             }
                                             if let Some(m) = &meta.model {
                                                 ui.label(
                                                     egui::RichText::new("Camera Model:")
                                                         .strong()
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .color(hex_to_c32(&palette.theme.f_med)),
                                                 );
-                                                ui.label(egui::RichText::new(m).small());
+                                                ui.label(
+                                                    egui::RichText::new(m)
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
+                                                );
                                                 ui.end_row();
                                             }
                                             if let Some(l) = &meta.lens_model {
                                                 ui.label(
                                                     egui::RichText::new("Lens:")
                                                         .strong()
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .color(hex_to_c32(&palette.theme.f_med)),
                                                 );
-                                                ui.label(egui::RichText::new(l).small());
+                                                ui.label(
+                                                    egui::RichText::new(l)
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
+                                                );
                                                 ui.end_row();
                                             }
                                             if let Some(s) = &meta.software {
                                                 ui.label(
                                                     egui::RichText::new("Software:")
                                                         .strong()
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .color(hex_to_c32(&palette.theme.f_med)),
                                                 );
-                                                ui.label(egui::RichText::new(s).small());
+                                                ui.label(
+                                                    egui::RichText::new(s)
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
+                                                );
                                                 ui.end_row();
                                             }
                                             if let Some(dt) = &meta.date_time {
                                                 ui.label(
                                                     egui::RichText::new("Timestamp:")
                                                         .strong()
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .color(hex_to_c32(&palette.theme.f_med)),
                                                 );
-                                                ui.label(egui::RichText::new(dt).small());
+                                                ui.label(
+                                                    egui::RichText::new(dt)
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
+                                                );
                                                 ui.end_row();
                                             }
                                             if let Some(iso) = meta.iso {
                                                 ui.label(
                                                     egui::RichText::new("ISO Speed:")
                                                         .strong()
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .color(hex_to_c32(&palette.theme.f_med)),
                                                 );
                                                 ui.label(
-                                                    egui::RichText::new(iso.to_string()).small(),
+                                                    egui::RichText::new(iso.to_string())
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
                                                 );
                                                 ui.end_row();
                                             }
@@ -194,12 +210,12 @@ impl ImagePreviewState {
                                                 ui.label(
                                                     egui::RichText::new("Aperture:")
                                                         .strong()
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .color(hex_to_c32(&palette.theme.f_med)),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(format!("f/{:.1}", f))
-                                                        .small(),
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
                                                 );
                                                 ui.end_row();
                                             }
@@ -207,22 +223,25 @@ impl ImagePreviewState {
                                                 ui.label(
                                                     egui::RichText::new("Shutter Speed:")
                                                         .strong()
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .color(hex_to_c32(&palette.theme.f_med)),
                                                 );
-                                                ui.label(egui::RichText::new(exp).small());
+                                                ui.label(
+                                                    egui::RichText::new(exp)
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
+                                                );
                                                 ui.end_row();
                                             }
                                             if let Some(fl) = meta.focal_length {
                                                 ui.label(
                                                     egui::RichText::new("Focal Length:")
                                                         .strong()
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .color(hex_to_c32(&palette.theme.f_med)),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(format!("{:.1} mm", fl))
-                                                        .small(),
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
                                                 );
                                                 ui.end_row();
                                             }
@@ -232,7 +251,7 @@ impl ImagePreviewState {
                                                 ui.label(
                                                     egui::RichText::new("GPS Coordinates:")
                                                         .strong()
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .color(hex_to_c32(&palette.theme.f_med)),
                                                 );
                                                 ui.horizontal(|ui| {
@@ -241,7 +260,7 @@ impl ImagePreviewState {
                                                             "{:.6}, {:.6}",
                                                             lat, lon
                                                         ))
-                                                        .small(),
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
                                                     );
                                                     let copy_btn =
                                                         crate::ui_ext::secondary_button_icon(
@@ -263,12 +282,12 @@ impl ImagePreviewState {
                                                 ui.label(
                                                     egui::RichText::new("GPS Altitude:")
                                                         .strong()
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .color(hex_to_c32(&palette.theme.f_med)),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(format!("{:.1} m", alt))
-                                                        .small(),
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
                                                 );
                                                 ui.end_row();
                                             }
