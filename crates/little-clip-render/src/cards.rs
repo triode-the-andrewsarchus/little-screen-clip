@@ -522,7 +522,7 @@ impl ScreenRenderer {
             if let Some(card_r) = Rect::from_xywh(rx + 16.0, target_top, box_w as f32, box_h as f32)
             {
                 let mut p = Paint::default();
-                p.set_color(self.color_from_hex(&self.palette.theme.b_low));
+                p.set_color(self.color_from_hex(&self.palette.colors.surface_recessed));
                 pixmap.fill_rect(card_r, &p, Transform::identity(), None);
 
                 let mut sp = Paint::default();
@@ -553,7 +553,7 @@ impl ScreenRenderer {
                 rx + 14.0,
                 target_top + box_h as f32 + 10.0,
                 18.0,
-                self.color_from_hex(&self.palette.theme.f_med),
+                self.color_from_hex(&self.palette.colors.text_secondary),
                 false,
                 clip_right,
             );
@@ -587,7 +587,7 @@ impl ScreenRenderer {
         if display_count == 0 {
             if let Some(r) = Rect::from_xywh(content_x, target_top, box_w, box_h) {
                 let mut p = Paint::default();
-                p.set_color(self.color_from_hex(&self.palette.theme.b_low));
+                p.set_color(self.color_from_hex(&self.palette.colors.surface_recessed));
                 pixmap.fill_rect(r, &p, Transform::identity(), None);
             }
             self.draw_text_clipped(
@@ -596,7 +596,7 @@ impl ScreenRenderer {
                 content_x + 10.0,
                 target_top + box_h / 2.0 - 8.0,
                 16.0,
-                self.color_from_hex(&self.palette.theme.f_low),
+                self.color_from_hex(&self.palette.colors.text_muted),
                 true,
                 content_x + box_w,
             );
@@ -651,13 +651,13 @@ impl ScreenRenderer {
             // Card cell background
             if let Some(cr) = Rect::from_xywh(cx, cy, cw, ch) {
                 let mut bg_paint = Paint::default();
-                bg_paint.set_color(self.color_from_hex(&self.palette.theme.b_low));
+                bg_paint.set_color(self.color_from_hex(&self.palette.colors.surface_recessed));
                 pixmap.fill_rect(cr, &bg_paint, Transform::identity(), None);
 
                 let mut stroke = Stroke::default();
                 stroke.width = 1.0;
                 let mut sp = Paint::default();
-                sp.set_color(self.color_from_hex(&self.palette.theme.b_med));
+                sp.set_color(self.color_from_hex(&self.palette.colors.surface_panel));
                 let path = PathBuilder::from_rect(cr);
                 pixmap.stroke_path(&path, &sp, &stroke, Transform::identity(), None);
             }
@@ -688,10 +688,10 @@ impl ScreenRenderer {
             let badge_font_size = if is_hero { 12.0 } else { 10.0 };
             let badge_w = self.measure_text_width(&idx_str, badge_font_size, true) + 8.0;
             let badge_h = badge_font_size + 4.0;
-            let badge_bg = self.color_from_hex(&self.palette.theme.b_low);
+            let badge_bg = self.color_from_hex(&self.palette.colors.surface_recessed);
             let badge_fg = self.contrast_color(
                 badge_bg,
-                Some(self.color_from_hex(&self.palette.theme.f_high)),
+                Some(self.color_from_hex(&self.palette.colors.text_primary)),
             );
             if let Some(br) = Rect::from_xywh(cx + 4.0, cy + 4.0, badge_w, badge_h) {
                 let mut bp = Paint::default();
@@ -721,10 +721,10 @@ impl ScreenRenderer {
             let bx = content_x + (box_w - badge_w) / 2.0;
             let by = target_top + (box_h - badge_h) / 2.0;
 
-            let overlay_bg = self.color_from_hex(&self.palette.theme.b_low);
+            let overlay_bg = self.color_from_hex(&self.palette.colors.surface_recessed);
             let overlay_fg = self.contrast_color(
                 overlay_bg,
-                Some(self.color_from_hex(&self.palette.theme.f_high)),
+                Some(self.color_from_hex(&self.palette.colors.text_primary)),
             );
             if let Some(br) = Rect::from_xywh(bx, by, badge_w, badge_h) {
                 let mut bp = Paint::default();
@@ -822,7 +822,7 @@ impl ScreenRenderer {
                         // Looping badge in top-left of box
                         let badge =
                             format!("▶ {} [{}/{}]", format, frame_idx + 1, thumb.frame_count);
-                        let badge_bg = self.color_from_hex(&self.palette.theme.b_low);
+                        let badge_bg = self.color_from_hex(&self.palette.colors.surface_recessed);
                         let badge_fg = self.contrast_color(
                             badge_bg,
                             Some(self.color_from_hex(&self.palette.harmonies.warm_attention)),
@@ -845,11 +845,11 @@ impl ScreenRenderer {
             if let Some(card_r) = Rect::from_xywh(rx + 14.0, target_top, box_w as f32, box_h as f32)
             {
                 let mut p = Paint::default();
-                p.set_color(self.color_from_hex(&self.palette.theme.b_low));
+                p.set_color(self.color_from_hex(&self.palette.colors.surface_recessed));
                 pixmap.fill_rect(card_r, &p, Transform::identity(), None);
 
                 let mut sp = Paint::default();
-                sp.set_color(self.color_from_hex(&self.palette.theme.b_med));
+                sp.set_color(self.color_from_hex(&self.palette.colors.surface_panel));
                 let mut stroke = Stroke::default();
                 stroke.width = 1.0;
                 let path = PathBuilder::from_rect(card_r);
@@ -890,7 +890,7 @@ impl ScreenRenderer {
             rx + 14.0,
             target_top + box_h as f32 + 10.0,
             16.0,
-            self.color_from_hex(&self.palette.theme.f_med),
+            self.color_from_hex(&self.palette.colors.text_secondary),
             elision_color,
             false,
             clip_right,
@@ -928,7 +928,7 @@ impl ScreenRenderer {
                     content_x,
                     content_y + 30.0,
                     20.0,
-                    self.color_from_hex(&self.palette.theme.f_med),
+                    self.color_from_hex(&self.palette.colors.text_secondary),
                     false,
                 );
                 self.draw_text(
@@ -948,7 +948,7 @@ impl ScreenRenderer {
                     content_x,
                     content_y + 65.0,
                     18.0,
-                    self.color_from_hex(&self.palette.theme.f_low),
+                    self.color_from_hex(&self.palette.colors.text_muted),
                     false,
                 );
                 return;
@@ -975,7 +975,7 @@ impl ScreenRenderer {
                     content_x,
                     content_y + 65.0,
                     18.0,
-                    self.color_from_hex(&self.palette.theme.f_low),
+                    self.color_from_hex(&self.palette.colors.text_muted),
                     false,
                 );
                 if let Some(r) = Rect::from_xywh(content_x, content_y + 110.0, content_w, 3.0) {
@@ -1012,7 +1012,7 @@ impl ScreenRenderer {
                 content_x,
                 content_y + 10.0,
                 14.0,
-                self.color_from_hex(&self.palette.theme.f_low),
+                self.color_from_hex(&self.palette.colors.text_muted),
                 true,
             );
             self.draw_text(
@@ -1021,7 +1021,7 @@ impl ScreenRenderer {
                 content_x,
                 content_y + ch_h + 24.0,
                 14.0,
-                self.color_from_hex(&self.palette.theme.f_low),
+                self.color_from_hex(&self.palette.colors.text_muted),
                 true,
             );
 
@@ -1029,7 +1029,10 @@ impl ScreenRenderer {
             let div_y = content_y + ch_h + 7.0;
             if let Some(r) = Rect::from_xywh(content_x + 16.0, div_y, content_w - 16.0, 1.0) {
                 let mut paint = Paint::default();
-                paint.set_color(Self::hex_to_color_alpha(&self.palette.theme.b_med, 120));
+                paint.set_color(Self::hex_to_color_alpha(
+                    &self.palette.colors.surface_panel,
+                    120,
+                ));
                 pixmap.fill_rect(r, &paint, Transform::identity(), None);
             }
 
@@ -1074,7 +1077,10 @@ impl ScreenRenderer {
             // Subtle center axis (theme-adaptive)
             if let Some(r) = Rect::from_xywh(content_x, center_y, content_w, 1.0) {
                 let mut paint = Paint::default();
-                paint.set_color(Self::hex_to_color_alpha(&self.palette.theme.b_med, 120));
+                paint.set_color(Self::hex_to_color_alpha(
+                    &self.palette.colors.surface_panel,
+                    120,
+                ));
                 pixmap.fill_rect(r, &paint, Transform::identity(), None);
             }
 
@@ -1139,7 +1145,7 @@ impl ScreenRenderer {
             let end_x = (content_x + content_w - 42.0).max(content_x + 50.0);
             self.draw_text(pixmap, &end_str, end_x, time_y, 16.0, attention_col, false);
         } else {
-            let footer_col = self.color_from_hex(&self.palette.theme.f_low);
+            let footer_col = self.color_from_hex(&self.palette.colors.text_muted);
             self.draw_text(pixmap, "00:00", content_x, time_y, 16.0, footer_col, false);
             let end_x = (content_x + content_w - 42.0).max(content_x + 50.0);
             self.draw_text(pixmap, &dur_text, end_x, time_y, 16.0, footer_col, false);
@@ -1309,7 +1315,7 @@ impl ScreenRenderer {
                         ),
                     };
                     let head_color = self.contrast_color(
-                        self.color_from_hex(&self.palette.theme.background),
+                        self.color_from_hex(&self.palette.colors.canvas),
                         Some(head_color_pref),
                     );
 
@@ -1374,8 +1380,8 @@ impl ScreenRenderer {
                     }
                     let font_size = if is_hero { 17.5 } else { 14.5 };
                     let quote_fg = self.contrast_color(
-                        self.color_from_hex(&self.palette.theme.background),
-                        Some(self.color_from_hex(&self.palette.theme.f_med)),
+                        self.color_from_hex(&self.palette.colors.canvas),
+                        Some(self.color_from_hex(&self.palette.colors.text_secondary)),
                     );
                     self.draw_markdown_spans(
                         pixmap,
@@ -1391,7 +1397,7 @@ impl ScreenRenderer {
                 MarkdownLine::Rule => {
                     if let Some(rr) = Rect::from_xywh(content_x, y + 6.0, max_content_w, 1.0) {
                         let mut rp = Paint::default();
-                        rp.set_color(self.color_from_hex(&self.palette.theme.b_med));
+                        rp.set_color(self.color_from_hex(&self.palette.colors.surface_panel));
                         pixmap.fill_rect(rr, &rp, Transform::identity(), None);
                     }
                     y += 14.0;
@@ -1403,8 +1409,8 @@ impl ScreenRenderer {
                         format!("``` {}", language)
                     };
                     let fence_fg = self.contrast_color(
-                        self.color_from_hex(&self.palette.theme.background),
-                        Some(self.color_from_hex(&self.palette.theme.f_low)),
+                        self.color_from_hex(&self.palette.colors.canvas),
+                        Some(self.color_from_hex(&self.palette.colors.text_muted)),
                     );
                     self.draw_text_styled_clipped(
                         pixmap,
@@ -1420,7 +1426,7 @@ impl ScreenRenderer {
                 }
                 MarkdownLine::CodeLine { line } => {
                     let font_size = if is_hero { 16.0 } else { 13.5 };
-                    let code_bg = self.color_from_hex(&self.palette.theme.b_low);
+                    let code_bg = self.color_from_hex(&self.palette.colors.surface_recessed);
                     let code_fg = self.contrast_color(
                         code_bg,
                         Some(self.color_from_hex(&self.palette.harmonies.warm_attention)),
@@ -1472,13 +1478,15 @@ impl ScreenRenderer {
         let clip_right = rx + rw - 10.0;
         let mut y = ry + 124.0;
 
-        let bg_col = self.color_from_hex(&self.palette.theme.background);
+        let bg_col = self.color_from_hex(&self.palette.colors.canvas);
         let f_high = self.contrast_color(
             bg_col,
-            Some(self.color_from_hex(&self.palette.theme.f_high)),
+            Some(self.color_from_hex(&self.palette.colors.text_primary)),
         );
-        let f_low =
-            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_low)));
+        let f_low = self.contrast_color(
+            bg_col,
+            Some(self.color_from_hex(&self.palette.colors.text_muted)),
+        );
         let base_c = self.contrast_color(
             bg_col,
             Some(self.color_from_hex(&self.palette.harmonies.base)),
@@ -1495,7 +1503,7 @@ impl ScreenRenderer {
             y,
             14.0,
             diff_add,
-            Self::hex_to_color_alpha(&self.palette.theme.b_low, 230),
+            Self::hex_to_color_alpha(&self.palette.colors.surface_recessed, 230),
             clip_right,
         );
         y += 28.0;
@@ -1566,13 +1574,15 @@ impl ScreenRenderer {
         let clip_right = rx + rw - 10.0;
         let mut y = ry + 124.0;
 
-        let bg_col = self.color_from_hex(&self.palette.theme.background);
+        let bg_col = self.color_from_hex(&self.palette.colors.canvas);
         let f_high = self.contrast_color(
             bg_col,
-            Some(self.color_from_hex(&self.palette.theme.f_high)),
+            Some(self.color_from_hex(&self.palette.colors.text_primary)),
         );
-        let f_low =
-            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_low)));
+        let f_low = self.contrast_color(
+            bg_col,
+            Some(self.color_from_hex(&self.palette.colors.text_muted)),
+        );
         let base_c = self.contrast_color(
             bg_col,
             Some(self.color_from_hex(&self.palette.harmonies.base)),
@@ -1600,7 +1610,7 @@ impl ScreenRenderer {
                     y,
                     14.0,
                     base_c,
-                    Self::hex_to_color_alpha(&self.palette.theme.b_low, 230),
+                    Self::hex_to_color_alpha(&self.palette.colors.surface_recessed, 230),
                     clip_right,
                 );
                 y += 28.0;
@@ -1670,7 +1680,7 @@ impl ScreenRenderer {
                     y,
                     14.0,
                     triadic_1,
-                    Self::hex_to_color_alpha(&self.palette.theme.b_low, 230),
+                    Self::hex_to_color_alpha(&self.palette.colors.surface_recessed, 230),
                     clip_right,
                 );
                 y += 28.0;
@@ -1727,15 +1737,19 @@ impl ScreenRenderer {
         let clip_right = rx + rw - 10.0;
         let mut y = ry + 124.0;
 
-        let bg_col = self.color_from_hex(&self.palette.theme.background);
+        let bg_col = self.color_from_hex(&self.palette.colors.canvas);
         let f_high = self.contrast_color(
             bg_col,
-            Some(self.color_from_hex(&self.palette.theme.f_high)),
+            Some(self.color_from_hex(&self.palette.colors.text_primary)),
         );
-        let f_med =
-            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_med)));
-        let f_low =
-            self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.theme.f_low)));
+        let f_med = self.contrast_color(
+            bg_col,
+            Some(self.color_from_hex(&self.palette.colors.text_secondary)),
+        );
+        let f_low = self.contrast_color(
+            bg_col,
+            Some(self.color_from_hex(&self.palette.colors.text_muted)),
+        );
         let diff_add =
             self.contrast_color(bg_col, Some(self.color_from_hex(&self.palette.diff_add)));
         let diff_mod =
@@ -1748,7 +1762,7 @@ impl ScreenRenderer {
             y,
             14.0,
             diff_mod,
-            Self::hex_to_color_alpha(&self.palette.theme.b_low, 230),
+            Self::hex_to_color_alpha(&self.palette.colors.surface_recessed, 230),
             clip_right,
         );
         y += 28.0;
@@ -1819,7 +1833,7 @@ impl ScreenRenderer {
         let badge_bg = self.color_from_hex(&self.palette.diff_add);
         let badge_fg = self.contrast_color(
             badge_bg,
-            Some(self.color_from_hex(&self.palette.theme.f_high)),
+            Some(self.color_from_hex(&self.palette.colors.text_primary)),
         );
         self.draw_pill_badge(
             pixmap,
@@ -1843,7 +1857,7 @@ impl ScreenRenderer {
             content_x,
             y,
             if is_hero { 16.0 } else { 13.0 },
-            self.color_from_hex(&self.palette.theme.f_med),
+            self.color_from_hex(&self.palette.colors.text_secondary),
             false,
             clip_right,
         );
@@ -1870,11 +1884,11 @@ impl ScreenRenderer {
 
             let is_header = r_idx == 0;
             let row_bg = if is_header {
-                self.color_from_hex(&self.palette.theme.b_med)
+                self.color_from_hex(&self.palette.colors.surface_panel)
             } else if r_idx % 2 == 1 {
-                self.color_from_hex(&self.palette.theme.b_low)
+                self.color_from_hex(&self.palette.colors.surface_recessed)
             } else {
-                self.color_from_hex(&self.palette.theme.background)
+                self.color_from_hex(&self.palette.colors.canvas)
             };
 
             if let Some(rect) = Rect::from_xywh(content_x, row_y, avail_w, row_h) {
@@ -1885,7 +1899,7 @@ impl ScreenRenderer {
                 let mut stroke = Stroke::default();
                 stroke.width = 0.5;
                 let mut stroke_paint = Paint::default();
-                stroke_paint.set_color(self.color_from_hex(&self.palette.theme.b_med));
+                stroke_paint.set_color(self.color_from_hex(&self.palette.colors.surface_panel));
                 let path = PathBuilder::from_rect(rect);
                 pixmap.stroke_path(&path, &stroke_paint, &stroke, Transform::identity(), None);
             }
@@ -1901,7 +1915,7 @@ impl ScreenRenderer {
                 } else {
                     self.contrast_color(
                         row_bg,
-                        Some(self.color_from_hex(&self.palette.theme.f_high)),
+                        Some(self.color_from_hex(&self.palette.colors.text_primary)),
                     )
                 };
 
@@ -1919,7 +1933,7 @@ impl ScreenRenderer {
             content_x,
             footer_y,
             12.0,
-            self.color_from_hex(&self.palette.theme.f_low),
+            self.color_from_hex(&self.palette.colors.text_muted),
             false,
             clip_right,
         );
@@ -1942,7 +1956,7 @@ impl ScreenRenderer {
         let badge_bg = self.color_from_hex(&self.palette.harmonies.base);
         let badge_fg = self.contrast_color(
             badge_bg,
-            Some(self.color_from_hex(&self.palette.theme.f_high)),
+            Some(self.color_from_hex(&self.palette.colors.text_primary)),
         );
         self.draw_pill_badge(
             pixmap,
@@ -1966,7 +1980,7 @@ impl ScreenRenderer {
             content_x,
             y,
             if is_hero { 16.0 } else { 13.0 },
-            self.color_from_hex(&self.palette.theme.f_med),
+            self.color_from_hex(&self.palette.colors.text_secondary),
             false,
             clip_right,
         );
@@ -1981,7 +1995,7 @@ impl ScreenRenderer {
             let kb_w = 16.0f32;
             if let Some(kb_rect) = Rect::from_xywh(roll_x, roll_y, kb_w, roll_h) {
                 let mut kb_paint = Paint::default();
-                kb_paint.set_color(self.color_from_hex(&self.palette.theme.b_med));
+                kb_paint.set_color(self.color_from_hex(&self.palette.colors.surface_panel));
                 pixmap.fill_rect(kb_rect, &kb_paint, Transform::identity(), None);
             }
 
@@ -2025,7 +2039,7 @@ impl ScreenRenderer {
             content_x,
             footer_y,
             12.0,
-            self.color_from_hex(&self.palette.theme.f_low),
+            self.color_from_hex(&self.palette.colors.text_muted),
             false,
             clip_right,
         );
@@ -2062,7 +2076,7 @@ impl ScreenRenderer {
         let badge_bg = self.color_from_hex(&self.palette.diff_mod);
         let badge_fg = self.contrast_color(
             badge_bg,
-            Some(self.color_from_hex(&self.palette.theme.f_high)),
+            Some(self.color_from_hex(&self.palette.colors.text_primary)),
         );
         let badge_label = format!("3D {} MODEL", mesh.format.badge_label());
         self.draw_pill_badge(
@@ -2091,7 +2105,7 @@ impl ScreenRenderer {
             content_x,
             y,
             if is_hero { 16.0 } else { 13.0 },
-            self.color_from_hex(&self.palette.theme.f_med),
+            self.color_from_hex(&self.palette.colors.text_secondary),
             false,
             clip_right,
         );
@@ -2186,7 +2200,7 @@ impl ScreenRenderer {
             projected.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
             let base_c = self.color_from_hex(&self.palette.harmonies.base);
-            let bg_c = self.color_from_hex(&self.palette.theme.b_low);
+            let bg_c = self.color_from_hex(&self.palette.colors.surface_recessed);
 
             let mut line_stroke = Stroke::default();
             line_stroke.width = 1.2;
@@ -2250,7 +2264,7 @@ impl ScreenRenderer {
             content_x,
             footer_y,
             12.0,
-            self.color_from_hex(&self.palette.theme.f_low),
+            self.color_from_hex(&self.palette.colors.text_muted),
             false,
             clip_right,
         );

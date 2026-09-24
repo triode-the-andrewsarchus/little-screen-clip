@@ -37,8 +37,8 @@ impl ScreenRenderer {
         h: f32,
         cell_size: f32,
     ) {
-        let c1 = self.color_from_hex(&self.palette.theme.b_low);
-        let c2 = self.color_from_hex(&self.palette.theme.b_med);
+        let c1 = self.color_from_hex(&self.palette.colors.surface_recessed);
+        let c2 = self.color_from_hex(&self.palette.colors.surface_panel);
         let mut p1 = Paint::default();
         p1.set_color(c1);
         let mut p2 = Paint::default();
@@ -359,11 +359,11 @@ impl ScreenRenderer {
     ) {
         let badge_w = self.measure_text_width(badge_text, size - 2.0, true) + 16.0;
         let badge_h = size + 4.0;
-        let bg_color = self.color_from_hex(&self.palette.theme.b_low);
-        let border_color = self.color_from_hex(&self.palette.theme.b_med);
+        let bg_color = self.color_from_hex(&self.palette.colors.surface_recessed);
+        let border_color = self.color_from_hex(&self.palette.colors.surface_panel);
         let text_color = self.contrast_color(
             bg_color,
-            Some(self.color_from_hex(&self.palette.theme.f_high)),
+            Some(self.color_from_hex(&self.palette.colors.text_primary)),
         );
         if let Some(rect) = Rect::from_xywh(x, y - 2.0, badge_w.min(clip_right - x), badge_h) {
             let mut paint = Paint::default();
@@ -445,14 +445,14 @@ impl ScreenRenderer {
     ) -> Option<Rect> {
         let rect = Rect::from_xywh(x, y, w, h)?;
         let mut bg_paint = Paint::default();
-        let bg_color = self.color_from_hex(&self.palette.theme.background);
+        let bg_color = self.color_from_hex(&self.palette.colors.canvas);
         bg_paint.set_color(bg_color);
         pixmap.fill_rect(rect, &bg_paint, Transform::identity(), None);
 
         let mut border_stroke = Stroke::default();
         border_stroke.width = 1.0;
         let mut border_paint = Paint::default();
-        let border_color = self.color_from_hex(&self.palette.theme.b_med);
+        let border_color = self.color_from_hex(&self.palette.colors.surface_panel);
         border_paint.set_color(border_color);
         let path = PathBuilder::from_rect(rect);
         pixmap.stroke_path(

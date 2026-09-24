@@ -256,7 +256,8 @@ impl ScreenRenderer {
         let bb = (bg.blue() * 255.0).round() as u8;
         let bg_rgb = (br, bg_c, bb);
 
-        let pref = preferred_fg.unwrap_or_else(|| self.color_from_hex(&self.palette.theme.f_high));
+        let pref =
+            preferred_fg.unwrap_or_else(|| self.color_from_hex(&self.palette.colors.text_primary));
         let pr = (pref.red() * 255.0).round() as u8;
         let pg = (pref.green() * 255.0).round() as u8;
         let pb = (pref.blue() * 255.0).round() as u8;
@@ -266,12 +267,12 @@ impl ScreenRenderer {
         }
 
         let candidates = [
-            self.color_from_hex(&self.palette.theme.f_inv),
-            self.color_from_hex(&self.palette.theme.background),
-            self.color_from_hex(&self.palette.theme.b_low),
-            self.color_from_hex(&self.palette.theme.b_high),
-            self.color_from_hex(&self.palette.theme.b_med),
-            self.color_from_hex(&self.palette.theme.b_inv),
+            self.color_from_hex(&self.palette.colors.text_inverse),
+            self.color_from_hex(&self.palette.colors.canvas),
+            self.color_from_hex(&self.palette.colors.surface_recessed),
+            self.color_from_hex(&self.palette.colors.surface_raised),
+            self.color_from_hex(&self.palette.colors.surface_panel),
+            self.color_from_hex(&self.palette.colors.surface_inverse),
         ];
 
         for cand in candidates {
