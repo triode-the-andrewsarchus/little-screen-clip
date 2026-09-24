@@ -7,6 +7,7 @@ use crate::ansi::ansi_to_layout_job;
 use crate::icons::Icon;
 use crate::send_ipc_request;
 use crate::shell::{EscapeHatch, StudioShell};
+use crate::ui_ext::{BODY_FONT_SIZE, CONTROL_HEIGHT};
 use eframe::egui::{self, Color32, Rounding, Stroke, Vec2};
 use little_clip_core::HandSide;
 use little_clip_core::ipc::IpcRequest;
@@ -687,6 +688,7 @@ impl DiffViewerState {
             .stroke(Stroke::new(1.0_f32, b_med))
             .rounding(Rounding::same(4.0))
             .show(ui, |ui| {
+                ui.set_min_height(CONTROL_HEIGHT);
                 ui.horizontal(|ui| {
                     for mode in &[
                         ImageDiffViewMode::ThreeUp,
@@ -705,7 +707,11 @@ impl DiffViewerState {
                     ui.separator();
                     ui.add_space(8.0);
 
-                    ui.label(egui::RichText::new("Tolerance:").small().color(f_low));
+                    ui.label(
+                        egui::RichText::new("Tolerance:")
+                            .size(BODY_FONT_SIZE)
+                            .color(f_low),
+                    );
                     let slider = egui::Slider::new(&mut self.image_options.threshold, 0.00..=0.50)
                         .step_by(0.01)
                         .show_value(true);
@@ -928,7 +934,11 @@ impl DiffViewerState {
                         .decode_error
                         .as_deref()
                         .unwrap_or("Unable to decode one or both images for comparison");
-                    ui.label(egui::RichText::new(err_text).color(f_med).size(14.0));
+                    ui.label(
+                        egui::RichText::new(err_text)
+                            .color(f_med)
+                            .size(BODY_FONT_SIZE),
+                    );
                 });
             });
         }
@@ -977,6 +987,7 @@ impl DiffViewerState {
             .stroke(Stroke::new(1.0_f32, b_med))
             .rounding(Rounding::same(4.0))
             .show(ui, |ui| {
+                ui.set_min_height(CONTROL_HEIGHT);
                 ui.horizontal(|ui| {
                     let is_side = self.mode == DiffDisplayMode::SideBySide;
                     let (mode_label, mode_icon) = if is_side {
@@ -1062,24 +1073,28 @@ impl DiffViewerState {
 
                         ui.label(
                             egui::RichText::new(format!("Base: {}", self.lhs.label()))
-                                .small()
+                                .size(BODY_FONT_SIZE)
                                 .color(f_low),
                         );
                         ui.label(
                             egui::RichText::new(format!("Comp: {}", self.rhs.label()))
-                                .small()
+                                .size(BODY_FONT_SIZE)
                                 .color(f_low),
                         );
 
                         ui.add_space(8.0);
 
-                        ui.label(egui::RichText::new(readout).small().color(accent));
+                        ui.label(
+                            egui::RichText::new(readout)
+                                .size(BODY_FONT_SIZE)
+                                .color(accent),
+                        );
 
                         ui.add_space(10.0);
 
                         ui.label(
                             egui::RichText::new("[Esc] Cancel / Close")
-                                .small()
+                                .size(BODY_FONT_SIZE)
                                 .color(f_low),
                         );
                     });
@@ -1110,7 +1125,7 @@ impl DiffViewerState {
                 ui.label(egui::RichText::new(title).strong().color(title_color));
                 ui.label(
                     egui::RichText::new(format!("• {}", subtitle))
-                        .small()
+                        .size(BODY_FONT_SIZE)
                         .color(f_low),
                 );
             });
