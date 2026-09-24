@@ -1760,8 +1760,20 @@ impl WorkbenchApp {
                     strip.selected_region = None;
                     strip.stop();
                 }
+            } else if self.view == WorkbenchView::NodeMachine {
+                if self.canvas_state.catalog_open {
+                    self.canvas_state.catalog_open = false;
+                } else if self.canvas_state.save_dialog_open {
+                    self.canvas_state.save_dialog_open = false;
+                } else if self.canvas_state.dragging_from.take().is_some() {
+                    // Cancel a cable gesture before leaving the workbench.
+                } else {
+                    self.view = WorkbenchView::Palette;
+                    self.palette_search_needs_focus = true;
+                }
             } else if self.view == WorkbenchView::AutoActions {
                 self.view = WorkbenchView::Palette;
+                self.palette_search_needs_focus = true;
             } else {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
