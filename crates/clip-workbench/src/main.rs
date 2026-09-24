@@ -1798,7 +1798,7 @@ impl WorkbenchApp {
     }
 
     fn handle_audio_strip_playback(&mut self, ctx: &egui::Context, audio_region_active: bool) {
-        if !audio_region_active {
+        if !audio_region_active || ctx.wants_keyboard_input() {
             return;
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
@@ -1809,7 +1809,7 @@ impl WorkbenchApp {
     }
 
     fn handle_audio_strip_copy(&mut self, ctx: &egui::Context, audio_region_active: bool) {
-        if !audio_region_active {
+        if !audio_region_active || ctx.wants_keyboard_input() {
             return;
         }
         let copy_pressed = ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C));
