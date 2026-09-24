@@ -12,7 +12,9 @@ use little_clip_core::pdf::{
     delete_pdf_pages, get_pdf_info, render_pdf_page_preview, rotate_pdf_page,
 };
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, TryRecvError, channel, sync_channel};
+
+const PREVIEW_QUEUE_CAPACITY: usize = 3;
 
 struct PdfPreviewMsg {
     page_num: usize,
@@ -114,7 +116,9 @@ impl PdfEditorState {
         let path = self.path.clone();
         let page_count = self.page_count;
         let selected_page = self.selected_page.unwrap_or(1).min(page_count.max(1));
-        let (tx, rx) = channel();
+        // Bound pending raster data if rendering outruns the UI. Dropping this
+        // receiver on a route change also stops the old worker at its next send.
+        let (tx, rx) = sync_channel(PREVIEW_QUEUE_CAPACITY);
         self.preview_rx = Some(rx);
         self.previews_loading = true;
         std::thread::spawn(move || {
