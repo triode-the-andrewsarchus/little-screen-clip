@@ -20,9 +20,18 @@ pub struct CreativeFxThumbnailMsg {
 
 fn render_creative_fx_mask_loading(ui: &mut egui::Ui, label: &str, color: Color32) {
     ui.horizontal(|ui| {
-        ui.add(egui::Spinner::new().size(14.0).color(color));
+        ui.add(
+            egui::Spinner::new()
+                .size(crate::ui_ext::CONTROL_ICON_SIZE)
+                .color(color),
+        );
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(label).small().monospace().color(color));
+        ui.label(
+            egui::RichText::new(label)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
+                .monospace()
+                .color(color),
+        );
     });
 }
 
@@ -42,14 +51,14 @@ fn render_creative_fx_mask_button(
     let foreground = contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_high)), palette);
     let button = egui::Button::new(
         egui::RichText::new(label)
-            .small()
+            .size(crate::ui_ext::BODY_FONT_SIZE)
             .strong()
             .color(foreground),
     )
     .fill(fill)
     .stroke(Stroke::new(1.0_f32, fill))
     .rounding(Rounding::same(4.0))
-    .min_size(Vec2::new(width, 22.0));
+    .min_size(Vec2::new(width, crate::ui_ext::CONTROL_HEIGHT));
     ui.add_enabled(!loading, button)
 }
 
@@ -584,7 +593,7 @@ impl ImagePreviewState {
 
         ui.label(
             egui::RichText::new("Masking")
-                .small()
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(f_high),
         );
@@ -649,7 +658,7 @@ impl ImagePreviewState {
             ui.add_space(2.0);
             ui.label(
                 egui::RichText::new(format!("⚠ {}", error))
-                    .small()
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(diff_del),
             );
         }
@@ -657,7 +666,7 @@ impl ImagePreviewState {
             ui.add_space(2.0);
             ui.label(
                 egui::RichText::new(format!("⚠ {}", error))
-                    .small()
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(diff_del),
             );
         }
@@ -689,11 +698,14 @@ impl ImagePreviewState {
                 "⇄ Invert Mask: OFF (Foreground)"
             }
         };
-        let invert_button =
-            egui::Button::new(egui::RichText::new(invert_text).small().color(f_high))
-                .fill(b_med)
-                .rounding(Rounding::same(3.0))
-                .min_size(Vec2::new(full_w, 20.0));
+        let invert_button = egui::Button::new(
+            egui::RichText::new(invert_text)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
+                .color(f_high),
+        )
+        .fill(b_med)
+        .rounding(Rounding::same(3.0))
+        .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
         if ui
             .add(invert_button)
             .on_hover_text("Swap the foreground and background mask regions")
@@ -826,7 +838,7 @@ impl ImagePreviewState {
                         ui.label(
                             egui::RichText::new("✨ Creative FX")
                                 .strong()
-                                .small()
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(base_c),
                         );
                         ui.label(
@@ -1093,7 +1105,7 @@ impl ImagePreviewState {
                             ui.add_space(2.0);
                             ui.label(
                                 egui::RichText::new(cur_fx.description())
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(f_low),
                             );
                             ui.add_space(6.0);
@@ -1104,7 +1116,7 @@ impl ImagePreviewState {
                             ui.label(
                                 egui::RichText::new("🏷 Presets")
                                     .strong()
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(base_c),
                             );
                             ui.add_space(3.0);
@@ -1119,14 +1131,14 @@ impl ImagePreviewState {
                                 };
                                 let btn = egui::Button::new(
                                     egui::RichText::new(preset.name)
-                                        .small()
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                         .strong()
                                         .color(s_fg),
                                 )
                                 .fill(s_bg)
                                 .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
                                 .rounding(Rounding::same(4.0))
-                                .min_size(Vec2::new(full_w, 20.0));
+                                .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
 
                                 if ui.add(btn).on_hover_text(preset.description).clicked() {
                                     self.creative_fx_state.selected_preset_name =
@@ -1167,7 +1179,7 @@ impl ImagePreviewState {
                             ui.label(
                                 egui::RichText::new("🎛 Controls")
                                     .strong()
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(base_c),
                             );
                             ui.add_space(4.0);
@@ -1229,7 +1241,7 @@ impl ImagePreviewState {
                                     // Mode: RGB vs OKLab
                                     ui.label(
                                         egui::RichText::new("Color Separation Model")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
@@ -1248,7 +1260,7 @@ impl ImagePreviewState {
                                             };
                                             let btn = egui::Button::new(
                                                 egui::RichText::new(label)
-                                                    .small()
+                                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                                     .strong()
                                                     .color(b_fg),
                                             )
@@ -1281,7 +1293,7 @@ impl ImagePreviewState {
                                                 i + 1,
                                                 names[i]
                                             ))
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .strong()
                                             .color(base_c),
                                         );
@@ -1369,7 +1381,7 @@ impl ImagePreviewState {
                                     );
                                     ui.label(
                                         egui::RichText::new("(auto-cropped to 3-channel overlap)")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_low),
                                     );
                                 }
@@ -1378,7 +1390,7 @@ impl ImagePreviewState {
                                     // Direction
                                     ui.label(
                                         egui::RichText::new("Scanline Direction")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
@@ -1398,7 +1410,7 @@ impl ImagePreviewState {
                                             };
                                             let btn = egui::Button::new(
                                                 egui::RichText::new(label)
-                                                    .small()
+                                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                                     .strong()
                                                     .color(b_fg),
                                             )
@@ -1422,7 +1434,9 @@ impl ImagePreviewState {
 
                                     // Criteria
                                     ui.label(
-                                        egui::RichText::new("Sort Metric").small().color(f_med),
+                                        egui::RichText::new("Sort Metric")
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                                            .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
                                         let crit = [
@@ -1441,7 +1455,7 @@ impl ImagePreviewState {
                                             };
                                             let btn = egui::Button::new(
                                                 egui::RichText::new(label)
-                                                    .small()
+                                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                                     .strong()
                                                     .color(b_fg),
                                             )
@@ -1464,7 +1478,9 @@ impl ImagePreviewState {
 
                                     // Order
                                     ui.label(
-                                        egui::RichText::new("Sort Order").small().color(f_med),
+                                        egui::RichText::new("Sort Order")
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                                            .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
                                         let orders = [
@@ -1481,7 +1497,7 @@ impl ImagePreviewState {
                                             };
                                             let btn = egui::Button::new(
                                                 egui::RichText::new(label)
-                                                    .small()
+                                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                                     .strong()
                                                     .color(b_fg),
                                             )
@@ -1563,7 +1579,7 @@ impl ImagePreviewState {
                                         .checkbox(
                                             &mut invert,
                                             egui::RichText::new("Invert Selection Mask")
-                                                .small()
+                                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                                 .color(f_med),
                                         )
                                         .changed()
@@ -1614,7 +1630,7 @@ impl ImagePreviewState {
                                     // Paper Tint
                                     ui.label(
                                         egui::RichText::new("Paper Substrate Tint")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
@@ -1628,7 +1644,7 @@ impl ImagePreviewState {
                                             };
                                             let btn = egui::Button::new(
                                                 egui::RichText::new(tint.label())
-                                                    .small()
+                                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                                     .strong()
                                                     .color(b_fg),
                                             )
@@ -1654,7 +1670,7 @@ impl ImagePreviewState {
                                     // Plate Misregistration Offsets
                                     ui.label(
                                         egui::RichText::new("🗞 Plate Misregistration Offsets")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .strong()
                                             .color(base_c),
                                     );
@@ -1663,7 +1679,7 @@ impl ImagePreviewState {
                                     // Cyan plate
                                     ui.label(
                                         egui::RichText::new("Cyan Plate Offset")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_med),
                                     );
                                     if render_context_slider(
@@ -1699,7 +1715,7 @@ impl ImagePreviewState {
                                     // Magenta plate
                                     ui.label(
                                         egui::RichText::new("Magenta Plate Offset")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_med),
                                     );
                                     if render_context_slider(
@@ -1735,7 +1751,7 @@ impl ImagePreviewState {
                                     // Yellow plate
                                     ui.label(
                                         egui::RichText::new("Yellow Plate Offset")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_med),
                                     );
                                     if render_context_slider(
@@ -1771,7 +1787,7 @@ impl ImagePreviewState {
                                     // Black (Key) plate
                                     ui.label(
                                         egui::RichText::new("Black (Key) Plate Offset")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_med),
                                     );
                                     if render_context_slider(
@@ -1808,7 +1824,7 @@ impl ImagePreviewState {
                                     // Palette selection
                                     ui.label(
                                         egui::RichText::new("Hardware / Aesthetic Palette")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
@@ -1822,7 +1838,7 @@ impl ImagePreviewState {
                                             };
                                             let btn = egui::Button::new(
                                                 egui::RichText::new(pal.label())
-                                                    .small()
+                                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                                     .strong()
                                                     .color(b_fg),
                                             )
@@ -1845,7 +1861,7 @@ impl ImagePreviewState {
                                     // Dither Method selection
                                     ui.label(
                                         egui::RichText::new("Dithering Method")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
@@ -1859,7 +1875,7 @@ impl ImagePreviewState {
                                             };
                                             let btn = egui::Button::new(
                                                 egui::RichText::new(method.label())
-                                                    .small()
+                                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                                     .strong()
                                                     .color(b_fg),
                                             )
@@ -1883,7 +1899,7 @@ impl ImagePreviewState {
                                     // Pixel Scale selection (1x..4x)
                                     ui.label(
                                         egui::RichText::new("Pixel Grid Scale")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
@@ -1898,7 +1914,7 @@ impl ImagePreviewState {
                                             };
                                             let btn = egui::Button::new(
                                                 egui::RichText::new(format!("{}×", scale))
-                                                    .small()
+                                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                                     .strong()
                                                     .color(b_fg),
                                             )
@@ -1958,7 +1974,7 @@ impl ImagePreviewState {
                                     // ── 1. Broadcast RF & Filtering ──
                                     ui.label(
                                         egui::RichText::new("📡 Signal & Filtering")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .strong()
                                             .color(base_c),
                                     );
@@ -2018,7 +2034,7 @@ impl ImagePreviewState {
                                     // Demodulation Filter
                                     ui.label(
                                         egui::RichText::new("Demodulation Filter")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
@@ -2033,7 +2049,7 @@ impl ImagePreviewState {
                                             };
                                             let btn = egui::Button::new(
                                                 egui::RichText::new(demo.label())
-                                                    .small()
+                                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                                     .strong()
                                                     .color(b_fg),
                                             )
@@ -2057,7 +2073,7 @@ impl ImagePreviewState {
                                     // Scanline Phase Shift
                                     ui.label(
                                         egui::RichText::new("Subcarrier Phase Shift (Dot Crawl)")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
@@ -2072,7 +2088,7 @@ impl ImagePreviewState {
                                             };
                                             let btn = egui::Button::new(
                                                 egui::RichText::new(ps.label())
-                                                    .small()
+                                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                                     .strong()
                                                     .color(b_fg),
                                             )
@@ -2097,7 +2113,7 @@ impl ImagePreviewState {
                                     // Chroma Lowpass
                                     ui.label(
                                         egui::RichText::new("Chroma Lowpass Filter")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(f_med),
                                     );
                                     ui.horizontal_wrapped(|ui| {
@@ -2112,7 +2128,7 @@ impl ImagePreviewState {
                                             };
                                             let btn = egui::Button::new(
                                                 egui::RichText::new(cl.label())
-                                                    .small()
+                                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                                     .strong()
                                                     .color(b_fg),
                                             )
@@ -2139,7 +2155,7 @@ impl ImagePreviewState {
                                         .checkbox(
                                             &mut scanlines,
                                             egui::RichText::new("📺 CRT Interlaced Scanlines")
-                                                .small()
+                                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                                 .color(f_med),
                                         )
                                         .changed()
@@ -2156,7 +2172,7 @@ impl ImagePreviewState {
                                     ui.add_space(3.0);
                                     ui.label(
                                         egui::RichText::new("🎨 Chrominance & Color")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .strong()
                                             .color(base_c),
                                     );
@@ -2204,7 +2220,7 @@ impl ImagePreviewState {
                                         .checkbox(
                                             &mut vert_blend,
                                             egui::RichText::new("Chroma Vertical Blending")
-                                                .small()
+                                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                                 .color(f_med),
                                         )
                                         .changed()
@@ -2270,7 +2286,7 @@ impl ImagePreviewState {
                                     ui.add_space(3.0);
                                     ui.label(
                                         egui::RichText::new("❄ Noise & Static")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .strong()
                                             .color(base_c),
                                     );
@@ -2279,7 +2295,7 @@ impl ImagePreviewState {
                                     ui.vertical(|ui| {
                                         ui.label(
                                             egui::RichText::new("RF Static / Snow")
-                                                .small()
+                                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                                 .color(f_med),
                                         );
                                         ui.spacing_mut().slider_width = slider_w;
@@ -2361,7 +2377,7 @@ impl ImagePreviewState {
                                     ui.add_space(3.0);
                                     ui.label(
                                         egui::RichText::new("📼 VHS Tape Emulation")
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .strong()
                                             .color(base_c),
                                     );
@@ -2373,7 +2389,7 @@ impl ImagePreviewState {
                                         .checkbox(
                                             &mut vhs_enabled,
                                             egui::RichText::new("Enable VHS Tape Pass")
-                                                .small()
+                                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                                 .color(f_med),
                                         )
                                         .changed()
@@ -2388,7 +2404,9 @@ impl ImagePreviewState {
                                     if self.creative_fx_state.ntsc_params.vhs_enabled {
                                         ui.add_space(2.0);
                                         ui.label(
-                                            egui::RichText::new("Tape Speed").small().color(f_med),
+                                            egui::RichText::new("Tape Speed")
+                                                .size(crate::ui_ext::BODY_FONT_SIZE)
+                                                .color(f_med),
                                         );
                                         ui.horizontal_wrapped(|ui| {
                                             for speed in [
@@ -2409,7 +2427,7 @@ impl ImagePreviewState {
                                                 };
                                                 let btn = egui::Button::new(
                                                     egui::RichText::new(speed.label())
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .strong()
                                                         .color(b_fg),
                                                 )
@@ -2502,7 +2520,7 @@ impl ImagePreviewState {
                                                 egui::RichText::new(
                                                     "Head-Switching Jitter (Bottom)",
                                                 )
-                                                .small()
+                                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                                 .color(f_med),
                                             )
                                             .changed()
@@ -2521,7 +2539,7 @@ impl ImagePreviewState {
                                     ui.vertical(|ui| {
                                         ui.label(
                                             egui::RichText::new("🎲 Noise Random Seed")
-                                                .small()
+                                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                                 .color(f_med),
                                         );
                                         ui.spacing_mut().slider_width = slider_w;
@@ -2621,14 +2639,14 @@ impl ImagePreviewState {
                             let apply_fg = contrast_text_c32(diff_add, Some(f_high), palette);
                             let apply_btn = egui::Button::new(
                                 egui::RichText::new("✓ Apply to Image")
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .strong()
                                     .color(apply_fg),
                             )
                             .fill(diff_add)
                             .stroke(Stroke::new(1.0_f32, diff_add))
                             .rounding(Rounding::same(4.0))
-                            .min_size(Vec2::new(full_w, 24.0));
+                            .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
 
                             let apply_enabled = self.creative_fx_state.preview_rgba.is_some();
                             if ui
@@ -2646,14 +2664,14 @@ impl ImagePreviewState {
                             let reset_fg = contrast_text_c32(b_med, Some(f_med), palette);
                             let reset_btn = egui::Button::new(
                                 egui::RichText::new("⟲ Reset Defaults")
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .strong()
                                     .color(reset_fg),
                             )
                             .fill(b_med)
                             .stroke(Stroke::new(1.0_f32, b_low))
                             .rounding(Rounding::same(4.0))
-                            .min_size(Vec2::new(full_w, 22.0));
+                            .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
 
                             if ui
                                 .add(reset_btn)
@@ -2702,7 +2720,7 @@ impl ImagePreviewState {
                                         self.creative_fx_state.last_render_duration_ms as f64
                                             / 1000.0
                                     ))
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(f_low),
                                 );
                             }
