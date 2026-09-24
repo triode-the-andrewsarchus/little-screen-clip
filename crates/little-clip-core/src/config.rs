@@ -508,8 +508,8 @@ impl AppConfig {
     }
 
     /// Resolves the shared fixed Light/Dark colors for the workbench and display.
-    pub fn resolve_palette(&self) -> crate::theme::AppPalette {
-        crate::theme::AppPalette::for_appearance(self.workbench.appearance)
+    pub fn resolve_palette(&self) -> crate::palette::AppPalette {
+        crate::palette::AppPalette::for_appearance(self.workbench.appearance)
     }
 
     /// Save the shared appearance choice, preserving all other settings.

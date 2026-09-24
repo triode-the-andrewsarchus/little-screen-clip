@@ -118,7 +118,7 @@ impl SpreadsheetViewerState {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
-        palette: &little_clip_core::theme::AppPalette,
+        palette: &little_clip_core::palette::AppPalette,
         close: &mut bool,
     ) {
         let now = std::time::SystemTime::now()
@@ -740,7 +740,7 @@ mod tests {
             sheets: vec![SpreadsheetSheet::new("Data".into(), vec![first_row])],
         };
         let mut state = SpreadsheetViewerState::new(data, None);
-        let palette = little_clip_core::theme::AppPalette::default();
+        let palette = little_clip_core::palette::AppPalette::default();
         let ctx = egui::Context::default();
         let output = ctx.run(
             egui::RawInput {
@@ -784,7 +784,7 @@ mod tests {
             sheets: vec![SpreadsheetSheet::new("Data".into(), rows)],
         };
         let mut state = SpreadsheetViewerState::new(data, None);
-        let palette = little_clip_core::theme::AppPalette::default();
+        let palette = little_clip_core::palette::AppPalette::default();
         let ctx = egui::Context::default();
         let input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -839,7 +839,7 @@ mod tests {
             )],
         };
         let mut state = SpreadsheetViewerState::new(data, None);
-        let palette = little_clip_core::theme::AppPalette::default();
+        let palette = little_clip_core::palette::AppPalette::default();
         let ctx = egui::Context::default();
         let _ = ctx.run(
             egui::RawInput {

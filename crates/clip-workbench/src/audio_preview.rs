@@ -14,7 +14,7 @@ use little_clip_core::audio::{
     compute_audio_spectral_preview_with_gain_and_edits, read_audio_metadata,
 };
 use little_clip_core::ipc::IpcRequest;
-use little_clip_core::theme::AppPalette;
+use little_clip_core::palette::AppPalette;
 use rodio::stream::MixerDeviceSink;
 use rodio::{Decoder, Player, Source};
 use std::fs::File;

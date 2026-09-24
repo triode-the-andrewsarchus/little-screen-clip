@@ -7,7 +7,7 @@ use crate::icons::Icon;
 use crate::shell::{EscapeHatch, PanelState, StudioShell};
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
-use little_clip_core::theme::AppPalette;
+use little_clip_core::palette::AppPalette;
 use little_clip_ops::binary_diff::{
     AlignedCell, BinaryDiffMode, BinaryDiffResult, DiffKind, byte_to_ascii_char,
     compute_binary_diff, search_rows,

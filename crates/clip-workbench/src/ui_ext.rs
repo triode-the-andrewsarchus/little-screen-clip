@@ -4,7 +4,7 @@ use crate::ui_appearance::WorkbenchColors;
 use eframe::egui::{
     self, Color32, FontFamily, FontId, Response, RichText, Rounding, Stroke, TextStyle, Ui, Vec2,
 };
-use little_clip_core::theme::{AppPalette, contrast_ratio};
+use little_clip_core::palette::{AppPalette, contrast_ratio};
 
 pub const CONTROL_HEIGHT: f32 = 36.0;
 pub const CONTROL_ICON_SIZE: f32 = 18.0;

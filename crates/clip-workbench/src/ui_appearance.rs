@@ -2,7 +2,7 @@
 
 use eframe::egui::{self, Color32};
 use little_clip_core::config::WorkbenchAppearance;
-use little_clip_core::theme::AppPalette;
+use little_clip_core::palette::AppPalette;
 
 use crate::hex_to_c32;
 use crate::ui_ext::contrast_text_c32;
@@ -104,7 +104,7 @@ pub fn apply_visuals(ctx: &egui::Context, palette: &AppPalette) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use little_clip_core::theme::contrast_ratio;
+    use little_clip_core::palette::contrast_ratio;
 
     #[test]
     fn text_roles_remain_readable_on_every_workbench_surface() {

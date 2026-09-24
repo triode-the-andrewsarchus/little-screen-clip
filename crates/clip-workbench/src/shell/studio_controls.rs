@@ -2,7 +2,7 @@
 
 use crate::ui_appearance::WorkbenchColors;
 use eframe::egui::{self, Pos2, Rect, Stroke, Vec2};
-use little_clip_core::theme::AppPalette;
+use little_clip_core::palette::AppPalette;
 
 #[allow(clippy::too_many_arguments)]
 pub fn render_context_slider(

@@ -7,7 +7,7 @@
 use crate::hex_to_c32;
 use crate::ui_ext::contrast_text_c32;
 use eframe::egui::{self, Color32, Pos2, Rect, Response, Stroke};
-use little_clip_core::theme::AppPalette;
+use little_clip_core::palette::AppPalette;
 
 /// Reusable interactive before/after split comparison slider.
 pub struct SplitCompareView<'a> {

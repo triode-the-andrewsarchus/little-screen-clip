@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use eframe::egui;
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
-use little_clip_core::theme::AppPalette;
+use little_clip_core::palette::AppPalette;
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 
 use crate::send_ipc_request_with_timeout;

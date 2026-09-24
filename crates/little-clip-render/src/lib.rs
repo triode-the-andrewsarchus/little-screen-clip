@@ -7,7 +7,7 @@ use fontdue::{Font, FontSettings};
 use image::{ExtendedColorType, codecs::jpeg::JpegEncoder};
 use little_clip_core::color::parse_hex_color_rgba_or_white as parse_hex_color;
 use little_clip_core::config::AppConfig;
-use little_clip_core::theme::AppPalette;
+use little_clip_core::palette::AppPalette;
 use little_clip_core::{SlotId, SlotManager};
 use thiserror::Error;
 use tiny_skia::*;
@@ -262,7 +262,7 @@ impl ScreenRenderer {
         let pg = (pref.green() * 255.0).round() as u8;
         let pb = (pref.blue() * 255.0).round() as u8;
 
-        if little_clip_core::theme::contrast_ratio(bg_rgb, (pr, pg, pb)) >= 4.5 {
+        if little_clip_core::palette::contrast_ratio(bg_rgb, (pr, pg, pb)) >= 4.5 {
             return pref;
         }
 
@@ -279,13 +279,13 @@ impl ScreenRenderer {
             let cr = (cand.red() * 255.0).round() as u8;
             let cg = (cand.green() * 255.0).round() as u8;
             let cb = (cand.blue() * 255.0).round() as u8;
-            if little_clip_core::theme::contrast_ratio(bg_rgb, (cr, cg, cb)) >= 4.5 {
+            if little_clip_core::palette::contrast_ratio(bg_rgb, (cr, cg, cb)) >= 4.5 {
                 return cand;
             }
         }
 
-        let black_ratio = little_clip_core::theme::contrast_ratio(bg_rgb, (0, 0, 0));
-        let white_ratio = little_clip_core::theme::contrast_ratio(bg_rgb, (255, 255, 255));
+        let black_ratio = little_clip_core::palette::contrast_ratio(bg_rgb, (0, 0, 0));
+        let white_ratio = little_clip_core::palette::contrast_ratio(bg_rgb, (255, 255, 255));
         if black_ratio >= white_ratio {
             Color::from_rgba8(0, 0, 0, 255)
         } else {

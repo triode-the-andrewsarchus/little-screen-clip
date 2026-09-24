@@ -27,6 +27,7 @@ pub mod presentation {
     #[path = "../../../little-clip-ops/src/units.rs"]
     pub mod units;
 }
+pub mod palette;
 pub mod pdf;
 pub mod process;
 pub mod raw_image;
@@ -34,9 +35,8 @@ pub mod rolling_audio;
 pub mod slot;
 pub mod staging;
 pub mod syntax;
-pub mod theme;
 pub use color::parse_hex_color;
-pub use theme::{AppPalette, BaseColors, DerivedHarmonies, Oklab, Oklch};
+pub use palette::{AppPalette, BaseColors, DerivedHarmonies, Oklab, Oklch};
 
 pub use animation::{
     AnimationThumbnail, decode_animated_bytes, decode_animated_gif_or_webp,

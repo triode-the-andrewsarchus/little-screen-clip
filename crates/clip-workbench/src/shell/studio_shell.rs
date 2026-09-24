@@ -14,7 +14,7 @@ use crate::ui_ext::{
     CONTROL_HEIGHT, CONTROL_ICON_SIZE, StatusToast, contrast_text_c32, equal_button_width,
 };
 use eframe::egui::{self, Color32, Rect, Rounding, Stroke, Vec2};
-use little_clip_core::theme::AppPalette;
+use little_clip_core::palette::AppPalette;
 
 use crate::icons::Icon;
 

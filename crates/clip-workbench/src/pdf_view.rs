@@ -357,7 +357,7 @@ impl PdfEditorState {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
-        palette: &little_clip_core::theme::AppPalette,
+        palette: &little_clip_core::palette::AppPalette,
         close: &mut bool,
     ) {
         let now = std::time::SystemTime::now()

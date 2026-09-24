@@ -10,7 +10,7 @@ use crate::icons::Icon;
 use crate::{contrast_text_c32, hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use image::RgbaImage;
-use little_clip_core::theme::AppPalette;
+use little_clip_core::palette::AppPalette;
 use little_clip_core::{AppConfig, ClipItem, CommandRequest, HandSide, IpcRequest};
 use little_clip_ops::barcode::BarcodeDetection;
 use little_clip_ops::creative_fx::{

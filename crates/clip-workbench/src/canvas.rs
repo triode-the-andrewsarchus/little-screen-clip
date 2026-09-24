@@ -9,7 +9,7 @@ use crate::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, Id, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::SlotManager;
 use little_clip_core::config::AppConfig;
-use little_clip_core::theme::AppPalette;
+use little_clip_core::palette::AppPalette;
 use little_clip_ops::PipelineExecutor;
 use little_clip_ops::pipeline::catalog::{instantiate_template, search_templates};
 use little_clip_ops::pipeline::recipes::{

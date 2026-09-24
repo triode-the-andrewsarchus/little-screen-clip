@@ -6,7 +6,7 @@
 use fontdue::Font;
 use little_clip_core::audio::types::FullAudioAnalysis;
 use little_clip_core::audio::types::apply_audio_gain;
-use little_clip_core::theme::AppPalette;
+use little_clip_core::palette::AppPalette;
 use little_clip_ops::hf_audio::{HfSpectrogramConfig, render_hf_viewport_spectrogram};
 use little_clip_render::tiny_skia::{
     Color, IntSize, Paint, PathBuilder, Pixmap, PixmapPaint, Rect, Stroke, Transform,
@@ -768,7 +768,7 @@ pub fn render_spectrum_image(
 mod tests {
     use super::*;
     use little_clip_core::audio::types::PeakBlock;
-    use little_clip_core::theme::AppPalette;
+    use little_clip_core::palette::AppPalette;
 
     fn make_mock_analysis(stereo: bool) -> FullAudioAnalysis {
         let sample_rate = 44_100;

@@ -6,7 +6,7 @@
 use crate::hex_to_c32;
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::SlotId;
-use little_clip_core::theme::AppPalette;
+use little_clip_core::palette::AppPalette;
 
 pub const SCREEN_WIDTH: f32 = 1920.0;
 pub const SCREEN_HEIGHT: f32 = 462.0;

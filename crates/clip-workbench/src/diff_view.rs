@@ -438,7 +438,7 @@ impl DiffViewerState {
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
-        palette: &little_clip_core::theme::AppPalette,
+        palette: &little_clip_core::palette::AppPalette,
         close_requested: &mut bool,
     ) {
         let now = ctx.input(|i| i.time);
@@ -676,7 +676,7 @@ impl DiffViewerState {
     fn render_image_toolbar(
         &mut self,
         ui: &mut egui::Ui,
-        palette: &little_clip_core::theme::AppPalette,
+        palette: &little_clip_core::palette::AppPalette,
     ) {
         let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
         let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
@@ -734,7 +734,7 @@ impl DiffViewerState {
     fn render_image_viewport(
         &self,
         ui: &mut egui::Ui,
-        palette: &little_clip_core::theme::AppPalette,
+        palette: &little_clip_core::palette::AppPalette,
     ) {
         let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
         let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
@@ -947,7 +947,7 @@ impl DiffViewerState {
     fn render_text_viewport(
         &mut self,
         ui: &mut egui::Ui,
-        palette: &little_clip_core::theme::AppPalette,
+        palette: &little_clip_core::palette::AppPalette,
     ) {
         if self.is_computing {
             self.render_computing_ui(ui, palette);
@@ -976,7 +976,7 @@ impl DiffViewerState {
     fn render_text_toolbar(
         &mut self,
         ui: &mut egui::Ui,
-        palette: &little_clip_core::theme::AppPalette,
+        palette: &little_clip_core::palette::AppPalette,
     ) {
         let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
         let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
@@ -1015,7 +1015,7 @@ impl DiffViewerState {
     fn render_computing_ui(
         &self,
         ui: &mut egui::Ui,
-        palette: &little_clip_core::theme::AppPalette,
+        palette: &little_clip_core::palette::AppPalette,
     ) {
         let elapsed = self.compute_start_time.elapsed().as_secs_f32();
         let progress = (elapsed * 0.75).fract();
@@ -1105,7 +1105,7 @@ impl DiffViewerState {
     fn render_image_column(
         &self,
         ui: &mut egui::Ui,
-        palette: &little_clip_core::theme::AppPalette,
+        palette: &little_clip_core::palette::AppPalette,
         title: &str,
         subtitle: &str,
         title_color: Color32,

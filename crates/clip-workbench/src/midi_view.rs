@@ -52,7 +52,7 @@ pub fn get_track_color(
     track_idx: usize,
     channel: u8,
     total_tracks: usize,
-    palette: &little_clip_core::theme::AppPalette,
+    palette: &little_clip_core::palette::AppPalette,
 ) -> Color32 {
     let (r, g, b) = palette.midi_track_color(track_idx, channel, total_tracks);
     Color32::from_rgb(r, g, b)
@@ -510,7 +510,7 @@ impl MidiViewerState {
     pub fn render_ui(
         &mut self,
         ui: &mut egui::Ui,
-        palette: &little_clip_core::theme::AppPalette,
+        palette: &little_clip_core::palette::AppPalette,
         close: &mut bool,
     ) {
         self.update_playback();
@@ -1262,7 +1262,7 @@ impl MidiViewerState {
 mod tests {
     use super::*;
     use little_clip_core::config::WorkbenchAppearance;
-    use little_clip_core::theme::AppPalette;
+    use little_clip_core::palette::AppPalette;
 
     #[test]
     fn test_midi_view_track_colors() {
@@ -1286,7 +1286,7 @@ mod tests {
             let note_c = palette.midi_note_color(0, 0, 4, 60, 100);
             let note_d = palette.midi_note_color(1, 0, 4, 62, 100);
             assert_ne!(note_c, note_d, "{appearance:?}: track notes should differ");
-            let chroma = little_clip_core::theme::Oklab::from_rgb(note_c.0, note_c.1, note_c.2)
+            let chroma = little_clip_core::palette::Oklab::from_rgb(note_c.0, note_c.1, note_c.2)
                 .to_oklch()
                 .c;
             assert!(
@@ -1295,7 +1295,7 @@ mod tests {
             );
             let (r, g, b, _) = palette.rgba(&palette.colors.surface_recessed);
             assert!(
-                little_clip_core::theme::contrast_ratio((r, g, b), note_c) >= 2.5,
+                little_clip_core::palette::contrast_ratio((r, g, b), note_c) >= 2.5,
                 "{appearance:?}: MIDI note lacks contrast against display surface"
             );
         }
@@ -1473,7 +1473,7 @@ mod tests {
             pending_play: false,
             synth_rx: None,
         };
-        let palette = little_clip_core::theme::AppPalette::default();
+        let palette = little_clip_core::palette::AppPalette::default();
         let ctx = egui::Context::default();
 
         let _ = ctx.run(

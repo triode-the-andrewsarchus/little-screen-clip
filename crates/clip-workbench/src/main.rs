@@ -7,6 +7,7 @@ use eframe::egui;
 use little_clip_core::color::parse_hex_color_rgba_or_white as parse_hex_color_rgba;
 use little_clip_core::config::WorkbenchAppearance;
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
+use little_clip_core::palette::AppPalette;
 use little_clip_core::presentation::{
     model3d::is_3d_model_file,
     network_preview::{NetworkPreview, detect_network_preview},
@@ -17,7 +18,6 @@ use little_clip_core::presentation::{
     timestamps::detect_timestamp,
     units::detect_unit_conversion,
 };
-use little_clip_core::theme::AppPalette;
 use little_clip_core::{
     AppConfig, BackgroundJobs, ClipItem, ClipPayload, JobError, JobTicket, SlotId, SlotManager,
 };
