@@ -749,6 +749,7 @@ mod tests {
                 Vec2::new(900.0, 300.0),
             ));
             let mut heights = Vec::new();
+            let mut input_text = String::new();
             let _ = ctx.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.horizontal(|ui| {
@@ -783,10 +784,18 @@ mod tests {
                             .rect
                             .height(),
                         );
+                        heights.push(
+                            ui.add_sized(
+                                [150.0, CONTROL_HEIGHT],
+                                egui::TextEdit::singleline(&mut input_text),
+                            )
+                            .rect
+                            .height(),
+                        );
                     });
                 });
             });
-            assert_eq!(heights.len(), 5);
+            assert_eq!(heights.len(), 6);
             assert!(
                 heights.iter().all(|&height| height >= CONTROL_HEIGHT),
                 "{appearance:?} control gallery has a short hit target: {heights:?}"

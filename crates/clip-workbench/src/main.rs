@@ -1121,7 +1121,7 @@ impl eframe::App for WorkbenchApp {
                             text_edit = text_edit.interactive(false);
                         }
                         let response = ui.add_sized(
-                            [ui.available_width() - 20.0, 32.0],
+                            [ui.available_width() - 20.0, ui_ext::CONTROL_HEIGHT],
                             text_edit,
                         );
                         if !audio_region_active {
@@ -1386,14 +1386,13 @@ impl WorkbenchApp {
                     ui.add_space(8.0);
                     ui.label(
                         egui::RichText::new(&prompt.message)
-                            .color(hex_to_c32(&self.ui_palette.theme.f_med))
-                            .size(13.0),
+                            .color(hex_to_c32(&self.ui_palette.theme.f_med)),
                     );
 
                     ui.add_space(10.0);
-                    let edit_resp = ui.add(
+                    let edit_resp = ui.add_sized(
+                        [ui.available_width(), ui_ext::CONTROL_HEIGHT],
                         egui::TextEdit::singleline(&mut prompt.input_text)
-                            .desired_width(ui.available_width())
                             .hint_text("Type input text here..."),
                     );
 
@@ -2089,10 +2088,10 @@ impl eframe::App for PromptApp {
                 );
 
                 ui.add_space(12.0);
-                let edit_resp = ui.add(
+                let edit_resp = ui.add_sized(
+                    [ui.available_width(), ui_ext::CONTROL_HEIGHT],
                     egui::TextEdit::singleline(&mut self.input_text)
                         .font(egui::TextStyle::Body)
-                        .desired_width(ui.available_width())
                         .hint_text("Enter input text..."),
                 );
 
