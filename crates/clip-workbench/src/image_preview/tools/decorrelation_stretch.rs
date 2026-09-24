@@ -82,26 +82,32 @@ impl ImagePreviewState {
 
         ui.label(
             egui::RichText::new("Decorrelation stretch")
-                .size(16.0)
+                .size(crate::ui_ext::HEADING_FONT_SIZE)
                 .strong()
                 .color(accent),
         );
         ui.label(
             egui::RichText::new("Separate correlated color channels to reveal subtle variation.")
-                .size(11.5)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .color(muted),
         );
 
         ui.add_space(12.0);
         ui.label(
             egui::RichText::new("PRESET")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
         ui.add_space(4.0);
-        let half_width = ((ui.available_width() - 6.0) * 0.5).max(76.0);
-        ui.horizontal(|ui| {
+        let available_width = ui.available_width();
+        let button_gap = ui.spacing().item_spacing.x;
+        let preset_min_width =
+            crate::ui_ext::equal_button_width(ui, &["NASA / ASTER", "Preserve"], false);
+        let preset_width = ((available_width - button_gap) * 0.5)
+            .max(preset_min_width)
+            .min(available_width);
+        ui.horizontal_wrapped(|ui| {
             for (preset, label, tooltip) in [
                 (
                     DecorrelationStretchParams::nasa(),
@@ -119,7 +125,7 @@ impl ImagePreviewState {
                 let foreground = contrast_text_c32(fill, Some(text), palette);
                 let button = egui::Button::new(
                     egui::RichText::new(label)
-                        .size(12.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(foreground),
                 )
@@ -130,7 +136,7 @@ impl ImagePreviewState {
                 ))
                 .rounding(Rounding::same(4.0));
                 if ui
-                    .add_sized([half_width, 30.0], button)
+                    .add_sized([preset_width, crate::ui_ext::CONTROL_HEIGHT], button)
                     .on_hover_text(tooltip)
                     .clicked()
                     && !active
@@ -150,12 +156,17 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("COLOR MODEL")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
         ui.add_space(4.0);
-        ui.horizontal(|ui| {
+        let mode_min_width =
+            crate::ui_ext::equal_button_width(ui, &["Correlation", "Covariance"], false);
+        let mode_width = ((available_width - button_gap) * 0.5)
+            .max(mode_min_width)
+            .min(available_width);
+        ui.horizontal_wrapped(|ui| {
             for (mode, label, tooltip) in [
                 (
                     DecorrelationMatrixMode::Correlation,
@@ -173,7 +184,7 @@ impl ImagePreviewState {
                 let foreground = contrast_text_c32(fill, Some(text), palette);
                 let button = egui::Button::new(
                     egui::RichText::new(label)
-                        .size(12.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(foreground),
                 )
@@ -184,7 +195,7 @@ impl ImagePreviewState {
                 ))
                 .rounding(Rounding::same(4.0));
                 if ui
-                    .add_sized([half_width, 30.0], button)
+                    .add_sized([mode_width, crate::ui_ext::CONTROL_HEIGHT], button)
                     .on_hover_text(tooltip)
                     .clicked()
                     && !active
@@ -198,7 +209,7 @@ impl ImagePreviewState {
         ui.add_space(12.0);
         ui.label(
             egui::RichText::new("OUTPUT DISTRIBUTION")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
@@ -208,7 +219,7 @@ impl ImagePreviewState {
             .checkbox(
                 &mut preserve_mean,
                 egui::RichText::new("Preserve original band means")
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(text),
             )
             .changed()
@@ -222,11 +233,15 @@ impl ImagePreviewState {
         }
         if !preserve_mean {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Target mean").size(11.5).color(muted));
+                ui.label(
+                    egui::RichText::new("Target mean")
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(muted),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(format!("{:.1}", self.dcs_state.custom_mean))
-                            .size(11.5)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .monospace()
                             .color(accent),
                     );
@@ -252,7 +267,7 @@ impl ImagePreviewState {
             .checkbox(
                 &mut preserve_sigma,
                 egui::RichText::new("Preserve original band spread")
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(text),
             )
             .changed()
@@ -266,11 +281,15 @@ impl ImagePreviewState {
         }
         if !preserve_sigma {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Target spread").size(11.5).color(muted));
+                ui.label(
+                    egui::RichText::new("Target spread")
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(muted),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(format!("{:.1}", self.dcs_state.custom_sigma))
-                            .size(11.5)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .monospace()
                             .color(accent),
                     );
@@ -295,7 +314,7 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("SAMPLING & CLIPPING")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
@@ -303,7 +322,7 @@ impl ImagePreviewState {
 
         ui.label(
             egui::RichText::new("Highlight clipping")
-                .size(11.5)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .color(muted),
         );
         let current_tol = self.dcs_state.params.tol;
@@ -333,7 +352,7 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("Statistics sampling")
-                .size(11.5)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .color(muted),
         );
         let current_stride = self.dcs_state.params.stride;
@@ -365,14 +384,14 @@ impl ImagePreviewState {
         ui.add_space(12.0);
         let hold = crate::secondary_button("Hold to view original", surface, palette);
         let hold_response = ui
-            .add_sized([ui.available_width(), 30.0], hold)
+            .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], hold)
             .on_hover_text("Press and hold to temporarily hide the stretch");
         self.dcs_state.is_holding_original = hold_response.is_pointer_button_down_on();
 
         ui.add_space(6.0);
         let apply = crate::action_button("Apply stretch (Enter)", success, palette);
         if ui
-            .add_sized([ui.available_width(), 32.0], apply)
+            .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], apply)
             .on_hover_text("Commit the current stretch to the image")
             .clicked()
         {
@@ -382,7 +401,10 @@ impl ImagePreviewState {
         ui.add_space(4.0);
         let refresh = crate::secondary_button("Recompute preview", surface, palette);
         if ui
-            .add_sized([ui.available_width(), 30.0], refresh)
+            .add_sized(
+                [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
+                refresh,
+            )
             .on_hover_text("Recalculate statistics and the color transform")
             .clicked()
         {
@@ -392,7 +414,10 @@ impl ImagePreviewState {
         if !self.undo_stack.is_empty() {
             ui.add_space(4.0);
             let undo = crate::secondary_button("Undo last edit (Ctrl+Z)", surface, palette);
-            if ui.add_sized([ui.available_width(), 30.0], undo).clicked() {
+            if ui
+                .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], undo)
+                .clicked()
+            {
                 self.undo();
                 self.update_decorrelation_stretch();
             }
@@ -416,13 +441,13 @@ impl ImagePreviewState {
 
         ui.label(
             egui::RichText::new("Stretch analysis")
-                .size(16.0)
+                .size(crate::ui_ext::HEADING_FONT_SIZE)
                 .strong()
                 .color(base_c),
         );
         ui.label(
             egui::RichText::new("Input statistics and the generated RGB transform.")
-                .size(11.5)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .color(f_low),
         );
 
@@ -431,7 +456,7 @@ impl ImagePreviewState {
             ui.add_space(12.0);
             ui.label(
                 egui::RichText::new("No analysis is available yet.")
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .italics()
                     .color(f_med),
             );
@@ -447,7 +472,7 @@ impl ImagePreviewState {
         ui.add_space(12.0);
         ui.label(
             egui::RichText::new("OVERVIEW")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(f_med),
         );
@@ -465,11 +490,15 @@ impl ImagePreviewState {
             ),
         ] {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(label).size(12.0).color(f_low));
+                ui.label(
+                    egui::RichText::new(label)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(f_low),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(value)
-                            .size(12.0)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .monospace()
                             .color(f_high),
                     );
@@ -482,43 +511,40 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("CHANNEL STATISTICS")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(f_med),
         );
         ui.add_space(4.0);
-        egui::Grid::new("dcs_channel_stats")
-            .num_columns(3)
-            .spacing(Vec2::new(14.0, 3.0))
-            .show(ui, |ui| {
-                ui.label(egui::RichText::new("Band").size(11.0).color(f_low));
-                ui.label(egui::RichText::new("Mean").size(11.0).color(f_low));
-                ui.label(egui::RichText::new("Spread").size(11.0).color(f_low));
-                ui.end_row();
-                for (index, band) in ["R", "G", "B"].into_iter().enumerate() {
-                    ui.label(egui::RichText::new(band).size(12.0).strong().color(base_c));
-                    ui.label(
-                        egui::RichText::new(format!("{:.1}", stats.mean[index]))
-                            .size(12.0)
-                            .monospace()
-                            .color(f_high),
-                    );
-                    ui.label(
-                        egui::RichText::new(format!("{:.1}", stats.sd[index]))
-                            .size(12.0)
-                            .monospace()
-                            .color(f_high),
-                    );
-                    ui.end_row();
-                }
+        for (index, band) in ["R", "G", "B"].into_iter().enumerate() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(band)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .strong()
+                        .color(base_c),
+                );
+                ui.label(
+                    egui::RichText::new(format!("Mean {:.1}", stats.mean[index]))
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .monospace()
+                        .color(f_high),
+                );
+                ui.label(
+                    egui::RichText::new(format!("Spread {:.1}", stats.sd[index]))
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .monospace()
+                        .color(f_high),
+                );
             });
+        }
 
         ui.add_space(12.0);
         ui.separator();
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("CORRELATION MATRIX")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(f_med),
         );
@@ -537,7 +563,7 @@ impl ImagePreviewState {
         ui.add_space(10.0);
         ui.label(
             egui::RichText::new("COVARIANCE MATRIX")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(f_med),
         );
@@ -547,7 +573,7 @@ impl ImagePreviewState {
                     "[{:>7.1}  {:>7.1}  {:>7.1}]",
                     row[0], row[1], row[2]
                 ))
-                .size(11.0)
+                .size(11.5)
                 .monospace()
                 .color(f_high),
             );
@@ -558,7 +584,7 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("PRINCIPAL COMPONENTS")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(f_med),
         );
@@ -566,13 +592,13 @@ impl ImagePreviewState {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(format!("λ{}", index + 1))
-                        .size(12.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .color(f_low),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(format!("{:.5}", value))
-                            .size(12.0)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .monospace()
                             .color(f_high),
                     );
@@ -583,7 +609,7 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("EIGENVECTORS")
-                .size(11.5)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(f_med),
         );
@@ -604,7 +630,7 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("RGB TRANSFORM")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(f_med),
         );
@@ -625,7 +651,7 @@ impl ImagePreviewState {
                 "Offset  [{:.1}, {:.1}, {:.1}]",
                 transform.offset[0], transform.offset[1], transform.offset[2]
             ))
-            .size(11.5)
+            .size(crate::ui_ext::BODY_FONT_SIZE)
             .monospace()
             .color(f_low),
         );
@@ -636,20 +662,24 @@ impl ImagePreviewState {
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new("CLIPPING LIMITS")
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .strong()
                     .color(f_med),
             );
             for (index, band) in ["R", "G", "B"].into_iter().enumerate() {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(band).size(12.0).color(f_low));
+                    ui.label(
+                        egui::RichText::new(band)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                            .color(f_low),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             egui::RichText::new(format!(
                                 "{:.1} – {:.1}",
                                 limits[index][0], limits[index][1]
                             ))
-                            .size(11.5)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .monospace()
                             .color(f_high),
                         );
@@ -664,14 +694,14 @@ impl ImagePreviewState {
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new("DIAGNOSTICS")
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .strong()
                     .color(diff_del),
             );
             for warning in &transform.warnings {
                 ui.label(
                     egui::RichText::new(format!("⚠ {}", warning))
-                        .size(11.5)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .color(diff_del),
                 );
             }
