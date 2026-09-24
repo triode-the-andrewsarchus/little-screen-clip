@@ -735,7 +735,10 @@ impl ImagePreviewState {
                 palette,
             );
             if ui
-                .add_sized([mode_button_width, 28.0], dimensions)
+                .add_sized(
+                    [mode_button_width, crate::ui_ext::CONTROL_HEIGHT],
+                    dimensions,
+                )
                 .clicked()
             {
                 self.resize_state.sub_tab = ResizeSubTab::Pixels;
@@ -747,7 +750,13 @@ impl ImagePreviewState {
                 self.resize_state.sub_tab == ResizeSubTab::FileSize,
                 palette,
             );
-            if ui.add_sized([mode_button_width, 28.0], file_size).clicked() {
+            if ui
+                .add_sized(
+                    [mode_button_width, crate::ui_ext::CONTROL_HEIGHT],
+                    file_size,
+                )
+                .clicked()
+            {
                 self.resize_state.sub_tab = ResizeSubTab::FileSize;
             }
         });
@@ -760,7 +769,7 @@ impl ImagePreviewState {
             ResizeSubTab::Pixels => {
                 ui.label(
                     egui::RichText::new("OUTPUT DIMENSIONS")
-                        .small()
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(text),
                 );
@@ -801,9 +810,17 @@ impl ImagePreviewState {
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("W").small().color(muted));
+                    ui.label(
+                        egui::RichText::new("W")
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                            .color(muted),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new("H").small().color(muted));
+                        ui.label(
+                            egui::RichText::new("H")
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
+                                .color(muted),
+                        );
                     });
                 });
 
@@ -825,7 +842,10 @@ impl ImagePreviewState {
                     palette,
                 );
                 if ui
-                    .add_sized([ui.available_width(), 28.0], lock_button)
+                    .add_sized(
+                        [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
+                        lock_button,
+                    )
                     .on_hover_text("Keep width and height proportional")
                     .clicked()
                 {
@@ -839,7 +859,7 @@ impl ImagePreviewState {
                 ui.add_space(12.0);
                 ui.label(
                     egui::RichText::new("SCALE PRESET")
-                        .small()
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(text),
                 );
@@ -872,7 +892,7 @@ impl ImagePreviewState {
                 ui.add_space(12.0);
                 ui.label(
                     egui::RichText::new("RESAMPLING")
-                        .small()
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(text),
                 );
@@ -900,7 +920,7 @@ impl ImagePreviewState {
                 ui.add_space(14.0);
                 let apply = crate::action_button("Apply resize (Enter)", accent, palette);
                 if ui
-                    .add_sized([ui.available_width(), 30.0], apply)
+                    .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], apply)
                     .on_hover_text("Resize the image to the dimensions above")
                     .clicked()
                 {
@@ -914,7 +934,7 @@ impl ImagePreviewState {
             ResizeSubTab::FileSize => {
                 ui.label(
                     egui::RichText::new("TARGET SIZE")
-                        .small()
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(text),
                 );
@@ -947,7 +967,11 @@ impl ImagePreviewState {
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Custom").small().color(text));
+                    ui.label(
+                        egui::RichText::new("Custom")
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                            .color(text),
+                    );
                     ui.add(
                         egui::DragValue::new(&mut self.resize_state.target_size_val)
                             .speed(0.1)
@@ -971,7 +995,7 @@ impl ImagePreviewState {
                 ui.add_space(12.0);
                 ui.label(
                     egui::RichText::new("OUTPUT FORMAT")
-                        .small()
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(text),
                 );
@@ -995,13 +1019,15 @@ impl ImagePreviewState {
                 if self.resize_state.is_optimizing {
                     ui.add_enabled(
                         false,
-                        crate::action_button("Optimizing…", surface, palette)
-                            .min_size(Vec2::new(ui.available_width(), 30.0)),
+                        crate::action_button("Optimizing…", surface, palette).min_size(Vec2::new(
+                            ui.available_width(),
+                            crate::ui_ext::CONTROL_HEIGHT,
+                        )),
                     );
                 } else {
                     let run = crate::action_button("Run optimizer", success, palette);
                     if ui
-                        .add_sized([ui.available_width(), 30.0], run)
+                        .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], run)
                         .on_hover_text("Fit quality and resolution to the target file size")
                         .clicked()
                     {
@@ -1019,7 +1045,7 @@ impl ImagePreviewState {
                                     .as_deref()
                                     .unwrap_or("Optimizing image file size…"),
                             )
-                            .small()
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .color(accent),
                         );
                     });
@@ -1029,7 +1055,7 @@ impl ImagePreviewState {
                     ui.add_space(8.0);
                     ui.label(
                         egui::RichText::new("OPTIMIZED RESULT")
-                            .small()
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .strong()
                             .color(success),
                     );
@@ -1050,17 +1076,23 @@ impl ImagePreviewState {
                             result.scale * 100.0,
                             result.quality
                         ))
-                        .small()
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .color(text),
                     );
                     ui.add_space(6.0);
 
                     let apply = crate::action_button("Apply to canvas", success, palette);
-                    if ui.add_sized([ui.available_width(), 28.0], apply).clicked() {
+                    if ui
+                        .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], apply)
+                        .clicked()
+                    {
                         self.apply_optimized_result();
                     }
                     let copy = crate::secondary_button("Copy to slot", surface, palette);
-                    if ui.add_sized([ui.available_width(), 28.0], copy).clicked() {
+                    if ui
+                        .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], copy)
+                        .clicked()
+                    {
                         self.copy_optimized_to_slot();
                     }
                 }
@@ -1072,7 +1104,10 @@ impl ImagePreviewState {
             ui.separator();
             ui.add_space(6.0);
             let undo = crate::secondary_button("Undo resize (Ctrl+Z)", surface, palette);
-            if ui.add_sized([ui.available_width(), 27.0], undo).clicked() {
+            if ui
+                .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], undo)
+                .clicked()
+            {
                 self.undo();
             }
         }
