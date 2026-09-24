@@ -370,7 +370,7 @@ impl AudioPreviewState {
 
             // Playback Mode selection
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Mode:").color(text_f_med).strong());
+                layout::AudioWorkspace::inline_label(ui, "Mode:", text_f_med);
                 let mode_width = crate::ui_ext::equal_button_width(
                     ui,
                     &["Normal (1.0x)", "Time Expansion", "Pitch Shift"],
@@ -406,7 +406,7 @@ impl AudioPreviewState {
             if self.hf_analysis.mode != HfPlaybackMode::Normal {
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Ratio:").color(text_f_med).strong());
+                    layout::AudioWorkspace::inline_label(ui, "Ratio:", text_f_med);
                     let available = HfAnalysisState::available_ratios(sample_rate);
                     for &r in available {
                         let is_sel = (self.hf_analysis.ratio - r).abs() < 1e-4;

@@ -156,15 +156,20 @@ impl AudioWorkspace {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_med))
             .rounding(Rounding::same(3.0))
-            .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+            .inner_margin(egui::Margin::symmetric(8.0, 0.0))
             .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new(format!("{label}:"))
-                        .size(14.0)
-                        .strong()
-                        .color(hex_to_c32(&palette.theme.f_high)),
-                );
+                Self::inline_label(ui, &format!("{label}:"), hex_to_c32(&palette.theme.f_high));
             });
+    }
+
+    /// A readable label centered against the shared control row height.
+    pub(super) fn inline_label(ui: &mut egui::Ui, label: &str, color: Color32) {
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let width = ui.fonts(|fonts| fonts.layout_no_wrap(label.to_owned(), font, color).size().x);
+        ui.add_sized(
+            [width + 4.0, Self::BUTTON_HEIGHT],
+            egui::Label::new(egui::RichText::new(label).strong().color(color)).wrap(false),
+        );
     }
 
     /// A full-width control band above the timeline. The label stays with its controls.
@@ -399,5 +404,40 @@ mod tests {
     #[test]
     fn audio_time_readout_keeps_hours() {
         assert_eq!(AudioWorkspace::clock_time(3661.25), "01:01:01.25");
+    }
+
+    #[test]
+    fn mode_label_centers_against_transport_control() {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut button_rect = None;
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    AudioWorkspace::inline_label(ui, "Mode:", Color32::WHITE);
+                    button_rect = Some(
+                        ui.add(AudioWorkspace::toggle_button_icon(
+                            None, "Normal", true, &palette,
+                        ))
+                        .rect,
+                    );
+                });
+            });
+        });
+        let control = button_rect.expect("mode button should render");
+        let (text_pos, text_size) = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.text() == "Mode:" => {
+                    Some((text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .expect("mode label should render");
+        assert_eq!(control.height(), crate::ui_ext::CONTROL_HEIGHT);
+        assert!((text_pos.y + text_size.y / 2.0 - control.center().y).abs() < 1.0);
     }
 }
