@@ -659,14 +659,14 @@ impl TextPreviewState {
                 Icon::Alert.ui(ui, 13.0, hex_to_c32(&palette.diff_del));
                 ui.label(
                     egui::RichText::new(format!("Regex error: {}", err))
-                        .small()
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .color(hex_to_c32(&palette.diff_del)),
                 );
             });
         } else if self.matches.is_empty() {
             ui.label(
                 egui::RichText::new("No matches")
-                    .small()
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(hex_to_c32(&palette.theme.f_low)),
             );
         } else {
@@ -677,7 +677,7 @@ impl TextPreviewState {
             );
             ui.label(
                 egui::RichText::new(count_text)
-                    .small()
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .strong()
                     .color(hex_to_c32(&palette.harmonies.complementary)),
             );
@@ -1404,7 +1404,7 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(lang.to_uppercase())
-                            .small()
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .color(hex_to_c32(&palette.theme.f_low)),
                     );
                 });
