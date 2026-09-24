@@ -864,18 +864,19 @@ impl AudioPreviewState {
         // 4. Footer Help Bar
         ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(
                         egui::RichText::new("Navigation:")
-                            .small()
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .strong()
                             .color(hex_to_c32(&palette.theme.f_med)),
                     );
                     ui.label(
-                        egui::RichText::new("[N] Normalize hovered region / track • [Shift+Wheel waveform] Gain • [Shift+Wheel spectrum top/bottom] Low/High Pass • [Ctrl+Wheel] Crossfade • [Ctrl+Middle-Click] Clear Crossfade • [Middle-Click] Reset Effect • [Middle-Drag] Pan • [Wheel / +/-] Zoom • [Drag] Select • [Ctrl+C] Copy • [Ctrl+S] Save")
-                            .small()
+                        egui::RichText::new("Wheel / +/-: Zoom • Drag: Select • Ctrl+C: Copy • Ctrl+S: Save")
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .color(hex_to_c32(&palette.theme.f_low)),
-                    );
+                    )
+                    .on_hover_text("N: Normalize hovered region / track • Shift+Wheel waveform: Gain • Shift+Wheel spectrum top/bottom: Low/High Pass • Ctrl+Wheel: Crossfade • Ctrl+Middle-Click: Clear Crossfade • Middle-Click: Reset Effect • Middle-Drag: Pan • Wheel / +/-: Zoom • Drag: Select • Ctrl+C: Copy • Ctrl+S: Save");
                 });
             });
 
@@ -1069,7 +1070,7 @@ impl AudioPreviewState {
                                 .fill(bg_col)
                                 .stroke(Stroke::new(1.0_f32, border_col))
                                 .rounding(Rounding::same(4.0))
-                                .min_size(Vec2::new(0.0, 30.0));
+                                .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                                 let btn_resp = ui.add(btn).on_hover_text(
                                     "Left-Click: focus & seek | Right-Click: preview slice (hold or toggle [L] to loop)",
@@ -1094,7 +1095,10 @@ impl AudioPreviewState {
                                     Some(del_fg),
                                     palette,
                                 )
-                                .min_size(Vec2::new(30.0, 30.0));
+                                .min_size(Vec2::new(
+                                    crate::ui_ext::CONTROL_HEIGHT,
+                                    crate::ui_ext::CONTROL_HEIGHT,
+                                ));
                                 if ui
                                     .add(del_btn)
                                     .on_hover_text(format!("Remove slice #{}", idx + 1))
