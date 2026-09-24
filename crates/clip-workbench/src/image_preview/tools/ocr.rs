@@ -346,7 +346,7 @@ impl ImagePreviewState {
 
         ui.label(
             egui::RichText::new("Extract text")
-                .size(16.0)
+                .size(crate::ui_ext::HEADING_FONT_SIZE)
                 .strong()
                 .color(accent),
         );
@@ -354,20 +354,20 @@ impl ImagePreviewState {
             egui::RichText::new(
                 "Extract editable text from the image or guide the model with a prompt.",
             )
-            .size(11.5)
+            .size(crate::ui_ext::BODY_FONT_SIZE)
             .color(muted),
         );
 
         ui.add_space(12.0);
         ui.label(
             egui::RichText::new("OCR ENGINE")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
         ui.add_space(4.0);
         let engine_width = ((ui.available_width() - 6.0) * 0.5).max(76.0);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             for (engine, label, tooltip) in [
                 (
                     OcrEngine::GlmOcr,
@@ -385,7 +385,7 @@ impl ImagePreviewState {
                 let foreground = contrast_text_c32(fill, Some(text), palette);
                 let button = egui::Button::new(
                     egui::RichText::new(label)
-                        .size(12.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(foreground),
                 )
@@ -397,7 +397,7 @@ impl ImagePreviewState {
                 .rounding(Rounding::same(4.0));
                 if ui
                     .add_enabled_ui(!self.ocr_state.in_progress, |ui| {
-                        ui.add_sized([engine_width, 30.0], button)
+                        ui.add_sized([engine_width, crate::ui_ext::CONTROL_HEIGHT], button)
                     })
                     .inner
                     .on_hover_text(tooltip)
@@ -413,21 +413,22 @@ impl ImagePreviewState {
                 OcrEngine::GlmOcr => "Best for layouts, handwriting, and contextual recognition.",
                 OcrEngine::Tesseract => "Fastest for clean, high-contrast printed text.",
             })
-            .size(11.0)
+            .size(crate::ui_ext::BODY_FONT_SIZE)
             .color(muted),
         );
 
         ui.add_space(12.0);
         ui.label(
             egui::RichText::new("Recognition prompt")
-                .size(13.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
         ui.add_space(3.0);
         ui.add_sized(
-            [ui.available_width(), 92.0],
+            [ui.available_width(), 120.0],
             egui::TextEdit::multiline(&mut self.ocr_state.custom_prompt)
+                .font(egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE))
                 .hint_text("Optional instructions, for example:\nPreserve the table layout\nReturn only handwritten notes")
                 .desired_width(f32::INFINITY)
                 .desired_rows(5),
@@ -438,7 +439,7 @@ impl ImagePreviewState {
             egui::RichText::new(
                 "Leave blank for general text recognition. Ctrl+Enter runs while editing.",
             )
-            .size(11.0)
+            .size(crate::ui_ext::BODY_FONT_SIZE)
             .color(muted),
         );
 
@@ -446,7 +447,10 @@ impl ImagePreviewState {
         if self.ocr_state.in_progress {
             let cancel = crate::danger_button("Cancel OCR (Esc)", danger, palette);
             if ui
-                .add_sized([ui.available_width(), 32.0], cancel)
+                .add_sized(
+                    [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
+                    cancel,
+                )
                 .on_hover_text("Stop OCR and release the worker process")
                 .clicked()
             {
@@ -455,7 +459,7 @@ impl ImagePreviewState {
         } else {
             let run = crate::action_button("Run OCR", accent, palette);
             if ui
-                .add_sized([ui.available_width(), 32.0], run)
+                .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], run)
                 .on_hover_text("Recognize text using the selected engine")
                 .clicked()
             {
@@ -468,7 +472,7 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("PROCESSING")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
@@ -478,7 +482,7 @@ impl ImagePreviewState {
                 ui.add(egui::Spinner::new().size(14.0).color(accent));
                 ui.label(
                     egui::RichText::new("Recognizing text…")
-                        .size(12.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(accent),
                 );
@@ -490,19 +494,23 @@ impl ImagePreviewState {
                         .as_deref()
                         .unwrap_or("Preparing the OCR model…"),
                 )
-                .size(11.5)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .color(muted),
             );
         } else {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Selected").size(12.0).color(muted));
+                ui.label(
+                    egui::RichText::new("Selected")
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(muted),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(match self.ocr_state.engine {
                             OcrEngine::GlmOcr => "GLM-OCR 0.9B",
                             OcrEngine::Tesseract => "Tesseract",
                         })
-                        .size(12.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(text),
                     );
@@ -510,7 +518,7 @@ impl ImagePreviewState {
             });
             ui.label(
                 egui::RichText::new("The recognized text will appear in the output pane.")
-                    .size(11.5)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(muted),
             );
         }
@@ -521,12 +529,16 @@ impl ImagePreviewState {
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new("OCR FAILED")
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .strong()
                     .color(danger),
             );
             ui.add_space(3.0);
-            ui.label(egui::RichText::new(error).size(11.5).color(danger));
+            ui.label(
+                egui::RichText::new(error)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(danger),
+            );
         }
     }
 
@@ -544,30 +556,38 @@ impl ImagePreviewState {
 
         ui.label(
             egui::RichText::new("OCR output")
-                .size(16.0)
+                .size(crate::ui_ext::HEADING_FONT_SIZE)
                 .strong()
                 .color(accent),
         );
         ui.label(
             egui::RichText::new("Review, edit, or copy the recognized text.")
-                .size(11.5)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .color(muted),
         );
 
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Characters").size(12.0).color(muted));
+            ui.label(
+                egui::RichText::new("Characters")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(muted),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(self.ocr_state.extracted_text.chars().count().to_string())
-                        .size(12.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .monospace()
                         .color(text),
                 );
             });
         });
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Lines").size(12.0).color(muted));
+            ui.label(
+                egui::RichText::new("Lines")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(muted),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(if has_output {
@@ -575,14 +595,18 @@ impl ImagePreviewState {
                     } else {
                         "0".to_string()
                     })
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .monospace()
                     .color(text),
                 );
             });
         });
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Duration").size(12.0).color(muted));
+            ui.label(
+                egui::RichText::new("Duration")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(muted),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(
@@ -591,7 +615,7 @@ impl ImagePreviewState {
                             .map(|ms| format!("{:.2}s", ms as f64 / 1000.0))
                             .unwrap_or_else(|| "—".to_string()),
                     )
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .monospace()
                     .color(text),
                 );
@@ -602,7 +626,7 @@ impl ImagePreviewState {
         let copy = crate::action_button("Copy all text", accent, palette);
         if ui
             .add_enabled_ui(has_output, |ui| {
-                ui.add_sized([ui.available_width(), 30.0], copy)
+                ui.add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], copy)
             })
             .inner
             .clicked()
@@ -614,10 +638,12 @@ impl ImagePreviewState {
         ui.add_space(4.0);
         let slot_width = ((ui.available_width() - 6.0) * 0.5).max(82.0);
         let output_for_slots = self.ocr_state.extracted_text.clone();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let left = crate::secondary_button("Left hand", surface, palette);
             if ui
-                .add_enabled_ui(has_output, |ui| ui.add_sized([slot_width, 28.0], left))
+                .add_enabled_ui(has_output, |ui| {
+                    ui.add_sized([slot_width, crate::ui_ext::CONTROL_HEIGHT], left)
+                })
                 .inner
                 .on_hover_text("Push recognized text to the Left Hand slot")
                 .clicked()
@@ -627,7 +653,9 @@ impl ImagePreviewState {
 
             let right = crate::secondary_button("Right hand", surface, palette);
             if ui
-                .add_enabled_ui(has_output, |ui| ui.add_sized([slot_width, 28.0], right))
+                .add_enabled_ui(has_output, |ui| {
+                    ui.add_sized([slot_width, crate::ui_ext::CONTROL_HEIGHT], right)
+                })
                 .inner
                 .on_hover_text("Push recognized text to the Right Hand slot")
                 .clicked()
@@ -642,14 +670,17 @@ impl ImagePreviewState {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("RECOGNIZED TEXT")
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .strong()
                     .color(text),
             );
             if has_output {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add(crate::compact_toolbar_button("Clear", surface, palette))
+                        .add_sized(
+                            [64.0, crate::ui_ext::CONTROL_HEIGHT],
+                            crate::compact_toolbar_button("Clear", surface, palette),
+                        )
                         .clicked()
                     {
                         self.ocr_state.extracted_text.clear();
@@ -669,7 +700,7 @@ impl ImagePreviewState {
                 ui.add_sized(
                     [ui.available_width(), editor_height],
                     egui::TextEdit::multiline(&mut self.ocr_state.extracted_text)
-                        .font(egui::TextStyle::Monospace)
+                        .font(egui::FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
                         .hint_text(if self.ocr_state.in_progress {
                             "OCR is running…"
                         } else {

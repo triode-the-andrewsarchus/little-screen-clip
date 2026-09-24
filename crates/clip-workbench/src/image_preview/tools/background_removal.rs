@@ -227,7 +227,7 @@ impl ImagePreviewState {
 
         ui.label(
             egui::RichText::new("Remove background")
-                .size(20.0)
+                .size(crate::ui_ext::HEADING_FONT_SIZE)
                 .strong()
                 .color(accent),
         );
