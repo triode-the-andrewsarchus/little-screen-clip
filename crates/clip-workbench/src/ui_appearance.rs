@@ -30,13 +30,13 @@ pub struct WorkbenchColors {
 impl WorkbenchColors {
     pub fn from_palette(palette: &AppPalette) -> Self {
         Self {
-            canvas: hex_to_c32(&palette.background),
-            panel: hex_to_c32(&palette.prior_card_bg),
-            recessed: hex_to_c32(&palette.undo_card_bg),
-            raised: hex_to_c32(&palette.hero_card_bg),
-            text_primary: hex_to_c32(&palette.title_color),
-            text_secondary: hex_to_c32(&palette.subtitle_color),
-            text_muted: hex_to_c32(&palette.theme.f_low),
+            canvas: hex_to_c32(&palette.colors.canvas),
+            panel: hex_to_c32(&palette.colors.surface_panel),
+            recessed: hex_to_c32(&palette.colors.surface_recessed),
+            raised: hex_to_c32(&palette.colors.surface_raised),
+            text_primary: hex_to_c32(&palette.colors.text_primary),
+            text_secondary: hex_to_c32(&palette.colors.text_secondary),
+            text_muted: hex_to_c32(&palette.colors.text_muted),
             border: hex_to_c32(&palette.chrome_border),
             accent: hex_to_c32(&palette.left_hand_border),
             focus: hex_to_c32(&palette.cursor_border),

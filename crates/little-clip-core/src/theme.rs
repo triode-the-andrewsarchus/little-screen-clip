@@ -5,6 +5,47 @@ use serde::{Deserialize, Serialize};
 use crate::color::parse_hex_color_rgba_or_white as parse_hex_color_rgba;
 use crate::config::WorkbenchAppearance;
 
+/// Semantic base colors shared by the workbench and little-screen display.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BaseColors {
+    pub canvas: String,
+    pub surface_raised: String,
+    pub surface_panel: String,
+    pub surface_recessed: String,
+    pub surface_inverse: String,
+    pub text_primary: String,
+    pub text_secondary: String,
+    pub text_muted: String,
+    pub text_inverse: String,
+}
+
+impl BaseColors {
+    pub fn for_appearance(appearance: WorkbenchAppearance) -> Self {
+        let (canvas, primary, secondary, muted, inverse_text, raised, panel, recessed, inverse) =
+            match appearance {
+                WorkbenchAppearance::Dark => (
+                    "#151c24", "#f5f2e9", "#d6dce0", "#aab6c1", "#111923", "#243440", "#273541",
+                    "#1e2a35", "#ffb385",
+                ),
+                WorkbenchAppearance::Light => (
+                    "#f4f2ea", "#17242f", "#45505b", "#586977", "#fffdf7", "#fffaf1", "#e3e7e7",
+                    "#e9edeb", "#a44a37",
+                ),
+            };
+        Self {
+            canvas: canvas.into(),
+            surface_raised: raised.into(),
+            surface_panel: panel.into(),
+            surface_recessed: recessed.into(),
+            surface_inverse: inverse.into(),
+            text_primary: primary.into(),
+            text_secondary: secondary.into(),
+            text_muted: muted.into(),
+            text_inverse: inverse_text.into(),
+        }
+    }
+}
+
 /// Transitional base-color container for the fixed Light/Dark palettes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Theme {
@@ -312,6 +353,7 @@ impl DerivedHarmonies {
 pub struct AppPalette {
     pub theme_name: String,
     pub is_dark: bool,
+    pub colors: BaseColors,
     pub theme: Theme,
     pub harmonies: DerivedHarmonies,
 
@@ -370,36 +412,30 @@ impl Default for AppPalette {
 
 impl AppPalette {
     /// Fixed application colors shared by the workbench and little-screen renderer.
-    /// `Theme` is temporarily used as the palette input while legacy callers migrate.
+    /// `Theme` remains as an adapter while legacy callers migrate to semantic roles.
     pub fn for_appearance(appearance: WorkbenchAppearance) -> Self {
-        let (background, f_high, f_med, f_low, f_inv, b_high, b_med, b_low, b_inv, link) =
-            match appearance {
-                WorkbenchAppearance::Dark => (
-                    "#151c24", "#f5f2e9", "#d6dce0", "#aab6c1", "#111923", "#243440", "#273541",
-                    "#1e2a35", "#ffb385", "#79b8ec",
-                ),
-                WorkbenchAppearance::Light => (
-                    "#f4f2ea", "#17242f", "#45505b", "#586977", "#fffdf7", "#fffaf1", "#e3e7e7",
-                    "#e9edeb", "#a44a37", "#215c84",
-                ),
-            };
+        let colors = BaseColors::for_appearance(appearance);
+        let link = match appearance {
+            WorkbenchAppearance::Dark => "#79b8ec",
+            WorkbenchAppearance::Light => "#215c84",
+        };
         let theme = Theme {
             name: format!("fixed-{appearance:?}").to_lowercase(),
-            background: background.into(),
-            f_high: f_high.into(),
-            f_med: f_med.into(),
-            f_low: f_low.into(),
-            f_inv: f_inv.into(),
-            b_high: b_high.into(),
-            b_med: b_med.into(),
-            b_low: b_low.into(),
-            b_inv: b_inv.into(),
+            background: colors.canvas.clone(),
+            f_high: colors.text_primary.clone(),
+            f_med: colors.text_secondary.clone(),
+            f_low: colors.text_muted.clone(),
+            f_inv: colors.text_inverse.clone(),
+            b_high: colors.surface_raised.clone(),
+            b_med: colors.surface_panel.clone(),
+            b_low: colors.surface_recessed.clone(),
+            b_inv: colors.surface_inverse.clone(),
         };
-        Self::from_fixed_colors(&theme, link)
+        Self::from_fixed_colors(colors, theme, link)
     }
 
     /// Resolve the two built-in appearances while callers migrate off `Theme` fields.
-    fn from_fixed_colors(theme: &Theme, link: &str) -> Self {
+    fn from_fixed_colors(colors: BaseColors, theme: Theme, link: &str) -> Self {
         let is_dark = theme.is_dark();
 
         // Base accent: prefer f_med, fall back to b_inv if f_med is grayscale
@@ -438,6 +474,7 @@ impl AppPalette {
         Self {
             theme_name: theme.name.clone(),
             is_dark,
+            colors,
             theme: theme.clone(),
             harmonies: harmonies.clone(),
 
@@ -628,6 +665,24 @@ impl AppPalette {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_semantic_colors_match_the_transitional_palette_fields() {
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
+            let colors = &palette.colors;
+            let legacy = &palette.theme;
+            assert_eq!(colors.canvas, legacy.background);
+            assert_eq!(colors.surface_raised, legacy.b_high);
+            assert_eq!(colors.surface_panel, legacy.b_med);
+            assert_eq!(colors.surface_recessed, legacy.b_low);
+            assert_eq!(colors.surface_inverse, legacy.b_inv);
+            assert_eq!(colors.text_primary, legacy.f_high);
+            assert_eq!(colors.text_secondary, legacy.f_med);
+            assert_eq!(colors.text_muted, legacy.f_low);
+            assert_eq!(colors.text_inverse, legacy.f_inv);
+        }
+    }
 
     #[test]
     fn test_oklab_roundtrip() {
