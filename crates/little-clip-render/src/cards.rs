@@ -50,13 +50,13 @@ impl ScreenRenderer {
         // Fill background
         if let Some(cr) = Rect::from_xywh(rect_x, rect_y, rect_w, rect_h) {
             let bg_hex = match slot_id {
-                SlotId::Undo => &self.palette.undo_card_bg,
-                SlotId::LeftHand | SlotId::RightHand => &self.palette.hero_card_bg,
+                SlotId::Undo => &self.palette.colors.surface_recessed,
+                SlotId::LeftHand | SlotId::RightHand => &self.palette.colors.surface_raised,
                 SlotId::LeftPrior1
                 | SlotId::LeftPrior2
                 | SlotId::LeftPrior3
                 | SlotId::RightPrior2
-                | SlotId::RightPrior1 => &self.palette.prior_card_bg,
+                | SlotId::RightPrior1 => &self.palette.colors.surface_panel,
             };
             let (bg_r, bg_g, bg_b, bg_a) = parse_hex_color(bg_hex);
             let mut paint = Paint::default();
@@ -134,8 +134,8 @@ impl ScreenRenderer {
         is_hero: bool,
         border_color: Color,
     ) {
-        let (t_r, t_g, t_b, t_a) = parse_hex_color(&self.palette.title_color);
-        let (s_r, s_g, s_b, s_a) = parse_hex_color(&self.palette.subtitle_color);
+        let (t_r, t_g, t_b, t_a) = parse_hex_color(&self.palette.colors.text_primary);
+        let (s_r, s_g, s_b, s_a) = parse_hex_color(&self.palette.colors.text_secondary);
         let (u_r, u_g, u_b, u_a) = parse_hex_color(&self.palette.url_color);
 
         let content_x = rx + 14.0;
@@ -1166,8 +1166,8 @@ impl ScreenRenderer {
     ) -> f32 {
         use crate::markdown::MarkdownSpan;
         let url_color = self.color_from_hex(&self.palette.url_color);
-        let title_color = self.color_from_hex(&self.palette.title_color);
-        let italic_color = self.color_from_hex_alpha(&self.palette.body_color, 240);
+        let title_color = self.color_from_hex(&self.palette.colors.text_primary);
+        let italic_color = self.color_from_hex_alpha(&self.palette.colors.text_muted, 240);
         let code_color = self.color_from_hex(&self.palette.undo_border);
 
         for span in spans {
@@ -1265,7 +1265,7 @@ impl ScreenRenderer {
         elision_color: Color,
     ) {
         use crate::markdown::MarkdownLine;
-        let body_color = self.color_from_hex(&self.palette.body_color);
+        let body_color = self.color_from_hex(&self.palette.colors.text_muted);
         let content_x = rx + 14.0;
         let max_content_w = (rw - 28.0).max(10.0);
         let clip_right = rx + rw - 10.0;

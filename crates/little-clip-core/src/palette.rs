@@ -329,12 +329,6 @@ pub struct AppPalette {
     pub colors: BaseColors,
     pub harmonies: DerivedHarmonies,
 
-    // Core Canvas & Cards
-    pub background: String,
-    pub hero_card_bg: String,
-    pub prior_card_bg: String,
-    pub undo_card_bg: String,
-
     // Borders & Accents
     pub undo_border: String,
     pub chrome_border: String,
@@ -349,16 +343,7 @@ pub struct AppPalette {
     pub selected_border: String,
 
     // Text Typography
-    pub title_color: String,
-    pub subtitle_color: String,
-    pub body_color: String,
     pub url_color: String,
-
-    // UI Badges & Overlays
-    pub debug_badge_bg: String,
-    pub debug_badge_text: String,
-    pub tag_pill_bg: String,
-    pub tag_pill_text: String,
 
     // Functional Accents (Diffs, Status)
     pub diff_add: String,
@@ -423,11 +408,6 @@ impl AppPalette {
             is_dark,
             harmonies: harmonies.clone(),
 
-            background: colors.canvas.clone(),
-            hero_card_bg: colors.surface_raised.clone(),
-            prior_card_bg: colors.surface_panel.clone(),
-            undo_card_bg: colors.surface_recessed.clone(),
-
             undo_border: harmonies.warm_attention.clone(),
             chrome_border: "#6f8595".to_owned(),
             left_hand_border: harmonies.base.clone(),
@@ -443,15 +423,7 @@ impl AppPalette {
             cursor_border: harmonies.tetradic_2.clone(),
             selected_border: harmonies.triadic_1.clone(),
 
-            title_color: colors.text_primary.clone(),
-            subtitle_color: colors.text_secondary.clone(),
-            body_color: colors.text_muted.clone(),
             url_color: link.to_owned(),
-
-            debug_badge_bg: colors.surface_inverse.clone(),
-            debug_badge_text: colors.text_inverse.clone(),
-            tag_pill_bg: colors.surface_recessed.clone(),
-            tag_pill_text: colors.text_secondary.clone(),
 
             diff_add,
             diff_del,
@@ -617,8 +589,9 @@ mod tests {
         assert!((contrast_ratio((0, 0, 0), (255, 255, 255)) - 21.0).abs() < 0.1);
         for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
             let palette = AppPalette::for_appearance(appearance);
-            let fg = palette.contrast_pair_fg(&palette.background, Some(&palette.title_color));
-            let (br, bg, bb, _) = parse_hex_color_rgba(&palette.background);
+            let fg = palette
+                .contrast_pair_fg(&palette.colors.canvas, Some(&palette.colors.text_primary));
+            let (br, bg, bb, _) = parse_hex_color_rgba(&palette.colors.canvas);
             let (fr, fg, fb, _) = parse_hex_color_rgba(&fg);
             assert!(contrast_ratio((br, bg, bb), (fr, fg, fb)) >= 4.5);
         }
@@ -644,9 +617,9 @@ mod tests {
                 &palette.diff_del,
                 &palette.colors.surface_panel,
                 &palette.colors.surface_recessed,
-                &palette.undo_card_bg,
-                &palette.hero_card_bg,
-                &palette.prior_card_bg,
+                &palette.colors.surface_recessed,
+                &palette.colors.surface_raised,
+                &palette.colors.surface_panel,
             ];
 
             for surface in surfaces {

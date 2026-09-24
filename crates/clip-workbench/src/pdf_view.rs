@@ -406,7 +406,7 @@ impl PdfEditorState {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
         let warn_accent = crate::hex_to_c32(&palette.undo_border);
-        let warn_bg = crate::hex_to_c32(&palette.undo_card_bg);
+        let warn_bg = crate::hex_to_c32(&palette.colors.surface_recessed);
 
         egui::Frame::none()
             .fill(colors.canvas)

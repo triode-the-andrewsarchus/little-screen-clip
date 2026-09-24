@@ -292,9 +292,9 @@ impl WorkbenchApp {
 
     fn render_workbench_header(&mut self, ctx: &egui::Context) {
         // Top Header Panel: Mirror of Trofeo Screen + Tabs
-        let header_bg = hex_to_c32(&self.ui_palette.background);
+        let header_bg = hex_to_c32(&self.ui_palette.colors.canvas);
         let brand_color = hex_to_c32(&self.ui_palette.left_hand_border);
-        let sub_color = hex_to_c32(&self.ui_palette.subtitle_color);
+        let sub_color = hex_to_c32(&self.ui_palette.colors.text_secondary);
 
         egui::TopBottomPanel::top("header_panel")
             .frame(
@@ -832,7 +832,7 @@ impl eframe::App for WorkbenchApp {
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
-            ui.visuals_mut().override_text_color = Some(hex_to_c32(&self.ui_palette.title_color));
+            ui.visuals_mut().override_text_color = Some(hex_to_c32(&self.ui_palette.colors.text_primary));
 
             if self.view != WorkbenchView::Palette {
                 self.palette_search_needs_focus = true;

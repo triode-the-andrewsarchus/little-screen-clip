@@ -844,7 +844,7 @@ impl NodeCanvasState {
                                     let close_btn = crate::ui_ext::danger_button_icon(
                                         Some(Icon::Close),
                                         "Close",
-                                        hex_to_c32(&palette.undo_card_bg),
+                                        hex_to_c32(&palette.colors.surface_recessed),
                                         palette,
                                     )
                                     .stroke(egui::Stroke::new(

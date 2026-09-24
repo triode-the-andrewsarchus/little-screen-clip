@@ -394,7 +394,7 @@ impl ScreenRenderer {
             .ok_or_else(|| RenderError::ImageEncode("Failed to allocate pixmap".to_string()))?;
 
         // Background: fixed canvas color for the shared appearance mode.
-        let (bg_r, bg_g, bg_b, bg_a) = parse_hex_color(&self.palette.background);
+        let (bg_r, bg_g, bg_b, bg_a) = parse_hex_color(&self.palette.colors.canvas);
         pixmap.fill(Color::from_rgba8(bg_r, bg_g, bg_b, bg_a));
 
         // Render slots according to canonical layout
@@ -428,12 +428,14 @@ impl ScreenRenderer {
             let badge_w = 460.0;
             let badge_h = 32.0;
             if let Some(br) = Rect::from_xywh(badge_x, badge_y, badge_w, badge_h) {
-                let (br_r, br_g, br_b, br_a) = parse_hex_color(&self.palette.debug_badge_bg);
+                let (br_r, br_g, br_b, br_a) =
+                    parse_hex_color(&self.palette.colors.surface_inverse);
                 let mut paint = Paint::default();
                 paint.set_color(Color::from_rgba8(br_r, br_g, br_b, br_a));
                 pixmap.fill_rect(br, &paint, Transform::identity(), None);
 
-                let (str_r, str_g, str_b, str_a) = parse_hex_color(&self.palette.debug_badge_text);
+                let (str_r, str_g, str_b, str_a) =
+                    parse_hex_color(&self.palette.colors.text_inverse);
                 let mut stroke_paint = Paint::default();
                 stroke_paint.set_color(Color::from_rgba8(
                     str_r,
