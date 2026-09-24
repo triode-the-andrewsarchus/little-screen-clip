@@ -670,7 +670,7 @@ impl MidiViewerState {
                             }
 
                             let stop_btn = crate::ui_ext::action_button_icon(Some(Icon::Stop), "Stop", b_med, palette)
-                                .min_size(egui::Vec2::new(0.0, 26.0))
+                                .min_size(egui::Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT))
                                 .stroke(Stroke::new(1.0_f32, b_low));
                             if ui.add(stop_btn).clicked() {
                                 stop_clicked = true;
@@ -681,7 +681,7 @@ impl MidiViewerState {
                             ui.label(
                                 egui::RichText::new(time_text)
                                     .monospace()
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .strong()
                                     .color(accent),
                             );
@@ -706,7 +706,7 @@ impl MidiViewerState {
                                 (false, None) => "Copy MIDI [Ctrl+C]".to_string(),
                             };
                             let copy_btn = crate::ui_ext::secondary_button_icon(Some(Icon::Copy), copy_label, b_med, palette)
-                                .min_size(egui::Vec2::new(0.0, 26.0));
+                                .min_size(egui::Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
                             if ui.add(copy_btn).on_hover_text("Export selected region (or full score) as .mid to Left Hand & clipboard").clicked() {
                                 copy_clicked = true;
                             }
@@ -718,12 +718,12 @@ impl MidiViewerState {
                                     let max_s = s.max(e);
                                     ui.label(
                                         egui::RichText::new(format!("Sel: {:.2}s - {:.2}s", min_s, max_s))
-                                            .small()
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .strong()
                                             .color(accent),
                                     );
-                                    let x_btn = egui::Button::new(egui::RichText::new("✕").small())
-                                        .min_size(egui::Vec2::new(18.0, 18.0));
+                                    let x_btn = egui::Button::new(egui::RichText::new("✕").size(crate::ui_ext::BODY_FONT_SIZE))
+                                        .min_size(egui::Vec2::new(crate::ui_ext::CONTROL_HEIGHT, crate::ui_ext::CONTROL_HEIGHT));
                                     if ui.add(x_btn).on_hover_text("Clear selection [Esc]").clicked() {
                                         clear_sel_clicked = true;
                                     }
@@ -735,12 +735,12 @@ impl MidiViewerState {
                                 let st_name = self.data.track_names.get(st).cloned().unwrap_or_else(|| format!("Track {}", st + 1));
                                 ui.label(
                                     egui::RichText::new(format!("Solo: {st_name}"))
-                                        .small()
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                         .strong()
                                         .color(pause_color),
                                 );
-                                let unsolo_btn = egui::Button::new(egui::RichText::new("Unsolo").small())
-                                    .min_size(egui::Vec2::new(0.0, 20.0));
+                                let unsolo_btn = egui::Button::new(egui::RichText::new("Unsolo").size(crate::ui_ext::BODY_FONT_SIZE))
+                                    .min_size(egui::Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
                                 if ui.add(unsolo_btn).on_hover_text("Unsolo and preview/copy all tracks").clicked() {
                                     clear_solo_clicked = true;
                                 }
@@ -785,13 +785,14 @@ impl MidiViewerState {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(
                             egui::RichText::new("Tracks:")
-                                .small()
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .strong()
                                 .color(f_low),
                         );
                         if self.solo_track.is_some() {
-                            let all_btn = egui::Button::new(egui::RichText::new("All Tracks").small().strong())
-                                .fill(b_med);
+                            let all_btn = egui::Button::new(egui::RichText::new("All Tracks").size(crate::ui_ext::BODY_FONT_SIZE).strong())
+                                .fill(b_med)
+                                .min_size(egui::Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
                             if ui.add(all_btn).on_hover_text("Clear solo and show/copy all tracks").clicked() {
                                 clear_solo_clicked = true;
                             }
@@ -830,7 +831,7 @@ impl MidiViewerState {
                             let track_label_resp = ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(format!("● {} ({})", t_name, note_count))
-                                        .small()
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                         .color(track_label_col),
                                 )
                                 .sense(egui::Sense::click()),
@@ -838,12 +839,12 @@ impl MidiViewerState {
 
                             let solo_btn = egui::Button::new(
                                 egui::RichText::new(if is_solo { "SOLO" } else { "Solo" })
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .strong()
                                     .color(solo_text_col),
                             )
                             .fill(solo_fill)
-                            .min_size(egui::Vec2::new(0.0, 18.0));
+                            .min_size(egui::Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                             let solo_btn_resp = ui.add(solo_btn);
 
