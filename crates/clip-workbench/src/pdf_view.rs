@@ -472,7 +472,7 @@ impl PdfEditorState {
                                             |ui| {
                                                 ui.label(
                                                     egui::RichText::new(format!("{} total", page_count))
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .color(f_low),
                                                 );
                                             },
@@ -555,7 +555,7 @@ impl PdfEditorState {
                                                                             "Page {}",
                                                                             page_num
                                                                         ))
-                                                                        .small()
+                                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                                         .strong()
                                                                         .color(if is_selected {
                                                                             accent
@@ -611,7 +611,7 @@ impl PdfEditorState {
                                                     "• {} × {} px",
                                                     page.width, page.height
                                                 ))
-                                                .small()
+                                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                                 .color(f_low),
                                             );
 
