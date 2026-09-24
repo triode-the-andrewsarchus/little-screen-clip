@@ -393,7 +393,7 @@ impl ImagePreviewState {
             );
             ui.label(
                 egui::RichText::new("Vector screenshot markup tools")
-                    .small()
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(f_med),
             );
             ui.add_space(8.0);
@@ -402,7 +402,7 @@ impl ImagePreviewState {
                 egui::RichText::new("SHAPES & TOOLS")
                     .extra_letter_spacing(1.0)
                     .strong()
-                    .small()
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(f_med),
             );
             ui.add_space(4.0);
@@ -421,7 +421,7 @@ impl ImagePreviewState {
             for tool in tools {
                 let is_active = self.markup_state.active_tool == tool;
                 let btn = crate::ui_ext::mode_tab_button_icon(Some(tool.icon()), tool.label(), is_active, palette)
-                    .min_size(Vec2::new(ui.available_width(), 28.0));
+                    .min_size(Vec2::new(ui.available_width(), crate::ui_ext::CONTROL_HEIGHT));
 
                 if ui.add(btn).clicked() {
                     self.markup_state.active_tool = tool;
@@ -440,7 +440,7 @@ impl ImagePreviewState {
                 egui::RichText::new("COLOR PALETTE")
                     .extra_letter_spacing(1.0)
                     .strong()
-                    .small()
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(f_med),
             );
             ui.add_space(6.0);
@@ -480,7 +480,7 @@ impl ImagePreviewState {
 
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Custom:").small().color(f_med));
+                ui.label(egui::RichText::new("Custom:").size(crate::ui_ext::BODY_FONT_SIZE).color(f_med));
                 let mut custom_c = self.markup_state.active_color;
                 if egui::color_picker::color_edit_button_srgba(
                     ui,
@@ -506,12 +506,12 @@ impl ImagePreviewState {
                 egui::RichText::new("SHORTCUTS")
                     .extra_letter_spacing(1.0)
                     .strong()
-                    .small()
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(f_med),
             );
             ui.label(
                 egui::RichText::new("• Del / Backspace: Delete item\n• Esc: Deselect / Exit edit\n• Enter: Flatten / Burn")
-                    .small()
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(hex_to_c32(&palette.theme.f_low)),
             );
         });
@@ -538,14 +538,18 @@ impl ImagePreviewState {
                 egui::RichText::new("STYLE & SIZING")
                     .extra_letter_spacing(1.0)
                     .strong()
-                    .small()
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(f_med),
             );
             ui.add_space(4.0);
 
             // Stroke Width Slider
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Stroke:").small().color(f_med));
+                ui.label(
+                    egui::RichText::new("Stroke:")
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(f_med),
+                );
                 let mut stroke_w = self.markup_state.active_stroke_width;
                 if ui
                     .add(egui::Slider::new(&mut stroke_w, 1.0..=32.0).suffix(" px"))
@@ -562,7 +566,11 @@ impl ImagePreviewState {
 
             // Font Size Slider
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Font:").small().color(f_med));
+                ui.label(
+                    egui::RichText::new("Font:")
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(f_med),
+                );
                 let mut font_sz = self.markup_state.active_font_size;
                 if ui
                     .add(egui::Slider::new(&mut font_sz, 10.0..=200.0).suffix(" px"))
@@ -602,7 +610,11 @@ impl ImagePreviewState {
 
             // Step Badge counter
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Next Badge:").small().color(f_med));
+                ui.label(
+                    egui::RichText::new("Next Badge:")
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(f_med),
+                );
                 let next_num = self.markup_state.sync_next_badge_number();
                 ui.label(
                     egui::RichText::new(format!("#{next_num}"))
@@ -620,7 +632,11 @@ impl ImagePreviewState {
 
             // Badge Size Slider
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Badge:").small().color(f_med));
+                ui.label(
+                    egui::RichText::new("Badge:")
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(f_med),
+                );
                 let mut badge_r = self.markup_state.active_badge_radius;
                 if ui
                     .add(egui::Slider::new(&mut badge_r, 12.0..=300.0).suffix(" px"))
@@ -649,13 +665,13 @@ impl ImagePreviewState {
                     egui::RichText::new("LAYERS")
                         .extra_letter_spacing(1.0)
                         .strong()
-                        .small()
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .color(f_med),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(format!("{} items", self.markup_state.items.len()))
-                            .small()
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .color(f_med),
                     );
                 });
@@ -673,7 +689,7 @@ impl ImagePreviewState {
                                 egui::RichText::new(
                                     "No markup shapes placed.\nClick & drag on image to draw.",
                                 )
-                                .small()
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(hex_to_c32(&palette.theme.f_low)),
                             );
                         });
