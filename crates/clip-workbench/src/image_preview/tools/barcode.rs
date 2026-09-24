@@ -90,13 +90,14 @@ impl ImagePreviewState {
                         } else {
                             "Rescan (Enter)"
                         })
-                        .small()
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(rescan_fg),
                     )
                     .fill(base_c)
                     .stroke(Stroke::new(1.0_f32, b_med))
-                    .rounding(Rounding::same(4.0));
+                    .rounding(Rounding::same(4.0))
+                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                     if ui
                         .add_enabled(!self.barcode_state.is_scanning, rescan_btn)
@@ -131,7 +132,7 @@ impl ImagePreviewState {
                     ui.add_space(8.0);
                     ui.label(
                         egui::RichText::new("QR • DataMatrix • Aztec • PDF417 • Code 128 • EAN-13")
-                            .small()
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .color(f_low),
                     );
 
@@ -139,11 +140,14 @@ impl ImagePreviewState {
                         if !self.barcode_state.detections.is_empty() {
                             let copy_fg = contrast_text_c32(b_med, Some(f_med), palette);
                             let copy_all_btn = egui::Button::new(
-                                egui::RichText::new("📋 Copy All").small().color(copy_fg),
+                                egui::RichText::new("📋 Copy All")
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                                    .color(copy_fg),
                             )
                             .fill(b_med)
                             .stroke(Stroke::new(1.0_f32, b_low))
-                            .rounding(Rounding::same(3.0));
+                            .rounding(Rounding::same(3.0))
+                            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                             if ui.add(copy_all_btn).clicked() {
                                 let combined: Vec<String> = self
@@ -177,11 +181,18 @@ impl ImagePreviewState {
                                         .stroke(Stroke::new(1.0_f32, card_border))
                                         .rounding(Rounding::same(4.0))
                                         .show(ui, |ui| {
-                                            ui.horizontal(|ui| {
+                                            ui.horizontal_wrapped(|ui| {
                                                 chip_badge(ui, &det.format, base_c, b_low);
 
-                                                let display_text = if det.text.len() > 36 {
-                                                    format!("{}...", &det.text[..36])
+                                                let display_text = if det.text.chars().count() > 36
+                                                {
+                                                    format!(
+                                                        "{}…",
+                                                        det.text
+                                                            .chars()
+                                                            .take(36)
+                                                            .collect::<String>()
+                                                    )
                                                 } else {
                                                     det.text.clone()
                                                 };
@@ -189,7 +200,7 @@ impl ImagePreviewState {
                                                     contrast_text_c32(b_low, Some(f_high), palette);
                                                 ui.label(
                                                     egui::RichText::new(&display_text)
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .monospace()
                                                         .color(text_fg),
                                                 )
@@ -203,11 +214,15 @@ impl ImagePreviewState {
                                                     );
                                                     let url_btn = egui::Button::new(
                                                         egui::RichText::new("🌐 Open")
-                                                            .small()
+                                                            .size(crate::ui_ext::BODY_FONT_SIZE)
                                                             .color(url_fg),
                                                     )
                                                     .fill(b_med)
-                                                    .rounding(Rounding::same(3.0));
+                                                    .rounding(Rounding::same(3.0))
+                                                    .min_size(Vec2::new(
+                                                        0.0,
+                                                        crate::ui_ext::CONTROL_HEIGHT,
+                                                    ));
                                                     if ui.add(url_btn).clicked() {
                                                         let _ = Command::new("xdg-open")
                                                             .arg(&det.text)
@@ -237,11 +252,17 @@ impl ImagePreviewState {
                                                     palette,
                                                 );
                                                 let push_btn = egui::Button::new(
-                                                    egui::RichText::new("RH").small().color(rh_fg),
+                                                    egui::RichText::new("RH")
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                                                        .color(rh_fg),
                                                 )
                                                 .fill(b_low)
                                                 .stroke(Stroke::new(1.0_f32, diff_add))
-                                                .rounding(Rounding::same(3.0));
+                                                .rounding(Rounding::same(3.0))
+                                                .min_size(Vec2::new(
+                                                    0.0,
+                                                    crate::ui_ext::CONTROL_HEIGHT,
+                                                ));
                                                 if ui
                                                     .add(push_btn)
                                                     .on_hover_text("Push to Right Hand slot")
@@ -361,7 +382,7 @@ impl ImagePreviewState {
                             let triadic_1 = hex_to_c32(&palette.harmonies.triadic_1);
                             ui.label(
                                 egui::RichText::new("🌐 Click in toolbar to open URL")
-                                    .small()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(triadic_1),
                             );
                         }
