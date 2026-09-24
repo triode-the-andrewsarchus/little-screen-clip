@@ -498,12 +498,12 @@ impl RollingAudioStripState {
                 egui::RichText::new("ROLLING AUDIO")
                     .color(hex_to_c32(&palette.harmonies.base))
                     .strong()
-                    .small(),
+                    .size(crate::ui_ext::BODY_FONT_SIZE),
             );
             ui.label(
                 egui::RichText::new(format!("({:.0}s snapshot)", total_dur))
                     .color(hex_to_c32(&palette.theme.f_med))
-                    .small(),
+                    .size(crate::ui_ext::BODY_FONT_SIZE),
             );
 
             // Refresh Snapshot button
@@ -531,13 +531,13 @@ impl RollingAudioStripState {
                 ui.label(
                     egui::RichText::new("Loading audio snapshot…")
                         .color(hex_to_c32(&palette.theme.f_med))
-                        .small(),
+                        .size(crate::ui_ext::BODY_FONT_SIZE),
                 );
             } else if let Some(error) = &self.error_msg {
                 ui.label(
                     egui::RichText::new("Refresh failed — retry")
                         .color(hex_to_c32(&palette.diff_del))
-                        .small(),
+                        .size(crate::ui_ext::BODY_FONT_SIZE),
                 )
                 .on_hover_text(error);
             } else if self.is_silent() {
@@ -546,7 +546,7 @@ impl RollingAudioStripState {
                     ui.label(
                         egui::RichText::new("Buffer is silence (play audio to capture)")
                             .color(hex_to_c32(&palette.diff_mod))
-                            .small(),
+                            .size(crate::ui_ext::BODY_FONT_SIZE),
                     );
                 });
             } else if let Some((s, e)) = self.selected_region {
@@ -560,12 +560,12 @@ impl RollingAudioStripState {
                     ))
                     .color(hex_to_c32(&palette.harmonies.base))
                     .strong()
-                    .small(),
+                    .size(crate::ui_ext::BODY_FONT_SIZE),
                 );
                 ui.label(
                     egui::RichText::new("[Space] Play  [Ctrl+C] Copy  [Esc] Clear")
                         .color(hex_to_c32(&palette.theme.f_med))
-                        .small(),
+                        .size(crate::ui_ext::BODY_FONT_SIZE),
                 );
             } else {
                 ui.label(
@@ -573,7 +573,7 @@ impl RollingAudioStripState {
                         "• Drag on waveform to select  |  Right-click: Full Editor",
                     )
                     .color(hex_to_c32(&palette.theme.f_low))
-                    .small(),
+                    .size(crate::ui_ext::BODY_FONT_SIZE),
                 );
             }
 
@@ -588,7 +588,7 @@ impl RollingAudioStripState {
                         egui::RichText::new(msg)
                             .color(hex_to_c32(color))
                             .strong()
-                            .small(),
+                            .size(crate::ui_ext::BODY_FONT_SIZE),
                     );
                 });
             }
@@ -689,7 +689,7 @@ impl RollingAudioStripState {
                         Pos2::new(rect.center().x, center_y),
                         egui::Align2::CENTER_CENTER,
                         "Capture buffer is currently silence — play audio and click Refresh (or press F5)",
-                        egui::FontId::proportional(11.0),
+                        egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                         hex_to_c32_alpha(&palette.theme.f_med, 160),
                     );
                 } else {
@@ -747,7 +747,7 @@ impl RollingAudioStripState {
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
                     "Loading rolling audio…",
-                    egui::FontId::proportional(14.0),
+                    egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                     hex_to_c32(&palette.theme.f_med),
                 );
             } else if let Some(ref err) = self.error_msg {
@@ -755,7 +755,7 @@ impl RollingAudioStripState {
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
                     format!("{}", err),
-                    egui::FontId::proportional(11.0),
+                    egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                     hex_to_c32(&palette.diff_del),
                 );
             } else {
@@ -763,7 +763,7 @@ impl RollingAudioStripState {
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
                     "No system audio captured yet",
-                    egui::FontId::proportional(11.0),
+                    egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                     hex_to_c32(&palette.theme.f_low),
                 );
             }
