@@ -3154,7 +3154,7 @@ impl AudioPreviewState {
         palette: &AppPalette,
         close_requested: &mut bool,
     ) {
-        if !ctx.wants_keyboard_input() {
+        if !self.save_dialog_open && !ctx.wants_keyboard_input() {
             if ctx.input(|i| i.key_pressed(egui::Key::I)) {
                 self.active_mode = AudioToolMode::Inspect;
             }
@@ -3174,8 +3174,8 @@ impl AudioPreviewState {
                 self.active_mode = AudioToolMode::HfAnalysis;
             }
         }
-        // Tool-level shortcuts must win over nested stem editors.
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        // The save dialog handles Escape itself, leaving the studio open.
+        if !self.save_dialog_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.stop();
             *close_requested = true;
             return;
@@ -3214,6 +3214,45 @@ impl AudioPreviewState {
 mod tests {
     use super::*;
     use little_clip_core::audio::compute_full_audio_analysis;
+
+    #[test]
+    fn escape_cancels_save_dialog_before_closing_audio_studio() {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut state = AudioPreviewState::new(
+            PathBuf::from("/__little_clip_missing_audio_dialog__.wav"),
+            "test.wav".to_string(),
+        );
+        state.save_dialog_open = true;
+
+        let escape = || egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut close_requested = false;
+        let _ = ctx.run(escape(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                state.render_ui(ui, ctx, &palette, &mut close_requested);
+            });
+        });
+        assert!(!close_requested);
+        assert!(!state.save_dialog_open);
+
+        let _ = ctx.run(escape(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                state.render_ui(ui, ctx, &palette, &mut close_requested);
+            });
+        });
+        assert!(close_requested);
+    }
 
     fn preview_source_with_region(
         region: AudioRegionEdit,
