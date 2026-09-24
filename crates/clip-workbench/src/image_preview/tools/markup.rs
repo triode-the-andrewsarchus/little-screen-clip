@@ -379,9 +379,9 @@ impl MarkupState {
 impl ImagePreviewState {
     /// Renders the Left-Hand studio pane: Tool picker & color swatches.
     pub(crate) fn render_markup_left_panel(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        let b_med = hex_to_c32(&palette.theme.b_med);
-        let f_high = hex_to_c32(&palette.theme.f_high);
-        let f_med = hex_to_c32(&palette.theme.f_med);
+        let b_med = hex_to_c32(&palette.colors.surface_panel);
+        let f_high = hex_to_c32(&palette.colors.text_primary);
+        let f_med = hex_to_c32(&palette.colors.text_secondary);
         let base_accent = hex_to_c32(&palette.harmonies.base);
 
         ui.vertical(|ui| {
@@ -512,17 +512,17 @@ impl ImagePreviewState {
             ui.label(
                 egui::RichText::new("• Del / Backspace: Delete item\n• Esc: Deselect / Exit edit\n• Enter: Flatten / Burn")
                     .size(crate::ui_ext::BODY_FONT_SIZE)
-                    .color(hex_to_c32(&palette.theme.f_low)),
+                    .color(hex_to_c32(&palette.colors.text_muted)),
             );
         });
     }
 
     /// Renders the Right-Hand studio pane: Active shape properties, layer list, and burn action.
     pub(crate) fn render_markup_right_panel(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        let b_med = hex_to_c32(&palette.theme.b_med);
-        let b_low = hex_to_c32(&palette.theme.b_low);
-        let f_high = hex_to_c32(&palette.theme.f_high);
-        let f_med = hex_to_c32(&palette.theme.f_med);
+        let b_med = hex_to_c32(&palette.colors.surface_panel);
+        let b_low = hex_to_c32(&palette.colors.surface_recessed);
+        let f_high = hex_to_c32(&palette.colors.text_primary);
+        let f_med = hex_to_c32(&palette.colors.text_secondary);
 
         ui.vertical(|ui| {
             ui.heading(
@@ -690,7 +690,7 @@ impl ImagePreviewState {
                                     "No markup shapes placed.\nClick & drag on image to draw.",
                                 )
                                 .size(crate::ui_ext::BODY_FONT_SIZE)
-                                .color(hex_to_c32(&palette.theme.f_low)),
+                                .color(hex_to_c32(&palette.colors.text_muted)),
                             );
                         });
                     } else {
@@ -701,7 +701,7 @@ impl ImagePreviewState {
                         for (i, item) in self.markup_state.items.iter().enumerate().rev() {
                             let is_selected = self.markup_state.selected_idx == Some(i);
                             let row_bg = if is_selected {
-                                hex_to_c32(&palette.theme.b_med)
+                                hex_to_c32(&palette.colors.surface_panel)
                             } else {
                                 b_low
                             };

@@ -46,9 +46,13 @@ fn render_creative_fx_mask_button(
     let fill = if active {
         hex_to_c32(&palette.diff_add)
     } else {
-        hex_to_c32(&palette.theme.b_med)
+        hex_to_c32(&palette.colors.surface_panel)
     };
-    let foreground = contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_high)), palette);
+    let foreground = contrast_text_c32(
+        fill,
+        Some(hex_to_c32(&palette.colors.text_primary)),
+        palette,
+    );
     let button = egui::Button::new(
         egui::RichText::new(label)
             .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -578,7 +582,7 @@ impl ImagePreviewState {
         palette: &AppPalette,
         full_w: f32,
     ) {
-        let f_high = hex_to_c32(&palette.theme.f_high);
+        let f_high = hex_to_c32(&palette.colors.text_primary);
         let base_c = hex_to_c32(&palette.harmonies.base);
         let diff_del = hex_to_c32(&palette.diff_del);
         let config = *self.creative_fx_state.depth_mask_for_active_fx();
@@ -685,8 +689,8 @@ impl ImagePreviewState {
             return;
         }
 
-        let b_med = hex_to_c32(&palette.theme.b_med);
-        let f_high = hex_to_c32(&palette.theme.f_high);
+        let b_med = hex_to_c32(&palette.colors.surface_panel);
+        let f_high = hex_to_c32(&palette.colors.text_primary);
         ui.add_space(4.0);
         let invert_text = match (config.source, config.invert) {
             (CreativeFxMaskSource::DepthMap, true) => "⇄ Invert Mask: ON (Far / Background)",
@@ -773,12 +777,12 @@ impl ImagePreviewState {
         ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        let b_low = hex_to_c32(&palette.theme.b_low);
-        let b_med = hex_to_c32(&palette.theme.b_med);
+        let b_low = hex_to_c32(&palette.colors.surface_recessed);
+        let b_med = hex_to_c32(&palette.colors.surface_panel);
         let base_c = hex_to_c32(&palette.harmonies.base);
-        let f_high = hex_to_c32(&palette.theme.f_high);
-        let f_med = hex_to_c32(&palette.theme.f_med);
-        let f_low = hex_to_c32(&palette.theme.f_low);
+        let f_high = hex_to_c32(&palette.colors.text_primary);
+        let f_med = hex_to_c32(&palette.colors.text_secondary);
+        let f_low = hex_to_c32(&palette.colors.text_muted);
         let diff_add = hex_to_c32(&palette.diff_add);
 
         // Upload any newly received thumbnails into GPU textures
@@ -935,7 +939,7 @@ impl ImagePreviewState {
         // ── 2. CENTER PANEL: Split-view Comparison Canvas ──
         crate::shell::StudioPanelLayout::show_region(ui, panels.center, |ui| {
             egui::Frame::none()
-                .fill(hex_to_c32(&palette.theme.background))
+                .fill(hex_to_c32(&palette.colors.canvas))
                 .rounding(Rounding::same(4.0))
                 .show(ui, |ui| {
                     ui.set_width(center_w);
@@ -966,7 +970,7 @@ impl ImagePreviewState {
                     painter.rect_filled(
                         canvas_rect,
                         Rounding::same(4.0),
-                        hex_to_c32(&palette.theme.background),
+                        hex_to_c32(&palette.colors.canvas),
                     );
 
                     // If mouse is near the comparison split divider when drag starts, initiate split dragging
@@ -1040,14 +1044,17 @@ impl ImagePreviewState {
                         painter.rect_stroke(
                             img_rect,
                             Rounding::ZERO,
-                            Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_med, 40)),
+                            Stroke::new(
+                                1.0_f32,
+                                hex_to_c32_alpha(&palette.colors.text_secondary, 40),
+                            ),
                         );
                     }
 
                     // Rendering spinner overlay
                     if self.creative_fx_state.is_rendering {
                         let spinner_pos = canvas_rect.center();
-                        let spin_bg = hex_to_c32_alpha(&palette.theme.b_low, 210);
+                        let spin_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 210);
                         let spin_rect = Rect::from_center_size(spinner_pos, Vec2::new(220.0, 36.0));
                         painter.rect_filled(spin_rect, Rounding::same(8.0), spin_bg);
                         painter.rect_stroke(
@@ -2750,7 +2757,7 @@ impl ImagePreviewState {
         orig_tex: &egui::TextureHandle,
         palette: &AppPalette,
     ) {
-        let b_med = hex_to_c32(&palette.theme.b_med);
+        let b_med = hex_to_c32(&palette.colors.surface_panel);
         let base_c = hex_to_c32(&palette.harmonies.base);
 
         // Render split comparison using unified SplitCompareView
@@ -2763,7 +2770,7 @@ impl ImagePreviewState {
         split_view.paint(ui, response, painter, img_rect, palette);
 
         // HUD badges
-        let badge_bg = hex_to_c32_alpha(&palette.theme.b_low, 210);
+        let badge_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 210);
 
         let orig_rect = Rect::from_min_size(
             Pos2::new(img_rect.min.x + 10.0, img_rect.min.y + 10.0),
@@ -2776,7 +2783,7 @@ impl ImagePreviewState {
             egui::Align2::CENTER_CENTER,
             "ORIGINAL",
             egui::FontId::proportional(11.0),
-            hex_to_c32(&palette.theme.f_med),
+            hex_to_c32(&palette.colors.text_secondary),
         );
 
         let cur_fx = self.creative_fx_state.selected_fx;

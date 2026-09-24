@@ -108,7 +108,7 @@ impl ImagePreviewState {
                 let card_rect = Rect::from_min_size(card_min, Vec2::new(card_w, card_h));
 
                 // Card background & sleek harmonic border
-                let card_bg = hex_to_c32_alpha(&palette.theme.b_low, 245);
+                let card_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 245);
                 painter.rect_filled(card_rect, Rounding::same(8.0), card_bg);
                 painter.rect_stroke(
                     card_rect,
@@ -162,12 +162,12 @@ impl ImagePreviewState {
                             painter.rect_stroke(
                                 cell_rect,
                                 Rounding::ZERO,
-                                Stroke::new(2.0_f32, hex_to_c32(&palette.theme.f_high)),
+                                Stroke::new(2.0_f32, hex_to_c32(&palette.colors.text_primary)),
                             );
                             painter.rect_stroke(
                                 cell_rect.expand(1.0),
                                 Rounding::ZERO,
-                                Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)),
+                                Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_recessed)),
                             );
                         }
                     }
@@ -183,7 +183,7 @@ impl ImagePreviewState {
                 painter.rect_stroke(
                     swatch_rect,
                     Rounding::same(3.0),
-                    Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)),
+                    Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
                 );
 
                 // Hex Code Text
@@ -191,8 +191,11 @@ impl ImagePreviewState {
                     "#{:02X}{:02X}{:02X}",
                     pixel_data[0], pixel_data[1], pixel_data[2]
                 );
-                let hex_text_col =
-                    contrast_text_c32(card_bg, Some(hex_to_c32(&palette.theme.f_high)), palette);
+                let hex_text_col = contrast_text_c32(
+                    card_bg,
+                    Some(hex_to_c32(&palette.colors.text_primary)),
+                    palette,
+                );
                 let hex_galley =
                     painter.layout_no_wrap(hex_str, egui::FontId::monospace(12.0), hex_text_col);
                 painter.galley(
@@ -206,8 +209,11 @@ impl ImagePreviewState {
                     "RGB({}, {}, {}) | {}, {}",
                     pixel_data[0], pixel_data[1], pixel_data[2], px, py
                 );
-                let info_text_col =
-                    contrast_text_c32(card_bg, Some(hex_to_c32(&palette.theme.f_med)), palette);
+                let info_text_col = contrast_text_c32(
+                    card_bg,
+                    Some(hex_to_c32(&palette.colors.text_secondary)),
+                    palette,
+                );
                 let info_galley = painter.layout_no_wrap(
                     info_str,
                     egui::FontId::proportional(9.5),
@@ -254,9 +260,9 @@ impl ImagePreviewState {
         palette: &AppPalette,
     ) {
         let accent = hex_to_c32(&palette.harmonies.base);
-        let surface = hex_to_c32(&palette.theme.b_med);
-        let text = hex_to_c32(&palette.theme.f_med);
-        let muted = hex_to_c32(&palette.theme.f_low);
+        let surface = hex_to_c32(&palette.colors.surface_panel);
+        let text = hex_to_c32(&palette.colors.text_secondary);
+        let muted = hex_to_c32(&palette.colors.text_muted);
 
         ui.label(
             egui::RichText::new("Color picker")

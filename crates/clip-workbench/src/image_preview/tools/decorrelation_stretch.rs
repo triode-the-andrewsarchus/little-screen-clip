@@ -73,10 +73,10 @@ impl ImagePreviewState {
         palette: &AppPalette,
     ) {
         let accent = hex_to_c32(&palette.harmonies.base);
-        let surface = hex_to_c32(&palette.theme.b_med);
-        let border = hex_to_c32(&palette.theme.b_low);
-        let text = hex_to_c32(&palette.theme.f_med);
-        let muted = hex_to_c32(&palette.theme.f_low);
+        let surface = hex_to_c32(&palette.colors.surface_panel);
+        let border = hex_to_c32(&palette.colors.surface_recessed);
+        let text = hex_to_c32(&palette.colors.text_secondary);
+        let muted = hex_to_c32(&palette.colors.text_muted);
         let success = hex_to_c32(&palette.diff_add);
         let mut recompute = false;
 
@@ -408,9 +408,9 @@ impl ImagePreviewState {
         ui: &mut egui::Ui,
         palette: &AppPalette,
     ) {
-        let f_high = hex_to_c32(&palette.theme.f_high);
-        let f_med = hex_to_c32(&palette.theme.f_med);
-        let f_low = hex_to_c32(&palette.theme.f_low);
+        let f_high = hex_to_c32(&palette.colors.text_primary);
+        let f_med = hex_to_c32(&palette.colors.text_secondary);
+        let f_low = hex_to_c32(&palette.colors.text_muted);
         let diff_del = hex_to_c32(&palette.diff_del);
         let base_c = hex_to_c32(&palette.harmonies.base);
 
@@ -704,8 +704,8 @@ impl ImagePreviewState {
             }
         }
 
-        let b_low = hex_to_c32(&palette.theme.b_low);
-        let b_med = hex_to_c32(&palette.theme.b_med);
+        let b_low = hex_to_c32(&palette.colors.surface_recessed);
+        let b_med = hex_to_c32(&palette.colors.surface_panel);
         let base_c = hex_to_c32(&palette.harmonies.base);
 
         // If user is holding original (via Hold to Compare button), show full original
@@ -721,9 +721,12 @@ impl ImagePreviewState {
 
                 let badge_pos = Pos2::new(img_rect.min.x + 12.0, img_rect.min.y + 12.0);
                 let badge_rect = Rect::from_min_size(badge_pos, Vec2::new(170.0, 24.0));
-                let badge_bg = hex_to_c32_alpha(&palette.theme.b_low, 210);
-                let badge_fg =
-                    contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_med)), palette);
+                let badge_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 210);
+                let badge_fg = contrast_text_c32(
+                    b_low,
+                    Some(hex_to_c32(&palette.colors.text_secondary)),
+                    palette,
+                );
                 painter.rect_filled(badge_rect, Rounding::same(4.0), badge_bg);
                 painter.rect_stroke(badge_rect, Rounding::same(4.0), Stroke::new(1.0_f32, b_med));
                 painter.text(
@@ -783,7 +786,11 @@ impl ImagePreviewState {
         // 4. Draggable Center Knob
         let knob_center = Pos2::new(split_x, img_rect.center().y);
         let knob_radius = 16.0;
-        let knob_fg = contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_high)), palette);
+        let knob_fg = contrast_text_c32(
+            b_low,
+            Some(hex_to_c32(&palette.colors.text_primary)),
+            palette,
+        );
         painter.circle(
             knob_center,
             knob_radius,
@@ -829,8 +836,12 @@ impl ImagePreviewState {
         // 6. Floating HUD Badges
         let before_badge_pos = Pos2::new(img_rect.min.x + 12.0, img_rect.min.y + 12.0);
         let before_rect = Rect::from_min_size(before_badge_pos, Vec2::new(140.0, 24.0));
-        let badge_bg = hex_to_c32_alpha(&palette.theme.b_low, 210);
-        let before_fg = contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_med)), palette);
+        let badge_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 210);
+        let before_fg = contrast_text_c32(
+            b_low,
+            Some(hex_to_c32(&palette.colors.text_secondary)),
+            palette,
+        );
         painter.rect_filled(before_rect, Rounding::same(4.0), badge_bg);
         painter.rect_stroke(
             before_rect,

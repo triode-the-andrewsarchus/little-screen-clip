@@ -367,9 +367,12 @@ impl ImagePreviewState {
 
     pub(crate) fn render_crop_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.b_low))
+            .fill(hex_to_c32(&palette.colors.surface_recessed))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(
+                1.0_f32,
+                hex_to_c32(&palette.colors.surface_panel),
+            ))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
@@ -383,7 +386,7 @@ impl ImagePreviewState {
                     ui.label(
                         egui::RichText::new("Ratio:")
                             .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .color(hex_to_c32(&palette.theme.f_med)),
+                            .color(hex_to_c32(&palette.colors.text_secondary)),
                     );
 
                     let ratios = [
@@ -423,7 +426,7 @@ impl ImagePreviewState {
                         // Reset Crop Button
                         let reset_crop_btn = crate::secondary_button(
                             "✕ Full Image",
-                            hex_to_c32(&palette.theme.b_med),
+                            hex_to_c32(&palette.colors.surface_panel),
                             palette,
                         )
                         .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
@@ -435,7 +438,7 @@ impl ImagePreviewState {
                         }
 
                         if !self.undo_stack.is_empty() {
-                            let undo_bg = hex_to_c32(&palette.theme.b_med);
+                            let undo_bg = hex_to_c32(&palette.colors.surface_panel);
                             let undo_fg = contrast_text_c32(
                                 undo_bg,
                                 Some(hex_to_c32(&palette.diff_mod)),
@@ -448,7 +451,10 @@ impl ImagePreviewState {
                                     .color(undo_fg),
                             )
                             .fill(undo_bg)
-                            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)))
+                            .stroke(Stroke::new(
+                                1.0_f32,
+                                hex_to_c32(&palette.colors.surface_recessed),
+                            ))
                             .rounding(Rounding::same(4.0))
                             .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
@@ -526,7 +532,10 @@ impl ImagePreviewState {
         // 2. Rule of Thirds Grid
         let w = crop_screen_rect.width();
         let h = crop_screen_rect.height();
-        let grid_stroke = Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_med, 60));
+        let grid_stroke = Stroke::new(
+            1.0_f32,
+            hex_to_c32_alpha(&palette.colors.text_secondary, 60),
+        );
         painter.line_segment(
             [
                 Pos2::new(crop_screen_rect.min.x + w / 3.0, crop_screen_rect.min.y),
@@ -630,7 +639,7 @@ impl ImagePreviewState {
             painter.rect_stroke(
                 handle_rect,
                 Rounding::same(1.0),
-                Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)),
+                Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
             );
         }
 
@@ -647,9 +656,12 @@ impl ImagePreviewState {
             crop_screen_rect.center().x,
             (crop_screen_rect.min.y - 14.0).max(img_rect.min.y + 10.0),
         );
-        let b_low = hex_to_c32(&palette.theme.b_low);
-        let badge_text_col =
-            contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_high)), palette);
+        let b_low = hex_to_c32(&palette.colors.surface_recessed);
+        let badge_text_col = contrast_text_c32(
+            b_low,
+            Some(hex_to_c32(&palette.colors.text_primary)),
+            palette,
+        );
         let galley = ui.painter().layout_no_wrap(
             badge_str,
             egui::FontId::proportional(11.0),

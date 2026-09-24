@@ -68,14 +68,14 @@ impl ImagePreviewState {
         palette: &AppPalette,
     ) {
         self.poll_barcode_scan(ctx);
-        let b_low = hex_to_c32(&palette.theme.b_low);
-        let b_med = hex_to_c32(&palette.theme.b_med);
+        let b_low = hex_to_c32(&palette.colors.surface_recessed);
+        let b_med = hex_to_c32(&palette.colors.surface_panel);
         let base_c = hex_to_c32(&palette.harmonies.base);
         let diff_add = hex_to_c32(&palette.diff_add);
         let diff_mod = hex_to_c32(&palette.diff_mod);
-        let f_high = hex_to_c32(&palette.theme.f_high);
-        let f_med = hex_to_c32(&palette.theme.f_med);
-        let f_low = hex_to_c32(&palette.theme.f_low);
+        let f_high = hex_to_c32(&palette.colors.text_primary);
+        let f_med = hex_to_c32(&palette.colors.text_secondary);
+        let f_low = hex_to_c32(&palette.colors.text_muted);
 
         egui::Frame::none()
             .fill(b_low)
@@ -294,8 +294,8 @@ impl ImagePreviewState {
         let clicked = response.clicked();
         let diff_mod = hex_to_c32(&palette.diff_mod);
         let base_c = hex_to_c32(&palette.harmonies.base);
-        let b_low = hex_to_c32(&palette.theme.b_low);
-        let f_high = hex_to_c32(&palette.theme.f_high);
+        let b_low = hex_to_c32(&palette.colors.surface_recessed);
+        let f_high = hex_to_c32(&palette.colors.text_primary);
 
         for (idx, det) in self.barcode_state.detections.iter().enumerate() {
             let is_selected = self.barcode_state.selected_idx == Some(idx);

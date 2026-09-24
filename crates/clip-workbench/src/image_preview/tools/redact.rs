@@ -90,10 +90,10 @@ impl ImagePreviewState {
     /// Strips all EXIF, GPS, camera metadata, and timestamps by cleanly re-encoding pristine pixels.
 
     pub(crate) fn render_redact_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        let frame_bg = hex_to_c32(&palette.theme.b_low);
-        let frame_stroke = hex_to_c32(&palette.theme.b_med);
-        let btn_bg = hex_to_c32(&palette.theme.b_med);
-        let btn_border = hex_to_c32(&palette.theme.b_low);
+        let frame_bg = hex_to_c32(&palette.colors.surface_recessed);
+        let frame_stroke = hex_to_c32(&palette.colors.surface_panel);
+        let btn_bg = hex_to_c32(&palette.colors.surface_panel);
+        let btn_border = hex_to_c32(&palette.colors.surface_recessed);
 
         egui::Frame::none()
             .fill(frame_bg)
@@ -119,7 +119,7 @@ impl ImagePreviewState {
                     ui.label(
                         egui::RichText::new(count_str)
                             .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .color(hex_to_c32(&palette.theme.f_med)),
+                            .color(hex_to_c32(&palette.colors.text_secondary)),
                     );
 
                     ui.add_space(8.0);
@@ -238,10 +238,10 @@ impl ImagePreviewState {
         };
 
         let diff_del = hex_to_c32(&palette.diff_del);
-        let b_low_badge = hex_to_c32_alpha(&palette.theme.b_low, 230);
+        let b_low_badge = hex_to_c32_alpha(&palette.colors.surface_recessed, 230);
         let badge_text_col = contrast_text_c32(
             b_low_badge,
-            Some(hex_to_c32(&palette.theme.f_high)),
+            Some(hex_to_c32(&palette.colors.text_primary)),
             palette,
         );
 
@@ -269,12 +269,12 @@ impl ImagePreviewState {
                     painter.rect_filled(
                         handle_rect,
                         Rounding::same(1.0),
-                        hex_to_c32(&palette.theme.f_high),
+                        hex_to_c32(&palette.colors.text_primary),
                     );
                     painter.rect_stroke(
                         handle_rect,
                         Rounding::same(1.0),
-                        Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_low)),
+                        Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_recessed)),
                     );
                 }
 
@@ -304,7 +304,10 @@ impl ImagePreviewState {
                 painter.rect_stroke(
                     box_screen_rect,
                     Rounding::ZERO,
-                    Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_med, 60)),
+                    Stroke::new(
+                        1.0_f32,
+                        hex_to_c32_alpha(&palette.colors.text_secondary, 60),
+                    ),
                 );
             }
         }

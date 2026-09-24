@@ -7,10 +7,10 @@ impl ImagePreviewState {
         ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        let frame_bg = hex_to_c32(&palette.theme.b_low);
-        let frame_stroke = hex_to_c32(&palette.theme.b_med);
-        let btn_bg = hex_to_c32(&palette.theme.b_med);
-        let _btn_border = hex_to_c32(&palette.theme.b_low);
+        let frame_bg = hex_to_c32(&palette.colors.surface_recessed);
+        let frame_stroke = hex_to_c32(&palette.colors.surface_panel);
+        let btn_bg = hex_to_c32(&palette.colors.surface_panel);
+        let _btn_border = hex_to_c32(&palette.colors.surface_recessed);
 
         egui::Frame::none()
             .fill(frame_bg)
@@ -47,7 +47,7 @@ impl ImagePreviewState {
                                 crate::ui_ext::badge_pill(
                                     ui,
                                     dt,
-                                    Some(hex_to_c32(&palette.theme.f_med)),
+                                    Some(hex_to_c32(&palette.colors.text_secondary)),
                                     palette,
                                 );
                             }
@@ -96,7 +96,7 @@ impl ImagePreviewState {
                                     "Clean Image (No EXIF or metadata tags detected)",
                                 )
                                 .size(crate::ui_ext::BODY_FONT_SIZE)
-                                .color(hex_to_c32(&palette.theme.f_med)),
+                                .color(hex_to_c32(&palette.colors.text_secondary)),
                             );
                         }
 
@@ -109,7 +109,7 @@ impl ImagePreviewState {
                             ui.label(
                                 egui::RichText::new(dim_str)
                                     .size(crate::ui_ext::BODY_FONT_SIZE)
-                                    .color(hex_to_c32(&palette.theme.f_low)),
+                                    .color(hex_to_c32(&palette.colors.text_muted)),
                             );
                         });
                     });
@@ -133,7 +133,9 @@ impl ImagePreviewState {
                                                     egui::RichText::new("Camera Make:")
                                                         .strong()
                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(&palette.theme.f_med)),
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_secondary,
+                                                        )),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(m)
@@ -146,7 +148,9 @@ impl ImagePreviewState {
                                                     egui::RichText::new("Camera Model:")
                                                         .strong()
                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(&palette.theme.f_med)),
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_secondary,
+                                                        )),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(m)
@@ -159,7 +163,9 @@ impl ImagePreviewState {
                                                     egui::RichText::new("Lens:")
                                                         .strong()
                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(&palette.theme.f_med)),
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_secondary,
+                                                        )),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(l)
@@ -172,7 +178,9 @@ impl ImagePreviewState {
                                                     egui::RichText::new("Software:")
                                                         .strong()
                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(&palette.theme.f_med)),
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_secondary,
+                                                        )),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(s)
@@ -185,7 +193,9 @@ impl ImagePreviewState {
                                                     egui::RichText::new("Timestamp:")
                                                         .strong()
                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(&palette.theme.f_med)),
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_secondary,
+                                                        )),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(dt)
@@ -198,7 +208,9 @@ impl ImagePreviewState {
                                                     egui::RichText::new("ISO Speed:")
                                                         .strong()
                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(&palette.theme.f_med)),
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_secondary,
+                                                        )),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(iso.to_string())
@@ -211,7 +223,9 @@ impl ImagePreviewState {
                                                     egui::RichText::new("Aperture:")
                                                         .strong()
                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(&palette.theme.f_med)),
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_secondary,
+                                                        )),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(format!("f/{:.1}", f))
@@ -224,7 +238,9 @@ impl ImagePreviewState {
                                                     egui::RichText::new("Shutter Speed:")
                                                         .strong()
                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(&palette.theme.f_med)),
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_secondary,
+                                                        )),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(exp)
@@ -237,7 +253,9 @@ impl ImagePreviewState {
                                                     egui::RichText::new("Focal Length:")
                                                         .strong()
                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(&palette.theme.f_med)),
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_secondary,
+                                                        )),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(format!("{:.1} mm", fl))
@@ -252,7 +270,9 @@ impl ImagePreviewState {
                                                     egui::RichText::new("GPS Coordinates:")
                                                         .strong()
                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(&palette.theme.f_med)),
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_secondary,
+                                                        )),
                                                 );
                                                 ui.horizontal(|ui| {
                                                     ui.label(
@@ -283,7 +303,9 @@ impl ImagePreviewState {
                                                     egui::RichText::new("GPS Altitude:")
                                                         .strong()
                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(&palette.theme.f_med)),
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_secondary,
+                                                        )),
                                                 );
                                                 ui.label(
                                                     egui::RichText::new(format!("{:.1} m", alt))

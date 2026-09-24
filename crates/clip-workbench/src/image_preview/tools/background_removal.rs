@@ -218,9 +218,9 @@ impl ImagePreviewState {
 
         let accent = hex_to_c32(&palette.harmonies.base);
         let guided_accent = hex_to_c32(&palette.harmonies.triadic_2);
-        let surface = hex_to_c32(&palette.theme.b_med);
-        let text = hex_to_c32(&palette.theme.f_med);
-        let muted = hex_to_c32(&palette.theme.f_low);
+        let surface = hex_to_c32(&palette.colors.surface_panel);
+        let text = hex_to_c32(&palette.colors.text_secondary);
+        let muted = hex_to_c32(&palette.colors.text_muted);
         let danger = hex_to_c32(&palette.diff_del);
         let has_prompt = !self.multimatte_prompt.trim().is_empty();
         let action_color = if has_prompt { guided_accent } else { accent };

@@ -118,10 +118,10 @@ impl ImagePreviewState {
         _ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        let frame_bg = hex_to_c32(&palette.theme.b_low);
-        let frame_stroke = hex_to_c32(&palette.theme.b_med);
-        let btn_bg = hex_to_c32(&palette.theme.b_med);
-        let btn_border = hex_to_c32(&palette.theme.b_low);
+        let frame_bg = hex_to_c32(&palette.colors.surface_recessed);
+        let frame_stroke = hex_to_c32(&palette.colors.surface_panel);
+        let btn_bg = hex_to_c32(&palette.colors.surface_panel);
+        let btn_border = hex_to_c32(&palette.colors.surface_recessed);
 
         egui::Frame::none()
             .fill(frame_bg)
@@ -172,7 +172,7 @@ impl ImagePreviewState {
                     ui.label(
                         egui::RichText::new("Cropping:")
                             .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .color(hex_to_c32(&palette.theme.f_med)),
+                            .color(hex_to_c32(&palette.colors.text_secondary)),
                     );
 
                     let is_crop_to_quad = self.deskew_state.crop_mode == DeskewCropMode::CropToQuad;
@@ -252,7 +252,7 @@ impl ImagePreviewState {
                     }
 
                     // 5. Reset button
-                    let reset_fg = contrast_text_c32(btn_bg, Some(hex_to_c32(&palette.theme.f_med)), palette);
+                    let reset_fg = contrast_text_c32(btn_bg, Some(hex_to_c32(&palette.colors.text_secondary)), palette);
                     let reset_btn = egui::Button::new(
                         egui::RichText::new("⟲ Reset Quad").size(crate::ui_ext::BODY_FONT_SIZE).color(reset_fg),
                     )
@@ -269,7 +269,7 @@ impl ImagePreviewState {
                         ui.label(
                             egui::RichText::new("Click 4 points or drag handles")
                                 .size(crate::ui_ext::BODY_FONT_SIZE)
-                                .color(hex_to_c32(&palette.theme.f_low)),
+                                .color(hex_to_c32(&palette.colors.text_muted)),
                         );
                     });
                 });
@@ -308,7 +308,7 @@ impl ImagePreviewState {
                 painter.circle_stroke(
                     pt,
                     8.0,
-                    Stroke::new(2.0_f32, hex_to_c32(&palette.theme.b_low)),
+                    Stroke::new(2.0_f32, hex_to_c32(&palette.colors.surface_recessed)),
                 );
                 painter.circle_filled(pt, 6.0, hex_to_c32(&palette.diff_add));
                 painter.text(
@@ -316,7 +316,7 @@ impl ImagePreviewState {
                     egui::Align2::LEFT_TOP,
                     labels[i],
                     egui::FontId::proportional(11.0),
-                    hex_to_c32(&palette.theme.f_high),
+                    hex_to_c32(&palette.colors.text_primary),
                 );
             }
 
@@ -349,9 +349,12 @@ impl ImagePreviewState {
                     let next_name = corner_names.get(n).copied().unwrap_or("Next");
                     let badge_text =
                         format!("🎯 Click {next_idx}/4: {next_name}", next_idx = n + 1);
-                    let b_low = hex_to_c32(&palette.theme.b_low);
-                    let badge_fg =
-                        contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_high)), palette);
+                    let b_low = hex_to_c32(&palette.colors.surface_recessed);
+                    let badge_fg = contrast_text_c32(
+                        b_low,
+                        Some(hex_to_c32(&palette.colors.text_primary)),
+                        palette,
+                    );
                     let galley = ui.painter().layout_no_wrap(
                         badge_text,
                         egui::FontId::proportional(11.0),
@@ -384,8 +387,12 @@ impl ImagePreviewState {
                 n + 1,
                 next_name
             );
-            let b_low = hex_to_c32(&palette.theme.b_low);
-            let b_fg = contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_high)), palette);
+            let b_low = hex_to_c32(&palette.colors.surface_recessed);
+            let b_fg = contrast_text_c32(
+                b_low,
+                Some(hex_to_c32(&palette.colors.text_primary)),
+                palette,
+            );
             let banner_galley =
                 ui.painter()
                     .layout_no_wrap(banner_text, egui::FontId::proportional(11.0), b_fg);
@@ -451,7 +458,10 @@ impl ImagePreviewState {
             ];
 
             // 1. Perspective Grid (rule of thirds inside quad)
-            let grid_stroke = Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_med, 80));
+            let grid_stroke = Stroke::new(
+                1.0_f32,
+                hex_to_c32_alpha(&palette.colors.text_secondary, 80),
+            );
             for &u in &[1.0 / 3.0, 2.0 / 3.0] {
                 let top_pt = screen_pts[0].to_vec2() * (1.0 - u) + screen_pts[1].to_vec2() * u;
                 let bot_pt = screen_pts[3].to_vec2() * (1.0 - u) + screen_pts[2].to_vec2() * u;
@@ -484,7 +494,7 @@ impl ImagePreviewState {
                 painter.circle_stroke(
                     pt,
                     handle_radius + 2.0,
-                    Stroke::new(2.0_f32, hex_to_c32(&palette.theme.b_low)),
+                    Stroke::new(2.0_f32, hex_to_c32(&palette.colors.surface_recessed)),
                 );
                 painter.circle_filled(pt, handle_radius, handle_col);
 
@@ -499,7 +509,7 @@ impl ImagePreviewState {
                     egui::Align2::LEFT_TOP,
                     labels[i],
                     egui::FontId::proportional(11.0),
-                    hex_to_c32(&palette.theme.f_high),
+                    hex_to_c32(&palette.colors.text_primary),
                 );
             }
 
@@ -508,9 +518,12 @@ impl ImagePreviewState {
                 (screen_pts[0].x + screen_pts[1].x + screen_pts[2].x + screen_pts[3].x) * 0.25,
                 (screen_pts[0].y + screen_pts[1].y + screen_pts[2].y + screen_pts[3].y) * 0.25,
             );
-            let badge_bg = hex_to_c32(&palette.theme.b_low);
-            let badge_fg =
-                contrast_text_c32(badge_bg, Some(hex_to_c32(&palette.theme.f_high)), palette);
+            let badge_bg = hex_to_c32(&palette.colors.surface_recessed);
+            let badge_fg = contrast_text_c32(
+                badge_bg,
+                Some(hex_to_c32(&palette.colors.text_primary)),
+                palette,
+            );
             let badge_str = if !self.deskew_state.corners_adjusted {
                 "🎯 Click 4 Points (or drag handles) | Enter: Apply"
             } else {
@@ -555,10 +568,10 @@ impl ImagePreviewState {
                     // If corners haven't been adjusted yet, hint to the user that clicking sets point 1
                     if !self.deskew_state.corners_adjusted {
                         let hint_text = "🎯 Click to place Point 1 (Top-Left)";
-                        let b_low = hex_to_c32(&palette.theme.b_low);
+                        let b_low = hex_to_c32(&palette.colors.surface_recessed);
                         let h_fg = contrast_text_c32(
                             b_low,
-                            Some(hex_to_c32(&palette.theme.f_high)),
+                            Some(hex_to_c32(&palette.colors.text_primary)),
                             palette,
                         );
                         let h_galley = ui.painter().layout_no_wrap(
@@ -579,7 +592,7 @@ impl ImagePreviewState {
                         painter.rect_stroke(
                             h_rect,
                             Rounding::same(3.0),
-                            Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)),
+                            Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
                         );
                         painter.galley(h_rect.min + Vec2::new(5.0, 2.0), h_galley, h_fg);
                     }

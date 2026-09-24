@@ -48,10 +48,10 @@ impl ImagePreviewState {
     }
 
     pub(crate) fn render_transform_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        let frame_bg = hex_to_c32(&palette.theme.b_low);
-        let frame_stroke = hex_to_c32(&palette.theme.b_med);
-        let btn_bg = hex_to_c32(&palette.theme.b_med);
-        let btn_border = hex_to_c32(&palette.theme.b_low);
+        let frame_bg = hex_to_c32(&palette.colors.surface_recessed);
+        let frame_stroke = hex_to_c32(&palette.colors.surface_panel);
+        let btn_bg = hex_to_c32(&palette.colors.surface_panel);
+        let btn_border = hex_to_c32(&palette.colors.surface_recessed);
 
         egui::Frame::none()
             .fill(frame_bg)
@@ -116,7 +116,7 @@ impl ImagePreviewState {
                     ui.label(
                         egui::RichText::new("Mirror:")
                             .small()
-                            .color(hex_to_c32(&palette.theme.f_med)),
+                            .color(hex_to_c32(&palette.colors.text_secondary)),
                     );
 
                     // Flip H

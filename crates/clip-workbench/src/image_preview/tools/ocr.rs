@@ -338,10 +338,10 @@ impl ImagePreviewState {
         }
 
         let accent = hex_to_c32(&palette.harmonies.triadic_1);
-        let surface = hex_to_c32(&palette.theme.b_med);
-        let border = hex_to_c32(&palette.theme.b_low);
-        let text = hex_to_c32(&palette.theme.f_med);
-        let muted = hex_to_c32(&palette.theme.f_low);
+        let surface = hex_to_c32(&palette.colors.surface_panel);
+        let border = hex_to_c32(&palette.colors.surface_recessed);
+        let text = hex_to_c32(&palette.colors.text_secondary);
+        let muted = hex_to_c32(&palette.colors.text_muted);
         let danger = hex_to_c32(&palette.diff_del);
 
         ui.label(
@@ -537,9 +537,9 @@ impl ImagePreviewState {
         palette: &AppPalette,
     ) {
         let accent = hex_to_c32(&palette.harmonies.triadic_1);
-        let surface = hex_to_c32(&palette.theme.b_med);
-        let text = hex_to_c32(&palette.theme.f_med);
-        let muted = hex_to_c32(&palette.theme.f_low);
+        let surface = hex_to_c32(&palette.colors.surface_panel);
+        let text = hex_to_c32(&palette.colors.text_secondary);
+        let muted = hex_to_c32(&palette.colors.text_muted);
         let has_output = !self.ocr_state.extracted_text.is_empty();
 
         ui.label(

@@ -276,10 +276,10 @@ impl ImagePreviewState {
         palette: &AppPalette,
     ) {
         let accent = hex_to_c32(&palette.harmonies.base);
-        let surface = hex_to_c32(&palette.theme.b_med);
-        let border = hex_to_c32(&palette.theme.b_low);
-        let text = hex_to_c32(&palette.theme.f_med);
-        let muted = hex_to_c32(&palette.theme.f_low);
+        let surface = hex_to_c32(&palette.colors.surface_panel);
+        let border = hex_to_c32(&palette.colors.surface_recessed);
+        let text = hex_to_c32(&palette.colors.text_secondary);
+        let muted = hex_to_c32(&palette.colors.text_muted);
         let success = hex_to_c32(&palette.diff_add);
         let warning = hex_to_c32(&palette.diff_mod);
         let mut changed = false;
@@ -724,10 +724,14 @@ impl ImagePreviewState {
         // 4. Draggable Center Knob
         let knob_center = Pos2::new(split_x, img_rect.center().y);
         let knob_radius = 16.0;
-        let b_low = hex_to_c32(&palette.theme.b_low);
-        let b_med = hex_to_c32(&palette.theme.b_med);
+        let b_low = hex_to_c32(&palette.colors.surface_recessed);
+        let b_med = hex_to_c32(&palette.colors.surface_panel);
         let base_c = hex_to_c32(&palette.harmonies.base);
-        let knob_fg = contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_high)), palette);
+        let knob_fg = contrast_text_c32(
+            b_low,
+            Some(hex_to_c32(&palette.colors.text_primary)),
+            palette,
+        );
         painter.circle(
             knob_center,
             knob_radius,
@@ -778,8 +782,12 @@ impl ImagePreviewState {
 
         let before_badge_pos = Pos2::new(img_rect.min.x + 12.0, img_rect.min.y + 12.0);
         let before_rect = Rect::from_min_size(before_badge_pos, Vec2::new(140.0, 24.0));
-        let badge_bg = hex_to_c32_alpha(&palette.theme.b_low, 210);
-        let before_fg = contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_med)), palette);
+        let badge_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 210);
+        let before_fg = contrast_text_c32(
+            b_low,
+            Some(hex_to_c32(&palette.colors.text_secondary)),
+            palette,
+        );
         painter.rect_filled(before_rect, Rounding::same(4.0), badge_bg);
         painter.rect_stroke(
             before_rect,

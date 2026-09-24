@@ -170,9 +170,9 @@ impl ImagePreviewState {
     ) {
         let accent = hex_to_c32(&palette.harmonies.base);
         let secondary = hex_to_c32(&palette.harmonies.triadic_1);
-        let surface = hex_to_c32(&palette.theme.b_med);
-        let text = hex_to_c32(&palette.theme.f_med);
-        let muted = hex_to_c32(&palette.theme.f_low);
+        let surface = hex_to_c32(&palette.colors.surface_panel);
+        let text = hex_to_c32(&palette.colors.text_secondary);
+        let muted = hex_to_c32(&palette.colors.text_muted);
 
         ui.label(
             egui::RichText::new("Palette")
