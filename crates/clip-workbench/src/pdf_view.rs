@@ -358,17 +358,13 @@ impl PdfEditorState {
             }
         }
 
-        let bg = crate::hex_to_c32(&palette.theme.background);
-        let f_low = crate::hex_to_c32(&palette.theme.f_low);
-        let f_high = crate::hex_to_c32(&palette.theme.f_high);
-        let b_med = crate::hex_to_c32(&palette.theme.b_med);
-        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
         let warn_accent = crate::hex_to_c32(&palette.undo_border);
         let warn_bg = crate::hex_to_c32(&palette.undo_card_bg);
 
         egui::Frame::none()
-            .fill(bg)
+            .fill(colors.canvas)
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 let page_count = self.page_count;
@@ -411,7 +407,7 @@ impl PdfEditorState {
                     let rot_btn = crate::ui_ext::secondary_button_icon(
                         Some(Icon::RotateCw),
                         "Rotate 90° [R]",
-                        b_med,
+                        colors.panel,
                         palette,
                     );
                     if ui
@@ -456,8 +452,8 @@ impl PdfEditorState {
                             ui.set_height(avail_h);
 
                             egui::Frame::none()
-                                .fill(b_low)
-                                .stroke(Stroke::new(1.0_f32, b_med))
+                                .fill(colors.recessed)
+                                .stroke(Stroke::new(1.0_f32, colors.panel))
                                 .rounding(Rounding::same(6.0))
                                 .inner_margin(egui::Margin::same(8.0))
                                 .show(ui, |ui| {
@@ -465,7 +461,7 @@ impl PdfEditorState {
                                         ui.label(
                                             egui::RichText::new("Pages")
                                                 .strong()
-                                                .color(f_high),
+                                                .color(colors.text_primary),
                                         );
                                         ui.with_layout(
                                             egui::Layout::right_to_left(egui::Align::Center),
@@ -473,7 +469,7 @@ impl PdfEditorState {
                                                 ui.label(
                                                     egui::RichText::new(format!("{} total", page_count))
                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(f_low),
+                                                        .color(colors.text_muted),
                                                 );
                                             },
                                         );
@@ -512,12 +508,16 @@ impl PdfEditorState {
                                                         let border_col = if is_selected {
                                                             accent
                                                         } else {
-                                                            b_med
+                                                            colors.panel
                                                         };
                                                         let stroke_w = if is_selected { 2.0_f32 } else { 1.0_f32 };
 
                                                         egui::Frame::none()
-                                                            .fill(if is_selected { b_med } else { bg })
+                                                            .fill(if is_selected {
+                                                                colors.panel
+                                                            } else {
+                                                                colors.canvas
+                                                            })
                                                             .stroke(Stroke::new(stroke_w, border_col))
                                                             .rounding(Rounding::same(4.0))
                                                             .inner_margin(egui::Margin::same(6.0))
@@ -560,7 +560,7 @@ impl PdfEditorState {
                                                                         .color(if is_selected {
                                                                             accent
                                                                         } else {
-                                                                            f_low
+                                                                            colors.text_muted
                                                                         }),
                                                                     );
                                                                 });
@@ -586,8 +586,8 @@ impl PdfEditorState {
                             ui.set_height(avail_h);
 
                             egui::Frame::none()
-                                .fill(b_low)
-                                .stroke(Stroke::new(1.0_f32, b_med))
+                                .fill(colors.recessed)
+                                .stroke(Stroke::new(1.0_f32, colors.panel))
                                 .rounding(Rounding::same(6.0))
                                 .inner_margin(egui::Margin::same(12.0))
                                 .show(ui, |ui| {
@@ -604,7 +604,7 @@ impl PdfEditorState {
                                                     page.page_num, page_count
                                                 ))
                                                 .strong()
-                                                .color(f_high),
+                                                .color(colors.text_primary),
                                             );
                                             ui.label(
                                                 egui::RichText::new(format!(
@@ -612,7 +612,7 @@ impl PdfEditorState {
                                                     page.width, page.height
                                                 ))
                                                 .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                .color(f_low),
+                                                .color(colors.text_muted),
                                             );
 
                                         });
@@ -651,7 +651,7 @@ impl PdfEditorState {
                                         ui.centered_and_justified(|ui| {
                                             ui.label(
                                                 egui::RichText::new("No page selected.")
-                                                    .color(f_low),
+                                                    .color(colors.text_muted),
                                             );
                                         });
                                     }
