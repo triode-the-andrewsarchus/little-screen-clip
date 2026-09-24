@@ -1754,41 +1754,45 @@ impl WorkbenchApp {
 
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
         let audio_active = self.is_audio_region_active();
-        self.handle_escape_shortcut(ctx, audio_active);
+        if self.handle_escape_shortcut(ctx, audio_active) {
+            return;
+        }
         self.handle_audio_strip_shortcuts(ctx, audio_active);
         self.handle_view_switching_shortcuts(ctx);
         self.handle_palette_shortcuts(ctx, audio_active);
     }
 
-    fn handle_escape_shortcut(&mut self, ctx: &egui::Context, audio_region_active: bool) {
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if self.view == WorkbenchView::NodeMachine
-                && (self.canvas_state.catalog_open
-                    || self.canvas_state.save_dialog_open
-                    || self.canvas_state.dragging_from.is_some())
-            {
-                if self.canvas_state.catalog_open {
-                    self.canvas_state.catalog_open = false;
-                } else if self.canvas_state.save_dialog_open {
-                    self.canvas_state.save_dialog_open = false;
-                } else {
-                    self.canvas_state.dragging_from = None;
-                }
-            } else if audio_region_active {
-                if let Some(strip) = &mut self.rolling_audio_strip {
-                    strip.selected_region = None;
-                    strip.stop();
-                }
-            } else if self.view == WorkbenchView::NodeMachine {
-                self.view = WorkbenchView::Palette;
-                self.palette_search_needs_focus = true;
-            } else if self.view == WorkbenchView::AutoActions {
-                self.view = WorkbenchView::Palette;
-                self.palette_search_needs_focus = true;
-            } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+    fn handle_escape_shortcut(&mut self, ctx: &egui::Context, audio_region_active: bool) -> bool {
+        if !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            return false;
         }
+        if self.view == WorkbenchView::NodeMachine
+            && (self.canvas_state.catalog_open
+                || self.canvas_state.save_dialog_open
+                || self.canvas_state.dragging_from.is_some())
+        {
+            if self.canvas_state.catalog_open {
+                self.canvas_state.catalog_open = false;
+            } else if self.canvas_state.save_dialog_open {
+                self.canvas_state.save_dialog_open = false;
+            } else {
+                self.canvas_state.dragging_from = None;
+            }
+        } else if audio_region_active {
+            if let Some(strip) = &mut self.rolling_audio_strip {
+                strip.selected_region = None;
+                strip.stop();
+            }
+        } else if self.view == WorkbenchView::NodeMachine {
+            self.view = WorkbenchView::Palette;
+            self.palette_search_needs_focus = true;
+        } else if self.view == WorkbenchView::AutoActions {
+            self.view = WorkbenchView::Palette;
+            self.palette_search_needs_focus = true;
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        true
     }
 
     fn handle_audio_strip_shortcuts(&mut self, ctx: &egui::Context, audio_region_active: bool) {
