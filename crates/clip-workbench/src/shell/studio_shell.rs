@@ -877,16 +877,16 @@ mod tests {
                     shell.render_header(ui, |ui| {
                         action_rects.push(
                             ui.add(crate::ui_ext::action_button(
-                                "Save As...",
-                                Color32::GREEN,
+                                "Copy",
+                                Color32::LIGHT_BLUE,
                                 &palette,
                             ))
                             .rect,
                         );
                         action_rects.push(
                             ui.add(crate::ui_ext::action_button(
-                                "Copy",
-                                Color32::LIGHT_BLUE,
+                                "Save As...",
+                                Color32::GREEN,
                                 &palette,
                             ))
                             .rect,
@@ -921,8 +921,8 @@ mod tests {
             "WEBP",
             "554.4 KB",
             "Close (Esc)",
-            "Copy",
             "Save As...",
+            "Copy",
             "Krita",
             "Inkscape",
             "Nomacs",

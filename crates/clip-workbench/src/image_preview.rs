@@ -1208,25 +1208,8 @@ impl ImagePreviewState {
         let mut clicked_copy = false;
 
         let clicked_hatch = shell.render_header(ui, |ui| {
-            // Save As button
-            let save_btn = crate::ui_ext::action_button_icon(
-                Some(Icon::Save),
-                "Save As...",
-                hex_to_c32(&palette.diff_add),
-                palette,
-            )
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.diff_add)));
-            if ui
-                .add(save_btn)
-                .on_hover_text("Save current image to file (Ctrl+S)")
-                .clicked()
-            {
-                clicked_save_as = true;
-            }
-
-            ui.add_space(4.0);
-
-            // Copy to Clipboard Slot button
+            // The shared header lays actions out from the right edge inward.
+            // Draw Copy first so Save As appears immediately after Close.
             let copy_btn = crate::ui_ext::action_button_icon(
                 Some(Icon::Copy),
                 "Copy (Ctrl+C)",
@@ -1242,6 +1225,24 @@ impl ImagePreviewState {
                 .clicked()
             {
                 clicked_copy = true;
+            }
+
+            ui.add_space(4.0);
+
+            // Save As button
+            let save_btn = crate::ui_ext::action_button_icon(
+                Some(Icon::Save),
+                "Save As...",
+                hex_to_c32(&palette.diff_add),
+                palette,
+            )
+            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.diff_add)));
+            if ui
+                .add(save_btn)
+                .on_hover_text("Save current image to file (Ctrl+S)")
+                .clicked()
+            {
+                clicked_save_as = true;
             }
         });
 
