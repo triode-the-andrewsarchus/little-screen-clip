@@ -90,156 +90,13 @@ impl ImagePreviewState {
                     self.show_toast("Color added to picked colors");
                 }
 
-                // Render Magnifying Loupe Card
-                let canvas_rect = ui.available_rect_before_wrap();
-                let loupe_r: i32 = 4; // 9x9 grid (-4..=4)
-                let cell_size = 14.0;
-                let grid_w = (loupe_r * 2 + 1) as f32 * cell_size; // 126.0
-                let card_w = grid_w + 20.0; // 146.0
-                let card_h = grid_w + 80.0; // 206.0
-
-                let mut card_min = ptr + Vec2::new(20.0, 20.0);
-                if card_min.x + card_w > canvas_rect.max.x {
-                    card_min.x = ptr.x - card_w - 20.0;
-                }
-                if card_min.y + card_h > canvas_rect.max.y {
-                    card_min.y = ptr.y - card_h - 20.0;
-                }
-                let card_rect = Rect::from_min_size(card_min, Vec2::new(card_w, card_h));
-
-                // Card background & sleek harmonic border
-                let card_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 245);
-                painter.rect_filled(card_rect, Rounding::same(8.0), card_bg);
-                painter.rect_stroke(
-                    card_rect,
-                    Rounding::same(8.0),
-                    Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
-                );
-
-                // Loupe Grid
-                let grid_origin = card_min + Vec2::new(10.0, 10.0);
-                for dy in -loupe_r..=loupe_r {
-                    for dx in -loupe_r..=loupe_r {
-                        let samp_x = (px + dx).clamp(0, img_w - 1) as u32;
-                        let samp_y = (py + dy).clamp(0, img_h - 1) as u32;
-                        let samp_pix = self.current_rgba.get_pixel(samp_x, samp_y);
-                        let cell_col = Color32::from_rgba_unmultiplied(
-                            samp_pix[0],
-                            samp_pix[1],
-                            samp_pix[2],
-                            samp_pix[3],
-                        );
-
-                        let cell_min = grid_origin
-                            + Vec2::new(
-                                (dx + loupe_r) as f32 * cell_size,
-                                (dy + loupe_r) as f32 * cell_size,
-                            );
-                        let cell_rect = Rect::from_min_size(cell_min, Vec2::splat(cell_size));
-
-                        // Draw alpha checkerboard under transparent pixels
-                        if samp_pix[3] < 255 {
-                            let half = cell_size / 2.0;
-                            painter.rect_filled(
-                                Rect::from_min_size(cell_min, Vec2::splat(half)),
-                                Rounding::ZERO,
-                                Color32::from_gray(180),
-                            );
-                            painter.rect_filled(
-                                Rect::from_min_size(
-                                    cell_min + Vec2::splat(half),
-                                    Vec2::splat(half),
-                                ),
-                                Rounding::ZERO,
-                                Color32::from_gray(180),
-                            );
-                        }
-
-                        painter.rect_filled(cell_rect, Rounding::ZERO, cell_col);
-
-                        // Highlight center cell
-                        if dx == 0 && dy == 0 {
-                            painter.rect_stroke(
-                                cell_rect,
-                                Rounding::ZERO,
-                                Stroke::new(2.0_f32, hex_to_c32(&palette.colors.text_primary)),
-                            );
-                            painter.rect_stroke(
-                                cell_rect.expand(1.0),
-                                Rounding::ZERO,
-                                Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_recessed)),
-                            );
-                        }
-                    }
-                }
-
-                // Color Swatch below grid
-                let swatch_y = grid_origin.y + grid_w + 8.0;
-                let swatch_rect = Rect::from_min_size(
-                    Pos2::new(card_min.x + 10.0, swatch_y),
-                    Vec2::new(card_w - 20.0, 16.0),
-                );
-                painter.rect_filled(swatch_rect, Rounding::same(3.0), col);
-                painter.rect_stroke(
-                    swatch_rect,
-                    Rounding::same(3.0),
-                    Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
-                );
-
-                // Hex Code Text
-                let hex_str = format!(
-                    "#{:02X}{:02X}{:02X}",
-                    pixel_data[0], pixel_data[1], pixel_data[2]
-                );
-                let hex_text_col = contrast_text_c32(
-                    card_bg,
-                    Some(hex_to_c32(&palette.colors.text_primary)),
+                self.render_pick_color_loupe(
+                    painter,
+                    ptr,
+                    ui.available_rect_before_wrap(),
+                    px,
+                    py,
                     palette,
-                );
-                let hex_galley =
-                    painter.layout_no_wrap(hex_str, egui::FontId::monospace(12.0), hex_text_col);
-                painter.galley(
-                    Pos2::new(card_min.x + 10.0, swatch_y + 20.0),
-                    hex_galley,
-                    hex_text_col,
-                );
-
-                // RGB & Coordinate Info
-                let info_str = format!(
-                    "RGB({}, {}, {}) | {}, {}",
-                    pixel_data[0], pixel_data[1], pixel_data[2], px, py
-                );
-                let info_text_col = contrast_text_c32(
-                    card_bg,
-                    Some(hex_to_c32(&palette.colors.text_secondary)),
-                    palette,
-                );
-                let info_galley = painter.layout_no_wrap(
-                    info_str,
-                    egui::FontId::proportional(9.5),
-                    info_text_col,
-                );
-                painter.galley(
-                    Pos2::new(card_min.x + 10.0, swatch_y + 36.0),
-                    info_galley,
-                    info_text_col,
-                );
-
-                // Click to copy hint
-                let hint_text_col = contrast_text_c32(
-                    card_bg,
-                    Some(hex_to_c32(&palette.harmonies.triadic_1)),
-                    palette,
-                );
-                let hint_galley = painter.layout_no_wrap(
-                    "🖱 Click to copy".to_string(),
-                    egui::FontId::proportional(9.0),
-                    hint_text_col,
-                );
-                painter.galley(
-                    Pos2::new(card_min.x + 10.0, swatch_y + 49.0),
-                    hint_galley,
-                    hint_text_col,
                 );
             } else {
                 self.pick_color_state.hovered_color = None;
@@ -248,6 +105,188 @@ impl ImagePreviewState {
         } else {
             self.pick_color_state.hovered_color = None;
             self.pick_color_state.hovered_pixel = None;
+        }
+    }
+
+    fn render_pick_color_loupe(
+        &self,
+        painter: &egui::Painter,
+        ptr: Pos2,
+        canvas_rect: Rect,
+        px: i32,
+        py: i32,
+        palette: &AppPalette,
+    ) {
+        let img_w = self.current_rgba.width() as i32;
+        let img_h = self.current_rgba.height() as i32;
+        let pixel_data = *self.current_rgba.get_pixel(px as u32, py as u32);
+        let col = Color32::from_rgba_unmultiplied(
+            pixel_data[0],
+            pixel_data[1],
+            pixel_data[2],
+            pixel_data[3],
+        );
+        // Render Magnifying Loupe Card
+        let loupe_r: i32 = 4; // 9x9 grid (-4..=4)
+        // Keep enough width for the shared 15pt monospace hex value
+        // while scaling the loupe cells down for compact panels.
+        let card_w = canvas_rect.width().clamp(92.0, 146.0);
+        let cell_size = ((card_w - 20.0) / 9.0).min(14.0);
+        let grid_w = (loupe_r * 2 + 1) as f32 * cell_size; // 126.0
+        let card_padding = (card_w - grid_w) / 2.0;
+
+        let card_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 245);
+        let hex_text_col = contrast_text_c32(
+            card_bg,
+            Some(hex_to_c32(&palette.colors.text_primary)),
+            palette,
+        );
+        let info_text_col = contrast_text_c32(
+            card_bg,
+            Some(hex_to_c32(&palette.colors.text_secondary)),
+            palette,
+        );
+        let hint_text_col = contrast_text_c32(
+            card_bg,
+            Some(hex_to_c32(&palette.harmonies.triadic_1)),
+            palette,
+        );
+        let hex_str = format!(
+            "#{:02X}{:02X}{:02X}",
+            pixel_data[0], pixel_data[1], pixel_data[2]
+        );
+        let readout_lines = [
+            (hex_str, true, hex_text_col),
+            (format!("R: {}", pixel_data[0]), false, info_text_col),
+            (format!("G: {}", pixel_data[1]), false, info_text_col),
+            (format!("B: {}", pixel_data[2]), false, info_text_col),
+            (format!("X: {px}"), true, info_text_col),
+            (format!("Y: {py}"), true, info_text_col),
+            ("Click to".to_owned(), false, hint_text_col),
+            ("keep".to_owned(), false, hint_text_col),
+        ];
+        let readout: Vec<_> = readout_lines
+            .into_iter()
+            .map(|(line, monospace, color)| {
+                let font = if monospace {
+                    egui::FontId::monospace(crate::ui_ext::MONO_FONT_SIZE)
+                } else {
+                    egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE)
+                };
+                (painter.layout_no_wrap(line, font, color), color)
+            })
+            .collect();
+        let readout_height = readout
+            .iter()
+            .map(|(galley, _)| galley.size().y)
+            .sum::<f32>()
+            + (readout.len().saturating_sub(1) as f32 * 2.0);
+        let card_h = grid_w + 56.0 + readout_height;
+        let card_h = card_h.min(canvas_rect.height().max(1.0));
+
+        let mut card_min = ptr + Vec2::new(20.0, 20.0);
+        if card_min.x + card_w > canvas_rect.max.x {
+            card_min.x = ptr.x - card_w - 20.0;
+        }
+        if card_min.y + card_h > canvas_rect.max.y {
+            card_min.y = ptr.y - card_h - 20.0;
+        }
+        card_min.x = card_min.x.clamp(
+            canvas_rect.min.x,
+            (canvas_rect.max.x - card_w).max(canvas_rect.min.x),
+        );
+        card_min.y = card_min.y.clamp(
+            canvas_rect.min.y,
+            (canvas_rect.max.y - card_h).max(canvas_rect.min.y),
+        );
+        let card_rect = Rect::from_min_size(card_min, Vec2::new(card_w, card_h));
+
+        // Card background & sleek harmonic border
+        painter.rect_filled(card_rect, Rounding::same(8.0), card_bg);
+        painter.rect_stroke(
+            card_rect,
+            Rounding::same(8.0),
+            Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)),
+        );
+
+        // Loupe Grid
+        let grid_origin = card_min + Vec2::new(card_padding, 10.0);
+        for dy in -loupe_r..=loupe_r {
+            for dx in -loupe_r..=loupe_r {
+                let samp_x = (px + dx).clamp(0, img_w - 1) as u32;
+                let samp_y = (py + dy).clamp(0, img_h - 1) as u32;
+                let samp_pix = self.current_rgba.get_pixel(samp_x, samp_y);
+                let cell_col = Color32::from_rgba_unmultiplied(
+                    samp_pix[0],
+                    samp_pix[1],
+                    samp_pix[2],
+                    samp_pix[3],
+                );
+
+                let cell_min = grid_origin
+                    + Vec2::new(
+                        (dx + loupe_r) as f32 * cell_size,
+                        (dy + loupe_r) as f32 * cell_size,
+                    );
+                let cell_rect = Rect::from_min_size(cell_min, Vec2::splat(cell_size));
+
+                // Draw alpha checkerboard under transparent pixels
+                if samp_pix[3] < 255 {
+                    let half = cell_size / 2.0;
+                    painter.rect_filled(
+                        Rect::from_min_size(cell_min, Vec2::splat(half)),
+                        Rounding::ZERO,
+                        Color32::from_gray(180),
+                    );
+                    painter.rect_filled(
+                        Rect::from_min_size(cell_min + Vec2::splat(half), Vec2::splat(half)),
+                        Rounding::ZERO,
+                        Color32::from_gray(180),
+                    );
+                }
+
+                painter.rect_filled(cell_rect, Rounding::ZERO, cell_col);
+
+                // Highlight center cell
+                if dx == 0 && dy == 0 {
+                    painter.rect_stroke(
+                        cell_rect,
+                        Rounding::ZERO,
+                        Stroke::new(2.0_f32, hex_to_c32(&palette.colors.text_primary)),
+                    );
+                    painter.rect_stroke(
+                        cell_rect.expand(1.0),
+                        Rounding::ZERO,
+                        Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_recessed)),
+                    );
+                }
+            }
+        }
+
+        // Color Swatch below grid
+        let swatch_y = grid_origin.y + grid_w + 8.0;
+        let swatch_rect = Rect::from_min_size(
+            Pos2::new(card_min.x + card_padding, swatch_y),
+            Vec2::new(grid_w, 16.0),
+        );
+        painter.rect_filled(swatch_rect, Rounding::same(3.0), col);
+        painter.rect_stroke(
+            swatch_rect,
+            Rounding::same(3.0),
+            Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
+        );
+
+        // Stacked rows remain legible without a long line overflowing
+        // the compact card.
+        let mut readout_y = swatch_y + 20.0;
+        for (galley, color) in readout {
+            let row_height = galley.size().y;
+            painter.galley(
+                Pos2::new(card_min.x + card_padding, readout_y),
+                galley,
+                color,
+            );
+            readout_y += row_height + 2.0;
         }
     }
 }
