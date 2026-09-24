@@ -66,6 +66,21 @@ pub fn equal_button_width(ui: &Ui, labels: &[&str], with_icon: bool) -> f32 {
         }
 }
 
+/// Equal button width that fills available space while allowing a wrapped row.
+pub fn wrapped_equal_button_width(
+    ui: &Ui,
+    labels: &[&str],
+    with_icon: bool,
+    max_columns: usize,
+) -> f32 {
+    let minimum = equal_button_width(ui, labels, with_icon);
+    let spacing = ui.spacing().item_spacing.x;
+    let available = ui.available_width().max(1.0);
+    let columns = (((available + spacing) / (minimum + spacing)).floor() as usize)
+        .clamp(1, max_columns.min(labels.len()).max(1));
+    (available - spacing * (columns - 1) as f32) / columns as f32
+}
+
 /// Calculates an effective foreground Color32 that meets WCAG 2.1 4.5:1 contrast
 /// against `bg`. If `bg` is semi-transparent, it is alpha-composited against
 /// the theme's panel background. Call `contrast_text_c32_on` for another surface.

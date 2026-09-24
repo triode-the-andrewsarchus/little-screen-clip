@@ -100,13 +100,8 @@ impl ImagePreviewState {
                 .color(text),
         );
         ui.add_space(4.0);
-        let available_width = ui.available_width();
-        let button_gap = ui.spacing().item_spacing.x;
-        let preset_min_width =
-            crate::ui_ext::equal_button_width(ui, &["NASA / ASTER", "Preserve"], false);
-        let preset_width = ((available_width - button_gap) * 0.5)
-            .max(preset_min_width)
-            .min(available_width);
+        let preset_width =
+            crate::ui_ext::wrapped_equal_button_width(ui, &["NASA / ASTER", "Preserve"], false, 2);
         ui.horizontal_wrapped(|ui| {
             for (preset, label, tooltip) in [
                 (
@@ -161,11 +156,8 @@ impl ImagePreviewState {
                 .color(text),
         );
         ui.add_space(4.0);
-        let mode_min_width =
-            crate::ui_ext::equal_button_width(ui, &["Correlation", "Covariance"], false);
-        let mode_width = ((available_width - button_gap) * 0.5)
-            .max(mode_min_width)
-            .min(available_width);
+        let mode_width =
+            crate::ui_ext::wrapped_equal_button_width(ui, &["Correlation", "Covariance"], false, 2);
         ui.horizontal_wrapped(|ui| {
             for (mode, label, tooltip) in [
                 (

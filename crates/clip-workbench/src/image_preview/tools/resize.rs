@@ -873,21 +873,21 @@ impl ImagePreviewState {
                     ("150%", 1.5),
                     ("200%", 2.0),
                 ];
-                egui::Grid::new("resize_scale_presets")
-                    .num_columns(3)
-                    .spacing(Vec2::new(4.0, 4.0))
-                    .show(ui, |ui| {
-                        for (index, (label, factor)) in presets.into_iter().enumerate() {
-                            let button = crate::compact_toolbar_button(label, surface, palette);
-                            if ui.add_sized([58.0, 25.0], button).clicked() {
-                                self.resize_state
-                                    .set_scale_preset(factor, current.0, current.1);
-                            }
-                            if index % 3 == 2 {
-                                ui.end_row();
-                            }
+                let labels = presets.map(|(label, _)| label);
+                let button_width =
+                    crate::ui_ext::wrapped_equal_button_width(ui, &labels, false, presets.len());
+                ui.horizontal_wrapped(|ui| {
+                    for (label, factor) in presets {
+                        let button = crate::compact_toolbar_button(label, surface, palette);
+                        if ui
+                            .add_sized([button_width, crate::ui_ext::CONTROL_HEIGHT], button)
+                            .clicked()
+                        {
+                            self.resize_state
+                                .set_scale_preset(factor, current.0, current.1);
                         }
-                    });
+                    }
+                });
 
                 ui.add_space(12.0);
                 ui.label(
@@ -946,24 +946,24 @@ impl ImagePreviewState {
                     ("1 MB", 1.0, true),
                     ("2 MB", 2.0, true),
                 ];
-                egui::Grid::new("resize_file_size_presets")
-                    .num_columns(2)
-                    .spacing(Vec2::new(4.0, 4.0))
-                    .show(ui, |ui| {
-                        for (index, (label, value, megabytes)) in presets.into_iter().enumerate() {
-                            let selected = (self.resize_state.target_size_val - value).abs() < 0.01
-                                && self.resize_state.target_size_unit_mb == megabytes;
-                            let fill = if selected { success } else { surface };
-                            let button = crate::compact_toolbar_button(label, fill, palette);
-                            if ui.add_sized([88.0, 26.0], button).clicked() {
-                                self.resize_state.target_size_val = value;
-                                self.resize_state.target_size_unit_mb = megabytes;
-                            }
-                            if index % 2 == 1 {
-                                ui.end_row();
-                            }
+                let labels = presets.map(|(label, _, _)| label);
+                let button_width =
+                    crate::ui_ext::wrapped_equal_button_width(ui, &labels, false, presets.len());
+                ui.horizontal_wrapped(|ui| {
+                    for (label, value, megabytes) in presets {
+                        let selected = (self.resize_state.target_size_val - value).abs() < 0.01
+                            && self.resize_state.target_size_unit_mb == megabytes;
+                        let fill = if selected { success } else { surface };
+                        let button = crate::compact_toolbar_button(label, fill, palette);
+                        if ui
+                            .add_sized([button_width, crate::ui_ext::CONTROL_HEIGHT], button)
+                            .clicked()
+                        {
+                            self.resize_state.target_size_val = value;
+                            self.resize_state.target_size_unit_mb = megabytes;
                         }
-                    });
+                    }
+                });
 
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
