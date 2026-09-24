@@ -9,10 +9,12 @@ use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::StatusToast;
 use eframe::egui::{self, Rounding, Stroke, Vec2};
 use little_clip_core::pdf::{
-    delete_pdf_pages, get_pdf_info, render_pdf_page_preview, rotate_pdf_page,
+    PdfInfo, delete_pdf_pages, get_pdf_info, render_pdf_page_preview, rotate_pdf_page,
 };
+use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError, channel, sync_channel};
+use std::time::Duration;
 
 const PREVIEW_QUEUE_CAPACITY: usize = 3;
 
@@ -51,6 +53,10 @@ pub struct PdfEditorState {
     pub selected_page: Option<usize>,
     pub status_toast: StatusToast,
     pub dirty: bool,
+    info_job: Option<(
+        JobTicket,
+        Receiver<Result<Result<PdfInfo, String>, JobError>>,
+    )>,
     preview_rx: Option<Receiver<PdfPreviewMsg>>,
     previews_loading: bool,
     edit_rx: Option<Receiver<PdfEditMsg>>,
@@ -70,46 +76,91 @@ impl PdfEditorState {
             .with_file_name(format!("{stem}.{operation}.edited.pdf"))
     }
 
-    /// Loads page metadata and generates thumbnail previews for the given PDF file.
+    /// Starts loading page metadata and thumbnail previews for the given PDF file.
     pub fn new(path: PathBuf) -> Self {
         let title = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "document.pdf".to_string());
 
-        let info = get_pdf_info(&path).unwrap_or(little_clip_core::pdf::PdfInfo {
-            page_count: 1,
-            title: None,
-            author: None,
-            page_size: None,
-        });
-
-        let page_count = info.page_count;
-        let selected_page = if page_count > 0 { Some(1) } else { None };
         let mut state = Self {
             path,
             title,
-            page_count,
-            pages: (1..=page_count)
-                .map(|page_num| PdfPageItem {
-                    page_num,
-                    png_bytes: Vec::new(),
-                    texture: None,
-                    width: 0,
-                    height: 0,
-                    rotation: 0,
-                })
-                .collect(),
-            selected_page,
+            page_count: 0,
+            pages: Vec::new(),
+            selected_page: None,
             status_toast: StatusToast::new(),
             dirty: false,
+            info_job: None,
             preview_rx: None,
             previews_loading: false,
             edit_rx: None,
             edit_in_progress: false,
         };
-        state.start_preview_worker();
+        state.start_info_worker();
         state
+    }
+
+    fn start_info_worker(&mut self) {
+        if let Some((ticket, _)) = self.info_job.take() {
+            ticket.cancel();
+        }
+        self.preview_rx = None;
+        self.previews_loading = false;
+        self.pages.clear();
+        self.page_count = 0;
+        let path = self.path.clone();
+        self.info_job = Some(
+            BackgroundJobs::global().submit(Duration::from_secs(30), move || get_pdf_info(&path)),
+        );
+    }
+
+    fn poll_info_worker(&mut self, ctx: &egui::Context, now: f64) {
+        let Some((_, rx)) = &self.info_job else {
+            return;
+        };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(50));
+                return;
+            }
+            Err(TryRecvError::Disconnected) => Err(JobError::Cancelled),
+        };
+        self.info_job = None;
+        let info = match result {
+            Ok(Ok(info)) => info,
+            failure => {
+                let reason = match failure {
+                    Ok(Err(error)) => error,
+                    Err(error) => error.to_string(),
+                    Ok(Ok(_)) => unreachable!(),
+                };
+                self.status_toast
+                    .set(format!("PDF metadata unavailable: {reason}"), now);
+                PdfInfo {
+                    page_count: 1,
+                    title: None,
+                    author: None,
+                    page_size: None,
+                }
+            }
+        };
+        self.page_count = info.page_count;
+        self.pages = (1..=self.page_count)
+            .map(|page_num| PdfPageItem {
+                page_num,
+                png_bytes: Vec::new(),
+                texture: None,
+                width: 0,
+                height: 0,
+                rotation: 0,
+            })
+            .collect();
+        self.selected_page =
+            (self.page_count > 0).then(|| self.selected_page.unwrap_or(1).min(self.page_count));
+        self.start_preview_worker();
+        ctx.request_repaint();
     }
 
     fn start_preview_worker(&mut self) {
@@ -169,38 +220,15 @@ impl PdfEditorState {
         }
     }
 
-    pub fn reload_pages(&mut self, _ctx: &egui::Context) {
-        let info = get_pdf_info(&self.path).unwrap_or(little_clip_core::pdf::PdfInfo {
-            page_count: 1,
-            title: None,
-            author: None,
-            page_size: None,
-        });
-
-        self.page_count = info.page_count;
-        self.pages = (1..=self.page_count)
-            .map(|page_num| PdfPageItem {
-                page_num,
-                png_bytes: Vec::new(),
-                texture: None,
-                width: 0,
-                height: 0,
-                rotation: 0,
-            })
-            .collect();
-        self.start_preview_worker();
-        if let Some(cur) = self.selected_page {
-            if cur > self.page_count {
-                self.selected_page = if self.page_count > 0 {
-                    Some(self.page_count)
-                } else {
-                    None
-                };
-            }
-        }
+    pub fn reload_pages(&mut self, ctx: &egui::Context) {
+        self.start_info_worker();
+        ctx.request_repaint();
     }
 
     pub fn delete_current_page(&mut self, now: f64) {
+        if self.info_job.is_some() {
+            return;
+        }
         let Some(cur) = self.selected_page else {
             return;
         };
@@ -214,6 +242,9 @@ impl PdfEditorState {
     }
 
     pub fn rotate_current_page(&mut self, degrees: u32, now: f64) {
+        if self.info_job.is_some() {
+            return;
+        }
         let Some(cur) = self.selected_page else {
             return;
         };
@@ -323,11 +354,12 @@ impl PdfEditorState {
         palette: &little_clip_core::theme::AppPalette,
         close: &mut bool,
     ) {
-        self.poll_preview_worker(ctx);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
+        self.poll_info_worker(ctx, now);
+        self.poll_preview_worker(ctx);
         self.poll_edit_worker(ctx, now);
 
         // Hotkeys
@@ -372,11 +404,21 @@ impl PdfEditorState {
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 let page_count = self.page_count;
+                let metadata_loading = self.info_job.is_some();
+                let page_actions_enabled =
+                    !metadata_loading && !self.edit_in_progress && self.selected_page.is_some();
                 let mut rotate_clicked = false;
                 let mut delete_clicked = false;
 
                 let mut shell = StudioShell::new(&self.title, Icon::Pdf, palette, close)
-                    .with_badge(format!("{} pages", page_count), None)
+                    .with_badge(
+                        if metadata_loading {
+                            "Loading PDF…".to_owned()
+                        } else {
+                            format!("{} pages", page_count)
+                        },
+                        None,
+                    )
                     .with_escape_hatch(EscapeHatch::primary(
                         "Okular",
                         "okular",
@@ -384,7 +426,7 @@ impl PdfEditorState {
                     ).with_icon(Icon::Pdf))
                     .with_footer_hints("Click thumbnail: Select page | [R] Rotate 90° | [Del] Delete page | Esc: Close");
 
-                if let Some(cur) = self.selected_page {
+                if let Some(cur) = self.selected_page.filter(|_| !metadata_loading) {
                     shell = shell.with_footer_readout(format!("Selected: Page {} of {}", cur, page_count));
                 }
 
@@ -398,7 +440,7 @@ impl PdfEditorState {
                     )
                     .stroke(egui::Stroke::new(1.0_f32, warn_accent));
                     if ui
-                        .add(del_btn)
+                        .add_enabled(page_actions_enabled, del_btn)
                         .on_hover_text("Delete selected page from PDF (Hotkey: Del)")
                         .clicked()
                     {
@@ -415,7 +457,7 @@ impl PdfEditorState {
                         palette,
                     );
                     if ui
-                        .add(rot_btn)
+                        .add_enabled(page_actions_enabled, rot_btn)
                         .on_hover_text("Rotate selected page 90° clockwise (Hotkey: R)")
                         .clicked()
                     {
@@ -668,5 +710,40 @@ impl PdfEditorState {
                 let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
                 shell.render_footer(ui, &toast_tuple, now);
             });
+    }
+}
+
+impl Drop for PdfEditorState {
+    fn drop(&mut self) {
+        if let Some((ticket, _)) = &self.info_job {
+            ticket.cancel();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_pdf_metadata_completes_after_initial_view_creation() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = PdfEditorState::new(temp.path().join("missing.pdf"));
+        assert_eq!(state.page_count, 0);
+        assert!(state.info_job.is_some());
+
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while state.info_job.is_some() && std::time::Instant::now() < deadline {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                state.poll_info_worker(ctx, 0.0)
+            });
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(state.info_job.is_none(), "PDF metadata job did not finish");
+        assert_eq!(state.page_count, 1);
+        assert_eq!(state.selected_page, Some(1));
+        assert!(state.status_toast.message(0.0).is_some());
     }
 }
