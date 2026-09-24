@@ -46,7 +46,7 @@ The workbench must remain a non-resizable, centered, single-instance popup for N
 
 Async preview completion updates an existing clipboard item in place. Keep `SlotStateSummary` sensitive to preview readiness so open workbenches rehydrate the affected slot and repaint the mirror; item ID and payload kind alone do not reveal these updates.
 
-Runtime Hundred Rabbits themes and per-color overrides are retired, including on the USB display. Define fixed Light/Dark base colors centrally in core and switch workbench and display together; keep semantic desktop roles in `clip-workbench/src/ui_appearance.rs`. The remaining `Theme`/`AppPalette::from_theme` adapter is transitional until callers migrate. Do not rewrite a user's personal `config.toml` while migrating it.
+Runtime Hundred Rabbits themes and per-color overrides are retired, including on the USB display. Define fixed Light/Dark base colors centrally in core and switch workbench and display together; keep semantic desktop roles in `clip-workbench/src/ui_appearance.rs`. The remaining `Theme`-shaped palette fields are transitional until callers migrate. Do not rewrite a user's personal `config.toml` while migrating it.
 
 ## Agent Maintenance & Self-Correction
 During final cleanup, consider whether the work revealed that this file is incomplete, incorrect, or obsolete.

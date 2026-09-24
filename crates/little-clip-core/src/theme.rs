@@ -1,7 +1,6 @@
 //! Fixed application palettes and Oklab perceptual color space calculations.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 use crate::color::parse_hex_color_rgba_or_white as parse_hex_color_rgba;
 use crate::config::WorkbenchAppearance;
@@ -19,12 +18,6 @@ pub struct Theme {
     pub b_med: String,
     pub b_low: String,
     pub b_inv: String,
-}
-
-impl Default for Theme {
-    fn default() -> Self {
-        Self::apollo()
-    }
 }
 
 /// Computes the relative luminance (0.0 to 1.0) of an RGB color according to WCAG 2.1.
@@ -49,22 +42,6 @@ pub fn contrast_ratio(rgb1: (u8, u8, u8), rgb2: (u8, u8, u8)) -> f32 {
 }
 
 impl Theme {
-    /// Legacy fallback used only by the transitional palette adapter.
-    pub fn apollo() -> Self {
-        Self {
-            name: "apollo".to_string(),
-            background: "#29272b".to_string(),
-            f_high: "#ffffff".to_string(),
-            f_med: "#e47464".to_string(),
-            f_low: "#66606b".to_string(),
-            f_inv: "#000000".to_string(),
-            b_high: "#000000".to_string(),
-            b_med: "#201e21".to_string(),
-            b_low: "#322e33".to_string(),
-            b_inv: "#e47464".to_string(),
-        }
-    }
-
     /// Whether this theme is predominantly dark or light.
     pub fn is_dark(&self) -> bool {
         let (br, bg, bb, _) = parse_hex_color_rgba(&self.background);
@@ -417,14 +394,11 @@ impl AppPalette {
             b_low: b_low.into(),
             b_inv: b_inv.into(),
         };
-        Self::from_theme(
-            &theme,
-            &HashMap::from([("url_color".to_owned(), link.to_owned())]),
-        )
+        Self::from_fixed_colors(&theme, link)
     }
 
-    /// Builds a fully resolved AppPalette from a Theme and optional user overrides.
-    pub fn from_theme(theme: &Theme, overrides: &HashMap<String, String>) -> Self {
+    /// Resolve the two built-in appearances while callers migrate off `Theme` fields.
+    fn from_fixed_colors(theme: &Theme, link: &str) -> Self {
         let is_dark = theme.is_dark();
 
         // Base accent: prefer f_med, fall back to b_inv if f_med is grayscale
@@ -460,48 +434,40 @@ impl AppPalette {
         }
         .to_hex();
 
-        // Helper to pick override or fallback
-        let ov = |key: &str, fallback: &str| -> String {
-            overrides
-                .get(key)
-                .cloned()
-                .unwrap_or_else(|| fallback.to_string())
-        };
-
         Self {
             theme_name: theme.name.clone(),
             is_dark,
             theme: theme.clone(),
             harmonies: harmonies.clone(),
 
-            background: ov("background", &theme.background),
-            hero_card_bg: ov("hero_card_bg", &theme.b_high),
-            prior_card_bg: ov("prior_card_bg", &theme.b_med),
-            undo_card_bg: ov("undo_card_bg", &theme.b_low),
+            background: theme.background.clone(),
+            hero_card_bg: theme.b_high.clone(),
+            prior_card_bg: theme.b_med.clone(),
+            undo_card_bg: theme.b_low.clone(),
 
-            undo_border: ov("undo_border", &harmonies.warm_attention),
-            left_hand_border: ov("left_hand_border", &harmonies.base),
-            right_hand_border: ov("right_hand_border", &harmonies.complementary),
+            undo_border: harmonies.warm_attention.clone(),
+            left_hand_border: harmonies.base.clone(),
+            right_hand_border: harmonies.complementary.clone(),
 
-            left_prior1_border: ov("left_prior1_border", &harmonies.split_comp_1),
-            left_prior2_border: ov("left_prior2_border", &harmonies.triadic_1),
-            left_prior3_border: ov("left_prior3_border", &harmonies.split_comp_2),
+            left_prior1_border: harmonies.split_comp_1.clone(),
+            left_prior2_border: harmonies.triadic_1.clone(),
+            left_prior3_border: harmonies.split_comp_2.clone(),
 
-            right_prior1_border: ov("right_prior1_border", &harmonies.triadic_2),
-            right_prior2_border: ov("right_prior2_border", &harmonies.tetradic_1),
+            right_prior1_border: harmonies.triadic_2.clone(),
+            right_prior2_border: harmonies.tetradic_1.clone(),
 
-            cursor_border: ov("cursor_border", &harmonies.tetradic_2),
-            selected_border: ov("selected_border", &harmonies.triadic_1),
+            cursor_border: harmonies.tetradic_2.clone(),
+            selected_border: harmonies.triadic_1.clone(),
 
-            title_color: ov("title_color", &theme.f_high),
-            subtitle_color: ov("subtitle_color", &theme.f_med),
-            body_color: ov("body_color", &theme.f_low),
-            url_color: ov("url_color", &harmonies.split_comp_1),
+            title_color: theme.f_high.clone(),
+            subtitle_color: theme.f_med.clone(),
+            body_color: theme.f_low.clone(),
+            url_color: link.to_owned(),
 
-            debug_badge_bg: ov("debug_badge_bg", &theme.b_inv),
-            debug_badge_text: ov("debug_badge_text", &theme.f_inv),
-            tag_pill_bg: ov("tag_pill_bg", &theme.b_low),
-            tag_pill_text: ov("tag_pill_text", &theme.f_med),
+            debug_badge_bg: theme.b_inv.clone(),
+            debug_badge_text: theme.f_inv.clone(),
+            tag_pill_bg: theme.b_low.clone(),
+            tag_pill_text: theme.f_med.clone(),
 
             diff_add,
             diff_del,
