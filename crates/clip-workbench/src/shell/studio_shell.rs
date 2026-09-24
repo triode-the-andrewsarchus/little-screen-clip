@@ -11,8 +11,7 @@ use super::panel::{
 use crate::hex_to_c32;
 use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext::{
-    CONTROL_HEIGHT, CONTROL_ICON_SIZE, StatusToast, ZoomAction, contrast_text_c32,
-    equal_button_width, mode_tab_button, zoom_control_bar,
+    CONTROL_HEIGHT, CONTROL_ICON_SIZE, StatusToast, contrast_text_c32, equal_button_width,
 };
 use eframe::egui::{self, Color32, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::theme::AppPalette;
@@ -35,15 +34,6 @@ impl HeaderBadge {
             accent,
         }
     }
-}
-
-/// Container for the 3-panel / 4-panel workspace layout closures.
-pub struct PanelBody<'a, 'b> {
-    pub left: Option<Box<dyn FnOnce(&mut egui::Ui) + 'a>>,
-    pub center: Option<Box<dyn FnOnce(&mut egui::Ui) + 'a>>,
-    pub right: Option<Box<dyn FnOnce(&mut egui::Ui) + 'a>>,
-    pub bottom: Option<Box<dyn FnOnce(&mut egui::Ui) + 'a>>,
-    _marker: std::marker::PhantomData<&'b ()>,
 }
 
 /// Exact rectangles for a studio tool's optional work areas.
@@ -454,34 +444,6 @@ impl StudioPanelLayout {
     }
 }
 
-impl<'a, 'b> PanelBody<'a, 'b> {
-    pub fn new() -> Self {
-        Self {
-            left: None,
-            center: None,
-            right: None,
-            bottom: None,
-            _marker: std::marker::PhantomData,
-        }
-    }
-
-    pub fn left(&mut self, f: impl FnOnce(&mut egui::Ui) + 'a) {
-        self.left = Some(Box::new(f));
-    }
-
-    pub fn center(&mut self, f: impl FnOnce(&mut egui::Ui) + 'a) {
-        self.center = Some(Box::new(f));
-    }
-
-    pub fn right(&mut self, f: impl FnOnce(&mut egui::Ui) + 'a) {
-        self.right = Some(Box::new(f));
-    }
-
-    pub fn bottom(&mut self, f: impl FnOnce(&mut egui::Ui) + 'a) {
-        self.bottom = Some(Box::new(f));
-    }
-}
-
 /// The standard StudioShell component builder.
 pub struct StudioShell<'a> {
     pub title: String,
@@ -723,46 +685,6 @@ impl<'a> StudioShell<'a> {
         clicked_hatch
     }
 
-    /// Renders Zone 2 (Mode & Viewport Toolbar).
-    pub fn render_mode_bar<M: Copy + PartialEq>(
-        &self,
-        ui: &mut egui::Ui,
-        modes: &[M],
-        current_mode: M,
-        mode_label: impl Fn(M) -> &'static str,
-        mut on_mode_select: impl FnMut(M),
-        zoom_pct: Option<u32>,
-        mut on_zoom: impl FnMut(ZoomAction),
-    ) {
-        let palette = self.palette;
-        let colors = WorkbenchColors::from_palette(palette);
-
-        egui::Frame::none()
-            .fill(colors.recessed)
-            .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0_f32, colors.panel))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for &mode in modes {
-                        let is_active = mode == current_mode;
-                        let btn = mode_tab_button(mode_label(mode), is_active, palette);
-                        if ui.add(btn).clicked() {
-                            on_mode_select(mode);
-                        }
-                    }
-
-                    // Right side zoom controls if requested
-                    if let Some(pct) = zoom_pct {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if let Some(action) = zoom_control_bar(ui, pct, palette) {
-                                on_zoom(action);
-                            }
-                        });
-                    }
-                });
-            });
-    }
-
     /// Renders Zone 4 (Status & Shortcut Help Footer).
     pub fn render_footer(&self, ui: &mut egui::Ui, toast: &Option<(String, f64)>, now: f64) {
         let palette = self.palette;
@@ -793,51 +715,6 @@ impl<'a> StudioShell<'a> {
                     });
                 });
             });
-    }
-
-    /// Renders Zone 3 in a standardized 3-panel / 4-panel layout with collapsible sidebars and bottom drawer.
-    pub fn render_panels(
-        &self,
-        ui: &mut egui::Ui,
-        panel_state: &mut PanelState,
-        build_panels: impl FnOnce(&mut PanelBody),
-    ) {
-        let mut body = PanelBody::new();
-        build_panels(&mut body);
-
-        let left_visible = body.left.is_some() && !panel_state.left_collapsed;
-        let right_visible = body.right.is_some() && !panel_state.right_collapsed;
-        let bottom_visible = body.bottom.is_some() && !panel_state.bottom_collapsed;
-        let layout = StudioPanelLayout {
-            left: left_visible,
-            right: right_visible,
-            bottom: bottom_visible,
-            left_width: panel_state.effective_left_width(),
-            right_width: panel_state.effective_right_width(),
-            bottom_height: panel_state.effective_bottom_height(),
-            gap: 8.0,
-        };
-        let panels = layout.allocate(ui);
-
-        if let (Some(rect), Some(left_fn)) = (panels.left, body.left.take()) {
-            StudioPanelLayout::show_side(ui, rect, "studio_shell_left", self.palette, left_fn);
-        }
-        if let Some(center_fn) = body.center.take() {
-            StudioPanelLayout::show_region(ui, panels.center, center_fn);
-        }
-        if let (Some(rect), Some(right_fn)) = (panels.right, body.right.take()) {
-            StudioPanelLayout::show_side(ui, rect, "studio_shell_right", self.palette, right_fn);
-        }
-        if let (Some(rect), Some(bottom_fn)) = (panels.bottom, body.bottom.take()) {
-            StudioPanelLayout::show_bottom(ui, rect, self.palette, bottom_fn);
-        }
-        StudioPanelLayout::show_resize_handles(
-            ui,
-            &panels,
-            panel_state,
-            self.palette,
-            "studio_shell_panels",
-        );
     }
 }
 

@@ -20,4 +20,4 @@ pub use studio_controls::{
     render_context_slider, render_slider_track, render_track_slider, slider_double_clicked,
     slider_double_clicked_in,
 };
-pub use studio_shell::{HeaderBadge, PanelBody, StudioPanelLayout, StudioPanelRects, StudioShell};
+pub use studio_shell::{HeaderBadge, StudioPanelLayout, StudioPanelRects, StudioShell};
