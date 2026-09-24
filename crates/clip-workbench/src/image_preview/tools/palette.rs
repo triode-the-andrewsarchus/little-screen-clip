@@ -182,7 +182,7 @@ impl ImagePreviewState {
         );
         ui.label(
             egui::RichText::new("Dominant colors sampled from the image")
-                .size(11.5)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .color(muted),
         );
         ui.add_space(10.0);
@@ -191,7 +191,7 @@ impl ImagePreviewState {
         ui.horizontal(|ui| {
             let refresh = crate::secondary_button("Refresh", surface, palette);
             if ui
-                .add_sized([action_width, 28.0], refresh)
+                .add_sized([action_width, crate::ui_ext::CONTROL_HEIGHT], refresh)
                 .on_hover_text("Re-extract dominant colors from the current image")
                 .clicked()
             {
@@ -201,7 +201,7 @@ impl ImagePreviewState {
             let copy = crate::secondary_button("Copy CSV", surface, palette);
             if ui
                 .add_enabled_ui(!self.palette_state.extracted_colors.is_empty(), |ui| {
-                    ui.add_sized([action_width, 28.0], copy)
+                    ui.add_sized([action_width, crate::ui_ext::CONTROL_HEIGHT], copy)
                 })
                 .inner
                 .on_hover_text("Copy all palette hex codes")
@@ -233,14 +233,14 @@ impl ImagePreviewState {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("DOMINANT COLORS")
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .strong()
                     .color(secondary),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(self.palette_state.extracted_colors.len().to_string())
-                        .size(12.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .color(muted),
                 );
             });
@@ -251,13 +251,16 @@ impl ImagePreviewState {
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new("No palette extracted yet.")
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .italics()
                     .color(muted),
             );
             let extract = crate::action_button("Extract palette", accent, palette);
             if ui
-                .add_sized([ui.available_width(), 30.0], extract)
+                .add_sized(
+                    [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
+                    extract,
+                )
                 .clicked()
             {
                 self.run_palette_extraction();
@@ -281,14 +284,14 @@ impl ImagePreviewState {
                 ui.vertical(|ui| {
                     ui.label(
                         egui::RichText::new(&color.hex)
-                            .size(13.0)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .strong()
                             .monospace()
                             .color(text),
                     );
                     ui.label(
                         egui::RichText::new(format!("{:.1}% of sampled pixels", color.percentage))
-                            .size(11.0)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .color(muted),
                     );
                 });

@@ -272,7 +272,7 @@ impl ImagePreviewState {
         );
         ui.label(
             egui::RichText::new("Hover the image to inspect; click to keep a color.")
-                .size(11.5)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .color(muted),
         );
         ui.add_space(10.0);
@@ -309,7 +309,7 @@ impl ImagePreviewState {
                         current.g(),
                         current.b()
                     ))
-                    .size(11.5)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(muted),
                 );
             });
@@ -317,7 +317,10 @@ impl ImagePreviewState {
         ui.add_space(6.0);
         let copy_hex = crate::action_button("Copy current hex", accent, palette);
         if ui
-            .add_sized([ui.available_width(), 30.0], copy_hex)
+            .add_sized(
+                [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
+                copy_hex,
+            )
             .clicked()
         {
             self.copy_color_to_clipboard(current, ctx);
@@ -329,14 +332,14 @@ impl ImagePreviewState {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("PICKED COLORS")
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .strong()
                     .color(text),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(self.pick_color_state.picked_colors.len().to_string())
-                        .size(12.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .color(muted),
                 );
             });
@@ -346,7 +349,7 @@ impl ImagePreviewState {
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new("No colors picked yet.")
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .italics()
                     .color(muted),
             );
@@ -356,7 +359,10 @@ impl ImagePreviewState {
         ui.add_space(4.0);
         let copy_all = crate::secondary_button("Copy all colors", surface, palette);
         if ui
-            .add_sized([ui.available_width(), 28.0], copy_all)
+            .add_sized(
+                [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
+                copy_all,
+            )
             .clicked()
         {
             let colors = self
@@ -386,7 +392,7 @@ impl ImagePreviewState {
                         color.g(),
                         color.b()
                     ))
-                    .size(13.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .monospace()
                     .color(text),
                 );
