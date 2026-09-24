@@ -1444,10 +1444,11 @@ impl ImagePreviewState {
                         }
 
                         // Zoom percentage readout
+                        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
                         ui.label(
                             egui::RichText::new(format!("{:.0}%", self.zoom * 100.0))
-                                .small()
-                                .color(hex_to_c32(&palette.theme.f_low)),
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
+                                .color(colors.text_secondary),
                         );
 
                         // Zoom Out (-)
@@ -1619,6 +1620,7 @@ impl ImagePreviewState {
     }
 
     fn render_footer(&mut self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
+        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         egui::Frame::none()
             .fill(hex_to_c32(&palette.theme.b_low))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
@@ -1643,8 +1645,8 @@ impl ImagePreviewState {
 
                     ui.label(
                         egui::RichText::new(hint_text)
-                            .small()
-                            .color(hex_to_c32(&palette.theme.f_low)),
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                            .color(colors.text_secondary),
                     );
 
                     // Toast message
@@ -1683,7 +1685,12 @@ fn chip_badge(ui: &mut egui::Ui, text: &str, text_col: Color32, bg_col: Color32)
         .rounding(Rounding::same(4.0))
         .inner_margin(egui::Margin::symmetric(6.0, 2.0));
     frame.show(ui, |ui| {
-        ui.label(egui::RichText::new(text).small().strong().color(text_col));
+        ui.label(
+            egui::RichText::new(text)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
+                .strong()
+                .color(text_col),
+        );
     });
 }
 
