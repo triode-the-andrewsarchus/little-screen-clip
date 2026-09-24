@@ -8,10 +8,12 @@ use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::StatusToast;
 use eframe::egui::{self, Color32, Pos2, Rounding, Stroke, Vec2};
+use little_clip_core::JobTicket;
 use little_clip_core::palette::AppPalette;
 use little_clip_core::presentation::model3d::{Model3d, ModelFormat, Vec3};
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
+use std::time::Duration;
 
 /// Caps the number of facets submitted per frame for extreme high-poly meshes based on configured budget.
 /// Preserves full triangle density without dropping facets during interactive dragging.
@@ -43,6 +45,7 @@ pub struct Model3dViewerState {
     pub status: ModelLoadingStatus,
     pub mesh: Option<Model3d>,
     pub rx: Option<Receiver<Result<Result<Model3d, String>, little_clip_core::JobError>>>,
+    load_ticket: Option<JobTicket>,
     pub pitch: f32, // X rotation (radians)
     pub yaw: f32,   // Y rotation (radians)
     pub zoom: f32,
@@ -75,8 +78,8 @@ impl Model3dViewerState {
         };
 
         let load_path = path.clone();
-        let (_, rx) = little_clip_core::BackgroundJobs::global()
-            .submit(std::time::Duration::from_secs(30), move || {
+        let (ticket, rx) = little_clip_core::BackgroundJobs::global()
+            .submit(Duration::from_secs(30), move || {
                 Model3d::load_file(&load_path)
             });
 
@@ -86,6 +89,7 @@ impl Model3dViewerState {
             status: ModelLoadingStatus::Loading,
             mesh: None,
             rx: Some(rx),
+            load_ticket: Some(ticket),
             pitch: 0.4,
             yaw: 0.6,
             zoom: 1.0,
@@ -125,6 +129,7 @@ impl Model3dViewerState {
             status: ModelLoadingStatus::Ready,
             mesh: Some(mesh),
             rx: None,
+            load_ticket: None,
             pitch: 0.4,
             yaw: 0.6,
             zoom: 1.0,
@@ -171,6 +176,7 @@ impl Model3dViewerState {
                     Err(error) => self.status = ModelLoadingStatus::Error(error.to_string()),
                 }
                 self.rx = None;
+                self.load_ticket = None;
             }
         }
     }
@@ -215,7 +221,7 @@ impl Model3dViewerState {
         b_low: Color32,
         f_high: Color32,
     ) {
-        ui.ctx().request_repaint();
+        ui.ctx().request_repaint_after(Duration::from_millis(50));
         egui::Frame::none()
             .fill(bg)
             .inner_margin(egui::Margin::same(12.0))
@@ -665,6 +671,14 @@ fn render_mesh_projection(
         }
 
         painter.add(egui::Shape::mesh(mesh_shape));
+    }
+}
+
+impl Drop for Model3dViewerState {
+    fn drop(&mut self) {
+        if let Some(ticket) = &self.load_ticket {
+            ticket.cancel();
+        }
     }
 }
 
