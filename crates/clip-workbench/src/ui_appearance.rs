@@ -7,8 +7,7 @@ use little_clip_core::palette::AppPalette;
 use crate::hex_to_c32;
 use crate::ui_ext::contrast_text_c32;
 
-/// Semantic desktop roles. The legacy `AppPalette` bridge below keeps existing
-/// viewers working while their controls move away from display-theme names.
+/// Semantic desktop roles resolved from the shared fixed Light/Dark palette.
 #[derive(Debug, Clone, Copy)]
 pub struct WorkbenchColors {
     pub canvas: Color32,

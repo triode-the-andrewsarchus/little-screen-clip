@@ -5,7 +5,7 @@
 //! and double-click center reset.
 
 use crate::hex_to_c32;
-use crate::ui_ext::contrast_text_c32;
+use crate::ui_ext::{CONTROL_HEIGHT, MONO_FONT_SIZE, contrast_text_c32};
 use eframe::egui::{self, Color32, Pos2, Rect, Response, Stroke};
 use little_clip_core::palette::AppPalette;
 
@@ -92,12 +92,17 @@ impl<'a> SplitCompareView<'a> {
             Some(hex_to_c32(&palette.colors.text_primary)),
             palette,
         );
-        painter.circle(knob_center, 16.0, b_low, Stroke::new(2.0_f32, base_c));
+        painter.circle(
+            knob_center,
+            CONTROL_HEIGHT / 2.0,
+            b_low,
+            Stroke::new(2.0_f32, base_c),
+        );
         painter.text(
             knob_center,
             egui::Align2::CENTER_CENTER,
             "◀ ▶",
-            egui::FontId::monospace(10.0),
+            egui::FontId::monospace(MONO_FONT_SIZE),
             knob_fg,
         );
 
@@ -106,7 +111,9 @@ impl<'a> SplitCompareView<'a> {
             .hover_pos()
             .or_else(|| response.interact_pointer_pos());
         let near_divider = if let Some(pos) = ptr_pos {
-            (pos.x - split_x).abs() <= 18.0 && pos.y >= img_rect.min.y && pos.y <= img_rect.max.y
+            (pos.x - split_x).abs() <= CONTROL_HEIGHT / 2.0
+                && pos.y >= img_rect.min.y
+                && pos.y <= img_rect.max.y
         } else {
             false
         };
