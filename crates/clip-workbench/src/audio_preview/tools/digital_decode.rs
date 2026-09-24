@@ -315,10 +315,10 @@ impl AudioPreviewState {
             ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::click_and_drag());
         let painter = ui.painter_at(rect);
 
-        let bg_frame = crate::hex_to_c32(&palette.theme.b_low);
-        let border_frame = crate::hex_to_c32(&palette.theme.b_med);
-        let text_f_med = crate::hex_to_c32(&palette.theme.f_med);
-        let text_f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let bg_frame = crate::hex_to_c32(&palette.colors.surface_recessed);
+        let border_frame = crate::hex_to_c32(&palette.colors.surface_panel);
+        let text_f_med = crate::hex_to_c32(&palette.colors.text_secondary);
+        let text_f_low = crate::hex_to_c32(&palette.colors.text_muted);
         let accent_base = crate::hex_to_c32(&palette.harmonies.base);
         let accent_playhead = crate::hex_to_c32(&palette.harmonies.complementary);
 
@@ -500,12 +500,15 @@ impl AudioPreviewState {
             painter.rect_filled(
                 lane_rect,
                 Rounding::same(3.0),
-                crate::hex_to_c32_alpha(&palette.theme.b_med, 40),
+                crate::hex_to_c32_alpha(&palette.colors.surface_panel, 40),
             );
             painter.rect_stroke(
                 lane_rect,
                 Rounding::same(3.0),
-                Stroke::new(1.0_f32, crate::hex_to_c32_alpha(&palette.theme.b_high, 30)),
+                Stroke::new(
+                    1.0_f32,
+                    crate::hex_to_c32_alpha(&palette.colors.surface_raised, 30),
+                ),
             );
 
             // Gutter protocol badge
@@ -586,7 +589,7 @@ impl AudioPreviewState {
                     let text_color = if is_selected {
                         Color32::WHITE
                     } else {
-                        crate::hex_to_c32(&palette.theme.f_high)
+                        crate::hex_to_c32(&palette.colors.text_primary)
                     };
                     let label = if chip_rect.width() < needed_w - 6.0 && is_cw {
                         sym.symbol.split_whitespace().next().unwrap_or(&sym.symbol)
@@ -649,14 +652,20 @@ impl AudioPreviewState {
                             Pos2::new(x, ruler_rect.max.y),
                             Pos2::new(x, spec_rect.max.y),
                         ],
-                        Stroke::new(1.0_f32, crate::hex_to_c32_alpha(&palette.theme.f_low, 20)),
+                        Stroke::new(
+                            1.0_f32,
+                            crate::hex_to_c32_alpha(&palette.colors.text_muted, 20),
+                        ),
                     );
                     painter.line_segment(
                         [
                             Pos2::new(x, ruler_rect.min.y + 12.0),
                             Pos2::new(x, ruler_rect.max.y),
                         ],
-                        Stroke::new(1.0_f32, crate::hex_to_c32_alpha(&palette.theme.f_med, 80)),
+                        Stroke::new(
+                            1.0_f32,
+                            crate::hex_to_c32_alpha(&palette.colors.text_secondary, 80),
+                        ),
                     );
                     let label = if interval_sec >= 1.0 {
                         let m = (t / 60.0) as u32;
@@ -871,12 +880,12 @@ impl AudioPreviewState {
                                 sym.confidence * 100.0
                             ))
                             .monospace()
-                            .color(crate::hex_to_c32(&palette.theme.f_med)),
+                            .color(crate::hex_to_c32(&palette.colors.text_secondary)),
                         );
                         if !desc.is_empty() {
                             ui.label(
                                 egui::RichText::new(desc)
-                                    .color(crate::hex_to_c32(&palette.theme.f_high)),
+                                    .color(crate::hex_to_c32(&palette.colors.text_primary)),
                             );
                         }
                     });
@@ -938,12 +947,12 @@ impl AudioPreviewState {
         _ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        let text_f_med = crate::hex_to_c32(&palette.theme.f_med);
+        let text_f_med = crate::hex_to_c32(&palette.colors.text_secondary);
         let accent_base = crate::hex_to_c32(&palette.harmonies.base);
 
         // Top Toolbar: Scan button, protocol toggles, playback controls, and summary
         ui.horizontal(|ui| {
-            let b_med = crate::hex_to_c32(&palette.theme.b_med);
+            let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
             // Play/Pause button
             let (play_label, play_icon) = if self.is_playing {
                 ("Pause", Icon::Pause)
@@ -1057,7 +1066,7 @@ impl AudioPreviewState {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Copy transcript to clipboard button
-                let b_med = crate::hex_to_c32(&palette.theme.b_med);
+                let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
                 if ui
                     .add(crate::ui_ext::secondary_button_icon(
                         Some(Icon::Copy),
@@ -1273,7 +1282,7 @@ impl AudioPreviewState {
                                             .color(if is_selected {
                                                 accent_base
                                             } else {
-                                                crate::hex_to_c32(&palette.theme.f_high)
+                                                crate::hex_to_c32(&palette.colors.text_primary)
                                             }),
                                     );
 
@@ -1288,7 +1297,7 @@ impl AudioPreviewState {
                                         .add(crate::ui_ext::icon_button(
                                             Icon::Play,
                                             12.0,
-                                            crate::hex_to_c32(&palette.theme.b_med),
+                                            crate::hex_to_c32(&palette.colors.surface_panel),
                                             None,
                                             palette,
                                         ))

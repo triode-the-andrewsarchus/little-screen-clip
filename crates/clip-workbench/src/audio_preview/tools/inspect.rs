@@ -101,7 +101,7 @@ impl AudioPreviewState {
         let button = layout::AudioWorkspace::secondary_button_icon(
             Some(crate::icons::Icon::Volume),
             "Normalize Track",
-            hex_to_c32(&palette.theme.b_low),
+            hex_to_c32(&palette.colors.surface_recessed),
             palette,
         );
         if ui
@@ -466,7 +466,7 @@ impl AudioPreviewState {
                 let stop_btn = layout::AudioWorkspace::secondary_button_icon(
                     Some(crate::icons::Icon::Stop),
                     "Stop",
-                    hex_to_c32(&palette.theme.b_low),
+                    hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 );
                 if ui.add(stop_btn).clicked() {
@@ -476,7 +476,7 @@ impl AudioPreviewState {
                 let replay_btn = layout::AudioWorkspace::secondary_button_icon(
                     Some(crate::icons::Icon::Undo),
                     "Start",
-                    hex_to_c32(&palette.theme.b_low),
+                    hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 );
                 if ui.add(replay_btn).clicked() {
@@ -632,7 +632,7 @@ impl AudioPreviewState {
                 let trim_btn = layout::AudioWorkspace::secondary_button_icon(
                     Some(crate::icons::Icon::Scissors),
                     "Trim Silence",
-                    hex_to_c32(&palette.theme.b_low),
+                    hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 );
                 if ui
@@ -678,7 +678,7 @@ impl AudioPreviewState {
                             ui.add_space(4.0);
                             let left_btn = layout::AudioWorkspace::secondary_button(
                                 "Copy left (mono)",
-                                hex_to_c32(&palette.theme.b_low),
+                                hex_to_c32(&palette.colors.surface_recessed),
                                 palette,
                             );
                             if ui
@@ -691,7 +691,7 @@ impl AudioPreviewState {
 
                             let right_btn = layout::AudioWorkspace::secondary_button(
                                 "Copy right (mono)",
-                                hex_to_c32(&palette.theme.b_low),
+                                hex_to_c32(&palette.colors.surface_recessed),
                                 palette,
                             );
                             if ui
@@ -750,7 +750,7 @@ impl AudioPreviewState {
                             ui.add_space(4.0);
                             let left_btn = layout::AudioWorkspace::secondary_button(
                                 "Copy left (mono)",
-                                hex_to_c32(&palette.theme.b_low),
+                                hex_to_c32(&palette.colors.surface_recessed),
                                 palette,
                             );
                             if ui
@@ -765,7 +765,7 @@ impl AudioPreviewState {
 
                             let right_btn = layout::AudioWorkspace::secondary_button(
                                 "Copy right (mono)",
-                                hex_to_c32(&palette.theme.b_low),
+                                hex_to_c32(&palette.colors.surface_recessed),
                                 palette,
                             );
                             if ui
@@ -811,7 +811,7 @@ impl AudioPreviewState {
                 let copy_wave_btn = layout::AudioWorkspace::secondary_button_icon(
                     Some(crate::icons::Icon::Copy),
                     "Copy Waveform Image",
-                    hex_to_c32(&palette.theme.b_low),
+                    hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 );
                 if ui
@@ -829,7 +829,7 @@ impl AudioPreviewState {
                 let copy_spec_btn = layout::AudioWorkspace::secondary_button_icon(
                     Some(crate::icons::Icon::Copy),
                     "Copy Spectrum Image",
-                    hex_to_c32(&palette.theme.b_low),
+                    hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 );
                 if ui
@@ -869,12 +869,12 @@ impl AudioPreviewState {
                         egui::RichText::new("Navigation:")
                             .size(crate::ui_ext::BODY_FONT_SIZE)
                             .strong()
-                            .color(hex_to_c32(&palette.theme.f_med)),
+                            .color(hex_to_c32(&palette.colors.text_secondary)),
                     );
                     ui.label(
                         egui::RichText::new("Wheel / +/-: Zoom • Drag: Select • Ctrl+C: Copy • Ctrl+S: Save")
                             .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .color(hex_to_c32(&palette.theme.f_low)),
+                            .color(hex_to_c32(&palette.colors.text_muted)),
                     )
                     .on_hover_text("N: Normalize hovered region / track • Shift+Wheel waveform: Gain • Shift+Wheel spectrum top/bottom: Low/High Pass • Ctrl+Wheel: Crossfade • Ctrl+Middle-Click: Clear Crossfade • Middle-Click: Reset Effect • Middle-Drag: Pan • Wheel / +/-: Zoom • Drag: Select • Ctrl+C: Copy • Ctrl+S: Save");
                 });
@@ -897,7 +897,7 @@ impl AudioPreviewState {
                     egui::RichText::new("Selection info:")
                         .size(14.0)
                         .strong()
-                        .color(hex_to_c32(&palette.theme.f_high)),
+                        .color(hex_to_c32(&palette.colors.text_primary)),
                 );
                 layout::AudioWorkspace::section_divider(ui, palette);
                 self.render_track_gain_summary(ui, palette);
@@ -933,7 +933,7 @@ impl AudioPreviewState {
                                 .add(layout::AudioWorkspace::secondary_button_icon(
                                     Some(crate::icons::Icon::Close),
                                     "Clear",
-                                    hex_to_c32(&palette.theme.b_low),
+                                    hex_to_c32(&palette.colors.surface_recessed),
                                     palette,
                                 ))
                                 .clicked()
@@ -1006,7 +1006,7 @@ impl AudioPreviewState {
                                 .add(layout::AudioWorkspace::secondary_button_icon(
                                     Some(crate::icons::Icon::Trash),
                                     "Clear All",
-                                    hex_to_c32(&palette.theme.b_low),
+                                    hex_to_c32(&palette.colors.surface_recessed),
                                     palette,
                                 ))
                                 .clicked()
@@ -1026,7 +1026,7 @@ impl AudioPreviewState {
                     ui.label(
                         egui::RichText::new("Slices:")
                             .strong()
-                            .color(hex_to_c32(&palette.theme.f_med)),
+                            .color(hex_to_c32(&palette.colors.text_secondary)),
                     );
                     let mut seek_target = None;
                     let mut preview_target = None;
@@ -1047,9 +1047,9 @@ impl AudioPreviewState {
                                     )
                                 } else {
                                     (
-                                        hex_to_c32(&palette.theme.b_low),
-                                        hex_to_c32(&palette.theme.b_med),
-                                        hex_to_c32(&palette.theme.f_med),
+                                        hex_to_c32(&palette.colors.surface_recessed),
+                                        hex_to_c32(&palette.colors.surface_panel),
+                                        hex_to_c32(&palette.colors.text_secondary),
                                     )
                                 };
                                 let text_col =
@@ -1082,7 +1082,7 @@ impl AudioPreviewState {
                                     preview_target = Some((idx, s, e));
                                 }
 
-                                let del_bg = hex_to_c32(&palette.theme.b_low);
+                                let del_bg = hex_to_c32(&palette.colors.surface_recessed);
                                 let del_fg = crate::contrast_text_c32(
                                     del_bg,
                                     Some(hex_to_c32(&palette.diff_del)),
@@ -1282,10 +1282,10 @@ impl AudioPreviewState {
             ui.allocate_exact_size(Vec2::new(width, height), egui::Sense::click_and_drag());
         let painter = ui.painter_at(rect);
 
-        let bg_frame = crate::hex_to_c32(&palette.theme.b_low);
-        let border_frame = crate::hex_to_c32(&palette.theme.b_med);
-        let text_f_med = crate::hex_to_c32(&palette.theme.f_med);
-        let text_f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let bg_frame = crate::hex_to_c32(&palette.colors.surface_recessed);
+        let border_frame = crate::hex_to_c32(&palette.colors.surface_panel);
+        let text_f_med = crate::hex_to_c32(&palette.colors.text_secondary);
+        let text_f_low = crate::hex_to_c32(&palette.colors.text_muted);
         let accent_base = crate::hex_to_c32(&palette.harmonies.base);
         let accent_playhead = crate::hex_to_c32(&palette.harmonies.complementary);
         let transient_col = crate::hex_to_c32(&palette.diff_mod);
@@ -2048,7 +2048,10 @@ impl AudioPreviewState {
                             Pos2::new(x, ruler_rect.max.y),
                             Pos2::new(x, strip_rect.max.y),
                         ],
-                        Stroke::new(1.0_f32, crate::hex_to_c32_alpha(&palette.theme.f_low, 20)),
+                        Stroke::new(
+                            1.0_f32,
+                            crate::hex_to_c32_alpha(&palette.colors.text_muted, 20),
+                        ),
                     );
                     // Ruler tick
                     painter.line_segment(
@@ -2056,7 +2059,10 @@ impl AudioPreviewState {
                             Pos2::new(x, ruler_rect.min.y + 14.0),
                             Pos2::new(x, ruler_rect.max.y),
                         ],
-                        Stroke::new(1.0_f32, crate::hex_to_c32_alpha(&palette.theme.f_med, 80)),
+                        Stroke::new(
+                            1.0_f32,
+                            crate::hex_to_c32_alpha(&palette.colors.text_secondary, 80),
+                        ),
                     );
                     // Label
                     let label = format_time_label(t, interval_sec);
@@ -2450,7 +2456,7 @@ impl AudioPreviewState {
                         ui.label(
                             egui::RichText::new(text)
                                 .strong()
-                                .color(crate::hex_to_c32(&palette.theme.f_high)),
+                                .color(crate::hex_to_c32(&palette.colors.text_primary)),
                         );
                     });
                 }
@@ -2655,7 +2661,7 @@ impl AudioPreviewState {
             painter.rect_filled(
                 Rect::from_min_size(badge_pos, Vec2::new(65.0, 18.0)),
                 Rounding::same(4.0),
-                crate::hex_to_c32_alpha(&palette.theme.b_low, 220),
+                crate::hex_to_c32_alpha(&palette.colors.surface_recessed, 220),
             );
             painter.text(
                 Pos2::new(badge_pos.x + 4.0, badge_pos.y + 9.0),

@@ -317,8 +317,8 @@ impl AudioPreviewState {
         nyquist: f32,
         total_dur: f32,
     ) {
-        let text_f_med = hex_to_c32(&palette.theme.f_med);
-        let text_f_high = hex_to_c32(&palette.theme.f_high);
+        let text_f_med = hex_to_c32(&palette.colors.text_secondary);
+        let text_f_high = hex_to_c32(&palette.colors.text_primary);
         let accent_base = hex_to_c32(&palette.harmonies.base);
         let accent_cyan = Color32::from_rgb(0, 210, 255);
 
@@ -358,7 +358,7 @@ impl AudioPreviewState {
                 .add(layout::AudioWorkspace::secondary_button_icon(
                     Some(Icon::Stop),
                     "Stop",
-                    hex_to_c32(&palette.theme.b_low),
+                    hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 ))
                 .clicked()
@@ -492,7 +492,7 @@ impl AudioPreviewState {
                 let (btn_bg, btn_fg) = if is_sel {
                     (accent_base, Color32::WHITE)
                 } else {
-                    (hex_to_c32(&palette.theme.b_low), text_f_med)
+                    (hex_to_c32(&palette.colors.surface_recessed), text_f_med)
                 };
                 let freq_res = sample_rate as f32 / sz as f32;
                 let time_res_ms = (sz as f32 / sample_rate as f32) * 1000.0_f32;
@@ -546,7 +546,7 @@ impl AudioPreviewState {
             if ui
                 .add(
                     egui::Button::new(egui::RichText::new("↺ Reset").color(text_f_med))
-                        .fill(hex_to_c32(&palette.theme.b_low))
+                        .fill(hex_to_c32(&palette.colors.surface_recessed))
                         .rounding(4.0_f32),
                 )
                 .on_hover_text("Reset FFT and intensity settings to defaults")
@@ -579,7 +579,7 @@ impl AudioPreviewState {
                     .add(layout::AudioWorkspace::secondary_button_icon(
                         Some(Icon::ArrowLeft),
                         "Prev",
-                        hex_to_c32(&palette.theme.b_low),
+                        hex_to_c32(&palette.colors.surface_recessed),
                         palette,
                     ))
                     .on_hover_text("Jump to previous ultrasonic chirp")
@@ -604,7 +604,7 @@ impl AudioPreviewState {
                     .add(layout::AudioWorkspace::secondary_button_icon(
                         Some(Icon::ArrowRight),
                         "Next",
-                        hex_to_c32(&palette.theme.b_low),
+                        hex_to_c32(&palette.colors.surface_recessed),
                         palette,
                     ))
                     .on_hover_text("Jump to next ultrasonic chirp")
@@ -640,8 +640,8 @@ impl AudioPreviewState {
     }
 
     fn render_hf_roi_bar(&mut self, ui: &mut egui::Ui, palette: &AppPalette, total_dur: f32) {
-        let border_frame = hex_to_c32(&palette.theme.b_med);
-        let bg_frame = hex_to_c32(&palette.theme.b_low);
+        let border_frame = hex_to_c32(&palette.colors.surface_panel);
+        let bg_frame = hex_to_c32(&palette.colors.surface_recessed);
         let accent_cyan = Color32::from_rgb(0, 210, 255);
         let accent_amber = Color32::from_rgb(255, 185, 0);
 
@@ -786,9 +786,9 @@ impl AudioPreviewState {
         nyquist: f32,
         total_dur: f32,
     ) {
-        let border_frame = hex_to_c32(&palette.theme.b_med);
-        let bg_frame = hex_to_c32(&palette.theme.b_low);
-        let text_f_med = hex_to_c32(&palette.theme.f_med);
+        let border_frame = hex_to_c32(&palette.colors.surface_panel);
+        let bg_frame = hex_to_c32(&palette.colors.surface_recessed);
+        let text_f_med = hex_to_c32(&palette.colors.text_secondary);
 
         let v_start = self.view_start_sec;
         let v_dur = self.view_duration_sec.max(0.001_f32);
@@ -893,7 +893,7 @@ impl AudioPreviewState {
                 cfg,
                 bg_frame,
                 text_f_med,
-                Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.b_med, 60)),
+                Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.colors.surface_panel, 60)),
                 11.0_f32,
             );
         } else {

@@ -186,16 +186,16 @@ pub fn render_waveform_image(
     let mut pixmap = Pixmap::new(width, total_h)
         .ok_or_else(|| "Failed to allocate pixmap buffer for waveform export".to_string())?;
 
-    let bg_canvas = skia_color(&palette.theme.background);
-    let bg_frame = skia_color(&palette.theme.b_low);
-    let border_frame = skia_color(&palette.theme.b_med);
+    let bg_canvas = skia_color(&palette.colors.canvas);
+    let bg_frame = skia_color(&palette.colors.surface_recessed);
+    let border_frame = skia_color(&palette.colors.surface_panel);
 
     let (f_med_r, f_med_g, f_med_b, _) =
-        little_clip_core::color::parse_hex_color_rgba_or_white(&palette.theme.f_med);
+        little_clip_core::color::parse_hex_color_rgba_or_white(&palette.colors.text_secondary);
     let (accent_r, accent_g, accent_b, _) =
         little_clip_core::color::parse_hex_color_rgba_or_white(&palette.harmonies.base);
     let (f_low_r, f_low_g, f_low_b, _) =
-        little_clip_core::color::parse_hex_color_rgba_or_white(&palette.theme.f_low);
+        little_clip_core::color::parse_hex_color_rgba_or_white(&palette.colors.text_muted);
 
     // 1. Canvas background
     pixmap.fill(bg_canvas);
@@ -231,8 +231,8 @@ pub fn render_waveform_image(
     let first_marker = (v_start / interval_sec).floor() * interval_sec;
     let mut t = first_marker;
     let max_t = v_start + v_dur;
-    let grid_color = skia_color_alpha(&palette.theme.f_low, 35);
-    let tick_color = skia_color_alpha(&palette.theme.f_med, 140);
+    let grid_color = skia_color_alpha(&palette.colors.text_muted, 35);
+    let tick_color = skia_color_alpha(&palette.colors.text_secondary, 140);
 
     while t <= max_t + interval_sec * 0.5 {
         if t >= v_start {
@@ -294,7 +294,7 @@ pub fn render_waveform_image(
             y_c1,
             track_max_x,
             y_c1,
-            skia_color_alpha(&palette.theme.b_med, 90),
+            skia_color_alpha(&palette.colors.surface_panel, 90),
             1.0,
         );
         draw_line(
@@ -303,7 +303,7 @@ pub fn render_waveform_image(
             y_c2,
             track_max_x,
             y_c2,
-            skia_color_alpha(&palette.theme.b_med, 90),
+            skia_color_alpha(&palette.colors.surface_panel, 90),
             1.0,
         );
 
@@ -337,7 +337,7 @@ pub fn render_waveform_image(
             y_c,
             track_max_x,
             y_c,
-            skia_color_alpha(&palette.theme.b_med, 90),
+            skia_color_alpha(&palette.colors.surface_panel, 90),
             1.0,
         );
 
@@ -583,12 +583,12 @@ pub fn render_spectrum_image(
     let mut pixmap = Pixmap::new(width, total_h)
         .ok_or_else(|| "Failed to allocate pixmap buffer for spectrogram export".to_string())?;
 
-    let bg_canvas = skia_color(&palette.theme.background);
-    let bg_frame = skia_color(&palette.theme.b_low);
-    let border_frame = skia_color(&palette.theme.b_med);
+    let bg_canvas = skia_color(&palette.colors.canvas);
+    let bg_frame = skia_color(&palette.colors.surface_recessed);
+    let border_frame = skia_color(&palette.colors.surface_panel);
 
     let (f_med_r, f_med_g, f_med_b, _) =
-        little_clip_core::color::parse_hex_color_rgba_or_white(&palette.theme.f_med);
+        little_clip_core::color::parse_hex_color_rgba_or_white(&palette.colors.text_secondary);
 
     // 1. Canvas background
     pixmap.fill(bg_canvas);
@@ -668,7 +668,7 @@ pub fn render_spectrum_image(
     let nyquist = analysis.sample_rate as f32 * 0.5;
     let ticks = frequency_ticks(analysis.sample_rate);
     let mut last_y = f32::NEG_INFINITY;
-    let grid_stroke_color = skia_color_alpha(&palette.theme.b_med, 120);
+    let grid_stroke_color = skia_color_alpha(&palette.colors.surface_panel, 120);
 
     for (freq_hz, lbl) in ticks {
         if freq_hz >= nyquist {
@@ -711,8 +711,8 @@ pub fn render_spectrum_image(
     let first_marker = (v_start / interval_sec).floor() * interval_sec;
     let mut t = first_marker;
     let max_t = v_start + v_dur;
-    let time_grid_color = skia_color_alpha(&palette.theme.f_low, 35);
-    let tick_color = skia_color_alpha(&palette.theme.f_med, 140);
+    let time_grid_color = skia_color_alpha(&palette.colors.text_muted, 35);
+    let tick_color = skia_color_alpha(&palette.colors.text_secondary, 140);
 
     while t <= max_t + interval_sec * 0.5 {
         if t >= v_start {

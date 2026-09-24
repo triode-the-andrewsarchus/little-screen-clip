@@ -469,9 +469,9 @@ impl AudioPreviewState {
             egui::Sense::click_and_drag(),
         );
         let painter = ui.painter_at(rect);
-        let bg = hex_to_c32(&palette.theme.b_low);
+        let bg = hex_to_c32(&palette.colors.surface_recessed);
         let accent = if muted {
-            hex_to_c32(&palette.theme.f_low)
+            hex_to_c32(&palette.colors.text_muted)
         } else {
             hex_to_c32(&palette.harmonies.base)
         };
@@ -627,7 +627,7 @@ impl AudioPreviewState {
                             .add(layout::AudioWorkspace::secondary_button_icon(
                                 Some(Icon::RotateCw),
                                 "Separate Again",
-                                hex_to_c32(&palette.theme.b_low),
+                                hex_to_c32(&palette.colors.surface_recessed),
                                 palette,
                             ))
                             .clicked()
@@ -672,7 +672,7 @@ impl AudioPreviewState {
                 if self.stem_separation.stems.is_empty() {
                     for name in ["VOCALS", "DRUMS", "BASS", "OTHER"] {
                         egui::Frame::none()
-                            .fill(hex_to_c32(&palette.theme.b_med))
+                            .fill(hex_to_c32(&palette.colors.surface_panel))
                             .inner_margin(egui::Margin::symmetric(10.0, 5.0))
                             .rounding(Rounding::same(5.0))
                             .show(ui, |ui| {
@@ -719,7 +719,7 @@ impl AudioPreviewState {
                             .add(layout::AudioWorkspace::secondary_button_icon(
                                 Some(Icon::Stop),
                                 "Stop All",
-                                hex_to_c32(&palette.theme.b_low),
+                                hex_to_c32(&palette.colors.surface_recessed),
                                 palette,
                             ))
                             .clicked()
@@ -743,7 +743,7 @@ impl AudioPreviewState {
                         "Click or drag any waveform to select its stem and scrub all tracks",
                     )
                     .size(crate::ui_ext::BODY_FONT_SIZE)
-                    .color(hex_to_c32(&palette.theme.f_med)),
+                    .color(hex_to_c32(&palette.colors.text_secondary)),
                 );
                     });
 
@@ -759,7 +759,7 @@ impl AudioPreviewState {
                             .fill(if selected_now {
                                 hex_to_c32_alpha(&palette.harmonies.base, 18)
                             } else {
-                                hex_to_c32(&palette.theme.b_med)
+                                hex_to_c32(&palette.colors.surface_panel)
                             })
                             .inner_margin(egui::Margin::symmetric(10.0, 4.0))
                             .stroke(Stroke::new(
@@ -767,7 +767,7 @@ impl AudioPreviewState {
                                 if selected_now {
                                     hex_to_c32(&palette.harmonies.base)
                                 } else {
-                                    hex_to_c32(&palette.theme.b_med)
+                                    hex_to_c32(&palette.colors.surface_panel)
                                 },
                             ))
                             .rounding(Rounding::same(5.0))
@@ -879,7 +879,7 @@ impl AudioPreviewState {
                         cancel = ui
                             .add(layout::AudioWorkspace::secondary_button(
                                 "Cancel",
-                                hex_to_c32(&palette.theme.b_low),
+                                hex_to_c32(&palette.colors.surface_recessed),
                                 palette,
                             ))
                             .clicked();
