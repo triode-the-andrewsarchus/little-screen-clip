@@ -2849,7 +2849,7 @@ impl AudioPreviewState {
                 });
                 ui.label(
                     egui::RichText::new("Format: [OriginalName]_[SampleTimestamp]_[Duration]")
-                        .small()
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .color(hex_to_c32(&palette.colors.text_muted)),
                 );
 

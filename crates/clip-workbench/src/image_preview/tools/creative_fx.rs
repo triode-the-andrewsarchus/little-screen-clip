@@ -847,12 +847,16 @@ impl ImagePreviewState {
                         );
                         ui.label(
                             egui::RichText::new(format!("({})", CreativeFxType::all().len()))
-                                .small()
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(f_low),
                         );
                         if self.creative_fx_state.is_generating_thumbnails {
-                            ui.label(egui::RichText::new("⏳").small().color(f_low))
-                                .on_hover_text("Generating preview thumbnails…");
+                            ui.label(
+                                egui::RichText::new("⏳")
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                                    .color(f_low),
+                            )
+                            .on_hover_text("Generating preview thumbnails…");
                         }
                     });
                     ui.add_space(4.0);
@@ -905,7 +909,7 @@ impl ImagePreviewState {
                                             ui.vertical(|ui| {
                                                 ui.label(
                                                     egui::RichText::new(fx.name())
-                                                        .small()
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                                         .strong()
                                                         .color(name_col),
                                                 );
@@ -919,7 +923,7 @@ impl ImagePreviewState {
                                                 ui.label(
                                                     egui::RichText::new(fx.subtitle())
                                                         .color(meta_col)
-                                                        .small(),
+                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
                                                 );
                                             });
                                         });
@@ -1383,7 +1387,7 @@ impl ImagePreviewState {
                                             cw, ch
                                         ))
                                         .monospace()
-                                        .small()
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
                                         .color(f_med),
                                     );
                                     ui.label(

@@ -51,7 +51,6 @@ impl ImagePreviewState {
         let frame_bg = hex_to_c32(&palette.colors.surface_recessed);
         let frame_stroke = hex_to_c32(&palette.colors.surface_panel);
         let btn_bg = hex_to_c32(&palette.colors.surface_panel);
-        let btn_border = hex_to_c32(&palette.colors.surface_recessed);
 
         egui::Frame::none()
             .fill(frame_bg)
@@ -115,7 +114,7 @@ impl ImagePreviewState {
                     ui.add_space(12.0);
                     ui.label(
                         egui::RichText::new("Mirror:")
-                            .small()
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .color(hex_to_c32(&palette.colors.text_secondary)),
                     );
 
@@ -163,20 +162,8 @@ impl ImagePreviewState {
 
                         // Undo
                         if !self.undo_stack.is_empty() {
-                            let undo_fg = contrast_text_c32(
-                                btn_bg,
-                                Some(hex_to_c32(&palette.diff_mod)),
-                                palette,
-                            );
-                            let undo_btn = egui::Button::new(
-                                egui::RichText::new("⟲ Undo (Ctrl+Z)")
-                                    .small()
-                                    .strong()
-                                    .color(undo_fg),
-                            )
-                            .fill(btn_bg)
-                            .stroke(Stroke::new(1.0_f32, btn_border))
-                            .rounding(Rounding::same(4.0));
+                            let undo_btn =
+                                crate::ui_ext::secondary_button("⟲ Undo (Ctrl+Z)", btn_bg, palette);
                             if ui.add(undo_btn).clicked() {
                                 self.undo();
                             }
