@@ -571,75 +571,153 @@ impl<'a> StudioShell<'a> {
             .inner_margin(egui::Margin::symmetric(14.0, 8.0))
             .stroke(Stroke::new(1.0_f32, colors.panel))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if let Some(icon) = self.icon {
-                        ui.add(icon.image_tinted(18.0, colors.accent));
-                    }
-
-                    ui.label(
-                        egui::RichText::new(&self.title)
+                let (row_rect, _) = ui.allocate_exact_size(
+                    Vec2::new(ui.available_width(), CONTROL_HEIGHT),
+                    egui::Sense::hover(),
+                );
+                // Allocate the functional controls first. Their width determines how much
+                // space the title can use; a long filename must never draw over them.
+                let mut action_ui =
+                    ui.child_ui(row_rect, egui::Layout::right_to_left(egui::Align::Center));
+                action_ui.set_clip_rect(row_rect);
+                {
+                    let ui = &mut action_ui;
+                    // Place the actions at the far right of the title row.
+                    for (idx, hatch) in self.escape_hatches.iter().enumerate().rev() {
+                        let (bg, fg) = if hatch.is_primary {
+                            (colors.accent, colors.text_primary)
+                        } else {
+                            (colors.panel, colors.text_secondary)
+                        };
+                        let contrast_fg = contrast_text_c32(bg, Some(fg), palette);
+                        let text = egui::RichText::new(&hatch.label)
                             .strong()
-                            .size(22.0)
-                            .color(colors.text_primary),
-                    );
-
-                    ui.add_space(8.0);
-                    title_actions(ui);
-
-                    // Badges
-                    for b in &self.badges {
-                        crate::ui_ext::badge_pill(ui, &b.text, b.accent, palette);
-                        ui.add_space(4.0);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // Place the actions at the far right of the title row.
-                        for (idx, hatch) in self.escape_hatches.iter().enumerate().rev() {
-                            let (bg, fg) = if hatch.is_primary {
-                                (colors.accent, colors.text_primary)
-                            } else {
-                                (colors.panel, colors.text_secondary)
-                            };
-                            let contrast_fg = contrast_text_c32(bg, Some(fg), palette);
-                            let text = egui::RichText::new(&hatch.label)
-                                .strong()
-                                .color(contrast_fg);
-                            let btn = if let Some(icon) = hatch.icon {
-                                egui::Button::image_and_text(
-                                    icon.image_tinted(CONTROL_ICON_SIZE, contrast_fg),
-                                    text,
-                                )
-                            } else {
-                                egui::Button::new(text)
-                            }
-                            .fill(bg)
-                            .stroke(Stroke::new(1.0_f32, colors.recessed))
-                            .rounding(Rounding::same(4.0))
-                            .min_size(Vec2::new(hatch_width, CONTROL_HEIGHT));
-
-                            if ui.add(btn).on_hover_text(&hatch.tooltip).clicked() {
-                                clicked_hatch = Some(idx);
-                            }
-                            ui.add_space(4.0);
+                            .color(contrast_fg);
+                        let btn = if let Some(icon) = hatch.icon {
+                            egui::Button::image_and_text(
+                                icon.image_tinted(CONTROL_ICON_SIZE, contrast_fg),
+                                text,
+                            )
+                        } else {
+                            egui::Button::new(text)
                         }
-
-                        right_actions(ui);
-
-                        let close_bg = colors.panel;
-                        let close_fg = contrast_text_c32(close_bg, Some(colors.danger), palette);
-                        let close_btn = egui::Button::image_and_text(
-                            Icon::Close.image_tinted(CONTROL_ICON_SIZE, close_fg),
-                            egui::RichText::new("Close (Esc)").strong().color(close_fg),
-                        )
-                        .fill(close_bg)
+                        .fill(bg)
                         .stroke(Stroke::new(1.0_f32, colors.recessed))
                         .rounding(Rounding::same(4.0))
-                        .min_size(Vec2::new(0.0, CONTROL_HEIGHT));
+                        .min_size(Vec2::new(hatch_width, CONTROL_HEIGHT));
 
-                        if ui.add(close_btn).clicked() {
-                            *self.close = true;
+                        if ui.add(btn).on_hover_text(&hatch.tooltip).clicked() {
+                            clicked_hatch = Some(idx);
                         }
-                    });
-                });
+                        ui.add_space(4.0);
+                    }
+
+                    right_actions(ui);
+
+                    let close_bg = colors.panel;
+                    let close_fg = contrast_text_c32(close_bg, Some(colors.danger), palette);
+                    let close_btn = egui::Button::image_and_text(
+                        Icon::Close.image_tinted(CONTROL_ICON_SIZE, close_fg),
+                        egui::RichText::new("Close (Esc)").strong().color(close_fg),
+                    )
+                    .fill(close_bg)
+                    .stroke(Stroke::new(1.0_f32, colors.recessed))
+                    .rounding(Rounding::same(4.0))
+                    .min_size(Vec2::new(0.0, CONTROL_HEIGHT));
+
+                    if ui.add(close_btn).clicked() {
+                        *self.close = true;
+                    }
+                }
+
+                let title_right = (action_ui.min_rect().left() - 8.0).max(row_rect.left());
+                let controls_rect =
+                    Rect::from_min_max(row_rect.min, egui::pos2(title_right, row_rect.bottom()));
+                let mut title_action_ui = ui.child_ui(
+                    controls_rect,
+                    egui::Layout::right_to_left(egui::Align::Center),
+                );
+                title_action_ui.set_clip_rect(controls_rect);
+                title_actions(&mut title_action_ui);
+                let badges_right = (title_action_ui.min_rect().left() - 8.0).min(title_right);
+                let badge_font = egui::TextStyle::Body.resolve(ui.style());
+                let badge_widths: Vec<f32> = self
+                    .badges
+                    .iter()
+                    .map(|badge| {
+                        ui.fonts(|fonts| {
+                            fonts
+                                .layout_no_wrap(
+                                    badge.text.clone(),
+                                    badge_font.clone(),
+                                    Color32::WHITE,
+                                )
+                                .size()
+                                .x
+                        }) + 12.0
+                    })
+                    .collect();
+                let badges_width = badge_widths.iter().sum::<f32>()
+                    + 4.0 * self.badges.len().saturating_sub(1) as f32;
+                let badges_left = badges_right - badges_width;
+                let show_badges = badges_left >= row_rect.left() + 80.0;
+                if show_badges {
+                    let mut badge_x = badges_left;
+                    for (badge, width) in self.badges.iter().zip(badge_widths) {
+                        let badge_rect = Rect::from_min_size(
+                            egui::pos2(badge_x, row_rect.top()),
+                            Vec2::new(width, row_rect.height()),
+                        );
+                        let mut badge_ui = ui
+                            .child_ui(badge_rect, egui::Layout::left_to_right(egui::Align::Center));
+                        badge_ui.set_clip_rect(badge_rect);
+                        crate::ui_ext::badge_pill(
+                            &mut badge_ui,
+                            &badge.text,
+                            badge.accent,
+                            palette,
+                        );
+                        badge_x += width + 4.0;
+                    }
+                }
+                let name_right = (if show_badges {
+                    badges_left
+                } else {
+                    badges_right
+                } - 8.0)
+                    .max(row_rect.left());
+                let name_rect =
+                    Rect::from_min_max(row_rect.min, egui::pos2(name_right, row_rect.bottom()));
+                let mut name_ui =
+                    ui.child_ui(name_rect, egui::Layout::left_to_right(egui::Align::Center));
+                name_ui.set_clip_rect(name_rect);
+                if let Some(icon) = self.icon {
+                    name_ui.add(icon.image_tinted(18.0, colors.accent));
+                }
+                let title_tooltip = if show_badges {
+                    self.title.clone()
+                } else {
+                    format!(
+                        "{}\n{}",
+                        self.title,
+                        self.badges
+                            .iter()
+                            .map(|badge| badge.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join(" · ")
+                    )
+                };
+                name_ui
+                    .add(
+                        egui::Label::new(
+                            egui::RichText::new(&self.title)
+                                .strong()
+                                .size(22.0)
+                                .color(colors.text_primary),
+                        )
+                        .truncate(true),
+                    )
+                    .on_hover_text(title_tooltip);
             });
 
         clicked_hatch
@@ -766,6 +844,101 @@ impl<'a> StudioShell<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_image_header_keeps_actions_in_one_compact_row() {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut input = egui::RawInput::default();
+        input.screen_rect = Some(Rect::from_min_size(
+            egui::Pos2::ZERO,
+            Vec2::new(1177.0, 662.0),
+        ));
+        let mut close = false;
+        let mut header_rect = None;
+        let mut action_rects = Vec::new();
+        let output = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut shell = StudioShell::new(
+                    "IMAGE STUDIO — a very long descriptive Unicode filename 日本語.webp",
+                    Icon::Image,
+                    &palette,
+                    &mut close,
+                )
+                .with_badge("6000×6000 (1:1)", None)
+                .with_badge("WEBP", None)
+                .with_badge("554.4 KB", None)
+                .with_escape_hatch(EscapeHatch::new("Krita", "krita", "Edit"))
+                .with_escape_hatch(EscapeHatch::new("Inkscape", "inkscape", "Edit"))
+                .with_escape_hatch(EscapeHatch::new("Nomacs", "nomacs", "View"));
+                let response = ui.scope(|ui| {
+                    shell.render_header(ui, |ui| {
+                        action_rects.push(
+                            ui.add(crate::ui_ext::action_button(
+                                "Save As...",
+                                Color32::GREEN,
+                                &palette,
+                            ))
+                            .rect,
+                        );
+                        action_rects.push(
+                            ui.add(crate::ui_ext::action_button(
+                                "Copy",
+                                Color32::LIGHT_BLUE,
+                                &palette,
+                            ))
+                            .rect,
+                        );
+                    });
+                });
+                header_rect = Some(response.response.rect);
+            });
+        });
+        let rect = header_rect.unwrap();
+        assert!(rect.height() <= 60.0, "header wrapped vertically: {rect:?}");
+        assert!(
+            rect.right() <= 1177.0,
+            "header overflowed right edge: {rect:?}"
+        );
+        let visible_text = |label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::epaint::Shape::Text(text) if text.galley.text() == label => Some(
+                        Rect::from_min_size(text.pos, text.galley.size())
+                            .intersect(clipped.clip_rect),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("missing header label: {label}"))
+        };
+        let labels = [
+            "IMAGE STUDIO — a very long descriptive Unicode filename 日本語.webp",
+            "6000×6000 (1:1)",
+            "WEBP",
+            "554.4 KB",
+            "Close (Esc)",
+            "Copy",
+            "Save As...",
+            "Krita",
+            "Inkscape",
+            "Nomacs",
+        ];
+        let visible: Vec<_> = labels.iter().map(|label| visible_text(label)).collect();
+        for pair in visible.windows(2) {
+            assert!(
+                pair[0].right() <= pair[1].left(),
+                "header labels overlap: {:?} and {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+        assert!(visible.iter().all(|text| text.width() > 0.0));
+        assert!(action_rects.iter().all(|action| action.top() == 16.0));
+    }
 
     fn run_layout(layout: StudioPanelLayout, size: Vec2) -> StudioPanelRects {
         let ctx = egui::Context::default();
