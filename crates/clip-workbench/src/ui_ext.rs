@@ -10,6 +10,7 @@ pub const CONTROL_HEIGHT: f32 = 36.0;
 pub const CONTROL_ICON_SIZE: f32 = 18.0;
 pub const BODY_FONT_SIZE: f32 = 16.0;
 pub const HEADING_FONT_SIZE: f32 = 22.0;
+pub const SUBHEADING_FONT_SIZE: f32 = 19.0;
 pub const MONO_FONT_SIZE: f32 = 15.0;
 pub const CONTROL_CORNER_RADIUS: f32 = 4.0;
 

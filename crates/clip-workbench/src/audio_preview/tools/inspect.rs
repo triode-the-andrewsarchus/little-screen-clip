@@ -895,7 +895,7 @@ impl AudioPreviewState {
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     egui::RichText::new("Selection info:")
-                        .size(14.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(hex_to_c32(&palette.colors.text_primary)),
                 );

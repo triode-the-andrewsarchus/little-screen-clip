@@ -5,6 +5,7 @@
 
 use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
+use crate::ui_ext::{BODY_FONT_SIZE, HEADING_FONT_SIZE, MONO_FONT_SIZE, SUBHEADING_FONT_SIZE};
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
 use little_clip_core::config::AppConfig;
@@ -17,7 +18,7 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
-/// Maps an RGB syntax highlighting token color from syntect into the active Hundred Rabbits theme harmonies.
+/// Maps syntax highlighting hues into the fixed application palette harmonies.
 fn map_syntect_color_to_theme(
     style_fg: syntect::highlighting::Color,
     palette: &AppPalette,
@@ -53,7 +54,7 @@ fn map_syntect_color_to_theme(
         h += 360.0;
     }
 
-    // Map by hue angle to theme harmonies
+    // Map by hue angle to the shared color harmonies.
     if h < 45.0 {
         // Red / Orange (constants, literals)
         hex_to_c32(&palette.diff_mod)
@@ -995,9 +996,12 @@ fn render_markdown_element(
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 let (size, color) = match level {
-                    1 => (20.0, hex_to_c32(&palette.colors.text_primary)),
-                    2 => (17.0, hex_to_c32(&palette.colors.text_primary)),
-                    _ => (15.0, hex_to_c32(&palette.colors.text_secondary)),
+                    1 => (HEADING_FONT_SIZE, hex_to_c32(&palette.colors.text_primary)),
+                    2 => (
+                        SUBHEADING_FONT_SIZE,
+                        hex_to_c32(&palette.colors.text_primary),
+                    ),
+                    _ => (BODY_FONT_SIZE, hex_to_c32(&palette.colors.text_secondary)),
                 };
                 for span in spans {
                     render_markdown_span(ui, &span, size, color, palette);
@@ -1011,7 +1015,7 @@ fn render_markdown_element(
                 ui.add_space(indent as f32 * 16.0);
                 ui.label(
                     egui::RichText::new("•")
-                        .size(14.0)
+                        .size(BODY_FONT_SIZE)
                         .color(hex_to_c32(&palette.harmonies.base)),
                 );
                 ui.add_space(4.0);
@@ -1019,7 +1023,7 @@ fn render_markdown_element(
                     render_markdown_span(
                         ui,
                         &span,
-                        14.0,
+                        BODY_FONT_SIZE,
                         hex_to_c32(&palette.colors.text_primary),
                         palette,
                     );
@@ -1031,7 +1035,7 @@ fn render_markdown_element(
             ui.horizontal_wrapped(|ui| {
                 ui.label(
                     egui::RichText::new(format!("{}.", number))
-                        .size(14.0)
+                        .size(BODY_FONT_SIZE)
                         .strong()
                         .color(hex_to_c32(&palette.harmonies.base)),
                 );
@@ -1040,7 +1044,7 @@ fn render_markdown_element(
                     render_markdown_span(
                         ui,
                         &span,
-                        14.0,
+                        BODY_FONT_SIZE,
                         hex_to_c32(&palette.colors.text_primary),
                         palette,
                     );
@@ -1060,7 +1064,7 @@ fn render_markdown_element(
                             render_markdown_span(
                                 ui,
                                 &span,
-                                13.5,
+                                BODY_FONT_SIZE,
                                 hex_to_c32(&palette.colors.text_secondary),
                                 palette,
                             );
@@ -1081,7 +1085,7 @@ fn render_markdown_element(
                     render_markdown_span(
                         ui,
                         &span,
-                        14.0,
+                        BODY_FONT_SIZE,
                         hex_to_c32(&palette.colors.text_primary),
                         palette,
                     );
@@ -1381,7 +1385,7 @@ fn render_markdown_span(
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(s)
-                            .font(FontId::monospace(size * 0.9))
+                            .font(FontId::monospace(size.max(MONO_FONT_SIZE)))
                             .color(hex_to_c32(&palette.harmonies.triadic_2)),
                     );
                 });
