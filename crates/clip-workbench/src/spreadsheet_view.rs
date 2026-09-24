@@ -4,7 +4,7 @@
 
 use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
-use crate::ui_ext::StatusToast;
+use crate::ui_ext::{BODY_FONT_SIZE, StatusToast};
 use eframe::egui::{self, FontId, Rounding, Stroke, TextStyle, Vec2};
 use little_clip_ops::spreadsheet::{SpreadsheetData, SpreadsheetSheet};
 use std::ops::Range;
@@ -244,7 +244,11 @@ impl SpreadsheetViewerState {
                 // 2. Sheet Tabs
                 if sheet_count > 1 {
                     ui.horizontal_wrapped(|ui| {
-                        ui.label(egui::RichText::new("Sheets:").small().color(f_low));
+                        ui.label(
+                            egui::RichText::new("Sheets:")
+                                .size(BODY_FONT_SIZE)
+                                .color(f_low),
+                        );
                         for (idx, sheet) in self.data.sheets.iter().enumerate() {
                             let is_active = idx == self.active_sheet_idx;
                             let tab_btn = crate::mode_tab_button(&sheet.name, is_active, palette);
