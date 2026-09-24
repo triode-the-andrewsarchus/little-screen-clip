@@ -116,7 +116,7 @@ impl ScreenRenderer {
                 rect_x + 14.0,
                 rect_y + 54.0,
                 if is_hero { 26.0 } else { 21.0 },
-                self.color_from_hex(&self.palette.f_low),
+                self.color_from_hex(&self.palette.colors.text_muted),
                 false,
                 card_clip_right,
             );

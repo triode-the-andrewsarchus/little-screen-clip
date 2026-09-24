@@ -650,14 +650,14 @@ appearance = "light"
         )
         .unwrap();
         let light = config.resolve_palette();
-        assert_eq!(light.theme_name, "fixed-light");
+        assert_eq!(light.colors.canvas, "#f4f2ea");
         assert_ne!(light.background, "#010101");
         assert!(!light.is_dark);
 
         let mut dark_config = config;
         dark_config.workbench.appearance = WorkbenchAppearance::Dark;
         let dark = dark_config.resolve_palette();
-        assert_eq!(dark.theme_name, "fixed-dark");
+        assert_eq!(dark.colors.canvas, "#151c24");
         assert!(dark.is_dark);
         assert_ne!(light.background, dark.background);
     }

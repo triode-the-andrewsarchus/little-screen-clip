@@ -46,21 +46,6 @@ impl BaseColors {
     }
 }
 
-/// Transitional base-color container for the fixed Light/Dark palettes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Theme {
-    pub name: String,
-    pub background: String,
-    pub f_high: String,
-    pub f_med: String,
-    pub f_low: String,
-    pub f_inv: String,
-    pub b_high: String,
-    pub b_med: String,
-    pub b_low: String,
-    pub b_inv: String,
-}
-
 /// Computes the relative luminance (0.0 to 1.0) of an RGB color according to WCAG 2.1.
 pub fn relative_luminance(r: u8, g: u8, b: u8) -> f32 {
     fn to_linear(c: u8) -> f32 {
@@ -82,62 +67,51 @@ pub fn contrast_ratio(rgb1: (u8, u8, u8), rgb2: (u8, u8, u8)) -> f32 {
     (lighter + 0.05) / (darker + 0.05)
 }
 
-impl Theme {
-    /// Whether this theme is predominantly dark or light.
-    pub fn is_dark(&self) -> bool {
-        let (br, bg, bb, _) = parse_hex_color_rgba(&self.background);
-        let (fr, fg, fb, _) = parse_hex_color_rgba(&self.f_high);
-        let bg_lum = relative_luminance(br, bg, bb);
-        let fg_lum = relative_luminance(fr, fg, fb);
-        // A theme is dark if its background is dark (< 0.20 relative luminance)
-        // and its primary text foreground is brighter than the background.
-        bg_lum < 0.20 && fg_lum > bg_lum
-    }
-
+impl BaseColors {
     /// Selects the best foreground color to render on `bg_hex`.
-    /// 1. Tests `preferred_fg` (or `f_high` by default). If contrast >= 4.5, returns it.
-    /// 2. If contrast < 4.5, tries the bg color from other theme fg/bg pairs, or `f_inv` (e.g. `background`, `b_low`, `b_med`, `b_high`, `b_inv`, `f_inv`).
+    /// 1. Tests `preferred_fg` (or primary text by default). If contrast >= 4.5, returns it.
+    /// 2. If contrast < 4.5, tries the other semantic surface and text colors.
     /// 3. If none achieve contrast >= 4.5, selects between pure black ("#000000") and pure white ("#ffffff"),
     ///    whichever provides higher contrast against `bg_hex`.
     pub fn contrast_pair_fg(&self, bg_hex: &str, preferred_fg: Option<&str>) -> String {
         let (br, bg, bb, _) = parse_hex_color_rgba(bg_hex);
         let bg_rgb = (br, bg, bb);
 
-        let pref = preferred_fg.unwrap_or(&self.f_high);
+        let pref = preferred_fg.unwrap_or(&self.text_primary);
         let (pr, pg, pb, _) = parse_hex_color_rgba(pref);
         if contrast_ratio(bg_rgb, (pr, pg, pb)) >= 4.5 {
             return pref.to_string();
         }
 
         let candidates = [
-            &self.f_high,
-            &self.f_inv,
-            &self.background,
-            &self.b_high,
-            &self.b_med,
-            &self.b_low,
-            &self.b_inv,
-            &self.f_med,
-            &self.f_low,
+            &self.text_primary,
+            &self.text_inverse,
+            &self.canvas,
+            &self.surface_raised,
+            &self.surface_panel,
+            &self.surface_recessed,
+            &self.surface_inverse,
+            &self.text_secondary,
+            &self.text_muted,
         ];
 
-        // Try the theme palette colors to find the one with the highest contrast (>= 4.5)
-        let mut best_theme_cand: Option<(&str, f32)> = None;
+        // Try the semantic palette colors to find the one with the highest contrast (>= 4.5).
+        let mut best_candidate: Option<(&str, f32)> = None;
         for cand in candidates {
             let (cr, cg, cb, _) = parse_hex_color_rgba(cand);
             let ratio = contrast_ratio(bg_rgb, (cr, cg, cb));
             if ratio >= 4.5 {
-                if let Some((_, best_r)) = best_theme_cand {
+                if let Some((_, best_r)) = best_candidate {
                     if ratio > best_r {
-                        best_theme_cand = Some((cand, ratio));
+                        best_candidate = Some((cand, ratio));
                     }
                 } else {
-                    best_theme_cand = Some((cand, ratio));
+                    best_candidate = Some((cand, ratio));
                 }
             }
         }
 
-        if let Some((best, _)) = best_theme_cand {
+        if let Some((best, _)) = best_candidate {
             return best.to_string();
         }
 
@@ -351,10 +325,8 @@ impl DerivedHarmonies {
 /// Fully resolved color palette used across all rendering and UI widgets.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppPalette {
-    pub theme_name: String,
     pub is_dark: bool,
     pub colors: BaseColors,
-    pub theme: Theme,
     pub harmonies: DerivedHarmonies,
 
     // Core Canvas & Cards
@@ -392,16 +364,6 @@ pub struct AppPalette {
     pub diff_add: String,
     pub diff_del: String,
     pub diff_mod: String,
-
-    // Raw Theme colors
-    pub f_high: String,
-    pub f_med: String,
-    pub f_low: String,
-    pub f_inv: String,
-    pub b_high: String,
-    pub b_med: String,
-    pub b_low: String,
-    pub b_inv: String,
 }
 
 impl Default for AppPalette {
@@ -412,39 +374,25 @@ impl Default for AppPalette {
 
 impl AppPalette {
     /// Fixed application colors shared by the workbench and little-screen renderer.
-    /// `Theme` remains as an adapter while legacy callers migrate to semantic roles.
     pub fn for_appearance(appearance: WorkbenchAppearance) -> Self {
         let colors = BaseColors::for_appearance(appearance);
         let link = match appearance {
             WorkbenchAppearance::Dark => "#79b8ec",
             WorkbenchAppearance::Light => "#215c84",
         };
-        let theme = Theme {
-            name: format!("fixed-{appearance:?}").to_lowercase(),
-            background: colors.canvas.clone(),
-            f_high: colors.text_primary.clone(),
-            f_med: colors.text_secondary.clone(),
-            f_low: colors.text_muted.clone(),
-            f_inv: colors.text_inverse.clone(),
-            b_high: colors.surface_raised.clone(),
-            b_med: colors.surface_panel.clone(),
-            b_low: colors.surface_recessed.clone(),
-            b_inv: colors.surface_inverse.clone(),
-        };
-        Self::from_fixed_colors(colors, theme, link)
+        Self::from_fixed_colors(appearance, colors, link)
     }
 
-    /// Resolve the two built-in appearances while callers migrate off `Theme` fields.
-    fn from_fixed_colors(colors: BaseColors, theme: Theme, link: &str) -> Self {
-        let is_dark = theme.is_dark();
+    fn from_fixed_colors(appearance: WorkbenchAppearance, colors: BaseColors, link: &str) -> Self {
+        let is_dark = appearance == WorkbenchAppearance::Dark;
 
-        // Base accent: prefer f_med, fall back to b_inv if f_med is grayscale
-        let (f_r, f_g, f_b, _) = parse_hex_color_rgba(&theme.f_med);
+        // Base accent: prefer secondary text, fall back to inverse surface if grayscale.
+        let (f_r, f_g, f_b, _) = parse_hex_color_rgba(&colors.text_secondary);
         let f_oklch = Oklab::from_rgb(f_r, f_g, f_b).to_oklch();
         let base_accent_hex = if f_oklch.c > 0.03 {
-            &theme.f_med
+            &colors.text_secondary
         } else {
-            &theme.b_inv
+            &colors.surface_inverse
         };
 
         let harmonies = DerivedHarmonies::from_base_hex(base_accent_hex, is_dark);
@@ -472,16 +420,13 @@ impl AppPalette {
         .to_hex();
 
         Self {
-            theme_name: theme.name.clone(),
             is_dark,
-            colors,
-            theme: theme.clone(),
             harmonies: harmonies.clone(),
 
-            background: theme.background.clone(),
-            hero_card_bg: theme.b_high.clone(),
-            prior_card_bg: theme.b_med.clone(),
-            undo_card_bg: theme.b_low.clone(),
+            background: colors.canvas.clone(),
+            hero_card_bg: colors.surface_raised.clone(),
+            prior_card_bg: colors.surface_panel.clone(),
+            undo_card_bg: colors.surface_recessed.clone(),
 
             undo_border: harmonies.warm_attention.clone(),
             chrome_border: "#6f8595".to_owned(),
@@ -498,28 +443,21 @@ impl AppPalette {
             cursor_border: harmonies.tetradic_2.clone(),
             selected_border: harmonies.triadic_1.clone(),
 
-            title_color: theme.f_high.clone(),
-            subtitle_color: theme.f_med.clone(),
-            body_color: theme.f_low.clone(),
+            title_color: colors.text_primary.clone(),
+            subtitle_color: colors.text_secondary.clone(),
+            body_color: colors.text_muted.clone(),
             url_color: link.to_owned(),
 
-            debug_badge_bg: theme.b_inv.clone(),
-            debug_badge_text: theme.f_inv.clone(),
-            tag_pill_bg: theme.b_low.clone(),
-            tag_pill_text: theme.f_med.clone(),
+            debug_badge_bg: colors.surface_inverse.clone(),
+            debug_badge_text: colors.text_inverse.clone(),
+            tag_pill_bg: colors.surface_recessed.clone(),
+            tag_pill_text: colors.text_secondary.clone(),
 
             diff_add,
             diff_del,
             diff_mod,
 
-            f_high: theme.f_high.clone(),
-            f_med: theme.f_med.clone(),
-            f_low: theme.f_low.clone(),
-            f_inv: theme.f_inv.clone(),
-            b_high: theme.b_high.clone(),
-            b_med: theme.b_med.clone(),
-            b_low: theme.b_low.clone(),
-            b_inv: theme.b_inv.clone(),
+            colors,
         }
     }
 
@@ -530,7 +468,7 @@ impl AppPalette {
 
     /// Selects the best foreground color to render on `bg_hex` with sufficient contrast (minimum 4.5:1).
     pub fn contrast_pair_fg(&self, bg_hex: &str, preferred_fg: Option<&str>) -> String {
-        self.theme.contrast_pair_fg(bg_hex, preferred_fg)
+        self.colors.contrast_pair_fg(bg_hex, preferred_fg)
     }
 
     /// Computes the theme-derived vibrant color for a MIDI track / channel.
@@ -571,7 +509,7 @@ impl AppPalette {
         let h_0 = if base_oklch.c < 0.04 {
             // Theme has an almost completely neutral/achromatic accent.
             // Check if b_inv has color:
-            let (inv_r, inv_g, inv_b, _) = parse_hex_color_rgba(&self.b_inv);
+            let (inv_r, inv_g, inv_b, _) = parse_hex_color_rgba(&self.colors.surface_inverse);
             let inv_oklch = Oklab::from_rgb(inv_r, inv_g, inv_b).to_oklch();
             if inv_oklch.c >= 0.04 {
                 inv_oklch.h
@@ -667,24 +605,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fixed_semantic_colors_match_the_transitional_palette_fields() {
-        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
-            let palette = AppPalette::for_appearance(appearance);
-            let colors = &palette.colors;
-            let legacy = &palette.theme;
-            assert_eq!(colors.canvas, legacy.background);
-            assert_eq!(colors.surface_raised, legacy.b_high);
-            assert_eq!(colors.surface_panel, legacy.b_med);
-            assert_eq!(colors.surface_recessed, legacy.b_low);
-            assert_eq!(colors.surface_inverse, legacy.b_inv);
-            assert_eq!(colors.text_primary, legacy.f_high);
-            assert_eq!(colors.text_secondary, legacy.f_med);
-            assert_eq!(colors.text_muted, legacy.f_low);
-            assert_eq!(colors.text_inverse, legacy.f_inv);
-        }
-    }
-
-    #[test]
     fn test_oklab_roundtrip() {
         let (r, g, b) = (228, 116, 100); // #e47464
         let oklab = Oklab::from_rgb(r, g, b);
@@ -722,15 +642,15 @@ mod tests {
                 &palette.harmonies.warm_attention,
                 &palette.diff_add,
                 &palette.diff_del,
-                &palette.theme.b_med,
-                &palette.theme.b_low,
+                &palette.colors.surface_panel,
+                &palette.colors.surface_recessed,
                 &palette.undo_card_bg,
                 &palette.hero_card_bg,
                 &palette.prior_card_bg,
             ];
 
             for surface in surfaces {
-                let fg = palette.contrast_pair_fg(surface, Some(&palette.theme.f_high));
+                let fg = palette.contrast_pair_fg(surface, Some(&palette.colors.text_primary));
                 let (br, bg, bb, _) = parse_hex_color_rgba(surface);
                 let (fr, fg, fb, _) = parse_hex_color_rgba(&fg);
                 assert!(
@@ -758,7 +678,7 @@ mod tests {
     fn fixed_palette_midi_colors_remain_distinct_and_legible_in_both_appearances() {
         for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
             let palette = AppPalette::for_appearance(appearance);
-            let (br, bg, bb, _) = parse_hex_color_rgba(&palette.theme.b_low);
+            let (br, bg, bb, _) = parse_hex_color_rgba(&palette.colors.surface_recessed);
             let tracks: Vec<_> = (0..4)
                 .map(|track| palette.midi_track_color(track, 0, 4))
                 .collect();

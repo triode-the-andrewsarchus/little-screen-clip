@@ -695,7 +695,7 @@ mod tests {
         renderer.set_config(config);
         let light = renderer.render_pixmap(&manager).unwrap();
         assert_ne!(dark.data(), light.data());
-        assert_eq!(renderer.palette.theme_name, "fixed-light");
+        assert_eq!(renderer.palette.colors.canvas, "#f4f2ea");
     }
 
     #[test]
