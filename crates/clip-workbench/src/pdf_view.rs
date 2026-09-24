@@ -494,8 +494,15 @@ impl PdfEditorState {
                 // Right pane: large preview of the selected page
                 let avail_w = ui.available_width();
                 let avail_h = (ui.available_height() - 32.0).max(100.0);
-                let left_pane_w = (avail_w * 0.30).clamp(240.0, 360.0);
-                let right_pane_w = (avail_w - left_pane_w - 16.0).max(200.0);
+                // The horizontal row contains two item gaps and the separator in
+                // addition to the panes. Budget those first so pane minimums never
+                // make the combined layout wider than a compact popup.
+                let pane_gap = ui.spacing().item_spacing.x * 2.0 + 1.0;
+                let pane_width = (avail_w - pane_gap).max(0.0);
+                let left_pane_w = (pane_width * 0.30)
+                    .clamp(180.0, 360.0)
+                    .min((pane_width - 200.0).max(0.0));
+                let right_pane_w = (pane_width - left_pane_w).max(0.0);
 
                 ui.horizontal(|ui| {
                     // --- Left Pane: Page Selector Grid ---
