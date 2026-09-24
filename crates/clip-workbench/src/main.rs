@@ -1371,6 +1371,13 @@ impl WorkbenchApp {
     }
 
     fn render_modal_viewers(&mut self, ctx: &egui::Context) -> bool {
+        // A new foreground route supersedes a pending table request. Otherwise its
+        // result would open after the user closes the viewer they chose instead.
+        if (self.in_app_prompt.is_some() || self.viewer.is_some())
+            && let Some((ticket, _, _)) = self.spreadsheet_load_job.take()
+        {
+            ticket.cancel();
+        }
         if self.render_prompt_modal(ctx) {
             return true;
         }
