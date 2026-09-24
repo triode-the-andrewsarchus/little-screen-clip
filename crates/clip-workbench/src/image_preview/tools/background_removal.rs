@@ -227,7 +227,7 @@ impl ImagePreviewState {
 
         ui.label(
             egui::RichText::new("Remove background")
-                .size(16.0)
+                .size(20.0)
                 .strong()
                 .color(accent),
         );
@@ -235,7 +235,7 @@ impl ImagePreviewState {
             egui::RichText::new(
                 "Create a transparent cutout automatically or describe what to keep.",
             )
-            .size(11.5)
+            .size(crate::ui_ext::BODY_FONT_SIZE)
             .color(muted),
         );
 
@@ -243,7 +243,7 @@ impl ImagePreviewState {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("SEGMENTATION")
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .strong()
                     .color(text),
             );
@@ -254,7 +254,7 @@ impl ImagePreviewState {
                     } else {
                         "Automatic"
                     })
-                    .size(11.5)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .strong()
                     .color(action_color),
                 );
@@ -264,13 +264,13 @@ impl ImagePreviewState {
 
         ui.label(
             egui::RichText::new("What should remain?")
-                .size(13.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
         ui.add_space(3.0);
         let prompt_response = ui.add_sized(
-            [ui.available_width(), 92.0],
+            [ui.available_width(), 132.0],
             egui::TextEdit::multiline(&mut self.multimatte_prompt)
                 .hint_text("Optional prompt, for example:\nperson in the foreground\nred bicycle and its basket")
                 .desired_width(f32::INFINITY)
@@ -286,7 +286,7 @@ impl ImagePreviewState {
             } else {
                 "Leave blank to detect the foreground automatically with FeyNoBg."
             })
-            .size(11.0)
+            .size(crate::ui_ext::BODY_FONT_SIZE)
             .color(muted),
         );
 
@@ -301,7 +301,10 @@ impl ImagePreviewState {
         let run_button = crate::action_button(run_label, action_color, palette);
         if ui
             .add_enabled_ui(!self.bg_removal_in_progress, |ui| {
-                ui.add_sized([ui.available_width(), 32.0], run_button)
+                ui.add_sized(
+                    [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
+                    run_button,
+                )
             })
             .inner
             .on_hover_text(if has_prompt {
@@ -319,7 +322,7 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("PROCESSING")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
@@ -330,7 +333,7 @@ impl ImagePreviewState {
                 ui.add(egui::Spinner::new().size(14.0).color(action_color));
                 ui.label(
                     egui::RichText::new("Working…")
-                        .size(12.0)
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(action_color),
                 );
@@ -341,31 +344,32 @@ impl ImagePreviewState {
                         .as_deref()
                         .unwrap_or("Preparing the segmentation model…"),
                 )
-                .size(11.5)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .color(muted),
             );
         } else {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Engine").size(12.0).color(muted));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new(if has_prompt { "MultiMatte" } else { "FeyNoBg" })
-                            .size(12.0)
-                            .strong()
-                            .color(text),
-                    );
-                });
-            });
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Acceleration").size(12.0).color(muted));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new("CUDA when available")
-                            .size(11.5)
-                            .color(text),
-                    );
-                });
-            });
+            ui.label(
+                egui::RichText::new("Engine")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(muted),
+            );
+            ui.label(
+                egui::RichText::new(if has_prompt { "MultiMatte" } else { "FeyNoBg" })
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .strong()
+                    .color(text),
+            );
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new("Acceleration")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(muted),
+            );
+            ui.label(
+                egui::RichText::new("CUDA when available")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(text),
+            );
         }
 
         if let Some(error) = self.bg_removal_error.clone() {
@@ -374,18 +378,25 @@ impl ImagePreviewState {
             ui.add_space(8.0);
             ui.label(
                 egui::RichText::new("BACKGROUND REMOVAL FAILED")
-                    .size(12.0)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .strong()
                     .color(danger),
             );
             ui.add_space(3.0);
-            ui.label(egui::RichText::new(&error).size(11.5).color(danger));
+            ui.label(
+                egui::RichText::new(&error)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(danger),
+            );
 
             if error.contains("nobg") || error.contains("pip") {
                 ui.add_space(6.0);
                 let copy_install = crate::secondary_button("Copy setup command", surface, palette);
                 if ui
-                    .add_sized([ui.available_width(), 30.0], copy_install)
+                    .add_sized(
+                        [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
+                        copy_install,
+                    )
                     .clicked()
                 {
                     let install_cmd = "uv venv --python /usr/bin/python3 --system-site-packages ~/.local/share/little-screen-clip/nobg-venv && uv pip install --python ~/.local/share/little-screen-clip/nobg-venv/bin/python nobg";
@@ -400,17 +411,16 @@ impl ImagePreviewState {
         ui.add_space(8.0);
         ui.label(
             egui::RichText::new("OUTPUT")
-                .size(12.0)
+                .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
         ui.add_space(4.0);
 
-        let slot_width = ((ui.available_width() - 6.0) * 0.5).max(70.0);
-        ui.horizontal(|ui| {
+        ui.vertical(|ui| {
             let left = crate::secondary_button("Left hand", surface, palette);
             if ui
-                .add_sized([slot_width, 28.0], left)
+                .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], left)
                 .on_hover_text("Copy the current cutout to the Left Hand slot")
                 .clicked()
             {
@@ -419,7 +429,7 @@ impl ImagePreviewState {
 
             let right = crate::secondary_button("Right hand", surface, palette);
             if ui
-                .add_sized([slot_width, 28.0], right)
+                .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], right)
                 .on_hover_text("Copy the current cutout to the Right Hand slot")
                 .clicked()
             {
@@ -430,7 +440,10 @@ impl ImagePreviewState {
         if !self.undo_stack.is_empty() {
             ui.add_space(6.0);
             let undo = crate::secondary_button("Undo last edit (Ctrl+Z)", surface, palette);
-            if ui.add_sized([ui.available_width(), 30.0], undo).clicked() {
+            if ui
+                .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], undo)
+                .clicked()
+            {
                 self.undo();
             }
         }
