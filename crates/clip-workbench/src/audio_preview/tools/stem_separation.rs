@@ -655,14 +655,14 @@ impl AudioPreviewState {
                     if let Some(status) = &self.stem_separation.status {
                         ui.label(
                             egui::RichText::new(status)
-                                .small()
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(hex_to_c32(&palette.diff_add)),
                         );
                     }
                     if let Some(error) = &self.stem_separation.error {
                         ui.label(
                             egui::RichText::new(error)
-                                .small()
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(hex_to_c32(&palette.diff_del)),
                         );
                     }
@@ -742,7 +742,7 @@ impl AudioPreviewState {
                     egui::RichText::new(
                         "Click or drag any waveform to select its stem and scrub all tracks",
                     )
-                    .small()
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(hex_to_c32(&palette.theme.f_med)),
                 );
                     });
