@@ -1,4 +1,4 @@
-//! Desktop appearance palettes. Hardware display themes remain in the renderer.
+//! Shared Light/Dark appearance roles for workbench chrome.
 
 use eframe::egui::{self, Color32};
 use little_clip_core::config::WorkbenchAppearance;
@@ -23,6 +23,8 @@ pub struct WorkbenchColors {
     pub focus: Color32,
     pub link: Color32,
     pub danger: Color32,
+    pub success: Color32,
+    pub warning: Color32,
 }
 
 impl WorkbenchColors {
@@ -40,6 +42,8 @@ impl WorkbenchColors {
             focus: hex_to_c32(&palette.cursor_border),
             link: hex_to_c32(&palette.url_color),
             danger: hex_to_c32(&palette.diff_del),
+            success: hex_to_c32(&palette.diff_add),
+            warning: hex_to_c32(&palette.harmonies.warm_attention),
         }
     }
 }
@@ -90,6 +94,9 @@ pub fn apply_visuals(ctx: &egui::Context, palette: &AppPalette) {
     visuals.selection.stroke.color =
         contrast_text_c32(colors.accent, Some(colors.text_primary), palette);
     visuals.hyperlink_color = colors.link;
+    visuals.warn_fg_color = colors.warning;
+    visuals.error_fg_color = colors.danger;
+    visuals.text_cursor.color = colors.focus;
 
     ctx.set_visuals(visuals);
 }
@@ -144,6 +151,20 @@ mod tests {
             assert!(ratio(colors.recessed, colors.accent) >= 3.0);
             assert!(ratio(colors.panel, colors.link) >= 4.5);
             assert!(ratio(colors.panel, colors.accent) >= 3.0);
+            for (name, foreground) in [
+                ("warning", colors.warning),
+                ("danger", colors.danger),
+                ("success", colors.success),
+            ] {
+                let contrast = ratio(colors.panel, foreground);
+                assert!(
+                    contrast >= 4.5,
+                    "{appearance:?} {name} text contrast is {contrast:.2}"
+                );
+            }
+            assert_eq!(visuals.warn_fg_color, colors.warning);
+            assert_eq!(visuals.error_fg_color, colors.danger);
+            assert_eq!(visuals.text_cursor.color, colors.focus);
             for widget in [
                 visuals.widgets.noninteractive,
                 visuals.widgets.inactive,

@@ -306,7 +306,7 @@ impl DerivedHarmonies {
 
         // Warm attention hue in Oklch is approximately 75-80 degrees (amber/gold)
         let warm_attention = Oklch {
-            l: if is_dark { 0.78 } else { 0.55 },
+            l: if is_dark { 0.78 } else { 0.50 },
             c: oklch.c.max(0.14),
             h: 75.0,
         }
@@ -447,7 +447,7 @@ impl AppPalette {
         .to_hex();
 
         let diff_del = Oklch {
-            l: if is_dark { 0.70 } else { 0.45 },
+            l: if is_dark { 0.73 } else { 0.42 },
             c: 0.16,
             h: 25.0, // Crimson / rose
         }

@@ -1,6 +1,6 @@
 //! Reusable controls shared by studio tool sidebars and drawers.
 
-use crate::hex_to_c32;
+use crate::ui_appearance::WorkbenchColors;
 use eframe::egui::{self, Pos2, Rect, Stroke, Vec2};
 use little_clip_core::theme::AppPalette;
 
@@ -16,10 +16,10 @@ pub fn render_context_slider(
     palette: &AppPalette,
 ) -> bool {
     let mut changed = false;
-    let f_med = hex_to_c32(&palette.theme.f_med);
+    let colors = WorkbenchColors::from_palette(palette);
 
     ui.vertical(|ui| {
-        ui.label(egui::RichText::new(label).small().color(f_med));
+        ui.label(egui::RichText::new(label).color(colors.text_secondary));
 
         ui.spacing_mut().slider_width = slider_width;
         let mut cur_val = *value;
@@ -192,9 +192,10 @@ fn paint_slider_track(
     thumb_radius: f32,
     palette: &AppPalette,
 ) {
-    let b_med = hex_to_c32(&palette.theme.b_med);
-    let base_c = hex_to_c32(&palette.harmonies.base);
-    let f_low = hex_to_c32(&palette.theme.f_low);
+    let colors = WorkbenchColors::from_palette(palette);
+    let b_med = colors.panel;
+    let base_c = colors.accent;
+    let f_low = colors.text_muted;
     let min_val = *range.start();
     let max_val = *range.end();
     let span = (max_val - min_val).max(1e-5);
@@ -298,8 +299,8 @@ mod tests {
 
         assert_eq!(val, 0.85);
 
-        // Click 1 at (50.0, 20.0)
-        let click_pos = Pos2::new(50.0, 20.0);
+        // Click 1 in the slider row below the full-size label.
+        let click_pos = Pos2::new(50.0, 27.0);
         let mut click1_down = raw_input.clone();
         click1_down.time = Some(0.01);
         click1_down.events.push(egui::Event::PointerButton {

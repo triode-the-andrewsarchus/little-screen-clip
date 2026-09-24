@@ -1,5 +1,6 @@
 use crate::hex_to_c32;
 use crate::icons::Icon;
+use crate::ui_appearance::WorkbenchColors;
 use eframe::egui::{
     self, Color32, FontFamily, FontId, Response, RichText, Rounding, Stroke, TextStyle, Ui, Vec2,
 };
@@ -7,6 +8,10 @@ use little_clip_core::theme::{AppPalette, contrast_ratio};
 
 pub const CONTROL_HEIGHT: f32 = 36.0;
 pub const CONTROL_ICON_SIZE: f32 = 18.0;
+pub const BODY_FONT_SIZE: f32 = 16.0;
+pub const HEADING_FONT_SIZE: f32 = 22.0;
+pub const MONO_FONT_SIZE: f32 = 15.0;
+pub const CONTROL_CORNER_RADIUS: f32 = 4.0;
 
 /// Set readable workbench defaults. Secondary text uses color and weight for
 /// hierarchy; `.small()` must remain as legible as ordinary control labels.
@@ -14,22 +19,23 @@ pub fn configure_workbench_style(ctx: &egui::Context) {
     ctx.style_mut(|style| {
         style.text_styles.insert(
             TextStyle::Small,
-            FontId::new(16.0, FontFamily::Proportional),
+            FontId::new(BODY_FONT_SIZE, FontFamily::Proportional),
         );
-        style
-            .text_styles
-            .insert(TextStyle::Body, FontId::new(16.0, FontFamily::Proportional));
+        style.text_styles.insert(
+            TextStyle::Body,
+            FontId::new(BODY_FONT_SIZE, FontFamily::Proportional),
+        );
         style.text_styles.insert(
             TextStyle::Button,
-            FontId::new(16.0, FontFamily::Proportional),
+            FontId::new(BODY_FONT_SIZE, FontFamily::Proportional),
         );
         style.text_styles.insert(
             TextStyle::Heading,
-            FontId::new(22.0, FontFamily::Proportional),
+            FontId::new(HEADING_FONT_SIZE, FontFamily::Proportional),
         );
         style.text_styles.insert(
             TextStyle::Monospace,
-            FontId::new(15.0, FontFamily::Monospace),
+            FontId::new(MONO_FONT_SIZE, FontFamily::Monospace),
         );
         style.spacing.interact_size.y = CONTROL_HEIGHT;
         style.spacing.button_padding = Vec2::new(10.0, 6.0);
@@ -68,7 +74,12 @@ pub fn contrast_text_c32(
     preferred_fg: Option<Color32>,
     palette: &AppPalette,
 ) -> Color32 {
-    contrast_text_c32_on(bg, hex_to_c32(&palette.theme.b_low), preferred_fg, palette)
+    contrast_text_c32_on(
+        bg,
+        WorkbenchColors::from_palette(palette).recessed,
+        preferred_fg,
+        palette,
+    )
 }
 
 /// Choose readable text for a fill painted over a known opaque surface.
@@ -119,7 +130,7 @@ pub fn themed_button<'a>(
     let fg = contrast_text_c32(fill, preferred_fg, palette);
     egui::Button::new(RichText::new(text.into()).color(fg))
         .fill(fill)
-        .rounding(Rounding::same(4.0))
+        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
 }
 
 /// Applies contrast-guaranteed text color to an existing `RichText` for a given `fill`.
@@ -132,7 +143,7 @@ pub fn themed_button_rich<'a>(
     let fg = contrast_text_c32(fill, preferred_fg, palette);
     egui::Button::new(rich.color(fg))
         .fill(fill)
-        .rounding(Rounding::same(4.0))
+        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
 }
 
 /// Standard mode/tab toggle button with guaranteed WCAG contrast in both active and inactive states.
@@ -151,18 +162,11 @@ pub fn mode_tab_button_icon<'a>(
     is_active: bool,
     palette: &AppPalette,
 ) -> egui::Button<'a> {
+    let colors = WorkbenchColors::from_palette(palette);
     let (bg, border, pref_fg) = if is_active {
-        (
-            hex_to_c32(&palette.harmonies.base),
-            hex_to_c32(&palette.theme.f_high),
-            hex_to_c32(&palette.theme.f_high),
-        )
+        (colors.accent, colors.text_primary, colors.text_primary)
     } else {
-        (
-            hex_to_c32(&palette.theme.b_med),
-            hex_to_c32(&palette.theme.b_low),
-            hex_to_c32(&palette.theme.f_med),
-        )
+        (colors.panel, colors.recessed, colors.text_secondary)
     };
     let fg = contrast_text_c32(bg, Some(pref_fg), palette);
     let border_fg = if is_active { fg } else { border };
@@ -176,7 +180,7 @@ pub fn mode_tab_button_icon<'a>(
 
     btn.fill(bg)
         .stroke(Stroke::new(1.0_f32, border_fg))
-        .rounding(Rounding::same(4.0))
+        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
         .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
 
@@ -196,7 +200,11 @@ pub fn action_button_icon<'a>(
     fill: Color32,
     palette: &AppPalette,
 ) -> egui::Button<'a> {
-    let fg = contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_high)), palette);
+    let fg = contrast_text_c32(
+        fill,
+        Some(WorkbenchColors::from_palette(palette).text_primary),
+        palette,
+    );
     let text = RichText::new(label.into()).strong().color(fg);
     let btn = if let Some(ic) = icon {
         egui::Button::image_and_text(ic.image_tinted(CONTROL_ICON_SIZE, fg), text)
@@ -204,7 +212,7 @@ pub fn action_button_icon<'a>(
         egui::Button::new(text)
     };
     btn.fill(fill)
-        .rounding(Rounding::same(4.0))
+        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
         .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
 
@@ -224,7 +232,11 @@ pub fn secondary_button_icon<'a>(
     fill: Color32,
     palette: &AppPalette,
 ) -> egui::Button<'a> {
-    let fg = contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_med)), palette);
+    let fg = contrast_text_c32(
+        fill,
+        Some(WorkbenchColors::from_palette(palette).text_secondary),
+        palette,
+    );
     let text = RichText::new(label.into()).color(fg);
     let btn = if let Some(ic) = icon {
         egui::Button::image_and_text(ic.image_tinted(CONTROL_ICON_SIZE, fg), text)
@@ -232,7 +244,7 @@ pub fn secondary_button_icon<'a>(
         egui::Button::new(text)
     };
     btn.fill(fill)
-        .rounding(Rounding::same(4.0))
+        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
         .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
 
@@ -272,7 +284,11 @@ pub fn danger_button_icon<'a>(
     fill: Color32,
     palette: &AppPalette,
 ) -> egui::Button<'a> {
-    let fg = contrast_text_c32(fill, Some(hex_to_c32(&palette.theme.f_high)), palette);
+    let fg = contrast_text_c32(
+        fill,
+        Some(WorkbenchColors::from_palette(palette).text_primary),
+        palette,
+    );
     let text = RichText::new(label.into()).strong().color(fg);
     let btn = if let Some(ic) = icon {
         egui::Button::image_and_text(ic.image_tinted(CONTROL_ICON_SIZE, fg), text)
@@ -280,7 +296,7 @@ pub fn danger_button_icon<'a>(
         egui::Button::new(text)
     };
     btn.fill(fill)
-        .rounding(Rounding::same(4.0))
+        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
         .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
 
@@ -292,14 +308,11 @@ pub fn icon_button<'a>(
     preferred_fg: Option<Color32>,
     palette: &AppPalette,
 ) -> egui::Button<'a> {
-    let fg = contrast_text_c32(
-        fill,
-        preferred_fg.or_else(|| Some(hex_to_c32(&palette.theme.f_high))),
-        palette,
-    );
+    let colors = WorkbenchColors::from_palette(palette);
+    let fg = contrast_text_c32(fill, preferred_fg.or(Some(colors.text_primary)), palette);
     egui::Button::image(icon.image_tinted(size, fg))
         .fill(fill)
-        .rounding(Rounding::same(4.0))
+        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
         .min_size(Vec2::splat(CONTROL_HEIGHT))
 }
 
@@ -532,38 +545,40 @@ impl StatusToast {
     ) {
         if let Some((msg, ts)) = toast {
             if now - ts < duration {
-                let color = hex_to_c32(&palette.diff_add);
-                ui.label(egui::RichText::new(msg).small().strong().color(color));
+                let color = WorkbenchColors::from_palette(palette).success;
+                ui.label(egui::RichText::new(msg).strong().color(color));
             }
         }
     }
 
     pub fn render_pill(&self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
         if let Some(msg) = self.message(now) {
-            let bg = hex_to_c32(&palette.theme.b_low);
-            let stroke = hex_to_c32(&palette.diff_add);
+            let colors = WorkbenchColors::from_palette(palette);
+            let bg = colors.recessed;
+            let stroke = colors.success;
             let fg = contrast_text_c32(bg, Some(stroke), palette);
             egui::Frame::none()
                 .fill(bg)
                 .stroke(Stroke::new(1.0_f32, stroke))
-                .rounding(Rounding::same(4.0))
+                .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
                 .inner_margin(egui::Margin::symmetric(8.0, 4.0))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new(msg).small().color(fg));
+                    ui.label(egui::RichText::new(msg).color(fg));
                 });
         }
     }
 
     pub fn render(&mut self, ui: &mut egui::Ui, now: f64, palette: &AppPalette) {
         if let Some(msg) = self.message(now) {
-            let bg = hex_to_c32(&palette.harmonies.base);
-            let fg = contrast_text_c32(bg, Some(hex_to_c32(&palette.theme.f_high)), palette);
+            let colors = WorkbenchColors::from_palette(palette);
+            let bg = colors.accent;
+            let fg = contrast_text_c32(bg, Some(colors.text_primary), palette);
             egui::Frame::none()
                 .fill(bg)
-                .rounding(Rounding::same(4.0))
+                .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
                 .inner_margin(egui::Margin::symmetric(10.0, 4.0))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new(msg).small().strong().color(fg));
+                    ui.label(egui::RichText::new(msg).strong().color(fg));
                 });
         }
     }
@@ -577,14 +592,11 @@ pub fn stat_pill(
     val_color: Option<Color32>,
     palette: &AppPalette,
 ) {
+    let colors = WorkbenchColors::from_palette(palette);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
-        ui.label(
-            egui::RichText::new(format!("{}:", label))
-                .small()
-                .color(hex_to_c32(&palette.theme.f_low)),
-        );
-        let color = val_color.unwrap_or_else(|| hex_to_c32(&palette.harmonies.base));
+        ui.label(egui::RichText::new(format!("{}:", label)).color(colors.text_muted));
+        let color = val_color.unwrap_or(colors.accent);
         ui.label(
             egui::RichText::new(format!("{}", value))
                 .monospace()
@@ -596,14 +608,15 @@ pub fn stat_pill(
 
 /// Renders a standardized status pill for badges and counts.
 pub fn badge_pill(ui: &mut egui::Ui, label: &str, accent: Option<Color32>, palette: &AppPalette) {
-    let bg = accent.unwrap_or_else(|| hex_to_c32(&palette.theme.b_low));
-    let fg = contrast_text_c32(bg, Some(hex_to_c32(&palette.theme.f_high)), palette);
+    let colors = WorkbenchColors::from_palette(palette);
+    let bg = accent.unwrap_or(colors.recessed);
+    let fg = contrast_text_c32(bg, Some(colors.text_primary), palette);
     egui::Frame::none()
         .fill(bg)
         .rounding(Rounding::same(3.0))
         .inner_margin(egui::Margin::symmetric(6.0, 2.0))
         .show(ui, |ui| {
-            ui.label(egui::RichText::new(label).small().color(fg));
+            ui.label(egui::RichText::new(label).color(fg));
         });
 }
 
@@ -615,13 +628,10 @@ pub fn sidebar_readout(
     val_color: Option<Color32>,
     palette: &AppPalette,
 ) {
+    let colors = WorkbenchColors::from_palette(palette);
     ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(label)
-                .small()
-                .color(hex_to_c32(&palette.theme.f_low)),
-        );
-        let color = val_color.unwrap_or_else(|| hex_to_c32(&palette.harmonies.base));
+        ui.label(egui::RichText::new(label).color(colors.text_muted));
+        let color = val_color.unwrap_or(colors.accent);
         ui.label(
             egui::RichText::new(format!("{}", value))
                 .monospace()
@@ -646,7 +656,8 @@ pub fn zoom_control_bar(
     palette: &AppPalette,
 ) -> Option<ZoomAction> {
     let mut action = None;
-    let btn_bg = hex_to_c32(&palette.theme.b_low);
+    let colors = WorkbenchColors::from_palette(palette);
+    let btn_bg = colors.recessed;
     let zoom_in_btn = icon_button(Icon::ZoomIn, CONTROL_ICON_SIZE, btn_bg, None, palette);
     if ui
         .add(zoom_in_btn)
@@ -673,9 +684,8 @@ pub fn zoom_control_bar(
     }
     ui.label(
         egui::RichText::new(format!("{}%", zoom_pct))
-            .small()
             .monospace()
-            .color(hex_to_c32(&palette.theme.f_med)),
+            .color(colors.text_secondary),
     );
     action
 }
@@ -719,6 +729,70 @@ pub fn new_shared_audio_player() -> Option<rodio::Player> {
 mod tests {
     use super::*;
     use little_clip_core::config::WorkbenchAppearance;
+
+    #[test]
+    fn shared_control_gallery_keeps_readable_type_and_equal_hit_heights() {
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
+            let colors = WorkbenchColors::from_palette(&palette);
+            let ctx = egui::Context::default();
+            configure_workbench_style(&ctx);
+            crate::ui_appearance::apply_visuals(&ctx, &palette);
+            let style = ctx.style();
+            assert!(TextStyle::Small.resolve(&style).size >= BODY_FONT_SIZE);
+            assert!(TextStyle::Button.resolve(&style).size >= BODY_FONT_SIZE);
+            drop(style);
+
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(900.0, 300.0),
+            ));
+            let mut heights = Vec::new();
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        heights.push(
+                            ui.add(mode_tab_button("Inspect", true, &palette))
+                                .rect
+                                .height(),
+                        );
+                        heights.push(
+                            ui.add(action_button("Copy", colors.success, &palette))
+                                .rect
+                                .height(),
+                        );
+                        heights.push(
+                            ui.add(secondary_button("Reset", colors.recessed, &palette))
+                                .rect
+                                .height(),
+                        );
+                        heights.push(
+                            ui.add(danger_button("Delete", colors.danger, &palette))
+                                .rect
+                                .height(),
+                        );
+                        heights.push(
+                            ui.add(icon_button(
+                                Icon::Close,
+                                CONTROL_ICON_SIZE,
+                                colors.panel,
+                                None,
+                                &palette,
+                            ))
+                            .rect
+                            .height(),
+                        );
+                    });
+                });
+            });
+            assert_eq!(heights.len(), 5);
+            assert!(
+                heights.iter().all(|&height| height >= CONTROL_HEIGHT),
+                "{appearance:?} control gallery has a short hit target: {heights:?}"
+            );
+        }
+    }
 
     #[test]
     fn translucent_fill_is_composited_in_linear_light() {
