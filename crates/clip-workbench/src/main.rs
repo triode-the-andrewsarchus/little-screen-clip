@@ -1762,22 +1762,26 @@ impl WorkbenchApp {
 
     fn handle_escape_shortcut(&mut self, ctx: &egui::Context, audio_region_active: bool) {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if audio_region_active {
+            if self.view == WorkbenchView::NodeMachine
+                && (self.canvas_state.catalog_open
+                    || self.canvas_state.save_dialog_open
+                    || self.canvas_state.dragging_from.is_some())
+            {
+                if self.canvas_state.catalog_open {
+                    self.canvas_state.catalog_open = false;
+                } else if self.canvas_state.save_dialog_open {
+                    self.canvas_state.save_dialog_open = false;
+                } else {
+                    self.canvas_state.dragging_from = None;
+                }
+            } else if audio_region_active {
                 if let Some(strip) = &mut self.rolling_audio_strip {
                     strip.selected_region = None;
                     strip.stop();
                 }
             } else if self.view == WorkbenchView::NodeMachine {
-                if self.canvas_state.catalog_open {
-                    self.canvas_state.catalog_open = false;
-                } else if self.canvas_state.save_dialog_open {
-                    self.canvas_state.save_dialog_open = false;
-                } else if self.canvas_state.dragging_from.take().is_some() {
-                    // Cancel a cable gesture before leaving the workbench.
-                } else {
-                    self.view = WorkbenchView::Palette;
-                    self.palette_search_needs_focus = true;
-                }
+                self.view = WorkbenchView::Palette;
+                self.palette_search_needs_focus = true;
             } else if self.view == WorkbenchView::AutoActions {
                 self.view = WorkbenchView::Palette;
                 self.palette_search_needs_focus = true;
@@ -1838,6 +1842,11 @@ impl WorkbenchApp {
     }
 
     fn handle_view_switching_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.view == WorkbenchView::NodeMachine
+            && (self.canvas_state.catalog_open || self.canvas_state.save_dialog_open)
+        {
+            return;
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::F1)) {
             self.view = WorkbenchView::NodeMachine;
         }
