@@ -561,12 +561,12 @@ impl MidiViewerState {
             self.zoom(1.25, self.playhead_sec);
         }
 
-        let bg = crate::hex_to_c32(&palette.theme.background);
-        let b_low = crate::hex_to_c32(&palette.theme.b_low);
-        let b_med = crate::hex_to_c32(&palette.theme.b_med);
-        let f_high = crate::hex_to_c32(&palette.theme.f_high);
-        let _f_med = crate::hex_to_c32(&palette.theme.f_med);
-        let f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let bg = crate::hex_to_c32(&palette.colors.canvas);
+        let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
+        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
+        let f_high = crate::hex_to_c32(&palette.colors.text_primary);
+        let _f_med = crate::hex_to_c32(&palette.colors.text_secondary);
+        let f_low = crate::hex_to_c32(&palette.colors.text_muted);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
         let playhead_color = crate::hex_to_c32(&palette.harmonies.complementary);
         let success_color = crate::hex_to_c32(&palette.diff_add);
@@ -1293,7 +1293,7 @@ mod tests {
                 chroma >= 0.15,
                 "{appearance:?}: note chroma {chroma:.3} is muted"
             );
-            let (r, g, b, _) = palette.rgba(&palette.theme.b_low);
+            let (r, g, b, _) = palette.rgba(&palette.colors.surface_recessed);
             assert!(
                 little_clip_core::theme::contrast_ratio((r, g, b), note_c) >= 2.5,
                 "{appearance:?}: MIDI note lacks contrast against display surface"

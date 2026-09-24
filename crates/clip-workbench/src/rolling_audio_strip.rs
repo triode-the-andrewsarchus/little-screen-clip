@@ -502,7 +502,7 @@ impl RollingAudioStripState {
             );
             ui.label(
                 egui::RichText::new(format!("({:.0}s snapshot)", total_dur))
-                    .color(hex_to_c32(&palette.theme.f_med))
+                    .color(hex_to_c32(&palette.colors.text_secondary))
                     .size(crate::ui_ext::BODY_FONT_SIZE),
             );
 
@@ -517,10 +517,13 @@ impl RollingAudioStripState {
                 crate::ui_ext::secondary_button_icon(
                     Some(Icon::RotateCw),
                     refresh_label,
-                    hex_to_c32(&palette.theme.b_low),
+                    hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 )
-                .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med))),
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    hex_to_c32(&palette.colors.surface_panel),
+                )),
             );
             if refresh_btn.clicked() {
                 self.load_snapshot();
@@ -530,7 +533,7 @@ impl RollingAudioStripState {
             if self.snapshot_job.is_some() && !self.is_loaded {
                 ui.label(
                     egui::RichText::new("Loading audio snapshot…")
-                        .color(hex_to_c32(&palette.theme.f_med))
+                        .color(hex_to_c32(&palette.colors.text_secondary))
                         .size(crate::ui_ext::BODY_FONT_SIZE),
                 );
             } else if let Some(error) = &self.error_msg {
@@ -564,7 +567,7 @@ impl RollingAudioStripState {
                 );
                 ui.label(
                     egui::RichText::new("[Space] Play  [Ctrl+C] Copy  [Esc] Clear")
-                        .color(hex_to_c32(&palette.theme.f_med))
+                        .color(hex_to_c32(&palette.colors.text_secondary))
                         .size(crate::ui_ext::BODY_FONT_SIZE),
                 );
             } else {
@@ -572,7 +575,7 @@ impl RollingAudioStripState {
                     egui::RichText::new(
                         "• Drag on waveform to select  |  Right-click: Full Editor",
                     )
-                    .color(hex_to_c32(&palette.theme.f_low))
+                    .color(hex_to_c32(&palette.colors.text_muted))
                     .size(crate::ui_ext::BODY_FONT_SIZE),
                 );
             }
@@ -633,11 +636,11 @@ impl RollingAudioStripState {
             let painter = ui.painter_at(rect);
 
             // Background & Border (glow border when selection is active and focused)
-            painter.rect_filled(rect, Rounding::same(4.0), hex_to_c32(&palette.theme.b_low));
+            painter.rect_filled(rect, Rounding::same(4.0), hex_to_c32(&palette.colors.surface_recessed));
             let border_stroke = if self.selected_region.is_some() {
                 Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base))
             } else {
-                Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med))
+                Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel))
             };
             painter.rect_stroke(
                 rect,
@@ -651,7 +654,7 @@ impl RollingAudioStripState {
             // Center zero-baseline
             painter.line_segment(
                 [Pos2::new(rect.min.x, center_y), Pos2::new(rect.max.x, center_y)],
-                Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_low, 30)),
+                Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.colors.text_muted, 30)),
             );
 
             // Time Tick Marks (-30s, -20s, -10s, NOW)
@@ -669,14 +672,14 @@ impl RollingAudioStripState {
 
                 painter.line_segment(
                     [Pos2::new(tick_x, rect.min.y), Pos2::new(tick_x, rect.min.y + 4.0)],
-                    Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_med, 60)),
+                    Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.colors.text_secondary, 60)),
                 );
                 painter.text(
                     Pos2::new(tick_x + 2.0, rect.min.y + 3.0),
                     egui::Align2::LEFT_TOP,
                     tick_label,
                     egui::FontId::proportional(9.0),
-                    hex_to_c32_alpha(&palette.theme.f_med, 100),
+                    hex_to_c32_alpha(&palette.colors.text_secondary, 100),
                 );
 
                 t_tick += tick_step_sec;
@@ -690,7 +693,7 @@ impl RollingAudioStripState {
                         egui::Align2::CENTER_CENTER,
                         "Capture buffer is currently silence — play audio and click Refresh (or press F5)",
                         egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
-                        hex_to_c32_alpha(&palette.theme.f_med, 160),
+                        hex_to_c32_alpha(&palette.colors.text_secondary, 160),
                     );
                 } else {
                     let num_bars = (rect.width() as usize).clamp(50, 1000);
@@ -717,7 +720,7 @@ impl RollingAudioStripState {
                             let dot_col = if in_sel {
                                 hex_to_c32_alpha(&palette.harmonies.base, 100)
                             } else {
-                                hex_to_c32_alpha(&palette.theme.f_low, 30)
+                                hex_to_c32_alpha(&palette.colors.text_muted, 30)
                             };
                             mesh.add_colored_rect(
                                 Rect::from_min_size(Pos2::new(bar_x, center_y - 0.5), Vec2::new(bar_w.max(1.0), 1.0)),
@@ -748,7 +751,7 @@ impl RollingAudioStripState {
                     egui::Align2::CENTER_CENTER,
                     "Loading rolling audio…",
                     egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
-                    hex_to_c32(&palette.theme.f_med),
+                    hex_to_c32(&palette.colors.text_secondary),
                 );
             } else if let Some(ref err) = self.error_msg {
                 painter.text(
@@ -764,7 +767,7 @@ impl RollingAudioStripState {
                     egui::Align2::CENTER_CENTER,
                     "No system audio captured yet",
                     egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
-                    hex_to_c32(&palette.theme.f_low),
+                    hex_to_c32(&palette.colors.text_muted),
                 );
             }
 

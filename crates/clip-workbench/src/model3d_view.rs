@@ -188,9 +188,9 @@ impl Model3dViewerState {
             .unwrap()
             .as_secs_f64();
 
-        let bg = crate::hex_to_c32(&palette.theme.background);
-        let b_low = crate::hex_to_c32(&palette.theme.b_low);
-        let f_high = crate::hex_to_c32(&palette.theme.f_high);
+        let bg = crate::hex_to_c32(&palette.colors.canvas);
+        let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
+        let f_high = crate::hex_to_c32(&palette.colors.text_primary);
 
         match &self.status {
             ModelLoadingStatus::Loading => {
@@ -328,7 +328,7 @@ impl Model3dViewerState {
         let wireframe = self.wireframe;
         let format_badge = mesh.format.badge_label();
 
-        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
 
         let mut auto_rot_clicked = false;

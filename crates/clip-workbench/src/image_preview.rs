@@ -766,7 +766,7 @@ impl ImagePreviewState {
                     ui.painter().rect_filled(
                         rect,
                         0.0,
-                        hex_to_c32_alpha(&palette.theme.background, 180),
+                        hex_to_c32_alpha(&palette.colors.canvas, 180),
                     );
                 });
             egui::Window::new("Save Image As")
@@ -1132,7 +1132,7 @@ impl ImagePreviewState {
         }
 
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.background))
+            .fill(hex_to_c32(&palette.colors.canvas))
             .show(ui, |ui| {
                 // 1. TOP HEADER & ESCAPE HATCHES
                 self.render_header(ui, ctx, palette, close);
@@ -1344,9 +1344,12 @@ impl ImagePreviewState {
 
     fn render_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.b_low))
+            .fill(hex_to_c32(&palette.colors.surface_recessed))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(
+                1.0_f32,
+                hex_to_c32(&palette.colors.surface_panel),
+            ))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     // Tool Modes
@@ -1391,7 +1394,7 @@ impl ImagePreviewState {
                         let reset_btn = crate::ui_ext::secondary_button_icon(
                             Some(Icon::RotateCcw),
                             "Reset",
-                            hex_to_c32(&palette.theme.b_med),
+                            hex_to_c32(&palette.colors.surface_panel),
                             palette,
                         );
                         if ui
@@ -1406,7 +1409,7 @@ impl ImagePreviewState {
                         // 1:1 Pixel Zoom
                         let pixel_btn = crate::secondary_button(
                             "1:1",
-                            hex_to_c32(&palette.theme.b_med),
+                            hex_to_c32(&palette.colors.surface_panel),
                             palette,
                         );
                         if ui
@@ -1421,7 +1424,7 @@ impl ImagePreviewState {
                         let fit_btn = crate::ui_ext::secondary_button_icon(
                             Some(Icon::ZoomFit),
                             "Fit",
-                            hex_to_c32(&palette.theme.b_med),
+                            hex_to_c32(&palette.colors.surface_panel),
                             palette,
                         );
                         if ui
@@ -1435,8 +1438,8 @@ impl ImagePreviewState {
                         // Zoom In (+)
                         let plus_btn = crate::themed_button(
                             "+",
-                            hex_to_c32(&palette.theme.b_med),
-                            Some(hex_to_c32(&palette.theme.f_high)),
+                            hex_to_c32(&palette.colors.surface_panel),
+                            Some(hex_to_c32(&palette.colors.text_primary)),
                             palette,
                         );
                         if ui.add(plus_btn).clicked() {
@@ -1454,8 +1457,8 @@ impl ImagePreviewState {
                         // Zoom Out (-)
                         let minus_btn = crate::themed_button(
                             "-",
-                            hex_to_c32(&palette.theme.b_med),
-                            Some(hex_to_c32(&palette.theme.f_high)),
+                            hex_to_c32(&palette.colors.surface_panel),
+                            Some(hex_to_c32(&palette.colors.text_primary)),
                             palette,
                         );
                         if ui.add(minus_btn).clicked() {
@@ -1480,7 +1483,7 @@ impl ImagePreviewState {
         painter.rect_filled(
             canvas_rect,
             Rounding::same(6.0),
-            hex_to_c32(&palette.theme.background),
+            hex_to_c32(&palette.colors.canvas),
         );
 
         // Panning interaction (drag) when in View, Resize, Palette, RemoveBg, DepthMap, Ocr, Barcode, or Convert mode (when not dragging split handle)
@@ -1538,8 +1541,8 @@ impl ImagePreviewState {
                 &painter,
                 img_rect,
                 self.zoom,
-                hex_to_c32(&palette.theme.b_low),
-                hex_to_c32(&palette.theme.b_med),
+                hex_to_c32(&palette.colors.surface_recessed),
+                hex_to_c32(&palette.colors.surface_panel),
             );
 
             // Draw image mesh (or Squoosh-style split view in Convert mode or DCS curtain view in DecorrelationStretch mode)
@@ -1577,7 +1580,10 @@ impl ImagePreviewState {
             painter.rect_stroke(
                 img_rect,
                 Rounding::ZERO,
-                Stroke::new(1.0_f32, hex_to_c32_alpha(&palette.theme.f_med, 40)),
+                Stroke::new(
+                    1.0_f32,
+                    hex_to_c32_alpha(&palette.colors.text_secondary, 40),
+                ),
             );
 
             // Draw any placed redaction bars so they remain visible across all modes
@@ -1622,7 +1628,7 @@ impl ImagePreviewState {
     fn render_footer(&mut self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.b_low))
+            .fill(hex_to_c32(&palette.colors.surface_recessed))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {

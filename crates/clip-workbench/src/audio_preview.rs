@@ -2807,7 +2807,7 @@ impl AudioPreviewState {
                     egui::RichText::new(
                         "Extract and save selections as individual audio files with sample timestamps & durations.",
                     )
-                    .color(hex_to_c32(&palette.theme.f_med)),
+                    .color(hex_to_c32(&palette.colors.text_secondary)),
                 );
                 ui.add_space(8.0);
                 ui.separator();
@@ -2818,14 +2818,14 @@ impl AudioPreviewState {
                     ui.label(
                         egui::RichText::new("📁 Destination:")
                             .strong()
-                            .color(hex_to_c32(&palette.theme.f_high)),
+                            .color(hex_to_c32(&palette.colors.text_primary)),
                     );
                     let text_width = (ui.available_width() - 90.0).max(100.0);
                     ui.add(
                         egui::TextEdit::singleline(&mut self.save_destination_dir)
                             .desired_width(text_width),
                     );
-                    if ui.add(layout::AudioWorkspace::secondary_button("Browse...", hex_to_c32(&palette.theme.b_low), palette))
+                    if ui.add(layout::AudioWorkspace::secondary_button("Browse...", hex_to_c32(&palette.colors.surface_recessed), palette))
                         .on_hover_text("Choose destination folder via file manager dialog").clicked() {
                         self.start_browse_directory(now);
                     }
@@ -2839,10 +2839,10 @@ impl AudioPreviewState {
                     ui.label(
                         egui::RichText::new(format!("📄 Files to Save ({}):", slice_count))
                             .strong()
-                            .color(hex_to_c32(&palette.theme.f_high)),
+                            .color(hex_to_c32(&palette.colors.text_primary)),
                     );
                     ui.add_space(8.0);
-                    if ui.add(layout::AudioWorkspace::secondary_button("↺ Reset Names", hex_to_c32(&palette.theme.b_low), palette))
+                    if ui.add(layout::AudioWorkspace::secondary_button("↺ Reset Names", hex_to_c32(&palette.colors.surface_recessed), palette))
                         .on_hover_text("Reset filenames to default original_name + timestamp + duration").clicked() {
                         self.reset_save_filenames();
                     }
@@ -2850,7 +2850,7 @@ impl AudioPreviewState {
                 ui.label(
                     egui::RichText::new("Format: [OriginalName]_[SampleTimestamp]_[Duration]")
                         .small()
-                        .color(hex_to_c32(&palette.theme.f_low)),
+                        .color(hex_to_c32(&palette.colors.text_muted)),
                 );
 
                 ui.add_space(6.0);
@@ -2892,7 +2892,7 @@ impl AudioPreviewState {
                         trigger_save = true;
                     }
 
-                    if ui.add(layout::AudioWorkspace::secondary_button("Cancel [Esc]", hex_to_c32(&palette.theme.b_low), palette)).clicked()
+                    if ui.add(layout::AudioWorkspace::secondary_button("Cancel [Esc]", hex_to_c32(&palette.colors.surface_recessed), palette)).clicked()
                         || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                         close_dialog = true;
                     }

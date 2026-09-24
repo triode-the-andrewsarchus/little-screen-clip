@@ -146,11 +146,11 @@ impl SpreadsheetViewerState {
             .map(|s| s.total_cols)
             .unwrap_or(0);
 
-        let bg = crate::hex_to_c32(&palette.theme.background);
-        let f_high = crate::hex_to_c32(&palette.theme.f_high);
-        let f_low = crate::hex_to_c32(&palette.theme.f_low);
-        let b_med = crate::hex_to_c32(&palette.theme.b_med);
-        let b_low = crate::hex_to_c32(&palette.theme.b_low);
+        let bg = crate::hex_to_c32(&palette.colors.canvas);
+        let f_high = crate::hex_to_c32(&palette.colors.text_primary);
+        let f_low = crate::hex_to_c32(&palette.colors.text_muted);
+        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
+        let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
         let warn_accent = crate::hex_to_c32(&palette.harmonies.warm_attention);
 
@@ -203,7 +203,7 @@ impl SpreadsheetViewerState {
 
                     // Search box
                     ui.add_space(8.0);
-                    Icon::Search.ui(ui, 13.0, crate::hex_to_c32(&palette.theme.f_med));
+                    Icon::Search.ui(ui, 13.0, crate::hex_to_c32(&palette.colors.text_secondary));
                     ui.add_sized(
                         [160.0, crate::ui_ext::CONTROL_HEIGHT],
                         egui::TextEdit::singleline(&mut self.search_query)
@@ -413,7 +413,7 @@ impl SpreadsheetViewerState {
                         let text_color = if is_selected_col {
                             crate::contrast_text_c32(
                                 col_bg,
-                                Some(crate::hex_to_c32(&palette.theme.f_inv)),
+                                Some(crate::hex_to_c32(&palette.colors.text_inverse)),
                                 palette,
                             )
                         } else {
@@ -497,7 +497,7 @@ impl SpreadsheetViewerState {
                         let text_color = if is_selected_row {
                             crate::contrast_text_c32(
                                 row_bg,
-                                Some(crate::hex_to_c32(&palette.theme.f_inv)),
+                                Some(crate::hex_to_c32(&palette.colors.text_inverse)),
                                 palette,
                             )
                         } else {
@@ -600,7 +600,7 @@ impl SpreadsheetViewerState {
                                                 let pref_text_color = if is_header {
                                                     accent
                                                 } else if is_selected {
-                                                    crate::hex_to_c32(&palette.theme.f_inv)
+                                                    crate::hex_to_c32(&palette.colors.text_inverse)
                                                 } else {
                                                     f_high
                                                 };

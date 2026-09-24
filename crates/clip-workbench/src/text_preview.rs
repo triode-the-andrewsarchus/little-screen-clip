@@ -34,10 +34,10 @@ fn map_syntect_color_to_theme(
     if delta < 0.08 {
         if max < 0.65 {
             // Comment or muted punctuation
-            return hex_to_c32(&palette.theme.f_low);
+            return hex_to_c32(&palette.colors.text_muted);
         } else {
             // Standard high contrast text
-            return hex_to_c32(&palette.theme.f_high);
+            return hex_to_c32(&palette.colors.text_primary);
         }
     }
 
@@ -481,7 +481,7 @@ impl TextPreviewState {
             .with_footer_readout(format!("{} lines • {} chars", total_lines, total_chars));
 
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.background))
+            .fill(hex_to_c32(&palette.colors.canvas))
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 // Header (Zone 1)
@@ -554,7 +554,7 @@ impl TextPreviewState {
         let copy_btn = crate::ui_ext::secondary_button_icon(
             Some(Icon::Copy),
             "Copy All",
-            hex_to_c32(&palette.theme.b_med),
+            hex_to_c32(&palette.colors.surface_panel),
             palette,
         );
         if ui.add(copy_btn).clicked() {
@@ -667,7 +667,7 @@ impl TextPreviewState {
             ui.label(
                 egui::RichText::new("No matches")
                     .size(crate::ui_ext::BODY_FONT_SIZE)
-                    .color(hex_to_c32(&palette.theme.f_low)),
+                    .color(hex_to_c32(&palette.colors.text_muted)),
             );
         } else {
             let count_text = format!(
@@ -709,13 +709,16 @@ impl TextPreviewState {
     fn render_search_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         ui.add_space(8.0);
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.b_low))
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
+            .fill(hex_to_c32(&palette.colors.surface_recessed))
+            .stroke(Stroke::new(
+                1.0_f32,
+                hex_to_c32(&palette.colors.surface_panel),
+            ))
             .rounding(Rounding::same(6.0))
             .inner_margin(egui::Margin::symmetric(10.0, 6.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    Icon::Search.ui(ui, 15.0, hex_to_c32(&palette.theme.f_med));
+                    Icon::Search.ui(ui, 15.0, hex_to_c32(&palette.colors.text_secondary));
 
                     let search_edit = egui::TextEdit::singleline(&mut self.find_query)
                         .hint_text("Find in text (Enter for next, Shift+Enter for prev)...");
@@ -744,7 +747,7 @@ impl TextPreviewState {
                     let prev_btn = crate::ui_ext::secondary_button_icon(
                         Some(Icon::ArrowUp),
                         "Prev",
-                        hex_to_c32(&palette.theme.b_med),
+                        hex_to_c32(&palette.colors.surface_panel),
                         palette,
                     );
                     if ui.add(prev_btn).clicked() {
@@ -754,7 +757,7 @@ impl TextPreviewState {
                     let next_btn = crate::ui_ext::secondary_button_icon(
                         Some(Icon::ArrowDown),
                         "Next",
-                        hex_to_c32(&palette.theme.b_med),
+                        hex_to_c32(&palette.colors.surface_panel),
                         palette,
                     );
                     if ui.add(next_btn).clicked() {
@@ -829,8 +832,11 @@ impl TextPreviewState {
 
         // Unified editor surface frame
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.b_low))
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
+            .fill(hex_to_c32(&palette.colors.surface_recessed))
+            .stroke(Stroke::new(
+                1.0_f32,
+                hex_to_c32(&palette.colors.surface_panel),
+            ))
             .rounding(Rounding::same(6.0))
             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
@@ -873,7 +879,9 @@ impl TextPreviewState {
                                                             width = digits
                                                         ))
                                                         .font(FontId::monospace(12.5))
-                                                        .color(hex_to_c32(&palette.theme.f_low)),
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_muted,
+                                                        )),
                                                     ),
                                                 );
                                                 ui.separator();
@@ -987,9 +995,9 @@ fn render_markdown_element(
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 let (size, color) = match level {
-                    1 => (20.0, hex_to_c32(&palette.theme.f_high)),
-                    2 => (17.0, hex_to_c32(&palette.theme.f_high)),
-                    _ => (15.0, hex_to_c32(&palette.theme.f_med)),
+                    1 => (20.0, hex_to_c32(&palette.colors.text_primary)),
+                    2 => (17.0, hex_to_c32(&palette.colors.text_primary)),
+                    _ => (15.0, hex_to_c32(&palette.colors.text_secondary)),
                 };
                 for span in spans {
                     render_markdown_span(ui, &span, size, color, palette);
@@ -1012,7 +1020,7 @@ fn render_markdown_element(
                         ui,
                         &span,
                         14.0,
-                        hex_to_c32(&palette.theme.f_high),
+                        hex_to_c32(&palette.colors.text_primary),
                         palette,
                     );
                 }
@@ -1033,7 +1041,7 @@ fn render_markdown_element(
                         ui,
                         &span,
                         14.0,
-                        hex_to_c32(&palette.theme.f_high),
+                        hex_to_c32(&palette.colors.text_primary),
                         palette,
                     );
                 }
@@ -1042,7 +1050,7 @@ fn render_markdown_element(
         little_clip_render::markdown::MarkdownLine::Quote { spans } => {
             flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
             egui::Frame::none()
-                .fill(hex_to_c32(&palette.theme.b_low))
+                .fill(hex_to_c32(&palette.colors.surface_recessed))
                 .stroke(Stroke::new(3.0_f32, hex_to_c32(&palette.harmonies.base)))
                 .inner_margin(egui::Margin::symmetric(10.0, 4.0))
                 .rounding(Rounding::same(3.0))
@@ -1053,7 +1061,7 @@ fn render_markdown_element(
                                 ui,
                                 &span,
                                 13.5,
-                                hex_to_c32(&palette.theme.f_med),
+                                hex_to_c32(&palette.colors.text_secondary),
                                 palette,
                             );
                         }
@@ -1074,7 +1082,7 @@ fn render_markdown_element(
                         ui,
                         &span,
                         14.0,
-                        hex_to_c32(&palette.theme.f_high),
+                        hex_to_c32(&palette.colors.text_primary),
                         palette,
                     );
                 }
@@ -1148,7 +1156,7 @@ fn render_code_minimap(
     painter.rect_filled(
         map_rect,
         Rounding::same(3.0),
-        hex_to_c32(&palette.theme.b_med),
+        hex_to_c32(&palette.colors.surface_panel),
     );
 
     let content_rect = map_rect.shrink2(Vec2::new(4.0, 3.0));
@@ -1315,7 +1323,7 @@ fn build_highlighted_layout_job(
             };
 
             let text_color = if is_active {
-                hex_to_c32(&palette.theme.background)
+                hex_to_c32(&palette.colors.canvas)
             } else {
                 fg
             };
@@ -1367,7 +1375,7 @@ fn render_markdown_span(
         }
         little_clip_render::markdown::MarkdownSpan::Code(s) => {
             egui::Frame::none()
-                .fill(hex_to_c32(&palette.theme.b_med))
+                .fill(hex_to_c32(&palette.colors.surface_panel))
                 .inner_margin(egui::Margin::symmetric(4.0, 1.0))
                 .rounding(Rounding::same(3.0))
                 .show(ui, |ui| {
@@ -1395,8 +1403,11 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
     let syntax = find_syntax(lang);
 
     egui::Frame::none()
-        .fill(hex_to_c32(&palette.theme.b_low))
-        .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
+        .fill(hex_to_c32(&palette.colors.surface_recessed))
+        .stroke(Stroke::new(
+            1.0_f32,
+            hex_to_c32(&palette.colors.surface_panel),
+        ))
         .inner_margin(egui::Margin::same(10.0))
         .rounding(Rounding::same(4.0))
         .show(ui, |ui| {
@@ -1405,7 +1416,7 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
                     ui.label(
                         egui::RichText::new(lang.to_uppercase())
                             .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .color(hex_to_c32(&palette.theme.f_low)),
+                            .color(hex_to_c32(&palette.colors.text_muted)),
                     );
                 });
                 ui.add_space(4.0);

@@ -112,16 +112,16 @@ mod tests {
             let palette = palette(appearance);
             assert_eq!(palette.is_dark, appearance == WorkbenchAppearance::Dark);
             for surface in [
-                &palette.theme.background,
-                &palette.theme.b_high,
-                &palette.theme.b_med,
-                &palette.theme.b_low,
+                &palette.colors.canvas,
+                &palette.colors.surface_raised,
+                &palette.colors.surface_panel,
+                &palette.colors.surface_recessed,
             ] {
                 let (r, g, b, _) = palette.rgba(surface);
                 for foreground in [
-                    &palette.theme.f_high,
-                    &palette.theme.f_med,
-                    &palette.theme.f_low,
+                    &palette.colors.text_primary,
+                    &palette.colors.text_secondary,
+                    &palette.colors.text_muted,
                 ] {
                     let (fr, fg, fb, _) = palette.rgba(foreground);
                     assert!(

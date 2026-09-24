@@ -821,7 +821,8 @@ mod tests {
             let palette = AppPalette::for_appearance(appearance);
             for surface in [&palette.harmonies.base, &palette.diff_add] {
                 let bg = hex_to_c32(surface);
-                let fg = contrast_text_c32(bg, Some(hex_to_c32(&palette.theme.f_high)), &palette);
+                let fg =
+                    contrast_text_c32(bg, Some(hex_to_c32(&palette.colors.text_primary)), &palette);
                 let ratio = contrast_ratio((bg.r(), bg.g(), bg.b()), (fg.r(), fg.g(), fg.b()));
                 assert!(
                     ratio >= 4.5,
@@ -850,27 +851,27 @@ mod tests {
                 (
                     "active tab",
                     hex_to_c32(&palette.harmonies.base),
-                    Some(hex_to_c32(&palette.theme.f_high)),
+                    Some(hex_to_c32(&palette.colors.text_primary)),
                 ),
                 (
                     "inactive tab",
-                    hex_to_c32(&palette.theme.b_med),
-                    Some(hex_to_c32(&palette.theme.f_med)),
+                    hex_to_c32(&palette.colors.surface_panel),
+                    Some(hex_to_c32(&palette.colors.text_secondary)),
                 ),
                 (
                     "add",
                     hex_to_c32(&palette.diff_add),
-                    Some(hex_to_c32(&palette.theme.f_high)),
+                    Some(hex_to_c32(&palette.colors.text_primary)),
                 ),
                 (
                     "secondary",
-                    hex_to_c32(&palette.theme.b_low),
-                    Some(hex_to_c32(&palette.theme.f_med)),
+                    hex_to_c32(&palette.colors.surface_recessed),
+                    Some(hex_to_c32(&palette.colors.text_secondary)),
                 ),
                 (
                     "delete",
                     hex_to_c32(&palette.diff_del),
-                    Some(hex_to_c32(&palette.theme.f_high)),
+                    Some(hex_to_c32(&palette.colors.text_primary)),
                 ),
                 (
                     "translucent accent",
@@ -881,7 +882,7 @@ mod tests {
 
             for (name, bg, preferred) in test_cases {
                 let fg = contrast_text_c32(bg, preferred, &palette);
-                let effective_bg = composited_rgb(bg, hex_to_c32(&palette.theme.b_low));
+                let effective_bg = composited_rgb(bg, hex_to_c32(&palette.colors.surface_recessed));
                 let ratio = contrast_ratio(effective_bg, (fg.r(), fg.g(), fg.b()));
                 assert!(
                     ratio >= 4.5,
