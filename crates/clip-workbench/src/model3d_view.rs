@@ -385,7 +385,9 @@ impl Model3dViewerState {
                     .stroke(Stroke::new(1.0_f32, b_med))
                     .inner_margin(egui::Margin::symmetric(14.0, 6.0))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
+                        // Keep every viewer action one click away while allowing
+                        // the controls to wrap on narrower fixed popup sizes.
+                        ui.horizontal_wrapped(|ui| {
                             let auto_rot_bg = if auto_rotate { b_med } else { accent };
                             let (auto_rot_label, auto_rot_icon) = if auto_rotate {
                                 ("Pause Rotation", Icon::Pause)
