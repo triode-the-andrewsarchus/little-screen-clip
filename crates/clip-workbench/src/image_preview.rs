@@ -778,9 +778,12 @@ impl ImagePreviewState {
                     ui.add_space(4.0);
                     ui.label(egui::RichText::new("Enter destination file path:").strong());
                     ui.add_space(4.0);
-                    let path_field = ui.add(
-                        egui::TextEdit::singleline(&mut self.fallback_save_path)
-                            .desired_width(380.0),
+                    let path_field = ui.add_sized(
+                        [
+                            ui.available_width().clamp(260.0, 440.0),
+                            crate::ui_ext::CONTROL_HEIGHT,
+                        ],
+                        egui::TextEdit::singleline(&mut self.fallback_save_path),
                     );
                     if self.fallback_save_needs_focus {
                         path_field.request_focus();
