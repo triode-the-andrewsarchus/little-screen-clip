@@ -1287,5 +1287,24 @@ mod tests {
         state.wait_for_completion();
         assert!(!state.is_computing);
         assert!(!state.result.raw_ansi.is_empty());
+
+        for appearance in [
+            little_clip_core::config::WorkbenchAppearance::Dark,
+            little_clip_core::config::WorkbenchAppearance::Light,
+        ] {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette = crate::ui_appearance::palette(appearance);
+            let console = crate::hex_to_c32(&palette.colors.console_surface);
+            let mut close = false;
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                });
+            });
+            assert!(output.shapes.iter().any(|clipped| {
+                matches!(&clipped.shape, egui::Shape::Rect(rect) if rect.fill == console)
+            }));
+        }
     }
 }
