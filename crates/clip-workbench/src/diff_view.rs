@@ -434,18 +434,12 @@ impl DiffViewerState {
         self.status_toast = Some(("⚠️ Neither Meld nor KDiff3 is installed".to_string(), now));
     }
 
-    pub fn render_ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        palette: &little_clip_core::palette::AppPalette,
-        close_requested: &mut bool,
-    ) {
-        let now = ctx.input(|i| i.time);
-
-        // Handle common keyboard shortcuts
+    fn handle_shortcuts(&mut self, ctx: &egui::Context, close_requested: &mut bool) {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             *close_requested = true;
+        }
+        if ctx.wants_keyboard_input() {
+            return;
         }
         if ctx.input(|i| {
             i.key_pressed(egui::Key::Tab)
@@ -456,9 +450,26 @@ impl DiffViewerState {
         }) {
             self.toggle_mode();
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::S)) {
+        if ctx.input(|i| {
+            i.key_pressed(egui::Key::S)
+                && !i.modifiers.command
+                && !i.modifiers.ctrl
+                && !i.modifiers.mac_cmd
+        }) {
             self.swap_operands();
         }
+    }
+
+    pub fn render_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: &little_clip_core::palette::AppPalette,
+        close_requested: &mut bool,
+    ) {
+        let now = ctx.input(|i| i.time);
+
+        self.handle_shortcuts(ctx, close_requested);
 
         let is_img = self.is_image();
 
@@ -1188,6 +1199,46 @@ fn strip_ansi_codes(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modified_s_does_not_swap_diff_operands() {
+        let left = DiffTarget::ClipboardText {
+            label: "Left".to_string(),
+            content: "left".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+        let right = DiffTarget::ClipboardText {
+            label: "Right".to_string(),
+            content: "right".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+        let mut state = DiffViewerState::new(left, right, DiffDisplayMode::Inline);
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut close = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                modifiers: egui::Modifiers::CTRL,
+                events: vec![egui::Event::Key {
+                    key: egui::Key::S,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::CTRL,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                });
+            },
+        );
+        assert_eq!(state.lhs.label(), "Left");
+        assert_eq!(state.rhs.label(), "Right");
+    }
 
     #[test]
     fn test_strip_ansi_codes() {
