@@ -25,6 +25,7 @@ use little_clip_ops::pipeline::recipes::{find_recipe_by_name, load_all_recipes};
 use little_clip_ops::pipeline::types::{NodeKind, Recipe};
 use little_clip_ops::{OpDescriptor, get_applicable_ops};
 use little_clip_render::{SCREEN_HEIGHT, SCREEN_WIDTH, ScreenRenderer};
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -139,6 +140,24 @@ enum SpreadsheetLoadSource {
     Text { content: Arc<str>, title: String },
 }
 
+enum ViewerSession {
+    Diff(DiffViewerState),
+    BinaryDiff(BinaryDiffViewState),
+    Audio(AudioPreviewState),
+    Image(ImagePreviewState),
+    Spreadsheet(SpreadsheetViewerState),
+    Pdf(PdfEditorState),
+    Midi(MidiViewerState),
+    Model3d(Model3dViewerState),
+    Text(TextPreviewState),
+}
+
+fn show_viewer_panel(ctx: &egui::Context, contents: impl FnOnce(&mut egui::Ui)) {
+    egui::CentralPanel::default()
+        .frame(egui::Frame::none())
+        .show(ctx, contents);
+}
+
 type SpreadsheetLoadReceiver =
     Receiver<Result<Result<(SpreadsheetData, Option<PathBuf>), String>, JobError>>;
 
@@ -159,20 +178,13 @@ struct WorkbenchApp {
     mirror_texture: Option<egui::TextureHandle>,
     dirty_mirror: bool,
     in_app_prompt: Option<InAppPromptState>,
-    diff_viewer: Option<DiffViewerState>,
-    binary_diff_viewer: Option<BinaryDiffViewState>,
-    audio_preview: Option<AudioPreviewState>,
-    image_preview: Option<ImagePreviewState>,
-    spreadsheet_viewer: Option<SpreadsheetViewerState>,
+    viewer: Option<ViewerSession>,
+    startup_viewers: VecDeque<ViewerSession>,
     spreadsheet_load_job: Option<(
         JobTicket,
         SpreadsheetLoadReceiver,
         Option<(Arc<str>, String)>,
     )>,
-    pdf_viewer: Option<PdfEditorState>,
-    midi_viewer: Option<MidiViewerState>,
-    model3d_viewer: Option<Model3dViewerState>,
-    text_preview: Option<TextPreviewState>,
     rolling_audio_strip: Option<RollingAudioStripState>,
     dragging_slot: Option<SlotId>,
     config: AppConfig,
@@ -211,6 +223,13 @@ impl WorkbenchApp {
             initial_image.and_then(|p| ImagePreviewState::from_path(p, &config).ok());
 
         let rolling_audio_strip = Some(RollingAudioStripState::new());
+        let mut startup_viewers = VecDeque::new();
+        if let Some(audio) = audio_preview {
+            startup_viewers.push_back(ViewerSession::Audio(audio));
+        }
+        if let Some(image) = image_preview {
+            startup_viewers.push_back(ViewerSession::Image(image));
+        }
 
         let mut app = Self {
             state,
@@ -229,16 +248,9 @@ impl WorkbenchApp {
             mirror_texture: None,
             dirty_mirror: true,
             in_app_prompt: None,
-            diff_viewer: None,
-            binary_diff_viewer: None,
-            audio_preview,
-            image_preview,
-            spreadsheet_viewer: None,
+            viewer: None,
+            startup_viewers,
             spreadsheet_load_job: None,
-            pdf_viewer: None,
-            midi_viewer: None,
-            model3d_viewer: None,
-            text_preview: None,
             rolling_audio_strip,
             dragging_slot: None,
             config,
@@ -249,6 +261,10 @@ impl WorkbenchApp {
             app.open_binary_diff_viewer();
         } else if start_with_diff {
             app.open_diff_viewer();
+        }
+
+        if app.viewer.is_none() {
+            app.viewer = app.startup_viewers.pop_front();
         }
 
         app
@@ -519,8 +535,11 @@ impl WorkbenchApp {
                             .to_string(),
                     );
                 } else {
-                    self.diff_viewer =
-                        Some(DiffViewerState::new(lhs, rhs, DiffDisplayMode::SideBySide));
+                    self.viewer = Some(ViewerSession::Diff(DiffViewerState::new(
+                        lhs,
+                        rhs,
+                        DiffDisplayMode::SideBySide,
+                    )));
                 }
             }
             (Some(_), None) => {
@@ -542,8 +561,9 @@ impl WorkbenchApp {
         if let Some(((l_lbl, l_bytes), (r_lbl, r_bytes))) =
             resolve_binary_diff_pair(&selected_items, &self.state)
         {
-            self.binary_diff_viewer =
-                Some(BinaryDiffViewState::new(l_lbl, l_bytes, r_lbl, r_bytes));
+            self.viewer = Some(ViewerSession::BinaryDiff(BinaryDiffViewState::new(
+                l_lbl, l_bytes, r_lbl, r_bytes,
+            )));
         } else {
             self.status_msg =
                 Some("Binary diff requires 2 slots or 1 slot with 2 files/paths.".to_string());
@@ -724,7 +744,7 @@ impl Drop for WorkbenchApp {
 
 impl eframe::App for WorkbenchApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Apply theme to egui on first frame or theme changes
+        // Apply the fixed appearance to egui on the first frame or mode changes.
         if !self.appearance_applied {
             ui_appearance::apply_visuals(ctx, &self.ui_palette);
             self.appearance_applied = true;
@@ -808,7 +828,7 @@ impl eframe::App for WorkbenchApp {
             // A materialized selection is now the whole source timeline.
             let editor = AudioPreviewState::new(prepared_path, title.to_string())
                 .with_editor(self.config.audio.editor.clone());
-            self.audio_preview = Some(editor);
+            self.viewer = Some(ViewerSession::Audio(editor));
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -856,7 +876,7 @@ impl eframe::App for WorkbenchApp {
                                 &self.ui_palette,
                             );
                             if ui.add(audio_btn).clicked() {
-                                self.audio_preview = Some(AudioPreviewState::new(path, title).with_editor(self.config.audio.editor.clone()));
+                                self.viewer = Some(ViewerSession::Audio(AudioPreviewState::new(path, title).with_editor(self.config.audio.editor.clone())));
                             }
                         }
 
@@ -871,7 +891,7 @@ impl eframe::App for WorkbenchApp {
                             );
                             if ui.add(img_btn).clicked() {
                                 if let Ok(state) = ImagePreviewState::from_item(img_item, &self.config) {
-                                    self.image_preview = Some(state);
+                                    self.viewer = Some(ViewerSession::Image(state));
                                 }
                             }
                         }
@@ -970,7 +990,7 @@ impl eframe::App for WorkbenchApp {
                                 &self.ui_palette,
                             );
                             if ui.add(pdf_btn).on_hover_text("Open PDF Page Editor (Delete / Rotate pages)").clicked() {
-                                self.pdf_viewer = Some(PdfEditorState::new(pdf_path));
+                                self.viewer = Some(ViewerSession::Pdf(PdfEditorState::new(pdf_path)));
                             }
                         }
 
@@ -999,7 +1019,7 @@ impl eframe::App for WorkbenchApp {
                             );
                             if ui.add(midi_btn).on_hover_text("Open interactive MIDI piano roll visualizer & synth audio").clicked() {
                                 if let Ok(st) = MidiViewerState::from_file(midi_path) {
-                                    self.midi_viewer = Some(st);
+                                    self.viewer = Some(ViewerSession::Midi(st));
                                 }
                             }
                         }
@@ -1016,10 +1036,10 @@ impl eframe::App for WorkbenchApp {
                                 &self.ui_palette,
                             );
                             if ui.add(model_btn).on_hover_text("Open interactive 3D orbit viewer (pan, zoom, rotate)").clicked() {
-                                self.model3d_viewer = Some(
+                                self.viewer = Some(ViewerSession::Model3d(
                                     Model3dViewerState::from_file(model_path)
                                         .with_config(self.config.model3d.clone()),
-                                );
+                                ));
                             }
                         }
 
@@ -1095,10 +1115,10 @@ impl eframe::App for WorkbenchApp {
                             if ui.add(txt_btn).on_hover_text("Open big text preview (syntax highlighting, line wrapping, search, and editor export)").clicked() {
                                 if let Some(p) = file_p {
                                     if let Some(st) = TextPreviewState::from_file(p, &self.config) {
-                                        self.text_preview = Some(st);
+                                        self.viewer = Some(ViewerSession::Text(st));
                                     }
                                 } else if let Some(txt) = raw_txt {
-                                    self.text_preview = Some(TextPreviewState::from_text(txt, None, &self.config));
+                                    self.viewer = Some(ViewerSession::Text(TextPreviewState::from_text(txt, None, &self.config)));
                                 }
                             }
                         }
@@ -1351,10 +1371,85 @@ impl WorkbenchApp {
     }
 
     fn render_modal_viewers(&mut self, ctx: &egui::Context) -> bool {
-        self.render_prompt_modal(ctx)
-            || self.render_diff_modals(ctx)
-            || self.render_audio_image_modals(ctx)
-            || self.render_doc_3d_modals(ctx)
+        if self.render_prompt_modal(ctx) {
+            return true;
+        }
+
+        let Some(viewer) = self.viewer.as_mut() else {
+            return false;
+        };
+        let mut close = false;
+        let mut pdf_dirty = false;
+        match viewer {
+            ViewerSession::Diff(state) => {
+                show_viewer_panel(ctx, |ui| {
+                    state.render_ui(ui, ctx, &self.ui_palette, &mut close);
+                });
+            }
+            ViewerSession::BinaryDiff(state) => {
+                show_viewer_panel(ctx, |ui| {
+                    state.render_ui(ui, ctx, &self.ui_palette, &mut close);
+                });
+            }
+            ViewerSession::Audio(state) => {
+                show_viewer_panel(ctx, |ui| {
+                    state.render_ui(ui, ctx, &self.ui_palette, &mut close);
+                });
+                if close {
+                    state.stop();
+                }
+            }
+            ViewerSession::Image(state) => {
+                show_viewer_panel(ctx, |ui| {
+                    state.render_ui(ui, ctx, &self.ui_palette, &mut close);
+                });
+            }
+            ViewerSession::Spreadsheet(state) => {
+                show_viewer_panel(ctx, |ui| {
+                    state.render_ui(ui, ctx, &self.ui_palette, &mut close);
+                });
+            }
+            ViewerSession::Pdf(state) => {
+                show_viewer_panel(ctx, |ui| {
+                    state.render_ui(ui, ctx, &self.ui_palette, &mut close);
+                });
+                pdf_dirty = close && state.dirty;
+            }
+            ViewerSession::Midi(state) => {
+                if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                    if state.selected_region.is_some() {
+                        state.selected_region = None;
+                        state.play_stop_time = None;
+                    } else {
+                        close = true;
+                    }
+                } else {
+                    show_viewer_panel(ctx, |ui| {
+                        state.render_ui(ui, &self.ui_palette, &mut close);
+                    });
+                }
+                if close {
+                    state.stop();
+                }
+            }
+            ViewerSession::Model3d(state) => {
+                show_viewer_panel(ctx, |ui| {
+                    state.render_ui(ui, &self.ui_palette, &mut close);
+                });
+            }
+            ViewerSession::Text(state) => {
+                show_viewer_panel(ctx, |ui| {
+                    state.render_ui(ui, ctx, &self.ui_palette, &mut close);
+                });
+            }
+        }
+
+        if close {
+            self.viewer = self.startup_viewers.pop_front();
+            self.dirty_mirror |= pdf_dirty;
+            ctx.request_repaint();
+        }
+        true
     }
 
     fn render_prompt_modal(&mut self, ctx: &egui::Context) -> bool {
@@ -1464,159 +1559,6 @@ impl WorkbenchApp {
         false
     }
 
-    fn render_diff_modals(&mut self, ctx: &egui::Context) -> bool {
-        if let Some(diff_state) = &mut self.diff_viewer {
-            let mut close_diff = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    diff_state.render_ui(ui, ctx, &self.ui_palette, &mut close_diff);
-                });
-
-            if close_diff {
-                self.diff_viewer = None;
-            }
-            return true;
-        }
-
-        if let Some(binary_diff_state) = &mut self.binary_diff_viewer {
-            let mut close_binary_diff = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    binary_diff_state.render_ui(ui, ctx, &self.ui_palette, &mut close_binary_diff);
-                });
-
-            if close_binary_diff {
-                self.binary_diff_viewer = None;
-            }
-            return true;
-        }
-
-        false
-    }
-
-    fn render_audio_image_modals(&mut self, ctx: &egui::Context) -> bool {
-        if let Some(audio_state) = &mut self.audio_preview {
-            let mut close_audio = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    audio_state.render_ui(ui, ctx, &self.ui_palette, &mut close_audio);
-                });
-
-            if close_audio {
-                audio_state.stop();
-                self.audio_preview = None;
-            }
-            return true;
-        }
-
-        if let Some(image_state) = &mut self.image_preview {
-            let mut close_image = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    image_state.render_ui(ui, ctx, &self.ui_palette, &mut close_image);
-                });
-
-            if close_image {
-                self.image_preview = None;
-            }
-            return true;
-        }
-
-        false
-    }
-
-    fn render_doc_3d_modals(&mut self, ctx: &egui::Context) -> bool {
-        if let Some(sheet_state) = &mut self.spreadsheet_viewer {
-            let mut close_sheet = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    sheet_state.render_ui(ui, ctx, &self.ui_palette, &mut close_sheet);
-                });
-
-            if close_sheet {
-                self.spreadsheet_viewer = None;
-            }
-            return true;
-        }
-
-        if let Some(pdf_state) = &mut self.pdf_viewer {
-            let mut close_pdf = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    pdf_state.render_ui(ui, ctx, &self.ui_palette, &mut close_pdf);
-                });
-
-            if close_pdf {
-                if pdf_state.dirty {
-                    self.dirty_mirror = true;
-                }
-                self.pdf_viewer = None;
-            }
-            return true;
-        }
-
-        if let Some(midi_state) = &mut self.midi_viewer {
-            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                if midi_state.selected_region.is_some() {
-                    midi_state.selected_region = None;
-                    midi_state.play_stop_time = None;
-                } else {
-                    midi_state.stop();
-                    self.midi_viewer = None;
-                }
-                return true;
-            }
-            let mut close_midi = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    midi_state.render_ui(ui, &self.ui_palette, &mut close_midi);
-                });
-
-            if close_midi {
-                midi_state.stop();
-                self.midi_viewer = None;
-            }
-            return true;
-        }
-
-        if let Some(model_state) = &mut self.model3d_viewer {
-            let mut close_model = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    model_state.render_ui(ui, &self.ui_palette, &mut close_model);
-                });
-
-            if close_model {
-                self.model3d_viewer = None;
-            }
-            return true;
-        }
-
-        if let Some(text_state) = &mut self.text_preview {
-            let mut close_text = false;
-            egui::CentralPanel::default()
-                .frame(egui::Frame::none())
-                .show(ctx, |ui| {
-                    text_state.render_ui(ui, ctx, &self.ui_palette, &mut close_text);
-                });
-
-            if close_text {
-                self.text_preview = None;
-            }
-            return true;
-        }
-
-        false
-    }
-
     fn start_spreadsheet_load(&mut self, source: SpreadsheetLoadSource) {
         if let Some((ticket, _, _)) = self.spreadsheet_load_job.take() {
             ticket.cancel();
@@ -1654,16 +1596,18 @@ impl WorkbenchApp {
         let (_, _, fallback) = self.spreadsheet_load_job.take().unwrap();
         match result {
             Ok(Ok((data, path))) => {
-                self.spreadsheet_viewer = Some(SpreadsheetViewerState::new(data, path));
+                self.viewer = Some(ViewerSession::Spreadsheet(SpreadsheetViewerState::new(
+                    data, path,
+                )));
                 ctx.request_repaint();
             }
             failure => {
                 if let Some((content, title)) = fallback {
-                    self.text_preview = Some(TextPreviewState::from_text(
+                    self.viewer = Some(ViewerSession::Text(TextPreviewState::from_text(
                         content.to_string(),
                         Some(title),
                         &self.config,
-                    ));
+                    )));
                 } else {
                     self.status_msg = Some(match failure {
                         Ok(Err(error)) => format!("Spreadsheet: {error}"),
@@ -1706,24 +1650,24 @@ impl WorkbenchApp {
             .unwrap_or(false)
         {
             if let Ok(st) = MidiViewerState::from_file(fp.to_path_buf()) {
-                self.midi_viewer = Some(st);
+                self.viewer = Some(ViewerSession::Midi(st));
             }
         } else if is_3d_model_file(fp) {
-            self.model3d_viewer = Some(
+            self.viewer = Some(ViewerSession::Model3d(
                 Model3dViewerState::from_file(fp.to_path_buf())
                     .with_config(self.config.model3d.clone()),
-            );
+            ));
         } else if little_clip_core::pdf::is_pdf_path(fp) {
-            self.pdf_viewer = Some(PdfEditorState::new(fp.to_path_buf()));
+            self.viewer = Some(ViewerSession::Pdf(PdfEditorState::new(fp.to_path_buf())));
         } else if is_spreadsheet_file(fp) {
             self.start_spreadsheet_load(SpreadsheetLoadSource::File(fp.to_path_buf()));
         } else if is_image || is_image_path(fp) {
             if let Ok(editor) = ImagePreviewState::from_path(fp.to_path_buf(), &self.config) {
-                self.image_preview = Some(editor);
+                self.viewer = Some(ViewerSession::Image(editor));
             }
         } else if little_clip_ops::is_text_file(fp) {
             if let Some(st) = TextPreviewState::from_file(fp, &self.config) {
-                self.text_preview = Some(st);
+                self.viewer = Some(ViewerSession::Text(st));
             }
         }
     }
@@ -1740,27 +1684,27 @@ impl WorkbenchApp {
                 title: title.to_string(),
             });
         } else {
-            self.text_preview = Some(TextPreviewState::from_text(
+            self.viewer = Some(ViewerSession::Text(TextPreviewState::from_text(
                 text.to_string(),
                 Some(title.to_string()),
                 &self.config,
-            ));
+            )));
         }
     }
 
     fn open_slot_preview_modal(&mut self, item: &ClipItem) {
         if let Some(audio_path) = item.audio_path() {
-            self.audio_preview = Some(
+            self.viewer = Some(ViewerSession::Audio(
                 AudioPreviewState::new(audio_path, item.title.clone())
                     .with_editor(self.config.audio.editor.clone()),
-            );
+            ));
             return;
         }
         if let Some(fp) = item.file_path() {
             self.open_slot_file_preview(&fp, item.is_image());
         } else if item.is_image() {
             if let Ok(editor) = ImagePreviewState::from_item(item, &self.config) {
-                self.image_preview = Some(editor);
+                self.viewer = Some(ViewerSession::Image(editor));
             }
         } else if let Some(text) = item.to_clipboard_text() {
             self.open_slot_text_preview(&text, &item.title);
