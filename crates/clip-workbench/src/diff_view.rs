@@ -531,7 +531,7 @@ impl DiffViewerState {
             }
         }
 
-        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
         let success_color = crate::hex_to_c32(&palette.diff_add);
         let del_color = crate::hex_to_c32(&palette.diff_del);
@@ -587,7 +587,7 @@ impl DiffViewerState {
         };
 
         egui::Frame::none()
-            .fill(crate::hex_to_c32(&palette.theme.background))
+            .fill(crate::hex_to_c32(&palette.colors.canvas))
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 // Zone 1: Header
@@ -678,9 +678,9 @@ impl DiffViewerState {
         ui: &mut egui::Ui,
         palette: &little_clip_core::theme::AppPalette,
     ) {
-        let b_low = crate::hex_to_c32(&palette.theme.b_low);
-        let b_med = crate::hex_to_c32(&palette.theme.b_med);
-        let f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
+        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
+        let f_low = crate::hex_to_c32(&palette.colors.text_muted);
 
         egui::Frame::none()
             .fill(b_low)
@@ -736,10 +736,10 @@ impl DiffViewerState {
         ui: &mut egui::Ui,
         palette: &little_clip_core::theme::AppPalette,
     ) {
-        let b_low = crate::hex_to_c32(&palette.theme.b_low);
-        let b_med = crate::hex_to_c32(&palette.theme.b_med);
-        let f_high = crate::hex_to_c32(&palette.theme.f_high);
-        let f_med = crate::hex_to_c32(&palette.theme.f_med);
+        let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
+        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
+        let f_high = crate::hex_to_c32(&palette.colors.text_primary);
+        let f_med = crate::hex_to_c32(&palette.colors.text_secondary);
         let del_color = crate::hex_to_c32(&palette.diff_del);
 
         if self.is_computing {
@@ -954,8 +954,8 @@ impl DiffViewerState {
             return;
         }
 
-        let b_low = crate::hex_to_c32(&palette.theme.b_low);
-        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
+        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
 
         egui::Frame::none()
             .fill(b_low)
@@ -978,8 +978,8 @@ impl DiffViewerState {
         ui: &mut egui::Ui,
         palette: &little_clip_core::theme::AppPalette,
     ) {
-        let b_low = crate::hex_to_c32(&palette.theme.b_low);
-        let b_med = crate::hex_to_c32(&palette.theme.b_med);
+        let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
+        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
 
         egui::Frame::none()
             .fill(b_low)
@@ -1019,10 +1019,10 @@ impl DiffViewerState {
     ) {
         let elapsed = self.compute_start_time.elapsed().as_secs_f32();
         let progress = (elapsed * 0.75).fract();
-        let b_med = crate::hex_to_c32(&palette.theme.b_med);
-        let b_low = crate::hex_to_c32(&palette.theme.b_low);
-        let f_high = crate::hex_to_c32(&palette.theme.f_high);
-        let f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
+        let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
+        let f_high = crate::hex_to_c32(&palette.colors.text_primary);
+        let f_low = crate::hex_to_c32(&palette.colors.text_muted);
         let accent = crate::hex_to_c32(&palette.harmonies.base);
 
         let heading = if self.is_image() {
@@ -1113,9 +1113,9 @@ impl DiffViewerState {
         w: f32,
         h: f32,
     ) {
-        let b_low = crate::hex_to_c32(&palette.theme.b_low);
-        let b_med = crate::hex_to_c32(&palette.theme.b_med);
-        let f_low = crate::hex_to_c32(&palette.theme.f_low);
+        let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
+        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
+        let f_low = crate::hex_to_c32(&palette.colors.text_muted);
 
         ui.vertical(|ui| {
             ui.set_width(w);

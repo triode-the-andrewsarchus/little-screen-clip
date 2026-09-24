@@ -574,7 +574,7 @@ impl NodeCanvasState {
             let add_btn = crate::ui_ext::action_button_icon(
                 Some(Icon::Plus),
                 "Add Node",
-                hex_to_c32(&palette.theme.b_med),
+                hex_to_c32(&palette.colors.surface_panel),
                 palette,
             );
             if ui.add(add_btn).clicked() {
@@ -589,7 +589,7 @@ impl NodeCanvasState {
             let new_btn = crate::ui_ext::secondary_button_icon(
                 Some(Icon::Text),
                 "New Recipe",
-                hex_to_c32(&palette.theme.b_low),
+                hex_to_c32(&palette.colors.surface_recessed),
                 palette,
             );
             if ui
@@ -608,7 +608,7 @@ impl NodeCanvasState {
 
             ui.label(
                 egui::RichText::new("Recipe:")
-                    .color(hex_to_c32(&palette.theme.f_low))
+                    .color(hex_to_c32(&palette.colors.text_muted))
                     .size(BODY_FONT_SIZE),
             );
 
@@ -652,7 +652,7 @@ impl NodeCanvasState {
             let save_btn = crate::ui_ext::secondary_button_icon(
                 Some(Icon::Save),
                 "Save",
-                hex_to_c32(&palette.theme.b_low),
+                hex_to_c32(&palette.colors.surface_recessed),
                 palette,
             );
             if ui
@@ -698,7 +698,7 @@ impl NodeCanvasState {
             let save_as_btn = crate::ui_ext::secondary_button_icon(
                 Some(Icon::Save),
                 "Save As...",
-                hex_to_c32(&palette.theme.b_low),
+                hex_to_c32(&palette.colors.surface_recessed),
                 palette,
             );
             if ui
@@ -718,7 +718,7 @@ impl NodeCanvasState {
             let undo_btn = crate::ui_ext::secondary_button_icon(
                 Some(Icon::Undo),
                 "Undo",
-                hex_to_c32(&palette.theme.b_low),
+                hex_to_c32(&palette.colors.surface_recessed),
                 palette,
             );
             if ui
@@ -733,7 +733,7 @@ impl NodeCanvasState {
             let redo_btn = crate::ui_ext::secondary_button_icon(
                 Some(Icon::Redo),
                 "Redo",
-                hex_to_c32(&palette.theme.b_low),
+                hex_to_c32(&palette.colors.surface_recessed),
                 palette,
             );
             if ui
@@ -748,7 +748,7 @@ impl NodeCanvasState {
             let clear_btn = crate::ui_ext::secondary_button_icon(
                 Some(Icon::Trash),
                 "Clear",
-                hex_to_c32(&palette.theme.b_low),
+                hex_to_c32(&palette.colors.surface_recessed),
                 palette,
             );
             if ui
@@ -824,7 +824,7 @@ impl NodeCanvasState {
             .fixed_pos(modal_rect.min)
             .show(ui.ctx(), |ui| {
                 egui::Frame::window(&ui.style())
-                    .fill(hex_to_c32(&palette.theme.b_low))
+                    .fill(hex_to_c32(&palette.colors.surface_recessed))
                     .stroke(Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)))
                     .rounding(8.0)
                     .inner_margin(egui::Margin::same(14.0))
@@ -898,13 +898,13 @@ impl NodeCanvasState {
                                 if filtered.is_empty() {
                                     ui.label(
                                         egui::RichText::new("No matching nodes found.")
-                                            .color(hex_to_c32(&palette.theme.f_low))
+                                            .color(hex_to_c32(&palette.colors.text_muted))
                                             .italics(),
                                     );
                                 } else {
                                     for template in filtered {
                                         let frame = egui::Frame::none()
-                                            .fill(hex_to_c32(&palette.theme.b_med))
+                                            .fill(hex_to_c32(&palette.colors.surface_panel))
                                             .rounding(4.0)
                                             .inner_margin(egui::Margin::symmetric(10.0, 6.0));
 
@@ -912,7 +912,9 @@ impl NodeCanvasState {
                                             ui.horizontal(|ui| {
                                                 ui.label(
                                                     egui::RichText::new(template.name)
-                                                        .color(hex_to_c32(&palette.theme.f_high))
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_primary,
+                                                        ))
                                                         .strong(),
                                                 );
                                                 ui.label(
@@ -920,7 +922,7 @@ impl NodeCanvasState {
                                                         "[{}]",
                                                         template.category
                                                     ))
-                                                    .color(hex_to_c32(&palette.theme.f_low))
+                                                    .color(hex_to_c32(&palette.colors.text_muted))
                                                     .size(BODY_FONT_SIZE),
                                                 );
                                                 ui.with_layout(
@@ -995,7 +997,9 @@ impl NodeCanvasState {
                                             });
                                             ui.label(
                                                 egui::RichText::new(template.description)
-                                                    .color(hex_to_c32(&palette.theme.f_med))
+                                                    .color(hex_to_c32(
+                                                        &palette.colors.text_secondary,
+                                                    ))
                                                     .size(BODY_FONT_SIZE),
                                             );
                                         });
@@ -1067,7 +1071,7 @@ impl NodeCanvasState {
                     }
                     let cancel_btn = crate::secondary_button(
                         "Cancel",
-                        hex_to_c32(&palette.theme.b_med),
+                        hex_to_c32(&palette.colors.surface_panel),
                         palette,
                     );
                     if ui.add(cancel_btn).clicked() {
@@ -1086,14 +1090,14 @@ fn render_grid(
     palette: &AppPalette,
 ) {
     // Dark blueprint background from theme
-    painter.rect_filled(rect, Rounding::ZERO, hex_to_c32(&palette.theme.background));
+    painter.rect_filled(rect, Rounding::ZERO, hex_to_c32(&palette.colors.canvas));
 
     let grid_size = 32.0 * zoom;
     if grid_size > 8.0 {
         let offset_x = (pan[0] % grid_size + grid_size) % grid_size;
         let offset_y = (pan[1] % grid_size + grid_size) % grid_size;
 
-        let dot_color = hex_to_c32_alpha(&palette.theme.b_med, 120);
+        let dot_color = hex_to_c32_alpha(&palette.colors.surface_panel, 120);
 
         let mut x = rect.min.x + offset_x;
         while x < rect.max.x {
@@ -1267,7 +1271,11 @@ fn draw_active_cable(
         };
 
         let font_id = egui::FontId::proportional((11.0 * zoom).max(10.0));
-        let galley = painter.layout_no_wrap(badge_text, font_id, hex_to_c32(&palette.theme.f_high));
+        let galley = painter.layout_no_wrap(
+            badge_text,
+            font_id,
+            hex_to_c32(&palette.colors.text_primary),
+        );
         let padding = Vec2::new(8.0 * zoom, 4.0 * zoom);
         let badge_size = galley.size() + padding * 2.0;
 
@@ -1285,7 +1293,7 @@ fn draw_active_cable(
         painter.rect_filled(
             badge_rect,
             Rounding::same(6.0 * zoom),
-            hex_to_c32_alpha(&palette.theme.b_low, 235),
+            hex_to_c32_alpha(&palette.colors.surface_recessed, 235),
         );
         // Badge border
         painter.rect_stroke(
@@ -1297,7 +1305,7 @@ fn draw_active_cable(
         painter.galley(
             badge_rect.min + padding,
             galley,
-            hex_to_c32(&palette.theme.f_high),
+            hex_to_c32(&palette.colors.text_primary),
         );
     } else {
         // Not snapped: normal smooth dragging cable
@@ -1354,14 +1362,14 @@ fn render_node_card(
     let border_col = if is_selected {
         hex_to_c32(&palette.harmonies.base)
     } else {
-        hex_to_c32(&palette.theme.b_med)
+        hex_to_c32(&palette.colors.surface_panel)
     };
 
     // Card body background
     painter.rect_filled(
         rect,
         Rounding::same(8.0 * zoom),
-        hex_to_c32(&palette.theme.b_low),
+        hex_to_c32(&palette.colors.surface_recessed),
     );
     painter.rect_stroke(
         rect,
@@ -1390,7 +1398,7 @@ fn render_node_card(
         egui::Align2::LEFT_CENTER,
         &node.title,
         egui::FontId::proportional(12.0 * zoom),
-        hex_to_c32(&palette.theme.f_high),
+        hex_to_c32(&palette.colors.text_primary),
     );
 
     // Close / Delete button (×)
@@ -1409,7 +1417,7 @@ fn render_node_card(
     let close_col = if close_resp.hovered() {
         hex_to_c32(&palette.diff_del)
     } else {
-        hex_to_c32_alpha(&palette.theme.f_high, 180)
+        hex_to_c32_alpha(&palette.colors.text_primary, 180)
     };
     painter.text(
         close_rect.center(),
@@ -1445,7 +1453,7 @@ fn render_node_card(
             egui::Align2::LEFT_CENTER,
             &pin.name,
             egui::FontId::proportional(11.0 * zoom),
-            hex_to_c32(&palette.theme.f_med),
+            hex_to_c32(&palette.colors.text_secondary),
         );
     }
 
@@ -1471,7 +1479,7 @@ fn render_node_card(
             egui::Align2::RIGHT_CENTER,
             &pin.name,
             egui::FontId::proportional(11.0 * zoom),
-            hex_to_c32(&palette.theme.f_med),
+            hex_to_c32(&palette.colors.text_secondary),
         );
     }
 
@@ -1491,7 +1499,7 @@ fn render_node_card(
                 Pos2::new(rect.min.x + 8.0 * zoom, props_top - 4.0 * zoom),
                 Pos2::new(rect.max.x - 8.0 * zoom, props_top - 4.0 * zoom),
             ],
-            Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)),
+            Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
         );
     }
 
@@ -1514,10 +1522,10 @@ fn render_node_card(
             child_ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("file:")
-                        .color(hex_to_c32(&palette.theme.f_low))
+                        .color(hex_to_c32(&palette.colors.text_muted))
                         .small(),
                 );
-                let file_fill = hex_to_c32(&palette.theme.b_med);
+                let file_fill = hex_to_c32(&palette.colors.surface_panel);
                 let file_btn = crate::ui_ext::secondary_button_icon(
                     Some(Icon::Code),
                     &script_file,
@@ -1552,7 +1560,7 @@ fn render_node_card(
                 child_ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(key.replace('_', " "))
-                            .color(hex_to_c32(&palette.theme.f_low))
+                            .color(hex_to_c32(&palette.colors.text_muted))
                             .small(),
                     );
                     ui.add(
@@ -1622,7 +1630,7 @@ fn render_socket(
         painter.circle_stroke(
             pos,
             radius,
-            Stroke::new(1.2_f32, hex_to_c32(&palette.theme.background)),
+            Stroke::new(1.2_f32, hex_to_c32(&palette.colors.canvas)),
         );
     }
 }

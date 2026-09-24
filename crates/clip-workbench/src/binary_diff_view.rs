@@ -424,17 +424,17 @@ impl BinaryDiffViewState {
         }
 
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.background))
+            .fill(hex_to_c32(&palette.colors.canvas))
             .inner_margin(egui::Margin::same(12.0))
             .show(ui, |ui| {
                 // Zone 1: Header
                 let clicked_hatch = shell.render_header(ui, |ui| {
-                    let swap_btn = crate::ui_ext::secondary_button_icon(Some(Icon::Swap), "Swap [S]", hex_to_c32(&palette.theme.b_med), palette);
+                    let swap_btn = crate::ui_ext::secondary_button_icon(Some(Icon::Swap), "Swap [S]", hex_to_c32(&palette.colors.surface_panel), palette);
                     if ui.add(swap_btn).on_hover_text("Swap operands (S)").clicked() {
                         self.swap_operands();
                     }
 
-                    let copy_btn = crate::ui_ext::secondary_button_icon(Some(Icon::Copy), "Summary", hex_to_c32(&palette.theme.b_med), palette);
+                    let copy_btn = crate::ui_ext::secondary_button_icon(Some(Icon::Copy), "Summary", hex_to_c32(&palette.colors.surface_panel), palette);
                     if ui.add(copy_btn).clicked() {
                         if let Some(ref res) = self.result {
                             let summary = format!(
@@ -525,9 +525,9 @@ impl BinaryDiffViewState {
     }
 
     fn render_mode_and_stats_bar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        let b_low = hex_to_c32(&palette.theme.b_low);
-        let b_med = hex_to_c32(&palette.theme.b_med);
-        let f_low = hex_to_c32(&palette.theme.f_low);
+        let b_low = hex_to_c32(&palette.colors.surface_recessed);
+        let b_med = hex_to_c32(&palette.colors.surface_panel);
+        let f_low = hex_to_c32(&palette.colors.text_muted);
 
         let Some(ref res) = self.result else {
             return;
@@ -604,7 +604,7 @@ impl BinaryDiffViewState {
                         ui,
                         "Match",
                         match_count,
-                        Some(hex_to_c32(&palette.theme.f_med)),
+                        Some(hex_to_c32(&palette.colors.text_secondary)),
                         palette,
                     );
                     crate::ui_ext::stat_pill(
@@ -759,7 +759,7 @@ impl BinaryDiffViewState {
         ui.painter().rect_filled(
             header_rect,
             Rounding::ZERO,
-            hex_to_c32(&palette.theme.b_low),
+            hex_to_c32(&palette.colors.surface_recessed),
         );
         let header_ui_rect = egui::Rect::from_min_max(
             egui::pos2(
@@ -786,7 +786,7 @@ impl BinaryDiffViewState {
                     egui::RichText::new("Offset L")
                         .font(FontId::monospace(11.5))
                         .strong()
-                        .color(hex_to_c32(&palette.theme.f_low)),
+                        .color(hex_to_c32(&palette.colors.text_muted)),
                 );
             },
         );
@@ -798,7 +798,7 @@ impl BinaryDiffViewState {
                     egui::RichText::new(format!("Hex Bytes ({})", res.left_label))
                         .font(FontId::monospace(11.5))
                         .strong()
-                        .color(hex_to_c32(&palette.theme.f_med)),
+                        .color(hex_to_c32(&palette.colors.text_secondary)),
                 );
             },
         );
@@ -811,7 +811,7 @@ impl BinaryDiffViewState {
                     egui::RichText::new("ASCII")
                         .font(FontId::monospace(11.5))
                         .strong()
-                        .color(hex_to_c32(&palette.theme.f_med)),
+                        .color(hex_to_c32(&palette.colors.text_secondary)),
                 );
             },
         );
@@ -835,7 +835,7 @@ impl BinaryDiffViewState {
                     egui::RichText::new(format!("Hex Bytes ({})", res.right_label))
                         .font(FontId::monospace(11.5))
                         .strong()
-                        .color(hex_to_c32(&palette.theme.f_med)),
+                        .color(hex_to_c32(&palette.colors.text_secondary)),
                 );
             },
         );
@@ -848,7 +848,7 @@ impl BinaryDiffViewState {
                     egui::RichText::new("ASCII")
                         .font(FontId::monospace(11.5))
                         .strong()
-                        .color(hex_to_c32(&palette.theme.f_med)),
+                        .color(hex_to_c32(&palette.colors.text_secondary)),
                 );
             },
         );
@@ -860,7 +860,7 @@ impl BinaryDiffViewState {
                     egui::RichText::new("Offset R")
                         .font(FontId::monospace(11.5))
                         .strong()
-                        .color(hex_to_c32(&palette.theme.f_low)),
+                        .color(hex_to_c32(&palette.colors.text_muted)),
                 );
             },
         );
@@ -912,7 +912,7 @@ impl BinaryDiffViewState {
                 } else if row.has_diff {
                     hex_to_c32_alpha(&palette.diff_mod, 18)
                 } else if row_idx % 2 == 1 {
-                    hex_to_c32_alpha(&palette.theme.f_low, 8)
+                    hex_to_c32_alpha(&palette.colors.text_muted, 8)
                 } else {
                     Color32::TRANSPARENT
                 };
@@ -961,7 +961,7 @@ impl BinaryDiffViewState {
                             ui.label(
                                 egui::RichText::new(l_off_str)
                                     .font(FontId::monospace(font_size - 1.0))
-                                    .color(hex_to_c32(&palette.theme.f_low)),
+                                    .color(hex_to_c32(&palette.colors.text_muted)),
                             );
                         },
                     );
@@ -1048,7 +1048,7 @@ impl BinaryDiffViewState {
                         "+" => hex_to_c32(&palette.diff_add),
                         "-" => hex_to_c32(&palette.diff_del),
                         "~" => hex_to_c32(&palette.harmonies.triadic_1),
-                        _ => hex_to_c32(&palette.theme.f_low),
+                        _ => hex_to_c32(&palette.colors.text_muted),
                     };
                     ui.allocate_ui_with_layout(
                         Vec2::new(center_w, row_height),
@@ -1151,7 +1151,7 @@ impl BinaryDiffViewState {
                             ui.label(
                                 egui::RichText::new(r_off_str)
                                     .font(FontId::monospace(font_size - 1.0))
-                                    .color(hex_to_c32(&palette.theme.f_low)),
+                                    .color(hex_to_c32(&palette.colors.text_muted)),
                             );
                         },
                     );
@@ -1182,12 +1182,15 @@ impl BinaryDiffViewState {
         );
 
         // Background groove
-        ui.painter()
-            .rect_filled(rect, Rounding::same(3.0), hex_to_c32(&palette.theme.b_low));
+        ui.painter().rect_filled(
+            rect,
+            Rounding::same(3.0),
+            hex_to_c32(&palette.colors.surface_recessed),
+        );
         ui.painter().rect_stroke(
             rect,
             Rounding::same(3.0),
-            Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)),
+            Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
         );
 
         // Difference markers
@@ -1229,7 +1232,7 @@ impl BinaryDiffViewState {
         ui.painter().rect_filled(
             view_rect,
             Rounding::same(2.0),
-            hex_to_c32_alpha(&palette.theme.f_high, 25),
+            hex_to_c32_alpha(&palette.colors.text_primary, 25),
         );
         ui.painter().rect_stroke(
             view_rect,
@@ -1266,7 +1269,7 @@ impl BinaryDiffViewState {
                             hover_row + 1
                         ))
                         .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
-                        .color(hex_to_c32(&palette.theme.f_high)),
+                        .color(hex_to_c32(&palette.colors.text_primary)),
                     );
                 });
             }
@@ -1293,7 +1296,7 @@ impl BinaryDiffViewState {
             |ui| {
                 // Header bar
                 egui::Frame::none()
-                    .fill(hex_to_c32(&palette.theme.b_low))
+                    .fill(hex_to_c32(&palette.colors.surface_recessed))
                     .inner_margin(egui::Margin::symmetric(8.0, 5.0))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -1310,7 +1313,7 @@ impl BinaryDiffViewState {
                                     let next_btn = crate::ui_ext::icon_button(
                                         Icon::ArrowDown,
                                         14.0,
-                                        hex_to_c32(&palette.theme.b_med),
+                                        hex_to_c32(&palette.colors.surface_panel),
                                         None,
                                         palette,
                                     );
@@ -1324,7 +1327,7 @@ impl BinaryDiffViewState {
                                     let prev_btn = crate::ui_ext::icon_button(
                                         Icon::ArrowUp,
                                         14.0,
-                                        hex_to_c32(&palette.theme.b_med),
+                                        hex_to_c32(&palette.colors.surface_panel),
                                         None,
                                         palette,
                                     );
@@ -1377,19 +1380,19 @@ impl BinaryDiffViewState {
                                 DiffKind::Mismatch => hex_to_c32(&palette.diff_mod),
                                 DiffKind::LeftOnly => hex_to_c32(&palette.diff_del),
                                 DiffKind::RightOnly => hex_to_c32(&palette.diff_add),
-                                DiffKind::Match => hex_to_c32(&palette.theme.f_med),
+                                DiffKind::Match => hex_to_c32(&palette.colors.text_secondary),
                             };
 
                             let frame = egui::Frame::none()
                                 .fill(if is_selected {
                                     hex_to_c32_alpha(&palette.harmonies.base, 35)
                                 } else {
-                                    hex_to_c32(&palette.theme.b_low)
+                                    hex_to_c32(&palette.colors.surface_recessed)
                                 })
                                 .stroke(if is_selected {
                                     Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base))
                                 } else {
-                                    Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med))
+                                    Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel))
                                 })
                                 .rounding(Rounding::same(4.0))
                                 .inner_margin(egui::Margin {
@@ -1410,7 +1413,9 @@ impl BinaryDiffViewState {
                                                 egui::RichText::new(format!("#{}", block.id))
                                                     .font(FontId::monospace(10.0))
                                                     .strong()
-                                                    .color(hex_to_c32(&palette.theme.f_med)),
+                                                    .color(hex_to_c32(
+                                                        &palette.colors.text_secondary,
+                                                    )),
                                             );
 
                                             ui.label(
@@ -1430,7 +1435,9 @@ impl BinaryDiffViewState {
                                                         ))
                                                         .font(FontId::monospace(10.0))
                                                         .strong()
-                                                        .color(hex_to_c32(&palette.theme.f_med)),
+                                                        .color(hex_to_c32(
+                                                            &palette.colors.text_secondary,
+                                                        )),
                                                     );
                                                 },
                                             );
@@ -1450,14 +1457,14 @@ impl BinaryDiffViewState {
                                         ui.label(
                                             egui::RichText::new(off_str)
                                                 .font(FontId::monospace(10.0))
-                                                .color(hex_to_c32(&palette.theme.f_low)),
+                                                .color(hex_to_c32(&palette.colors.text_muted)),
                                         );
 
                                         // Row 3: Preview
                                         ui.label(
                                             egui::RichText::new(&block.preview)
                                                 .font(FontId::monospace(10.0))
-                                                .color(hex_to_c32(&palette.theme.f_high)),
+                                                .color(hex_to_c32(&palette.colors.text_primary)),
                                         );
                                     });
                                 });
@@ -1512,8 +1519,8 @@ impl BinaryDiffViewState {
                 let r_cell = row.right_cells.get(col_idx);
 
                 egui::Frame::none()
-                    .fill(hex_to_c32(&palette.theme.b_low))
-                    .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
+                    .fill(hex_to_c32(&palette.colors.surface_recessed))
+                    .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)))
                     .inner_margin(egui::Margin::symmetric(14.0, 6.0))
                     .show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {
@@ -1534,7 +1541,7 @@ impl BinaryDiffViewState {
                                             b, b, b, byte_to_ascii_char(b), off_str
                                         ))
                                         .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
-                                        .color(hex_to_c32(&palette.theme.f_high)),
+                                        .color(hex_to_c32(&palette.colors.text_primary)),
                                     );
                                 } else {
                                     ui.label(
@@ -1553,7 +1560,7 @@ impl BinaryDiffViewState {
                                 (Some(DiffKind::Mismatch), _) => ("MISMATCH (≠)", hex_to_c32(&palette.diff_mod)),
                                 (Some(DiffKind::LeftOnly), _) => ("LEFT ONLY (DELETION)", hex_to_c32(&palette.diff_del)),
                                 (Some(DiffKind::RightOnly), _) => ("RIGHT ONLY (INSERTION)", hex_to_c32(&palette.diff_add)),
-                                _ => ("UNKNOWN", hex_to_c32(&palette.theme.f_med)),
+                                _ => ("UNKNOWN", hex_to_c32(&palette.colors.text_secondary)),
                             };
                             ui.label(
                                 egui::RichText::new(format!("DIFF: {}", kind_txt))
@@ -1574,7 +1581,7 @@ impl BinaryDiffViewState {
                                             b, b, b, byte_to_ascii_char(b), off_str
                                         ))
                                         .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
-                                        .color(hex_to_c32(&palette.theme.f_high)),
+                                        .color(hex_to_c32(&palette.colors.text_primary)),
                                     );
                                 } else {
                                     ui.label(
@@ -1676,7 +1683,11 @@ fn format_cell_hex(
                     }
                 }
             } else {
-                ("--".to_string(), hex_to_c32(&palette.theme.f_low), None)
+                (
+                    "--".to_string(),
+                    hex_to_c32(&palette.colors.text_muted),
+                    None,
+                )
             }
         }
         (Some(b), DiffKind::RightOnly) => {
@@ -1695,10 +1706,18 @@ fn format_cell_hex(
                     }
                 }
             } else {
-                ("--".to_string(), hex_to_c32(&palette.theme.f_low), None)
+                (
+                    "--".to_string(),
+                    hex_to_c32(&palette.colors.text_muted),
+                    None,
+                )
             }
         }
-        (None, _) => ("--".to_string(), hex_to_c32(&palette.theme.f_low), None),
+        (None, _) => (
+            "--".to_string(),
+            hex_to_c32(&palette.colors.text_muted),
+            None,
+        ),
     }
 }
 
@@ -1712,7 +1731,7 @@ fn format_cell_ascii(
         (Some(b), DiffKind::Match) => {
             let col = match color_mode {
                 ByteColorMode::Digits => byte_subtle_color(b),
-                ByteColorMode::Background => hex_to_c32(&palette.theme.f_med),
+                ByteColorMode::Background => hex_to_c32(&palette.colors.text_secondary),
             };
             (byte_to_ascii_char(b), col)
         }
@@ -1721,17 +1740,17 @@ fn format_cell_ascii(
             if is_left {
                 (byte_to_ascii_char(b), hex_to_c32(&palette.diff_del))
             } else {
-                ('·', hex_to_c32(&palette.theme.f_low))
+                ('·', hex_to_c32(&palette.colors.text_muted))
             }
         }
         (Some(b), DiffKind::RightOnly) => {
             if !is_left {
                 (byte_to_ascii_char(b), hex_to_c32(&palette.diff_add))
             } else {
-                ('·', hex_to_c32(&palette.theme.f_low))
+                ('·', hex_to_c32(&palette.colors.text_muted))
             }
         }
-        (None, _) => ('·', hex_to_c32(&palette.theme.f_low)),
+        (None, _) => ('·', hex_to_c32(&palette.colors.text_muted)),
     }
 }
 
@@ -1899,7 +1918,7 @@ mod tests {
         let (hex_bg, color_bg, pill) =
             format_cell_hex(&match_cell, true, ByteColorMode::Background, &palette);
         assert_eq!(hex_bg, "41");
-        assert_eq!(color_bg, hex_to_c32(&palette.theme.f_high));
+        assert_eq!(color_bg, hex_to_c32(&palette.colors.text_primary));
         assert!(pill.is_some());
 
         let (ascii, a_color) =
