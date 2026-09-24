@@ -1881,7 +1881,15 @@ impl WorkbenchApp {
     fn handle_empty_search_shortcuts(&mut self, ctx: &egui::Context, audio_region_active: bool) {
         if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
             self.view = WorkbenchView::NodeMachine;
-        } else if ctx.input(|i| i.key_pressed(egui::Key::Space)) && !audio_region_active {
+            return;
+        }
+        // The search field also accepts these keys as one-character commands.
+        // Let the text edit own the key now; the prefix handler executes it once
+        // on the next frame after the field has updated its text.
+        if ctx.wants_keyboard_input() {
+            return;
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Space)) && !audio_region_active {
             self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::RightHand]);
         } else if ctx.input(|i| i.key_pressed(egui::Key::Num1)) {
             self.apply_quick_slot_selection(vec![SlotId::LeftHand, SlotId::LeftPrior1]);
