@@ -128,9 +128,10 @@ impl ImagePreviewState {
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
             .stroke(Stroke::new(1.0_f32, frame_stroke))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label(
                         egui::RichText::new("4-Point Deskew:")
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .strong()
                             .color(hex_to_c32(&palette.harmonies.base)),
                     );
@@ -144,7 +145,13 @@ impl ImagePreviewState {
                     } else {
                         "Click 4 Points".to_string()
                     };
-                    let click_btn = crate::ui_ext::mode_tab_button_icon(Some(Icon::Crosshair), &click_lbl, is_placing, palette);
+                    let click_btn = crate::ui_ext::mode_tab_button_icon(
+                        Some(Icon::Crosshair),
+                        &click_lbl,
+                        is_placing,
+                        palette,
+                    )
+                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
                     if ui.add(click_btn)
                         .on_hover_text("Click 4 corners directly on the image: Top-Left → Top-Right → Bottom-Right → Bottom-Left")
                         .clicked()
@@ -164,11 +171,18 @@ impl ImagePreviewState {
                     // 2. Cropping mode buttons (Crop to Quad vs Minimal Crop)
                     ui.label(
                         egui::RichText::new("Cropping:")
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .color(hex_to_c32(&palette.theme.f_med)),
                     );
 
                     let is_crop_to_quad = self.deskew_state.crop_mode == DeskewCropMode::CropToQuad;
-                    let crop_quad_btn = crate::ui_ext::mode_tab_button_icon(Some(Icon::Crop), "Crop to Quad", is_crop_to_quad, palette);
+                    let crop_quad_btn = crate::ui_ext::mode_tab_button_icon(
+                        Some(Icon::Crop),
+                        "Crop to Quad",
+                        is_crop_to_quad,
+                        palette,
+                    )
+                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
                     if ui.add(crop_quad_btn)
                         .on_hover_text("Crop tightly to the 4-point quadrilateral")
                         .clicked()
@@ -177,7 +191,13 @@ impl ImagePreviewState {
                     }
 
                     let is_minimal_crop = self.deskew_state.crop_mode == DeskewCropMode::MinimalCrop;
-                    let minimal_crop_btn = crate::ui_ext::mode_tab_button_icon(Some(Icon::Image), "Minimal Crop", is_minimal_crop, palette);
+                    let minimal_crop_btn = crate::ui_ext::mode_tab_button_icon(
+                        Some(Icon::Image),
+                        "Minimal Crop",
+                        is_minimal_crop,
+                        palette,
+                    )
+                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
                     if ui.add(minimal_crop_btn)
                         .on_hover_text("Preserve the entire rectified image, cropping only as strictly necessary")
                         .clicked()
@@ -224,7 +244,8 @@ impl ImagePreviewState {
                         "Apply Deskew (Enter)",
                         apply_bg,
                         palette,
-                    );
+                    )
+                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                     if ui.add(apply_btn).on_hover_text("Rectify quad perspective into rectangular output (Enter)").clicked() {
                         self.apply_deskew();
@@ -233,11 +254,12 @@ impl ImagePreviewState {
                     // 5. Reset button
                     let reset_fg = contrast_text_c32(btn_bg, Some(hex_to_c32(&palette.theme.f_med)), palette);
                     let reset_btn = egui::Button::new(
-                        egui::RichText::new("⟲ Reset Quad").small().color(reset_fg),
+                        egui::RichText::new("⟲ Reset Quad").size(crate::ui_ext::BODY_FONT_SIZE).color(reset_fg),
                     )
                     .fill(btn_bg)
                     .stroke(Stroke::new(1.0_f32, btn_border))
-                    .rounding(Rounding::same(4.0));
+                    .rounding(Rounding::same(4.0))
+                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                     if ui.add(reset_btn).on_hover_text("Reset corner handles to default positions").clicked() {
                         self.deskew_state.reset_quad();
@@ -246,7 +268,7 @@ impl ImagePreviewState {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(
                             egui::RichText::new("Click 4 points or drag handles")
-                                .small()
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(hex_to_c32(&palette.theme.f_low)),
                         );
                     });
