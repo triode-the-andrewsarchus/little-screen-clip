@@ -2821,9 +2821,9 @@ impl AudioPreviewState {
                             .color(hex_to_c32(&palette.colors.text_primary)),
                     );
                     let text_width = (ui.available_width() - 90.0).max(100.0);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.save_destination_dir)
-                            .desired_width(text_width),
+                    ui.add_sized(
+                        [text_width, crate::ui_ext::CONTROL_HEIGHT],
+                        egui::TextEdit::singleline(&mut self.save_destination_dir),
                     );
                     if ui.add(layout::AudioWorkspace::secondary_button("Browse...", hex_to_c32(&palette.colors.surface_recessed), palette))
                         .on_hover_text("Choose destination folder via file manager dialog").clicked() {
@@ -2860,9 +2860,12 @@ impl AudioPreviewState {
                         for (idx, filename) in self.save_filenames.iter_mut().enumerate() {
                             ui.horizontal(|ui| {
                                 ui.label(egui::RichText::new(format!("#{:02}:", idx + 1)).weak());
-                                ui.add(
-                                    egui::TextEdit::singleline(filename)
-                                        .desired_width(ui.available_width() - 8.0),
+                                ui.add_sized(
+                                    [
+                                        (ui.available_width() - 8.0).max(64.0),
+                                        crate::ui_ext::CONTROL_HEIGHT,
+                                    ],
+                                    egui::TextEdit::singleline(filename),
                                 );
                             });
                         }
@@ -3146,6 +3149,47 @@ impl AudioPreviewState {
         }
     }
 
+    fn handle_studio_shortcuts(&mut self, ctx: &egui::Context, close_requested: &mut bool) -> bool {
+        let dialog_open = self.save_dialog_open || self.stem_separation.save_dialog_open;
+        let tool_shortcuts_enabled = !dialog_open && !ctx.wants_keyboard_input();
+        if tool_shortcuts_enabled {
+            // Priority matches the former sequential checks when a frame has
+            // more than one pressed key; modified keys belong to other controls.
+            let mode = ctx.input(|i| {
+                let keys = [
+                    (egui::Key::H, AudioToolMode::HfAnalysis),
+                    (egui::Key::D, AudioToolMode::DigitalDecode),
+                    (egui::Key::S, AudioToolMode::StemSeparation),
+                    (egui::Key::I, AudioToolMode::Inspect),
+                ];
+                (!i.modifiers.command && !i.modifiers.ctrl && !i.modifiers.mac_cmd)
+                    .then(|| {
+                        keys.into_iter()
+                            .find_map(|(key, mode)| i.key_pressed(key).then_some(mode))
+                    })
+                    .flatten()
+            });
+            if let Some(mode) = mode {
+                self.active_mode = mode;
+            }
+        }
+        // Nested save dialogs handle Escape themselves, leaving the studio open.
+        if !dialog_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.stop();
+            *close_requested = true;
+            return true;
+        }
+        if tool_shortcuts_enabled
+            && self.active_mode == AudioToolMode::StemSeparation
+            && ctx.input(|i| i.key_pressed(egui::Key::Space))
+            && self.stem_separation.stems.is_empty()
+            && !self.stem_separation.in_progress
+        {
+            self.start_stem_separation();
+        }
+        false
+    }
+
     /// Renders shared studio chrome, then the selected audio tool workspace.
     pub fn render_ui(
         &mut self,
@@ -3154,38 +3198,8 @@ impl AudioPreviewState {
         palette: &AppPalette,
         close_requested: &mut bool,
     ) {
-        if !self.save_dialog_open && !ctx.wants_keyboard_input() {
-            if ctx.input(|i| i.key_pressed(egui::Key::I)) {
-                self.active_mode = AudioToolMode::Inspect;
-            }
-            if ctx
-                .input(|i| i.key_pressed(egui::Key::S) && !i.modifiers.command && !i.modifiers.ctrl)
-            {
-                self.active_mode = AudioToolMode::StemSeparation;
-            }
-            if ctx
-                .input(|i| i.key_pressed(egui::Key::D) && !i.modifiers.command && !i.modifiers.ctrl)
-            {
-                self.active_mode = AudioToolMode::DigitalDecode;
-            }
-            if ctx
-                .input(|i| i.key_pressed(egui::Key::H) && !i.modifiers.command && !i.modifiers.ctrl)
-            {
-                self.active_mode = AudioToolMode::HfAnalysis;
-            }
-        }
-        // The save dialog handles Escape itself, leaving the studio open.
-        if !self.save_dialog_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            self.stop();
-            *close_requested = true;
+        if self.handle_studio_shortcuts(ctx, close_requested) {
             return;
-        }
-        if self.active_mode == AudioToolMode::StemSeparation
-            && ctx.input(|i| i.key_pressed(egui::Key::Space))
-            && self.stem_separation.stems.is_empty()
-            && !self.stem_separation.in_progress
-        {
-            self.start_stem_separation();
         }
         layout::AudioWorkspace::show(ui, palette, |ui| {
             self.render_audio_header(ui, ctx, palette, close_requested);
@@ -3216,7 +3230,7 @@ mod tests {
     use little_clip_core::audio::compute_full_audio_analysis;
 
     #[test]
-    fn escape_cancels_save_dialog_before_closing_audio_studio() {
+    fn escape_cancels_nested_save_dialogs_before_closing_audio_studio() {
         let ctx = egui::Context::default();
         crate::ui_ext::configure_workbench_style(&ctx);
         let palette =
@@ -3245,6 +3259,16 @@ mod tests {
         });
         assert!(!close_requested);
         assert!(!state.save_dialog_open);
+
+        state.active_mode = AudioToolMode::StemSeparation;
+        state.stem_separation.save_dialog_open = true;
+        let _ = ctx.run(escape(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                state.render_ui(ui, ctx, &palette, &mut close_requested);
+            });
+        });
+        assert!(!close_requested);
+        assert!(!state.stem_separation.save_dialog_open);
 
         let _ = ctx.run(escape(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {

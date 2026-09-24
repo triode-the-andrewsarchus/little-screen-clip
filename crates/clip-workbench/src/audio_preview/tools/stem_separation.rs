@@ -867,7 +867,11 @@ impl AudioPreviewState {
                 .collapsible(false)
                 .show(ctx, |ui| {
                     ui.label("Destination folder (four stereo WAV files will be copied here):");
-                    ui.text_edit_singleline(&mut self.stem_separation.save_destination_dir);
+                    ui.add_sized(
+                        egui::vec2(ui.available_width(), crate::ui_ext::CONTROL_HEIGHT),
+                        egui::TextEdit::singleline(&mut self.stem_separation.save_destination_dir)
+                            .font(egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE)),
+                    );
                     ui.horizontal(|ui| {
                         save = ui
                             .add(layout::AudioWorkspace::primary_button(
@@ -888,6 +892,7 @@ impl AudioPreviewState {
             if save {
                 self.save_all_stems();
             }
+            cancel |= ctx.input(|i| i.key_pressed(egui::Key::Escape));
             if cancel {
                 self.stem_separation.save_dialog_open = false;
             }
