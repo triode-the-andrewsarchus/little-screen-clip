@@ -572,7 +572,7 @@ impl BinaryDiffViewState {
                     // Width selector
                     ui.label(
                         egui::RichText::new("Width:")
-                            .font(FontId::proportional(12.0))
+                            .font(FontId::proportional(crate::ui_ext::BODY_FONT_SIZE))
                             .color(f_low),
                     );
                     for &w in &[8, 16, 32] {
@@ -662,7 +662,7 @@ impl BinaryDiffViewState {
                         if search_len > 0 {
                             ui.label(
                                 egui::RichText::new(format!("{}/{}", search_idx + 1, search_len))
-                                    .font(FontId::monospace(11.0))
+                                    .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
                                     .color(hex_to_c32(&palette.harmonies.base)),
                             );
                             let down_btn = crate::ui_ext::icon_button(
@@ -724,7 +724,7 @@ impl BinaryDiffViewState {
                 ui.add_space(16.0);
                 ui.label(
                     egui::RichText::new("Aligning binary sequences using Myers LCS diff...")
-                        .font(FontId::proportional(15.0))
+                        .font(FontId::proportional(crate::ui_ext::BODY_FONT_SIZE))
                         .color(hex_to_c32(&palette.harmonies.base)),
                 );
             });
@@ -1265,7 +1265,7 @@ impl BinaryDiffViewState {
                             approx_off,
                             hover_row + 1
                         ))
-                        .font(FontId::monospace(11.0))
+                        .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
                         .color(hex_to_c32(&palette.theme.f_high)),
                     );
                 });
@@ -1299,7 +1299,7 @@ impl BinaryDiffViewState {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(format!("Diffs ({})", res.diff_blocks.len()))
-                                    .font(FontId::proportional(12.0))
+                                    .font(FontId::proportional(crate::ui_ext::BODY_FONT_SIZE))
                                     .strong()
                                     .color(hex_to_c32(&palette.diff_mod)),
                             );
@@ -1347,7 +1347,7 @@ impl BinaryDiffViewState {
                     ui.vertical_centered(|ui| {
                         ui.label(
                             egui::RichText::new("Files identical")
-                                .font(FontId::proportional(12.0))
+                                .font(FontId::proportional(crate::ui_ext::BODY_FONT_SIZE))
                                 .color(hex_to_c32(&palette.diff_add)),
                         );
                     });
@@ -1516,10 +1516,10 @@ impl BinaryDiffViewState {
                     .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
                     .inner_margin(egui::Margin::symmetric(14.0, 6.0))
                     .show(ui, |ui| {
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.label(
                                 egui::RichText::new("INSPECT: ")
-                                    .font(FontId::proportional(12.0))
+                                    .font(FontId::proportional(crate::ui_ext::BODY_FONT_SIZE))
                                     .strong()
                                     .color(hex_to_c32(&palette.harmonies.base)),
                             );
@@ -1533,13 +1533,13 @@ impl BinaryDiffViewState {
                                             "LEFT: 0x{:02X} (Dec: {}, Bin: {:08b}, ASCII: '{}', Off: {})",
                                             b, b, b, byte_to_ascii_char(b), off_str
                                         ))
-                                        .font(FontId::monospace(12.0))
+                                        .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
                                         .color(hex_to_c32(&palette.theme.f_high)),
                                     );
                                 } else {
                                     ui.label(
                                         egui::RichText::new("LEFT: <GAP (Deletion)>")
-                                            .font(FontId::monospace(12.0))
+                                            .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
                                             .color(hex_to_c32(&palette.diff_del)),
                                     );
                                 }
@@ -1557,7 +1557,7 @@ impl BinaryDiffViewState {
                             };
                             ui.label(
                                 egui::RichText::new(format!("DIFF: {}", kind_txt))
-                                    .font(FontId::monospace(12.0))
+                                    .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
                                     .strong()
                                     .color(kind_col),
                             );
@@ -1573,13 +1573,13 @@ impl BinaryDiffViewState {
                                             "RIGHT: 0x{:02X} (Dec: {}, Bin: {:08b}, ASCII: '{}', Off: {})",
                                             b, b, b, byte_to_ascii_char(b), off_str
                                         ))
-                                        .font(FontId::monospace(12.0))
+                                        .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
                                         .color(hex_to_c32(&palette.theme.f_high)),
                                     );
                                 } else {
                                     ui.label(
                                         egui::RichText::new("RIGHT: <GAP (Insertion)>")
-                                            .font(FontId::monospace(12.0))
+                                            .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
                                             .color(hex_to_c32(&palette.diff_add)),
                                     );
                                 }
