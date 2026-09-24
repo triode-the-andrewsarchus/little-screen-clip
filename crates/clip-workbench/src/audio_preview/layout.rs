@@ -101,9 +101,10 @@ impl AudioWorkspace {
         palette: &AppPalette,
         controls: impl FnOnce(&mut egui::Ui),
     ) {
+        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.b_low))
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
+            .fill(colors.recessed)
+            .stroke(Stroke::new(1.0_f32, colors.panel))
             .inner_margin(egui::Margin::symmetric(14.0, 5.0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -117,8 +118,9 @@ impl AudioWorkspace {
         palette: &AppPalette,
         contents: impl FnOnce(&mut egui::Ui),
     ) {
+        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.b_med))
+            .fill(colors.panel)
             .stroke(Stroke::new(
                 1.0_f32,
                 hex_to_c32_alpha(&palette.harmonies.base, 100),
@@ -153,12 +155,13 @@ impl AudioWorkspace {
     }
 
     fn section_title(ui: &mut egui::Ui, palette: &AppPalette, label: &str) {
+        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.b_med))
+            .fill(colors.panel)
             .rounding(Rounding::same(3.0))
             .inner_margin(egui::Margin::symmetric(8.0, 0.0))
             .show(ui, |ui| {
-                Self::inline_label(ui, &format!("{label}:"), hex_to_c32(&palette.theme.f_high));
+                Self::inline_label(ui, &format!("{label}:"), colors.text_primary);
             });
     }
 
@@ -179,9 +182,10 @@ impl AudioWorkspace {
         label: &str,
         controls: impl FnOnce(&mut egui::Ui),
     ) {
+        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.b_low))
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
+            .fill(colors.recessed)
+            .stroke(Stroke::new(1.0_f32, colors.panel))
             .inner_margin(egui::Margin::symmetric(14.0, 5.0))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -199,15 +203,16 @@ impl AudioWorkspace {
         active: bool,
         palette: &AppPalette,
     ) -> egui::Button<'static> {
+        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         let background = if active {
             hex_to_c32_alpha(&palette.harmonies.base, 40)
         } else {
-            hex_to_c32(&palette.theme.b_low)
+            colors.recessed
         };
         let border = if active {
             hex_to_c32(&palette.harmonies.base)
         } else {
-            hex_to_c32(&palette.theme.b_med)
+            colors.panel
         };
         egui::Button::new(
             egui::RichText::new(label.to_owned())
@@ -226,7 +231,7 @@ impl AudioWorkspace {
     ) -> Option<crate::ui_ext::ZoomAction> {
         use crate::icons::Icon;
         use crate::ui_ext::ZoomAction;
-        let fill = hex_to_c32(&palette.theme.b_low);
+        let fill = crate::ui_appearance::WorkbenchColors::from_palette(palette).recessed;
         let mut action = None;
         if ui
             .add(crate::ui_ext::icon_button(
@@ -270,10 +275,11 @@ impl AudioWorkspace {
     }
 
     pub(super) fn show(ui: &mut egui::Ui, palette: &AppPalette, body: impl FnOnce(&mut egui::Ui)) {
+        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         let rect = ui.available_rect_before_wrap();
         ui.allocate_ui_at_rect(rect, |ui| {
             ui.painter()
-                .rect_filled(rect, Rounding::ZERO, hex_to_c32(&palette.theme.background));
+                .rect_filled(rect, Rounding::ZERO, colors.canvas);
             ui.add_space(8.0);
             body(ui);
         });
@@ -282,8 +288,9 @@ impl AudioWorkspace {
 
 impl AudioPreviewState {
     fn render_volume_control(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         ui.horizontal(|ui| {
-            crate::icons::Icon::Volume.ui(ui, 16.0, hex_to_c32(&palette.theme.f_med));
+            crate::icons::Icon::Volume.ui(ui, 16.0, colors.text_secondary);
             let mut volume_percent = self.volume * 100.0;
             let changed = crate::shell::render_track_slider(
                 ui,
@@ -301,7 +308,7 @@ impl AudioPreviewState {
                 ui,
                 &format!("{:>3.0}%", self.volume * 100.0),
                 48.0,
-                hex_to_c32(&palette.theme.f_med),
+                colors.text_secondary,
             );
         });
     }
@@ -373,10 +380,11 @@ impl AudioPreviewState {
     }
 
     pub(crate) fn render_audio_tool_bar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         egui::Frame::none()
-            .fill(hex_to_c32(&palette.theme.b_low))
+            .fill(colors.recessed)
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
-            .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
+            .stroke(Stroke::new(1.0_f32, colors.panel))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     for &mode in AudioToolMode::ALL {
