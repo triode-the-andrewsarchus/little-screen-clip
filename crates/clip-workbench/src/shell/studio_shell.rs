@@ -245,7 +245,7 @@ impl StudioPanelLayout {
         let color = if response.hovered() || response.dragged() {
             &palette.harmonies.base
         } else {
-            &palette.theme.f_low
+            &palette.colors.text_muted
         };
         ui.painter()
             .rect_filled(grip, Rounding::same(2.0), hex_to_c32(color));
@@ -399,8 +399,11 @@ impl StudioPanelLayout {
         ui.allocate_ui_at_rect(rect, |ui| {
             ui.set_clip_rect(rect);
             egui::Frame::none()
-                .fill(hex_to_c32(&palette.theme.b_low))
-                .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
+                .fill(hex_to_c32(&palette.colors.surface_recessed))
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    hex_to_c32(&palette.colors.surface_panel),
+                ))
                 .rounding(Rounding::same(4.0))
                 .inner_margin(egui::Margin::same(8.0))
                 .show(ui, |ui| {
@@ -435,8 +438,11 @@ impl StudioPanelLayout {
         ui.allocate_ui_at_rect(rect, |ui| {
             ui.set_clip_rect(rect);
             egui::Frame::none()
-                .fill(hex_to_c32(&palette.theme.b_low))
-                .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.theme.b_med)))
+                .fill(hex_to_c32(&palette.colors.surface_recessed))
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    hex_to_c32(&palette.colors.surface_panel),
+                ))
                 .rounding(Rounding::same(4.0))
                 .inner_margin(egui::Margin::same(8.0))
                 .show(ui, add_contents);

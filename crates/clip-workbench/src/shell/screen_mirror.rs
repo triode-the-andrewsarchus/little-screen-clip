@@ -111,7 +111,11 @@ impl<'a> ScreenMirrorWidget<'a> {
                 Color32::WHITE,
             );
         } else {
-            painter.rect_filled(rect, Rounding::same(4.0), hex_to_c32(&palette.theme.b_low));
+            painter.rect_filled(
+                rect,
+                Rounding::same(4.0),
+                hex_to_c32(&palette.colors.surface_recessed),
+            );
         }
 
         // Scale factor from native screen coordinates to UI rect
@@ -143,7 +147,7 @@ impl<'a> ScreenMirrorWidget<'a> {
                     Stroke::new(2.0_f32, stroke_color),
                 );
             } else if is_hovered && !is_dragging {
-                let stroke_color = hex_to_c32(&palette.theme.f_med);
+                let stroke_color = hex_to_c32(&palette.colors.text_secondary);
                 painter.rect_stroke(
                     slot_screen_rect,
                     Rounding::same(4.0),

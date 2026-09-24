@@ -41,7 +41,7 @@ impl<'a> SplitCompareView<'a> {
         img_rect: Rect,
         palette: &AppPalette,
     ) {
-        let b_low = hex_to_c32(&palette.theme.b_low);
+        let b_low = hex_to_c32(&palette.colors.surface_recessed);
         let base_c = hex_to_c32(&palette.harmonies.base);
 
         let split = (*self.split_pos).clamp(0.02, 0.98);
@@ -87,7 +87,11 @@ impl<'a> SplitCompareView<'a> {
 
         // Draggable knob
         let knob_center = Pos2::new(split_x, img_rect.center().y);
-        let knob_fg = contrast_text_c32(b_low, Some(hex_to_c32(&palette.theme.f_high)), palette);
+        let knob_fg = contrast_text_c32(
+            b_low,
+            Some(hex_to_c32(&palette.colors.text_primary)),
+            palette,
+        );
         painter.circle(knob_center, 16.0, b_low, Stroke::new(2.0_f32, base_c));
         painter.text(
             knob_center,
