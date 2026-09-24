@@ -37,7 +37,7 @@ impl WorkbenchColors {
             text_primary: hex_to_c32(&palette.title_color),
             text_secondary: hex_to_c32(&palette.subtitle_color),
             text_muted: hex_to_c32(&palette.theme.f_low),
-            border: hex_to_c32(&palette.b_low),
+            border: hex_to_c32(&palette.chrome_border),
             accent: hex_to_c32(&palette.left_hand_border),
             focus: hex_to_c32(&palette.cursor_border),
             link: hex_to_c32(&palette.url_color),
@@ -149,6 +149,8 @@ mod tests {
             assert!(ratio(colors.panel, colors.text_secondary) >= 4.5);
             assert!(ratio(colors.recessed, colors.text_muted) >= 4.5);
             assert!(ratio(colors.recessed, colors.accent) >= 3.0);
+            assert!(ratio(colors.recessed, colors.border) >= 3.0);
+            assert!(ratio(colors.panel, colors.border) >= 3.0);
             assert!(ratio(colors.panel, colors.link) >= 4.5);
             assert!(ratio(colors.panel, colors.accent) >= 3.0);
             for (name, foreground) in [

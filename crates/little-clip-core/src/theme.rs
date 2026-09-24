@@ -323,6 +323,7 @@ pub struct AppPalette {
 
     // Borders & Accents
     pub undo_border: String,
+    pub chrome_border: String,
     pub left_hand_border: String,
     pub left_prior1_border: String,
     pub left_prior2_border: String,
@@ -446,6 +447,7 @@ impl AppPalette {
             undo_card_bg: theme.b_low.clone(),
 
             undo_border: harmonies.warm_attention.clone(),
+            chrome_border: "#6f8595".to_owned(),
             left_hand_border: harmonies.base.clone(),
             right_hand_border: harmonies.complementary.clone(),
 
