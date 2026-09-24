@@ -204,10 +204,10 @@ impl SpreadsheetViewerState {
                     // Search box
                     ui.add_space(8.0);
                     Icon::Search.ui(ui, 13.0, crate::hex_to_c32(&palette.theme.f_med));
-                    ui.add(
+                    ui.add_sized(
+                        [160.0, crate::ui_ext::CONTROL_HEIGHT],
                         egui::TextEdit::singleline(&mut self.search_query)
-                            .hint_text("Filter cells...")
-                            .desired_width(160.0),
+                            .hint_text("Filter cells..."),
                     );
                 });
 

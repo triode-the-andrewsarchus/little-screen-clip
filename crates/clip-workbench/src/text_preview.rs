@@ -718,10 +718,10 @@ impl TextPreviewState {
                     Icon::Search.ui(ui, 15.0, hex_to_c32(&palette.theme.f_med));
 
                     let search_edit = egui::TextEdit::singleline(&mut self.find_query)
-                        .hint_text("Find in text (Enter for next, Shift+Enter for prev)...")
-                        .desired_width(280.0);
+                        .hint_text("Find in text (Enter for next, Shift+Enter for prev)...");
 
-                    let response = ui.add(search_edit);
+                    let response =
+                        ui.add_sized([280.0, crate::ui_ext::CONTROL_HEIGHT], search_edit);
                     if self.focus_find_input {
                         response.request_focus();
                         self.focus_find_input = false;

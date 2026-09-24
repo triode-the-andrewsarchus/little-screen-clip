@@ -687,10 +687,10 @@ impl BinaryDiffViewState {
                             }
                         }
 
-                        let search_edit = ui.add(
+                        let search_edit = ui.add_sized(
+                            [180.0, crate::ui_ext::CONTROL_HEIGHT],
                             egui::TextEdit::singleline(&mut self.search_query)
-                                .hint_text("Search Hex / ASCII...")
-                                .desired_width(180.0),
+                                .hint_text("Search Hex / ASCII..."),
                         );
                         if search_edit.changed() {
                             do_search = true;
