@@ -24,6 +24,13 @@ pub enum ByteColorMode {
     Background,
 }
 
+struct HexHeaderColumns {
+    offset: f32,
+    hex: f32,
+    ascii: f32,
+    diff: f32,
+}
+
 /// Pure, testable state machine for diff block and search match navigation.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct BinaryDiffNavigation {
@@ -299,14 +306,20 @@ impl BinaryDiffViewState {
         self.scroll_target_row = self.nav.scroll_target_row;
     }
 
-    /// Calculates responsive cell dimensions, font sizes, and row height based on bytes_per_row
+    /// Keeps byte hit targets and row geometry in step with the readable monospace font.
+    /// Wider rows pan horizontally instead of shrinking their contents.
     /// Returns: (cell_w, cell_h, font_size, ascii_w, offset_w, row_height)
     pub fn layout_metrics(&self) -> (f32, f32, f32, f32, f32, f32) {
-        match self.bytes_per_row {
-            8 => (24.0, 22.0, 13.5, 11.5, 80.0, 23.0),
-            16 => (18.5, 21.0, 12.5, 9.0, 75.0, 22.0),
-            _ => (16.5, 20.0, 11.5, 8.0, 68.0, 20.0),
-        }
+        let font_size = crate::ui_ext::MONO_FONT_SIZE;
+        let glyph_width = font_size * 0.6;
+        (
+            glyph_width * 2.0 + 6.0,
+            font_size + 11.0,
+            font_size,
+            glyph_width + 3.0,
+            glyph_width * 9.0 + 9.0,
+            font_size + 13.0,
+        )
     }
 
     /// Triggers opening the binary comparison in ImHex hex editor.
@@ -741,7 +754,7 @@ impl BinaryDiffViewState {
         let total_rows = res.rows.len();
         let bpr = res.bytes_per_row;
 
-        let center_w = 20.0;
+        let center_w = 42.0;
         let hex_group_space = 5.0;
         let num_gaps = if bpr == 8 {
             1
@@ -753,115 +766,16 @@ impl BinaryDiffViewState {
             + (num_gaps as f32 * hex_group_space);
         let ascii_w = bpr as f32 * ascii_char_w;
 
-        // Table column headers
-        let (header_rect, _) =
-            ui.allocate_exact_size(Vec2::new(ui.available_width(), 26.0), egui::Sense::hover());
-        ui.painter().rect_filled(
-            header_rect,
-            Rounding::ZERO,
-            hex_to_c32(&palette.colors.surface_recessed),
-        );
-        let header_ui_rect = egui::Rect::from_min_max(
-            egui::pos2(
-                header_rect.min.x + 4.0 - self.current_scroll_offset_x,
-                header_rect.min.y,
-            ),
-            egui::pos2(
-                header_rect.min.x + 4.0 - self.current_scroll_offset_x + 3500.0,
-                header_rect.max.y,
-            ),
-        );
-        let mut child_ui = ui.child_ui(
-            header_ui_rect,
-            egui::Layout::left_to_right(egui::Align::Center),
-        );
-        child_ui.set_clip_rect(header_rect);
-        child_ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
-
-        child_ui.allocate_ui_with_layout(
-            Vec2::new(offset_w, 24.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.label(
-                    egui::RichText::new("Offset L")
-                        .font(FontId::monospace(11.5))
-                        .strong()
-                        .color(hex_to_c32(&palette.colors.text_muted)),
-                );
-            },
-        );
-        child_ui.allocate_ui_with_layout(
-            Vec2::new(hex_w, 24.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.label(
-                    egui::RichText::new(format!("Hex Bytes ({})", res.left_label))
-                        .font(FontId::monospace(11.5))
-                        .strong()
-                        .color(hex_to_c32(&palette.colors.text_secondary)),
-                );
-            },
-        );
-        child_ui.add_space(8.0);
-        child_ui.allocate_ui_with_layout(
-            Vec2::new(ascii_w, 24.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.label(
-                    egui::RichText::new("ASCII")
-                        .font(FontId::monospace(11.5))
-                        .strong()
-                        .color(hex_to_c32(&palette.colors.text_secondary)),
-                );
-            },
-        );
-        child_ui.allocate_ui_with_layout(
-            Vec2::new(center_w, 24.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.label(
-                    egui::RichText::new("Diff")
-                        .font(FontId::monospace(11.5))
-                        .strong()
-                        .color(hex_to_c32(&palette.diff_mod)),
-                );
-            },
-        );
-        child_ui.allocate_ui_with_layout(
-            Vec2::new(hex_w, 24.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.label(
-                    egui::RichText::new(format!("Hex Bytes ({})", res.right_label))
-                        .font(FontId::monospace(11.5))
-                        .strong()
-                        .color(hex_to_c32(&palette.colors.text_secondary)),
-                );
-            },
-        );
-        child_ui.add_space(8.0);
-        child_ui.allocate_ui_with_layout(
-            Vec2::new(ascii_w, 24.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.label(
-                    egui::RichText::new("ASCII")
-                        .font(FontId::monospace(11.5))
-                        .strong()
-                        .color(hex_to_c32(&palette.colors.text_secondary)),
-                );
-            },
-        );
-        child_ui.allocate_ui_with_layout(
-            Vec2::new(offset_w, 24.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.label(
-                    egui::RichText::new("Offset R")
-                        .font(FontId::monospace(11.5))
-                        .strong()
-                        .color(hex_to_c32(&palette.colors.text_muted)),
-                );
+        render_hex_table_header(
+            ui,
+            palette,
+            res,
+            self.current_scroll_offset_x,
+            HexHeaderColumns {
+                offset: offset_w,
+                hex: hex_w,
+                ascii: ascii_w,
+                diff: center_w,
             },
         );
 
@@ -960,7 +874,7 @@ impl BinaryDiffViewState {
                         |ui| {
                             ui.label(
                                 egui::RichText::new(l_off_str)
-                                    .font(FontId::monospace(font_size - 1.0))
+                                    .font(FontId::monospace(font_size))
                                     .color(hex_to_c32(&palette.colors.text_muted)),
                             );
                         },
@@ -1150,7 +1064,7 @@ impl BinaryDiffViewState {
                         |ui| {
                             ui.label(
                                 egui::RichText::new(r_off_str)
-                                    .font(FontId::monospace(font_size - 1.0))
+                                    .font(FontId::monospace(font_size))
                                     .color(hex_to_c32(&palette.colors.text_muted)),
                             );
                         },
@@ -1638,6 +1552,93 @@ pub fn byte_subtle_bg_opaque(b: u8) -> Color32 {
     }
 }
 
+fn render_hex_table_header(
+    ui: &mut egui::Ui,
+    palette: &AppPalette,
+    res: &BinaryDiffResult,
+    scroll_x: f32,
+    columns: HexHeaderColumns,
+) {
+    // Table column headers
+    let (header_rect, _) =
+        ui.allocate_exact_size(Vec2::new(ui.available_width(), 28.0), egui::Sense::hover());
+    ui.painter().rect_filled(
+        header_rect,
+        Rounding::ZERO,
+        hex_to_c32(&palette.colors.surface_recessed),
+    );
+    let header_ui_rect = egui::Rect::from_min_max(
+        egui::pos2(header_rect.min.x + 4.0 - scroll_x, header_rect.min.y),
+        egui::pos2(
+            header_rect.min.x + 4.0 - scroll_x + 3500.0,
+            header_rect.max.y,
+        ),
+    );
+    let mut child_ui = ui.child_ui(
+        header_ui_rect,
+        egui::Layout::left_to_right(egui::Align::Center),
+    );
+    child_ui.set_clip_rect(header_rect);
+    child_ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
+
+    let headers = [
+        (
+            "Offset L".to_owned(),
+            columns.offset,
+            &palette.colors.text_muted,
+            false,
+        ),
+        (
+            format!("Hex Bytes ({})", res.left_label),
+            columns.hex,
+            &palette.colors.text_secondary,
+            false,
+        ),
+        (
+            "ASCII".to_owned(),
+            columns.ascii,
+            &palette.colors.text_secondary,
+            true,
+        ),
+        ("Diff".to_owned(), columns.diff, &palette.diff_mod, false),
+        (
+            format!("Hex Bytes ({})", res.right_label),
+            columns.hex,
+            &palette.colors.text_secondary,
+            false,
+        ),
+        (
+            "ASCII".to_owned(),
+            columns.ascii,
+            &palette.colors.text_secondary,
+            true,
+        ),
+        (
+            "Offset R".to_owned(),
+            columns.offset,
+            &palette.colors.text_muted,
+            false,
+        ),
+    ];
+    for (label, width, color, gap_before) in headers {
+        if gap_before {
+            child_ui.add_space(8.0);
+        }
+        child_ui.allocate_ui_with_layout(
+            Vec2::new(width, 28.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.label(
+                    egui::RichText::new(label)
+                        .font(FontId::monospace(crate::ui_ext::MONO_FONT_SIZE))
+                        .strong()
+                        .color(hex_to_c32(color)),
+                );
+            },
+        );
+    }
+}
+
 fn format_cell_hex(
     cell: &AlignedCell,
     is_left: bool,
@@ -2004,6 +2005,21 @@ mod tests {
                         });
                 },
             );
+        }
+    }
+
+    #[test]
+    fn byte_density_does_not_shrink_text_or_hit_targets() {
+        let mut state =
+            BinaryDiffViewState::new("left".to_owned(), vec![0], "right".to_owned(), vec![1]);
+        for bpr in [8, 16, 32] {
+            state.bytes_per_row = bpr;
+            let (cell_w, _, font_size, ascii_w, offset_w, row_height) = state.layout_metrics();
+            assert_eq!(font_size, crate::ui_ext::MONO_FONT_SIZE);
+            assert!(cell_w >= font_size * 1.2);
+            assert!(ascii_w >= font_size * 0.6);
+            assert!(offset_w >= font_size * 5.4);
+            assert!(row_height >= font_size + 10.0);
         }
     }
 
