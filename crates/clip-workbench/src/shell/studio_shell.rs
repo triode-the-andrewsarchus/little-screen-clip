@@ -847,97 +847,99 @@ mod tests {
 
     #[test]
     fn long_image_header_keeps_actions_in_one_compact_row() {
-        let ctx = egui::Context::default();
-        crate::ui_ext::configure_workbench_style(&ctx);
-        let palette =
-            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-        let mut input = egui::RawInput::default();
-        input.screen_rect = Some(Rect::from_min_size(
-            egui::Pos2::ZERO,
-            Vec2::new(1177.0, 662.0),
-        ));
-        let mut close = false;
-        let mut header_rect = None;
-        let mut action_rects = Vec::new();
-        let output = ctx.run(input, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                let mut shell = StudioShell::new(
-                    "IMAGE STUDIO — a very long descriptive Unicode filename 日本語.webp",
-                    Icon::Image,
-                    &palette,
-                    &mut close,
-                )
-                .with_badge("6000×6000 (1:1)", None)
-                .with_badge("WEBP", None)
-                .with_badge("554.4 KB", None)
-                .with_escape_hatch(EscapeHatch::new("Krita", "krita", "Edit"))
-                .with_escape_hatch(EscapeHatch::new("Inkscape", "inkscape", "Edit"))
-                .with_escape_hatch(EscapeHatch::new("Nomacs", "nomacs", "View"));
-                let response = ui.scope(|ui| {
-                    shell.render_header(ui, |ui| {
-                        action_rects.push(
-                            ui.add(crate::ui_ext::action_button(
-                                "Copy",
-                                Color32::LIGHT_BLUE,
-                                &palette,
-                            ))
-                            .rect,
-                        );
-                        action_rects.push(
-                            ui.add(crate::ui_ext::action_button(
-                                "Save As...",
-                                Color32::GREEN,
-                                &palette,
-                            ))
-                            .rect,
-                        );
+        for width in [1177.0, 1766.0, 2500.0] {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(Rect::from_min_size(
+                egui::Pos2::ZERO,
+                Vec2::new(width, 662.0),
+            ));
+            let mut close = false;
+            let mut header_rect = None;
+            let mut action_rects = Vec::new();
+            let output = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut shell = StudioShell::new(
+                        "IMAGE STUDIO — a very long descriptive Unicode filename 日本語.webp",
+                        Icon::Image,
+                        &palette,
+                        &mut close,
+                    )
+                    .with_badge("6000×6000 (1:1)", None)
+                    .with_badge("WEBP", None)
+                    .with_badge("554.4 KB", None)
+                    .with_escape_hatch(EscapeHatch::new("Krita", "krita", "Edit"))
+                    .with_escape_hatch(EscapeHatch::new("Inkscape", "inkscape", "Edit"))
+                    .with_escape_hatch(EscapeHatch::new("Nomacs", "nomacs", "View"));
+                    let response = ui.scope(|ui| {
+                        shell.render_header(ui, |ui| {
+                            action_rects.push(
+                                ui.add(crate::ui_ext::action_button(
+                                    "Copy",
+                                    Color32::LIGHT_BLUE,
+                                    &palette,
+                                ))
+                                .rect,
+                            );
+                            action_rects.push(
+                                ui.add(crate::ui_ext::action_button(
+                                    "Save As...",
+                                    Color32::GREEN,
+                                    &palette,
+                                ))
+                                .rect,
+                            );
+                        });
                     });
+                    header_rect = Some(response.response.rect);
                 });
-                header_rect = Some(response.response.rect);
             });
-        });
-        let rect = header_rect.unwrap();
-        assert!(rect.height() <= 60.0, "header wrapped vertically: {rect:?}");
-        assert!(
-            rect.right() <= 1177.0,
-            "header overflowed right edge: {rect:?}"
-        );
-        let visible_text = |label: &str| {
-            output
-                .shapes
-                .iter()
-                .find_map(|clipped| match &clipped.shape {
-                    egui::epaint::Shape::Text(text) if text.galley.text() == label => Some(
-                        Rect::from_min_size(text.pos, text.galley.size())
-                            .intersect(clipped.clip_rect),
-                    ),
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("missing header label: {label}"))
-        };
-        let labels = [
-            "IMAGE STUDIO — a very long descriptive Unicode filename 日本語.webp",
-            "6000×6000 (1:1)",
-            "WEBP",
-            "554.4 KB",
-            "Close (Esc)",
-            "Save As...",
-            "Copy",
-            "Krita",
-            "Inkscape",
-            "Nomacs",
-        ];
-        let visible: Vec<_> = labels.iter().map(|label| visible_text(label)).collect();
-        for pair in visible.windows(2) {
+            let rect = header_rect.unwrap();
+            assert!(rect.height() <= 60.0, "header wrapped vertically: {rect:?}");
             assert!(
-                pair[0].right() <= pair[1].left(),
-                "header labels overlap: {:?} and {:?}",
-                pair[0],
-                pair[1]
+                rect.right() <= width,
+                "header overflowed right edge: {rect:?}"
             );
+            let visible_text = |label: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|clipped| match &clipped.shape {
+                        egui::epaint::Shape::Text(text) if text.galley.text() == label => Some(
+                            Rect::from_min_size(text.pos, text.galley.size())
+                                .intersect(clipped.clip_rect),
+                        ),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing header label: {label}"))
+            };
+            let labels = [
+                "IMAGE STUDIO — a very long descriptive Unicode filename 日本語.webp",
+                "6000×6000 (1:1)",
+                "WEBP",
+                "554.4 KB",
+                "Close (Esc)",
+                "Save As...",
+                "Copy",
+                "Krita",
+                "Inkscape",
+                "Nomacs",
+            ];
+            let visible: Vec<_> = labels.iter().map(|label| visible_text(label)).collect();
+            for pair in visible.windows(2) {
+                assert!(
+                    pair[0].right() <= pair[1].left(),
+                    "header labels overlap: {:?} and {:?}",
+                    pair[0],
+                    pair[1]
+                );
+            }
+            assert!(visible.iter().all(|text| text.width() > 0.0));
+            assert!(action_rects.iter().all(|action| action.top() == 16.0));
         }
-        assert!(visible.iter().all(|text| text.width() > 0.0));
-        assert!(action_rects.iter().all(|action| action.top() == 16.0));
     }
 
     fn run_layout(layout: StudioPanelLayout, size: Vec2) -> StudioPanelRects {
