@@ -4,6 +4,7 @@
 //! recipe loading/saving, and live graph execution.
 
 use crate::icons::Icon;
+use crate::ui_ext::{BODY_FONT_SIZE, CONTROL_HEIGHT};
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, Id, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::SlotManager;
@@ -608,7 +609,7 @@ impl NodeCanvasState {
             ui.label(
                 egui::RichText::new("Recipe:")
                     .color(hex_to_c32(&palette.theme.f_low))
-                    .small(),
+                    .size(BODY_FONT_SIZE),
             );
 
             let mut recipe_to_load = None;
@@ -770,7 +771,7 @@ impl NodeCanvasState {
                     hex_to_c32(&palette.harmonies.base),
                     palette,
                 )
-                .min_size(Vec2::new(140.0, 26.0));
+                .min_size(Vec2::new(140.0, CONTROL_HEIGHT));
 
                 if ui.add(run_btn).clicked() {
                     if let Some(res) = self.run_current_graph(slot_mgr) {
@@ -790,7 +791,12 @@ impl NodeCanvasState {
                     } else {
                         hex_to_c32(&palette.diff_add)
                     };
-                    ui.label(egui::RichText::new(msg).color(col).small().strong());
+                    ui.label(
+                        egui::RichText::new(msg)
+                            .color(col)
+                            .size(BODY_FONT_SIZE)
+                            .strong(),
+                    );
                 }
             });
         });
@@ -856,7 +862,7 @@ impl NodeCanvasState {
 
                         // Search box (autofocused)
                         let resp = ui.add_sized(
-                            [ui.available_width(), 28.0],
+                            [ui.available_width(), CONTROL_HEIGHT],
                             egui::TextEdit::singleline(&mut self.catalog_search).hint_text(
                                 "Search nodes or tags (e.g. caption, frame, normalize, python)...",
                             ),
@@ -915,7 +921,7 @@ impl NodeCanvasState {
                                                         template.category
                                                     ))
                                                     .color(hex_to_c32(&palette.theme.f_low))
-                                                    .small(),
+                                                    .size(BODY_FONT_SIZE),
                                                 );
                                                 ui.with_layout(
                                                     egui::Layout::right_to_left(
@@ -990,7 +996,7 @@ impl NodeCanvasState {
                                             ui.label(
                                                 egui::RichText::new(template.description)
                                                     .color(hex_to_c32(&palette.theme.f_med))
-                                                    .small(),
+                                                    .size(BODY_FONT_SIZE),
                                             );
                                         });
                                         ui.add_space(4.0);
@@ -1015,7 +1021,10 @@ impl NodeCanvasState {
             .show(ui.ctx(), |ui| {
                 ui.set_width(340.0);
                 ui.label("Enter recipe name:");
-                let resp = ui.text_edit_singleline(&mut self.save_name);
+                let resp = ui.add_sized(
+                    [ui.available_width(), CONTROL_HEIGHT],
+                    egui::TextEdit::singleline(&mut self.save_name),
+                );
                 resp.request_focus();
                 ui.add_space(10.0);
                 ui.horizontal(|ui| {
