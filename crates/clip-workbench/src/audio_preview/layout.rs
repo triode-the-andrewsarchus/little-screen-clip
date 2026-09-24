@@ -182,20 +182,11 @@ impl AudioWorkspace {
         label: &str,
         controls: impl FnOnce(&mut egui::Ui),
     ) {
-        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
-        egui::Frame::none()
-            .fill(colors.recessed)
-            .stroke(Stroke::new(1.0_f32, colors.panel))
-            .inner_margin(egui::Margin::symmetric(14.0, 5.0))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal_wrapped(|ui| {
-                    Self::section_title(ui, palette, label);
-                    Self::section_divider(ui, palette);
-                    controls(ui);
-                });
-            });
-        ui.add_space(4.0);
+        Self::control_bar(ui, palette, |ui| {
+            Self::section_title(ui, palette, label);
+            Self::section_divider(ui, palette);
+            controls(ui);
+        });
     }
 
     pub(super) fn toggle_button(
