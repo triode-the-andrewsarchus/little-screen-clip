@@ -97,13 +97,13 @@ pub fn ansi_to_layout_job(ansi_text: &str, font_size: f32) -> egui::text::Layout
                             }
                             24 => is_underlined = false,
 
-                            30 => cur_fg = Color32::from_rgb(71, 85, 105), // Dark slate
-                            31 => cur_fg = Color32::from_rgb(239, 68, 68), // Red
-                            32 => cur_fg = Color32::from_rgb(34, 197, 94), // Green
-                            33 => cur_fg = Color32::from_rgb(234, 179, 8), // Yellow
-                            34 => cur_fg = Color32::from_rgb(59, 130, 246), // Blue
-                            35 => cur_fg = Color32::from_rgb(168, 85, 247), // Purple
-                            36 => cur_fg = Color32::from_rgb(6, 182, 212), // Cyan
+                            30 => cur_fg = Color32::from_rgb(148, 163, 184), // Readable dark ANSI
+                            31 => cur_fg = Color32::from_rgb(239, 68, 68),   // Red
+                            32 => cur_fg = Color32::from_rgb(34, 197, 94),   // Green
+                            33 => cur_fg = Color32::from_rgb(234, 179, 8),   // Yellow
+                            34 => cur_fg = Color32::from_rgb(59, 130, 246),  // Blue
+                            35 => cur_fg = Color32::from_rgb(168, 85, 247),  // Purple
+                            36 => cur_fg = Color32::from_rgb(6, 182, 212),   // Cyan
                             37 => cur_fg = Color32::from_rgb(241, 245, 249), // White
                             38 => {
                                 // 256-color or 24-bit TrueColor RGB
@@ -235,6 +235,29 @@ fn ansi_256_to_color32(idx: u8) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use little_clip_core::config::WorkbenchAppearance;
+    use little_clip_core::palette::{BaseColors, contrast_ratio};
+
+    #[test]
+    fn standard_ansi_text_is_readable_on_console_surface_in_both_modes() {
+        let job = ansi_to_layout_job(
+            "plain \u{1b}[30mblack\u{1b}[0m \u{1b}[31mred\u{1b}[0m \u{1b}[32mgreen\u{1b}[0m",
+            crate::ui_ext::MONO_FONT_SIZE,
+        );
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let colors = BaseColors::for_appearance(appearance);
+            let background = crate::hex_to_c32(&colors.console_surface);
+            let background = (background.r(), background.g(), background.b());
+            for section in &job.sections {
+                let color = section.format.color;
+                assert!(
+                    contrast_ratio(background, (color.r(), color.g(), color.b())) >= 4.5,
+                    "{appearance:?}: ANSI segment was unreadable on console surface"
+                );
+                assert_eq!(section.format.font_id.size, crate::ui_ext::MONO_FONT_SIZE);
+            }
+        }
+    }
 
     #[test]
     fn test_ansi_parsing_plain() {

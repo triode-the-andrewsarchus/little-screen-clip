@@ -128,7 +128,7 @@ fn spawn_text_diff_worker(
     let rhs = rhs.clone();
     std::thread::spawn(move || {
         let r = compute_diff(&lhs, &rhs, mode, width);
-        let job = ansi_to_layout_job(&r.raw_ansi, 12.0);
+        let job = ansi_to_layout_job(&r.raw_ansi, crate::ui_ext::MONO_FONT_SIZE);
         let _ = tx.send((r, job));
     });
     rx
@@ -160,7 +160,7 @@ impl DiffViewerState {
             is_identical: false,
             mode,
         };
-        let layout_job = ansi_to_layout_job("", 12.0);
+        let layout_job = ansi_to_layout_job("", crate::ui_ext::MONO_FONT_SIZE);
 
         Self {
             lhs,
@@ -965,8 +965,8 @@ impl DiffViewerState {
             return;
         }
 
-        let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
-        let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
+        let b_low = crate::hex_to_c32(&palette.colors.console_surface);
+        let b_med = crate::hex_to_c32(&palette.chrome_border);
 
         egui::Frame::none()
             .fill(b_low)

@@ -9,6 +9,8 @@ use crate::config::WorkbenchAppearance;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BaseColors {
     pub canvas: String,
+    /// High-contrast data viewport shared by both appearances.
+    pub console_surface: String,
     pub surface_raised: String,
     pub surface_panel: String,
     pub surface_recessed: String,
@@ -34,6 +36,7 @@ impl BaseColors {
             };
         Self {
             canvas: canvas.into(),
+            console_surface: "#111923".into(),
             surface_raised: raised.into(),
             surface_panel: panel.into(),
             surface_recessed: recessed.into(),
