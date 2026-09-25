@@ -9,6 +9,7 @@ use little_clip_core::config::WorkbenchAppearance;
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::palette::AppPalette;
 use little_clip_core::presentation::{
+    midi::MidiData,
     model3d::is_3d_model_file,
     network_preview::{NetworkPreview, detect_network_preview},
     spreadsheet::{
@@ -160,6 +161,7 @@ fn show_viewer_panel(ctx: &egui::Context, contents: impl FnOnce(&mut egui::Ui)) 
 
 type SpreadsheetLoadReceiver =
     Receiver<Result<Result<(SpreadsheetData, Option<PathBuf>), String>, JobError>>;
+type MidiLoadReceiver = Receiver<Result<Result<(MidiData, PathBuf), String>, JobError>>;
 
 struct WorkbenchApp {
     state: SlotManager,
@@ -185,6 +187,7 @@ struct WorkbenchApp {
         SpreadsheetLoadReceiver,
         Option<(Arc<str>, String)>,
     )>,
+    midi_load_job: Option<(JobTicket, MidiLoadReceiver)>,
     rolling_audio_strip: Option<RollingAudioStripState>,
     dragging_slot: Option<SlotId>,
     config: AppConfig,
@@ -251,6 +254,7 @@ impl WorkbenchApp {
             viewer: None,
             startup_viewers,
             spreadsheet_load_job: None,
+            midi_load_job: None,
             rolling_audio_strip,
             dragging_slot: None,
             config,
@@ -739,6 +743,9 @@ impl Drop for WorkbenchApp {
         if let Some((ticket, _, _)) = &self.spreadsheet_load_job {
             ticket.cancel();
         }
+        if let Some((ticket, _)) = &self.midi_load_job {
+            ticket.cancel();
+        }
     }
 }
 
@@ -778,6 +785,11 @@ impl eframe::App for WorkbenchApp {
         // Hold completed table loads while another viewer is active. Its receiver keeps
         // the result until the current session closes, so it cannot open underneath it.
         self.poll_spreadsheet_load(ctx);
+        if self.render_modal_viewers(ctx) {
+            self.palette_search_needs_focus = true;
+            return;
+        }
+        self.poll_midi_load(ctx);
         if self.render_modal_viewers(ctx) {
             self.palette_search_needs_focus = true;
             return;
@@ -853,6 +865,7 @@ impl eframe::App for WorkbenchApp {
 
                     let mut open_diff_requested = false;
                     let mut open_spreadsheet_requested = None;
+                    let mut open_midi_requested = None;
 
                     ui.horizontal_wrapped(|ui| {
                         ui.label(
@@ -1013,14 +1026,12 @@ impl eframe::App for WorkbenchApp {
                             let midi_bg = hex_to_c32(&self.ui_palette.harmonies.triadic_2);
                             let midi_btn = ui_ext::action_button_icon(
                                 Some(Icon::Midi),
-                                "MIDI Piano Roll",
+                                if self.midi_load_job.is_some() { "Opening MIDI…" } else { "MIDI Piano Roll" },
                                 midi_bg,
                                 &self.ui_palette,
                             );
-                            if ui.add(midi_btn).on_hover_text("Open interactive MIDI piano roll visualizer & synth audio").clicked() {
-                                if let Ok(st) = MidiViewerState::from_file(midi_path) {
-                                    self.viewer = Some(ViewerSession::Midi(st));
-                                }
+                            if ui.add_enabled(self.midi_load_job.is_none(), midi_btn).on_hover_text("Open interactive MIDI piano roll visualizer & synth audio").clicked() {
+                                open_midi_requested = Some(midi_path);
                             }
                         }
 
@@ -1130,6 +1141,9 @@ impl eframe::App for WorkbenchApp {
                     }
                     if let Some(slot) = open_spreadsheet_requested {
                         self.open_spreadsheet_item(slot);
+                    }
+                    if let Some(path) = open_midi_requested {
+                        self.start_midi_load(path);
                     }
 
                     ui.add_space(6.0);
@@ -1373,8 +1387,17 @@ impl WorkbenchApp {
     fn render_modal_viewers(&mut self, ctx: &egui::Context) -> bool {
         // A new foreground route supersedes a pending table request. Otherwise its
         // result would open after the user closes the viewer they chose instead.
-        if (self.in_app_prompt.is_some() || self.viewer.is_some())
+        if (self.view != WorkbenchView::Palette
+            || self.in_app_prompt.is_some()
+            || self.viewer.is_some())
             && let Some((ticket, _, _)) = self.spreadsheet_load_job.take()
+        {
+            ticket.cancel();
+        }
+        if (self.view != WorkbenchView::Palette
+            || self.in_app_prompt.is_some()
+            || self.viewer.is_some())
+            && let Some((ticket, _)) = self.midi_load_job.take()
         {
             ticket.cancel();
         }
@@ -1567,6 +1590,9 @@ impl WorkbenchApp {
     }
 
     fn start_spreadsheet_load(&mut self, source: SpreadsheetLoadSource) {
+        if let Some((ticket, _)) = self.midi_load_job.take() {
+            ticket.cancel();
+        }
         if let Some((ticket, _, _)) = self.spreadsheet_load_job.take() {
             ticket.cancel();
         }
@@ -1626,6 +1652,46 @@ impl WorkbenchApp {
         }
     }
 
+    fn start_midi_load(&mut self, path: PathBuf) {
+        if let Some((ticket, _, _)) = self.spreadsheet_load_job.take() {
+            ticket.cancel();
+        }
+        if let Some((ticket, _)) = self.midi_load_job.take() {
+            ticket.cancel();
+        }
+        let (ticket, receiver) = BackgroundJobs::global()
+            .submit(Duration::from_secs(30), move || {
+                MidiData::parse_file(&path).map(|data| (data, path))
+            });
+        self.midi_load_job = Some((ticket, receiver));
+        self.status_msg = None;
+    }
+
+    fn poll_midi_load(&mut self, ctx: &egui::Context) {
+        let Some((_, receiver)) = &self.midi_load_job else {
+            return;
+        };
+        let result = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(80));
+                return;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(JobError::Cancelled),
+        };
+        self.midi_load_job = None;
+        match result {
+            Ok(Ok((data, path))) => {
+                self.viewer = Some(ViewerSession::Midi(MidiViewerState::from_parsed_file(
+                    path, data,
+                )));
+                ctx.request_repaint();
+            }
+            Ok(Err(error)) => self.status_msg = Some(format!("MIDI load failed: {error}")),
+            Err(error) => self.status_msg = Some(format!("MIDI load failed: {error}")),
+        }
+    }
+
     fn open_spreadsheet_item(&mut self, slot: SlotId) {
         let source = self.state.get(slot).and_then(|item| {
             if let Some(path) = item.file_path().filter(|p| is_spreadsheet_file(p)) {
@@ -1656,9 +1722,7 @@ impl WorkbenchApp {
             .map(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
             .unwrap_or(false)
         {
-            if let Ok(st) = MidiViewerState::from_file(fp.to_path_buf()) {
-                self.viewer = Some(ViewerSession::Midi(st));
-            }
+            self.start_midi_load(fp.to_path_buf());
         } else if is_3d_model_file(fp) {
             self.viewer = Some(ViewerSession::Model3d(
                 Model3dViewerState::from_file(fp.to_path_buf())

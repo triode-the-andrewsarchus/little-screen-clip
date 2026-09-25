@@ -60,51 +60,26 @@ pub fn get_track_color(
 }
 
 impl MidiViewerState {
-    /// Loads and parses a MIDI file into workbench viewer state.
-    pub fn from_file(path: PathBuf) -> Result<Self, String> {
-        let data = MidiData::parse_file(&path)?;
+    /// Builds the viewer after a background file parse has completed.
+    pub(crate) fn from_parsed_file(path: PathBuf, data: MidiData) -> Self {
         let title = path
             .file_name()
-            .and_then(|s| s.to_str())
+            .and_then(|name| name.to_str())
             .unwrap_or("MIDI")
-            .to_string();
-
-        let total_dur = data.duration_sec.max(0.5);
-        Ok(Self {
-            path: Some(path),
-            title,
-            is_playing: false,
-            playhead_sec: 0.0,
-            playback_start_instant: None,
-            playback_start_offset: 0.0,
-            player: None,
-            _sink: None,
-            wav_cache: None,
-            view_start_sec: 0.0,
-            view_duration_sec: total_dur,
-            user_panned_during_playback: false,
-            was_playing_before_drag: false,
-            hovered_note: None,
-            status_toast: StatusToast::new(),
-            selected_region: None,
-            solo_track: None,
-            drag_start_time: None,
-            is_dragging_selection: false,
-            play_stop_time: None,
-            is_synthesizing: false,
-            pending_play: false,
-            synth_rx: None,
-            synth_ticket: None,
-            data,
-        })
+            .to_owned();
+        Self::from_data(data, Some(path), title)
     }
 
     #[allow(dead_code)]
     pub fn from_bytes(bytes: &[u8], title: String) -> Result<Self, String> {
         let data = MidiData::parse_bytes(bytes, title.clone())?;
+        Ok(Self::from_data(data, None, title))
+    }
+
+    fn from_data(data: MidiData, path: Option<PathBuf>, title: String) -> Self {
         let total_dur = data.duration_sec.max(0.5);
-        Ok(Self {
-            path: None,
+        Self {
+            path,
             title,
             is_playing: false,
             playhead_sec: 0.0,
@@ -129,7 +104,7 @@ impl MidiViewerState {
             synth_rx: None,
             synth_ticket: None,
             data,
-        })
+        }
     }
 
     pub fn zoom(&mut self, factor: f32, anchor_time: f32) {
