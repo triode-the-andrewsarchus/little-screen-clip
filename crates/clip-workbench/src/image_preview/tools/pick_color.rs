@@ -191,15 +191,9 @@ impl ImagePreviewState {
         if card_min.y + card_h > canvas_rect.max.y {
             card_min.y = ptr.y - card_h - 20.0;
         }
-        card_min.x = card_min.x.clamp(
-            canvas_rect.min.x,
-            (canvas_rect.max.x - card_w).max(canvas_rect.min.x),
-        );
-        card_min.y = card_min.y.clamp(
-            canvas_rect.min.y,
-            (canvas_rect.max.y - card_h).max(canvas_rect.min.y),
-        );
-        let card_rect = Rect::from_min_size(card_min, Vec2::new(card_w, card_h));
+        let card_rect =
+            crate::ui_ext::clamp_overlay_rect(card_min, Vec2::new(card_w, card_h), canvas_rect);
+        card_min = card_rect.min;
 
         // Card background & sleek harmonic border
         painter.rect_filled(card_rect, Rounding::same(8.0), card_bg);

@@ -2,7 +2,8 @@ use crate::hex_to_c32;
 use crate::icons::Icon;
 use crate::ui_appearance::WorkbenchColors;
 use eframe::egui::{
-    self, Color32, FontFamily, FontId, Response, RichText, Rounding, Stroke, TextStyle, Ui, Vec2,
+    self, Color32, FontFamily, FontId, Pos2, Rect, Response, RichText, Rounding, Stroke, TextStyle,
+    Ui, Vec2,
 };
 use little_clip_core::palette::{AppPalette, contrast_ratio};
 
@@ -13,6 +14,19 @@ pub const HEADING_FONT_SIZE: f32 = 22.0;
 pub const SUBHEADING_FONT_SIZE: f32 = 19.0;
 pub const MONO_FONT_SIZE: f32 = 15.0;
 pub const CONTROL_CORNER_RADIUS: f32 = 4.0;
+
+/// Places a floating overlay inside its visible canvas whenever it fits.
+pub fn clamp_overlay_rect(ideal_min: Pos2, size: Vec2, bounds: Rect) -> Rect {
+    let max_x = (bounds.max.x - size.x).max(bounds.min.x);
+    let max_y = (bounds.max.y - size.y).max(bounds.min.y);
+    Rect::from_min_size(
+        Pos2::new(
+            ideal_min.x.clamp(bounds.min.x, max_x),
+            ideal_min.y.clamp(bounds.min.y, max_y),
+        ),
+        size,
+    )
+}
 
 /// Set readable workbench defaults. Secondary text uses color and weight for
 /// hierarchy; `.small()` must remain as legible as ordinary control labels.
@@ -934,5 +948,16 @@ mod tests {
         assert_eq!(ZoomAction::ZoomIn, ZoomAction::ZoomIn);
         assert_ne!(ZoomAction::ZoomIn, ZoomAction::ZoomOut);
         assert_ne!(ZoomAction::ZoomOut, ZoomAction::Fit);
+    }
+
+    #[test]
+    fn floating_overlay_origin_stays_inside_canvas_even_when_badge_is_wide() {
+        let bounds = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(100.0, 80.0));
+        let fitted = clamp_overlay_rect(Pos2::new(100.0, 90.0), Vec2::new(30.0, 20.0), bounds);
+        assert_eq!(fitted.max, bounds.max);
+
+        let oversized = clamp_overlay_rect(Pos2::new(100.0, 90.0), Vec2::new(140.0, 20.0), bounds);
+        assert_eq!(oversized.min.x, bounds.min.x);
+        assert_eq!(oversized.max.y, bounds.max.y);
     }
 }

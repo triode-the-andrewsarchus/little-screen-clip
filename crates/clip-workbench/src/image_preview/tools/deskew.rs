@@ -286,6 +286,7 @@ impl ImagePreviewState {
     ) {
         let labels = ["TL (1)", "TR (2)", "BR (3)", "BL (4)"];
         let corner_names = ["Top-Left", "Top-Right", "Bottom-Right", "Bottom-Left"];
+        let overlay_bounds = painter.clip_rect();
 
         if self.deskew_state.is_clicking_points {
             // --- 4-Point Sequential Clicking Mode ---
@@ -357,18 +358,14 @@ impl ImagePreviewState {
                     );
                     let galley = ui.painter().layout_no_wrap(
                         badge_text,
-                        egui::FontId::proportional(11.0),
+                        egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                         badge_fg,
                     );
-                    let badge_pos = Pos2::new(
-                        (ptr_pos.x + 16.0).clamp(
-                            img_rect.min.x + 10.0,
-                            img_rect.max.x - galley.size().x - 14.0,
-                        ),
-                        (ptr_pos.y + 16.0).clamp(img_rect.min.y + 10.0, img_rect.max.y - 26.0),
+                    let badge_rect = crate::ui_ext::clamp_overlay_rect(
+                        ptr_pos + Vec2::splat(16.0),
+                        galley.size() + Vec2::new(12.0, 6.0),
+                        overlay_bounds,
                     );
-                    let badge_rect =
-                        Rect::from_min_size(badge_pos, galley.size() + Vec2::new(12.0, 6.0));
                     painter.rect_filled(badge_rect, Rounding::same(4.0), b_low);
                     painter.rect_stroke(
                         badge_rect,
@@ -382,22 +379,25 @@ impl ImagePreviewState {
             // Top banner instruction
             let top_banner_pos = Pos2::new(img_rect.center().x, img_rect.min.y + 18.0);
             let next_name = corner_names.get(n).copied().unwrap_or("");
-            let banner_text = format!(
-                "🎯 Click 4 points: (1) TL → (2) TR → (3) BR → (4) BL | Next: {} of 4 ({}) [Esc: Cancel]",
-                n + 1,
-                next_name
-            );
+            let banner_text = format!("🎯 Place corner {}/4: {} | Esc cancels", n + 1, next_name);
             let b_low = hex_to_c32(&palette.colors.surface_recessed);
             let b_fg = contrast_text_c32(
                 b_low,
                 Some(hex_to_c32(&palette.colors.text_primary)),
                 palette,
             );
-            let banner_galley =
-                ui.painter()
-                    .layout_no_wrap(banner_text, egui::FontId::proportional(11.0), b_fg);
-            let banner_rect =
-                Rect::from_center_size(top_banner_pos, banner_galley.size() + Vec2::new(16.0, 6.0));
+            let banner_galley = ui.painter().layout(
+                banner_text,
+                egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
+                b_fg,
+                (overlay_bounds.width() - 20.0).max(20.0),
+            );
+            let banner_size = banner_galley.size() + Vec2::new(16.0, 6.0);
+            let banner_rect = crate::ui_ext::clamp_overlay_rect(
+                top_banner_pos - banner_size * 0.5,
+                banner_size,
+                overlay_bounds,
+            );
             painter.rect_filled(banner_rect, Rounding::same(4.0), b_low);
             painter.rect_stroke(
                 banner_rect,
@@ -525,16 +525,22 @@ impl ImagePreviewState {
                 palette,
             );
             let badge_str = if !self.deskew_state.corners_adjusted {
-                "🎯 Click 4 Points (or drag handles) | Enter: Apply"
+                "🎯 Click 4 Points or drag corners • Enter to apply"
             } else {
-                "Enter / Double-Click: Apply Deskew | Drag handles to adjust"
+                "Drag corners • Enter or double-click to apply"
             };
-            let galley = ui.painter().layout_no_wrap(
+            let galley = ui.painter().layout(
                 badge_str.to_string(),
-                egui::FontId::proportional(11.0),
+                egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                 badge_fg,
+                (overlay_bounds.width() - 20.0).max(20.0),
             );
-            let badge_rect = Rect::from_center_size(centroid, galley.size() + Vec2::new(14.0, 6.0));
+            let badge_size = galley.size() + Vec2::new(14.0, 6.0);
+            let badge_rect = crate::ui_ext::clamp_overlay_rect(
+                centroid - badge_size * 0.5,
+                badge_size,
+                overlay_bounds,
+            );
             painter.rect_filled(badge_rect, Rounding::same(4.0), badge_bg);
             painter.rect_stroke(
                 badge_rect,
@@ -567,7 +573,7 @@ impl ImagePreviewState {
                     ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Crosshair);
                     // If corners haven't been adjusted yet, hint to the user that clicking sets point 1
                     if !self.deskew_state.corners_adjusted {
-                        let hint_text = "🎯 Click to place Point 1 (Top-Left)";
+                        let hint_text = "🎯 Place top-left corner";
                         let b_low = hex_to_c32(&palette.colors.surface_recessed);
                         let h_fg = contrast_text_c32(
                             b_low,
@@ -576,18 +582,14 @@ impl ImagePreviewState {
                         );
                         let h_galley = ui.painter().layout_no_wrap(
                             hint_text.to_string(),
-                            egui::FontId::proportional(10.5),
+                            egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                             h_fg,
                         );
-                        let h_pos = Pos2::new(
-                            (ptr_pos.x + 14.0).clamp(
-                                img_rect.min.x + 10.0,
-                                img_rect.max.x - h_galley.size().x - 14.0,
-                            ),
-                            (ptr_pos.y + 14.0).clamp(img_rect.min.y + 10.0, img_rect.max.y - 24.0),
+                        let h_rect = crate::ui_ext::clamp_overlay_rect(
+                            ptr_pos + Vec2::splat(14.0),
+                            h_galley.size() + Vec2::new(10.0, 4.0),
+                            overlay_bounds,
                         );
-                        let h_rect =
-                            Rect::from_min_size(h_pos, h_galley.size() + Vec2::new(10.0, 4.0));
                         painter.rect_filled(h_rect, Rounding::same(3.0), b_low);
                         painter.rect_stroke(
                             h_rect,
