@@ -1322,10 +1322,12 @@ impl BinaryDiffViewState {
                                     ui.set_max_width(card_inner_w);
                                     ui.vertical(|ui| {
                                         // Row 1: ID badge + Kind + byte count
-                                        ui.horizontal(|ui| {
+                                        ui.horizontal_wrapped(|ui| {
                                             ui.label(
                                                 egui::RichText::new(format!("#{}", block.id))
-                                                    .font(FontId::monospace(10.0))
+                                                    .font(FontId::monospace(
+                                                        crate::ui_ext::MONO_FONT_SIZE,
+                                                    ))
                                                     .strong()
                                                     .color(hex_to_c32(
                                                         &palette.colors.text_secondary,
@@ -1334,7 +1336,9 @@ impl BinaryDiffViewState {
 
                                             ui.label(
                                                 egui::RichText::new(&block.kind_label)
-                                                    .font(FontId::proportional(10.5))
+                                                    .font(FontId::proportional(
+                                                        crate::ui_ext::BODY_FONT_SIZE,
+                                                    ))
                                                     .strong()
                                                     .color(badge_color),
                                             );
@@ -1347,7 +1351,9 @@ impl BinaryDiffViewState {
                                                             "{} B",
                                                             block.byte_count
                                                         ))
-                                                        .font(FontId::monospace(10.0))
+                                                        .font(FontId::monospace(
+                                                            crate::ui_ext::MONO_FONT_SIZE,
+                                                        ))
                                                         .strong()
                                                         .color(hex_to_c32(
                                                             &palette.colors.text_secondary,
@@ -1370,14 +1376,18 @@ impl BinaryDiffViewState {
                                         };
                                         ui.label(
                                             egui::RichText::new(off_str)
-                                                .font(FontId::monospace(10.0))
+                                                .font(FontId::monospace(
+                                                    crate::ui_ext::MONO_FONT_SIZE,
+                                                ))
                                                 .color(hex_to_c32(&palette.colors.text_muted)),
                                         );
 
                                         // Row 3: Preview
                                         ui.label(
                                             egui::RichText::new(&block.preview)
-                                                .font(FontId::monospace(10.0))
+                                                .font(FontId::monospace(
+                                                    crate::ui_ext::MONO_FONT_SIZE,
+                                                ))
                                                 .color(hex_to_c32(&palette.colors.text_primary)),
                                         );
                                     });
