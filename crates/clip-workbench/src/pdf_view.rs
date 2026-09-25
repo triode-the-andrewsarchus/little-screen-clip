@@ -12,11 +12,12 @@ use little_clip_core::pdf::{
     PdfInfo, delete_pdf_pages, get_pdf_info, render_pdf_page_preview, rotate_pdf_page,
 };
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel, sync_channel};
 use std::time::Duration;
 
 const PREVIEW_QUEUE_CAPACITY: usize = 3;
+const STAGED_PDF_FILENAME: &str = "edited.pdf";
 
 struct PdfPreviewMsg {
     page_num: usize,
@@ -30,6 +31,7 @@ struct PdfEditMsg {
     operation: &'static str,
     page_num: usize,
     output: PathBuf,
+    staging_dir: tempfile::TempDir,
     result: Result<(), String>,
 }
 
@@ -222,7 +224,7 @@ impl PdfEditorState {
             self.preview_rx = None;
             self.previews_loading = false;
         } else if self.previews_loading {
-            ctx.request_repaint();
+            ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
 
@@ -265,6 +267,18 @@ impl PdfEditorState {
         }
         let input = self.path.clone();
         let output = self.sibling_output_path(operation);
+        let output_dir = output
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let staging_dir = match tempfile::tempdir_in(output_dir) {
+            Ok(dir) => dir,
+            Err(error) => {
+                self.status_toast
+                    .set(format!("Could not stage PDF edit: {error}"), now);
+                return;
+            }
+        };
         let expected_page_count = self
             .page_count
             .saturating_sub(usize::from(operation == "delete"));
@@ -284,42 +298,57 @@ impl PdfEditorState {
             now,
         );
         std::thread::spawn(move || {
+            let staged_output = staging_dir.path().join(STAGED_PDF_FILENAME);
             let result = match operation {
-                "delete" => delete_pdf_pages(&input, &[page_num], &output),
-                "rotate" => rotate_pdf_page(&input, page_num, degrees, &output),
+                "delete" => delete_pdf_pages(&input, &[page_num], &staged_output),
+                "rotate" => rotate_pdf_page(&input, page_num, degrees, &staged_output),
                 _ => Err("Unknown PDF edit operation".to_string()),
             }
             .and_then(|()| {
-                if !output.is_file() {
+                if !staged_output.is_file() {
                     return Err("PDF operation produced no output file".to_string());
                 }
-                let info = get_pdf_info(&output)?;
+                let info = get_pdf_info(&staged_output)?;
                 if info.page_count != expected_page_count {
                     return Err(format!(
                         "Edited PDF has {} pages; expected {}",
                         info.page_count, expected_page_count
                     ));
                 }
-                render_pdf_page_preview(&output, 1, 64).map(|_| ())
+                render_pdf_page_preview(&staged_output, 1, 64).map(|_| ())
             });
-            if result.is_err() {
-                let _ = std::fs::remove_file(&output);
-            }
             let _ = tx.send(PdfEditMsg {
                 operation,
                 page_num,
                 output,
+                staging_dir,
                 result,
             });
         });
     }
 
     fn poll_edit_worker(&mut self, ctx: &egui::Context, now: f64) {
-        let message = self.edit_rx.as_ref().and_then(|rx| rx.try_recv().ok());
+        let message = match self.edit_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(message)) => Some(message),
+            Some(Err(TryRecvError::Disconnected)) => {
+                self.edit_rx = None;
+                self.edit_in_progress = false;
+                self.status_toast.set("PDF edit worker disconnected", now);
+                return;
+            }
+            _ => None,
+        };
         if let Some(message) = message {
             self.edit_rx = None;
             self.edit_in_progress = false;
-            match message.result {
+            let result = message.result.and_then(|()| {
+                std::fs::rename(
+                    message.staging_dir.path().join(STAGED_PDF_FILENAME),
+                    &message.output,
+                )
+                .map_err(|error| format!("Could not publish edited PDF: {error}"))
+            });
+            match result {
                 Ok(()) => {
                     self.path = message.output;
                     self.title = self
@@ -349,7 +378,7 @@ impl PdfEditorState {
                 ),
             }
         } else if self.edit_in_progress {
-            ctx.request_repaint();
+            ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
 
@@ -805,5 +834,92 @@ mod tests {
         });
         assert_eq!(state.pages[0].error.as_deref(), Some("raster failed"));
         assert!(!state.previews_loading);
+    }
+
+    #[test]
+    fn closed_viewer_discards_completed_edit_before_publication() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("document.rotate.edited.pdf");
+        let mut state = PdfEditorState::new(temp.path().join("document.pdf"));
+        let staging_dir = tempfile::tempdir_in(temp.path()).unwrap();
+        let staged_output = staging_dir.path().join(STAGED_PDF_FILENAME);
+        std::fs::write(&staged_output, b"staged edit").unwrap();
+        let (sender, receiver) = channel();
+        state.edit_rx = Some(receiver);
+        sender
+            .send(PdfEditMsg {
+                operation: "rotate",
+                page_num: 1,
+                output: output.clone(),
+                staging_dir,
+                result: Ok(()),
+            })
+            .unwrap();
+        drop(state);
+
+        assert!(!staged_output.exists());
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn failed_edit_preserves_existing_sibling_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("document.rotate.edited.pdf");
+        std::fs::write(&output, b"prior edit").unwrap();
+        let mut state = PdfEditorState::new(temp.path().join("document.pdf"));
+        let staging_dir = tempfile::tempdir_in(temp.path()).unwrap();
+        let staged_output = staging_dir.path().join(STAGED_PDF_FILENAME);
+        std::fs::write(&staged_output, b"failed edit").unwrap();
+        let (sender, receiver) = channel();
+        state.edit_rx = Some(receiver);
+        state.edit_in_progress = true;
+        sender
+            .send(PdfEditMsg {
+                operation: "rotate",
+                page_num: 1,
+                output: output.clone(),
+                staging_dir,
+                result: Err("render failed".to_owned()),
+            })
+            .unwrap();
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            state.poll_edit_worker(ctx, 0.0)
+        });
+        assert_eq!(std::fs::read(output).unwrap(), b"prior edit");
+        assert!(!staged_output.exists());
+        assert!(!state.edit_in_progress);
+    }
+
+    #[test]
+    fn validated_edit_publishes_sibling_output_from_open_viewer() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("document.rotate.edited.pdf");
+        let mut state = PdfEditorState::new(temp.path().join("document.pdf"));
+        let staging_dir = tempfile::tempdir_in(temp.path()).unwrap();
+        let staged_output = staging_dir.path().join(STAGED_PDF_FILENAME);
+        std::fs::write(&staged_output, b"validated edit").unwrap();
+        let (sender, receiver) = channel();
+        state.edit_rx = Some(receiver);
+        state.edit_in_progress = true;
+        sender
+            .send(PdfEditMsg {
+                operation: "rotate",
+                page_num: 1,
+                output: output.clone(),
+                staging_dir,
+                result: Ok(()),
+            })
+            .unwrap();
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            state.poll_edit_worker(ctx, 0.0)
+        });
+        assert_eq!(std::fs::read(&output).unwrap(), b"validated edit");
+        assert!(!staged_output.exists());
+        assert_eq!(state.path, output);
+        assert!(state.dirty);
     }
 }
