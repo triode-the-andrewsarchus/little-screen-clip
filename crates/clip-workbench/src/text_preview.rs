@@ -808,6 +808,13 @@ impl TextPreviewState {
     /// Renders raw / code view with syntax highlighting, line numbers gutter, and search match highlighting.
     fn render_raw_code_view(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let syntax = find_syntax(self.language);
+        let code_font = FontId::monospace(crate::ui_ext::MONO_FONT_SIZE);
+        let (line_height, digit_width) = ui.fonts(|fonts| {
+            (
+                fonts.row_height(&code_font) + 4.0,
+                fonts.glyph_width(&code_font, '0'),
+            )
+        });
 
         let show_gutter = self.show_line_numbers;
         let query = if self.find_query.is_empty() {
@@ -827,7 +834,7 @@ impl TextPreviewState {
         if let Some(offset) = self.scroll_to_offset.take() {
             scroll_area = scroll_area.vertical_scroll_offset(offset);
         } else if let Some(target_line) = self.scroll_to_line.take() {
-            let approx_y = (target_line.saturating_sub(5)) as f32 * 18.0;
+            let approx_y = (target_line.saturating_sub(5)) as f32 * line_height;
             scroll_area = scroll_area.vertical_scroll_offset(approx_y);
         }
 
@@ -843,7 +850,6 @@ impl TextPreviewState {
             .show(ui, |ui| {
                 let total_lines = self.line_starts.len().max(1);
                 let digits = total_lines.to_string().len().max(2);
-                let line_height = 18.0;
                 // A horizontal layout shrink-wraps children by default.  That left the
                 // virtual ScrollArea with a one-row-high clip rect on some egui backends.
                 // Reserve the viewport explicitly before asking it to virtualize rows.
@@ -861,6 +867,7 @@ impl TextPreviewState {
                         |ui| {
                             let output =
                                 scroll_area.show_rows(ui, line_height, total_lines, |ui, rows| {
+                                    ui.spacing_mut().item_spacing.y = 0.0;
                                     for line_index in rows {
                                         let start = self.line_starts[line_index];
                                         let end = self
@@ -872,14 +879,17 @@ impl TextPreviewState {
                                         ui.horizontal(|ui| {
                                             if show_gutter {
                                                 ui.add_sized(
-                                                    [((digits + 1) * 8) as f32, line_height],
+                                                    [
+                                                        digit_width * (digits + 1) as f32 + 4.0,
+                                                        line_height,
+                                                    ],
                                                     egui::Label::new(
                                                         egui::RichText::new(format!(
                                                             "{:>width$}",
                                                             line_index + 1,
                                                             width = digits
                                                         ))
-                                                        .font(FontId::monospace(12.5))
+                                                        .font(code_font.clone())
                                                         .color(hex_to_c32(
                                                             &palette.colors.text_muted,
                                                         )),
@@ -1336,7 +1346,7 @@ fn build_highlighted_layout_job(
                 token_str,
                 0.0,
                 egui::TextFormat {
-                    font_id: FontId::monospace(12.5),
+                    font_id: FontId::monospace(crate::ui_ext::MONO_FONT_SIZE),
                     color: text_color,
                     background: bg,
                     ..Default::default()
@@ -1435,7 +1445,7 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
 
             let mut code_clone = code.to_string();
             let text_edit = egui::TextEdit::multiline(&mut code_clone)
-                .font(FontId::monospace(12.0))
+                .font(FontId::monospace(crate::ui_ext::MONO_FONT_SIZE))
                 .layouter(&mut layouter)
                 .desired_width(f32::INFINITY)
                 .lock_focus(false)
@@ -1549,8 +1559,10 @@ mod tests {
         let output = ctx.run(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 ui.horizontal_top(|ui| {
-                    let gutter_resp =
-                        ui.label(egui::RichText::new("1\n2\n3").font(FontId::monospace(12.5)));
+                    let gutter_resp = ui.label(
+                        egui::RichText::new("1\n2\n3")
+                            .font(FontId::monospace(crate::ui_ext::MONO_FONT_SIZE)),
+                    );
                     let mut text = "#include <stdio.h>\nint main() {}\n".to_string();
                     let syntax = find_syntax("c");
                     let palette = AppPalette::default();
@@ -1561,7 +1573,7 @@ mod tests {
                         ui.fonts(|f| f.layout_job(layout_job))
                     };
                     let edit = egui::TextEdit::multiline(&mut text)
-                        .font(FontId::monospace(12.5))
+                        .font(FontId::monospace(crate::ui_ext::MONO_FONT_SIZE))
                         .layouter(&mut layouter)
                         .frame(false)
                         .margin(egui::Margin::ZERO);
