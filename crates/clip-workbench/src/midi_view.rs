@@ -7,15 +7,15 @@ use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::{self, StatusToast, ZoomAction};
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
-use little_clip_core::HandSide;
 use little_clip_core::ipc::IpcRequest;
 use little_clip_core::presentation::midi::{MidiData, MidiNote};
+use little_clip_core::{BackgroundJobs, HandSide, JobError, JobTicket};
 use rodio::stream::MixerDeviceSink;
 use rodio::{Decoder, Player};
 use std::io::Cursor;
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, channel};
-use std::time::Instant;
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::time::{Duration, Instant};
 
 /// Interactive UI state for piano roll inspection and MIDI playback.
 pub struct MidiViewerState {
@@ -44,7 +44,8 @@ pub struct MidiViewerState {
     pub play_stop_time: Option<f32>,
     pub is_synthesizing: bool,
     pub pending_play: bool,
-    synth_rx: Option<Receiver<(Option<usize>, Vec<u8>)>>,
+    synth_rx: Option<Receiver<Result<(Option<usize>, Vec<u8>), JobError>>>,
+    synth_ticket: Option<JobTicket>,
 }
 
 /// Computes a distinct palette color for notes in a given MIDI track and channel using theme harmonies.
@@ -93,6 +94,7 @@ impl MidiViewerState {
             is_synthesizing: false,
             pending_play: false,
             synth_rx: None,
+            synth_ticket: None,
             data,
         })
     }
@@ -125,6 +127,7 @@ impl MidiViewerState {
             is_synthesizing: false,
             pending_play: false,
             synth_rx: None,
+            synth_ticket: None,
             data,
         })
     }
@@ -185,19 +188,19 @@ impl MidiViewerState {
             self.pending_play = true;
             if !self.is_synthesizing {
                 self.is_synthesizing = true;
-                let (tx, rx) = channel();
-                self.synth_rx = Some(rx);
                 let data = self.data.clone();
                 let solo = self.solo_track;
+                let (ticket, rx) = BackgroundJobs::global()
+                    .submit(Duration::from_secs(120), move || {
+                        (solo, data.synthesize_tracks_to_wav(solo))
+                    });
+                self.synth_rx = Some(rx);
+                self.synth_ticket = Some(ticket);
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
                     .as_secs_f64();
                 self.status_toast.set("Synthesizing audio…", now);
-                std::thread::spawn(move || {
-                    let wav = data.synthesize_tracks_to_wav(solo);
-                    let _ = tx.send((solo, wav));
-                });
             }
             return;
         }
@@ -287,6 +290,9 @@ impl MidiViewerState {
         self.pending_play = false;
         self.is_synthesizing = false;
         self.synth_rx = None;
+        if let Some(ticket) = self.synth_ticket.take() {
+            ticket.cancel();
+        }
         if self.is_playing {
             let cur = self.playhead_sec;
             let stop_time = self.play_stop_time;
@@ -304,6 +310,9 @@ impl MidiViewerState {
             self.pending_play = false;
             self.is_synthesizing = false;
             self.synth_rx = None;
+            if let Some(ticket) = self.synth_ticket.take() {
+                ticket.cancel();
+            }
             if self.is_playing {
                 let cur = self.playhead_sec;
                 let stop_time = self.play_stop_time;
@@ -456,17 +465,46 @@ impl MidiViewerState {
     }
 
     pub fn update_playback(&mut self) {
-        if let Some(ref rx) = self.synth_rx {
-            if let Ok((solo, wav)) = rx.try_recv() {
-                self.is_synthesizing = false;
-                self.synth_rx = None;
-                if self.solo_track == solo {
-                    self.wav_cache = Some(wav);
-                    if self.pending_play {
-                        self.pending_play = false;
-                        self.play();
+        let synth_result = self.synth_rx.as_ref().map(|rx| rx.try_recv());
+        if let Some(result) = synth_result {
+            match result {
+                Ok(Ok((solo, wav))) => {
+                    self.is_synthesizing = false;
+                    self.synth_rx = None;
+                    self.synth_ticket = None;
+                    if self.solo_track == solo {
+                        self.wav_cache = Some(wav);
+                        if self.pending_play {
+                            self.pending_play = false;
+                            self.play();
+                        }
                     }
                 }
+                Ok(Err(error)) => {
+                    self.is_synthesizing = false;
+                    self.pending_play = false;
+                    self.synth_rx = None;
+                    self.synth_ticket = None;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|duration| duration.as_secs_f64())
+                        .unwrap_or(0.0);
+                    self.status_toast
+                        .set(format!("MIDI synthesis failed: {error}"), now);
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.is_synthesizing = false;
+                    self.pending_play = false;
+                    self.synth_rx = None;
+                    self.synth_ticket = None;
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|duration| duration.as_secs_f64())
+                        .unwrap_or(0.0);
+                    self.status_toast
+                        .set("MIDI synthesis worker disconnected", now);
+                }
+                Err(TryRecvError::Empty) => {}
             }
         }
 
@@ -514,8 +552,10 @@ impl MidiViewerState {
         close: &mut bool,
     ) {
         self.update_playback();
-        if self.is_playing || self.is_synthesizing {
+        if self.is_playing {
             ui.ctx().request_repaint();
+        } else if self.is_synthesizing {
+            ui.ctx().request_repaint_after(Duration::from_millis(50));
         }
 
         // 1. Hook up Escape key: clear selection first, or close if no selection
@@ -1261,6 +1301,14 @@ impl MidiViewerState {
     }
 }
 
+impl Drop for MidiViewerState {
+    fn drop(&mut self) {
+        if let Some(ticket) = &self.synth_ticket {
+            ticket.cancel();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1393,6 +1441,7 @@ mod tests {
             is_synthesizing: false,
             pending_play: false,
             synth_rx: None,
+            synth_ticket: None,
         };
 
         // Test solo toggling
@@ -1475,6 +1524,7 @@ mod tests {
             is_synthesizing: false,
             pending_play: false,
             synth_rx: None,
+            synth_ticket: None,
         };
         let palette = little_clip_core::palette::AppPalette::default();
         let ctx = egui::Context::default();
