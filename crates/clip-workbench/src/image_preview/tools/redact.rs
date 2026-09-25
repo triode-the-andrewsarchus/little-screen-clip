@@ -288,11 +288,13 @@ impl ImagePreviewState {
                 );
                 let galley = ui.painter().layout_no_wrap(
                     badge_str,
-                    egui::FontId::proportional(11.0),
+                    egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                     badge_text_col,
                 );
+                let badge_size = galley.size() + Vec2::new(12.0, 4.0);
+                let ideal_badge_min = badge_pos - badge_size * 0.5;
                 let badge_rect =
-                    Rect::from_center_size(badge_pos, galley.size() + Vec2::new(12.0, 4.0));
+                    crate::ui_ext::clamp_overlay_rect(ideal_badge_min, badge_size, img_rect);
                 painter.rect_filled(badge_rect, Rounding::same(4.0), b_low_badge);
                 painter.rect_stroke(
                     badge_rect,
