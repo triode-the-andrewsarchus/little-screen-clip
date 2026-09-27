@@ -27,6 +27,28 @@ pub(super) struct ImageSaveJob {
     restored: bool,
 }
 
+pub(super) struct ImageCopyJob {
+    ticket: JobTicket,
+    phase: Arc<AtomicU8>,
+    snapshot_ready: Arc<AtomicBool>,
+    canvas: Arc<Mutex<Option<RgbaImage>>>,
+    receiver: mpsc::Receiver<Result<Result<String, String>, JobError>>,
+    stamp: ImageInputStamp,
+    restored: bool,
+}
+
+impl Drop for ImageCopyJob {
+    fn drop(&mut self) {
+        if self
+            .phase
+            .compare_exchange(CANCELLABLE, CANCELLED, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.ticket.cancel();
+        }
+    }
+}
+
 impl Drop for ImageSaveJob {
     fn drop(&mut self) {
         self.cancel();
@@ -100,6 +122,146 @@ impl ImageSaveJob {
             stamp,
             restored: false,
         }
+    }
+}
+
+impl ImageCopyJob {
+    fn start(
+        canvas: RgbaImage,
+        stamp: ImageInputStamp,
+        hand: HandSide,
+        jobs: &BackgroundJobs,
+    ) -> Self {
+        let canvas = Arc::new(Mutex::new(Some(canvas)));
+        let worker_canvas = Arc::clone(&canvas);
+        let snapshot_ready = Arc::new(AtomicBool::new(false));
+        let worker_ready = Arc::clone(&snapshot_ready);
+        let phase = Arc::new(AtomicU8::new(CANCELLABLE));
+        let worker_phase = Arc::clone(&phase);
+        let worker_stamp = stamp.clone();
+        let (ticket, receiver) = jobs.submit(Duration::MAX, move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let started = Instant::now();
+                check_copy_cancelled(&worker_phase, started)?;
+                let snapshot = {
+                    let slot = worker_canvas.lock().unwrap_or_else(|e| e.into_inner());
+                    slot.as_ref().ok_or("Copy image unavailable")?.clone()
+                };
+                worker_ready.store(true, Ordering::Release);
+                check_copy_cancelled(&worker_phase, started)?;
+                let composed = compose_display_image(snapshot, &worker_stamp);
+                check_copy_cancelled(&worker_phase, started)?;
+                let bytes = encode_png(&composed).map_err(|error| error.to_string())?;
+                check_copy_cancelled(&worker_phase, started)?;
+                phase_for_delivery(&worker_phase, started)?;
+                deliver_image_copy(
+                    &bytes,
+                    hand,
+                    || worker_phase.load(Ordering::Acquire) == CANCELLED,
+                    |request| {
+                        crate::send_ipc_request_with_timeout(request, Some(Duration::from_secs(2)))
+                            .map_err(|error| error.to_string())
+                            .and_then(|response| match response {
+                                little_clip_core::ipc::IpcResponse::Success { .. } => Ok(()),
+                                little_clip_core::ipc::IpcResponse::Error { error } => Err(error),
+                                other => Err(format!("Unexpected clipboard response: {other:?}")),
+                            })
+                    },
+                    |bytes, mime| {
+                        little_clip_core::copy_bytes_to_system_clipboard(bytes, mime)
+                            .map_err(|error| error.to_string())
+                    },
+                )
+            }))
+            .unwrap_or_else(|_| Err("Image clipboard worker panicked".into()))
+        });
+        Self {
+            ticket,
+            phase,
+            snapshot_ready,
+            canvas,
+            receiver,
+            stamp,
+            restored: false,
+        }
+    }
+
+    fn cancel(&self) -> bool {
+        if self
+            .phase
+            .compare_exchange(CANCELLABLE, CANCELLED, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            self.ticket.cancel();
+            true
+        } else {
+            false
+        }
+    }
+}
+
+fn phase_for_delivery(phase: &AtomicU8, started: Instant) -> Result<(), String> {
+    check_copy_cancelled(phase, started)?;
+    phase
+        .compare_exchange(CANCELLABLE, WRITING, Ordering::AcqRel, Ordering::Acquire)
+        .map(|_| ())
+        .map_err(|_| "Image clipboard copy cancelled".into())
+}
+
+fn check_copy_cancelled(phase: &AtomicU8, started: Instant) -> Result<(), String> {
+    if phase.load(Ordering::Acquire) == CANCELLED {
+        Err("Image clipboard copy cancelled".into())
+    } else if started.elapsed() > SAVE_TIMEOUT {
+        Err("Image clipboard copy timed out".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn deliver_image_copy<I, C>(
+    bytes: &[u8],
+    hand: HandSide,
+    cancelled: impl Fn() -> bool,
+    mut push_to_daemon: I,
+    mut copy_to_system_clipboard: C,
+) -> Result<String, String>
+where
+    I: FnMut(&IpcRequest) -> Result<(), String>,
+    C: FnMut(&[u8], &str) -> Result<(), String>,
+{
+    if cancelled() {
+        return Err("Image clipboard copy cancelled".into());
+    }
+    let request = IpcRequest::PushImage {
+        bytes: bytes.to_vec(),
+        mime: "image/png".into(),
+        hand,
+    };
+    let ipc_result = push_to_daemon(&request);
+    if cancelled() {
+        return Err("Image clipboard copy cancelled".into());
+    }
+    let clipboard_result = copy_to_system_clipboard(bytes, "image/png");
+    match (ipc_result, clipboard_result) {
+        (Ok(()), Ok(())) => Ok(format!(
+            "📋 Copied image to {} Hand slot & OS Clipboard",
+            hand_slot_label(hand)
+        )),
+        (Ok(()), Err(error)) => Ok(format!(
+            "📋 Copied image to {} Hand slot; OS clipboard failed: {error}",
+            hand_slot_label(hand)
+        )),
+        (Err(_), Ok(())) => Ok("📋 Copied image to OS Clipboard (daemon unavailable)".into()),
+        (Err(ipc), Err(clipboard)) => Err(format!(
+            "Could not copy image to clipboard: daemon: {ipc}; OS clipboard: {clipboard}"
+        )),
+    }
+}
+
+fn hand_slot_label(hand: HandSide) -> &'static str {
+    match hand {
+        HandSide::Left => "Left Hand (LH)",
+        HandSide::Right => "Right Hand (RH)",
     }
 }
 
@@ -181,6 +343,129 @@ fn write_save(
 }
 
 impl ImagePreviewState {
+    pub(super) fn start_copy_to_hand_slot(&mut self, hand: HandSide, jobs: &BackgroundJobs) {
+        if let Some(job) = self.copy_job.as_ref() {
+            if !job.cancel() {
+                self.show_toast("Image clipboard delivery is already in progress");
+            } else {
+                self.show_toast("Cancelling previous image copy before starting another");
+            }
+            return;
+        }
+        if self.save_snapshot_pending() || self.current_rgba.is_empty() {
+            self.show_toast("Image pixels are temporarily unavailable; try copying again shortly");
+            return;
+        }
+        let stamp = self.input_stamp();
+        let canvas = std::mem::take(&mut self.current_rgba);
+        self.copy_job = Some(ImageCopyJob::start(canvas, stamp, hand, jobs));
+        self.show_toast("Preparing image for clipboard…");
+    }
+
+    pub(super) fn copy_snapshot_pending(&self) -> bool {
+        self.copy_job.as_ref().is_some_and(|job| !job.restored)
+    }
+
+    pub(super) fn poll_copy_job(&mut self) {
+        let Some(job) = self.copy_job.as_mut() else {
+            return;
+        };
+        let completion = match job.receiver.try_recv() {
+            Ok(result) => Some(
+                result
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result),
+            ),
+            Err(mpsc::TryRecvError::Empty) => None,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                Some(Err("Image clipboard worker disconnected".into()))
+            }
+        };
+        if !job.restored && (job.snapshot_ready.load(Ordering::Acquire) || completion.is_some()) {
+            let mut slot = match job.canvas.try_lock() {
+                Ok(slot) => slot,
+                Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => return,
+            };
+            if let Some(canvas) = slot.take() {
+                self.current_rgba = canvas;
+                job.restored = true;
+            }
+        }
+        if let Some(completion) = completion {
+            self.copy_job = None;
+            match completion {
+                Ok(message) => self.show_toast(message),
+                Err(error)
+                    if error == "job was cancelled"
+                        || error == "Image clipboard copy cancelled" =>
+                {
+                    self.show_toast("Image clipboard copy cancelled")
+                }
+                Err(error) => self.show_toast(format!("❌ Failed to copy image: {error}")),
+            }
+        }
+    }
+
+    pub(super) fn render_copy_progress(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        close: &mut bool,
+    ) {
+        let Some(job) = self.copy_job.as_ref() else {
+            return;
+        };
+        let blocked = !job.restored;
+        ui.horizontal(|ui| {
+            ui.spinner();
+            ui.label(if blocked {
+                "Preparing clipboard image snapshot…"
+            } else {
+                "Copying image to clipboard…"
+            });
+            if ui
+                .add_enabled(!job.restored, egui::Button::new("Cancel copy"))
+                .clicked()
+            {
+                job.cancel();
+            }
+            if blocked && ui.button("Close (Esc)").clicked() {
+                *close = true;
+            }
+        });
+        if blocked {
+            if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+                *close = true;
+            }
+            if let Some(texture) = &self.texture {
+                let size = texture.size_vec2();
+                let available = ui.available_size();
+                let scale = (available.x / size.x).min(available.y / size.y).min(1.0);
+                ui.centered_and_justified(|ui| {
+                    let response = ui.image((texture.id(), size * scale));
+                    let image_rect = Rect::from_center_size(response.rect.center(), size * scale);
+                    for redaction in &job.stamp.redactions {
+                        let norm = redaction.normalized_rect;
+                        let to_screen = |point: Pos2| {
+                            image_rect.min
+                                + Vec2::new(
+                                    point.x * image_rect.width(),
+                                    point.y * image_rect.height(),
+                                )
+                        };
+                        ui.painter().rect_filled(
+                            Rect::from_min_max(to_screen(norm.min), to_screen(norm.max)),
+                            0.0,
+                            Color32::BLACK,
+                        );
+                    }
+                });
+            }
+        }
+        ctx.request_repaint_after(Duration::from_millis(16));
+    }
+
     pub(super) fn save_snapshot_pending(&self) -> bool {
         self.save_job.as_ref().is_some_and(|job| !job.restored)
     }
@@ -366,8 +651,124 @@ pub(super) fn wait_for_save(state: &mut ImagePreviewState) {
 }
 
 #[cfg(test)]
+fn wait_for_copy(state: &mut ImagePreviewState) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while state.copy_job.is_some() {
+        state.poll_copy_job();
+        assert!(
+            Instant::now() < deadline,
+            "image clipboard copy did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use image::GenericImageView;
+
+    #[test]
+    fn clipboard_delivery_preserves_png_mime_bytes_and_right_slot() {
+        let image = RgbaImage::from_pixel(7, 5, image::Rgba([12, 34, 56, 78]));
+        let bytes = encode_png(&image).unwrap();
+        let mut pushed = None;
+        let mut clipboard = None;
+        let status = deliver_image_copy(
+            &bytes,
+            HandSide::Right,
+            || false,
+            |request| {
+                pushed = Some(request.clone());
+                Ok(())
+            },
+            |payload, mime| {
+                clipboard = Some((payload.to_vec(), mime.to_owned()));
+                Ok(())
+            },
+        )
+        .unwrap();
+        match pushed.unwrap() {
+            IpcRequest::PushImage {
+                bytes: pushed,
+                mime,
+                hand,
+            } => {
+                assert_eq!(pushed, bytes);
+                assert_eq!(mime, "image/png");
+                assert_eq!(hand, HandSide::Right);
+                assert_eq!(
+                    image::load_from_memory(&pushed).unwrap().dimensions(),
+                    (7, 5)
+                );
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+        assert_eq!(clipboard, Some((bytes, "image/png".into())));
+        assert!(status.contains("Right Hand (RH)"));
+    }
+
+    #[test]
+    fn clipboard_delivery_falls_back_to_os_when_daemon_fails() {
+        let image = RgbaImage::from_pixel(2, 3, image::Rgba([1, 2, 3, 255]));
+        let bytes = encode_png(&image).unwrap();
+        let mut copied = false;
+        let status = deliver_image_copy(
+            &bytes,
+            HandSide::Left,
+            || false,
+            |_| Err("daemon unavailable".into()),
+            |payload, mime| {
+                copied = payload == bytes && mime == "image/png";
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(copied);
+        assert!(status.contains("OS Clipboard"));
+    }
+
+    #[test]
+    fn stale_clipboard_delivery_does_not_publish() {
+        let mut pushed = false;
+        let mut copied = false;
+        let result = deliver_image_copy(
+            b"png",
+            HandSide::Left,
+            || true,
+            |_| {
+                pushed = true;
+                Ok(())
+            },
+            |_, _| {
+                copied = true;
+                Ok(())
+            },
+        );
+        assert!(result.unwrap_err().contains("cancelled"));
+        assert!(!pushed && !copied);
+    }
+
+    #[test]
+    fn cancelled_queued_copy_restores_canvas_and_reports_cancellation() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_ticket, _rx) = jobs.submit(SAVE_TIMEOUT, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv().unwrap();
+
+        let mut state = state();
+        let original = state.current_rgba.clone();
+        state.start_copy_to_hand_slot(HandSide::Right, &jobs);
+        assert!(state.copy_job.as_ref().unwrap().cancel());
+        release_tx.send(()).unwrap();
+        wait_for_copy(&mut state);
+        assert_eq!(state.current_rgba, original);
+        assert!(state.status_toast.as_ref().unwrap().0.contains("cancelled"));
+    }
 
     fn state() -> ImagePreviewState {
         let image = RgbaImage::from_pixel(24, 16, image::Rgba([120, 180, 240, 200]));

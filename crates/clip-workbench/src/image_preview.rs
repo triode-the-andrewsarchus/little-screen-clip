@@ -128,6 +128,9 @@ pub struct ImagePreviewState {
 
     // File Dialog & Save-As
     save_job: Option<save::ImageSaveJob>,
+    copy_job: Option<save::ImageCopyJob>,
+    copy_requested: Option<HandSide>,
+    rendering_frame: bool,
     pub save_dialog_rx: Option<std::sync::mpsc::Receiver<PathBuf>>,
     pub show_fallback_save_modal: bool,
     fallback_save_needs_focus: bool,
@@ -341,6 +344,9 @@ impl ImagePreviewState {
             viewer: config.image.viewer.clone(),
             status_toast: None,
             save_job: None,
+            copy_job: None,
+            copy_requested: None,
+            rendering_frame: false,
             save_dialog_rx: None,
             show_fallback_save_modal: false,
             fallback_save_needs_focus: false,
@@ -427,46 +433,10 @@ impl ImagePreviewState {
 
     /// Rectifies perspective based on the 4 quad corners in deskew_state.
     pub fn copy_to_hand_slot(&mut self, hand: HandSide) {
-        let img = self.current_display_image();
-        let (w, h) = (img.width(), img.height());
-
-        let mut png_bytes = Vec::new();
-        let mut cursor = std::io::Cursor::new(&mut png_bytes);
-        if let Err(e) = img.write_to(&mut cursor, image::ImageFormat::Png) {
-            self.show_toast(format!("❌ Failed to encode PNG: {}", e));
-            return;
-        }
-
-        // 1. Send to daemon slot via IPC
-        let req = IpcRequest::PushImage {
-            bytes: png_bytes.clone(),
-            mime: "image/png".to_string(),
-            hand,
-        };
-        let ipc_ok = crate::send_ipc_request(&req).is_ok();
-
-        // 2. Also copy directly for instantaneous OS clipboard synchronization.
-        let bytes_for_cmd = png_bytes;
-        std::thread::spawn(move || {
-            if let Err(error) =
-                little_clip_core::copy_bytes_to_system_clipboard(&bytes_for_cmd, "image/png")
-            {
-                tracing::debug!(%error, "failed to copy rendered image to system clipboard");
-            }
-        });
-
-        let slot_label = match hand {
-            HandSide::Left => "Left Hand (LH)",
-            HandSide::Right => "Right Hand (RH)",
-        };
-
-        if ipc_ok {
-            self.show_toast(format!(
-                "📋 Copied {}×{} image to Clipboard Slot ({})",
-                w, h, slot_label
-            ));
+        if self.rendering_frame {
+            self.copy_requested = Some(hand);
         } else {
-            self.show_toast(format!("📋 Copied {}×{} image to OS Clipboard", w, h));
+            self.start_copy_to_hand_slot(hand, little_clip_core::BackgroundJobs::global());
         }
     }
 
@@ -694,6 +664,12 @@ impl ImagePreviewState {
         if self.save_snapshot_pending() && self.render_save_progress(ui, ctx, close) {
             return;
         }
+        self.poll_copy_job();
+        if self.copy_snapshot_pending() {
+            self.render_copy_progress(ui, ctx, close);
+            return;
+        }
+        self.rendering_frame = true;
 
         // Upload GPU texture if dirty or not loaded
         if self.texture.is_none() || self.dirty_texture {
@@ -1158,6 +1134,10 @@ impl ImagePreviewState {
                 // 3. MAIN INTERACTIVE VIEWPORT
                 self.render_active_tool_workspace(ui, ctx, palette);
             });
+        self.rendering_frame = false;
+        if let Some(hand) = self.copy_requested.take() {
+            self.start_copy_to_hand_slot(hand, little_clip_core::BackgroundJobs::global());
+        }
     }
 
     fn render_header(
