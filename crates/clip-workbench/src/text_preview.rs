@@ -23,6 +23,9 @@ fn map_syntect_color_to_theme(
     style_fg: syntect::highlighting::Color,
     palette: &AppPalette,
 ) -> Color32 {
+    let surface = hex_to_c32(&palette.colors.surface_recessed);
+    let readable =
+        |preferred| crate::ui_ext::contrast_text_c32_on(surface, surface, Some(preferred), palette);
     let r = style_fg.r as f32 / 255.0;
     let g = style_fg.g as f32 / 255.0;
     let b = style_fg.b as f32 / 255.0;
@@ -35,10 +38,10 @@ fn map_syntect_color_to_theme(
     if delta < 0.08 {
         if max < 0.65 {
             // Comment or muted punctuation
-            return hex_to_c32(&palette.colors.text_muted);
+            return readable(hex_to_c32(&palette.colors.text_muted));
         } else {
             // Standard high contrast text
-            return hex_to_c32(&palette.colors.text_primary);
+            return readable(hex_to_c32(&palette.colors.text_primary));
         }
     }
 
@@ -57,22 +60,22 @@ fn map_syntect_color_to_theme(
     // Map by hue angle to the shared color harmonies.
     if h < 45.0 {
         // Red / Orange (constants, literals)
-        hex_to_c32(&palette.diff_mod)
+        readable(hex_to_c32(&palette.diff_mod))
     } else if h < 90.0 {
         // Amber / Yellow (strings)
-        hex_to_c32(&palette.harmonies.triadic_2)
+        readable(hex_to_c32(&palette.harmonies.triadic_2))
     } else if h < 165.0 {
         // Green (strings, regex)
-        hex_to_c32(&palette.diff_add)
+        readable(hex_to_c32(&palette.diff_add))
     } else if h < 210.0 {
         // Cyan (types, structures)
-        hex_to_c32(&palette.harmonies.split_comp_1)
+        readable(hex_to_c32(&palette.harmonies.split_comp_1))
     } else if h < 275.0 {
         // Blue (functions, identifiers)
-        hex_to_c32(&palette.harmonies.triadic_1)
+        readable(hex_to_c32(&palette.harmonies.triadic_1))
     } else {
         // Purple / Magenta / Pink (keywords, control flow)
-        hex_to_c32(&palette.harmonies.base)
+        readable(hex_to_c32(&palette.harmonies.base))
     }
 }
 
@@ -676,16 +679,23 @@ impl TextPreviewState {
     }
 
     fn render_search_status_label(&self, ui: &mut egui::Ui, palette: &AppPalette) {
+        let surface = hex_to_c32(&palette.colors.surface_recessed);
         if self.find_query.is_empty() {
             return;
         }
         if let Some(ref err) = self.regex_error {
             ui.horizontal(|ui| {
-                Icon::Alert.ui(ui, 13.0, hex_to_c32(&palette.diff_del));
+                let error_color = crate::ui_ext::contrast_text_c32_on(
+                    surface,
+                    surface,
+                    Some(hex_to_c32(&palette.diff_del)),
+                    palette,
+                );
+                Icon::Alert.ui(ui, 13.0, error_color);
                 ui.label(
                     egui::RichText::new(format!("Regex error: {}", err))
                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .color(hex_to_c32(&palette.diff_del)),
+                        .color(error_color),
                 );
             });
         } else if self.matches.is_empty() {
@@ -704,7 +714,12 @@ impl TextPreviewState {
                 egui::RichText::new(count_text)
                     .size(crate::ui_ext::BODY_FONT_SIZE)
                     .strong()
-                    .color(hex_to_c32(&palette.harmonies.complementary)),
+                    .color(crate::ui_ext::contrast_text_c32_on(
+                        surface,
+                        surface,
+                        Some(hex_to_c32(&palette.harmonies.complementary)),
+                        palette,
+                    )),
             );
         }
     }
@@ -1102,11 +1117,14 @@ fn render_markdown_element(
             flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
             ui.horizontal_wrapped(|ui| {
                 ui.add_space(indent as f32 * 16.0);
-                ui.label(
-                    egui::RichText::new("•")
-                        .size(BODY_FONT_SIZE)
-                        .color(hex_to_c32(&palette.harmonies.base)),
-                );
+                ui.label(egui::RichText::new("•").size(BODY_FONT_SIZE).color(
+                    crate::ui_ext::contrast_text_c32_on(
+                        ui.visuals().panel_fill,
+                        ui.visuals().panel_fill,
+                        Some(hex_to_c32(&palette.harmonies.base)),
+                        palette,
+                    ),
+                ));
                 ui.add_space(4.0);
                 for span in spans {
                     render_markdown_span(
@@ -1126,7 +1144,12 @@ fn render_markdown_element(
                     egui::RichText::new(format!("{}.", number))
                         .size(BODY_FONT_SIZE)
                         .strong()
-                        .color(hex_to_c32(&palette.harmonies.base)),
+                        .color(crate::ui_ext::contrast_text_c32_on(
+                            ui.visuals().panel_fill,
+                            ui.visuals().panel_fill,
+                            Some(hex_to_c32(&palette.harmonies.base)),
+                            palette,
+                        )),
                 );
                 ui.add_space(4.0);
                 for span in spans {
@@ -1443,7 +1466,12 @@ fn render_markdown_span(
                     ui.label(
                         egui::RichText::new(s)
                             .font(FontId::monospace(size.max(MONO_FONT_SIZE)))
-                            .color(hex_to_c32(&palette.harmonies.triadic_2)),
+                            .color(crate::ui_ext::contrast_text_c32_on(
+                                hex_to_c32(&palette.colors.surface_panel),
+                                hex_to_c32(&palette.colors.surface_panel),
+                                Some(hex_to_c32(&palette.harmonies.triadic_2)),
+                                palette,
+                            )),
                     );
                 });
         }
@@ -1451,7 +1479,12 @@ fn render_markdown_span(
             ui.hyperlink_to(
                 egui::RichText::new(label)
                     .size(size)
-                    .color(hex_to_c32(&palette.harmonies.base))
+                    .color(crate::ui_ext::contrast_text_c32_on(
+                        hex_to_c32(&palette.colors.surface_panel),
+                        hex_to_c32(&palette.colors.surface_panel),
+                        Some(hex_to_c32(&palette.harmonies.base)),
+                        palette,
+                    ))
                     .underline(),
                 url,
             );
@@ -1504,6 +1537,71 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        little_clip_core::palette::contrast_ratio((a.r(), a.g(), a.b()), (b.r(), b.g(), b.b()))
+    }
+
+    #[test]
+    fn syntax_and_markdown_custom_labels_meet_contrast_in_both_appearances() {
+        let syntax_colors = [
+            [255, 0, 0],
+            [255, 128, 0],
+            [255, 255, 0],
+            [0, 255, 0],
+            [0, 255, 255],
+            [0, 0, 255],
+            [255, 0, 255],
+            [80, 80, 80],
+            [220, 220, 220],
+        ];
+        for appearance in [
+            little_clip_core::config::WorkbenchAppearance::Dark,
+            little_clip_core::config::WorkbenchAppearance::Light,
+        ] {
+            let palette = AppPalette::for_appearance(appearance);
+            let recessed = hex_to_c32(&palette.colors.surface_recessed);
+            for [r, g, b] in syntax_colors {
+                let foreground = map_syntect_color_to_theme(
+                    syntect::highlighting::Color { r, g, b, a: 255 },
+                    &palette,
+                );
+                assert!(
+                    contrast(recessed, foreground) >= 4.5,
+                    "{appearance:?} syntax hue [{r}, {g}, {b}] lacks contrast"
+                );
+            }
+
+            let panel = hex_to_c32(&palette.colors.surface_panel);
+            for preferred in [
+                hex_to_c32(&palette.harmonies.triadic_2),
+                hex_to_c32(&palette.harmonies.base),
+            ] {
+                let foreground =
+                    crate::ui_ext::contrast_text_c32_on(panel, panel, Some(preferred), &palette);
+                assert!(
+                    contrast(panel, foreground) >= 4.5,
+                    "{appearance:?} Markdown code/link label lacks contrast"
+                );
+            }
+
+            for preferred in [
+                hex_to_c32(&palette.diff_del),
+                hex_to_c32(&palette.harmonies.complementary),
+            ] {
+                let foreground = crate::ui_ext::contrast_text_c32_on(
+                    recessed,
+                    recessed,
+                    Some(preferred),
+                    &palette,
+                );
+                assert!(
+                    contrast(recessed, foreground) >= 4.5,
+                    "{appearance:?} text-search status label lacks contrast"
+                );
+            }
+        }
+    }
 
     #[test]
     fn measured_row_offsets_find_wrapped_rows_and_invalidate_on_width_change() {

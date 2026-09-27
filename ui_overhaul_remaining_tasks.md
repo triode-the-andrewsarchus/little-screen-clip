@@ -207,7 +207,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **E2.4f2f [Luna] Audit MIDI canvas labels.** Pitch-key labels choose readable foregrounds on black and white keys; time-axis labels use the muted semantic foreground tested against every neutral surface. New Light/Dark regression covers both key fills.
     - [x] **E2.4f2g [Luna] Audit 3D viewport labels.** Loading and error copy uses the semantic primary foreground on the recessed viewport; ready rendering paints no custom text. The semantic text-role test covers this surface in both appearances.
     - [x] **E2.4f2h [Luna] Audit rolling-audio labels.** Header/error/silence accents now resolve foreground contrast against the canvas; waveform errors do so against the recessed track. Tiny time ticks and silence copy no longer use semitransparent text. Light/Dark tests cover all status accent roles and semantic secondary text.
-    - [ ] **E2.4f2i [Luna] Audit text-preview labels.**
+    - [x] **E2.4f2i [Luna] Audit text-preview labels.** Syntax hues, Markdown code/link/list markers, and search error/match labels now resolve foreground contrast against their code, panel, or recessed surface. Tests cover every syntax hue family and both appearances.
     - [ ] **E2.4f2j [Luna] Audit PDF-viewer labels.**
     - [ ] **E2.4f2k [Luna] Audit spreadsheet labels.**
     - [ ] **E2.4f2l [Luna] Audit diff and binary-diff labels.**
