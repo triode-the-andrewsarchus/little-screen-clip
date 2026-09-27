@@ -564,6 +564,34 @@ def capture_workbench(
     hints = wayland_size_hints(output / "workbench.log")
     inspect_geometry(first_windows, final_windows, layout_events, logical_size, hints, report)
 
+    if args.verify_return:
+        run_checked(["wtype", "-k", "Escape"], env=niri_env)
+        try:
+            app.wait(timeout=STARTUP_SECONDS)
+            app_exited = True
+        except subprocess.TimeoutExpired:
+            app_exited = False
+        time.sleep(0.25)
+        remaining_windows = own_windows(niri_bin, niri_env, {app.pid, second.pid})
+        compositor_outputs = parse_json(
+            run_checked([str(niri_bin), "msg", "--json", "outputs"], env=niri_env),
+            "niri outputs after workbench close",
+        )
+        compositor_responsive = output_logical_size(compositor_outputs) == logical_size
+        report["return_check"] = {
+            "escape_sent": True,
+            "workbench_exited": app_exited,
+            "workbench_exit_status": app.returncode,
+            "remaining_workbench_windows": remaining_windows,
+            "niri_responsive_with_same_output": compositor_responsive,
+            "pass": app_exited and not remaining_windows and compositor_responsive,
+        }
+        report["screenshots"]["after-close"] = screenshot(
+            niri_bin, niri_env, output / "after-close.png"
+        )
+        if not report["return_check"]["pass"]:
+            report["failures"].append("Escape did not return cleanly to the responsive private Niri session")
+
 
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -585,6 +613,7 @@ def create_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--image", type=Path, help="optional existing image fixture")
     parser.add_argument("--audio", type=Path, help="optional existing audio fixture")
+    parser.add_argument("--verify-return", action="store_true", help="send Escape and verify the popup closes while private Niri remains responsive")
     parser.add_argument("--binary", type=Path, help="workbench binary (default: target/debug/clip-workbench)")
     parser.add_argument("--settle-ms", type=int, default=500, help="settling delay before second capture (default: 500)")
     return parser
@@ -600,6 +629,8 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         raise SystemExit("--image-tool requires --image")
     if args.image_action and not args.image_tool:
         raise SystemExit("--image-action requires --image-tool")
+    if args.verify_return and shutil.which("wtype") is None:
+        raise SystemExit("--verify-return requires wtype")
     if args.image_tool and shutil.which("wtype") is None:
         raise SystemExit("--image-tool requires wtype")
     binary = (args.binary or (repo / "target/debug/clip-workbench")).resolve()
@@ -631,6 +662,7 @@ def main() -> int:
             "image_action": args.image_action,
             "image_fixture": str(args.image.resolve()) if args.image else None,
             "audio_fixture": str(args.audio.resolve()) if args.audio else None,
+            "verify_return": args.verify_return,
             "binary": str(binary),
             "settle_ms": args.settle_ms,
         },
@@ -646,6 +678,7 @@ def main() -> int:
         "limitations": [
             "The first-observed screenshot is not proof of the first visible frame.",
             "This run records observations and timing; it does not prove Light/Dark parity or a full performance profile.",
+            "--verify-return checks popup dismissal and Niri responsiveness, not focus restoration to another application.",
         ],
     }
     children = ChildProcesses()
