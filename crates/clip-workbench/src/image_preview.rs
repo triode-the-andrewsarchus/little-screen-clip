@@ -11,8 +11,10 @@ use crate::icons::Icon;
 use crate::{contrast_text_c32, hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use image::RgbaImage;
+#[cfg(test)]
+use little_clip_core::ClipItem;
 use little_clip_core::palette::AppPalette;
-use little_clip_core::{AppConfig, ClipItem, CommandRequest, HandSide, IpcRequest};
+use little_clip_core::{AppConfig, CommandRequest, HandSide, IpcRequest};
 use little_clip_ops::barcode::BarcodeDetection;
 use little_clip_ops::creative_fx::{
     CmykHalftoneParams, CreativeFxMaskSource, CreativeFxParams, CreativeFxType, DepthMaskConfig,
@@ -251,6 +253,7 @@ impl ImagePreviewState {
         Self::from_bytes_with_meta(bytes, mime, Some(path), title, config)
     }
 
+    #[cfg(test)]
     pub fn from_item(item: &ClipItem, config: &AppConfig) -> Result<Self, String> {
         if let Some((bytes, mime, path)) = item.resolve_image_data() {
             let title = if item.title.is_empty() {

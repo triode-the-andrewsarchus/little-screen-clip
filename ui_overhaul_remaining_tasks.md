@@ -397,7 +397,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 
 ## Easy 3 — Consolidation and evidence (Luna implementation; primary review)
 
-- [ ] **E3.1a [Luna] Remove superseded adapters made obsolete by Hard 1–2.** Confirm each deletion is obsolete by reference and behavior review.
+- [x] **E3.1a [Luna implementation; primary review] Remove superseded adapters made obsolete by Hard 1–2.** `ImagePreviewState::from_item` now exists only in tests: source search found no runtime callers after workbench item loading moved through `ImageLoadSource::from_item`. Retained the documented MIDI/STL compatibility adapters and still-used image constructors. Workbench check, formatting, and 51 focused image-preview tests pass.
 - [ ] **E3.1b [Luna] Remove duplicate chrome made obsolete by Hard 1–2.** Confirm specialized domain behavior remains.
 - [ ] **E3.1c [Luna] Compare architecture metrics after consolidation.** Require genuine improvement; do not move code solely to change metrics.
 - [ ] **E3.2a [Luna] Replace obsolete `ui_architecture_design.md` with implemented boundaries.**
