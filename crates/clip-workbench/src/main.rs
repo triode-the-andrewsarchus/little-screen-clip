@@ -71,7 +71,7 @@ use little_clip_ops::diff::{
 use midi_view::MidiViewerState;
 use model3d_view::Model3dViewerState;
 use pdf_view::PdfEditorState;
-use rolling_audio_strip::RollingAudioStripState;
+use rolling_audio_strip::{RollingAudioAction, RollingAudioStripState};
 pub use shell::*;
 use spreadsheet_view::SpreadsheetViewerState;
 use text_preview::TextPreviewState;
@@ -1089,7 +1089,7 @@ impl eframe::App for WorkbenchApp {
 
         self.render_workbench_header(ctx);
 
-        let mut open_full_editor: Option<(PathBuf, Option<(f32, f32)>)> = None;
+        let mut host_action = None;
 
         if let Some(strip) = &mut self.rolling_audio_strip {
             egui::TopBottomPanel::bottom("rolling_audio_strip_panel")
@@ -1106,27 +1106,12 @@ impl eframe::App for WorkbenchApp {
                         )),
                 )
                 .show(ctx, |ui| {
-                    strip.render_ui(ui, ctx, &self.ui_palette, &mut open_full_editor);
+                    strip.render_ui(ui, ctx, &self.ui_palette, &mut host_action);
                 });
         }
 
-        if let Some((path, sel)) = open_full_editor {
-            let prepared_path = sel
-                .and_then(|(start, end)| {
-                    self.rolling_audio_strip
-                        .as_ref()
-                        .and_then(|strip| strip.materialize_editor_selection(start, end).ok())
-                })
-                .unwrap_or(path);
-            let title = if sel.is_some() {
-                "Rolling Audio Selection"
-            } else {
-                "Rolling Audio Snapshot"
-            };
-            // A materialized selection is now the whole source timeline.
-            let editor = AudioPreviewState::new(prepared_path, title.to_string())
-                .with_editor(self.config.audio.editor.clone());
-            self.viewer = Some(ViewerSession::Audio(editor));
+        if let Some(host_action) = host_action {
+            self.apply_rolling_audio_action(host_action);
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -1905,6 +1890,41 @@ impl WorkbenchApp {
         }
     }
 
+    fn apply_rolling_audio_action(&mut self, action: RollingAudioAction) {
+        match action {
+            RollingAudioAction::OpenEditor {
+                snapshot_path,
+                selected_region,
+            } => {
+                let prepared_path = if let Some((start, end)) = selected_region {
+                    self.rolling_audio_strip
+                        .as_ref()
+                        .ok_or_else(|| "rolling audio strip is no longer available".to_string())
+                        .and_then(|strip| strip.materialize_editor_selection(start, end))
+                } else {
+                    Ok(snapshot_path)
+                };
+                match prepared_path {
+                    Ok(prepared_path) => {
+                        let title = if selected_region.is_some() {
+                            "Rolling Audio Selection"
+                        } else {
+                            "Rolling Audio Snapshot"
+                        };
+                        // A materialized selection is now the whole source timeline.
+                        let editor = AudioPreviewState::new(prepared_path, title.to_string())
+                            .with_editor(self.config.audio.editor.clone());
+                        self.viewer = Some(ViewerSession::Audio(editor));
+                    }
+                    Err(error) => {
+                        self.status_msg =
+                            Some(format!("Could not open rolling audio selection: {error}"));
+                    }
+                }
+            }
+        }
+    }
+
     fn open_slot_file_preview(&mut self, fp: &std::path::Path, is_image: bool) {
         if fp
             .extension()
@@ -2529,6 +2549,42 @@ fn main() -> Result<(), eframe::Error> {
 mod workbench_layout_tests {
     use super::*;
 
+    fn test_workbench_app(
+        viewer: Option<ViewerSession>,
+        startup_viewers: VecDeque<ViewerSession>,
+    ) -> WorkbenchApp {
+        let config = AppConfig::default();
+        let palette = ui_appearance::palette(config.workbench.appearance);
+        let (state_tx, state_rx) = std::sync::mpsc::channel();
+        drop(state_tx);
+        WorkbenchApp {
+            state: SlotManager::default(),
+            state_rx,
+            view: WorkbenchView::Palette,
+            canvas_state: NodeCanvasState::new(),
+            recipes: Vec::new(),
+            search_query: String::new(),
+            palette_search_needs_focus: false,
+            selected_action_index: 0,
+            selected_slots: vec![SlotId::LeftHand],
+            status_msg: None,
+            appearance_sync: AppearanceSync::default(),
+            renderer: ScreenRenderer::fallback(config.clone()),
+            ui_palette: palette,
+            mirror_texture: None,
+            dirty_mirror: false,
+            in_app_prompt: None,
+            viewer,
+            startup_viewers,
+            spreadsheet_load_job: None,
+            midi_load_job: None,
+            rolling_audio_strip: None,
+            dragging_slot: None,
+            config,
+            appearance_applied: true,
+        }
+    }
+
     #[test]
     fn auto_actions_chrome_stays_inside_compact_and_wide_hosts() {
         for size in [egui::vec2(1280.0, 720.0), egui::vec2(3440.0, 1440.0)] {
@@ -2607,38 +2663,12 @@ mod workbench_layout_tests {
 
     #[test]
     fn spreadsheet_completion_waits_until_modal_viewer_closes() {
-        let config = AppConfig::default();
-        let palette = ui_appearance::palette(config.workbench.appearance);
-        let (state_tx, state_rx) = std::sync::mpsc::channel();
-        drop(state_tx);
-        let mut app = WorkbenchApp {
-            state: SlotManager::default(),
-            state_rx,
-            view: WorkbenchView::Palette,
-            canvas_state: NodeCanvasState::new(),
-            recipes: Vec::new(),
-            search_query: String::new(),
-            palette_search_needs_focus: false,
-            selected_action_index: 0,
-            selected_slots: vec![SlotId::LeftHand],
-            status_msg: None,
-            appearance_sync: AppearanceSync::default(),
-            renderer: ScreenRenderer::fallback(config.clone()),
-            ui_palette: palette,
-            mirror_texture: None,
-            dirty_mirror: false,
-            in_app_prompt: None,
-            viewer: Some(ViewerSession::ComponentGallery(
+        let mut app = test_workbench_app(
+            Some(ViewerSession::ComponentGallery(
                 component_gallery::ComponentGalleryState::default(),
             )),
-            startup_viewers: VecDeque::new(),
-            spreadsheet_load_job: None,
-            midi_load_job: None,
-            rolling_audio_strip: None,
-            dragging_slot: None,
-            config,
-            appearance_applied: true,
-        };
+            VecDeque::new(),
+        );
         let (ticket, _ticket_receiver) =
             BackgroundJobs::global().submit(Duration::from_secs(1), || ());
         let (result_tx, receiver) = std::sync::mpsc::channel::<
@@ -2713,38 +2743,10 @@ mod workbench_layout_tests {
 
     #[test]
     fn midi_completion_waits_for_foreground_and_startup_viewers() {
-        let config = AppConfig::default();
-        let palette = ui_appearance::palette(config.workbench.appearance);
-        let (state_tx, state_rx) = std::sync::mpsc::channel();
-        drop(state_tx);
         let startup_viewer =
             || ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::default());
-        let mut app = WorkbenchApp {
-            state: SlotManager::default(),
-            state_rx,
-            view: WorkbenchView::Palette,
-            canvas_state: NodeCanvasState::new(),
-            recipes: Vec::new(),
-            search_query: String::new(),
-            palette_search_needs_focus: false,
-            selected_action_index: 0,
-            selected_slots: vec![SlotId::LeftHand],
-            status_msg: None,
-            appearance_sync: AppearanceSync::default(),
-            renderer: ScreenRenderer::fallback(config.clone()),
-            ui_palette: palette,
-            mirror_texture: None,
-            dirty_mirror: false,
-            in_app_prompt: None,
-            viewer: Some(startup_viewer()),
-            startup_viewers: VecDeque::from([startup_viewer()]),
-            spreadsheet_load_job: None,
-            midi_load_job: None,
-            rolling_audio_strip: None,
-            dragging_slot: None,
-            config,
-            appearance_applied: true,
-        };
+        let mut app =
+            test_workbench_app(Some(startup_viewer()), VecDeque::from([startup_viewer()]));
         let (ticket, _ticket_receiver) =
             BackgroundJobs::global().submit(Duration::from_secs(1), || ());
         let (result_tx, receiver) =
@@ -2839,6 +2841,32 @@ mod workbench_layout_tests {
         assert_eq!(
             app.status_msg.as_deref(),
             Some("MIDI load failed: fixture failure")
+        );
+    }
+
+    #[test]
+    fn failed_rolling_selection_action_keeps_the_current_viewer_open() {
+        let mut app = test_workbench_app(
+            Some(ViewerSession::ComponentGallery(
+                component_gallery::ComponentGalleryState::default(),
+            )),
+            VecDeque::new(),
+        );
+
+        app.apply_rolling_audio_action(RollingAudioAction::OpenEditor {
+            snapshot_path: PathBuf::from("snapshot.wav"),
+            selected_region: Some((1.0, 2.0)),
+        });
+
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
+        assert_eq!(
+            app.status_msg.as_deref(),
+            Some(
+                "Could not open rolling audio selection: rolling audio strip is no longer available"
+            )
         );
     }
 

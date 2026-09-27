@@ -66,6 +66,15 @@ pub struct RollingAudioStripState {
     pub status_toast: Option<(String, f64)>, // (text, timestamp)
 }
 
+/// Actions requested by the rolling strip that must be applied by the workbench host.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum RollingAudioAction {
+    OpenEditor {
+        snapshot_path: PathBuf,
+        selected_region: Option<(f32, f32)>,
+    },
+}
+
 impl RollingAudioStripState {
     /// Materializes a selected rolling-buffer region for the full editor. The
     /// editor must never receive the entire rolling capture when a region was
@@ -625,7 +634,7 @@ impl RollingAudioStripState {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         palette: &AppPalette,
-        open_full_editor: &mut Option<(PathBuf, Option<(f32, f32)>)>,
+        host_action: &mut Option<RollingAudioAction>,
     ) {
         self.poll_snapshot(ctx);
         self.update_playback();
@@ -872,7 +881,10 @@ impl RollingAudioStripState {
             // Right-click opens the existing full audio editor
             if response.secondary_clicked() {
                 if let Some(ref path) = self.path {
-                    *open_full_editor = Some((path.clone(), self.selected_region));
+                    *host_action = Some(RollingAudioAction::OpenEditor {
+                        snapshot_path: path.clone(),
+                        selected_region: self.selected_region,
+                    });
                 }
             }
         });
