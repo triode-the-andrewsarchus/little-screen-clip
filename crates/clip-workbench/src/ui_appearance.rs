@@ -65,6 +65,9 @@ pub fn apply_visuals(ctx: &egui::Context, palette: &AppPalette) {
     visuals.extreme_bg_color = colors.raised;
 
     visuals.widgets.noninteractive.bg_fill = colors.panel;
+    // egui fades disabled content toward this color. Keep that fade on the
+    // workbench canvas instead of inheriting egui's unrelated gray defaults.
+    visuals.widgets.noninteractive.weak_bg_fill = colors.canvas;
     visuals.widgets.noninteractive.fg_stroke.color =
         contrast_text_c32(colors.panel, Some(colors.text_primary), palette);
     visuals.widgets.noninteractive.bg_stroke.color = colors.border;
@@ -188,6 +191,10 @@ mod tests {
             assert_eq!(visuals.warn_fg_color, colors.warning);
             assert_eq!(visuals.error_fg_color, colors.danger);
             assert_eq!(visuals.text_cursor.color, colors.focus);
+            assert_eq!(
+                visuals.widgets.noninteractive.weak_bg_fill, colors.canvas,
+                "{appearance:?} disabled content should fade toward the workbench canvas"
+            );
             for widget in [
                 visuals.widgets.noninteractive,
                 visuals.widgets.inactive,

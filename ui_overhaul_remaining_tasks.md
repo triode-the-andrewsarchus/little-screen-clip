@@ -54,7 +54,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **H1.2a2a1 [Luna] Tokenize shared StudioShell and AudioWorkspace spacing.** Shared shell and audio control-row insets, spacers, and corner radius now use centralized `ui_ext` tokens; intentional panel geometry remains local.
       - [x] **H1.2a2a2 [Luna] Audit remaining shared controls and migrate spacing tokens.** Global button padding and item gaps, status/toast/badge insets, badge radius, and mirror corner radius now use shared tokens in `ui_ext` and the shell.
       - [ ] **H1.2a2a3 [Primary] Audit view-specific spacing for repeated control patterns.**
-    - [ ] **H1.2a2b [Primary] Migrate disabled-state styling to shared tokens.**
+    - [x] **H1.2a2b [Luna] Migrate disabled-state styling to shared tokens.** egui's disabled fade now targets the centralized workbench canvas in both appearances; the Light/Dark appearance test asserts the configured fade target. The workbench suite passes (250 passed, one ignored).
     - [ ] **H1.2a2c [Primary] Migrate status interactions to shared tokens.**
   - [ ] **H1.2a3 [Primary] Finish shared chrome token use.**
   - [ ] **H1.2a4 [Primary] Visually inspect component gallery in Light mode.**
