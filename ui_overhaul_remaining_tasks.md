@@ -180,16 +180,16 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [ ] **E2.1b [Luna] Verify Film Look live, including comparison and parameters.**
   - [ ] **E2.1c [Luna] Verify Creative FX live, including comparison and parameters.**
   - [x] **E2.1d [Luna] Verify Resize live, including measured wrapping presets.** Isolated 1280×720 Dark capture shows the dimensions/file-size controls, 3-column scale presets, and canvas within the host; operational resize/undo remains under E2.1s.
-  - [ ] **E2.1e [Luna] Verify Markup live.**
+  - [x] **E2.1e [Luna] Verify Markup live.** Isolated 1280×720 Dark capture shows the tool rail, properties/layers rail, empty-state guidance, canvas, and footer together; drawing/flatten actions remain in E2.1s.
   - [x] **E2.1f [Luna] Verify Crop live.** Isolated 1280×720 Dark capture shows ratio controls, Apply action, canvas annotations, and footer inside the popup; crop/undo behavior remains under E2.1s.
   - [x] **E2.1g [Luna] Verify Deskew live, including guidance and canvas annotations.** Isolated 1280×720 Light capture shows the four-point status, crop/output controls, corner guidance, canvas annotations, and footer; applying/canceling remains under E2.1s.
   - [ ] **E2.1h [Luna] Verify Redact live, including selection-size badge.**
   - [ ] **E2.1i [Luna] Verify Convert live, including comparison HUD.**
-  - [ ] **E2.1j [Luna] Verify Depth Map live.**
+  - [x] **E2.1j [Luna] Verify Depth Map live.** Isolated 1280×720 Dark capture shows the Generate action, model description, Left/Right slot destinations, canvas, and footer; running/output behavior remains in E2.1s.
   - [ ] **E2.1k [Luna] Verify Barcode live at compact width, including decoded text/actions and Unicode payload.**
-  - [ ] **E2.1l [Luna] Verify Transform live.**
-  - [ ] **E2.1m [Luna] Verify Background Removal live.**
-  - [ ] **E2.1n [Luna] Verify OCR live.**
+  - [x] **E2.1l [Luna] Verify Transform live.** Isolated 1280×720 Light capture shows rotate/flip/revert controls, canvas, and footer in one view.
+  - [x] **E2.1m [Luna] Verify Background Removal live.** Isolated 1280×720 Light capture shows segmentation mode, prompt, action, canvas, and footer; the left inspector scrolls to reach the lower action at this compact height.
+  - [x] **E2.1n [Luna] Verify OCR live.** Isolated 1280×720 Light capture shows engine/prompt inputs, the empty output actions, canvas, and footer; extraction/output behavior remains unverified.
   - [ ] **E2.1o [Luna] Verify Pick Color live, including loupe readability and click behavior.**
   - [ ] **E2.1p [Luna] Verify Palette live.**
   - [ ] **E2.1q [Luna] Verify Decorrelation Stretch live, including comparison HUD and matrix precision.**
