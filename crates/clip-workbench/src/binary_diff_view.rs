@@ -673,10 +673,16 @@ impl BinaryDiffViewState {
                         ui.add_space(8.0);
 
                         if search_len > 0 {
+                            let canvas = hex_to_c32(&palette.colors.canvas);
                             ui.label(
                                 egui::RichText::new(format!("{}/{}", search_idx + 1, search_len))
                                     .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
-                                    .color(hex_to_c32(&palette.harmonies.base)),
+                                    .color(crate::ui_ext::contrast_text_c32_on(
+                                        canvas,
+                                        canvas,
+                                        Some(hex_to_c32(&palette.harmonies.base)),
+                                        palette,
+                                    )),
                             );
                             let down_btn = crate::ui_ext::icon_button(
                                 Icon::ArrowDown,
@@ -738,7 +744,12 @@ impl BinaryDiffViewState {
                 ui.label(
                     egui::RichText::new("Aligning binary sequences using Myers LCS diff...")
                         .font(FontId::proportional(crate::ui_ext::BODY_FONT_SIZE))
-                        .color(hex_to_c32(&palette.harmonies.base)),
+                        .color(crate::ui_ext::contrast_text_c32_on(
+                            hex_to_c32(&palette.colors.canvas),
+                            hex_to_c32(&palette.colors.canvas),
+                            Some(hex_to_c32(&palette.harmonies.base)),
+                            palette,
+                        )),
                 );
             });
             return;
@@ -1447,12 +1458,21 @@ impl BinaryDiffViewState {
                     .stroke(Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)))
                     .inner_margin(egui::Margin::symmetric(14.0, 6.0))
                     .show(ui, |ui| {
+                        let inspection_surface = hex_to_c32(&palette.colors.surface_recessed);
+                        let inspection_text = |preferred| {
+                            crate::ui_ext::contrast_text_c32_on(
+                                inspection_surface,
+                                inspection_surface,
+                                Some(preferred),
+                                palette,
+                            )
+                        };
                         ui.horizontal_wrapped(|ui| {
                             ui.label(
                                 egui::RichText::new("INSPECT: ")
                                     .font(FontId::proportional(crate::ui_ext::BODY_FONT_SIZE))
                                     .strong()
-                                    .color(hex_to_c32(&palette.harmonies.base)),
+                                    .color(inspection_text(hex_to_c32(&palette.harmonies.base))),
                             );
 
                             // Left cell details
@@ -1471,7 +1491,7 @@ impl BinaryDiffViewState {
                                     ui.label(
                                         egui::RichText::new("LEFT: <GAP (Deletion)>")
                                             .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
-                                            .color(hex_to_c32(&palette.diff_del)),
+                                            .color(inspection_text(hex_to_c32(&palette.diff_del))),
                                     );
                                 }
                             }
@@ -1490,7 +1510,7 @@ impl BinaryDiffViewState {
                                 egui::RichText::new(format!("DIFF: {}", kind_txt))
                                     .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
                                     .strong()
-                                    .color(kind_col),
+                                    .color(inspection_text(kind_col)),
                             );
 
                             ui.separator();
@@ -1511,7 +1531,7 @@ impl BinaryDiffViewState {
                                     ui.label(
                                         egui::RichText::new("RIGHT: <GAP (Insertion)>")
                                             .font(FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
-                                            .color(hex_to_c32(&palette.diff_add)),
+                                            .color(inspection_text(hex_to_c32(&palette.diff_add))),
                                     );
                                 }
                             }
@@ -1591,6 +1611,18 @@ fn render_hex_table_header(
     child_ui.set_clip_rect(header_rect);
     child_ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
 
+    let diff_header_color = crate::ui_ext::contrast_text_c32_on(
+        hex_to_c32(&palette.colors.surface_recessed),
+        hex_to_c32(&palette.colors.surface_recessed),
+        Some(hex_to_c32(&palette.diff_mod)),
+        palette,
+    );
+    let diff_header_hex = format!(
+        "#{:02X}{:02X}{:02X}",
+        diff_header_color.r(),
+        diff_header_color.g(),
+        diff_header_color.b()
+    );
     let headers = [
         (
             "Offset L".to_owned(),
@@ -1610,7 +1642,7 @@ fn render_hex_table_header(
             &palette.colors.text_secondary,
             true,
         ),
-        ("Diff".to_owned(), columns.diff, &palette.diff_mod, false),
+        ("Diff".to_owned(), columns.diff, &diff_header_hex, false),
         (
             format!("Hex Bytes ({})", res.right_label),
             columns.hex,
@@ -1881,6 +1913,48 @@ mod tests {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn binary_diff_status_accents_meet_contrast_on_canvas_and_inspector() {
+        fn contrast(a: Color32, b: Color32) -> f32 {
+            little_clip_core::palette::contrast_ratio((a.r(), a.g(), a.b()), (b.r(), b.g(), b.b()))
+        }
+
+        for appearance in [
+            little_clip_core::config::WorkbenchAppearance::Dark,
+            little_clip_core::config::WorkbenchAppearance::Light,
+        ] {
+            let palette = AppPalette::for_appearance(appearance);
+            let canvas = hex_to_c32(&palette.colors.canvas);
+            let recessed = hex_to_c32(&palette.colors.surface_recessed);
+            let status_accents = [
+                palette.harmonies.base.as_str(),
+                palette.diff_add.as_str(),
+                palette.diff_del.as_str(),
+                palette.diff_mod.as_str(),
+            ];
+
+            for accent in status_accents {
+                let preferred = hex_to_c32(accent);
+                let on_canvas =
+                    crate::ui_ext::contrast_text_c32_on(canvas, canvas, Some(preferred), &palette);
+                let on_inspector = crate::ui_ext::contrast_text_c32_on(
+                    recessed,
+                    recessed,
+                    Some(preferred),
+                    &palette,
+                );
+                assert!(
+                    contrast(canvas, on_canvas) >= 4.5,
+                    "{appearance:?} {accent} on canvas"
+                );
+                assert!(
+                    contrast(recessed, on_inspector) >= 4.5,
+                    "{appearance:?} {accent} on inspector"
+                );
             }
         }
     }
