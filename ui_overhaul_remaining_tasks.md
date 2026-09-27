@@ -66,7 +66,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
           - [x] **H1.2a2a3g3 Tokenize Text, PDF, and Spreadsheet gaps.** 24 direct 4/6/8/12-point gaps now use shared spacing tokens.
           - [x] **H1.2a2a3g4 Tokenize Diff, Binary Diff, MIDI, and Model 3D gaps.** 38 direct 4/6/8/12-point gaps now use shared spacing tokens.
     - [x] **H1.2a2b [Luna] Migrate disabled-state styling to shared tokens.** egui's disabled fade now targets the centralized workbench canvas in both appearances; the Light/Dark appearance test asserts the configured fade target. The workbench suite passes (250 passed, one ignored).
-    - [ ] **H1.2a2c [Primary] Migrate status interactions to shared tokens.**
+    - [x] **H1.2a2c [Luna] Audit status interaction tokens.** `StatusToast`'s framed variants already use shared padding and corner tokens. Studio footers render their message inline against an existing footer surface; the rolling-audio status is an inline, severity-colored readout, so neither needs extra frame spacing.
   - [ ] **H1.2a3 [Primary] Finish shared chrome token use.**
   - [ ] **H1.2a4 [Primary] Visually inspect component gallery in Light mode.**
   - [ ] **H1.2a5 [Primary] Visually inspect component gallery in Dark mode.** Existing gallery caught egui's default 22-point input; widget foreground/fill contrast tests exist and central chrome border clears 3:1 against recessed and panel fills in both modes.
