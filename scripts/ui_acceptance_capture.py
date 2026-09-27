@@ -439,6 +439,8 @@ def start_compositors(
 
 def app_arguments(args: argparse.Namespace, binary: Path) -> list[str]:
     command = [str(binary)]
+    if args.component_gallery:
+        command.append("--component-gallery")
     if args.image:
         command.extend(["--image", str(args.image.resolve())])
     if args.audio:
@@ -543,6 +545,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--height", type=int, default=800, help="Weston logical height (default: 800)")
     parser.add_argument("--scale", type=float, default=1.0, help="nested Niri output scale (default: 1)")
     parser.add_argument("--appearance", choices=("light", "dark"), required=True)
+    parser.add_argument("--component-gallery", action="store_true", help="open the workbench component gallery directly")
     parser.add_argument("--image", type=Path, help="optional existing image fixture")
     parser.add_argument("--audio", type=Path, help="optional existing audio fixture")
     parser.add_argument("--binary", type=Path, help="workbench binary (default: target/debug/clip-workbench)")

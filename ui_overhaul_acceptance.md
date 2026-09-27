@@ -2,6 +2,10 @@
 
 Working evidence sheet for E1.4 and final acceptance. Record each run with date, commit, display mode, compositor/UI scale, action, result, and screenshot or log path. A blank result means **not tested**, not passed. Keep hardware USB tests separate from virtual/display-render checks.
 
+## Component gallery Light/Dark review, 2026-09-27
+
+The isolated capture runner now accepts `--component-gallery`, so direct-entry gallery review does not reuse or disturb the interactive workbench window. Commit `cecc2c5` was built and captured in private Weston/Niri sessions at 1600×1000 logical, 100% scale. Light report: `/tmp/clip-gallery-light-1600-20260927/report.json`; settled screenshot: `/tmp/clip-gallery-light-1600-20260927/settled.png`. Dark report: `/tmp/clip-gallery-dark-1600-20260927/report.json`; settled screenshot: `/tmp/clip-gallery-dark-1600-20260927/settled.png`. Both runtime captures passed geometry and singleton checks. The full gallery fit in the viewport, and the button, text field, slider, status, panel, and toolbar samples were legible in both appearances. These captures validate the gallery itself, not every production view or interaction path.
+
 ## Starting evidence, 2026-09-23
 
 - Branch baseline: `4edf785`, architecture baseline `easy1-start`: 81,632 LOC, 1,863 functions, average CCN 5.01, 5.28% duplication, 467 clone groups, health 79.94. The local `config.toml` has an unrelated uncommitted edit; it is excluded from UI commits.
