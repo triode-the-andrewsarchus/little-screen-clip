@@ -159,3 +159,7 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 - Actual StudioShell header buttons for Krita, Inkscape, and Nomacs render at equal widths; focused test `related_external_editor_actions_share_width` passes.
 - Audio Inspect now measures Play/Pause labels together and reserves one additional point because the first regression render found the bold Pause button exceeded the nominal measured width by 0.4 points. `inspect_play_and_pause_keep_the_same_button_width` renders both button states and verifies equal width and the shared 36-point height.
 - These are focused egui render checks; no live mouse playback was exercised.
+
+## Quick Palette compact chrome, 2026-09-27
+
+- Reused settled capture `/tmp/clip-workbench-footer-after-1280`: no daemon, 1280×720 logical / 100% / Dark. Primary reviewed the Palette search field, matching action row, execute/footer hint, and rolling-audio refresh/error header; the footer is separated from the strip. Popup assertions passed in the runner. This is one compact empty-state layout, not the separate full no-daemon regression requested by H1.4m4.

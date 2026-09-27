@@ -177,7 +177,7 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
   - [ ] **E2.3a [Luna] Finish remaining PDF chrome live layout checks.** Semantic colors and readable metadata are in place.
   - [ ] **E2.3a1 [Luna] Verify sibling PDF pane widths remain correct when the divider and gaps are accounted for.**
   - [ ] **E2.3a2 [Luna] Add or update a regression check for sibling PDF pane widths.**
-  - [ ] **E2.3b [Luna] Finish Quick Palette chrome checks.** Ordinary labels use body-size token.
+  - [x] **E2.3b [Luna] Finish Quick Palette chrome checks.** Ordinary labels use body-size token; compact 1280×720 Dark no-daemon capture confirms search, result row and footer remain visible above rolling audio after the shared-footer fix.
   - [ ] **E2.3b1 [Luna] Finish Auto Actions chrome checks.** Ordinary labels use body-size token.
   - [ ] **E2.3c [Luna] Finish rolling-audio chrome checks.** Ordinary labels use body-size token.
   - [ ] **E2.3c1 [Luna] Finish MIDI chrome checks.** Ordinary labels, shared 36-point transport/track controls and narrow-width wrapping are done.
