@@ -96,7 +96,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [ ] **H1.3a5 [Primary] Verify PDF navigation and cleanup live.** Closing dirty PDF refreshes mirror.
   - [ ] **H1.3a6 [Primary] Verify diff navigation and cleanup live.**
   - [x] **H1.3b1 [Primary] Specify remaining Escape precedence.** `ui_overhaul_viewer_route_contract.md` documents modal prompt/viewer key ownership before workbench Escape; nested viewer Escape behavior then closes the active session/advances startup queue. With no modal route, Node Machine cancels catalog/save/cable drag, active rolling audio stops, secondary views return to Palette, and Palette closes the popup. Workbench global shortcuts now yield while a viewer/prompt is active.
-  - [ ] **H1.3b2 [Primary] Specify remaining Enter precedence.**
+  - [x] **H1.3b2 [Primary] Specify remaining Enter precedence.** `ui_overhaul_enter_key_contract.md` records modal ownership and explicit Quick Palette/form-submit semantics, focused text submission/navigation, and image processing Enter modifiers. Runtime ordering and submit-path regressions remain tracked separately.
   - [ ] **H1.3b3 [Primary] Specify remaining Space precedence.**
   - [x] **H1.3b4 [Primary] Specify remaining letter-key precedence.** `ui_overhaul_letter_key_contract.md` records current route bindings, focus/dialog behavior, and the intended precedence contract; it flags source/runtime gaps for H1.3b5 and later viewer checks.
   - [x] **H1.3b5 [Primary] Implement remaining key precedence without altering domain controls.** Text-viewer Cmd/Ctrl+F now yields to an already focused text edit; image/audio/comparison guards were retained, and PDF/MIDI do not host text-entry fields. Added a focused egui input regression; `cargo test -p clip-workbench --quiet` passes (254 passed, one ignored).
@@ -108,6 +108,9 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **H1.3b8 [Primary] Add focus and keyboard tests for representative image paths.** The fallback Save As field owns focus and prevents image tool switching while open; Escape cancels it without changing the crop selection, then V switches to View after dismissal. Focused egui input regression passes.
   - [x] **H1.3b9 [Primary] Add focus and keyboard tests for representative audio paths.** Audio tool shortcuts remain suppressed by save dialogs and focused text editors; the unmodified H/D/S/I mode-switch regression and modified-key check still pass.
   - [x] **H1.3b10 [Primary] Add focus and keyboard tests for representative text paths.** Cmd/Ctrl+F is ignored while another editor owns keyboard focus; without an editor it opens and focuses Find, and Escape closes Find without closing the viewer. Both focus paths pass egui input regressions.
+  - [ ] **H1.3b11 [Primary] Test Quick Palette Enter execution while its search field owns focus.** Preserve the command-palette execute affordance and ensure it does not execute twice.
+  - [ ] **H1.3b12 [Primary] Test Enter navigation/submission in Text Find and recipe prompts.** Verify `lost_focus()` behavior for focused input and ensure the intended next/submit action happens once.
+  - [ ] **H1.3b13 [Primary] Test Audio Save Enter after editing destination and filename fields.** Confirm focus does not suppress explicit form submission and edited values are saved.
   - [ ] **H1.3c1 [Primary] Add revision-aware ownership for async results.** Spreadsheet/MIDI loads, audio/image previews, and later exports need host-scoped identity.
   - **H1.3c2 Bound async work and completion behavior**
     - [ ] **H1.3c2a [Primary] Bound async work for viewer-owned results.**
