@@ -163,3 +163,7 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 ## Quick Palette compact chrome, 2026-09-27
 
 - Reused settled capture `/tmp/clip-workbench-footer-after-1280`: no daemon, 1280×720 logical / 100% / Dark. Primary reviewed the Palette search field, matching action row, execute/footer hint, and rolling-audio refresh/error header; the footer is separated from the strip. Popup assertions passed in the runner. This is one compact empty-state layout, not the separate full no-daemon regression requested by H1.4m4.
+
+## PDF sibling pane geometry, 2026-09-27
+
+- Added a production `PdfEditorState::render_ui` egui render test with a no-job empty PDF state; it starts no background worker. At 1177×662 and 1766×993, it locates the actual left/right pane frames, verifies both remain inside the host and do not overlap, and verifies their summed widths equal the available width after outer frame margins, both horizontal item gaps, and the divider. `pdf_sibling_panes_stay_inside_compact_and_wide_hosts` passes. This validates layout geometry, not PDF loading or page navigation.

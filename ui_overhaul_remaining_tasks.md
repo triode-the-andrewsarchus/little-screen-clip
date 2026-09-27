@@ -175,8 +175,8 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
 - **E2.3 Straightforward chrome in remaining viewers**
   - Source evidence: PDF chrome has semantic colors/readable metadata and divider/gap-aware pane widths. Quick Palette, Auto Actions, rolling-audio status, and MIDI labels use body-size metrics; MIDI transport/track buttons use 36-point height and the row wraps narrowly. Text search/status and rendered Markdown body/list/quote, spreadsheet sheet label/width-limited search, 3D loading/error, node forms/status, and text/binary diff ordinary chrome use shared metrics. Binary-diff cards wrap readable IDs/kind/byte count and use shared typography for offsets/previews. 3D toolbar wraps at narrow widths. Remaining dense table/canvas data typography belongs to H2.2.
   - [ ] **E2.3a [Luna] Finish remaining PDF chrome live layout checks.** Semantic colors and readable metadata are in place.
-  - [ ] **E2.3a1 [Luna] Verify sibling PDF pane widths remain correct when the divider and gaps are accounted for.**
-  - [ ] **E2.3a2 [Luna] Add or update a regression check for sibling PDF pane widths.**
+  - [x] **E2.3a1 [Luna] Verify sibling PDF pane widths remain correct when the divider and gaps are accounted for.** Rendered left/right panes fit their host and exactly fill the parent width after margins, two item gaps, and the divider at 1177 and 1766 points.
+  - [x] **E2.3a2 [Luna] Add or update a regression check for sibling PDF pane widths.** Production `render_ui` regression passes at compact and wide host widths.
   - [x] **E2.3b [Luna] Finish Quick Palette chrome checks.** Ordinary labels use body-size token; compact 1280×720 Dark no-daemon capture confirms search, result row and footer remain visible above rolling audio after the shared-footer fix.
   - [ ] **E2.3b1 [Luna] Finish Auto Actions chrome checks.** Ordinary labels use body-size token.
   - [ ] **E2.3c [Luna] Finish rolling-audio chrome checks.** Ordinary labels use body-size token.
