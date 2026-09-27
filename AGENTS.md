@@ -44,6 +44,8 @@ Do not commit personal display, compositor, or desktop settings. Keep `config.to
 
 The workbench must remain a non-resizable, centered, single-instance popup for Niri's fixed-size floating behavior. Screen-adaptive sizing must be resolved before the window opens, with fixed-size hints in place at mapping; do not enable window resizing/maximizing or resize a visible window to fit. Internal panels may resize independently. Repeated `launch.sh ui` calls should focus the existing popup without requiring a Niri keybinding change.
 
+UI acceptance automation must use the private Weston/Niri runner. Its pointer injection is scoped to that run's private Wayland and Niri sockets; do not send test input through host `/dev/uinput` or the user's interactive compositor.
+
 Async preview completion updates an existing clipboard item in place. Keep `SlotStateSummary` sensitive to preview readiness so open workbenches rehydrate the affected slot and repaint the mirror; item ID and payload kind alone do not reveal these updates.
 
 `WorkbenchApp` owns one active `ViewerSession` at a time. CLI previews queued at startup open in their established order; asynchronous completions must wait for the active session to close rather than replace or appear behind it.

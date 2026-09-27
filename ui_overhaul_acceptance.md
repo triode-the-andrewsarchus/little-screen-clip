@@ -58,7 +58,7 @@ Additional isolated Audio Inspect capture `/tmp/clip-audio-inspect-compact-dark-
 
 ## Creative FX live view, 2026-09-27
 
-The isolated 1280×720 logical / 100% / Dark capture `/tmp/clip-e21c-creative-fx-final-dark-1280-20260927/report.json` and `settled.png` uses the deterministic `image-transparent.png` acceptance fixture. The private Niri virtual-pointer runner clicked the existing Creative FX tab at logical screen coordinate `(858, 159)`, then Full Dispersion at `(1085, 553)`, and scrolled the right inspector at `(1085, 580)` by 480 logical units. The screenshot confirms Creative FX is selected and shows the effect browser, before/after canvas and draggable split, plus Strength 55, Falloff 0, and Color Balance 0 controls; popup geometry and singleton assertions passed. This is visual review of the view and preset/parameter presentation, not a pixel-difference assertion or Apply/undo behavior test.
+The isolated 1280×720 logical / 100% / Dark capture `/tmp/clip-e21c-creative-fx-final2-dark-1280-20260927/report.json` and `settled.png` uses the deterministic `image-transparent.png` acceptance fixture. The private Niri virtual-pointer runner clicked the existing Creative FX tab at logical screen coordinate `(858, 159)`, then Full Dispersion at `(1085, 553)`, and scrolled the right inspector at `(1085, 580)` by 480 logical units. The screenshot confirms Creative FX is selected and shows the effect browser, before/after canvas and draggable split, plus Strength 55, Falloff 0, and Color Balance 0 controls; popup geometry and singleton assertions passed. This is visual review of the view and preset/parameter presentation, not a pixel-difference assertion or Apply/undo behavior test.
 
 ## Starting evidence, 2026-09-23
 

@@ -13,6 +13,7 @@ import argparse
 import json
 import math
 import os
+import shlex
 import shutil
 import signal
 import socket
@@ -252,6 +253,58 @@ def run_checked(args: list[str], *, env: dict[str, str], timeout: float = 5) -> 
             f"{(result.stderr or result.stdout).strip()}"
         )
     return result.stdout
+
+
+def build_private_virtual_pointer(output: Path) -> Path:
+    """Build the tiny client used only against this run's private Niri socket."""
+    scanner, compiler, pkg_config = (
+        shutil.which("wayland-scanner"), shutil.which("cc"), shutil.which("pkg-config")
+    )
+    if not scanner or not compiler or not pkg_config:
+        raise RuntimeError("pointer input requires wayland-scanner, cc, and pkg-config")
+    try:
+        flags = subprocess.run(
+            [pkg_config, "--cflags", "--libs", "wayland-client"],
+            capture_output=True, text=True, timeout=5, check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"pointer input requires wayland-client development files: {exc}") from exc
+
+    build_dir = output / "private-pointer-build"
+    build_dir.mkdir(mode=0o700)
+    os.chmod(build_dir, 0o700)
+    header = build_dir / "virtual-pointer-client-protocol.h"
+    protocol_code = build_dir / "virtual-pointer-protocol.c"
+    binary = build_dir / "virtual-pointer"
+    repo = Path(__file__).resolve().parent.parent
+    protocol_xml = repo / "scripts/virtual-pointer-unstable-v1.xml"
+    client_code = repo / "scripts/ui_acceptance_virtual_pointer.c"
+    run_checked([scanner, "client-header", str(protocol_xml), str(header)], env=os.environ.copy())
+    run_checked([scanner, "private-code", str(protocol_xml), str(protocol_code)], env=os.environ.copy())
+    try:
+        subprocess.run(
+            [compiler, "-std=c11", "-Wall", "-Wextra", "-I", str(build_dir), "-o", str(binary),
+             str(client_code), str(protocol_code), *shlex.split(flags)],
+            capture_output=True, text=True, timeout=15, check=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        detail = getattr(exc, "stderr", "")
+        raise RuntimeError(f"failed to build private virtual-pointer helper: {detail or exc}") from exc
+    return binary
+
+
+def verify_private_wayland_target(env: dict[str, str], runtime: Path) -> None:
+    """Refuse pointer input unless this environment targets this run's Niri socket."""
+    if "WAYLAND_SOCKET" in env:
+        raise RuntimeError("refusing pointer input: inherited WAYLAND_SOCKET could bypass the private display path")
+    if Path(env.get("XDG_RUNTIME_DIR", "")).resolve() != runtime.resolve():
+        raise RuntimeError("refusing pointer input: XDG_RUNTIME_DIR is not this run's private runtime")
+    display = env.get("WAYLAND_DISPLAY", "")
+    if not display or "/" in display or not (runtime / display).is_socket():
+        raise RuntimeError("refusing pointer input: WAYLAND_DISPLAY is not a socket in the private runtime")
+    niri_socket = Path(env.get("NIRI_SOCKET", ""))
+    if niri_socket.parent.resolve() != runtime.resolve() or not niri_socket.is_socket():
+        raise RuntimeError("refusing pointer input: NIRI_SOCKET is not this run's private control socket")
 
 
 def start_process(
@@ -541,7 +594,7 @@ def prepare_configuration(args: argparse.Namespace, output: Path) -> dict[str, A
         encoding="utf-8",
     )
     clean_env = os.environ.copy()
-    for key in ("DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "NIRI_SOCKET", "WAYLAND_DISPLAY"):
+    for key in ("DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "NIRI_SOCKET", "WAYLAND_DISPLAY", "WAYLAND_SOCKET"):
         clean_env.pop(key, None)
     clean_env.update({"LIBGL_ALWAYS_SOFTWARE": "1", "XDG_RUNTIME_DIR": str(runtime), "XDG_CONFIG_HOME": str(config_home)})
     niri_bin, weston_bin = shutil.which("niri"), shutil.which("weston")
@@ -714,6 +767,18 @@ def capture_workbench(
     report["outputs"] = outputs
     report["actual_logical_size"] = list(logical_size)
     app_env = niri_env | {"WAYLAND_DEBUG": "client"}
+    pointer_helper: Path | None = None
+    if args.click is not None:
+        verify_private_wayland_target(niri_env, config["runtime"])
+        pointer_helper = build_private_virtual_pointer(output)
+        probe = run_checked([str(pointer_helper), "probe"], env=niri_env)
+        report["pointer_input"] = {
+            "transport": "zwlr_virtual_pointer_v1",
+            "target_runtime": str(config["runtime"]),
+            "target_wayland_display": niri_env["WAYLAND_DISPLAY"],
+            "protocol_probe": probe.strip(),
+            "coordinate_space": "private Niri output logical coordinates",
+        }
     command = app_arguments(args, binary)
     children.start(
         "event_stream", [str(niri_bin), "msg", "--json", "event-stream"],
@@ -733,6 +798,32 @@ def capture_workbench(
         if args.image_action:
             time.sleep(0.1)
             run_checked(["wtype", "-k", IMAGE_ACTION_KEYS[args.image_action]], env=niri_env)
+    def send_private_scroll() -> None:
+        assert pointer_helper is not None and args.scroll is not None
+        x, y, delta = args.scroll
+        run_checked(
+            [str(pointer_helper), "scroll", str(logical_size[0]), str(logical_size[1]),
+             str(x), str(y), str(delta)],
+            env=niri_env,
+        )
+        report["pointer_input"]["scroll"] = {
+            "x": x, "y": y, "delta_logical_units": delta, "axis": "vertical"
+        }
+        time.sleep(0.5)
+
+    if args.click is not None and pointer_helper is not None:
+        report["pointer_input"]["clicks"] = []
+        for click_index, (x, y) in enumerate(args.click, start=1):
+            run_checked(
+                [str(pointer_helper), "click", str(logical_size[0]), str(logical_size[1]), str(x), str(y)],
+                env=niri_env,
+            )
+            report["pointer_input"]["clicks"].append({"x": x, "y": y, "button": "left"})
+            time.sleep(0.5)
+            if args.scroll_after_click == click_index:
+                send_private_scroll()
+        if args.scroll is not None and args.scroll_after_click is None:
+            send_private_scroll()
     time.sleep(args.settle_ms / 1000)
     final_windows = own_windows(niri_bin, niri_env, {app.pid})
     report["final_windows"] = final_windows
@@ -803,6 +894,18 @@ def create_parser() -> argparse.ArgumentParser:
         help="send one supported key action after selecting the image tool",
     )
     parser.add_argument("--image", type=Path, help="optional existing image fixture")
+    parser.add_argument(
+        "--click", nargs=2, type=int, metavar=("X", "Y"), action="append",
+        help="send a left click at logical screen coordinates through private Niri; repeat to perform ordered UI interactions",
+    )
+    parser.add_argument(
+        "--scroll", nargs=3, type=int, metavar=("X", "Y", "DELTA"),
+        help="send one vertical wheel step at logical screen coordinates through private Niri; positive DELTA scrolls down",
+    )
+    parser.add_argument(
+        "--scroll-after-click", type=int,
+        help="place --scroll after this one-based --click number (default: after all clicks)",
+    )
     parser.add_argument("--audio", type=Path, help="optional existing audio fixture")
     parser.add_argument("--pdf", type=Path, help="optional existing PDF fixture")
     parser.add_argument("--midi", type=Path, help="optional existing MIDI fixture")
@@ -827,6 +930,23 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         raise SystemExit("--fake-audio-transition cannot be combined with file-entry fixtures")
     if args.image_tool and not args.image:
         raise SystemExit("--image-tool requires --image")
+    if args.click is not None and any(
+        not (0 <= x < args.width) or not (0 <= y < args.height) for x, y in args.click
+    ):
+        raise SystemExit("--click coordinates must be inside the requested logical output")
+    if args.scroll is not None and (
+        not (0 <= args.scroll[0] < args.width) or not (0 <= args.scroll[1] < args.height)
+        or args.scroll[2] == 0 or abs(args.scroll[2]) > 1000
+    ):
+        raise SystemExit("--scroll coordinates must be inside the requested output and DELTA must be 1..1000 in magnitude")
+    if args.scroll is not None and args.click is None:
+        raise SystemExit("--scroll requires --click so the pointer action remains an explicit post-selection interaction")
+    if args.scroll_after_click is not None and args.scroll is None:
+        raise SystemExit("--scroll-after-click requires --scroll")
+    if args.scroll_after_click is not None and (
+        args.click is None or not (1 <= args.scroll_after_click <= len(args.click))
+    ):
+        raise SystemExit("--scroll-after-click must identify an existing one-based --click")
     if args.image_action and not args.image_tool:
         raise SystemExit("--image-action requires --image-tool")
     if args.verify_return and shutil.which("wtype") is None:
@@ -861,6 +981,9 @@ def main() -> int:
             "image_tool": args.image_tool,
             "image_action": args.image_action,
             "image_fixture": str(args.image.resolve()) if args.image else None,
+            "click": args.click,
+            "scroll": args.scroll,
+            "scroll_after_click": args.scroll_after_click,
             "audio_fixture": str(args.audio.resolve()) if args.audio else None,
             "pdf_fixture": str(args.pdf.resolve()) if args.pdf else None,
             "midi_fixture": str(args.midi.resolve()) if args.midi else None,
