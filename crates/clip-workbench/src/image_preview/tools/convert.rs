@@ -68,12 +68,20 @@ pub struct ConvertState {
     pub(crate) render_error_input_stamp: Option<ImageInputStamp>,
     pub render_error: Option<String>,
     render_rx: Option<std::sync::mpsc::Receiver<ConvertWorkerMsg>>,
+    optipng_rx: Option<std::sync::mpsc::Receiver<OptipngWorkerMsg>>,
 }
 
 struct ConvertWorkerMsg {
     generation: u64,
     input_stamp: ImageInputStamp,
     result: Result<(Vec<u8>, RgbaImage), String>,
+}
+
+struct OptipngWorkerMsg {
+    generation: u64,
+    input_stamp: ImageInputStamp,
+    original_len: usize,
+    result: Result<Vec<u8>, String>,
 }
 
 impl Default for ConvertState {
@@ -99,13 +107,14 @@ impl Default for ConvertState {
             render_error_input_stamp: None,
             render_error: None,
             render_rx: None,
+            optipng_rx: None,
         }
     }
 }
 
 impl ConvertState {
     pub fn is_pending(&self) -> bool {
-        self.params_dirty_at.is_some() || self.is_encoding
+        self.params_dirty_at.is_some() || self.is_encoding || self.is_running_optipng
     }
 
     pub fn output_is_current(&self) -> bool {
@@ -210,6 +219,7 @@ impl ImagePreviewState {
     }
 
     pub fn poll_conversion(&mut self) {
+        self.poll_optipng();
         if self.convert_state.is_encoding
             && self.convert_state.render_input_stamp.as_ref() != Some(&self.input_stamp())
         {
@@ -288,6 +298,16 @@ impl ImagePreviewState {
     }
 
     pub fn run_optipng_conversion(&mut self) {
+        self.run_optipng_conversion_with(run_optipng_optimization);
+    }
+
+    fn run_optipng_conversion_with<F>(&mut self, optimizer: F)
+    where
+        F: FnOnce(&[u8]) -> Result<Vec<u8>, String> + Send + 'static,
+    {
+        if self.convert_state.is_running_optipng {
+            return;
+        }
         if !self.convert_state.output_matches(&self.input_stamp()) {
             return;
         }
@@ -305,22 +325,73 @@ impl ImagePreviewState {
         }
 
         let orig_len = original_bytes.len();
-        match run_optipng_optimization(&original_bytes) {
-            Ok(opt_bytes) => {
-                let opt_len = opt_bytes.len();
-                self.convert_state.encoded_bytes = opt_bytes;
-                self.convert_state.optipng_savings = Some((orig_len, opt_len));
+        let input_stamp = self.input_stamp();
+        let generation = self.convert_state.request_generation;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.convert_state.optipng_rx = Some(rx);
+        self.convert_state.is_running_optipng = true;
+        let spawn = std::thread::Builder::new()
+            .name("image_optipng".to_string())
+            .spawn(move || {
+                let result = optimizer(&original_bytes);
+                let _ = tx.send(OptipngWorkerMsg {
+                    generation,
+                    input_stamp,
+                    original_len: orig_len,
+                    result,
+                });
+            });
+        if let Err(error) = spawn {
+            self.convert_state.optipng_rx = None;
+            self.convert_state.is_running_optipng = false;
+            self.show_toast(format!("❌ OptiPNG error: failed to start worker: {error}"));
+        }
+    }
+
+    fn poll_optipng(&mut self) {
+        let current_stamp = self.input_stamp();
+        let Some(rx) = self.convert_state.optipng_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(message) => {
                 self.convert_state.is_running_optipng = false;
-                let pct = if orig_len > 0 && opt_len < orig_len {
-                    (orig_len - opt_len) as f32 / orig_len as f32 * 100.0
-                } else {
-                    0.0
-                };
-                self.show_toast(format!("✔ OptiPNG complete! Saved {:.1}%", pct));
+                if message.generation != self.convert_state.request_generation
+                    || message.input_stamp != current_stamp
+                    || self.convert_state.target_format != ConvertTargetFormat::Png
+                    || !self.convert_state.output_matches(&current_stamp)
+                {
+                    return;
+                }
+                match message.result {
+                    Ok(bytes) => {
+                        let optimized_len = bytes.len();
+                        self.convert_state.encoded_bytes = bytes;
+                        self.convert_state.optipng_savings =
+                            Some((message.original_len, optimized_len));
+                        let pct =
+                            if message.original_len > 0 && optimized_len < message.original_len {
+                                (message.original_len - optimized_len) as f32
+                                    / message.original_len as f32
+                                    * 100.0
+                            } else {
+                                0.0
+                            };
+                        self.show_toast(format!("✔ OptiPNG complete! Saved {:.1}%", pct));
+                    }
+                    Err(error) => self.show_toast(format!("❌ OptiPNG error: {}", error)),
+                }
             }
-            Err(e) => {
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.convert_state.optipng_rx = Some(rx);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.convert_state.is_running_optipng = false;
-                self.show_toast(format!("❌ OptiPNG error: {}", e));
+                if self.convert_state.target_format == ConvertTargetFormat::Png
+                    && self.convert_state.output_matches(&current_stamp)
+                {
+                    self.show_toast("❌ OptiPNG error: worker stopped");
+                }
             }
         }
     }
@@ -331,6 +402,9 @@ impl ImagePreviewState {
         ctx: &egui::Context,
         palette: &AppPalette,
     ) {
+        if self.convert_state.is_running_optipng {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
         let accent = hex_to_c32(&palette.harmonies.base);
         let surface = hex_to_c32(&palette.colors.surface_panel);
         let border = hex_to_c32(&palette.colors.surface_recessed);
@@ -366,6 +440,13 @@ impl ImagePreviewState {
                                 .color(warning),
                         )
                         .truncate(true),
+                    );
+                } else if self.convert_state.is_running_optipng {
+                    ui.add(egui::Spinner::new().size(13.0).color(accent));
+                    ui.label(
+                        egui::RichText::new("Optimizing PNG…")
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                            .color(accent),
                     );
                 } else if self.convert_state.is_pending() {
                     ui.add(egui::Spinner::new().size(13.0).color(accent));
@@ -955,5 +1036,70 @@ mod input_stamp_tests {
         state.set_tool_mode(ImageToolMode::View);
         state.set_tool_mode(ImageToolMode::Convert);
         assert_eq!(state.convert_state.request_generation, scheduled_generation);
+    }
+
+    fn wait_for_optipng(state: &mut ImagePreviewState) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while state.convert_state.is_running_optipng && std::time::Instant::now() < deadline {
+            state.poll_conversion();
+            std::thread::yield_now();
+        }
+        assert!(!state.convert_state.is_running_optipng);
+    }
+
+    #[test]
+    fn optipng_worker_publishes_current_success_and_preserves_bytes_on_failure() {
+        let mut state = state();
+        state.convert_state.target_format = ConvertTargetFormat::Png;
+        state.update_conversion();
+        let original = state.convert_state.encoded_bytes.clone();
+        let original_len = original.len();
+        let optimized = b"smaller encoded PNG".to_vec();
+        let expected_optimized = optimized.clone();
+        state.run_optipng_conversion_with(move |bytes| {
+            assert_eq!(bytes, original);
+            Ok(optimized)
+        });
+        assert!(state.convert_state.is_running_optipng);
+        wait_for_optipng(&mut state);
+        assert_eq!(state.convert_state.encoded_bytes, expected_optimized);
+        assert_eq!(
+            state.convert_state.optipng_savings,
+            Some((original_len, expected_optimized.len()))
+        );
+
+        state.update_conversion();
+        let original = state.convert_state.encoded_bytes.clone();
+        state.run_optipng_conversion_with(|_| Err("fixture optimizer failure".to_owned()));
+        wait_for_optipng(&mut state);
+        assert_eq!(state.convert_state.encoded_bytes, original);
+        assert_eq!(state.convert_state.optipng_savings, None);
+        assert!(state.status_toast.is_some());
+    }
+
+    #[test]
+    fn optipng_worker_discards_stale_success_after_input_revision_changes() {
+        let mut state = state();
+        state.convert_state.target_format = ConvertTargetFormat::Png;
+        state.update_conversion();
+        let original = state.convert_state.encoded_bytes.clone();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        state.run_optipng_conversion_with(move |_| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(b"stale optimized PNG".to_vec())
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("optimizer worker should start");
+        state.schedule_conversion();
+        state.poll_conversion();
+        assert_eq!(state.convert_state.encoded_bytes, original);
+        release_tx.send(()).unwrap();
+        wait_for_optipng(&mut state);
+        assert_eq!(state.convert_state.encoded_bytes, original);
+        assert_eq!(state.convert_state.optipng_savings, None);
+        assert!(state.convert_state.params_dirty_at.is_some());
     }
 }
