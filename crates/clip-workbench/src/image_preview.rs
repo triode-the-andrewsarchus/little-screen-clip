@@ -3276,6 +3276,33 @@ mod tests {
         let selected_pos = text_center(&after_copy_all, "📋");
         let copied_selected = click(&mut state, selected_pos, 0.6);
         assert_eq!(copied_selected.platform_output.copied_text, payloads[0]);
+
+        let with_url_action = render(&mut state, 0.9, vec![]);
+        let open_url_pos = text_center(&with_url_action, "🌐 Open");
+        let opened = click(&mut state, open_url_pos, 1.0);
+        let open_url = opened
+            .platform_output
+            .open_url
+            .expect("clicking a URL result requests opening its link");
+        assert_eq!(open_url.url, payloads[0]);
+        assert!(open_url.new_tab);
+
+        state.barcode_state.detections = vec![BarcodeDetection {
+            format: "QR Code".to_owned(),
+            text: payloads[1].to_owned(),
+            points: vec![],
+            bbox: [0.0; 4],
+            is_url: false,
+        }];
+        let text_only = render(&mut state, 1.3, vec![]);
+        assert!(
+            text_only
+                .shapes
+                .iter()
+                .all(|shape| !matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "🌐 Open")),
+            "non-URL payloads must not render an Open action"
+        );
+        assert!(text_only.platform_output.open_url.is_none());
     }
 
     #[test]

@@ -193,7 +193,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - **E2.1k3 Barcode result text and actions**
       - [x] **E2.1k3a [Luna] Verify Japanese/check-mark payload glyphs.** The post-fallback capture shows `clipboard test 日本語 ✓` legibly in the decoded row; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1k3b [Luna] Verify Copy Payload and Copy All.** Production toolbar render test clicks both actions and checks egui emits the exact selected payload and newline-joined results, including Japanese/check-mark text.
-      - [ ] **E2.1k3c [Luna] Verify Open Link action.** Confirm valid links open and non-link payloads do not launch an external handler.
+      - [x] **E2.1k3c [Luna] Verify Open Link action.** The rendered Barcode toolbar test clicks a recognized HTTPS payload and checks egui requests that exact URL in a new tab; a plain-text payload has no Open action and emits no open request. The view now uses the existing egui URL-opening path instead of spawning `xdg-open` directly.
   - [x] **E2.1l [Luna] Verify Transform live.** Isolated 1280×720 Light capture shows rotate/flip/revert controls, canvas, and footer in one view.
   - [x] **E2.1m [Luna] Verify Background Removal live.** Isolated 1280×720 Light capture shows segmentation mode, prompt, action, canvas, and footer; the left inspector scrolls to reach the lower action at this compact height.
   - [x] **E2.1n [Luna] Verify OCR live.** Isolated 1280×720 Light capture shows engine/prompt inputs, the empty output actions, canvas, and footer; extraction/output behavior remains unverified.

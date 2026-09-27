@@ -263,9 +263,11 @@ impl ImagePreviewState {
                                                         crate::ui_ext::CONTROL_HEIGHT,
                                                     ));
                                                     if ui.add(url_btn).clicked() {
-                                                        let _ = Command::new("xdg-open")
-                                                            .arg(&det.text)
-                                                            .spawn();
+                                                        ctx.open_url(
+                                                            egui::output::OpenUrl::new_tab(
+                                                                det.text.clone(),
+                                                            ),
+                                                        );
                                                     }
                                                 }
 
