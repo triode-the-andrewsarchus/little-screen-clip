@@ -272,3 +272,7 @@ The three-message preview queue bounds pending raster results. Changing routes o
 ## PDF open and decode UI-thread audit, 2026-09-27
 
 PDF metadata (`get_pdf_info`), Poppler page rendering and PNG file reads, and staged edit/validation already run on background workers. The remaining blocking path is `PdfEditorState::ensure_page_texture`: on the UI thread it decodes each selected or visible cached PNG, converts it to RGBA, and uploads it. H2.1a makes textures lazy and evictable, so reselecting an evicted page repeats this work during a frame. Move decode/conversion to background work with visible per-page pending/error state; texture upload stays on the UI thread. Tracked implementation work remains under H2.1h1–h5.
+
+## Text and 3D open/parse UI-thread audit, 2026-09-27
+
+3D `Model3dViewerState::from_file` submits `Model3d::load_file` to the shared bounded executor with a loading state and timeout; the existing viewer-drop path cancels publication. Text file preview reads up to 2 MiB on the UI thread, performs UTF-8 cleanup and creates line offsets before assigning the viewer. Clipboard text preview accepts its complete payload and synchronously strips a BOM, creates line offsets, and detects Markdown; syntax highlighting and minimap preparation happen on first render. Move file read/preparation and loading status under H2.1h1–h5, while unbounded clipboard processing and first-render work remain in H2.2c2–c5.
