@@ -197,8 +197,13 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **E2.1l [Luna] Verify Transform live.** Isolated 1280×720 Light capture shows rotate/flip/revert controls, canvas, and footer in one view.
   - [x] **E2.1m [Luna] Verify Background Removal live.** Isolated 1280×720 Light capture shows segmentation mode, prompt, action, canvas, and footer; the left inspector scrolls to reach the lower action at this compact height.
   - [x] **E2.1n [Luna] Verify OCR live.** Isolated 1280×720 Light capture shows engine/prompt inputs, the empty output actions, canvas, and footer; extraction/output behavior remains unverified.
-  - [ ] **E2.1o [Luna] Verify Pick Color live, including loupe readability and click behavior.**
-  - [ ] **E2.1p [Luna] Verify Palette live.**
+  - **E2.1o Pick Color interaction**
+    - [x] **E2.1o1 [Luna] Inspect the compact picker and palette panels live.** `/tmp/clip-image-pick-color-final-20260927/image-pick-color.png` shows the full palette, color readout, pick list, and canvas at 1280×720 Light.
+    - [ ] **E2.1o2 [Luna] Verify the loupe stays readable at compact and wide sizes.**
+    - [ ] **E2.1o3 [Luna] Verify clicking the canvas records the sampled color.**
+  - **E2.1p Palette extraction and output**
+    - [x] **E2.1p1 [Luna] Inspect Palette extraction and swatches live.** The isolated Light capture shows seven sampled colors, labels, percentages, and the Copy CSV control.
+    - [ ] **E2.1p2 [Luna] Verify Copy CSV output matches the extracted colors.**
   - [ ] **E2.1q [Luna] Verify Decorrelation Stretch live, including comparison HUD and matrix precision.**
   - [x] **E2.1r [Luna] Complete the image-tool contrast audit.** Image chrome uses tested semantic text roles across canvas, raised, panel, and recessed surfaces; labels on generated fills/badges and transparent selections use the shared foreground resolver. Existing Light/Dark regressions cover every neutral text role, standard action/mode fills, and translucent accent compositing. This is source-and-render-test evidence, not a live visual check.
   - [ ] **E2.1s [Luna] Verify image parameters and undo live.**
