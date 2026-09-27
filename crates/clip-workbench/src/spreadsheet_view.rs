@@ -202,7 +202,7 @@ impl SpreadsheetViewerState {
                     }
 
                     // Search box
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
                     Icon::Search.ui(
                         ui,
                         crate::ui_ext::CONTROL_ICON_SIZE,
@@ -244,7 +244,7 @@ impl SpreadsheetViewerState {
                     }
                 }
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // 2. Sheet Tabs
                 if sheet_count > 1 {
@@ -265,11 +265,11 @@ impl SpreadsheetViewerState {
                             }
                         }
                     });
-                    ui.add_space(4.0);
+                    ui.add_space(crate::ui_ext::SPACE_XS);
                 }
 
                 ui.separator();
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // 3. Scrollable 2D X/Y Spreadsheet Table with Sticky Headers
                 let Some(sheet) = self.data.sheets.get(self.active_sheet_idx) else {

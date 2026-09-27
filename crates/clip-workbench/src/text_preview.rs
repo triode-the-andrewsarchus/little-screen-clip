@@ -530,7 +530,7 @@ impl TextPreviewState {
                     self.render_search_toolbar(ui, palette);
                 }
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Zone 3: Main text viewport
                 let footer_h = 28.0;
@@ -550,7 +550,7 @@ impl TextPreviewState {
                     },
                 );
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Zone 5: Footer
                 let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
@@ -747,7 +747,7 @@ impl TextPreviewState {
     }
 
     fn render_search_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         egui::Frame::none()
             .fill(hex_to_c32(&palette.colors.surface_recessed))
             .stroke(Stroke::new(
@@ -805,7 +805,7 @@ impl TextPreviewState {
                         self.next_match();
                     }
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
                     self.render_search_options(ui, palette);
                 });
             });
@@ -1098,7 +1098,7 @@ fn render_markdown_element(
             spans,
         } => {
             flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
-            ui.add_space(8.0);
+            ui.add_space(crate::ui_ext::SPACE_SM);
             ui.horizontal_wrapped(|ui| {
                 let (size, color) = match level {
                     1 => (HEADING_FONT_SIZE, hex_to_c32(&palette.colors.text_primary)),
@@ -1112,7 +1112,7 @@ fn render_markdown_element(
                     render_markdown_span(ui, &span, size, color, palette);
                 }
             });
-            ui.add_space(4.0);
+            ui.add_space(crate::ui_ext::SPACE_XS);
         }
         little_clip_render::markdown::MarkdownLine::Bullet { indent, spans } => {
             flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
@@ -1126,7 +1126,7 @@ fn render_markdown_element(
                         palette,
                     ),
                 ));
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
                 for span in spans {
                     render_markdown_span(
                         ui,
@@ -1152,7 +1152,7 @@ fn render_markdown_element(
                             palette,
                         )),
                 );
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
                 for span in spans {
                     render_markdown_span(
                         ui,
@@ -1187,9 +1187,9 @@ fn render_markdown_element(
         }
         little_clip_render::markdown::MarkdownLine::Rule => {
             flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
-            ui.add_space(6.0);
+            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
             ui.separator();
-            ui.add_space(6.0);
+            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
         }
         little_clip_render::markdown::MarkdownLine::Paragraph { spans } => {
             flush_code_block(ui, in_code_block, code_block_buf, code_block_lang, palette);
@@ -1209,7 +1209,7 @@ fn render_markdown_element(
             if *in_code_block {
                 code_block_buf.push('\n');
             } else {
-                ui.add_space(6.0);
+                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
             }
         }
     }
@@ -1514,7 +1514,7 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
                             .color(hex_to_c32(&palette.colors.text_muted)),
                     );
                 });
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
             }
 
             let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {

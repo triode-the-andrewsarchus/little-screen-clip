@@ -485,7 +485,7 @@ impl PdfEditorState {
                         delete_clicked = true;
                     }
 
-                    ui.add_space(6.0);
+                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                     // Rotate 90 CW Button
                     let rot_btn = crate::ui_ext::secondary_button_icon(
@@ -514,9 +514,9 @@ impl PdfEditorState {
                     self.delete_current_page(now);
                 }
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
                 ui.separator();
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Two-Pane Split Layout
                 // Left pane: page thumbnail list / grid (takes left side, wrapping if width permits)
@@ -565,9 +565,9 @@ impl PdfEditorState {
                                             },
                                         );
                                     });
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
                                     ui.separator();
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     egui::ScrollArea::vertical()
                                         .auto_shrink([false, false])
@@ -665,7 +665,7 @@ impl PdfEditorState {
                                                             });
                                                     });
 
-                                                    ui.add_space(6.0);
+                                                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                                                 }
                                             });
                                         });
@@ -715,9 +715,9 @@ impl PdfEditorState {
 
                                         });
 
-                                        ui.add_space(6.0);
+                                        ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                                         ui.separator();
-                                        ui.add_space(8.0);
+                                        ui.add_space(crate::ui_ext::SPACE_SM);
 
                                         // Large page preview image fitted to right pane
                                         let max_w = (ui.available_width() - 16.0).max(50.0);

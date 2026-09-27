@@ -481,12 +481,12 @@ impl BinaryDiffViewState {
                     return;
                 }
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Zone 2: Mode & Filter Bar
                 self.render_mode_and_stats_bar(ui, palette);
 
-                ui.add_space(6.0);
+                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                 // Zone 3: Main Layout
                 let footer_h = if self.hovered_cell.is_some() { 64.0 } else { 32.0 };
@@ -611,9 +611,9 @@ impl BinaryDiffViewState {
                         }
                     }
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
                     ui.separator();
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
 
                     // Stat pills
                     crate::ui_ext::stat_pill(
@@ -673,7 +673,7 @@ impl BinaryDiffViewState {
                             prev_diff = true;
                         }
 
-                        ui.add_space(8.0);
+                        ui.add_space(crate::ui_ext::SPACE_SM);
 
                         if search_len > 0 {
                             let canvas = hex_to_c32(&palette.colors.canvas);
@@ -874,7 +874,7 @@ impl BinaryDiffViewState {
 
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
-                    ui.add_space(4.0);
+                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                     // 1. Left Offset
                     let l_off_str = if let Some(off) = row.left_offset {
@@ -937,7 +937,7 @@ impl BinaryDiffViewState {
                         }
                     }
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
 
                     // 3. Left ASCII
                     for (col_idx, cell) in row.left_cells.iter().enumerate() {
@@ -1033,7 +1033,7 @@ impl BinaryDiffViewState {
                         }
                     }
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
 
                     // 6. Right ASCII
                     for (col_idx, cell) in row.right_cells.iter().enumerate() {
@@ -1684,7 +1684,7 @@ fn render_hex_table_header(
     ];
     for (label, width, color, gap_before) in headers {
         if gap_before {
-            child_ui.add_space(8.0);
+            child_ui.add_space(crate::ui_ext::SPACE_SM);
         }
         child_ui.allocate_ui_with_layout(
             Vec2::new(width, 28.0),

@@ -672,7 +672,7 @@ impl MidiViewerState {
                     }
                 }
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Zone 2: Transport & Zoom Bar
                 egui::Frame::none()
@@ -712,7 +712,7 @@ impl MidiViewerState {
                                 stop_clicked = true;
                             }
 
-                            ui.add_space(8.0);
+                            ui.add_space(crate::ui_ext::SPACE_SM);
                             let time_text = format!("{:.1}s / {:.1}s", playhead_sec, duration_sec);
                             ui.label(
                                 egui::RichText::new(time_text)
@@ -722,7 +722,7 @@ impl MidiViewerState {
                                     .color(accent),
                             );
 
-                            ui.add_space(8.0);
+                            ui.add_space(crate::ui_ext::SPACE_SM);
 
                             // Copy selection button
                             let has_sel = match self.selected_region {
@@ -749,7 +749,7 @@ impl MidiViewerState {
 
                             if let Some((s, e)) = self.selected_region {
                                 if (e - s).abs() > 0.05 {
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
                                     let min_s = s.min(e);
                                     let max_s = s.max(e);
                                     ui.label(
@@ -767,7 +767,7 @@ impl MidiViewerState {
                             }
 
                             if let Some(st) = self.solo_track {
-                                ui.add_space(4.0);
+                                ui.add_space(crate::ui_ext::SPACE_XS);
                                 let st_name = self.data.track_names.get(st).cloned().unwrap_or_else(|| format!("Track {}", st + 1));
                                 ui.label(
                                     egui::RichText::new(format!("Solo: {st_name}"))
@@ -817,7 +817,7 @@ impl MidiViewerState {
 
                 // 2. Track Legend (if multi-track)
                 if self.data.track_count > 1 {
-                    ui.add_space(4.0);
+                    ui.add_space(crate::ui_ext::SPACE_XS);
                     ui.horizontal_wrapped(|ui| {
                         ui.label(
                             egui::RichText::new("Tracks:")
@@ -832,7 +832,7 @@ impl MidiViewerState {
                             if ui.add(all_btn).on_hover_text("Clear solo and show/copy all tracks").clicked() {
                                 clear_solo_clicked = true;
                             }
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
                         }
                         for t_idx in 0..self.data.track_count {
                             let note_count = self.data.notes.iter().filter(|n| n.track == t_idx).count();
@@ -894,7 +894,7 @@ impl MidiViewerState {
                                 toggled_solo_track = Some(t_idx);
                             }
 
-                            ui.add_space(8.0);
+                            ui.add_space(crate::ui_ext::SPACE_SM);
                         }
                     });
                 }
@@ -907,9 +907,9 @@ impl MidiViewerState {
                     self.toggle_solo(t_idx);
                 }
 
-                ui.add_space(6.0);
+                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                 ui.separator();
-                ui.add_space(6.0);
+                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                 // 3. Interactive Piano Roll Area
                 let mut available_size = ui.available_size();

@@ -362,7 +362,7 @@ fn render_auto_actions(
 ) -> (Option<bool>, AutoActionsLayout) {
     let mut layout = AutoActionsLayout::default();
     let mut changed = None;
-    ui.add_space(4.0);
+    ui.add_space(crate::ui_ext::SPACE_XS);
     ui.horizontal_wrapped(|ui| {
         Icon::Settings.ui(ui, 18.0, hex_to_c32(&palette.harmonies.base));
         layout.header = ui
@@ -379,7 +379,7 @@ fn render_auto_actions(
             )
             .rect;
     });
-    ui.add_space(8.0);
+    ui.add_space(crate::ui_ext::SPACE_SM);
 
     egui::ScrollArea::vertical().show(ui, |ui| {
         let card_bg = hex_to_c32(&palette.colors.surface_recessed);
@@ -441,7 +441,7 @@ fn render_auto_actions(
                     });
                 });
 
-                ui.add_space(6.0);
+                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                 layout.explanation = ui
                     .label(
                         egui::RichText::new(
@@ -450,7 +450,7 @@ fn render_auto_actions(
                         .color(hex_to_c32(&palette.colors.text_primary)),
                     )
                     .rect;
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
                 layout.behavior = ui
                     .label(
                         egui::RichText::new(
@@ -653,7 +653,7 @@ impl WorkbenchApp {
                     }
                 });
 
-                ui.add_space(8.0);
+                ui.add_space(crate::ui_ext::SPACE_SM);
 
                 // Re-render mirror if dirty
                 if self.dirty_mirror || self.mirror_texture.is_none() {
@@ -1163,7 +1163,7 @@ impl eframe::App for WorkbenchApp {
                         );
 
                         if let Some((path, title)) = first_audio_item {
-                            ui.add_space(8.0);
+                            ui.add_space(crate::ui_ext::SPACE_SM);
                             let audio_bg = hex_to_c32(&self.ui_palette.diff_add);
                             let audio_btn = ui_ext::action_button_icon(
                                 Some(Icon::Audio),
@@ -1177,7 +1177,7 @@ impl eframe::App for WorkbenchApp {
                         }
 
                         if let Some(img_item) = first_image_item {
-                            ui.add_space(8.0);
+                            ui.add_space(crate::ui_ext::SPACE_SM);
                             let img_bg = hex_to_c32(&self.ui_palette.harmonies.base);
                             let img_btn = ui_ext::action_button_icon(
                                 Some(Icon::Image),
@@ -1217,7 +1217,7 @@ impl eframe::App for WorkbenchApp {
                             false
                         };
                         if has_two_images {
-                            ui.add_space(8.0);
+                            ui.add_space(crate::ui_ext::SPACE_SM);
                             let diff_bg = hex_to_c32(&self.ui_palette.harmonies.warm_attention);
                             let diff_btn = ui_ext::action_button_icon(
                                 Some(Icon::Diff),
@@ -1277,7 +1277,7 @@ impl eframe::App for WorkbenchApp {
                         });
 
                         if let Some(pdf_path) = first_pdf_item {
-                            ui.add_space(8.0);
+                            ui.add_space(crate::ui_ext::SPACE_SM);
                             let pdf_bg = hex_to_c32(&self.ui_palette.diff_del);
                             let pdf_btn = ui_ext::action_button_icon(
                                 Some(Icon::Pdf),
@@ -1291,7 +1291,7 @@ impl eframe::App for WorkbenchApp {
                         }
 
                         if let Some(slot) = first_spreadsheet_slot {
-                            ui.add_space(8.0);
+                            ui.add_space(crate::ui_ext::SPACE_SM);
                             let sheet_bg = hex_to_c32(&self.ui_palette.harmonies.triadic_1);
                             let sheet_btn = ui_ext::action_button_icon(
                                 Some(Icon::Spreadsheet),
@@ -1310,7 +1310,7 @@ impl eframe::App for WorkbenchApp {
                         }
 
                         if let Some(midi_path) = first_midi_item {
-                            ui.add_space(8.0);
+                            ui.add_space(crate::ui_ext::SPACE_SM);
                             let midi_bg = hex_to_c32(&self.ui_palette.harmonies.triadic_2);
                             let midi_btn = ui_ext::action_button_icon(
                                 Some(Icon::Midi),
@@ -1329,7 +1329,7 @@ impl eframe::App for WorkbenchApp {
                         }
 
                         if let Some(model_path) = first_3d_model_item {
-                            ui.add_space(8.0);
+                            ui.add_space(crate::ui_ext::SPACE_SM);
                             let model_bg = hex_to_c32(&self.ui_palette.harmonies.split_comp_1);
                             let ext = model_path.extension().and_then(|s| s.to_str()).unwrap_or("3D").to_ascii_uppercase();
                             let btn_text = format!("3D {} Model", ext);
@@ -1354,7 +1354,7 @@ impl eframe::App for WorkbenchApp {
                         if let Some(ref text) = first_text_item {
                             let trimmed = text.trim();
                             if let Some(conv) = detect_unit_conversion(trimmed) {
-                                ui.add_space(8.0);
+                                ui.add_space(crate::ui_ext::SPACE_SM);
                                 let unit_bg = hex_to_c32(&self.ui_palette.harmonies.split_comp_2);
                                 let label = conv.summary_line();
                                 let btn = ui_ext::action_button_icon(
@@ -1368,7 +1368,7 @@ impl eframe::App for WorkbenchApp {
                                     self.status_msg = Some(format!("Copied: {}", conv.primary_conversion));
                                 }
                             } else if let Some(net) = detect_network_preview(trimmed) {
-                                ui.add_space(8.0);
+                                ui.add_space(crate::ui_ext::SPACE_SM);
                                 let net_bg = hex_to_c32(&self.ui_palette.diff_mod);
                                 let (label, net_icon) = match &net {
                                     NetworkPreview::Ip { ip, rfc_class, .. } => (format!("{} ({})", ip, rfc_class), Icon::Link),
@@ -1386,7 +1386,7 @@ impl eframe::App for WorkbenchApp {
                                     self.status_msg = Some("Copied network info".to_string());
                                 }
                             } else if let Some(ts) = detect_timestamp(trimmed) {
-                                ui.add_space(8.0);
+                                ui.add_space(crate::ui_ext::SPACE_SM);
                                 let ts_bg = hex_to_c32(&self.ui_palette.harmonies.tetradic_1);
                                 let label = format!("{} ({})", ts.human_readable, ts.relative);
                                 let btn = ui_ext::action_button_icon(
@@ -1403,7 +1403,7 @@ impl eframe::App for WorkbenchApp {
                         }
 
                         if let Some((raw_txt, file_p, is_md)) = Self::check_inspector_text_preview(&self.selected_slots, &self.state) {
-                            ui.add_space(8.0);
+                            ui.add_space(crate::ui_ext::SPACE_SM);
                             let (label, txt_icon) = if is_md {
                                 ("Preview Markdown", Icon::Book)
                             } else {
@@ -1439,7 +1439,7 @@ impl eframe::App for WorkbenchApp {
                         self.start_midi_load(path);
                     }
 
-                    ui.add_space(6.0);
+                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                     // Focus on entry, then leave keyboard focus under the user's control.
                     ui.horizontal(|ui| {
@@ -1476,7 +1476,7 @@ impl eframe::App for WorkbenchApp {
                         );
                     });
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
 
                     // Filtered Action List filling available vertical height
                     let avail_h = ui.available_height().max(0.0);
@@ -1702,7 +1702,7 @@ impl WorkbenchApp {
                         );
                     });
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
                     ui.label(
                         egui::RichText::new(&prompt.message)
                             .color(hex_to_c32(&self.ui_palette.colors.text_secondary)),
@@ -2315,13 +2315,13 @@ impl eframe::App for PromptApp {
                     );
                 });
 
-                ui.add_space(8.0);
+                ui.add_space(crate::ui_ext::SPACE_SM);
                 ui.label(
                     egui::RichText::new(&self.message)
                         .color(hex_to_c32(&self.palette.colors.text_secondary)),
                 );
 
-                ui.add_space(12.0);
+                ui.add_space(crate::ui_ext::SPACE_MD);
                 let edit_resp = ui.add_sized(
                     [ui.available_width(), ui_ext::CONTROL_HEIGHT],
                     egui::TextEdit::singleline(&mut self.input_text)

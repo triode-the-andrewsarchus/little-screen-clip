@@ -383,7 +383,7 @@ impl Model3dViewerState {
                     }
                 }
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Toolbar
                 egui::Frame::none()
@@ -489,9 +489,9 @@ impl Model3dViewerState {
                     self.pan_offset = Vec2::ZERO;
                 }
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
                 ui.separator();
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Interactive 3D Canvas
                 let mut available_size = ui.available_size();

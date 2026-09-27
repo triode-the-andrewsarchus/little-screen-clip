@@ -649,7 +649,7 @@ impl DiffViewerState {
                     return;
                 }
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Zone 2: Mode Toolbar
                 if is_img {
@@ -658,7 +658,7 @@ impl DiffViewerState {
                     self.render_text_toolbar(ui, palette);
                 }
 
-                ui.add_space(6.0);
+                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                 // Zone 3: Main comparison viewport
                 let footer_h = 28.0;
@@ -677,7 +677,7 @@ impl DiffViewerState {
                     },
                 );
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Zone 5: Footer
                 shell.render_footer(ui, &self.status_toast, now);
@@ -717,9 +717,9 @@ impl DiffViewerState {
                         }
                     }
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
                     ui.separator();
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
 
                     ui.label(
                         egui::RichText::new("Tolerance:")
@@ -781,7 +781,7 @@ impl DiffViewerState {
                     }
 
                     ui.horizontal(|ui| {
-                        ui.add_space(12.0);
+                        ui.add_space(crate::ui_ext::SPACE_MD);
 
                         // Column 1: Base
                         self.render_image_column(
@@ -795,7 +795,7 @@ impl DiffViewerState {
                             img_h,
                         );
 
-                        ui.add_space(12.0);
+                        ui.add_space(crate::ui_ext::SPACE_MD);
 
                         // Column 2: Comparison
                         self.render_image_column(
@@ -809,7 +809,7 @@ impl DiffViewerState {
                             img_h,
                         );
 
-                        ui.add_space(12.0);
+                        ui.add_space(crate::ui_ext::SPACE_MD);
 
                         // Column 3: Diff
                         let diff_sub = format!(
@@ -845,7 +845,7 @@ impl DiffViewerState {
                                 .strong()
                                 .color(f_high),
                         );
-                        ui.add_space(4.0);
+                        ui.add_space(crate::ui_ext::SPACE_XS);
 
                         if let Some(tex) = &self.overlay_texture {
                             egui::Frame::none()
@@ -879,7 +879,7 @@ impl DiffViewerState {
                                 .strong()
                                 .color(del_label_color),
                         );
-                        ui.add_space(4.0);
+                        ui.add_space(crate::ui_ext::SPACE_XS);
 
                         if let Some(tex) = &self.mask_texture {
                             egui::Frame::none()
@@ -909,7 +909,7 @@ impl DiffViewerState {
                     }
 
                     ui.horizontal(|ui| {
-                        ui.add_space(12.0);
+                        ui.add_space(crate::ui_ext::SPACE_MD);
 
                         self.render_image_column(
                             ui,
@@ -949,7 +949,7 @@ impl DiffViewerState {
                             .color(del_label_color)
                             .heading(),
                     );
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
                     let err_text = self
                         .decode_error
                         .as_deref()
@@ -1082,7 +1082,7 @@ impl DiffViewerState {
                                 .strong()
                                 .color(f_high),
                         );
-                        ui.add_space(8.0);
+                        ui.add_space(crate::ui_ext::SPACE_SM);
 
                         // Animated progress indicator bar
                         ui.add(
@@ -1092,7 +1092,7 @@ impl DiffViewerState {
                                 .text(bar_text),
                         );
 
-                        ui.add_space(12.0);
+                        ui.add_space(crate::ui_ext::SPACE_MD);
 
                         ui.label(
                             egui::RichText::new(format!("Base: {}", self.lhs.label()))
@@ -1105,7 +1105,7 @@ impl DiffViewerState {
                                 .color(f_low),
                         );
 
-                        ui.add_space(8.0);
+                        ui.add_space(crate::ui_ext::SPACE_SM);
 
                         ui.label(egui::RichText::new(readout).size(BODY_FONT_SIZE).color(
                             crate::ui_ext::contrast_text_c32_on(
@@ -1164,7 +1164,7 @@ impl DiffViewerState {
                 );
             });
 
-            ui.add_space(4.0);
+            ui.add_space(crate::ui_ext::SPACE_XS);
 
             // Image Frame Box
             egui::Frame::none()

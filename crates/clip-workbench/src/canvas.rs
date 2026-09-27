@@ -858,7 +858,7 @@ impl NodeCanvasState {
                             );
                         });
 
-                        ui.add_space(8.0);
+                        ui.add_space(crate::ui_ext::SPACE_SM);
 
                         // Search box (autofocused)
                         let resp = ui.add_sized(
@@ -869,7 +869,7 @@ impl NodeCanvasState {
                         );
                         resp.request_focus();
 
-                        ui.add_space(6.0);
+                        ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                         // Category Pills
                         ui.horizontal(|ui| {
@@ -885,7 +885,7 @@ impl NodeCanvasState {
                             }
                         });
 
-                        ui.add_space(8.0);
+                        ui.add_space(crate::ui_ext::SPACE_SM);
                         ui.separator();
 
                         // Filtered Node List
@@ -1006,7 +1006,7 @@ impl NodeCanvasState {
                                                     .size(BODY_FONT_SIZE),
                                             );
                                         });
-                                        ui.add_space(4.0);
+                                        ui.add_space(crate::ui_ext::SPACE_XS);
                                     }
                                 }
                             });
