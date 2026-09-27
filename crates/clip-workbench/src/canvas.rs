@@ -1571,8 +1571,12 @@ fn render_node_card(
                             .color(hex_to_c32(&palette.colors.text_muted))
                             .small(),
                     );
-                    ui.add(
-                        egui::TextEdit::singleline(val).desired_width(ui.available_width() * 0.95),
+                    let field_width = ui.available_width() * 0.95;
+                    ui.add_sized(
+                        [field_width, CONTROL_HEIGHT],
+                        egui::TextEdit::singleline(val)
+                            .desired_width(field_width)
+                            .font(egui::TextStyle::Body),
                     );
                 });
             }

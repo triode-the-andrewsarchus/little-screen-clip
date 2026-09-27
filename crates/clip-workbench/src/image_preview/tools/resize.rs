@@ -780,7 +780,8 @@ impl ImagePreviewState {
                     let field_width = ((ui.available_width() - 24.0) * 0.5).max(56.0);
 
                     let mut width = self.resize_state.width_input.clone();
-                    let width_response = ui.add(
+                    let width_response = ui.add_sized(
+                        [field_width, crate::ui_ext::CONTROL_HEIGHT],
                         egui::TextEdit::singleline(&mut width)
                             .desired_width(field_width)
                             .hint_text("Width")
@@ -796,7 +797,8 @@ impl ImagePreviewState {
                     ui.label(egui::RichText::new("×").strong().color(muted));
 
                     let mut height = self.resize_state.height_input.clone();
-                    let height_response = ui.add(
+                    let height_response = ui.add_sized(
+                        [field_width, crate::ui_ext::CONTROL_HEIGHT],
                         egui::TextEdit::singleline(&mut height)
                             .desired_width(field_width)
                             .hint_text("Height")

@@ -1029,7 +1029,8 @@ impl ImagePreviewState {
                     ui.add_space(4.0);
 
                     // Search box
-                    ui.add(
+                    ui.add_sized(
+                        [left_w - 24.0, crate::ui_ext::CONTROL_HEIGHT],
                         egui::TextEdit::singleline(&mut self.film_sim_state.search_query)
                             .hint_text("Filter stocks...")
                             .desired_width(left_w - 24.0),
