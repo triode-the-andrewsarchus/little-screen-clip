@@ -105,9 +105,14 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
   - [ ] **H1.4j [Primary] Confirm every image tool remains directly accessible and toolbar wrapping does not strand labels or hide common actions.**
   - **H1.4k Image Studio header truncation and footer clipping (observed at compact and larger sizes)**
     - [ ] **H1.4k1 [Primary] Keep the Image Studio title and short filename visible beside right actions.**
-    - [ ] **H1.4k2 [Primary] Reserve visible Image Studio footer space at every supported host size.**
-    - [ ] **H1.4k3 [Primary] Add render/layout regression checks for the compact header and footer.**
-    - [ ] **H1.4k4 [Primary] Verify compact header and footer live.**
+    - [x] **H1.4k2 Reserve visible Image Studio footer space at every supported host size.** Luna implemented a native footer panel reserved before chrome/workspace; primary review reused its measured hint height for a read-only caption row and removed the duplicate measurement. The canvas no longer subtracts a guessed 32-point footer. Landed in `3258d1f`.
+    - **H1.4k3 Header and footer regression checks**
+      - [x] **H1.4k3a Check rendered footer and canvas bounds.** The actual studio render test covers View and panelized Markup at compact/wide sizes and 100/150/200% UI zoom; it checks painted text/canvas stay inside the host and do not overlap. Workspace tests pass (215 workbench tests, one ignored).
+      - [ ] **H1.4k3b [Primary] Check that compact headers keep short filenames visible beside actions.**
+    - **H1.4k4 Live header and footer checks**
+      - [x] **H1.4k4a Verify the Image View footer live at compact widths in both appearances.** Primary reviewed isolated Niri captures showing complete footer text and a separate canvas. Fourteen captures across all seven logical resolutions passed popup geometry/singleton checks; representative footer visuals were reviewed.
+      - [ ] **H1.4k4b [Primary] Verify panelized image-tool footers live.**
+      - [ ] **H1.4k4c [Primary] Verify compact header filename visibility live.**
   - **H1.4l Audio Studio footer defect (1920×1080 Dark)**
     - [ ] **H1.4l1 [Primary] Reserve a nonoverlapping Audio Studio footer clear of the bottom timeline and scrollbar.**
     - [ ] **H1.4l2 [Primary] Add render/layout regression checks for the Audio Studio footer.**
