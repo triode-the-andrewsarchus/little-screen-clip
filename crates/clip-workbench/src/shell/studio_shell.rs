@@ -11,7 +11,8 @@ use super::panel::{
 use crate::hex_to_c32;
 use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext::{
-    CONTROL_HEIGHT, CONTROL_ICON_SIZE, StatusToast, contrast_text_c32, equal_button_width,
+    CONTROL_CORNER_RADIUS, CONTROL_HEIGHT, CONTROL_ICON_SIZE, FOOTER_INSET_Y, PANEL_INSET_X,
+    SPACE_MD, SPACE_SM, SPACE_XS, StatusToast, contrast_text_c32, equal_button_width,
 };
 use eframe::egui::{self, Color32, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::palette::AppPalette;
@@ -404,12 +405,12 @@ impl StudioPanelLayout {
                     1.0_f32,
                     hex_to_c32(&palette.colors.surface_panel),
                 ))
-                .rounding(Rounding::same(4.0))
-                .inner_margin(egui::Margin::same(8.0))
+                .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
+                .inner_margin(egui::Margin::same(SPACE_SM))
                 .show(ui, |ui| {
-                    ui.set_width((rect.width() - 16.0).max(1.0));
-                    ui.set_max_width((rect.width() - 16.0).max(1.0));
-                    ui.set_height((rect.height() - 16.0).max(1.0));
+                    ui.set_width((rect.width() - SPACE_SM * 2.0).max(1.0));
+                    ui.set_max_width((rect.width() - SPACE_SM * 2.0).max(1.0));
+                    ui.set_height((rect.height() - SPACE_SM * 2.0).max(1.0));
                     egui::ScrollArea::vertical()
                         .id_source(id)
                         .auto_shrink([false, false])
@@ -443,8 +444,8 @@ impl StudioPanelLayout {
                     1.0_f32,
                     hex_to_c32(&palette.colors.surface_panel),
                 ))
-                .rounding(Rounding::same(4.0))
-                .inner_margin(egui::Margin::same(8.0))
+                .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
+                .inner_margin(egui::Margin::same(SPACE_SM))
                 .show(ui, add_contents);
         });
     }
@@ -544,7 +545,7 @@ impl<'a> StudioShell<'a> {
 
         egui::Frame::none()
             .fill(colors.recessed)
-            .inner_margin(egui::Margin::symmetric(14.0, 8.0))
+            .inner_margin(egui::Margin::symmetric(PANEL_INSET_X, SPACE_SM))
             .stroke(Stroke::new(1.0_f32, colors.panel))
             .show(ui, |ui| {
                 let (row_rect, _) = ui.allocate_exact_size(
@@ -579,13 +580,13 @@ impl<'a> StudioShell<'a> {
                         }
                         .fill(bg)
                         .stroke(Stroke::new(1.0_f32, colors.recessed))
-                        .rounding(Rounding::same(4.0))
+                        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
                         .min_size(Vec2::new(hatch_width, CONTROL_HEIGHT));
 
                         if ui.add(btn).on_hover_text(&hatch.tooltip).clicked() {
                             clicked_hatch = Some(idx);
                         }
-                        ui.add_space(4.0);
+                        ui.add_space(SPACE_XS);
                     }
 
                     right_actions(ui);
@@ -598,7 +599,7 @@ impl<'a> StudioShell<'a> {
                     )
                     .fill(close_bg)
                     .stroke(Stroke::new(1.0_f32, colors.recessed))
-                    .rounding(Rounding::same(4.0))
+                    .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
                     .min_size(Vec2::new(0.0, CONTROL_HEIGHT));
 
                     if ui.add(close_btn).clicked() {
@@ -606,7 +607,7 @@ impl<'a> StudioShell<'a> {
                     }
                 }
 
-                let title_right = (action_ui.min_rect().left() - 8.0).max(row_rect.left());
+                let title_right = (action_ui.min_rect().left() - SPACE_SM).max(row_rect.left());
                 let controls_rect =
                     Rect::from_min_max(row_rect.min, egui::pos2(title_right, row_rect.bottom()));
                 let mut title_action_ui = ui.child_ui(
@@ -615,7 +616,7 @@ impl<'a> StudioShell<'a> {
                 );
                 title_action_ui.set_clip_rect(controls_rect);
                 title_actions(&mut title_action_ui);
-                let badges_right = (title_action_ui.min_rect().left() - 8.0).min(title_right);
+                let badges_right = (title_action_ui.min_rect().left() - SPACE_SM).min(title_right);
                 let badge_font = egui::TextStyle::Body.resolve(ui.style());
                 let badge_widths: Vec<f32> = self
                     .badges
@@ -733,7 +734,7 @@ impl<'a> StudioShell<'a> {
 
         egui::Frame::none()
             .fill(colors.recessed)
-            .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+            .inner_margin(egui::Margin::symmetric(PANEL_INSET_X, FOOTER_INSET_Y))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if let Some(hints) = self.footer_hints {
@@ -741,7 +742,7 @@ impl<'a> StudioShell<'a> {
                     }
 
                     if let Some(ref readout) = self.footer_readout {
-                        ui.add_space(12.0);
+                        ui.add_space(SPACE_MD);
                         ui.label(
                             egui::RichText::new(readout)
                                 .strong()

@@ -50,7 +50,10 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 - **H1.2 Fixed color system and controls**
   - [x] **H1.2a1 [Primary] Migrate remaining input controls to shared height and typography.** Remaining image resize dimensions, Film Look search, and Node Machine property inputs now explicitly use `CONTROL_HEIGHT`; node properties use the Body text style. All ordinary single-line inputs are audited. Multiline prompts, OCR output, markup-on-canvas editing, and code content retain their content-specific sizing. `cargo test -p clip-workbench --quiet` passes (250 passed, one ignored).
   - **H1.2a2 Finish remaining shared interaction tokens**
-    - [ ] **H1.2a2a [Primary] Migrate remaining spacing to shared tokens.**
+    - **H1.2a2a [Primary] Migrate remaining spacing to shared tokens**
+      - [x] **H1.2a2a1 [Luna] Tokenize shared StudioShell and AudioWorkspace spacing.** Shared shell and audio control-row insets, spacers, and corner radius now use centralized `ui_ext` tokens; intentional panel geometry remains local.
+      - [ ] **H1.2a2a2 [Primary] Audit remaining shared controls and migrate spacing tokens.**
+      - [ ] **H1.2a2a3 [Primary] Audit view-specific spacing for repeated control patterns.**
     - [ ] **H1.2a2b [Primary] Migrate disabled-state styling to shared tokens.**
     - [ ] **H1.2a2c [Primary] Migrate status interactions to shared tokens.**
   - [ ] **H1.2a3 [Primary] Finish shared chrome token use.**

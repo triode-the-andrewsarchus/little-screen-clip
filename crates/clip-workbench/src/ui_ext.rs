@@ -10,6 +10,12 @@ use little_clip_core::palette::{AppPalette, contrast_ratio};
 pub const CONTROL_HEIGHT: f32 = 36.0;
 pub const CONTROL_ICON_SIZE: f32 = 18.0;
 pub const BODY_FONT_SIZE: f32 = 16.0;
+pub const SPACE_XS: f32 = 4.0;
+pub const SPACE_SM: f32 = 8.0;
+pub const SPACE_MD: f32 = 12.0;
+pub const PANEL_INSET_X: f32 = 14.0;
+pub const CONTROL_ROW_INSET_Y: f32 = 5.0;
+pub const FOOTER_INSET_Y: f32 = 6.0;
 
 /// Keeps the regular help text available while explaining why a disabled control cannot run.
 pub fn on_hover_text_with_disabled_reason(

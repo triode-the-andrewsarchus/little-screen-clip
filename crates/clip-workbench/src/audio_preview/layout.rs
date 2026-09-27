@@ -130,12 +130,15 @@ impl AudioWorkspace {
         egui::Frame::none()
             .fill(colors.recessed)
             .stroke(Stroke::new(1.0_f32, colors.panel))
-            .inner_margin(egui::Margin::symmetric(14.0, 5.0))
+            .inner_margin(egui::Margin::symmetric(
+                crate::ui_ext::PANEL_INSET_X,
+                crate::ui_ext::CONTROL_ROW_INSET_Y,
+            ))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal_wrapped(controls);
             });
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
     }
 
     pub(super) fn info_bar(
@@ -150,12 +153,15 @@ impl AudioWorkspace {
                 1.0_f32,
                 hex_to_c32_alpha(&palette.harmonies.base, 100),
             ))
-            .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+            .inner_margin(egui::Margin::symmetric(
+                crate::ui_ext::PANEL_INSET_X,
+                crate::ui_ext::FOOTER_INSET_Y,
+            ))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 contents(ui);
             });
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
     }
 
     pub(super) fn control_group(
@@ -169,22 +175,22 @@ impl AudioWorkspace {
     }
 
     pub(super) fn section_divider(ui: &mut egui::Ui, palette: &AppPalette) {
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         let (rect, _) =
             ui.allocate_exact_size(Vec2::new(2.0, Self::BUTTON_HEIGHT), egui::Sense::hover());
         ui.painter().line_segment(
             [rect.center_top(), rect.center_bottom()],
             Stroke::new(1.5_f32, hex_to_c32_alpha(&palette.harmonies.base, 140)),
         );
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
     }
 
     fn section_title(ui: &mut egui::Ui, palette: &AppPalette, label: &str) {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         egui::Frame::none()
             .fill(colors.panel)
-            .rounding(Rounding::same(3.0))
-            .inner_margin(egui::Margin::symmetric(8.0, 0.0))
+            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+            .inner_margin(egui::Margin::symmetric(crate::ui_ext::SPACE_SM, 0.0))
             .show(ui, |ui| {
                 Self::inline_label(ui, &format!("{label}:"), colors.text_primary);
             });
@@ -237,7 +243,7 @@ impl AudioWorkspace {
         )
         .fill(background)
         .stroke(Stroke::new(1.0_f32, border))
-        .rounding(Rounding::same(4.0))
+        .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
         .min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
     }
 
@@ -296,7 +302,7 @@ impl AudioWorkspace {
         ui.allocate_ui_at_rect(rect, |ui| {
             ui.painter()
                 .rect_filled(rect, Rounding::ZERO, colors.canvas);
-            ui.add_space(8.0);
+            ui.add_space(crate::ui_ext::SPACE_SM);
             body(ui);
         });
     }
@@ -399,7 +405,10 @@ impl AudioPreviewState {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         egui::Frame::none()
             .fill(colors.recessed)
-            .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+            .inner_margin(egui::Margin::symmetric(
+                crate::ui_ext::PANEL_INSET_X,
+                crate::ui_ext::FOOTER_INSET_Y,
+            ))
             .stroke(Stroke::new(1.0_f32, colors.panel))
             .show(ui, |ui| {
                 render_audio_tool_tabs(ui, &mut self.active_mode, palette);
