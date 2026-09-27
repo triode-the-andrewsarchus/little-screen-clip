@@ -3278,6 +3278,116 @@ mod tests {
         assert!(close_requested);
     }
 
+    #[test]
+    fn inspect_footer_stays_after_canvas_in_full_and_embedded_views() {
+        use egui::epaint::Shape;
+
+        fn render_case(
+            width: f32,
+            height: f32,
+            embedded: bool,
+            ready: bool,
+            zoom: f32,
+        ) -> (egui::FullOutput, Rect, Option<(Rect, f32)>) {
+            let (_temp_dir, path) = generate_fixture_wav("inspect-layout", 0.25);
+            let mut state = AudioPreviewState::new(path.clone(), "fixture.wav".to_string());
+            state.analysis_rx = None;
+            if ready {
+                state.analysis = Some(compute_full_audio_analysis(&path, 100).unwrap());
+                state.is_loading_analysis = false;
+            }
+
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            ctx.set_zoom_factor(zoom);
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+            let host = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, height));
+            let mut close_requested = false;
+            let mut scroll_viewport = None;
+            let mut actual_host = host;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(host),
+                    ..Default::default()
+                },
+                |ctx| {
+                    actual_host = ctx.screen_rect();
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        if embedded {
+                            let output = egui::ScrollArea::vertical().show(ui, |ui| {
+                                state.render_standard_ui(
+                                    ui,
+                                    ctx,
+                                    &palette,
+                                    &mut close_requested,
+                                    Some(350.0),
+                                );
+                            });
+                            scroll_viewport = Some((output.inner_rect, output.content_size.y));
+                        } else {
+                            state.render_standard_ui(ui, ctx, &palette, &mut close_requested, None);
+                        }
+                    });
+                },
+            );
+            (output, actual_host, scroll_viewport)
+        }
+
+        for (width, height, embedded, ready, zoom) in [
+            (820.0, 680.0, false, false, 1.0),
+            (1180.0, 760.0, false, true, 1.25),
+            (900.0, 360.0, true, false, 1.0),
+            (1180.0, 380.0, true, true, 1.25),
+        ] {
+            let (output, host, scroll_viewport) = render_case(width, height, embedded, ready, zoom);
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+            let canvas = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    Shape::Rect(rect)
+                        if rect.fill == hex_to_c32(&palette.colors.surface_recessed)
+                            && rect.rounding == egui::Rounding::same(8.0)
+                            && rect.rect.width() > 500.0
+                            && rect.rect.height() > 100.0 =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .expect("inspect canvas frame should render");
+            let (footer_y, footer_height) = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    Shape::Text(text) if text.galley.text().contains("Navigation:") => {
+                        Some((text.pos.y, text.galley.size().y))
+                    }
+                    _ => None,
+                })
+                .expect("inspect footer caption should render");
+
+            assert!(
+                canvas.min.x >= host.min.x - 1.0 && canvas.max.x <= host.max.x + 1.0,
+                "canvas {canvas:?} is outside host {host:?} (embedded={embedded}, ready={ready}, zoom={zoom})"
+            );
+            assert!(
+                canvas.max.y <= footer_y,
+                "canvas and footer must not overlap"
+            );
+            if let Some((viewport, content_height)) = scroll_viewport {
+                assert!(canvas.min.x >= viewport.min.x && canvas.max.x <= viewport.max.x);
+                assert!(canvas.min.y >= viewport.min.y);
+                assert!(footer_y + footer_height <= viewport.min.y + content_height + 1.0);
+            } else {
+                assert!(canvas.min.y >= host.min.y && canvas.max.y <= host.max.y);
+                assert!(footer_y + footer_height <= host.max.y);
+            }
+        }
+    }
+
     fn preview_source_with_region(
         region: AudioRegionEdit,
     ) -> (

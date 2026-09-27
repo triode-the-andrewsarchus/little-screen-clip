@@ -66,7 +66,9 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
   - [ ] **H1.2c2 [Primary] Verify foreground/background contrast on all surfaces.**
   - [ ] **H1.2c3 [Primary] Verify accent use is purposeful on all surfaces.** Shared dark `console_surface` keeps ANSI comparison output high contrast in both appearances.
 - **H1.3 Viewer sessions, actions, and async identity**
-  - [ ] **H1.3a1 [Primary] Document and implement viewer route/return contract.** `WorkbenchApp` has one `ViewerSession` enum instead of nine optional viewers; startup queue preserves `--audio` then `--image` sequence and diff/binary-diff precedence.
+  - **H1.3a1 Viewer route/return contract**
+    - [ ] **H1.3a1a [Primary] Document the viewer route/return contract.** Include ownership, close behavior, and startup route precedence.
+    - [ ] **H1.3a1b [Primary] Complete implementation of the viewer route/return contract.** `WorkbenchApp` has one `ViewerSession` enum instead of nine optional viewers; startup queue preserves `--audio` then `--image` sequence and diff/binary-diff precedence. Reconcile remaining behavior against the documented contract.
   - [ ] **H1.3a2 [Primary] Verify image navigation and cleanup live.**
   - [ ] **H1.3a3 [Primary] Verify audio navigation and cleanup live.** Closing audio/MIDI stops playback.
   - [ ] **H1.3a4 [Primary] Verify text navigation and cleanup live.**
@@ -114,9 +116,11 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
       - [ ] **H1.4k4b [Primary] Verify panelized image-tool footers live.**
       - [ ] **H1.4k4c [Primary] Verify compact header filename visibility live.**
   - **H1.4l Audio Studio footer defect (1920×1080 Dark)**
-    - [ ] **H1.4l1 [Primary] Reserve a nonoverlapping Audio Studio footer clear of the bottom timeline and scrollbar.**
-    - [ ] **H1.4l2 [Primary] Add render/layout regression checks for the Audio Studio footer.**
-    - [ ] **H1.4l3 [Primary] Verify the Audio Studio footer live.**
+    - [x] **H1.4l1 [Primary; Luna implementation] Reserve a nonoverlapping Audio Studio footer clear of the bottom timeline and scrollbar.** Measured caption panel precedes canvas allocation; finite embedded workspace preserves a scrollable minimum. Timeline painting and hit regions stay bounded for short canvases.
+    - [x] **H1.4l2 [Primary; Luna implementation] Add render/layout regression checks for the Audio Studio footer.** Real rendering covers full and embedded hosts, loading/ready states, and UI zoom; separate geometry tests bound the five timeline regions. Workspace tests pass (217 workbench tests, one ignored).
+    - **H1.4l3 Runtime footer verification**
+      - [x] **H1.4l3a [Primary] Verify the full Audio Studio footer live.** Isolated Niri captures at 1920×1080 Dark / 100% and 1280×720 Light / 150% show the caption clear of the timeline scrollbar.
+      - [ ] **H1.4l3b [Primary] Verify the embedded stem editor footer live.**
   - **H1.4m Empty/no-daemon compact workbench footer and rolling-audio strip**
     - [ ] **H1.4m1 [Primary] Determine provenance of the clipped rolling-audio strip header at 1280×720.**
     - [ ] **H1.4m2 [Primary] Reserve footer space for the empty/no-daemon mirror at 1280×720.**

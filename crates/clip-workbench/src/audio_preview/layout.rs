@@ -7,6 +7,31 @@ impl AudioWorkspace {
     const BUTTON_HEIGHT: f32 = crate::ui_ext::CONTROL_HEIGHT;
     const TIME_READOUT_WIDTH: f32 = 242.0;
 
+    /// Keep timeline painting and hit regions inside even a short canvas.
+    pub(super) fn inspect_timeline_rects(track: Rect) -> [Rect; 5] {
+        let height = track.height().max(0.0);
+        // Normal geometry needs 126 points of fixed rows/gaps and 100 of plots.
+        let compression = (height / 226.0).min(1.0);
+        let gap = 4.0 * compression;
+        let plot = (height - 126.0 * compression).max(0.0) / 2.0;
+        let heights = [
+            24.0 * compression,
+            plot,
+            plot,
+            72.0 * compression,
+            14.0 * compression,
+        ];
+        let mut y = track.min.y;
+        heights.map(|height| {
+            let rect = Rect::from_min_max(
+                Pos2::new(track.min.x, y),
+                Pos2::new(track.max.x, y + height),
+            );
+            y += height + gap;
+            rect
+        })
+    }
+
     fn fixed_readout(ui: &mut egui::Ui, text: &str, width: f32, color: Color32) {
         let (rect, _) =
             ui.allocate_exact_size(Vec2::new(width, Self::BUTTON_HEIGHT), egui::Sense::hover());
@@ -399,6 +424,29 @@ impl AudioPreviewState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inspect_timeline_regions_fit_short_and_normal_canvases() {
+        for height in [0.0, 1.0, 64.0, 126.0, 180.0, 220.0, 226.0, 500.0] {
+            let host = Rect::from_min_size(Pos2::new(48.0, 32.0), Vec2::new(600.0, height));
+            let rows = AudioWorkspace::inspect_timeline_rects(host);
+            for row in rows {
+                assert!(row.min.y >= host.min.y - 0.001);
+                assert!(row.max.y <= host.max.y + 0.001);
+                assert!(row.height() >= 0.0);
+            }
+            for pair in rows.windows(2) {
+                assert!(pair[0].max.y <= pair[1].min.y);
+            }
+            assert!((rows[4].max.y - host.max.y).abs() < 0.001);
+            if height >= 226.0 {
+                assert_eq!(rows[0].height(), 24.0);
+                assert_eq!(rows[3].height(), 72.0);
+                assert_eq!(rows[4].height(), 14.0);
+                assert_eq!(rows[1].height(), rows[2].height());
+            }
+        }
+    }
 
     #[test]
     fn audio_time_readout_keeps_hours() {

@@ -8,6 +8,38 @@ enum CanvasEffect {
     HighPass,
 }
 
+const INSPECT_MIN_CANVAS_HEIGHT: f32 = 226.0;
+const INSPECT_HELP_TEXT: &str = "Wheel / +/-: Zoom • Drag: Select • Ctrl+C: Copy • Ctrl+S: Save";
+
+fn inspect_footer_galley(
+    ui: &egui::Ui,
+    palette: &AppPalette,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let font_id = egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE);
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        "Navigation:",
+        0.0,
+        egui::TextFormat {
+            font_id: font_id.clone(),
+            color: hex_to_c32(&palette.colors.text_secondary),
+            ..Default::default()
+        },
+    );
+    job.append(
+        INSPECT_HELP_TEXT,
+        8.0,
+        egui::TextFormat {
+            font_id,
+            color: hex_to_c32(&palette.colors.text_muted),
+            ..Default::default()
+        },
+    );
+    job.wrap.max_width = width.max(1.0);
+    ui.fonts(|fonts| fonts.layout_job(job))
+}
+
 #[cfg(test)]
 mod effect_tests {
     use super::*;
@@ -849,36 +881,51 @@ impl AudioPreviewState {
         ui.add_space(8.0);
 
         // 3. Main Synchronized 3-View Representation Canvas
+        let controls_spent = ui.cursor().min.y - editor_start_y;
         let avail_w = ui.available_width() - 28.0;
-        let sub_h = 36.0;
-        let avail_h = embedded_height
-            .map(|height| height - (ui.cursor().min.y - editor_start_y) - 34.0)
-            .unwrap_or_else(|| ui.available_height() - sub_h)
-            .max(220.0);
+        let footer_galley = inspect_footer_galley(ui, palette, ui.available_width());
+        let footer_height = footer_galley.size().y + 12.0;
+        let workspace_height = embedded_height
+            .map(|height| (height - controls_spent).max(INSPECT_MIN_CANVAS_HEIGHT + footer_height))
+            .unwrap_or_else(|| ui.available_height());
 
-        ui.horizontal(|ui| {
-            ui.add_space(14.0);
-            self.render_waveform_canvas(ui, ctx, palette, avail_w, avail_h);
-        });
+        ui.allocate_ui_with_layout(
+            Vec2::new(ui.available_width(), workspace_height),
+            egui::Layout::top_down(egui::Align::Min),
+            |workspace| {
+                egui::TopBottomPanel::bottom(workspace.make_persistent_id("audio_inspect_help_footer"))
+                    .exact_height(footer_height)
+                    .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 3.0)))
+                    .show_inside(workspace, |ui| {
+                        ui.add_space(6.0);
+                        let (row_rect, response) = ui.allocate_exact_size(
+                            Vec2::new(ui.available_width(), footer_galley.size().y),
+                            egui::Sense::hover(),
+                        );
+                        ui.painter().galley(
+                            Pos2::new(
+                                row_rect.center().x - footer_galley.size().x * 0.5,
+                                row_rect.min.y,
+                            ),
+                            footer_galley.clone(),
+                            Color32::PLACEHOLDER,
+                        );
+                        response.on_hover_text("N: Normalize hovered region / track • Shift+Wheel waveform: Gain • Shift+Wheel spectrum top/bottom: Low/High Pass • Ctrl+Wheel: Crossfade • Ctrl+Middle-Click: Clear Crossfade • Middle-Click: Reset Effect • Middle-Drag: Pan • Wheel / +/-: Zoom • Drag: Select • Ctrl+C: Copy • Ctrl+S: Save");
+                    });
 
-        // 4. Footer Help Bar
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
-                ui.add_space(6.0);
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        egui::RichText::new("Navigation:")
-                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .strong()
-                            .color(hex_to_c32(&palette.colors.text_secondary)),
+                let canvas_height = workspace.available_height();
+                workspace.horizontal(|ui| {
+                    ui.add_space(14.0);
+                    self.render_waveform_canvas(
+                        ui,
+                        ctx,
+                        palette,
+                        avail_w,
+                        canvas_height.max(0.0),
                     );
-                    ui.label(
-                        egui::RichText::new("Wheel / +/-: Zoom • Drag: Select • Ctrl+C: Copy • Ctrl+S: Save")
-                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .color(hex_to_c32(&palette.colors.text_muted)),
-                    )
-                    .on_hover_text("N: Normalize hovered region / track • Shift+Wheel waveform: Gain • Shift+Wheel spectrum top/bottom: Low/High Pass • Ctrl+Wheel: Crossfade • Ctrl+Middle-Click: Clear Crossfade • Middle-Click: Reset Effect • Middle-Drag: Pan • Wheel / +/-: Zoom • Drag: Select • Ctrl+C: Copy • Ctrl+S: Save");
                 });
-            });
+            },
+        );
 
         // Render Save Dialog modal if open
         self.render_save_dialog(ctx, palette, now);
@@ -1319,37 +1366,13 @@ impl AudioPreviewState {
         let track_max_x = rect.max.x - 6.0;
         let track_width = (track_max_x - track_min_x).max(10.0);
 
-        let ruler_h = 24.0;
-        let strip_h = 72.0; // 3x taller to accommodate 2-D multi-note chord stripes
-        let scrollbar_h = 14.0;
-        let spacing = 4.0;
-
-        let available_view_h =
-            (rect.height() - ruler_h - strip_h - scrollbar_h - spacing * 4.0).max(100.0);
-        // Equal 50/50 partition so room for the note strip is taken equally from waveform and spectrum views
-        let wave_h = (available_view_h * 0.50).max(50.0);
-        let spec_h = (available_view_h * 0.50).max(40.0);
-
-        let ruler_rect = Rect::from_min_max(
+        let track_rect = Rect::from_min_max(
             Pos2::new(track_min_x, rect.min.y),
-            Pos2::new(track_max_x, rect.min.y + ruler_h),
+            Pos2::new(track_max_x, rect.max.y),
         );
-        let wave_rect = Rect::from_min_max(
-            Pos2::new(track_min_x, ruler_rect.max.y + spacing),
-            Pos2::new(track_max_x, ruler_rect.max.y + spacing + wave_h),
-        );
-        let spec_rect = Rect::from_min_max(
-            Pos2::new(track_min_x, wave_rect.max.y + spacing),
-            Pos2::new(track_max_x, wave_rect.max.y + spacing + spec_h),
-        );
-        let strip_rect = Rect::from_min_max(
-            Pos2::new(track_min_x, spec_rect.max.y + spacing),
-            Pos2::new(track_max_x, spec_rect.max.y + spacing + strip_h),
-        );
-        let scroll_rect = Rect::from_min_max(
-            Pos2::new(track_min_x, strip_rect.max.y + spacing),
-            Pos2::new(track_max_x, strip_rect.max.y + spacing + scrollbar_h),
-        );
+        let [ruler_rect, wave_rect, spec_rect, strip_rect, scroll_rect] =
+            layout::AudioWorkspace::inspect_timeline_rects(track_rect);
+        let wave_h = wave_rect.height();
 
         // Transform helpers parameterized by (start, dur) to avoid closures holding &self
         let x_to_t = move |x: f32, start: f32, dur: f32| -> f32 {
