@@ -31,6 +31,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
@@ -331,6 +332,26 @@ struct TextFileLoadJob {
     receiver: Receiver<Result<Result<TextPreviewState, String>, JobError>>,
 }
 
+struct RollingEditorLoadJob {
+    ticket: JobTicket,
+    cancelled: Arc<AtomicBool>,
+    receiver: Receiver<
+        Result<Result<(PathBuf, Option<little_clip_core::audio::AudioMetadata>), String>, JobError>,
+    >,
+    editor: String,
+    ready: Option<Result<(PathBuf, Option<little_clip_core::audio::AudioMetadata>), String>>,
+}
+
+impl Drop for RollingEditorLoadJob {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+        self.ticket.cancel();
+        if let Some(Ok((path, _))) = self.ready.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
 impl ImageLoadJob {
     fn new(source: ImageLoadSource, config: AppConfig) -> Self {
         let (ticket, receiver) =
@@ -409,6 +430,7 @@ struct WorkbenchApp {
         Option<(Arc<str>, String)>,
     )>,
     midi_load_job: Option<(JobTicket, MidiLoadReceiver)>,
+    rolling_editor_job: Option<RollingEditorLoadJob>,
     rolling_audio_strip: Option<RollingAudioStripState>,
     dragging_slot: Option<SlotId>,
     config: AppConfig,
@@ -659,6 +681,7 @@ impl WorkbenchApp {
             text_load_job: None,
             spreadsheet_load_job: None,
             midi_load_job: None,
+            rolling_editor_job: None,
             rolling_audio_strip,
             dragging_slot: None,
             config,
@@ -1201,6 +1224,8 @@ impl eframe::App for WorkbenchApp {
         self.appearance_sync.poll(ctx);
         self.appearance_sync.render(ctx, &self.ui_palette);
 
+        self.poll_rolling_editor_load(ctx);
+        self.render_rolling_editor_status(ctx);
         self.poll_image_load(ctx);
         self.poll_text_load(ctx);
         if self.render_modal_viewers(ctx) {
@@ -1254,7 +1279,7 @@ impl eframe::App for WorkbenchApp {
         }
 
         if let Some(host_action) = host_action {
-            self.apply_rolling_audio_action(host_action);
+            self.apply_rolling_audio_action(host_action, ctx);
         }
 
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -2220,37 +2245,144 @@ impl WorkbenchApp {
         }
     }
 
-    fn apply_rolling_audio_action(&mut self, action: RollingAudioAction) {
+    fn apply_rolling_audio_action(&mut self, action: RollingAudioAction, ctx: &egui::Context) {
         match action {
             RollingAudioAction::OpenEditor {
                 snapshot_path,
                 selected_region,
             } => {
-                let prepared_path = if let Some((start, end)) = selected_region {
-                    self.rolling_audio_strip
-                        .as_ref()
-                        .ok_or_else(|| "rolling audio strip is no longer available".to_string())
-                        .and_then(|strip| strip.materialize_editor_selection(start, end))
-                } else {
-                    Ok(snapshot_path)
-                };
-                match prepared_path {
-                    Ok(prepared_path) => {
-                        let title = if selected_region.is_some() {
-                            "Rolling Audio Selection"
-                        } else {
-                            "Rolling Audio Snapshot"
-                        };
-                        // A materialized selection is now the whole source timeline.
-                        let editor = AudioPreviewState::new(prepared_path, title.to_string())
+                let Some((start, end)) = selected_region else {
+                    let editor =
+                        AudioPreviewState::new(snapshot_path, "Rolling Audio Snapshot".to_owned())
                             .with_editor(self.config.audio.editor.clone());
-                        self.replace_viewer(Some(ViewerSession::Audio(editor)));
-                    }
-                    Err(error) => self.set_status_message(format!(
-                        "Could not open rolling audio selection: {error}"
-                    )),
+                    self.replace_viewer(Some(ViewerSession::Audio(editor)));
+                    return;
+                };
+                if self.rolling_editor_job.is_some() {
+                    self.set_status_message(
+                        "A rolling audio editor handoff is already in progress",
+                    );
+                    return;
+                }
+                let cancelled = Arc::new(AtomicBool::new(false));
+                let worker_cancelled = Arc::clone(&cancelled);
+                let source = snapshot_path;
+                let (ticket, receiver) =
+                    BackgroundJobs::global().submit(Duration::MAX, move || {
+                        RollingAudioStripState::materialize_editor_selection(
+                            &source,
+                            start,
+                            end,
+                            &worker_cancelled,
+                        )
+                        .map(|path| {
+                            let metadata = little_clip_core::audio::read_audio_metadata(&path);
+                            (path, metadata)
+                        })
+                    });
+                self.rolling_editor_job = Some(RollingEditorLoadJob {
+                    ticket,
+                    cancelled,
+                    receiver,
+                    editor: self.config.audio.editor.clone(),
+                    ready: None,
+                });
+                self.set_status_message("Preparing selected rolling audio for the editor…");
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    fn poll_rolling_editor_load(&mut self, ctx: &egui::Context) {
+        let Some(job) = &mut self.rolling_editor_job else {
+            return;
+        };
+        if job.ready.is_none() {
+            match job.receiver.try_recv() {
+                Ok(Ok(Ok(result))) => job.ready = Some(Ok(result)),
+                Ok(Ok(Err(error))) => job.ready = Some(Err(error)),
+                Ok(Err(error)) => job.ready = Some(Err(error.to_string())),
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(40));
+                    return;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    job.ready = Some(Err("background job was cancelled".to_owned()));
                 }
             }
+        }
+        if self.viewer.is_some() || !self.startup_viewers.is_empty() {
+            self.set_status_message(
+                "Selected rolling audio is ready; waiting for the active viewer to close",
+            );
+            ctx.request_repaint_after(Duration::from_millis(80));
+            return;
+        }
+        let Some(mut job) = self.rolling_editor_job.take() else {
+            return;
+        };
+        match job.ready.take().expect("ready result checked above") {
+            Ok((path, metadata)) => {
+                let editor = AudioPreviewState::new_with_metadata(
+                    path,
+                    "Rolling Audio Selection".to_owned(),
+                    metadata,
+                )
+                .with_editor(job.editor.clone());
+                self.status_msg = None;
+                self.replace_viewer(Some(ViewerSession::Audio(editor)));
+            }
+            Err(error) => {
+                self.set_status_message(format!("Could not open rolling audio selection: {error}"))
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn render_rolling_editor_status(&mut self, ctx: &egui::Context) {
+        let active = self.rolling_editor_job.is_some();
+        let message = if active {
+            self.rolling_editor_job
+                .as_ref()
+                .filter(|job| job.ready.is_some())
+                .map(|_| "Selected audio is ready; waiting for the active viewer to close")
+                .unwrap_or("Preparing selected rolling audio for the editor…")
+                .to_owned()
+        } else {
+            match self.status_msg.as_deref() {
+                Some(message) if message.starts_with("Could not open rolling audio selection:") => {
+                    message.to_owned()
+                }
+                _ => return,
+            }
+        };
+        let mut dismiss = false;
+        egui::Area::new(egui::Id::new("rolling_audio_editor_handoff"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0])
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if active {
+                            ui.spinner();
+                        }
+                        ui.label(&message);
+                        if active {
+                            if ui.button("Cancel").clicked() {
+                                self.rolling_editor_job = None;
+                                self.status_msg = None;
+                            }
+                        } else {
+                            dismiss = ui.button("Dismiss").clicked();
+                        }
+                    });
+                });
+            });
+        if dismiss {
+            self.status_msg = None;
+        }
+        if active {
+            ctx.request_repaint_after(Duration::from_millis(40));
         }
     }
 
@@ -2902,6 +3034,7 @@ mod workbench_layout_tests {
             text_load_job: None,
             spreadsheet_load_job: None,
             midi_load_job: None,
+            rolling_editor_job: None,
             rolling_audio_strip: None,
             dragging_slot: None,
             config,
@@ -3295,6 +3428,7 @@ mod workbench_layout_tests {
 
     #[test]
     fn failed_rolling_selection_action_keeps_the_current_viewer_open() {
+        let ctx = egui::Context::default();
         let mut app = test_workbench_app(
             Some(ViewerSession::ComponentGallery(
                 component_gallery::ComponentGalleryState::default(),
@@ -3302,20 +3436,97 @@ mod workbench_layout_tests {
             VecDeque::new(),
         );
 
-        app.apply_rolling_audio_action(RollingAudioAction::OpenEditor {
-            snapshot_path: PathBuf::from("snapshot.wav"),
-            selected_region: Some((1.0, 2.0)),
-        });
+        app.apply_rolling_audio_action(
+            RollingAudioAction::OpenEditor {
+                snapshot_path: PathBuf::from("snapshot.wav"),
+                selected_region: Some((1.0, 2.0)),
+            },
+            &ctx,
+        );
 
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !app
+            .rolling_editor_job
+            .as_ref()
+            .is_some_and(|job| job.ready.is_some())
+        {
+            app.poll_rolling_editor_load(&ctx);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "rolling editor job should finish"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        app.poll_rolling_editor_load(&ctx);
+        assert!(app.rolling_editor_job.is_some());
         assert!(matches!(
             app.viewer,
             Some(ViewerSession::ComponentGallery(_))
         ));
-        assert_eq!(
-            app.status_msg.as_deref(),
-            Some(
-                "Could not open rolling audio selection: rolling audio strip is no longer available"
+        app.viewer = None;
+        app.poll_rolling_editor_load(&ctx);
+
+        assert!(app.viewer.is_none());
+        assert!(
+            app.status_msg.as_deref().is_some_and(
+                |message| message.starts_with("Could not open rolling audio selection:")
             )
+        );
+    }
+
+    #[test]
+    fn rolling_editor_materialization_waits_for_active_viewer_and_preserves_range_editor() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("rolling-capture.wav");
+        let mut buffer = little_clip_core::rolling_audio::RollingAudioBuffer::new(2, 44_100, 2);
+        buffer.push_samples(&vec![1000i16; 44_100 * 2 * 2]);
+        buffer.write_wav(&source).unwrap();
+        let gallery =
+            || ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::default());
+        let mut app = test_workbench_app(Some(gallery()), VecDeque::new());
+        app.config.audio.editor = "custom-audio-editor".to_owned();
+        let ctx = egui::Context::default();
+        app.apply_rolling_audio_action(
+            RollingAudioAction::OpenEditor {
+                snapshot_path: source,
+                selected_region: Some((1.25, 0.5)),
+            },
+            &ctx,
+        );
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !app
+            .rolling_editor_job
+            .as_ref()
+            .is_some_and(|job| job.ready.is_some())
+        {
+            app.poll_rolling_editor_load(&ctx);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "rolling editor materialization should finish"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        app.poll_rolling_editor_load(&ctx);
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
+        assert!(app.rolling_editor_job.is_some());
+        app.viewer = None;
+        app.poll_rolling_editor_load(&ctx);
+
+        let Some(ViewerSession::Audio(editor)) = app.viewer.as_ref() else {
+            panic!(
+                "rolling selection should open the audio editor after the current viewer closes"
+            );
+        };
+        assert_eq!(editor.title, "Rolling Audio Selection");
+        assert_eq!(editor.audio_editor, "custom-audio-editor");
+        assert!(
+            (0.5..=0.8).contains(&editor.duration_sec),
+            "selected range should remain bounded after optional edge trimming: {}",
+            editor.duration_sec
         );
     }
 

@@ -16,6 +16,7 @@ use rodio::{Decoder, Player};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 use tracing::{error, info};
@@ -80,15 +81,15 @@ impl RollingAudioStripState {
     /// editor must never receive the entire rolling capture when a region was
     /// explicitly selected. ffmpeg's silence filter is used when available;
     /// the already-trimmed time slice remains a safe fallback otherwise.
-    pub fn materialize_editor_selection(
-        &self,
+    pub(crate) fn materialize_editor_selection(
+        source: &Path,
         start_sec: f32,
         end_sec: f32,
+        cancelled: &AtomicBool,
     ) -> Result<PathBuf, String> {
-        let source = self
-            .path
-            .as_ref()
-            .ok_or_else(|| "No rolling audio snapshot is loaded".to_string())?;
+        if cancelled.load(Ordering::Acquire) {
+            return Err("Rolling audio editor handoff cancelled".to_owned());
+        }
         let (start_sec, end_sec) = (start_sec.min(end_sec), start_sec.max(end_sec));
         if end_sec - start_sec < 0.05 {
             return Err("Select at least 50ms of audio before opening the editor".to_string());
@@ -100,10 +101,14 @@ impl RollingAudioStripState {
         let sliced = directory.join(format!("rolling-{id}-selected.wav"));
         little_clip_core::rolling_audio::slice_wav(source, start_sec, end_sec, &sliced)
             .map_err(|error| format!("Could not materialize selected audio: {error}"))?;
+        if cancelled.load(Ordering::Acquire) {
+            let _ = std::fs::remove_file(&sliced);
+            return Err("Rolling audio editor handoff cancelled".to_owned());
+        }
 
         let trimmed = directory.join(format!("rolling-{id}-trimmed.wav"));
-        let status = little_clip_core::CommandRequest::new("ffmpeg")
-            .args(["-y", "-i"])
+        let mut trim = std::process::Command::new("ffmpeg");
+        trim.args(["-y", "-i"])
             .arg(&sliced)
             .args([
                 "-af",
@@ -113,9 +118,16 @@ impl RollingAudioStripState {
                 "silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_duration=0.05:start_threshold=-45dB,areverse",
             ])
             .arg(&trimmed)
-            .run()
-            .map(|output| output.status.success())
-            .unwrap_or(false);
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        let trim_status = crate::audio_preview::run_audio_command_cancellable(&mut trim, cancelled);
+        if cancelled.load(Ordering::Acquire) {
+            let _ = std::fs::remove_file(&sliced);
+            let _ = std::fs::remove_file(&trimmed);
+            return Err("Rolling audio editor handoff cancelled".to_owned());
+        }
+        let status = trim_status.is_ok_and(|status| status.success());
         if status && trimmed.is_file() {
             let _ = std::fs::remove_file(&sliced);
             Ok(trimmed)
@@ -1084,6 +1096,62 @@ mod tests {
                 ) >= 4.5
             );
         }
+    }
+
+    #[test]
+    fn editor_materialization_uses_captured_range_and_optional_trim() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("capture.wav");
+        let mut buffer = RollingAudioBuffer::new(2, 44_100, 2);
+        buffer.push_samples(&vec![1000i16; 44_100 * 2 * 2]);
+        buffer.write_wav(&source).unwrap();
+
+        let output = RollingAudioStripState::materialize_editor_selection(
+            &source,
+            1.25,
+            0.5,
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert!(output.is_file());
+        let (samples, sample_rate, _) = load_pcm16_samples(&output).unwrap();
+        let duration = samples.len() as f32 / sample_rate as f32;
+        assert!(
+            (0.6..=0.78).contains(&duration),
+            "captured range should remain bounded after optional edge trimming: {duration}s"
+        );
+        assert!(
+            output
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .contains("trimmed")
+        );
+        let _ = std::fs::remove_file(output);
+    }
+
+    #[test]
+    fn editor_materialization_rejects_short_or_cancelled_selection() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("missing.wav");
+        assert_eq!(
+            RollingAudioStripState::materialize_editor_selection(
+                &source,
+                0.0,
+                0.04,
+                &AtomicBool::new(false),
+            ),
+            Err("Select at least 50ms of audio before opening the editor".to_owned())
+        );
+        assert_eq!(
+            RollingAudioStripState::materialize_editor_selection(
+                &source,
+                0.0,
+                1.0,
+                &AtomicBool::new(true),
+            ),
+            Err("Rolling audio editor handoff cancelled".to_owned())
+        );
     }
 
     fn complete_snapshot(

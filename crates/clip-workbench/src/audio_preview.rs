@@ -673,6 +673,31 @@ fn handoff_audio_files(
     }
 }
 
+pub(crate) fn run_audio_command_cancellable(
+    command: &mut std::process::Command,
+    cancelled: &AtomicBool,
+) -> Result<std::process::ExitStatus, String> {
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Could not start audio process: {error}"))?;
+    loop {
+        if cancelled.load(Ordering::Acquire) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Audio process cancelled".to_owned());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("Could not wait for audio process: {error}"));
+            }
+        }
+    }
+}
+
 fn extract_audio_slice_file(
     plan: &AudioSliceCopyPlan,
     cancelled: &AtomicBool,
@@ -695,31 +720,13 @@ fn extract_audio_slice_file(
     if let Some(filter) = &plan.filter {
         command.arg("-af").arg(filter);
     }
-    let mut child = command
-        .arg("-c:a")
-        .arg("pcm_s16le")
-        .arg(&plan.output)
+    command.arg("-c:a").arg("pcm_s16le").arg(&plan.output);
+    command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|error| format!("ffmpeg process failed to execute: {error}"))?;
-    let status = loop {
-        if cancelled.load(Ordering::Acquire) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err("Audio slice copy cancelled".to_owned());
-        }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("Could not wait for ffmpeg: {error}"));
-            }
-        }
-    };
+        .stderr(std::process::Stdio::null());
+    let status = run_audio_command_cancellable(&mut command, cancelled)
+        .map_err(|error| format!("ffmpeg process failed: {error}"))?;
     if !status.success() || !plan.output.exists() {
         return Err(format!(
             "Failed to extract audio segment via ffmpeg ({status})"
@@ -1806,13 +1813,21 @@ impl AudioPreviewState {
     }
     /// Initializes an audio workbench viewer for the given audio file path.
     pub fn new(path: PathBuf, title: String) -> Self {
+        let metadata = read_audio_metadata(&path);
+        Self::new_with_metadata(path, title, metadata)
+    }
+
+    pub(crate) fn new_with_metadata(
+        path: PathBuf,
+        title: String,
+        metadata: Option<AudioMetadata>,
+    ) -> Self {
         let default_save_dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| ".".to_string());
 
-        let meta = read_audio_metadata(&path);
-        let duration_sec = meta
+        let duration_sec = metadata
             .as_ref()
             .map(|m| m.duration_ms as f32 / 1000.0)
             .unwrap_or(0.0);
@@ -1839,7 +1854,7 @@ impl AudioPreviewState {
             path,
             title,
             active_mode: AudioToolMode::Inspect,
-            metadata: meta,
+            metadata,
             analysis: None,
             edited_waveform: None,
             analysis_rx: Some(rx),
