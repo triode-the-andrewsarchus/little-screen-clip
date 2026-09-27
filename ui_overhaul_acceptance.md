@@ -259,7 +259,7 @@ PDF textures now load only for the selected page and thumbnails intersecting the
 
 Four production-cache regressions pass: 64-page traversal at both 16px and 1200px proves the handle/byte limits and selected-page retention; evicted-page re-selection verifies a fresh upload with the exact original pixels; saturated current-frame references are retained and new selection is admitted on the following frame; the actual 100-page `render_ui` uploads visible thumbnails and an offscreen selected page while middle offscreen pages remain unloaded. These are synthetic egui/storage checks, not a live PDF page-navigation session. The workbench suite currently passes (311 passed, 1 ignored); formatting and diff checks pass.
 
-Compressed PNG rasters remain in RAM for re-upload, so CPU storage still grows with document length; H2.1p tracks bounding it. The all-page sequential raster worker and three-message queue remain unchanged. PNG decoding/re-upload occurs on the UI thread for selected/visible cache misses; the per-page latency audit remains open under H2.1d. Initial selected-page quality remains 1200px and other pages retain the existing 360px raster quality; this change adds no new resolution downgrade.
+Compressed PNG rasters remain in RAM for re-upload, so CPU storage still grows with document length; H2.1p tracks bounding it. The all-page sequential raster worker and three-message queue remain unchanged. PNG decoding/re-upload occurs on the UI thread for selected/visible cache misses; moving that work off-frame remains under H2.1h1–h5. Initial selected-page quality remains 1200px and other pages retain the existing 360px raster quality; this change adds no new resolution downgrade.
 
 ## PDF preview worker lifetime, 2026-09-27
 
