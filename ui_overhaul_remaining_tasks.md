@@ -210,6 +210,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **E2.1q1 [Luna] Add a production-drawer render regression for matrix precision.** Synthetic correlation and covariance rows retain their formatted values inside compact and wide drawer viewports; live comparison-HUD review remains open.
   - [x] **E2.1r [Luna] Complete the image-tool contrast audit.** Image chrome uses tested semantic text roles across canvas, raised, panel, and recessed surfaces; labels on generated fills/badges and transparent selections use the shared foreground resolver. Existing Light/Dark regressions cover every neutral text role, standard action/mode fills, and translucent accent compositing. This is source-and-render-test evidence, not a live visual check.
   - [ ] **E2.1s [Luna] Verify image parameters and undo live.**
+    - [x] **E2.1s1 [Luna] Verify Decorrelation Stretch apply/undo/redo pixel restoration.** Deterministic RGB input changes under the stretch, returns exactly to the original after Undo, and returns to the applied result after Redo.
   - [ ] **E2.1t [Luna] Verify image save and copy live.**
   - [ ] **E2.1u [Luna] Verify external-app launch and fallback live.**
     - [x] **E2.1u1 [Luna] Test launcher success, fallback, and total failure without opening desktop apps.** Uses `/bin/true` and missing executable paths; production still defaults to `xdg-open`. The live editor-launch check remains open.

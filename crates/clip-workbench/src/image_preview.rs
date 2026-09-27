@@ -3474,6 +3474,68 @@ mod tests {
     }
 
     #[test]
+    fn decorrelation_stretch_apply_undo_and_redo_restore_image_pixels() {
+        let config = AppConfig::default();
+        let image = RgbaImage::from_fn(16, 16, |x, y| {
+            image::Rgba([
+                (x * 11 + y * 3) as u8,
+                (y * 13 + x * 5) as u8,
+                ((x + y) * 7) as u8,
+                255,
+            ])
+        });
+        let mut png = Vec::new();
+        image
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut state = ImagePreviewState::from_bytes_with_meta(
+            png,
+            "image/png".into(),
+            None,
+            "DCS undo redo test".into(),
+            &config,
+        )
+        .unwrap();
+        let original = state.current_rgba.clone();
+        assert!(
+            (0..3).all(|channel| {
+                let min = image.pixels().map(|pixel| pixel[channel]).min().unwrap();
+                let max = image.pixels().map(|pixel| pixel[channel]).max().unwrap();
+                min < max
+            }),
+            "fixture must have nonzero variance in every RGB channel"
+        );
+
+        state.update_decorrelation_stretch();
+        let stretched = state
+            .dcs_state
+            .stretched_rgba
+            .clone()
+            .expect("analysis creates a stretched result");
+        assert_ne!(
+            stretched, original,
+            "stretch result changes the fixture pixels"
+        );
+
+        state.apply_decorrelation_stretch();
+        let applied = state.current_rgba.clone();
+        assert_eq!(applied, stretched);
+        assert_ne!(applied, original);
+
+        state.undo();
+        assert_eq!(
+            state.current_rgba, original,
+            "undo restores pre-stretch pixels"
+        );
+
+        state.redo();
+        assert_eq!(
+            state.current_rgba, applied,
+            "redo restores stretched pixels"
+        );
+    }
+
+    #[test]
     fn test_metadata_inspection_and_stripping() {
         let config = AppConfig::default();
         let img = RgbaImage::new(30, 30);
