@@ -11,8 +11,59 @@ use crate::ui_ext::{BODY_FONT_SIZE, CONTROL_HEIGHT};
 use eframe::egui::{self, Color32, Rounding, Stroke, Vec2};
 use little_clip_core::HandSide;
 use little_clip_core::ipc::IpcRequest;
+use little_clip_core::{BackgroundJobs, JobTicket};
 use little_clip_ops::diff::{DiffDisplayMode, DiffResult, DiffTarget, compute_diff};
 use little_clip_ops::image_diff::{ImageDiffOptions, ImageDiffResult};
+
+enum DiffHandoffTarget {
+    Existing(std::path::PathBuf),
+    Shared(std::sync::Arc<DiffTarget>, String),
+}
+
+struct HandoffCancelGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for HandoffCancelGuard {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+impl DiffHandoffTarget {
+    fn from_target(target: &std::sync::Arc<DiffTarget>, side: &str) -> Self {
+        match target.as_ref() {
+            DiffTarget::File { path, .. }
+            | DiffTarget::Image {
+                path: Some(path), ..
+            } => Self::Existing(path.clone()),
+            _ => Self::Shared(target.clone(), side.into()),
+        }
+    }
+
+    fn stage(self) -> Result<std::path::PathBuf, String> {
+        match self {
+            Self::Existing(path) => Ok(path),
+            Self::Shared(target, side) => {
+                let (bytes, ext): (&[u8], &str) = match target.as_ref() {
+                    DiffTarget::ClipboardText {
+                        content, ext_hint, ..
+                    } => (content.as_bytes(), ext_hint.as_deref().unwrap_or("txt")),
+                    DiffTarget::Image { bytes, mime, .. } => {
+                        (bytes, if mime.contains("png") { "png" } else { "jpg" })
+                    }
+                    _ => unreachable!(),
+                };
+                let path = std::env::temp_dir().join(format!(
+                    "clip_diff_{side}_{}.{}",
+                    uuid::Uuid::new_v4().simple(),
+                    ext
+                ));
+                std::fs::write(&path, bytes)
+                    .map_err(|error| format!("Failed to stage diff {side} file: {error}"))?;
+                Ok(path)
+            }
+        }
+    }
+}
 
 /// Layout visualization mode for comparing bitmap images.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,8 +102,8 @@ impl ImageDiffViewMode {
 
 /// Interactive state for the text and visual image diff viewer.
 pub struct DiffViewerState {
-    pub lhs: DiffTarget,
-    pub rhs: DiffTarget,
+    pub lhs: std::sync::Arc<DiffTarget>,
+    pub rhs: std::sync::Arc<DiffTarget>,
     pub mode: DiffDisplayMode,
     // Text diff state
     pub result: DiffResult,
@@ -72,6 +123,11 @@ pub struct DiffViewerState {
     pub text_receiver: Option<std::sync::mpsc::Receiver<(DiffResult, egui::text::LayoutJob)>>,
     pub is_computing: bool,
     pub compute_start_time: std::time::Instant,
+    handoff: Option<(
+        JobTicket,
+        std::sync::mpsc::Receiver<Result<Result<String, String>, little_clip_core::JobError>>,
+    )>,
+    handoff_cancel: Option<HandoffCancelGuard>,
 }
 
 fn spawn_image_diff_worker(
@@ -163,8 +219,8 @@ impl DiffViewerState {
         let layout_job = ansi_to_layout_job("", crate::ui_ext::MONO_FONT_SIZE);
 
         Self {
-            lhs,
-            rhs,
+            lhs: std::sync::Arc::new(lhs),
+            rhs: std::sync::Arc::new(rhs),
             mode,
             result,
             layout_job,
@@ -182,6 +238,8 @@ impl DiffViewerState {
             text_receiver,
             is_computing,
             compute_start_time: std::time::Instant::now(),
+            handoff: None,
+            handoff_cancel: None,
         }
     }
 
@@ -315,123 +373,73 @@ impl DiffViewerState {
 
     /// Triggers launching Meld or KDiff3 for visual comparison.
     pub fn trigger_escape_hatch(&mut self, now: f64) {
-        let left_path = match &self.lhs {
-            DiffTarget::File { path, .. } => Some(path.clone()),
-            DiffTarget::ClipboardText {
-                content, ext_hint, ..
-            } => {
-                let ext = ext_hint.as_deref().unwrap_or("txt");
-                let p = std::env::temp_dir().join(format!(
-                    "clip_diff_lhs_{}.{}",
-                    uuid::Uuid::new_v4().simple(),
-                    ext
-                ));
-                match std::fs::write(&p, content) {
-                    Ok(()) => Some(p),
-                    Err(err) => {
-                        tracing::warn!(
-                            "Failed to write diff LHS temp file to {}: {err}",
-                            p.display()
-                        );
-                        None
+        if let Some((ticket, _)) = self.handoff.take() {
+            ticket.cancel();
+        }
+        self.handoff_cancel.take();
+        let left = DiffHandoffTarget::from_target(&self.lhs, "lhs");
+        let right = DiffHandoffTarget::from_target(&self.rhs, "rhs");
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let job_cancelled = cancelled.clone();
+        let (ticket, receiver) =
+            BackgroundJobs::global().submit(std::time::Duration::from_secs(30), move || {
+                let left_path = left.stage()?;
+                let right_path = right.stage()?;
+                if job_cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                    return Err("External handoff cancelled".to_string());
+                }
+                if let Some(app) = little_clip_core::command_available("meld") {
+                    if std::process::Command::new(app)
+                        .arg(&left_path)
+                        .arg(&right_path)
+                        .spawn()
+                        .is_ok()
+                    {
+                        return Ok("🚀 Launched Meld comparison".to_string());
                     }
                 }
-            }
-            DiffTarget::Image { path: Some(p), .. } => Some(p.clone()),
-            DiffTarget::Image { bytes, mime, .. } => {
-                let ext = if mime.contains("png") { "png" } else { "jpg" };
-                let p = std::env::temp_dir().join(format!(
-                    "clip_diff_lhs_{}.{}",
-                    uuid::Uuid::new_v4().simple(),
-                    ext
-                ));
-                match std::fs::write(&p, bytes) {
-                    Ok(()) => Some(p),
-                    Err(err) => {
-                        tracing::warn!(
-                            "Failed to write diff LHS image temp file to {}: {err}",
-                            p.display()
-                        );
-                        None
+                if let Some(app) = little_clip_core::command_available("kdiff3") {
+                    if std::process::Command::new(app)
+                        .arg(&left_path)
+                        .arg(&right_path)
+                        .spawn()
+                        .is_ok()
+                    {
+                        return Ok("🚀 Launched KDiff3 comparison".to_string());
                     }
                 }
-            }
-        };
+                Ok("⚠️ Neither Meld nor KDiff3 is installed".to_string())
+            });
+        self.status_toast = Some(("Preparing comparison for external tool…".to_string(), now));
+        self.handoff = Some((ticket, receiver));
+        self.handoff_cancel = Some(HandoffCancelGuard(cancelled));
+    }
 
-        let right_path = match &self.rhs {
-            DiffTarget::File { path, .. } => Some(path.clone()),
-            DiffTarget::ClipboardText {
-                content, ext_hint, ..
-            } => {
-                let ext = ext_hint.as_deref().unwrap_or("txt");
-                let p = std::env::temp_dir().join(format!(
-                    "clip_diff_rhs_{}.{}",
-                    uuid::Uuid::new_v4().simple(),
-                    ext
-                ));
-                match std::fs::write(&p, content) {
-                    Ok(()) => Some(p),
-                    Err(err) => {
-                        tracing::warn!(
-                            "Failed to write diff RHS temp file to {}: {err}",
-                            p.display()
-                        );
-                        None
-                    }
-                }
-            }
-            DiffTarget::Image { path: Some(p), .. } => Some(p.clone()),
-            DiffTarget::Image { bytes, mime, .. } => {
-                let ext = if mime.contains("png") { "png" } else { "jpg" };
-                let p = std::env::temp_dir().join(format!(
-                    "clip_diff_rhs_{}.{}",
-                    uuid::Uuid::new_v4().simple(),
-                    ext
-                ));
-                match std::fs::write(&p, bytes) {
-                    Ok(()) => Some(p),
-                    Err(err) => {
-                        tracing::warn!(
-                            "Failed to write diff RHS image temp file to {}: {err}",
-                            p.display()
-                        );
-                        None
-                    }
-                }
-            }
-        };
-
-        let (Some(left_path), Some(right_path)) = (left_path, right_path) else {
-            self.status_toast = Some((
-                "❌ Failed to stage diff files for external tool".to_string(),
-                now,
-            ));
+    fn poll_handoff(&mut self, now: f64, ctx: &egui::Context) {
+        let Some((_, rx)) = &self.handoff else {
             return;
         };
-
-        if let Some(meld) = little_clip_core::command_available("meld") {
-            if std::process::Command::new(meld)
-                .arg(&left_path)
-                .arg(&right_path)
-                .spawn()
-                .is_ok()
-            {
-                self.status_toast = Some(("🚀 Launched Meld comparison".to_string(), now));
-                return;
+        match rx.try_recv() {
+            Ok(Ok(Ok(message))) => {
+                self.status_toast = Some((message, now));
+                self.handoff = None;
+            }
+            Ok(Ok(Err(error))) => {
+                self.status_toast = Some((format!("❌ {error}"), now));
+                self.handoff = None;
+            }
+            Ok(Err(error)) => {
+                self.status_toast = Some((format!("❌ External handoff failed: {error}"), now));
+                self.handoff = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.status_toast = Some(("❌ External handoff was cancelled".to_string(), now));
+                self.handoff = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(80))
             }
         }
-        if let Some(kdiff3) = little_clip_core::command_available("kdiff3") {
-            if std::process::Command::new(kdiff3)
-                .arg(&left_path)
-                .arg(&right_path)
-                .spawn()
-                .is_ok()
-            {
-                self.status_toast = Some(("🚀 Launched KDiff3 comparison".to_string(), now));
-                return;
-            }
-        }
-        self.status_toast = Some(("⚠️ Neither Meld nor KDiff3 is installed".to_string(), now));
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context, close_requested: &mut bool) {
@@ -468,6 +476,7 @@ impl DiffViewerState {
         close_requested: &mut bool,
     ) {
         let now = ctx.input(|i| i.time);
+        self.poll_handoff(now, ctx);
 
         self.handle_shortcuts(ctx, close_requested);
 
@@ -1358,5 +1367,35 @@ mod tests {
                 matches!(&clipped.shape, egui::Shape::Rect(rect) if rect.fill == console)
             }));
         }
+    }
+
+    #[test]
+    fn external_handoff_preserves_clipboard_bytes_and_extension() {
+        let target = std::sync::Arc::new(DiffTarget::ClipboardText {
+            label: "fixture".into(),
+            content: "exact\nclipboard bytes\n".into(),
+            ext_hint: Some("md".into()),
+        });
+        let path = DiffHandoffTarget::from_target(&target, "lhs")
+            .stage()
+            .unwrap();
+        assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some("md"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"exact\nclipboard bytes\n");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn external_handoff_reports_temp_write_failure() {
+        let target = std::sync::Arc::new(DiffTarget::ClipboardText {
+            label: "fixture".into(),
+            content: "data".into(),
+            ext_hint: Some("missing-parent/file".into()),
+        });
+        assert!(
+            DiffHandoffTarget::from_target(&target, "lhs")
+                .stage()
+                .unwrap_err()
+                .contains("Failed to stage diff lhs file")
+        );
     }
 }

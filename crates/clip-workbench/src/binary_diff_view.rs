@@ -8,12 +8,32 @@ use crate::shell::{EscapeHatch, PanelState, StudioShell};
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
 use little_clip_core::palette::AppPalette;
+use little_clip_core::{BackgroundJobs, JobTicket};
 use little_clip_ops::binary_diff::{
     AlignedCell, BinaryDiffMode, BinaryDiffResult, DiffKind, byte_to_ascii_char,
     compute_binary_diff, search_rows,
 };
 use std::sync::mpsc::{Receiver, channel};
 use std::thread;
+
+struct HandoffCancelGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for HandoffCancelGuard {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+fn stage_binary_handoff(bytes: &[u8], side: &str) -> Result<std::path::PathBuf, String> {
+    let path = std::env::temp_dir().join(format!(
+        "clip_bin_{}_{}.bin",
+        uuid::Uuid::new_v4().simple(),
+        side
+    ));
+    std::fs::write(&path, bytes)
+        .map_err(|error| format!("Failed to write {side} temp file: {error}"))?;
+    Ok(path)
+}
 
 /// Color highlighting mode for hexadecimal byte displays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,9 +127,9 @@ impl BinaryDiffNavigation {
 pub struct BinaryDiffViewState {
     pub nav: BinaryDiffNavigation,
     pub left_label: String,
-    pub left_bytes: Vec<u8>,
+    pub left_bytes: std::sync::Arc<Vec<u8>>,
     pub right_label: String,
-    pub right_bytes: Vec<u8>,
+    pub right_bytes: std::sync::Arc<Vec<u8>>,
     pub mode: BinaryDiffMode,
     pub color_mode: ByteColorMode,
     pub bytes_per_row: usize,
@@ -131,6 +151,11 @@ pub struct BinaryDiffViewState {
     pub last_scrolled_diff_id: Option<usize>,
     pub visible_row_count: usize,
     pub panel_state: PanelState,
+    handoff: Option<(
+        JobTicket,
+        Receiver<Result<Result<String, String>, little_clip_core::JobError>>,
+    )>,
+    handoff_cancel: Option<HandoffCancelGuard>,
 }
 
 impl BinaryDiffViewState {
@@ -159,9 +184,9 @@ impl BinaryDiffViewState {
         Self {
             nav: BinaryDiffNavigation::default(),
             left_label,
-            left_bytes,
+            left_bytes: std::sync::Arc::new(left_bytes),
             right_label,
-            right_bytes,
+            right_bytes: std::sync::Arc::new(right_bytes),
             mode,
             color_mode: ByteColorMode::Digits,
             bytes_per_row,
@@ -182,6 +207,8 @@ impl BinaryDiffViewState {
             last_scrolled_diff_id: None,
             visible_row_count: 30,
             panel_state: PanelState::new(),
+            handoff: None,
+            handoff_cancel: None,
         }
     }
 
@@ -324,50 +351,75 @@ impl BinaryDiffViewState {
 
     /// Triggers opening the binary comparison in ImHex hex editor.
     pub fn trigger_escape_hatch(&mut self, now: f64) {
-        let temp_left = std::env::temp_dir().join(format!(
-            "clip_bin_{}_lhs.bin",
-            uuid::Uuid::new_v4().simple()
-        ));
-        let temp_right = std::env::temp_dir().join(format!(
-            "clip_bin_{}_rhs.bin",
-            uuid::Uuid::new_v4().simple()
-        ));
-
-        if let Err(e) = std::fs::write(&temp_left, &self.left_bytes) {
-            self.status_toast
-                .set(format!("Failed to write left temp file: {}", e), now);
-            return;
+        if let Some((ticket, _)) = self.handoff.take() {
+            ticket.cancel();
         }
+        self.handoff_cancel.take();
+        let left = self.left_bytes.clone();
+        let right = self.right_bytes.clone();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let job_cancelled = cancelled.clone();
+        let (ticket, rx) =
+            BackgroundJobs::global().submit(std::time::Duration::from_secs(30), move || {
+                let temp_left = stage_binary_handoff(left.as_slice(), "lhs")?;
+                let temp_right = stage_binary_handoff(right.as_slice(), "rhs")?;
+                if job_cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                    return Err("External handoff cancelled".to_string());
+                }
+                if let Some(app) = little_clip_core::command_available("imhex") {
+                    if std::process::Command::new(app)
+                        .arg(&temp_left)
+                        .arg(&temp_right)
+                        .spawn()
+                        .is_ok()
+                    {
+                        return Ok("🚀 Launched ImHex hex editor".to_string());
+                    }
+                }
+                if let Some(app) = little_clip_core::command_available("xdg-open") {
+                    if std::process::Command::new(app)
+                        .arg(&temp_left)
+                        .spawn()
+                        .is_ok()
+                    {
+                        return Ok("🚀 Opened left binary file with system default".to_string());
+                    }
+                }
+                Ok("⚠️ ImHex is not installed".to_string())
+            });
+        self.status_toast
+            .set("Preparing binary files for external tool…", now);
+        self.handoff = Some((ticket, rx));
+        self.handoff_cancel = Some(HandoffCancelGuard(cancelled));
+    }
 
-        if let Err(e) = std::fs::write(&temp_right, &self.right_bytes) {
-            self.status_toast
-                .set(format!("Failed to write right temp file: {}", e), now);
+    fn poll_handoff(&mut self, now: f64, ctx: &egui::Context) {
+        let Some((_, rx)) = &self.handoff else {
             return;
-        }
-
-        if let Some(imhex) = little_clip_core::command_available("imhex") {
-            if std::process::Command::new(imhex)
-                .arg(&temp_left)
-                .arg(&temp_right)
-                .spawn()
-                .is_ok()
-            {
-                self.status_toast.set("🚀 Launched ImHex hex editor", now);
-                return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(Ok(message))) => {
+                self.status_toast.set(message, now);
+                self.handoff = None;
             }
-        }
-        if let Some(xdg_open) = little_clip_core::command_available("xdg-open") {
-            if std::process::Command::new(xdg_open)
-                .arg(&temp_left)
-                .spawn()
-                .is_ok()
-            {
+            Ok(Ok(Err(error))) => {
+                self.status_toast.set(format!("❌ {error}"), now);
+                self.handoff = None;
+            }
+            Ok(Err(error)) => {
                 self.status_toast
-                    .set("🚀 Opened left binary file with system default", now);
-                return;
+                    .set(format!("❌ External handoff failed: {error}"), now);
+                self.handoff = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.status_toast
+                    .set("❌ External handoff was cancelled", now);
+                self.handoff = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(80))
             }
         }
-        self.status_toast.set("⚠️ ImHex is not installed", now);
     }
 
     pub fn render_ui(
@@ -378,6 +430,7 @@ impl BinaryDiffViewState {
         close_requested: &mut bool,
     ) {
         let now = ctx.input(|i| i.time);
+        self.poll_handoff(now, ctx);
 
         // Check async receiver
         if self.is_computing {
@@ -1853,6 +1906,22 @@ fn format_bytes_size(len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn binary_handoff_preserves_exact_bytes() {
+        let bytes = [0, 255, 0, 0x7f, 13, 10];
+        let path = stage_binary_handoff(&bytes, "lhs").unwrap();
+        assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some("bin"));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn dropping_handoff_guard_cancels_stale_publication() {
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        drop(HandoffCancelGuard(cancelled.clone()));
+        assert!(cancelled.load(std::sync::atomic::Ordering::Acquire));
+    }
 
     fn trigger_global_shortcut(state: &mut BinaryDiffViewState, key: egui::Key) {
         let ctx = egui::Context::default();
