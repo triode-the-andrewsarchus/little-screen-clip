@@ -201,7 +201,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **E2.1n [Luna] Verify OCR live.** Isolated 1280×720 Light capture shows engine/prompt inputs, the empty output actions, canvas, and footer; extraction/output behavior remains unverified.
   - **E2.1o Pick Color interaction**
     - [x] **E2.1o1 [Luna] Inspect the compact picker and palette panels live.** `/tmp/clip-image-pick-color-final-20260927/image-pick-color.png` shows the full palette, color readout, pick list, and canvas at 1280×720 Light.
-    - [ ] **E2.1o2 [Luna] Verify the loupe stays readable at compact and wide sizes.**
+    - [x] **E2.1o2 [Luna] Verify the loupe stays readable at compact and wide sizes.** Live hover captures at 1280×720 Light and 3440×1440 Dark show the card and all four readouts. The original capture exposed that the production path clamped against the UI's empty post-allocation remainder; `render_viewport` now passes its allocated canvas bounds to the existing loupe renderer, and the production-style regression uses `allocate_painter`.
       - [x] **E2.1o2a [Luna] Add a production-overlay regression for compact and wide loupe bounds.** Checks every readout stays inside the loupe card and canvas while confirming click sampling.
     - [x] **E2.1o3 [Luna] Verify clicking the canvas records the sampled color.** Production overlay render test sends egui hover/press/release events and confirms the expected center pixel, loupe readout, and picked-color state.
   - **E2.1p Palette extraction and output**

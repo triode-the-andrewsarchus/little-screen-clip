@@ -48,7 +48,8 @@ static const struct wl_registry_listener registry_listener = {
 
 static void usage(const char *program) {
     fprintf(stderr,
-            "usage: %s probe | click <width> <height> <x> <y> | "
+            "usage: %s probe | move <width> <height> <x> <y> | "
+            "click <width> <height> <x> <y> | "
             "scroll <width> <height> <x> <y> <logical-units>\n"
             "Connects only to WAYLAND_DISPLAY in XDG_RUNTIME_DIR.\n",
             program);
@@ -90,13 +91,14 @@ int main(int argc, char **argv) {
     uint32_t width = 0, height = 0, x = 0, y = 0;
     int probe = argc == 2 && strcmp(argv[1], "probe") == 0;
     int click = argc == 6 && strcmp(argv[1], "click") == 0;
+    int move = argc == 6 && strcmp(argv[1], "move") == 0;
     int scroll = argc == 7 && strcmp(argv[1], "scroll") == 0;
     int scroll_amount = 0;
-    if (!probe && !click && !scroll) {
+    if (!probe && !click && !move && !scroll) {
         usage(argv[0]);
         return 2;
     }
-    if ((click || scroll) &&
+    if ((click || move || scroll) &&
         (!parse_positive(argv[2], &width) || !parse_positive(argv[3], &height) ||
          !parse_coordinate(argv[4], width, &x) ||
          !parse_coordinate(argv[5], height, &y) ||
@@ -183,30 +185,38 @@ int main(int argc, char **argv) {
                 wl_display_disconnect(display);
                 return 5;
             }
-            zwlr_virtual_pointer_v1_button(pointer, 2, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
-            zwlr_virtual_pointer_v1_frame(pointer);
-            if (wl_display_roundtrip(display) < 0) {
-                fprintf(stderr, "private pointer press failed\n");
-                zwlr_virtual_pointer_v1_destroy(pointer);
-                zwlr_virtual_pointer_manager_v1_destroy(globals.manager);
-                wl_seat_destroy(globals.seat);
-                wl_registry_destroy(registry);
-                wl_display_disconnect(display);
-                return 5;
+            if (move) {
+                printf("moved private Niri pointer to %u,%u of %u×%u; keeping hover active\n",
+                       x, y, width, height);
+                fflush(stdout);
+                while (wl_display_dispatch(display) >= 0) {
+                }
+            } else {
+                zwlr_virtual_pointer_v1_button(pointer, 2, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+                zwlr_virtual_pointer_v1_frame(pointer);
+                if (wl_display_roundtrip(display) < 0) {
+                    fprintf(stderr, "private pointer press failed\n");
+                    zwlr_virtual_pointer_v1_destroy(pointer);
+                    zwlr_virtual_pointer_manager_v1_destroy(globals.manager);
+                    wl_seat_destroy(globals.seat);
+                    wl_registry_destroy(registry);
+                    wl_display_disconnect(display);
+                    return 5;
+                }
+                zwlr_virtual_pointer_v1_button(pointer, 3, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+                zwlr_virtual_pointer_v1_frame(pointer);
+                if (wl_display_roundtrip(display) < 0) {
+                    fprintf(stderr, "private pointer release failed\n");
+                    zwlr_virtual_pointer_v1_destroy(pointer);
+                    zwlr_virtual_pointer_manager_v1_destroy(globals.manager);
+                    wl_seat_destroy(globals.seat);
+                    wl_registry_destroy(registry);
+                    wl_display_disconnect(display);
+                    return 5;
+                }
+                printf("clicked private Niri logical coordinate %u,%u of %u×%u\n",
+                       x, y, width, height);
             }
-            zwlr_virtual_pointer_v1_button(pointer, 3, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
-            zwlr_virtual_pointer_v1_frame(pointer);
-            if (wl_display_roundtrip(display) < 0) {
-                fprintf(stderr, "private pointer release failed\n");
-                zwlr_virtual_pointer_v1_destroy(pointer);
-                zwlr_virtual_pointer_manager_v1_destroy(globals.manager);
-                wl_seat_destroy(globals.seat);
-                wl_registry_destroy(registry);
-                wl_display_disconnect(display);
-                return 5;
-            }
-            printf("clicked private Niri logical coordinate %u,%u of %u×%u\n",
-                   x, y, width, height);
         }
         zwlr_virtual_pointer_v1_destroy(pointer);
     }

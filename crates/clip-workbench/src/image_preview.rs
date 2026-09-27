@@ -1598,7 +1598,14 @@ impl ImagePreviewState {
             } else if self.active_mode == ImageToolMode::Markup {
                 self.render_markup_overlay(ui, &painter, &response, img_rect, palette);
             } else if self.active_mode == ImageToolMode::PickColor {
-                self.render_pick_color_overlay(ui, &painter, &response, img_rect, palette);
+                self.render_pick_color_overlay(
+                    ui,
+                    &painter,
+                    &response,
+                    img_rect,
+                    canvas_rect,
+                    palette,
+                );
             } else if self.active_mode == ImageToolMode::Barcode {
                 self.render_barcode_overlay(ui, &painter, &response, img_rect, palette);
             }
@@ -2534,19 +2541,18 @@ mod tests {
                     },
                     |ctx| {
                         egui::CentralPanel::default().show(ctx, |ui| {
-                            let bounds = ui.available_rect_before_wrap();
-                            let sample_area = bounds.shrink(12.0);
-                            let response = ui.interact(
-                                sample_area,
-                                ui.id().with("pick-color-interaction-sample"),
-                                egui::Sense::click(),
+                            let (response, painter) = ui.allocate_painter(
+                                ui.available_size(),
+                                egui::Sense::click_and_drag(),
                             );
-                            let painter = ui.painter().clone();
+                            let bounds = response.rect;
+                            let sample_area = bounds.shrink(12.0);
                             state.render_pick_color_overlay(
                                 ui,
                                 &painter,
                                 &response,
                                 sample_area,
+                                bounds,
                                 &palette,
                             );
                             canvas_bounds = Some(bounds);

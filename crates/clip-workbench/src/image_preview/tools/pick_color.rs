@@ -59,6 +59,7 @@ impl ImagePreviewState {
         painter: &egui::Painter,
         response: &egui::Response,
         img_rect: Rect,
+        canvas_rect: Rect,
         palette: &AppPalette,
     ) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -90,14 +91,7 @@ impl ImagePreviewState {
                     self.show_toast("Color added to picked colors");
                 }
 
-                self.render_pick_color_loupe(
-                    painter,
-                    ptr,
-                    ui.available_rect_before_wrap(),
-                    px,
-                    py,
-                    palette,
-                );
+                self.render_pick_color_loupe(painter, ptr, canvas_rect, px, py, palette);
             } else {
                 self.pick_color_state.hovered_color = None;
                 self.pick_color_state.hovered_pixel = None;
