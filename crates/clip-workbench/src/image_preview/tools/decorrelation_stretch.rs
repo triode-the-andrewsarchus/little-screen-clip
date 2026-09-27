@@ -877,3 +877,90 @@ impl ImagePreviewState {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rendered_matrix_rows_keep_three_decimal_precision_inside_compact_and_wide_drawers() {
+        for width in [360.0, 1200.0] {
+            let mut png = Vec::new();
+            RgbaImage::from_fn(16, 16, |x, y| {
+                image::Rgba([
+                    (x * 11 + y * 3) as u8,
+                    (y * 13 + x * 5) as u8,
+                    ((x + y) * 7) as u8,
+                    255,
+                ])
+            })
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+            let mut state = ImagePreviewState::from_bytes_with_meta(
+                png,
+                "image/png".into(),
+                None,
+                "DCS matrix render test".into(),
+                &little_clip_core::config::AppConfig::default(),
+            )
+            .unwrap();
+            state.update_decorrelation_stretch();
+            let stats = state.dcs_state.stats.as_ref().unwrap();
+            let expected_rows: Vec<_> = stats
+                .corr
+                .map(|row| format!("[{:>6.3}  {:>6.3}  {:>6.3}]", row[0], row[1], row[2]))
+                .into_iter()
+                .chain(
+                    stats
+                        .cov
+                        .map(|row| format!("[{:>7.1}  {:>7.1}  {:>7.1}]", row[0], row[1], row[2])),
+                )
+                .collect();
+
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette = AppPalette::default();
+            let mut drawer_rect = None;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 1000.0))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        drawer_rect = Some(ui.available_rect_before_wrap());
+                        state.render_decorrelation_stretch_stats_drawer(ui, &palette);
+                    });
+                },
+            );
+
+            let drawer_rect = drawer_rect.expect("stats drawer receives a viewport");
+            let rendered_rows: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text().starts_with('[') => Some((
+                        text.galley.text().to_owned(),
+                        Rect::from_min_size(text.pos, text.galley.size()),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                rendered_rows.len() >= 6,
+                "drawer emits all six correlation and covariance rows"
+            );
+            for expected in expected_rows {
+                let (_, bounds) = rendered_rows
+                    .iter()
+                    .find(|(rendered, _)| rendered == &expected)
+                    .unwrap_or_else(|| panic!("drawer renders precise matrix row {expected}"));
+                assert!(
+                    drawer_rect.contains_rect(*bounds),
+                    "matrix row {expected} at {bounds:?} must stay inside {drawer_rect:?} at width {width}"
+                );
+                assert_eq!(expected.matches('.').count(), 3);
+            }
+        }
+    }
+}

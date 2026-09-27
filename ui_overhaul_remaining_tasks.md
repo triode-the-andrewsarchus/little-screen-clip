@@ -207,6 +207,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **E2.1p1 [Luna] Inspect Palette extraction and swatches live.** The isolated Light capture shows seven sampled colors, labels, percentages, and the Copy CSV control.
     - [x] **E2.1p2 [Luna] Verify Copy CSV output matches the extracted colors.** A production-panel egui test extracts two known colors, clicks the rendered Copy CSV button, and verifies exact hex values and order in egui's clipboard payload. The asynchronous system clipboard adapter is not covered.
   - [ ] **E2.1q [Luna] Verify Decorrelation Stretch live, including comparison HUD and matrix precision.**
+    - [x] **E2.1q1 [Luna] Add a production-drawer render regression for matrix precision.** Synthetic correlation and covariance rows retain their formatted values inside compact and wide drawer viewports; live comparison-HUD review remains open.
   - [x] **E2.1r [Luna] Complete the image-tool contrast audit.** Image chrome uses tested semantic text roles across canvas, raised, panel, and recessed surfaces; labels on generated fills/badges and transparent selections use the shared foreground resolver. Existing Light/Dark regressions cover every neutral text role, standard action/mode fills, and translucent accent compositing. This is source-and-render-test evidence, not a live visual check.
   - [ ] **E2.1s [Luna] Verify image parameters and undo live.**
   - [ ] **E2.1t [Luna] Verify image save and copy live.**
