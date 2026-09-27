@@ -322,3 +322,9 @@ The isolated capture runner now supports `--verify-return`. At 1280×720 logical
 ## Film Look many-stock layout, 2026-09-27
 
 An isolated 1280×720 logical / 100% / Dark capture with the deterministic 1600×1000 image fixture `/tmp/clip-image-dense-e2.png` records all 57 Film Stocks in the searchable, scrollable browser and a settled Portra 400 comparison in `/tmp/clip-e3-many-presets-dark-settled/image-film-look.png`; the capture report passes popup geometry and singleton checks. This establishes dense list/layout behavior only; searching, selecting by pointer, and applying a stock remain unverified.
+
+## Loading and error states, 2026-09-27
+
+The 52,920,044-byte 300-second stereo WAV fixture `/tmp/clip-e3-loading-fixtures/audio-large-300s.wav` was captured in an isolated 1280×720 / 100% / Dark run. `first-observed.png` displays “Decoding audio track & building waveform…”, and `settled.png` shows the completed left/right waveforms, spectrum and chord lanes; popup geometry, fixed hints, centering and singleton checks pass in `/tmp/clip-e3-large-audio-dark/report.json`. This validates the direct Audio Studio load-to-result transition, not clipboard mirror invalidation or playback.
+
+The malformed PNG fixture `/tmp/clip-e3-loading-fixtures/image-malformed.png` was captured in an isolated 1280×720 / 100% / Light run. `/tmp/clip-e3-malformed-image-light/settled.png` shows the decode error in the workbench status area after the failed startup preview advances back to Palette; the popup checks pass in its report. The fixture also displays the expected no-daemon rolling-strip IPC error; normal daemon recovery and other error surfaces remain unverified.

@@ -415,7 +415,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **E3.3e1 [Luna] Capture many-preset behavior.** Isolated 1280×720 Dark capture shows all 57 Film Stocks in the searchable/scrollable list and a settled Portra 400 comparison. Searching, pointer selection, and Apply remain action-parity work.
   - [ ] **E3.3e2 [Luna] Capture many-track behavior.**
   - [ ] **E3.3e3 [Luna] Capture many-page behavior.**
-- [ ] **E3.3f [Luna] Capture loading and error states.**
+- [x] **E3.3f [Luna] Capture loading and error states.** Isolated captures show a 300-second stereo WAV moving from waveform-building state to rendered waveform and a malformed PNG error returning to Palette. Normal daemon recovery, playback, and mirror refresh remain separate acceptance tasks.
 - [ ] **E3.3g [Luna] Capture mirror freshness and async-audio behavior.**
 - [ ] **E3.3h [Luna] Record screen-reader and focus observations where feasible.**
 
