@@ -55,7 +55,9 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **H1.2a2a2 [Luna] Audit remaining shared controls and migrate spacing tokens.** Global button padding and item gaps, status/toast/badge insets, badge radius, and mirror corner radius now use shared tokens in `ui_ext` and the shell.
       - **H1.2a2a3 [Luna] Audit view-specific spacing for repeated control patterns.**
         - [x] **H1.2a2a3a Tokenize Image Studio control-group insets.** Tool and footer frames now share `PANEL_INSET_X` and the new `CONTROL_GROUP_INSET_Y`; no dimensions changed.
-        - [ ] **H1.2a2a3b Audit remaining viewer-specific repeated insets and gaps.** Keep content-specific canvas, timeline, and data-grid geometry local.
+        - [x] **H1.2a2a3b Tokenize shared MIDI and Model 3D toolbar insets.** Their repeated 14×6 transport/tool frames now use the existing horizontal token and shared control-group vertical inset.
+        - [x] **H1.2a2a3c Tokenize the rolling-audio panel inset.** Its 14×6 bottom-panel margin now uses the panel-width and footer-height tokens.
+        - [ ] **H1.2a2a3d Audit remaining viewer-specific repeated insets and gaps.** Keep content-specific canvas, timeline, and data-grid geometry local.
     - [x] **H1.2a2b [Luna] Migrate disabled-state styling to shared tokens.** egui's disabled fade now targets the centralized workbench canvas in both appearances; the Light/Dark appearance test asserts the configured fade target. The workbench suite passes (250 passed, one ignored).
     - [ ] **H1.2a2c [Primary] Migrate status interactions to shared tokens.**
   - [ ] **H1.2a3 [Primary] Finish shared chrome token use.**

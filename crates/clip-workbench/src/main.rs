@@ -1086,7 +1086,10 @@ impl eframe::App for WorkbenchApp {
                 .frame(
                     egui::Frame::none()
                         .fill(crate::hex_to_c32(&self.ui_palette.colors.canvas))
-                        .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+                        .inner_margin(egui::Margin::symmetric(
+                            crate::ui_ext::PANEL_INSET_X,
+                            crate::ui_ext::FOOTER_INSET_Y,
+                        ))
                         .stroke(egui::Stroke::new(
                             1.0_f32,
                             crate::hex_to_c32(&self.ui_palette.colors.surface_panel),
