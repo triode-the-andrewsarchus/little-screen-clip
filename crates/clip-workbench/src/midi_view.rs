@@ -59,6 +59,21 @@ pub fn get_track_color(
     Color32::from_rgb(r, g, b)
 }
 
+fn should_draw_pitch_label(key: u8, row_height: f32, label_height: f32) -> bool {
+    row_height >= label_height + 2.0 || key % 12 == 0
+}
+
+fn time_label_fits(left: f32, width: f32, previous_right: f32, clip_right: f32) -> bool {
+    left >= previous_right + 4.0 && left + width <= clip_right
+}
+
+fn clamp_label_center(center: f32, height: f32, clip_top: f32, clip_bottom: f32) -> Option<f32> {
+    if height > clip_bottom - clip_top {
+        return None;
+    }
+    Some(center.clamp(clip_top + height * 0.5, clip_bottom - height * 0.5))
+}
+
 impl MidiViewerState {
     /// Builds the viewer after a background file parse has completed.
     pub(crate) fn from_parsed_file(path: PathBuf, data: MidiData) -> Self {
@@ -913,6 +928,11 @@ impl MidiViewerState {
                 let key_range = (max_k - min_k + 1.0).max(12.0);
 
                 let row_height = (grid_rect.height() / key_range).clamp(8.0, 32.0);
+                let pitch_font = egui::FontId::monospace(crate::ui_ext::MONO_FONT_SIZE);
+                let pitch_label_height = painter
+                    .layout_no_wrap("C4".to_owned(), pitch_font.clone(), f_high)
+                    .size()
+                    .y;
 
                 // Draw piano keys and horizontal lane dividers
                 const NOTE_NAMES: [&str; 12] = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -949,18 +969,40 @@ impl MidiViewerState {
                     } else {
                         bg
                     };
+                    let key_text_color = crate::ui_ext::contrast_text_c32_on(
+                        key_color,
+                        b_low,
+                        Some(key_text_color),
+                        palette,
+                    );
                     painter.rect_filled(key_rect, Rounding::same(2.0), key_color);
                     painter.rect_stroke(key_rect, Rounding::same(2.0), Stroke::new(0.5_f32, b_low));
 
                     let note_name = format!("{}{}", NOTE_NAMES[(k_int % 12) as usize], (k_int as i32 / 12) - 1);
-                    if row_height >= 12.0 || (k_int % 12) == 0 {
-                        painter.text(
-                            Pos2::new(key_rect.min.x + 4.0, key_rect.center().y),
-                            egui::Align2::LEFT_CENTER,
-                            note_name,
-                            egui::FontId::monospace(9.0),
-                            key_text_color,
+                    // Keep every pitch name when there is room for a full label
+                    // in each lane. At dense vertical zoom, octave labels remain
+                    // spaced twelve lanes apart and stay readable without colliding.
+                    if should_draw_pitch_label(k_int, row_height, pitch_label_height) {
+                        let label_size = painter
+                            .layout_no_wrap(note_name.clone(), pitch_font.clone(), key_text_color)
+                            .size();
+                        let label_y = clamp_label_center(
+                            key_rect.center().y,
+                            label_size.y,
+                            canvas_rect.top(),
+                            canvas_rect.bottom(),
                         );
+                        if label_size.x <= key_rect.width() - 8.0
+                            && let Some(label_y) = label_y
+                        {
+                            painter.text(
+                                Pos2::new(key_rect.min.x + 4.0, label_y),
+                                egui::Align2::LEFT_CENTER,
+                                note_name,
+                                pitch_font.clone(),
+                                key_text_color,
+                            );
+                        }
                     }
                 }
 
@@ -1073,6 +1115,8 @@ impl MidiViewerState {
                 let first_step = (view_start / step).floor() * step;
                 let last_step = (view_end / step).ceil() * step;
 
+                let time_font = egui::FontId::monospace(crate::ui_ext::MONO_FONT_SIZE);
+                let mut previous_label_right = f32::NEG_INFINITY;
                 let mut s = first_step;
                 while s <= last_step {
                     if s >= view_start && s <= view_end {
@@ -1091,13 +1135,26 @@ impl MidiViewerState {
                         } else {
                             format!("{:.0}s", s)
                         };
-                        painter.text(
-                            Pos2::new(x + 2.0, grid_rect.min.y + 4.0),
-                            egui::Align2::LEFT_TOP,
-                            label_text,
-                            egui::FontId::monospace(9.0),
-                            f_low,
-                        );
+                        let label_width = painter
+                            .layout_no_wrap(label_text.clone(), time_font.clone(), f_low)
+                            .size()
+                            .x;
+                        let label_left = x + 2.0;
+                        if time_label_fits(
+                            label_left,
+                            label_width,
+                            previous_label_right,
+                            grid_rect.max.x,
+                        ) {
+                            painter.text(
+                                Pos2::new(label_left, grid_rect.min.y + 4.0),
+                                egui::Align2::LEFT_TOP,
+                                label_text,
+                                time_font.clone(),
+                                f_low,
+                            );
+                            previous_label_right = label_left + label_width;
+                        }
                     }
                     s += step;
                 }
@@ -1289,6 +1346,33 @@ mod tests {
     use super::*;
     use little_clip_core::config::WorkbenchAppearance;
     use little_clip_core::palette::AppPalette;
+
+    #[test]
+    fn piano_roll_pitch_labels_thin_out_before_lanes_get_too_short() {
+        let label_height = crate::ui_ext::MONO_FONT_SIZE;
+        assert!(should_draw_pitch_label(
+            61,
+            label_height + 2.0,
+            label_height
+        ));
+        assert!(should_draw_pitch_label(60, 8.0, label_height));
+        assert!(!should_draw_pitch_label(61, 8.0, label_height));
+        assert!(should_draw_pitch_label(72, 8.0, label_height));
+    }
+
+    #[test]
+    fn piano_roll_octave_labels_stay_inside_canvas_edges() {
+        assert_eq!(clamp_label_center(2.0, 16.0, 0.0, 100.0), Some(8.0));
+        assert_eq!(clamp_label_center(98.0, 16.0, 0.0, 100.0), Some(92.0));
+        assert_eq!(clamp_label_center(5.0, 16.0, 0.0, 12.0), None);
+    }
+
+    #[test]
+    fn piano_roll_time_labels_respect_measured_spacing_and_canvas_edge() {
+        assert!(time_label_fits(20.0, 40.0, 0.0, 100.0));
+        assert!(!time_label_fits(43.0, 30.0, 40.0, 100.0));
+        assert!(!time_label_fits(70.0, 40.0, 0.0, 100.0));
+    }
 
     #[test]
     fn test_midi_view_track_colors() {
