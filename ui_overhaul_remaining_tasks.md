@@ -162,7 +162,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 - **E2.2 Audio ordinary control rows**
   - Source evidence: Audio Inspect slice buttons share control height; selection info uses body type and gesture hints remain available in a tooltip. Rolling-strip status, stem status, and HF row alignment are migrated. Stem Separation loading/empty messages use body type. Digital Decode has shared button heights, a wrapping filter row, full-height field, and Copy action. Stem destination and Inspect save fields are full-height. Leaves below finish remaining shared components and preserve seek, selections, filters, gain, export, playback, and keyboard behavior. Escalate audio-engine or async-lifecycle changes to Hard 2.
   - [ ] **E2.2a [Luna] Migrate remaining shared transport components.**
-  - [ ] **E2.2b [Luna] Migrate remaining ordinary fields.** Stem destination and Inspect save fields have full-height body-type inputs.
+  - [x] **E2.2b [Luna] Migrate remaining ordinary fields.** All audio `TextEdit` controls are reviewed: Inspect directory/filename fields, stem destination, and Digital Decode filter request `CONTROL_HEIGHT`; custom stem/decode inputs explicitly use `BODY_FONT_SIZE`, while Inspect inherits the configured body style. The shared control gallery checks the 36-point field target in both appearances.
   - [ ] **E2.2c [Luna] Migrate remaining segmented-mode components.**
   - [ ] **E2.2d [Luna] Migrate remaining progress components.**
   - [ ] **E2.2e [Luna] Migrate remaining status components.** Inspect slice buttons, selection info/footer, rolling strip, stem status/loading/empty, HF alignment and Digital Decode filter row already use shared metrics.
