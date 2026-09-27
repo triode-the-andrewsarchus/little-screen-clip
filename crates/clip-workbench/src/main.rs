@@ -866,14 +866,7 @@ impl WorkbenchApp {
                 }
             }
             Some(MirrorAction::Context(slot)) => {
-                if let Some(item) = self.state.get(slot).filter(|item| item.is_image()) {
-                    let source = if let Some(path) = item.file_path() {
-                        Ok(ImageLoadSource::File(path))
-                    } else {
-                        ImageLoadSource::from_item(item)
-                    };
-                    self.start_image_item_load(source);
-                } else if let Some(item) = self.state.get(slot).cloned() {
+                if let Some(item) = self.state.get(slot).cloned() {
                     self.open_slot_preview_modal(&item);
                 }
             }
@@ -3649,6 +3642,37 @@ mod workbench_layout_tests {
         wait_for_image_load(&mut app);
         assert!(matches!(app.viewer, Some(ViewerSession::Image(_))));
         assert!(app.status_msg.is_none());
+    }
+
+    #[test]
+    fn mirror_context_preview_routes_pdf_image_payload_to_pdf_editor() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pdf_path = temp_dir.path().join("document.pdf");
+        std::fs::write(&pdf_path, b"%PDF-1.4\n").unwrap();
+        let item = ClipItem {
+            id: uuid::Uuid::new_v4(),
+            created_at: 0,
+            payload: ClipPayload::Image {
+                bytes: Vec::new(),
+                path: Some(pdf_path),
+                width: 800,
+                height: 600,
+                mime: "application/pdf".to_owned(),
+                thumbnail: None,
+            },
+            title: "document.pdf".to_owned(),
+            subtitle: "PDF (1 pg)".to_owned(),
+            details: vec!["PDF".to_owned()],
+            handler_tag: "PDF (DOCUMENT)".to_owned(),
+        };
+        assert!(item.is_image(), "PDF slot previews are image-backed");
+
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.state.push_left(item);
+        app.handle_mirror_action(Some(MirrorAction::Context(SlotId::LeftHand)));
+
+        assert!(matches!(app.viewer, Some(ViewerSession::Pdf(_))));
+        assert!(app.image_load_job.is_none());
     }
 
     #[test]
