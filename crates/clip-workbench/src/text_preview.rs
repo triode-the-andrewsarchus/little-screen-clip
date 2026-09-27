@@ -510,7 +510,7 @@ impl TextPreviewState {
 
         egui::Frame::none()
             .fill(hex_to_c32(&palette.colors.canvas))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 // Header (Zone 1)
                 let clicked_hatch = shell.render_header(ui, |ui| {
@@ -755,7 +755,10 @@ impl TextPreviewState {
                 hex_to_c32(&palette.colors.surface_panel),
             ))
             .rounding(Rounding::same(6.0))
-            .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+            .inner_margin(egui::Margin::symmetric(
+                crate::ui_ext::BUTTON_PADDING_X,
+                crate::ui_ext::BUTTON_PADDING_Y,
+            ))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     Icon::Search.ui(ui, 15.0, hex_to_c32(&palette.colors.text_secondary));

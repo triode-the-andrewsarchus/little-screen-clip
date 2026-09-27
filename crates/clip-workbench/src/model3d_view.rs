@@ -224,7 +224,7 @@ impl Model3dViewerState {
         ui.ctx().request_repaint_after(Duration::from_millis(50));
         egui::Frame::none()
             .fill(bg)
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 let mut shell = StudioShell::new(&self.title, Icon::Model3d, palette, close)
                     .with_badge("Parsing 3D Model...".to_string(), None)
@@ -262,7 +262,7 @@ impl Model3dViewerState {
     ) {
         egui::Frame::none()
             .fill(bg)
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 let mut shell = StudioShell::new(&self.title, Icon::Alert, palette, close)
                     .with_badge("Failed to load".to_string(), None)
@@ -343,7 +343,7 @@ impl Model3dViewerState {
 
         egui::Frame::none()
             .fill(bg)
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 let info_badge = format!(
                     "{} • {} triangles • {:.1}×{:.1}×{:.1} mm",

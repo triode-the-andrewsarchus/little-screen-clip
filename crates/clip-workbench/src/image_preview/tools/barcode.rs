@@ -180,7 +180,10 @@ impl ImagePreviewState {
 
                                     egui::Frame::none()
                                         .fill(b_low)
-                                        .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                                        .inner_margin(egui::Margin::symmetric(
+                                            crate::ui_ext::SPACE_SM,
+                                            crate::ui_ext::SPACE_XS,
+                                        ))
                                         .stroke(Stroke::new(1.0_f32, card_border))
                                         .rounding(Rounding::same(4.0))
                                         .show(ui, |ui| {

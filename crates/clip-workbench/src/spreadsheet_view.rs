@@ -156,7 +156,7 @@ impl SpreadsheetViewerState {
 
         egui::Frame::none()
             .fill(bg)
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 let info_badge = format!("{} rows × {} cols", total_rows, total_cols);
                 let mut shell = StudioShell::new(&self.title, Icon::Spreadsheet, palette, close)

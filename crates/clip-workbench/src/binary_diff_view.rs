@@ -438,7 +438,7 @@ impl BinaryDiffViewState {
 
         egui::Frame::none()
             .fill(hex_to_c32(&palette.colors.canvas))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 // Zone 1: Header
                 let clicked_hatch = shell.render_header(ui, |ui| {

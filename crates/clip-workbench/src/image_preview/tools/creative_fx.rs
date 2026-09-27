@@ -833,7 +833,7 @@ impl ImagePreviewState {
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
                 .rounding(Rounding::same(4.0))
-                .inner_margin(egui::Margin::same(8.0))
+                .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
                 .show(ui, |ui| {
                     ui.set_width(left_w - 16.0);
                     ui.set_height((left_h - 16.0).max(1.0));
@@ -1095,7 +1095,7 @@ impl ImagePreviewState {
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
                 .rounding(Rounding::same(4.0))
-                .inner_margin(egui::Margin::same(8.0))
+                .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
                 .show(ui, |ui| {
                     ui.set_width(right_w - 16.0);
                     ui.set_height((right_h - 16.0).max(1.0));

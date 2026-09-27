@@ -599,7 +599,7 @@ impl DiffViewerState {
 
         egui::Frame::none()
             .fill(crate::hex_to_c32(&palette.colors.canvas))
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 // Zone 1: Header
                 let clicked_hatch = shell.render_header(ui, |ui| {
@@ -852,7 +852,7 @@ impl DiffViewerState {
                                 .fill(b_low)
                                 .rounding(Rounding::same(6.0))
                                 .stroke(Stroke::new(1.0_f32, b_med))
-                                .inner_margin(egui::Margin::same(4.0))
+                                .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_XS))
                                 .show(ui, |ui| {
                                     ui.image(egui::load::SizedTexture::new(
                                         tex.id(),
@@ -886,7 +886,7 @@ impl DiffViewerState {
                                 .fill(b_low)
                                 .rounding(Rounding::same(6.0))
                                 .stroke(Stroke::new(1.0_f32, b_med))
-                                .inner_margin(egui::Margin::same(4.0))
+                                .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_XS))
                                 .show(ui, |ui| {
                                     ui.image(egui::load::SizedTexture::new(
                                         tex.id(),
@@ -981,7 +981,7 @@ impl DiffViewerState {
             .fill(b_low)
             .rounding(Rounding::same(6.0))
             .stroke(Stroke::new(1.0_f32, b_med))
-            .inner_margin(egui::Margin::same(8.0))
+            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
             .show(ui, |ui| {
                 egui::ScrollArea::both()
                     .auto_shrink([false; 2])

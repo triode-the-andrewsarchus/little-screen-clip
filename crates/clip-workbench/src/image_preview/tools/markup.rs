@@ -717,7 +717,10 @@ impl ImagePreviewState {
                                     },
                                 ))
                                 .rounding(Rounding::same(4.0))
-                                .inner_margin(egui::Margin::symmetric(6.0, 4.0))
+                                .inner_margin(egui::Margin::symmetric(
+                                    crate::ui_ext::ITEM_SPACING_Y,
+                                    crate::ui_ext::SPACE_XS,
+                                ))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         // Shape icon & name

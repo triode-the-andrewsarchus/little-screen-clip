@@ -604,7 +604,7 @@ impl MidiViewerState {
 
         egui::Frame::none()
             .fill(bg)
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 let total_notes = self.data.total_notes;
                 let duration_sec = self.data.duration_sec;

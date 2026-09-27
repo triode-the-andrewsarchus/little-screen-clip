@@ -439,7 +439,7 @@ impl PdfEditorState {
 
         egui::Frame::none()
             .fill(colors.canvas)
-            .inner_margin(egui::Margin::same(12.0))
+            .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
             .show(ui, |ui| {
                 let page_count = self.page_count;
                 let metadata_loading = self.info_job.is_some();
@@ -546,7 +546,7 @@ impl PdfEditorState {
                                 .fill(colors.recessed)
                                 .stroke(Stroke::new(1.0_f32, colors.panel))
                                 .rounding(Rounding::same(6.0))
-                                .inner_margin(egui::Margin::same(8.0))
+                                .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         ui.label(
@@ -613,7 +613,7 @@ impl PdfEditorState {
                                                             })
                                                             .stroke(Stroke::new(stroke_w, border_col))
                                                             .rounding(Rounding::same(4.0))
-                                                            .inner_margin(egui::Margin::same(6.0))
+                                                            .inner_margin(egui::Margin::same(crate::ui_ext::ITEM_SPACING_Y))
                                                             .show(ui, |ui| {
                                                                 let aspect = if h > 0 {
                                                                     w as f32 / h as f32
@@ -687,7 +687,7 @@ impl PdfEditorState {
                                 .fill(colors.recessed)
                                 .stroke(Stroke::new(1.0_f32, colors.panel))
                                 .rounding(Rounding::same(6.0))
-                                .inner_margin(egui::Margin::same(12.0))
+                                .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
                                 .show(ui, |ui| {
                                     let selected_item = self
                                         .selected_page
