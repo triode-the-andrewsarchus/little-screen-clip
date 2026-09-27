@@ -74,6 +74,15 @@ impl EscapeHatchLauncher {
         command: &str,
         file_path: &Path,
     ) -> Result<String, String> {
+        Self::spawn_with_fallback_command(app_name, command, file_path, "xdg-open")
+    }
+
+    fn spawn_with_fallback_command(
+        app_name: &str,
+        command: &str,
+        file_path: &Path,
+        fallback_command: &str,
+    ) -> Result<String, String> {
         let mut cmd = Command::new(command);
         cmd.arg(file_path);
 
@@ -87,7 +96,11 @@ impl EscapeHatchLauncher {
             }
             Err(_) => {
                 // Try xdg-open fallback
-                if Command::new("xdg-open").arg(file_path).spawn().is_ok() {
+                if Command::new(fallback_command)
+                    .arg(file_path)
+                    .spawn()
+                    .is_ok()
+                {
                     Ok("🚀 Opened in default application via xdg-open".to_string())
                 } else {
                     Err(format!(
@@ -141,5 +154,52 @@ mod tests {
             .with_icon(Icon::Volume);
         assert!(p.is_primary);
         assert_eq!(p.icon, Some(Icon::Volume));
+    }
+
+    #[test]
+    fn configured_application_spawn_returns_launch_message() {
+        let result = EscapeHatchLauncher::spawn_with_fallback_command(
+            "Test Viewer",
+            "/bin/true",
+            Path::new("/tmp/sample.test"),
+            "/bin/false",
+        );
+
+        assert_eq!(
+            result,
+            Ok("🚀 Launched Test Viewer with sample.test".into())
+        );
+    }
+
+    #[test]
+    fn fallback_spawn_returns_default_application_message() {
+        let result = EscapeHatchLauncher::spawn_with_fallback_command(
+            "Test Viewer",
+            "/missing/test-viewer-executable",
+            Path::new("/tmp/sample.test"),
+            "/bin/true",
+        );
+
+        assert_eq!(
+            result,
+            Ok("🚀 Opened in default application via xdg-open".into())
+        );
+    }
+
+    #[test]
+    fn failed_configured_and_fallback_spawns_return_failure_message() {
+        let result = EscapeHatchLauncher::spawn_with_fallback_command(
+            "Test Viewer",
+            "/missing/test-viewer-executable",
+            Path::new("/tmp/sample.test"),
+            "/missing/test-fallback-executable",
+        );
+
+        assert_eq!(
+            result,
+            Err(
+                "⚠️ Failed to launch '/missing/test-viewer-executable' (tool not installed)".into()
+            )
+        );
     }
 }
