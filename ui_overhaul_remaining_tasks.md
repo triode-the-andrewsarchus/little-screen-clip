@@ -155,7 +155,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [ ] **E2.1o [Luna] Verify Pick Color live, including loupe readability and click behavior.**
   - [ ] **E2.1p [Luna] Verify Palette live.**
   - [ ] **E2.1q [Luna] Verify Decorrelation Stretch live, including comparison HUD and matrix precision.**
-  - [ ] **E2.1r [Luna] Complete the image-tool contrast audit.**
+  - [x] **E2.1r [Luna] Complete the image-tool contrast audit.** Image chrome uses tested semantic text roles across canvas, raised, panel, and recessed surfaces; labels on generated fills/badges and transparent selections use the shared foreground resolver. Existing Light/Dark regressions cover every neutral text role, standard action/mode fills, and translucent accent compositing. This is source-and-render-test evidence, not a live visual check.
   - [ ] **E2.1s [Luna] Verify image parameters and undo live.**
   - [ ] **E2.1t [Luna] Verify image save and copy live.**
   - [ ] **E2.1u [Luna] Verify external-app launch and fallback live.**
