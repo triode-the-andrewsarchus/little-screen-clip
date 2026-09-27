@@ -248,3 +248,5 @@ Post-fallback Barcode capture `/tmp/clip-image-barcode-unicode-final-fonts-20260
 ## Image Pick Color and Palette compact layout, 2026-09-27
 
 Isolated 1280×720 logical / 100% / Light capture `/tmp/clip-image-pick-color-final-20260927/image-pick-color.png` uses a deterministic multicolor test image. Palette extraction displays seven dominant-color swatches with labels and percentages; the Copy CSV action is available. The Pick Color panel shows the current color/RGB readout, Copy current hex action, and picked-colors area alongside the canvas. This capture contains no pointer input, so loupe readability and click-to-pick remain unverified.
+
+The production-overlay render regression `pick_color_hover_renders_loupe_and_click_records_sampled_pixel` sends pointer move, press, and release events to a solid-color sample. It confirms pixel `(4, 4)`, draws the matching hex and X/Y readouts in the loupe, and records the color in the picked list. This is egui input simulation, not a physical pointer session; compact/wide visual loupe review remains open.

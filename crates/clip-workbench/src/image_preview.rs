@@ -2645,6 +2645,98 @@ mod tests {
     }
 
     #[test]
+    fn pick_color_hover_renders_loupe_and_click_records_sampled_pixel() {
+        let mut state = image_state_from_png((8, 8), "color picker interaction");
+        let expected = Color32::from_rgb(230, 83, 122);
+        state.current_rgba = RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([expected.r(), expected.g(), expected.b(), 255]),
+        );
+        let palette =
+            AppPalette::for_appearance(little_clip_core::config::WorkbenchAppearance::Light);
+        let ctx = egui::Context::default();
+        let sample_area = Rect::from_min_size(Pos2::new(80.0, 80.0), Vec2::new(200.0, 120.0));
+        let pointer = sample_area.center();
+        let render = |state: &mut ImagePreviewState, time, events| {
+            ctx.run(
+                egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let response = ui.interact(
+                            sample_area,
+                            ui.id().with("pick-color-interaction-sample"),
+                            egui::Sense::click(),
+                        );
+                        let painter = ui.painter().clone();
+                        state.render_pick_color_overlay(
+                            ui,
+                            &painter,
+                            &response,
+                            sample_area,
+                            &palette,
+                        );
+                    });
+                },
+            )
+        };
+
+        render(&mut state, 0.0, Vec::new());
+        let hover = render(&mut state, 0.1, vec![egui::Event::PointerMoved(pointer)]);
+        assert_eq!(state.pick_color_state.hovered_color, Some(expected));
+        assert_eq!(state.pick_color_state.hovered_pixel, Some((4, 4)));
+        let loupe_text = hover.shapes.iter().any(|shape| match &shape.shape {
+            egui::Shape::Text(text) => text.galley.text() == "#E6537A",
+            _ => false,
+        });
+        assert!(loupe_text, "hovering paints the sampled hex in the loupe");
+        let coordinate_readouts: Vec<_> = hover
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect();
+        assert!(coordinate_readouts.iter().any(|text| text == "X: 4"));
+        assert!(coordinate_readouts.iter().any(|text| text == "Y: 4"));
+
+        render(
+            &mut state,
+            0.2,
+            vec![
+                egui::Event::PointerMoved(pointer),
+                egui::Event::PointerButton {
+                    pos: pointer,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ],
+        );
+        render(
+            &mut state,
+            0.3,
+            vec![
+                egui::Event::PointerMoved(pointer),
+                egui::Event::PointerButton {
+                    pos: pointer,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ],
+        );
+        assert_eq!(state.pick_color_state.picked_colors, vec![expected]);
+        assert_eq!(state.pick_color_state.last_picked, Some(expected));
+    }
+
+    #[test]
     fn test_pixel_resize_aspect_locked_and_unlocked() {
         let config = AppConfig::default();
         let img = RgbaImage::new(200, 100);

@@ -200,7 +200,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - **E2.1o Pick Color interaction**
     - [x] **E2.1o1 [Luna] Inspect the compact picker and palette panels live.** `/tmp/clip-image-pick-color-final-20260927/image-pick-color.png` shows the full palette, color readout, pick list, and canvas at 1280×720 Light.
     - [ ] **E2.1o2 [Luna] Verify the loupe stays readable at compact and wide sizes.**
-    - [ ] **E2.1o3 [Luna] Verify clicking the canvas records the sampled color.**
+    - [x] **E2.1o3 [Luna] Verify clicking the canvas records the sampled color.** Production overlay render test sends egui hover/press/release events and confirms the expected center pixel, loupe readout, and picked-color state.
   - **E2.1p Palette extraction and output**
     - [x] **E2.1p1 [Luna] Inspect Palette extraction and swatches live.** The isolated Light capture shows seven sampled colors, labels, percentages, and the Copy CSV control.
     - [ ] **E2.1p2 [Luna] Verify Copy CSV output matches the extracted colors.**
