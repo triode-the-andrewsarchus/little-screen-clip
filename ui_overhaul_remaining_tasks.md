@@ -333,8 +333,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **H2.1h6b2 [Primary] Offload single-slice audio copy.** Preserve selected range, filters, output naming, clipboard/slot handoff, and visible failure state.
       - [ ] **H2.1h6b3 [Primary] Offload multi-slice audio copy.** Preserve slice order and naming, report per-slice/partial failures, and keep the UI responsive throughout export.
       - [ ] **H2.1h6b4 [Primary] Offload rolling-audio selection materialization and editor handoff.** Preserve selected range, optional trim, editor setup, and status feedback.
-      - [ ] **H2.1h6c1 [Primary] Offload MIDI slice selection and serialization.** Preserve selected time range and solo-track behavior.
-      - [ ] **H2.1h6c2 [Primary] Offload MIDI temp-file write and clipboard/slot handoff.** Preserve destination naming, IPC, and system-clipboard fallback.
+      - [x] **H2.1h6c1 [Luna + primary review] Offload MIDI slice selection and serialization.** The worker snapshots the selection and solo-track state, shares the score through `Arc`, and preserves MIDI timing and note contents.
+      - [x] **H2.1h6c2 [Luna + primary review] Offload MIDI temp-file write and clipboard/slot handoff.** Unique temp files preserve the millisecond naming convention, IPC and system-clipboard fallback run on a cancellable worker, and only the UI status is polled on-frame.
       - [x] **H2.1h6d1 [Luna + primary review] Offload text and image diff temporary-file staging.** Existing source paths pass through unchanged; clipboard text and in-memory image bytes stage through shared `Arc` targets on `BackgroundJobs`, preserving payload bytes, extensions, and Meld/KDiff3 priority. Pending/success/failure status and stale-session cancellation are covered.
       - [x] **H2.1h6d2 [Luna + primary review] Offload binary-diff temporary-file staging.** Exact left/right bytes stage through shared `Arc` buffers on `BackgroundJobs`; ImHex/system-opener behavior, status, and stale-session cancellation are preserved.
   - [x] **H2.1i Bound PDF page raster queue.** Three-message queue implemented.

@@ -12,8 +12,10 @@ use little_clip_core::presentation::midi::{MidiData, MidiNote};
 use little_clip_core::{BackgroundJobs, HandSide, JobError, JobTicket};
 use rodio::stream::MixerDeviceSink;
 use rodio::{Decoder, Player};
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -22,7 +24,7 @@ pub struct MidiViewerState {
     #[allow(dead_code)]
     pub path: Option<PathBuf>,
     pub title: String,
-    pub data: MidiData,
+    pub data: Arc<MidiData>,
     pub is_playing: bool,
     pub playhead_sec: f32,
     playback_start_instant: Option<Instant>,
@@ -46,6 +48,44 @@ pub struct MidiViewerState {
     pub pending_play: bool,
     synth_rx: Option<Receiver<Result<(Option<usize>, Vec<u8>), JobError>>>,
     synth_ticket: Option<JobTicket>,
+    export_job: Option<MidiExportJob>,
+}
+
+struct MidiExportJob {
+    ticket: JobTicket,
+    cancelled: Arc<AtomicBool>,
+    receiver: Receiver<Result<Result<MidiExportArtifact, String>, JobError>>,
+}
+
+#[derive(Debug)]
+struct MidiExportArtifact {
+    path: PathBuf,
+    total_notes: usize,
+    duration_sec: f32,
+    is_slice: bool,
+    solo_info: String,
+    delivery: MidiExportDelivery,
+    retain_file: bool,
+}
+
+#[derive(Debug)]
+enum MidiExportDelivery {
+    PushedToWorkbench,
+    ClipboardFallback,
+}
+
+impl MidiExportArtifact {
+    fn retain(&mut self) {
+        self.retain_file = true;
+    }
+}
+
+impl Drop for MidiExportArtifact {
+    fn drop(&mut self) {
+        if !self.retain_file {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 /// Computes a distinct palette color for notes in a given MIDI track and channel using theme harmonies.
@@ -65,6 +105,156 @@ fn should_draw_pitch_label(key: u8, row_height: f32, label_height: f32) -> bool 
 
 fn time_label_fits(left: f32, width: f32, previous_right: f32, clip_right: f32) -> bool {
     left >= previous_right + 4.0 && left + width <= clip_right
+}
+
+fn midi_export_dir() -> PathBuf {
+    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
+        PathBuf::from(runtime_dir)
+            .join("little-screen-clip")
+            .join("midi_slices")
+    } else {
+        PathBuf::from("/tmp/little-screen-clip/midi_slices")
+    }
+}
+
+fn write_unique_midi_export(
+    slice_dir: &std::path::Path,
+    filename: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, String> {
+    let base_path = slice_dir.join(filename);
+    let stem = base_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("midi_export");
+    let extension = base_path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("mid");
+
+    for suffix in 0u32.. {
+        let path = if suffix == 0 {
+            base_path.clone()
+        } else {
+            slice_dir.join(format!("{stem}_{suffix}.{extension}"))
+        };
+        let mut file = match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("Failed to write MIDI file: {error}")),
+        };
+        if let Err(error) = file.write_all(bytes) {
+            drop(file);
+            let _ = std::fs::remove_file(&path);
+            return Err(format!("Failed to write MIDI file: {error}"));
+        }
+        return Ok(path);
+    }
+    unreachable!("u32 collision suffix space exhausted")
+}
+
+fn write_midi_export(
+    data: &MidiData,
+    start_sec: f32,
+    end_sec: f32,
+    is_slice: bool,
+    solo_track: Option<usize>,
+    timestamp: u128,
+    slice_dir: PathBuf,
+    cancelled: Arc<AtomicBool>,
+) -> Result<MidiExportArtifact, String> {
+    let sliced_data = data.slice(start_sec, end_sec, solo_track);
+    if cancelled.load(Ordering::Acquire) {
+        return Err("MIDI export cancelled".to_string());
+    }
+    let midi_bytes = sliced_data
+        .to_midi_bytes()
+        .map_err(|error| format!("Failed to export MIDI: {error}"))?;
+    if cancelled.load(Ordering::Acquire) {
+        return Err("MIDI export cancelled".to_string());
+    }
+
+    std::fs::create_dir_all(&slice_dir).map_err(|error| {
+        tracing::warn!(
+            "Failed to create midi slice directory {}: {error}",
+            slice_dir.display()
+        );
+        format!("Failed to create slice directory: {error}")
+    })?;
+
+    let track_suffix = solo_track.map_or_else(String::new, |track| {
+        let name = data
+            .track_names
+            .get(track)
+            .map(|name| name.replace(|c: char| !c.is_alphanumeric() && c != '_', "_"))
+            .unwrap_or_else(|| format!("track_{}", track + 1));
+        format!("_{name}")
+    });
+    let filename = if is_slice {
+        format!("midi_slice_{timestamp}_{start_sec:.1}s-{end_sec:.1}s{track_suffix}.mid")
+    } else {
+        format!("midi_export_{timestamp}{track_suffix}.mid")
+    };
+    if cancelled.load(Ordering::Acquire) {
+        return Err("MIDI export cancelled".to_string());
+    }
+    let path = write_unique_midi_export(&slice_dir, &filename, &midi_bytes)?;
+
+    let artifact = MidiExportArtifact {
+        path,
+        total_notes: sliced_data.total_notes,
+        duration_sec: end_sec - start_sec,
+        is_slice,
+        solo_info: solo_track.map_or_else(String::new, |track| {
+            let name = data
+                .track_names
+                .get(track)
+                .map(String::as_str)
+                .unwrap_or("track");
+            format!(" (solo '{name}')")
+        }),
+        delivery: MidiExportDelivery::PushedToWorkbench,
+        retain_file: false,
+    };
+    if cancelled.load(Ordering::Acquire) {
+        return Err("MIDI export cancelled".to_string());
+    }
+    Ok(artifact)
+}
+
+fn handoff_midi_export(
+    mut artifact: MidiExportArtifact,
+    cancelled: &AtomicBool,
+    started: Instant,
+) -> Result<MidiExportArtifact, String> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err("MIDI export cancelled".to_string());
+    }
+    // Keep enough of the job deadline for bounded IPC and the clipboard fallback.
+    if started.elapsed() >= Duration::from_secs(45) {
+        return Err("MIDI export timed out before handoff".to_string());
+    }
+    let request = IpcRequest::PushFile {
+        path: artifact.path.clone(),
+        hand: HandSide::Left,
+    };
+    if crate::send_ipc_request_with_timeout(&request, Some(Duration::from_secs(2))).is_ok() {
+        artifact.retain();
+        return Ok(artifact);
+    }
+
+    if cancelled.load(Ordering::Acquire) {
+        return Err("MIDI export cancelled".to_string());
+    }
+    little_clip_core::copy_file_uris_to_system_clipboard(std::slice::from_ref(&artifact.path))
+        .map_err(|error| format!("Failed to copy MIDI file to system clipboard: {error}"))?;
+    artifact.delivery = MidiExportDelivery::ClipboardFallback;
+    artifact.retain();
+    Ok(artifact)
 }
 
 fn clamp_label_center(center: f32, height: f32, clip_top: f32, clip_bottom: f32) -> Option<f32> {
@@ -118,7 +308,8 @@ impl MidiViewerState {
             pending_play: false,
             synth_rx: None,
             synth_ticket: None,
-            data,
+            export_job: None,
+            data: Arc::new(data),
         }
     }
 
@@ -319,110 +510,96 @@ impl MidiViewerState {
             Some((a, b)) if (b - a).abs() > 0.05 => (a.min(b), a.max(b), true),
             _ => (0.0, self.data.duration_sec.max(0.1), false),
         };
-
-        let sliced_data = self.data.slice(s, e, self.solo_track);
-        let midi_bytes = match sliced_data.to_midi_bytes() {
-            Ok(b) => b,
-            Err(err) => {
-                self.status_toast
-                    .set(format!("Failed to export MIDI: {err}"), now);
-                return false;
-            }
-        };
-
-        let slice_dir = if let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") {
-            PathBuf::from(rt)
-                .join("little-screen-clip")
-                .join("midi_slices")
-        } else {
-            PathBuf::from("/tmp/little-screen-clip/midi_slices")
-        };
-
-        if let Err(err) = std::fs::create_dir_all(&slice_dir) {
-            tracing::warn!(
-                "Failed to create midi slice directory {}: {err}",
-                slice_dir.display()
-            );
-            self.status_toast
-                .set(format!("Failed to create slice directory: {err}"), now);
-            return false;
-        }
-
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
+        self.cancel_export_job();
+        let data = Arc::clone(&self.data);
+        let solo_track = self.solo_track;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let job_cancelled = Arc::clone(&cancelled);
+        let (ticket, receiver) =
+            BackgroundJobs::global().submit(Duration::from_secs(60), move || {
+                let started = Instant::now();
+                let artifact = write_midi_export(
+                    &data,
+                    s,
+                    e,
+                    is_slice,
+                    solo_track,
+                    timestamp,
+                    midi_export_dir(),
+                    Arc::clone(&job_cancelled),
+                )?;
+                handoff_midi_export(artifact, &job_cancelled, started)
+            });
+        self.export_job = Some(MidiExportJob {
+            ticket,
+            cancelled,
+            receiver,
+        });
+        self.status_toast.set("Preparing MIDI export…", now);
+        true
+    }
 
-        let track_suffix = if let Some(st) = self.solo_track {
-            let name = self
-                .data
-                .track_names
-                .get(st)
-                .map(|s| s.replace(|c: char| !c.is_alphanumeric() && c != '_', "_"))
-                .unwrap_or_else(|| format!("track_{}", st + 1));
-            format!("_{name}")
-        } else {
-            String::new()
-        };
-
-        let filename = if is_slice {
-            format!(
-                "midi_slice_{}_{:.1}s-{:.1}s{}.mid",
-                timestamp, s, e, track_suffix
-            )
-        } else {
-            format!("midi_export_{}{}.mid", timestamp, track_suffix)
-        };
-
-        let slice_path = slice_dir.join(filename);
-        if let Err(err) = std::fs::write(&slice_path, &midi_bytes) {
-            self.status_toast
-                .set(format!("Failed to write MIDI file: {err}"), now);
-            return false;
+    fn cancel_export_job(&mut self) {
+        if let Some(job) = self.export_job.take() {
+            job.cancelled.store(true, Ordering::Release);
+            job.ticket.cancel();
         }
+    }
 
-        let req = IpcRequest::PushFile {
-            path: slice_path.clone(),
-            hand: HandSide::Left,
+    fn poll_export(&mut self, now: f64, ctx: &egui::Context) {
+        let Some(job) = self.export_job.as_ref() else {
+            return;
         };
-
-        let ipc_sent = crate::send_ipc_request(&req).is_ok();
-        if !ipc_sent {
-            if let Err(error) = little_clip_core::copy_file_uris_to_system_clipboard(
-                std::slice::from_ref(&slice_path),
-            ) {
-                tracing::debug!(%error, "failed to copy MIDI slice to system clipboard");
+        match job.receiver.try_recv() {
+            Ok(Ok(Ok(mut artifact))) => {
+                let desc = if artifact.is_slice {
+                    format!(
+                        "Copied {:.1}s MIDI slice ({} notes{}) to Clipboard & Left Hand!",
+                        artifact.duration_sec, artifact.total_notes, artifact.solo_info
+                    )
+                } else {
+                    format!(
+                        "Copied full MIDI ({} notes{}) to Clipboard & Left Hand!",
+                        artifact.total_notes, artifact.solo_info
+                    )
+                };
+                match artifact.delivery {
+                    MidiExportDelivery::PushedToWorkbench => {}
+                    MidiExportDelivery::ClipboardFallback => {
+                        tracing::debug!("MIDI export delivered through system clipboard fallback");
+                    }
+                }
+                artifact.retain();
+                self.status_toast.set(desc, now);
+                self.export_job = None;
+            }
+            Ok(Ok(Err(error))) => {
+                if error == "MIDI export cancelled" {
+                    self.export_job = None;
+                    return;
+                }
+                self.status_toast.set(error, now);
+                self.export_job = None;
+            }
+            Ok(Err(JobError::Cancelled)) => self.export_job = None,
+            Ok(Err(error)) => {
+                self.status_toast
+                    .set(format!("Failed to export MIDI: {error}"), now);
+                self.export_job = None;
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.status_toast
+                    .set("MIDI export worker disconnected", now);
+                self.export_job = None;
+            }
+            Err(TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(50));
             }
         }
-
-        let solo_info = if let Some(st) = self.solo_track {
-            let name = self
-                .data
-                .track_names
-                .get(st)
-                .map(|s| s.as_str())
-                .unwrap_or("track");
-            format!(" (solo '{name}')")
-        } else {
-            String::new()
-        };
-
-        let desc = if is_slice {
-            format!(
-                "Copied {:.1}s MIDI slice ({} notes{}) to Clipboard & Left Hand!",
-                e - s,
-                sliced_data.total_notes,
-                solo_info
-            )
-        } else {
-            format!(
-                "Copied full MIDI ({} notes{}) to Clipboard & Left Hand!",
-                sliced_data.total_notes, solo_info
-            )
-        };
-
-        self.status_toast.set(desc, now);
-        true
     }
 
     pub fn pause(&mut self) {
@@ -541,6 +718,8 @@ impl MidiViewerState {
         palette: &little_clip_core::palette::AppPalette,
         close: &mut bool,
     ) {
+        let now = ui.input(|input| input.time);
+        self.poll_export(now, ui.ctx());
         self.update_playback();
         if self.is_playing {
             ui.ctx().request_repaint();
@@ -1340,6 +1519,7 @@ impl Drop for MidiViewerState {
         if let Some(ticket) = &self.synth_ticket {
             ticket.cancel();
         }
+        self.cancel_export_job();
     }
 }
 
@@ -1514,7 +1694,7 @@ mod tests {
     }
 
     #[test]
-    fn test_midi_viewer_selection_and_solo_copy() {
+    fn midi_viewer_tracks_selection_and_solo_for_export() {
         let midi = MidiData {
             title: "Test Score".to_string(),
             track_count: 2,
@@ -1567,7 +1747,7 @@ mod tests {
         let mut state = MidiViewerState {
             path: None,
             title: "Test Score".to_string(),
-            data: midi,
+            data: Arc::new(midi),
             is_playing: false,
             playhead_sec: 0.0,
             playback_start_instant: None,
@@ -1590,6 +1770,7 @@ mod tests {
             pending_play: false,
             synth_rx: None,
             synth_ticket: None,
+            export_job: None,
         };
 
         // Test solo toggling
@@ -1603,15 +1784,148 @@ mod tests {
         state.clear_solo();
         assert_eq!(state.solo_track, None);
 
-        // Test selection and copying
+        // Selection and solo state are captured by the asynchronous export request.
         state.selected_region = Some((1.0, 3.0));
         state.solo_track = Some(0);
+        assert_eq!(state.selected_region, Some((1.0, 3.0)));
+        assert_eq!(state.solo_track, Some(0));
+    }
 
-        let copied = state.copy_selection(1.0);
-        assert!(copied);
-        let msg = state.status_toast.message(1.0).unwrap();
-        assert!(msg.contains("Copied 2.0s MIDI slice"));
-        assert!(msg.contains("solo 'Melody'"));
+    #[test]
+    fn midi_export_worker_writes_selected_solo_slice_with_original_timing_and_name() {
+        let data = MidiData {
+            title: "Test Score".to_string(),
+            track_count: 2,
+            track_names: vec!["Melody".to_string(), "Bass Line".to_string()],
+            total_notes: 2,
+            duration_sec: 4.0,
+            bpm: 120.0,
+            min_key: 40,
+            max_key: 72,
+            notes: vec![
+                MidiNote {
+                    track: 0,
+                    channel: 0,
+                    program: 0,
+                    key: 60,
+                    velocity: 90,
+                    start_sec: 0.75,
+                    duration_sec: 1.0,
+                },
+                MidiNote {
+                    track: 1,
+                    channel: 1,
+                    program: 32,
+                    key: 40,
+                    velocity: 95,
+                    start_sec: 1.0,
+                    duration_sec: 1.25,
+                },
+            ],
+        };
+        let test_dir = std::env::temp_dir().join(format!(
+            "little-screen-clip-midi-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let artifact = write_midi_export(
+            &data,
+            0.5,
+            2.0,
+            true,
+            Some(1),
+            123,
+            test_dir.clone(),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap();
+
+        assert_eq!(artifact.total_notes, 1);
+        assert_eq!(artifact.duration_sec, 1.5);
+        assert!(
+            artifact
+                .path
+                .ends_with("midi_slice_123_0.5s-2.0s_Bass_Line.mid")
+        );
+        assert_eq!(artifact.solo_info, " (solo 'Bass Line')");
+        let bytes = std::fs::read(&artifact.path).unwrap();
+        let parsed = MidiData::parse_bytes(&bytes, "round trip".to_string()).unwrap();
+        assert_eq!(parsed.total_notes, 1);
+        assert_eq!(
+            parsed.notes[0].track, 0,
+            "solo track is remapped to track zero"
+        );
+        assert!((parsed.notes[0].start_sec - 0.5).abs() < 0.01);
+        drop(artifact);
+        std::fs::remove_dir(test_dir).unwrap();
+    }
+
+    #[test]
+    fn midi_export_worker_honors_cancellation_before_writing() {
+        let data = MidiData {
+            title: "Cancelled".to_string(),
+            track_count: 0,
+            track_names: Vec::new(),
+            total_notes: 0,
+            duration_sec: 1.0,
+            bpm: 120.0,
+            min_key: 0,
+            max_key: 127,
+            notes: Vec::new(),
+        };
+        let test_dir = std::env::temp_dir().join(format!(
+            "little-screen-clip-midi-cancel-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cancelled = Arc::new(AtomicBool::new(true));
+        let result = write_midi_export(
+            &data,
+            0.0,
+            1.0,
+            false,
+            None,
+            456,
+            test_dir.clone(),
+            cancelled,
+        );
+        assert_eq!(result.unwrap_err(), "MIDI export cancelled");
+        assert!(!test_dir.exists());
+    }
+
+    #[test]
+    fn midi_export_file_creation_retries_collision_without_overwriting_existing_file() {
+        let test_dir = std::env::temp_dir().join(format!(
+            "little-screen-clip-midi-collision-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&test_dir).unwrap();
+        let original_path = test_dir.join("midi_slice_123_0.5s-2.0s_Bass.mid");
+        std::fs::write(&original_path, b"original export").unwrap();
+
+        let second_path = write_unique_midi_export(
+            &test_dir,
+            "midi_slice_123_0.5s-2.0s_Bass.mid",
+            b"new export",
+        )
+        .unwrap();
+
+        assert_eq!(
+            second_path,
+            test_dir.join("midi_slice_123_0.5s-2.0s_Bass_1.mid")
+        );
+        assert_eq!(std::fs::read(&original_path).unwrap(), b"original export");
+        assert_eq!(std::fs::read(&second_path).unwrap(), b"new export");
+        std::fs::remove_file(original_path).unwrap();
+        std::fs::remove_file(second_path).unwrap();
+        std::fs::remove_dir(test_dir).unwrap();
     }
 
     #[test]
@@ -1650,7 +1964,7 @@ mod tests {
         let mut state = MidiViewerState {
             path: None,
             title: "Multi-Track Score".to_string(),
-            data: midi,
+            data: Arc::new(midi),
             is_playing: false,
             playhead_sec: 0.0,
             playback_start_instant: None,
@@ -1673,6 +1987,7 @@ mod tests {
             pending_play: false,
             synth_rx: None,
             synth_ticket: None,
+            export_job: None,
         };
         let palette = little_clip_core::palette::AppPalette::default();
         let ctx = egui::Context::default();
