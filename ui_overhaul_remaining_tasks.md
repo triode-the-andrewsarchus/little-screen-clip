@@ -143,7 +143,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **H1.4i [Primary] Live-check audio mode and transport layout at wide host size.** Isolated 3440×1440 logical / 100% Dark capture fits the transport/export controls in one row with the footer clear of the timeline.
   - [x] **H1.4j [Primary] Confirm every image tool remains directly accessible and toolbar wrapping does not strand labels or hide common actions.** Compact, standard, and wide captures show every tool as a visible one-click button across at most two rows; no selector hides tools.
   - **H1.4k Image Studio header truncation and footer clipping (observed at compact and larger sizes)**
-    - [x] **H1.4k1 [Primary] Keep the Image Studio title and short filename visible beside right actions.** StudioShell accepts a semantic compact title; Image Studio shows its filename when the full studio-prefixed title does not fit, with the full title retained in the tooltip. Wider hosts keep the full title.
+    - [x] **H1.4k1 [Primary] Keep the Image Studio title and filename visible beside right actions.** StudioShell accepts a semantic compact title; Image Studio switches to the filename when the full studio-prefixed title does not fit, truncating an overlong filename inside the reserved width while retaining the full title in the tooltip. Wider hosts keep the full title.
     - [x] **H1.4k2 Reserve visible Image Studio footer space at every supported host size.** Luna implemented a native footer panel reserved before chrome/workspace; primary review reused its measured hint height for a read-only caption row and removed the duplicate measurement. The canvas no longer subtracts a guessed 32-point footer. Landed in `3258d1f`.
     - **H1.4k3 Header and footer regression checks**
       - [x] **H1.4k3a Check rendered footer and canvas bounds.** The actual studio render test covers View and panelized Markup at compact/wide sizes and 100/150/200% UI zoom; it checks painted text/canvas stay inside the host and do not overlap. Workspace tests pass (215 workbench tests, one ignored).
@@ -362,7 +362,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 - [ ] **E3.3a [Luna] Capture Light screenshots at representative logical sizes/scales.**
 - [ ] **E3.3b [Luna] Capture Dark screenshots at representative logical sizes/scales.**
 - [ ] **E3.3c [Luna] Capture Niri launch and return behavior.**
-- [ ] **E3.3d [Luna] Capture long-filename behavior.**
+- [x] **E3.3d [Luna] Capture long-filename behavior.** Isolated 1280×720 Dark capture with `clip-image-dense-e2.png` shows a truncated filename prefix, badges/actions, wrapped tools, canvas and footer within the popup. Full title is available via the header tooltip.
 - **E3.3e Capture dense collection behavior**
   - [ ] **E3.3e1 [Luna] Capture many-preset behavior.**
   - [ ] **E3.3e2 [Luna] Capture many-track behavior.**

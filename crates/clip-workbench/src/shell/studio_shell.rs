@@ -675,7 +675,7 @@ impl<'a> StudioShell<'a> {
                 let visible_title = self
                     .compact_title
                     .as_deref()
-                    .filter(|compact| {
+                    .filter(|_| {
                         ui.fonts(|fonts| {
                             let full_width = fonts
                                 .layout_no_wrap(
@@ -685,16 +685,7 @@ impl<'a> StudioShell<'a> {
                                 )
                                 .size()
                                 .x;
-                            let compact_width = fonts
-                                .layout_no_wrap(
-                                    compact.to_string(),
-                                    title_font.clone(),
-                                    colors.text_primary,
-                                )
-                                .size()
-                                .x;
                             full_width > name_ui.available_width()
-                                && compact_width <= name_ui.available_width()
                         })
                     })
                     .unwrap_or(&self.title);
@@ -868,6 +859,8 @@ mod tests {
 
     #[test]
     fn long_image_header_keeps_actions_in_one_compact_row() {
+        let long_filename = "a very long descriptive Unicode filename 日本語.webp";
+        let full_title = format!("IMAGE STUDIO — {long_filename}");
         for width in [1177.0, 1766.0, 2500.0] {
             let ctx = egui::Context::default();
             crate::ui_ext::configure_workbench_style(&ctx);
@@ -883,19 +876,20 @@ mod tests {
             let mut action_rects = Vec::new();
             let output = ctx.run(input, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let mut shell = StudioShell::new(
-                        "IMAGE STUDIO — a very long descriptive Unicode filename 日本語.webp",
-                        Icon::Image,
-                        &palette,
-                        &mut close,
-                    )
-                    .with_compact_title("fixture.webp")
-                    .with_badge("6000×6000 (1:1)", None)
-                    .with_badge("WEBP", None)
-                    .with_badge("554.4 KB", None)
-                    .with_escape_hatch(EscapeHatch::new("Krita", "krita", "Edit"))
-                    .with_escape_hatch(EscapeHatch::new("Inkscape", "inkscape", "Edit"))
-                    .with_escape_hatch(EscapeHatch::new("Nomacs", "nomacs", "View"));
+                    let compact_title = if width == 1177.0 {
+                        long_filename
+                    } else {
+                        "fixture.webp"
+                    };
+                    let mut shell =
+                        StudioShell::new(&full_title, Icon::Image, &palette, &mut close)
+                            .with_compact_title(compact_title)
+                            .with_badge("6000×6000 (1:1)", None)
+                            .with_badge("WEBP", None)
+                            .with_badge("554.4 KB", None)
+                            .with_escape_hatch(EscapeHatch::new("Krita", "krita", "Edit"))
+                            .with_escape_hatch(EscapeHatch::new("Inkscape", "inkscape", "Edit"))
+                            .with_escape_hatch(EscapeHatch::new("Nomacs", "nomacs", "View"));
                     let response = ui.scope(|ui| {
                         shell.render_header(ui, |ui| {
                             action_rects.push(
@@ -939,9 +933,9 @@ mod tests {
                     .unwrap_or_else(|| panic!("missing header label: {label}"))
             };
             let title = if width == 1177.0 {
-                "fixture.webp"
+                long_filename
             } else {
-                "IMAGE STUDIO — a very long descriptive Unicode filename 日本語.webp"
+                full_title.as_str()
             };
             let labels = [
                 title,
