@@ -1413,7 +1413,7 @@ impl eframe::App for WorkbenchApp {
                 }
                 WorkbenchView::AutoActions => {
                     ui.add_space(4.0);
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         Icon::Settings.ui(ui, 18.0, hex_to_c32(&self.ui_palette.harmonies.base));
                         ui.heading(
                             egui::RichText::new("Matched Auto-Actions")
@@ -1437,7 +1437,7 @@ impl eframe::App for WorkbenchApp {
                             .rounding(egui::Rounding::same(8.0))
                             .inner_margin(egui::Margin::symmetric(16.0, 14.0))
                             .show(ui, |ui| {
-                                ui.horizontal(|ui| {
+                                ui.horizontal_wrapped(|ui| {
                                     let mut trim = self.config.auto_actions.trim_link_tracking;
                                     let title_color = contrast_text_c32(card_bg, Some(hex_to_c32(&self.ui_palette.colors.text_primary)), &self.ui_palette);
                                     let cb = ui.checkbox(

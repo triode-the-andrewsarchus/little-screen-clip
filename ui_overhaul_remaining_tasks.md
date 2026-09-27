@@ -178,7 +178,9 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **E2.3a1 [Luna] Verify sibling PDF pane widths remain correct when the divider and gaps are accounted for.** Rendered left/right panes fit their host and exactly fill the parent width after margins, two item gaps, and the divider at 1177 and 1766 points.
   - [x] **E2.3a2 [Luna] Add or update a regression check for sibling PDF pane widths.** Production `render_ui` regression passes at compact and wide host widths.
   - [x] **E2.3b [Luna] Finish Quick Palette chrome checks.** Ordinary labels use body-size token; compact 1280×720 Dark no-daemon capture confirms search, result row and footer remain visible above rolling audio after the shared-footer fix.
-  - [ ] **E2.3b1 [Luna] Finish Auto Actions chrome checks.** Ordinary labels use body-size token.
+  - **E2.3b1 Auto Actions chrome**
+    - [x] **E2.3b1a [Luna] Wrap Auto Actions header and setting rows at narrow widths.** Header subtitle and setting status now flow onto another row instead of forcing a single-line layout; ordinary labels use body-size token.
+    - [ ] **E2.3b1b [Luna] Inspect Auto Actions at representative logical sizes.** Confirm the wrapped header, card status, and explanatory text remain visible at 1280×720 and a wide host size.
   - [ ] **E2.3c [Luna] Finish rolling-audio chrome checks.** Ordinary labels use body-size token.
   - [ ] **E2.3c1 [Luna] Finish MIDI chrome checks.** Ordinary labels, shared 36-point transport/track controls and narrow-width wrapping are done.
   - [ ] **E2.3d [Luna] Finish text search/status live layout checks.**
