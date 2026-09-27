@@ -11,7 +11,7 @@ use eframe::egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
 use little_clip_core::config::AppConfig;
 use little_clip_core::palette::AppPalette;
 use little_clip_core::syntax::detect_language;
-use regex::Regex;
+use regex::RegexBuilder;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 use syntect::easy::HighlightLines;
@@ -275,82 +275,35 @@ impl TextPreviewState {
     pub fn update_search_matches(&mut self) {
         self.matches.clear();
         self.regex_error = None;
-
         if self.find_query.is_empty() {
             self.active_match_idx = 0;
             return;
         }
 
-        if self.is_regex {
-            let pattern = if self.case_sensitive {
-                Regex::new(&self.find_query)
-            } else {
-                Regex::new(&format!("(?i){}", self.find_query))
-            };
-
-            match pattern {
-                Ok(re) => {
-                    let mut line_num = 1;
-                    let mut last_idx = 0;
-                    for m in re.find_iter(&self.content) {
-                        let prefix = &self.content[last_idx..m.start()];
-                        line_num += prefix.chars().filter(|&c| c == '\n').count();
-                        last_idx = m.start();
-
-                        self.matches.push(SearchMatch {
-                            start_byte: m.start(),
-                            end_byte: m.end(),
-                            line: line_num,
-                        });
-                    }
-                }
-                Err(e) => {
-                    self.regex_error = Some(e.to_string());
-                }
-            }
+        let pattern = if self.is_regex {
+            self.find_query.clone()
         } else {
-            let query = if self.case_sensitive {
-                self.find_query.clone()
-            } else {
-                self.find_query.to_lowercase()
-            };
-
-            let text_to_search = if self.case_sensitive {
-                self.content.clone()
-            } else {
-                self.content.to_lowercase()
-            };
-
-            let mut line_num = 1;
-            let mut last_idx = 0;
-            let mut offset = 0;
-
-            while let Some(found) = text_to_search[offset..].find(&query) {
-                let start_byte = offset + found;
-                let end_byte = start_byte + query.len();
-
-                let prefix = &self.content[last_idx..start_byte];
-                line_num += prefix.chars().filter(|&c| c == '\n').count();
-                last_idx = start_byte;
-
-                self.matches.push(SearchMatch {
-                    start_byte,
-                    end_byte,
-                    line: line_num,
-                });
-
-                offset = end_byte;
-                if offset >= text_to_search.len() {
-                    break;
-                }
+            regex::escape(&self.find_query)
+        };
+        match RegexBuilder::new(&pattern)
+            .case_insensitive(!self.case_sensitive)
+            .build()
+        {
+            Ok(regex) => {
+                self.matches = regex
+                    .find_iter(&self.content)
+                    .map(|matched| SearchMatch {
+                        start_byte: matched.start(),
+                        end_byte: matched.end(),
+                        line: self
+                            .line_starts
+                            .partition_point(|start| *start <= matched.start()),
+                    })
+                    .collect();
             }
+            Err(error) => self.regex_error = Some(error.to_string()),
         }
-
-        if !self.matches.is_empty() {
-            if self.active_match_idx >= self.matches.len() {
-                self.active_match_idx = 0;
-            }
-        } else {
+        if self.active_match_idx >= self.matches.len() {
             self.active_match_idx = 0;
         }
     }
@@ -817,15 +770,6 @@ impl TextPreviewState {
         });
 
         let show_gutter = self.show_line_numbers;
-        let query = if self.find_query.is_empty() {
-            None
-        } else {
-            Some(self.find_query.as_str())
-        };
-        let is_regex = self.is_regex;
-        let case_sensitive = self.case_sensitive;
-        let active_match = self.matches.get(self.active_match_idx).copied();
-
         let mut scroll_area = egui::ScrollArea::vertical()
             .id_source("text_code_virtual_scroll")
             .auto_shrink([false, false])
@@ -865,6 +809,7 @@ impl TextPreviewState {
                         Vec2::new(editor_width, surface_size.y.max(1.0)),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
                             let output =
                                 scroll_area.show_rows(ui, line_height, total_lines, |ui, rows| {
                                     ui.spacing_mut().item_spacing.y = 0.0;
@@ -897,14 +842,17 @@ impl TextPreviewState {
                                                 );
                                                 ui.separator();
                                             }
+                                            let match_ranges = line_highlight_ranges(
+                                                &self.matches,
+                                                self.active_match_idx,
+                                                start,
+                                                start + line.len(),
+                                            );
                                             let mut job = build_highlighted_layout_job(
                                                 line,
                                                 syntax,
                                                 palette,
-                                                query,
-                                                is_regex,
-                                                case_sensitive,
-                                                active_match,
+                                                &match_ranges,
                                             );
                                             job.wrap.max_width = if self.wrap_lines {
                                                 ui.available_width()
@@ -1230,133 +1178,100 @@ fn render_code_minimap(
         })
 }
 
-fn compute_highlight_matches(
-    text: &str,
-    search_query: Option<&str>,
-    is_regex: bool,
-    case_sensitive: bool,
-    active_match: Option<SearchMatch>,
+/// Projects document search ranges into one source line.
+fn line_highlight_ranges(
+    matches: &[SearchMatch],
+    active_index: usize,
+    line_start: usize,
+    line_end: usize,
 ) -> Vec<(usize, usize, bool)> {
-    let mut match_ranges = Vec::new();
-    let query = match search_query {
-        Some(q) if !q.is_empty() => q,
-        _ => return match_ranges,
-    };
-
-    if is_regex {
-        let pattern = if case_sensitive {
-            Regex::new(query)
-        } else {
-            Regex::new(&format!("(?i){}", query))
-        };
-        if let Ok(re) = pattern {
-            for m in re.find_iter(text) {
-                let is_active = active_match
-                    .map(|am| am.start_byte == m.start())
-                    .unwrap_or(false);
-                match_ranges.push((m.start(), m.end(), is_active));
-            }
-        }
-    } else {
-        let q = if case_sensitive {
-            query.to_string()
-        } else {
-            query.to_lowercase()
-        };
-        let target = if case_sensitive {
-            text.to_string()
-        } else {
-            text.to_lowercase()
-        };
-        let mut offset = 0;
-        while let Some(found) = target[offset..].find(&q) {
-            let start = offset + found;
-            let end = start + q.len();
-            let is_active = active_match
-                .map(|am| am.start_byte == start)
-                .unwrap_or(false);
-            match_ranges.push((start, end, is_active));
-            offset = end;
-            if offset >= target.len() {
-                break;
-            }
-        }
-    }
-
-    match_ranges
+    let first = matches.partition_point(|matched| matched.end_byte <= line_start);
+    matches[first..]
+        .iter()
+        .enumerate()
+        .take_while(|(_, matched)| matched.start_byte < line_end)
+        .map(|(offset, matched)| {
+            (
+                matched.start_byte.max(line_start) - line_start,
+                matched.end_byte.min(line_end) - line_start,
+                first + offset == active_index,
+            )
+        })
+        .collect()
 }
 
-/// Builds an egui LayoutJob with theme syntax highlighting and search match background highlights.
+/// Appends only the intersecting part of a syntax token with a search background.
+fn append_highlighted_token(
+    job: &mut egui::text::LayoutJob,
+    token: &str,
+    token_start: usize,
+    foreground: Color32,
+    palette: &AppPalette,
+    matches: &[(usize, usize, bool)],
+) {
+    let token_end = token_start + token.len();
+    let mut boundaries = vec![token_start, token_end];
+    for &(start, end, _) in matches {
+        if start < token_end && end > token_start {
+            boundaries.extend([start.max(token_start), end.min(token_end)]);
+        }
+    }
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    for range in boundaries.windows(2) {
+        let matched = matches
+            .iter()
+            .find(|&&(start, end, _)| start <= range[0] && end >= range[1]);
+        let background = match matched {
+            Some((_, _, true)) => hex_to_c32(&palette.harmonies.complementary),
+            Some(_) => hex_to_c32_alpha(&palette.diff_mod, 100),
+            None => Color32::TRANSPARENT,
+        };
+        let color = if matched.is_some() {
+            crate::ui_ext::contrast_text_c32(background, Some(foreground), palette)
+        } else {
+            foreground
+        };
+        job.append(
+            &token[range[0] - token_start..range[1] - token_start],
+            0.0,
+            egui::TextFormat {
+                font_id: FontId::monospace(MONO_FONT_SIZE),
+                color,
+                background,
+                ..Default::default()
+            },
+        );
+    }
+}
+
+/// Builds syntax highlighting with exact, precomputed search ranges.
 fn build_highlighted_layout_job(
     text: &str,
     syntax: &SyntaxReference,
     palette: &AppPalette,
-    search_query: Option<&str>,
-    is_regex: bool,
-    case_sensitive: bool,
-    active_match: Option<SearchMatch>,
+    match_ranges: &[(usize, usize, bool)],
 ) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     let syn_theme = &THEME_SET.themes["base16-eighties.dark"];
     let mut highlighter = HighlightLines::new(syntax, syn_theme);
-
-    let match_ranges =
-        compute_highlight_matches(text, search_query, is_regex, case_sensitive, active_match);
-
     let mut byte_offset = 0;
-
     for line in text.split_inclusive('\n') {
-        let ranges = highlighter
+        for (style, token) in highlighter
             .highlight_line(line, &SYNTAX_SET)
-            .unwrap_or_default();
-
-        for (style, token_str) in ranges {
-            let token_start = byte_offset;
-            let token_end = token_start + token_str.len();
-
-            let fg = map_syntect_color_to_theme(style.foreground, palette);
-
-            // Check if this token intersects with any search matches
-            let mut has_match = false;
-            let mut is_active = false;
-            for &(m_start, m_end, active) in &match_ranges {
-                if token_start < m_end && token_end > m_start {
-                    has_match = true;
-                    if active {
-                        is_active = true;
-                    }
-                }
-            }
-
-            let bg = if is_active {
-                hex_to_c32(&palette.harmonies.complementary)
-            } else if has_match {
-                hex_to_c32_alpha(&palette.diff_mod, 100)
-            } else {
-                Color32::TRANSPARENT
-            };
-
-            let text_color = if is_active {
-                hex_to_c32(&palette.colors.canvas)
-            } else {
-                fg
-            };
-
-            job.append(
-                token_str,
-                0.0,
-                egui::TextFormat {
-                    font_id: FontId::monospace(crate::ui_ext::MONO_FONT_SIZE),
-                    color: text_color,
-                    background: bg,
-                    ..Default::default()
-                },
+            .unwrap_or_default()
+        {
+            append_highlighted_token(
+                &mut job,
+                token,
+                byte_offset,
+                map_syntect_color_to_theme(style.foreground, palette),
+                palette,
+                match_ranges,
             );
-
-            byte_offset += token_str.len();
+            byte_offset += token.len();
         }
     }
-
     job
 }
 
@@ -1437,8 +1352,7 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
             }
 
             let mut layouter = |ui: &egui::Ui, text: &str, wrap_width: f32| {
-                let mut layout_job =
-                    build_highlighted_layout_job(text, syntax, palette, None, false, false, None);
+                let mut layout_job = build_highlighted_layout_job(text, syntax, palette, &[]);
                 layout_job.wrap.max_width = wrap_width;
                 ui.fonts(|f| f.layout_job(layout_job))
             };
@@ -1507,6 +1421,81 @@ mod tests {
     }
 
     #[test]
+    fn literal_search_preserves_unicode_offsets_and_escapes_metacharacters() {
+        let mut state =
+            TextPreviewState::from_text("İX\nCAFÉ café [x]".into(), None, &AppConfig::default());
+        state.find_query = "x".into();
+        state.update_search_matches();
+        assert_eq!(
+            &state.content[state.matches[0].start_byte..state.matches[0].end_byte],
+            "X"
+        );
+        assert_eq!(state.matches[0].start_byte, "İ".len());
+        state.find_query = "CAFÉ".into();
+        state.update_search_matches();
+        assert_eq!(state.matches.len(), 2);
+        for matched in &state.matches {
+            assert!(state.content.is_char_boundary(matched.start_byte));
+            assert!(state.content.is_char_boundary(matched.end_byte));
+            assert_eq!(matched.line, 2);
+        }
+        state.find_query = "[x]".into();
+        state.update_search_matches();
+        assert_eq!(state.matches.len(), 1);
+        assert_eq!(
+            &state.content[state.matches[0].start_byte..state.matches[0].end_byte],
+            "[x]"
+        );
+    }
+
+    #[test]
+    fn highlights_project_active_and_multiline_ranges_to_source_lines() {
+        let matches = vec![
+            SearchMatch {
+                start_byte: 1,
+                end_byte: 3,
+                line: 1,
+            },
+            SearchMatch {
+                start_byte: 6,
+                end_byte: 12,
+                line: 2,
+            },
+        ];
+        assert_eq!(
+            line_highlight_ranges(&matches, 1, 5, 10),
+            vec![(1, 5, true)]
+        );
+        assert_eq!(
+            line_highlight_ranges(&matches, 1, 11, 15),
+            vec![(0, 1, true)]
+        );
+        assert!(line_highlight_ranges(&matches, 1, 15, 20).is_empty());
+    }
+
+    #[test]
+    fn search_background_covers_only_the_matched_part_of_a_token() {
+        let palette = AppPalette::default();
+        let mut job = egui::text::LayoutJob::default();
+        append_highlighted_token(
+            &mut job,
+            "identifier",
+            0,
+            Color32::WHITE,
+            &palette,
+            &[(2, 5, true)],
+        );
+        assert_eq!(job.text, "identifier");
+        let highlighted: Vec<_> = job
+            .sections
+            .iter()
+            .filter(|section| section.format.background != Color32::TRANSPARENT)
+            .collect();
+        assert_eq!(highlighted.len(), 1);
+        assert_eq!(highlighted[0].byte_range, 2..5);
+    }
+
+    #[test]
     fn test_markdown_preview_mode() {
         let config = AppConfig::default();
         let content = "# Title\n\n- item 1\n- item 2\n\n```rust\nfn test() {}\n```".to_string();
@@ -1567,9 +1556,7 @@ mod tests {
                     let syntax = find_syntax("c");
                     let palette = AppPalette::default();
                     let mut layouter = |ui: &egui::Ui, text: &str, _wrap_width: f32| {
-                        let layout_job = build_highlighted_layout_job(
-                            text, syntax, &palette, None, false, false, None,
-                        );
+                        let layout_job = build_highlighted_layout_job(text, syntax, &palette, &[]);
                         ui.fonts(|f| f.layout_job(layout_job))
                     };
                     let edit = egui::TextEdit::multiline(&mut text)
