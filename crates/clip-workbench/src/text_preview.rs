@@ -684,7 +684,7 @@ impl TextPreviewState {
             return;
         }
         if let Some(ref err) = self.regex_error {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 let error_color = crate::ui_ext::contrast_text_c32_on(
                     surface,
                     surface,
@@ -757,14 +757,15 @@ impl TextPreviewState {
             .rounding(Rounding::same(6.0))
             .inner_margin(egui::Margin::symmetric(10.0, 6.0))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     Icon::Search.ui(ui, 15.0, hex_to_c32(&palette.colors.text_secondary));
 
                     let search_edit = egui::TextEdit::singleline(&mut self.find_query)
                         .hint_text("Find in text (Enter for next, Shift+Enter for prev)...");
 
+                    let search_width = ui.available_width().min(280.0).max(120.0);
                     let response =
-                        ui.add_sized([280.0, crate::ui_ext::CONTROL_HEIGHT], search_edit);
+                        ui.add_sized([search_width, crate::ui_ext::CONTROL_HEIGHT], search_edit);
                     if self.focus_find_input {
                         response.request_focus();
                         self.focus_find_input = false;
@@ -1599,6 +1600,80 @@ mod tests {
                     contrast(recessed, foreground) >= 4.5,
                     "{appearance:?} text-search status label lacks contrast"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn text_search_toolbar_wraps_status_and_controls_at_compact_widths() {
+        for width in [390.0, 760.0, 1280.0] {
+            for (query, regex_error, matches, expected_status) in [
+                (
+                    "(".to_string(),
+                    Some("unclosed group".to_string()),
+                    Vec::new(),
+                    "Regex error:",
+                ),
+                ("missing".to_string(), None, Vec::new(), "No matches"),
+                (
+                    "Alpha".to_string(),
+                    None,
+                    vec![SearchMatch {
+                        start_byte: 0,
+                        end_byte: 5,
+                        line: 0,
+                    }],
+                    "1/1 matches",
+                ),
+            ] {
+                let ctx = egui::Context::default();
+                crate::ui_ext::configure_workbench_style(&ctx);
+                let palette = AppPalette::default();
+                let mut state = TextPreviewState::from_text(
+                    "Alpha beta".to_owned(),
+                    None,
+                    &AppConfig::default(),
+                );
+                state.find_query = query;
+                state.regex_error = regex_error;
+                state.matches = matches;
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 300.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            state.render_search_toolbar(ui, &palette);
+                        });
+                    },
+                );
+
+                for required in [expected_status, "Prev", "Next", "Aa", ".*"] {
+                    let shape = output.shapes.iter().find_map(|clipped| {
+                        let egui::Shape::Text(text) = &clipped.shape else {
+                            return None;
+                        };
+                        text.galley
+                            .job
+                            .text
+                            .contains(required)
+                            .then_some((clipped.clip_rect, text))
+                    });
+                    let Some((clip_rect, text)) = shape else {
+                        panic!("{required:?} missing at width {width}");
+                    };
+                    let bounds = text.galley.rect.translate(text.pos.to_vec2());
+                    assert!(!text.galley.elided, "{required:?} elided at width {width}");
+                    assert!(
+                        bounds.left() >= clip_rect.left() - 0.5
+                            && bounds.right() <= clip_rect.right() + 0.5,
+                        "{required:?} exceeds {width}-point search toolbar: {bounds:?} clipped to {clip_rect:?}"
+                    );
+                }
             }
         }
     }

@@ -184,11 +184,16 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [ ] **E2.3b1c [Primary] Inspect Auto Actions in a live host at compact and wide sizes.** Confirm visual spacing and card readability; renderer tests are not compositor-level evidence.
   - [x] **E2.3c [Luna] Finish rolling-audio chrome checks.** Ordinary labels use body-size metrics; egui render regression checks header text bounds/no elision at 520- and 1200-point widths for loading/error, silence/toast, and selected-region states. Light/Dark status contrast test passes. This is a host-render regression, not a manual Niri session.
   - [x] **E2.3c1 [Luna] Finish MIDI chrome checks.** Ordinary labels and 36-point transport/track controls use shared metrics and wrap at compact widths. Production `render_ui` regression covers long solo/selection labels at 760, 1000, and 1760 points, verifies required controls remain present without elision, and checks painted text stays within host bounds. It exposed and fixed the shared footer's unwrapped readout; a StudioShell regression now covers 760/1200-point hosts.
-  - [ ] **E2.3d [Luna] Finish text search/status live layout checks.**
-  - **E2.3d1 Markdown body/list/quote layout**
-    - [x] **E2.3d1a [Luna] Add compact/wide production-render layout regression.** Checks body, list, and quote text wraps, stays within clip bounds, is not elided, and uses the shared body size at 390 and 1400 points; workbench suite passes.
-    - [ ] **E2.3d1b [Primary] Inspect Markdown in a live host at compact and wide sizes.** Renderer tests are not compositor-level evidence.
-  - [ ] **E2.3e [Luna] Finish spreadsheet sheet-label/header-search live layout checks.** Width-limited header search is in place.
+  - **E2.3d Text search/status and Markdown layout**
+    - **E2.3d1 Markdown body/list/quote layout**
+      - [x] **E2.3d1a [Luna] Add compact/wide production-render layout regression.** Checks body, list, and quote text wraps, stays within clip bounds, is not elided, and uses the shared body size at 390 and 1400 points; workbench suite passes.
+      - [ ] **E2.3d1b [Primary] Inspect Markdown in a live host at compact and wide sizes.** Renderer tests are not compositor-level evidence.
+    - **E2.3d2 Text search/status toolbar layout**
+      - [x] **E2.3d2a [Luna] Wrap text search controls and status at compact widths.** Search field width is responsive and the status/options can continue on wrapped rows. Production-toolbar regression covers regex errors, no results, and match count plus Prev/Next/Match Case/Regex controls at 390, 760, and 1280 points; workbench suite passes (243 passed, one ignored).
+      - [ ] **E2.3d2b [Primary] Inspect text search/status in a live host at compact and wide sizes.** Renderer tests are not compositor-level evidence.
+  - **E2.3e Spreadsheet sheet/header chrome**
+    - [x] **E2.3e1 [Luna] Add production-render check for compact and wide headers.** `SpreadsheetViewerState::render_ui` covers title, Copy Table, search, Calc, Close, and both sheet tabs at 900 and 1500 points; tests check host/clip bounds and header-label overlap. Workbench suite passes (243 passed, one ignored).
+    - [ ] **E2.3e2 [Primary] Inspect spreadsheet sheet/header chrome in a live host.** Confirm search and tabs remain legible at compact and wide host sizes; renderer tests are not compositor-level evidence.
   - [ ] **E2.3f [Luna] Finish 3D loading/error and narrow-toolbar live checks.** Toolbar wraps at narrow widths.
   - [ ] **E2.3g [Luna] Finish node-machine forms/status live checks.**
   - [ ] **E2.3h [Luna] Finish text ordinary chrome live checks.**

@@ -780,6 +780,86 @@ mod tests {
     }
 
     #[test]
+    fn spreadsheet_header_controls_fit_compact_and_wide_hosts() {
+        let data = SpreadsheetData {
+            title: "Sheet overview".into(),
+            sheets: vec![
+                SpreadsheetSheet::new("Overview".into(), vec![vec!["Name".into()]]),
+                SpreadsheetSheet::new("Archive".into(), vec![vec!["Old name".into()]]),
+            ],
+        };
+        let palette = little_clip_core::palette::AppPalette::default();
+
+        for width in [900.0, 1500.0] {
+            let mut state = SpreadsheetViewerState::new(data.clone(), None);
+            let ctx = egui::Context::default();
+            let host = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(width, 620.0));
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(host),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                },
+            );
+
+            let required_labels = [
+                "Sheet overview",
+                "Copy Table",
+                "Filter cells...",
+                "Calc",
+                "Close (Esc)",
+                "Sheets:",
+                "Overview",
+                "Archive",
+            ];
+            let rendered = |label: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|clipped| match &clipped.shape {
+                        egui::Shape::Text(text) if text.galley.text() == label => Some((
+                            clipped.clip_rect,
+                            egui::Rect::from_min_size(text.pos, text.galley.size()),
+                        )),
+                        _ => None,
+                    })
+            };
+            let mut header_text_rects = Vec::new();
+            for label in required_labels {
+                let (clip_rect, text_rect) = rendered(label)
+                    .unwrap_or_else(|| panic!("{label:?} was not rendered at host width {width}"));
+                assert!(
+                    host.contains_rect(text_rect),
+                    "{label:?} extends outside the {width}-point host: {text_rect:?}"
+                );
+                assert!(
+                    clip_rect.contains_rect(text_rect),
+                    "{label:?} is clipped at host width {width}: text={text_rect:?}, clip={clip_rect:?}"
+                );
+                if matches!(
+                    label,
+                    "Sheet overview" | "Copy Table" | "Filter cells..." | "Calc" | "Close (Esc)"
+                ) {
+                    header_text_rects.push((label, text_rect));
+                }
+            }
+
+            for (idx, (left_label, left_rect)) in header_text_rects.iter().enumerate() {
+                for (right_label, right_rect) in header_text_rects.iter().skip(idx + 1) {
+                    assert!(
+                        !left_rect.intersects(*right_rect),
+                        "header labels {left_label:?} and {right_label:?} overlap at {width} points"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn large_sheet_renders_only_visible_cells() {
         let rows = std::iter::once(vec!["Name".into(), "Value".into()])
             .chain((0..5000).map(|row| vec![format!("Row {row}"), row.to_string()]))
