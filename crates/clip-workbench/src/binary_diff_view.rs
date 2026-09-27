@@ -1229,7 +1229,12 @@ impl BinaryDiffViewState {
                                 egui::RichText::new(format!("Diffs ({})", res.diff_blocks.len()))
                                     .font(FontId::proportional(crate::ui_ext::BODY_FONT_SIZE))
                                     .strong()
-                                    .color(hex_to_c32(&palette.diff_mod)),
+                                    .color(crate::ui_ext::contrast_text_c32_on(
+                                        hex_to_c32(&palette.colors.surface_recessed),
+                                        hex_to_c32(&palette.colors.surface_recessed),
+                                        Some(hex_to_c32(&palette.diff_mod)),
+                                        palette,
+                                    )),
                             );
 
                             ui.with_layout(
@@ -1276,7 +1281,12 @@ impl BinaryDiffViewState {
                         ui.label(
                             egui::RichText::new("Files identical")
                                 .font(FontId::proportional(crate::ui_ext::BODY_FONT_SIZE))
-                                .color(hex_to_c32(&palette.diff_add)),
+                                .color(crate::ui_ext::contrast_text_c32_on(
+                                    hex_to_c32(&palette.colors.canvas),
+                                    hex_to_c32(&palette.colors.canvas),
+                                    Some(hex_to_c32(&palette.diff_add)),
+                                    palette,
+                                )),
                         );
                     });
                     return;
@@ -1307,13 +1317,20 @@ impl BinaryDiffViewState {
                                 DiffKind::RightOnly => hex_to_c32(&palette.diff_add),
                                 DiffKind::Match => hex_to_c32(&palette.colors.text_secondary),
                             };
+                            let card_fill = if is_selected {
+                                hex_to_c32_alpha(&palette.harmonies.base, 35)
+                            } else {
+                                hex_to_c32(&palette.colors.surface_recessed)
+                            };
+                            let badge_text = crate::ui_ext::contrast_text_c32_on(
+                                card_fill,
+                                hex_to_c32(&palette.colors.canvas),
+                                Some(badge_color),
+                                palette,
+                            );
 
                             let frame = egui::Frame::none()
-                                .fill(if is_selected {
-                                    hex_to_c32_alpha(&palette.harmonies.base, 35)
-                                } else {
-                                    hex_to_c32(&palette.colors.surface_recessed)
-                                })
+                                .fill(card_fill)
                                 .stroke(if is_selected {
                                     Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base))
                                 } else {
@@ -1351,7 +1368,7 @@ impl BinaryDiffViewState {
                                                         crate::ui_ext::BODY_FONT_SIZE,
                                                     ))
                                                     .strong()
-                                                    .color(badge_color),
+                                                    .color(badge_text),
                                             );
 
                                             ui.with_layout(
@@ -1955,6 +1972,84 @@ mod tests {
                     contrast(recessed, on_inspector) >= 4.5,
                     "{appearance:?} {accent} on inspector"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn binary_difference_panel_labels_meet_contrast_in_both_appearances() {
+        fn contrast(a: Color32, b: Color32) -> f32 {
+            little_clip_core::palette::contrast_ratio((a.r(), a.g(), a.b()), (b.r(), b.g(), b.b()))
+        }
+
+        fn composite(fill: Color32, surface: Color32) -> Color32 {
+            let fg = egui::Rgba::from(fill);
+            let bg = egui::Rgba::from(surface);
+            let remaining = 1.0 - fg.a();
+            Color32::from(egui::Rgba::from_rgb(
+                fg.r() + bg.r() * remaining,
+                fg.g() + bg.g() * remaining,
+                fg.b() + bg.b() * remaining,
+            ))
+        }
+
+        for appearance in [
+            little_clip_core::config::WorkbenchAppearance::Dark,
+            little_clip_core::config::WorkbenchAppearance::Light,
+        ] {
+            let palette = AppPalette::for_appearance(appearance);
+            let canvas = hex_to_c32(&palette.colors.canvas);
+            let recessed = hex_to_c32(&palette.colors.surface_recessed);
+            let header_color = crate::ui_ext::contrast_text_c32_on(
+                recessed,
+                recessed,
+                Some(hex_to_c32(&palette.diff_mod)),
+                &palette,
+            );
+            let identical_color = crate::ui_ext::contrast_text_c32_on(
+                canvas,
+                canvas,
+                Some(hex_to_c32(&palette.diff_add)),
+                &palette,
+            );
+            assert!(
+                contrast(recessed, header_color) >= 4.5,
+                "{appearance:?} panel heading"
+            );
+            assert!(
+                contrast(canvas, identical_color) >= 4.5,
+                "{appearance:?} identical status"
+            );
+
+            for kind in [
+                DiffKind::Mismatch,
+                DiffKind::LeftOnly,
+                DiffKind::RightOnly,
+                DiffKind::Match,
+            ] {
+                let preferred = match kind {
+                    DiffKind::Mismatch => hex_to_c32(&palette.diff_mod),
+                    DiffKind::LeftOnly => hex_to_c32(&palette.diff_del),
+                    DiffKind::RightOnly => hex_to_c32(&palette.diff_add),
+                    DiffKind::Match => hex_to_c32(&palette.colors.text_secondary),
+                };
+                for selected in [false, true] {
+                    let fill = if selected {
+                        hex_to_c32_alpha(&palette.harmonies.base, 35)
+                    } else {
+                        recessed
+                    };
+                    let label = crate::ui_ext::contrast_text_c32_on(
+                        fill,
+                        canvas,
+                        Some(preferred),
+                        &palette,
+                    );
+                    assert!(
+                        contrast(composite(fill, canvas), label) >= 4.5,
+                        "{appearance:?} {kind:?} selected={selected} badge"
+                    );
+                }
             }
         }
     }
