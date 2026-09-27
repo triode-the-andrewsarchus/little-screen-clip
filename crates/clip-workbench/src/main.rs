@@ -249,6 +249,7 @@ enum ViewerSession {
     BinaryDiff(BinaryDiffViewState),
     Audio(AudioPreviewState),
     Image(ImagePreviewState),
+    ImageLoading(ImageLoadJob),
     Spreadsheet(SpreadsheetViewerState),
     Pdf(PdfEditorState),
     Midi(MidiViewerState),
@@ -266,6 +267,97 @@ fn show_viewer_panel(ctx: &egui::Context, contents: impl FnOnce(&mut egui::Ui)) 
 type SpreadsheetLoadReceiver =
     Receiver<Result<Result<(SpreadsheetData, Option<PathBuf>), String>, JobError>>;
 type MidiLoadReceiver = Receiver<Result<Result<(MidiData, PathBuf), String>, JobError>>;
+
+enum ImageLoadSource {
+    File(PathBuf),
+    ItemFile {
+        path: PathBuf,
+        mime: String,
+        title: String,
+    },
+    Bytes {
+        bytes: Vec<u8>,
+        mime: String,
+        path: Option<PathBuf>,
+        title: String,
+    },
+}
+
+impl ImageLoadSource {
+    fn from_item(item: &ClipItem) -> Result<Self, String> {
+        if let ClipPayload::Image {
+            bytes, mime, path, ..
+        } = &item.payload
+        {
+            let title = if item.title.is_empty() {
+                path.as_ref()
+                    .and_then(|path| path.file_name())
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "Image Preview".to_string())
+            } else {
+                item.title.clone()
+            };
+            if !bytes.is_empty() {
+                // ClipPayload owns Vec bytes. Copy only the encoded payload once;
+                // decoding, metadata extraction and pixel copies run on the worker.
+                return Ok(Self::Bytes {
+                    bytes: bytes.clone(),
+                    mime: mime.clone(),
+                    path: path.clone(),
+                    title,
+                });
+            }
+            if let Some(path) = path {
+                return Ok(Self::ItemFile {
+                    path: path.clone(),
+                    mime: mime.clone(),
+                    title,
+                });
+            }
+        }
+        item.image_path()
+            .map(Self::File)
+            .ok_or_else(|| "Item payload does not contain a recognizable image".to_string())
+    }
+}
+
+struct ImageLoadJob {
+    ticket: JobTicket,
+    receiver: Receiver<Result<Result<ImagePreviewState, String>, JobError>>,
+}
+
+impl ImageLoadJob {
+    fn new(source: ImageLoadSource, config: AppConfig) -> Self {
+        let (ticket, receiver) =
+            BackgroundJobs::global().submit(Duration::from_secs(30), move || match source {
+                ImageLoadSource::File(path) => ImagePreviewState::from_path(path, &config),
+                ImageLoadSource::ItemFile { path, mime, title } => std::fs::read(&path)
+                    .map_err(|error| format!("Failed to read file {}: {error}", path.display()))
+                    .and_then(|bytes| {
+                        ImagePreviewState::from_bytes_with_meta(
+                            bytes,
+                            mime,
+                            Some(path),
+                            title,
+                            &config,
+                        )
+                    }),
+                ImageLoadSource::Bytes {
+                    bytes,
+                    mime,
+                    path,
+                    title,
+                } => ImagePreviewState::from_bytes_with_meta(bytes, mime, path, title, &config),
+            });
+        Self { ticket, receiver }
+    }
+}
+
+impl Drop for ImageLoadJob {
+    fn drop(&mut self) {
+        self.ticket.cancel();
+    }
+}
 
 struct WorkbenchApp {
     state: SlotManager,
@@ -286,6 +378,7 @@ struct WorkbenchApp {
     in_app_prompt: Option<InAppPromptState>,
     viewer: Option<ViewerSession>,
     startup_viewers: VecDeque<ViewerSession>,
+    image_load_job: Option<ImageLoadJob>,
     spreadsheet_load_job: Option<(
         JobTicket,
         SpreadsheetLoadReceiver,
@@ -507,21 +600,16 @@ impl WorkbenchApp {
             AudioPreviewState::new(p, title).with_editor(config.audio.editor.clone())
         });
 
-        let (image_preview, image_preview_error) = match initial_image {
-            Some(path) => match ImagePreviewState::from_path(path, &config) {
-                Ok(preview) => (Some(preview), None),
-                Err(error) => (None, Some(format!("Image preview failed: {error}"))),
-            },
-            None => (None, None),
-        };
-
         let rolling_audio_strip = Some(RollingAudioStripState::new());
         let mut startup_viewers = VecDeque::new();
         if let Some(audio) = audio_preview {
             startup_viewers.push_back(ViewerSession::Audio(audio));
         }
-        if let Some(image) = image_preview {
-            startup_viewers.push_back(ViewerSession::Image(image));
+        if let Some(path) = initial_image {
+            startup_viewers.push_back(ViewerSession::ImageLoading(ImageLoadJob::new(
+                ImageLoadSource::File(path),
+                config.clone(),
+            )));
         }
 
         let mut app = Self {
@@ -534,7 +622,7 @@ impl WorkbenchApp {
             palette_search_needs_focus: true,
             selected_action_index: 0,
             selected_slots: vec![SlotId::LeftHand],
-            status_msg: image_preview_error,
+            status_msg: None,
             appearance_sync: AppearanceSync::default(),
             renderer,
             ui_palette,
@@ -543,6 +631,7 @@ impl WorkbenchApp {
             in_app_prompt: None,
             viewer: None,
             startup_viewers,
+            image_load_job: None,
             spreadsheet_load_job: None,
             midi_load_job: None,
             rolling_audio_strip,
@@ -713,7 +802,14 @@ impl WorkbenchApp {
                 }
             }
             Some(MirrorAction::Context(slot)) => {
-                if let Some(item) = self.state.get(slot).cloned() {
+                if let Some(item) = self.state.get(slot).filter(|item| item.is_image()) {
+                    let source = if let Some(path) = item.file_path() {
+                        Ok(ImageLoadSource::File(path))
+                    } else {
+                        ImageLoadSource::from_item(item)
+                    };
+                    self.start_image_item_load(source);
+                } else if let Some(item) = self.state.get(slot).cloned() {
                     self.open_slot_preview_modal(&item);
                 }
             }
@@ -833,11 +929,11 @@ impl WorkbenchApp {
                             .to_string(),
                     );
                 } else {
-                    self.viewer = Some(ViewerSession::Diff(DiffViewerState::new(
+                    self.replace_viewer(Some(ViewerSession::Diff(DiffViewerState::new(
                         lhs,
                         rhs,
                         DiffDisplayMode::SideBySide,
-                    )));
+                    ))));
                 }
             }
             (Some(_), None) => {
@@ -859,9 +955,9 @@ impl WorkbenchApp {
         if let Some(((l_lbl, l_bytes), (r_lbl, r_bytes))) =
             resolve_binary_diff_pair(&selected_items, &self.state)
         {
-            self.viewer = Some(ViewerSession::BinaryDiff(BinaryDiffViewState::new(
+            self.replace_viewer(Some(ViewerSession::BinaryDiff(BinaryDiffViewState::new(
                 l_lbl, l_bytes, r_lbl, r_bytes,
-            )));
+            ))));
         } else {
             self.status_msg =
                 Some("Binary diff requires 2 slots or 1 slot with 2 files/paths.".to_string());
@@ -1077,6 +1173,7 @@ impl eframe::App for WorkbenchApp {
         self.appearance_sync.poll(ctx);
         self.appearance_sync.render(ctx, &self.ui_palette);
 
+        self.poll_image_load(ctx);
         if self.render_modal_viewers(ctx) {
             self.palette_search_needs_focus = true;
             return;
@@ -1154,8 +1251,8 @@ impl eframe::App for WorkbenchApp {
                     let first_audio_item = self.selected_slots.iter().find_map(|s| {
                         self.state.get(*s).and_then(|it| it.audio_path().map(|p| (p, it.title.clone())))
                     });
-                    let first_image_item = self.selected_slots.iter().find_map(|s| {
-                        self.state.get(*s).filter(|it| it.is_image())
+                    let first_image_slot = self.selected_slots.iter().copied().find(|slot| {
+                        self.state.get(*slot).is_some_and(|item| item.is_image())
                     });
 
                     let mut open_diff_requested = false;
@@ -1184,11 +1281,11 @@ impl eframe::App for WorkbenchApp {
                                 &self.ui_palette,
                             );
                             if ui.add(audio_btn).clicked() {
-                                self.viewer = Some(ViewerSession::Audio(AudioPreviewState::new(path, title).with_editor(self.config.audio.editor.clone())));
+                                self.replace_viewer(Some(ViewerSession::Audio(AudioPreviewState::new(path, title).with_editor(self.config.audio.editor.clone()))));
                             }
                         }
 
-                        if let Some(img_item) = first_image_item {
+                        if let Some(slot) = first_image_slot {
                             ui.add_space(crate::ui_ext::SPACE_SM);
                             let img_bg = hex_to_c32(&self.ui_palette.harmonies.base);
                             let img_btn = ui_ext::action_button_icon(
@@ -1198,16 +1295,8 @@ impl eframe::App for WorkbenchApp {
                                 &self.ui_palette,
                             );
                             if ui.add(img_btn).clicked() {
-                                match ImagePreviewState::from_item(img_item, &self.config) {
-                                    Ok(state) => {
-                                        self.status_msg = None;
-                                        self.viewer = Some(ViewerSession::Image(state));
-                                    }
-                                    Err(error) => {
-                                        self.status_msg =
-                                            Some(format!("Image preview failed: {error}"));
-                                    }
-                                }
+                                let source = ImageLoadSource::from_item(self.state.get(slot).unwrap());
+                                self.start_image_item_load(source);
                             }
                         }
 
@@ -1305,7 +1394,7 @@ impl eframe::App for WorkbenchApp {
                                 &self.ui_palette,
                             );
                             if ui.add(pdf_btn).on_hover_text("Open PDF Page Editor (Delete / Rotate pages)").clicked() {
-                                self.viewer = Some(ViewerSession::Pdf(PdfEditorState::new(pdf_path)));
+                                self.replace_viewer(Some(ViewerSession::Pdf(PdfEditorState::new(pdf_path))));
                             }
                         }
 
@@ -1359,10 +1448,10 @@ impl eframe::App for WorkbenchApp {
                                 &self.ui_palette,
                             );
                             if ui.add(model_btn).on_hover_text("Open interactive 3D orbit viewer (pan, zoom, rotate)").clicked() {
-                                self.viewer = Some(ViewerSession::Model3d(
+                                self.replace_viewer(Some(ViewerSession::Model3d(
                                     Model3dViewerState::from_file(model_path)
                                         .with_config(self.config.model3d.clone()),
-                                ));
+                                )));
                             }
                         }
 
@@ -1438,10 +1527,10 @@ impl eframe::App for WorkbenchApp {
                             if ui.add(txt_btn).on_hover_text("Open big text preview (syntax highlighting, line wrapping, search, and editor export)").clicked() {
                                 if let Some(p) = file_p {
                                     if let Some(st) = TextPreviewState::from_file(p, &self.config) {
-                                        self.viewer = Some(ViewerSession::Text(st));
+                                        self.replace_viewer(Some(ViewerSession::Text(st)));
                                     }
                                 } else if let Some(txt) = raw_txt {
-                                    self.viewer = Some(ViewerSession::Text(TextPreviewState::from_text(txt, None, &self.config)));
+                                    self.replace_viewer(Some(ViewerSession::Text(TextPreviewState::from_text(txt, None, &self.config))));
                                 }
                             }
                         }
@@ -1596,6 +1685,21 @@ impl WorkbenchApp {
         }
 
         let Some(viewer) = self.viewer.as_mut() else {
+            if self.image_load_job.is_some() {
+                let mut cancel = false;
+                show_viewer_panel(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Loading image…");
+                        cancel = ui.button("Cancel [Esc]").clicked();
+                    });
+                });
+                if cancel || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                    self.image_load_job = None;
+                }
+                ctx.request_repaint_after(Duration::from_millis(40));
+                return true;
+            }
             return false;
         };
         let mut close = false;
@@ -1618,6 +1722,17 @@ impl WorkbenchApp {
                 if close {
                     state.stop();
                 }
+            }
+            ViewerSession::ImageLoading(_) => {
+                show_viewer_panel(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Loading image…");
+                        close = ui.button("Cancel [Esc]").clicked();
+                    });
+                });
+                close |= ctx.input(|input| input.key_pressed(egui::Key::Escape));
+                ctx.request_repaint_after(Duration::from_millis(40));
             }
             ViewerSession::Image(state) => {
                 show_viewer_panel(ctx, |ui| {
@@ -1673,7 +1788,39 @@ impl WorkbenchApp {
             }
         }
 
+        if self.image_load_job.is_some()
+            || self
+                .status_msg
+                .as_deref()
+                .is_some_and(|message| message.starts_with("Image preview failed:"))
+        {
+            egui::Area::new(egui::Id::new("image_load_status"))
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::RIGHT_TOP, [-12.0, 12.0])
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            if self.image_load_job.is_some() {
+                                ui.spinner();
+                                ui.label("Loading image…");
+                                if ui.button("Cancel").clicked() {
+                                    self.image_load_job = None;
+                                }
+                            } else if let Some(message) = &self.status_msg {
+                                ui.label(message);
+                                if ui.button("Dismiss").clicked() {
+                                    self.status_msg = None;
+                                }
+                            }
+                        });
+                    });
+                });
+            if self.image_load_job.is_some() {
+                ctx.request_repaint_after(Duration::from_millis(40));
+            }
+        }
         if close {
+            self.image_load_job = None;
             self.viewer = self.startup_viewers.pop_front();
             self.dirty_mirror |= pdf_dirty;
             ctx.request_repaint();
@@ -1788,7 +1935,77 @@ impl WorkbenchApp {
         false
     }
 
+    fn replace_viewer(&mut self, viewer: Option<ViewerSession>) {
+        self.image_load_job = None;
+        self.viewer = viewer;
+    }
+
+    fn start_image_item_load(&mut self, source: Result<ImageLoadSource, String>) {
+        match source {
+            Ok(source) => self.start_image_load(source),
+            Err(error) => {
+                self.image_load_job = None;
+                self.set_status_message(format!("Image preview failed: {error}"));
+            }
+        }
+    }
+
+    fn start_image_load(&mut self, source: ImageLoadSource) {
+        self.image_load_job = None;
+        if matches!(self.viewer, Some(ViewerSession::ImageLoading(_))) {
+            self.replace_viewer(None);
+        }
+        if let Some((ticket, _, _)) = self.spreadsheet_load_job.take() {
+            ticket.cancel();
+        }
+        if let Some((ticket, _)) = self.midi_load_job.take() {
+            ticket.cancel();
+        }
+        self.image_load_job = Some(ImageLoadJob::new(source, self.config.clone()));
+        self.clear_status_message();
+    }
+
+    fn poll_image_load(&mut self, ctx: &egui::Context) {
+        // A startup image occupies its FIFO position; jobs behind the active
+        // viewer remain queued and cannot publish into the foreground.
+        let startup = self.image_load_job.is_none();
+        let job = if let Some(job) = &self.image_load_job {
+            job
+        } else if let Some(ViewerSession::ImageLoading(job)) = &self.viewer {
+            job
+        } else {
+            return;
+        };
+        let result = match job.receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(40));
+                return;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(JobError::Cancelled),
+        };
+        self.image_load_job = None;
+        match result {
+            Ok(Ok(state)) => {
+                self.replace_viewer(Some(ViewerSession::Image(state)));
+                self.status_msg = None;
+            }
+            failure => {
+                self.status_msg = Some(match failure {
+                    Ok(Err(error)) => format!("Image preview failed: {error}"),
+                    Err(error) => format!("Image preview failed: {error}"),
+                    Ok(Ok(_)) => unreachable!(),
+                });
+                if startup {
+                    self.viewer = self.startup_viewers.pop_front();
+                }
+            }
+        }
+        ctx.request_repaint();
+    }
+
     fn start_spreadsheet_load(&mut self, source: SpreadsheetLoadSource) {
+        self.image_load_job = None;
         if let Some((ticket, _)) = self.midi_load_job.take() {
             ticket.cancel();
         }
@@ -1828,18 +2045,18 @@ impl WorkbenchApp {
         let (_, _, fallback) = self.spreadsheet_load_job.take().unwrap();
         match result {
             Ok(Ok((data, path))) => {
-                self.viewer = Some(ViewerSession::Spreadsheet(SpreadsheetViewerState::new(
-                    data, path,
+                self.replace_viewer(Some(ViewerSession::Spreadsheet(
+                    SpreadsheetViewerState::new(data, path),
                 )));
                 ctx.request_repaint();
             }
             failure => {
                 if let Some((content, title)) = fallback {
-                    self.viewer = Some(ViewerSession::Text(TextPreviewState::from_text(
+                    self.replace_viewer(Some(ViewerSession::Text(TextPreviewState::from_text(
                         content.to_string(),
                         Some(title),
                         &self.config,
-                    )));
+                    ))));
                 } else {
                     self.status_msg = Some(match failure {
                         Ok(Err(error)) => format!("Spreadsheet: {error}"),
@@ -1852,6 +2069,7 @@ impl WorkbenchApp {
     }
 
     fn start_midi_load(&mut self, path: PathBuf) {
+        self.image_load_job = None;
         if let Some((ticket, _, _)) = self.spreadsheet_load_job.take() {
             ticket.cancel();
         }
@@ -1881,8 +2099,8 @@ impl WorkbenchApp {
         self.midi_load_job = None;
         match result {
             Ok(Ok((data, path))) => {
-                self.viewer = Some(ViewerSession::Midi(MidiViewerState::from_parsed_file(
-                    path, data,
+                self.replace_viewer(Some(ViewerSession::Midi(
+                    MidiViewerState::from_parsed_file(path, data),
                 )));
                 ctx.request_repaint();
             }
@@ -1938,7 +2156,7 @@ impl WorkbenchApp {
                         // A materialized selection is now the whole source timeline.
                         let editor = AudioPreviewState::new(prepared_path, title.to_string())
                             .with_editor(self.config.audio.editor.clone());
-                        self.viewer = Some(ViewerSession::Audio(editor));
+                        self.replace_viewer(Some(ViewerSession::Audio(editor)));
                     }
                     Err(error) => self.set_status_message(format!(
                         "Could not open rolling audio selection: {error}"
@@ -1957,25 +2175,21 @@ impl WorkbenchApp {
         {
             self.start_midi_load(fp.to_path_buf());
         } else if is_3d_model_file(fp) {
-            self.viewer = Some(ViewerSession::Model3d(
+            self.replace_viewer(Some(ViewerSession::Model3d(
                 Model3dViewerState::from_file(fp.to_path_buf())
                     .with_config(self.config.model3d.clone()),
-            ));
+            )));
         } else if little_clip_core::pdf::is_pdf_path(fp) {
-            self.viewer = Some(ViewerSession::Pdf(PdfEditorState::new(fp.to_path_buf())));
+            self.replace_viewer(Some(ViewerSession::Pdf(PdfEditorState::new(
+                fp.to_path_buf(),
+            ))));
         } else if is_spreadsheet_file(fp) {
             self.start_spreadsheet_load(SpreadsheetLoadSource::File(fp.to_path_buf()));
         } else if is_image || is_image_path(fp) {
-            match ImagePreviewState::from_path(fp.to_path_buf(), &self.config) {
-                Ok(editor) => {
-                    self.clear_status_message();
-                    self.viewer = Some(ViewerSession::Image(editor));
-                }
-                Err(error) => self.set_status_message(format!("Image preview failed: {error}")),
-            }
+            self.start_image_load(ImageLoadSource::File(fp.to_path_buf()));
         } else if little_clip_ops::is_text_file(fp) {
             if let Some(st) = TextPreviewState::from_file(fp, &self.config) {
-                self.viewer = Some(ViewerSession::Text(st));
+                self.replace_viewer(Some(ViewerSession::Text(st)));
             }
         }
     }
@@ -1992,32 +2206,26 @@ impl WorkbenchApp {
                 title: title.to_string(),
             });
         } else {
-            self.viewer = Some(ViewerSession::Text(TextPreviewState::from_text(
+            self.replace_viewer(Some(ViewerSession::Text(TextPreviewState::from_text(
                 text.to_string(),
                 Some(title.to_string()),
                 &self.config,
-            )));
+            ))));
         }
     }
 
     fn open_slot_preview_modal(&mut self, item: &ClipItem) {
         if let Some(audio_path) = item.audio_path() {
-            self.viewer = Some(ViewerSession::Audio(
+            self.replace_viewer(Some(ViewerSession::Audio(
                 AudioPreviewState::new(audio_path, item.title.clone())
                     .with_editor(self.config.audio.editor.clone()),
-            ));
+            )));
             return;
         }
         if let Some(fp) = item.file_path() {
             self.open_slot_file_preview(&fp, item.is_image());
         } else if item.is_image() {
-            match ImagePreviewState::from_item(item, &self.config) {
-                Ok(editor) => {
-                    self.clear_status_message();
-                    self.viewer = Some(ViewerSession::Image(editor));
-                }
-                Err(error) => self.set_status_message(format!("Image preview failed: {error}")),
-            }
+            self.start_image_item_load(ImageLoadSource::from_item(item));
         } else if let Some(text) = item.to_clipboard_text() {
             self.open_slot_text_preview(&text, &item.title);
         }
@@ -2604,6 +2812,7 @@ mod workbench_layout_tests {
             in_app_prompt: None,
             viewer,
             startup_viewers,
+            image_load_job: None,
             spreadsheet_load_job: None,
             midi_load_job: None,
             rolling_audio_strip: None,
@@ -3023,30 +3232,193 @@ mod workbench_layout_tests {
         );
     }
 
+    fn wait_for_image_load(app: &mut WorkbenchApp) {
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while app.image_load_job.is_some()
+            || matches!(app.viewer, Some(ViewerSession::ImageLoading(_)))
+        {
+            app.poll_image_load(&ctx);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "image load did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    fn write_test_image(path: &std::path::Path, width: u32) {
+        image::RgbImage::from_pixel(width, 2, image::Rgb([24, 120, 180]))
+            .save(path)
+            .unwrap();
+    }
+
+    fn gallery_viewer() -> ViewerSession {
+        ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::default())
+    }
+
     #[test]
     fn malformed_image_preview_reports_cause_and_valid_preview_recovers() {
         let temp_dir = tempfile::tempdir().unwrap();
         let malformed_path = temp_dir.path().join("broken.png");
         std::fs::write(&malformed_path, b"not a PNG").unwrap();
         let valid_path = temp_dir.path().join("valid.png");
-        image::RgbImage::from_pixel(2, 2, image::Rgb([24, 120, 180]))
-            .save(&valid_path)
-            .unwrap();
-        let mut app = test_workbench_app(None, VecDeque::new());
+        write_test_image(&valid_path, 2);
+        let mut app = test_workbench_app(Some(gallery_viewer()), VecDeque::new());
 
         app.open_slot_file_preview(&malformed_path, true);
-
-        assert!(app.viewer.is_none());
-        assert!(
-            app.status_msg
-                .as_deref()
-                .is_some_and(|message| message.starts_with("Image preview failed:"))
-        );
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
+        assert!(app.image_load_job.is_some());
+        wait_for_image_load(&mut app);
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
+        assert!(app.status_msg.as_deref().is_some_and(|message| {
+            message.starts_with("Image preview failed: Failed to decode image bytes:")
+        }));
 
         app.open_slot_file_preview(&valid_path, true);
-
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
+        wait_for_image_load(&mut app);
         assert!(matches!(app.viewer, Some(ViewerSession::Image(_))));
         assert!(app.status_msg.is_none());
+    }
+
+    #[test]
+    fn clipboard_image_preview_decodes_owned_bytes_on_worker() {
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            3,
+            2,
+            image::Rgba([12, 34, 56, 255]),
+        ))
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        let mut item = ClipItem::from_image_bytes(bytes, "image/png".to_string()).unwrap();
+        if let ClipPayload::Image { path, .. } = &mut item.payload {
+            *path = None;
+        }
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.open_slot_preview_modal(&item);
+        assert!(app.viewer.is_none());
+        assert!(app.image_load_job.is_some());
+        wait_for_image_load(&mut app);
+        let Some(ViewerSession::Image(state)) = &app.viewer else {
+            panic!("missing image viewer")
+        };
+        assert_eq!(state.current_rgba.dimensions(), (3, 2));
+        assert_eq!(state.title, item.title);
+        assert!(matches!(&item.payload, ClipPayload::Image { bytes, .. } if !bytes.is_empty()));
+    }
+
+    #[test]
+    fn replaced_image_request_and_replaced_viewer_discard_stale_completion() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let first = temp_dir.path().join("first.png");
+        let second = temp_dir.path().join("second.png");
+        write_test_image(&first, 3);
+        write_test_image(&second, 5);
+        let mut app = test_workbench_app(Some(gallery_viewer()), VecDeque::new());
+        app.open_slot_file_preview(&first, true);
+        app.open_slot_file_preview(&second, true);
+        wait_for_image_load(&mut app);
+        let Some(ViewerSession::Image(state)) = &app.viewer else {
+            panic!("missing image viewer")
+        };
+        assert_eq!(state.current_rgba.width(), 5);
+
+        app.open_slot_file_preview(&first, true);
+        app.replace_viewer(Some(gallery_viewer()));
+        assert!(app.image_load_job.is_none());
+        app.poll_image_load(&egui::Context::default());
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
+    }
+
+    #[test]
+    fn replacing_startup_image_request_cancels_its_placeholder() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("image.png");
+        write_test_image(&path, 3);
+        let loading = ViewerSession::ImageLoading(ImageLoadJob::new(
+            ImageLoadSource::File(path),
+            AppConfig::default(),
+        ));
+        let mut app = test_workbench_app(Some(loading), VecDeque::new());
+        app.start_image_load(ImageLoadSource::File(temp_dir.path().join("missing.png")));
+        assert!(app.viewer.is_none());
+        wait_for_image_load(&mut app);
+        app.poll_image_load(&egui::Context::default());
+        assert!(app.viewer.is_none());
+        assert!(app.status_msg.as_deref().is_some_and(|message| {
+            message.starts_with("Image preview failed: Failed to read file")
+        }));
+    }
+
+    #[test]
+    fn closing_viewer_cancels_pending_image_replacement() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("image.png");
+        write_test_image(&path, 3);
+        let mut app = test_workbench_app(Some(gallery_viewer()), VecDeque::new());
+        app.open_slot_file_preview(&path, true);
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                app.render_modal_viewers(ctx);
+            },
+        );
+        assert!(app.viewer.is_none());
+        assert!(app.image_load_job.is_none());
+        app.poll_image_load(&ctx);
+        assert!(app.viewer.is_none());
+    }
+
+    #[test]
+    fn startup_image_loading_keeps_fifo_position_and_waits_for_foreground() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("image.png");
+        write_test_image(&path, 4);
+        let loading = ViewerSession::ImageLoading(ImageLoadJob::new(
+            ImageLoadSource::File(path),
+            AppConfig::default(),
+        ));
+        let mut app = test_workbench_app(
+            Some(gallery_viewer()),
+            VecDeque::from([loading, gallery_viewer()]),
+        );
+        app.poll_image_load(&egui::Context::default());
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
+        assert_eq!(app.startup_viewers.len(), 2);
+        app.viewer = app.startup_viewers.pop_front();
+        wait_for_image_load(&mut app);
+        assert!(matches!(app.viewer, Some(ViewerSession::Image(_))));
+        assert_eq!(app.startup_viewers.len(), 1);
     }
 
     #[test]
