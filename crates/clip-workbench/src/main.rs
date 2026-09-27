@@ -2986,6 +2986,73 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn in_app_prompt_enter_submits_from_focused_editor_once() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.in_app_prompt = Some(InAppPromptState {
+            recipe_name: "Prompt Enter Fixture".to_owned(),
+            message: "Enter test text".to_owned(),
+            input_text: "submitted value".to_owned(),
+            first_frame: true,
+        });
+        let ctx = egui::Context::default();
+        let frame = |app: &mut WorkbenchApp, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 700.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    assert!(app.render_prompt_modal(ctx));
+                },
+            )
+        };
+
+        frame(&mut app, Vec::new());
+        assert!(
+            ctx.wants_keyboard_input(),
+            "prompt editor should receive focus"
+        );
+        assert!(
+            app.in_app_prompt.is_some(),
+            "opening the prompt must not close it"
+        );
+
+        let submitted = frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        let close_commands = submitted
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|output| {
+                output
+                    .commands
+                    .iter()
+                    .filter(|command| matches!(command, egui::ViewportCommand::Close))
+                    .count()
+            })
+            .unwrap_or_default();
+        assert_eq!(
+            close_commands, 1,
+            "Enter submits and requests one window close"
+        );
+        assert!(
+            app.in_app_prompt.is_some(),
+            "submission should close the popup through its viewport command, not also dismiss prompt state"
+        );
+    }
+
+    #[test]
     fn shared_workbench_status_is_visible_in_every_host_view() {
         let palette = ui_appearance::palette(WorkbenchAppearance::Dark);
         for view in [

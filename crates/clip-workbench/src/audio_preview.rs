@@ -2823,7 +2823,8 @@ impl AudioPreviewState {
                     let text_width = (ui.available_width() - 90.0).max(100.0);
                     ui.add_sized(
                         [text_width, crate::ui_ext::CONTROL_HEIGHT],
-                        egui::TextEdit::singleline(&mut self.save_destination_dir),
+                        egui::TextEdit::singleline(&mut self.save_destination_dir)
+                            .id(egui::Id::new("audio_save_destination")),
                     );
                     if ui.add(layout::AudioWorkspace::secondary_button("Browse...", hex_to_c32(&palette.colors.surface_recessed), palette))
                         .on_hover_text("Choose destination folder via file manager dialog").clicked() {
@@ -2865,7 +2866,8 @@ impl AudioPreviewState {
                                         (ui.available_width() - 8.0).max(64.0),
                                         crate::ui_ext::CONTROL_HEIGHT,
                                     ],
-                                    egui::TextEdit::singleline(filename),
+                                    egui::TextEdit::singleline(filename)
+                                        .id(egui::Id::new(("audio_save_filename", idx))),
                                 );
                             });
                         }
@@ -3405,6 +3407,68 @@ mod tests {
         );
         assert_eq!(state.active_mode, AudioToolMode::Inspect);
         assert!(!close_requested);
+    }
+
+    #[test]
+    fn enter_saves_edited_audio_fields_while_destination_or_filename_is_focused() {
+        for (focused_id, filename) in [
+            (
+                egui::Id::new("audio_save_destination"),
+                "edited_with_destination_focus.wav",
+            ),
+            (
+                egui::Id::new(("audio_save_filename", 0usize)),
+                "edited_with_filename_focus.wav",
+            ),
+        ] {
+            let (_source_dir, source_path) = generate_fixture_wav("enter-save", 1.0);
+            let output_dir = tempfile::tempdir().unwrap();
+            let mut state = AudioPreviewState::new(source_path, "enter-save.wav".to_owned());
+            state.selection = Some((0.0, 1.0));
+            state.open_save_dialog();
+            state.save_destination_dir = output_dir.path().to_string_lossy().into_owned();
+            state.save_filenames = vec![filename.to_owned()];
+            state.open_folder_after_save = false;
+
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                state.render_save_dialog(ctx, &palette, 1.0);
+                ctx.memory_mut(|memory| memory.request_focus(focused_id));
+            });
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                state.render_save_dialog(ctx, &palette, 1.0);
+            });
+            assert_eq!(ctx.memory(|memory| memory.focused()), Some(focused_id));
+            assert!(
+                ctx.wants_keyboard_input(),
+                "the selected save field should own focus before Enter"
+            );
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::Enter,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| state.render_save_dialog(ctx, &palette, 1.0),
+            );
+
+            assert!(
+                !state.save_dialog_open,
+                "Enter submits while {focused_id:?} owns focus"
+            );
+            assert!(
+                output_dir.path().join(filename).is_file(),
+                "Enter should save the edited destination and filename"
+            );
+        }
     }
 
     #[test]

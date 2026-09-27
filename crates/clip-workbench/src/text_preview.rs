@@ -2051,6 +2051,119 @@ mod tests {
     }
 
     #[test]
+    fn find_editor_enter_navigates_once_without_closing_the_preview() {
+        let ctx = egui::Context::default();
+        let mut state = TextPreviewState::from_text(
+            "match one\nmatch two\nmatch three".to_owned(),
+            None,
+            &AppConfig::default(),
+        );
+        state.show_find = true;
+        state.find_query = "match".to_owned();
+        state.update_search_matches();
+        state.active_match_idx = 0;
+
+        let render = |ctx: &egui::Context, state: &mut TextPreviewState, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 400.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_search_toolbar(ui, &AppPalette::default());
+                    });
+                },
+            )
+        };
+
+        state.focus_find_input = true;
+        render(&ctx, &mut state, Vec::new());
+        assert!(
+            ctx.wants_keyboard_input(),
+            "Find editor should own keyboard focus"
+        );
+
+        render(
+            &ctx,
+            &mut state,
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert_eq!(state.active_match_idx, 1, "Enter advances one match");
+        assert!(state.show_find, "Enter must leave the Find toolbar open");
+
+        render(&ctx, &mut state, Vec::new());
+        assert_eq!(
+            state.active_match_idx, 1,
+            "one Enter must not advance twice"
+        );
+    }
+
+    #[test]
+    fn find_editor_shift_enter_navigates_to_previous_match_once() {
+        let ctx = egui::Context::default();
+        let mut state = TextPreviewState::from_text(
+            "match one\nmatch two\nmatch three".to_owned(),
+            None,
+            &AppConfig::default(),
+        );
+        state.show_find = true;
+        state.find_query = "match".to_owned();
+        state.update_search_matches();
+        state.active_match_idx = 1;
+        state.focus_find_input = true;
+
+        let mut render = |events, modifiers| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 400.0),
+                    )),
+                    events,
+                    modifiers,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_search_toolbar(ui, &AppPalette::default());
+                    });
+                },
+            )
+        };
+
+        render(Vec::new(), egui::Modifiers::NONE);
+        render(
+            vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::SHIFT,
+            }],
+            egui::Modifiers::SHIFT,
+        );
+        assert_eq!(
+            state.active_match_idx, 0,
+            "Shift+Enter moves to the prior match"
+        );
+        assert!(
+            state.show_find,
+            "Shift+Enter must leave the Find toolbar open"
+        );
+    }
+
+    #[test]
     fn test_text_preview_regex_search() {
         let config = AppConfig::default();
         let content = "const VALUE_A = 100;\nconst VALUE_B = 200;\nconst OTHER = 300;".to_string();
