@@ -10,6 +10,17 @@ use little_clip_core::palette::{AppPalette, contrast_ratio};
 pub const CONTROL_HEIGHT: f32 = 36.0;
 pub const CONTROL_ICON_SIZE: f32 = 18.0;
 pub const BODY_FONT_SIZE: f32 = 16.0;
+
+/// Keeps the regular help text available while explaining why a disabled control cannot run.
+pub fn on_hover_text_with_disabled_reason(
+    response: egui::Response,
+    hover_text: impl Into<egui::WidgetText>,
+    disabled_reason: impl Into<egui::WidgetText>,
+) -> egui::Response {
+    response
+        .on_hover_text(hover_text)
+        .on_disabled_hover_text(disabled_reason)
+}
 pub const HEADING_FONT_SIZE: f32 = 22.0;
 pub const SUBHEADING_FONT_SIZE: f32 = 19.0;
 pub const MONO_FONT_SIZE: f32 = 15.0;
@@ -894,6 +905,67 @@ pub fn new_shared_audio_player() -> Option<rodio::Player> {
 mod tests {
     use super::*;
     use little_clip_core::config::WorkbenchAppearance;
+
+    fn rendered_text(output: &egui::FullOutput) -> Vec<String> {
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn enabled_help_and_disabled_reason_are_both_hoverable() {
+        fn draw(
+            ctx: &egui::Context,
+            time: f64,
+            pointer: Option<Pos2>,
+            enabled: bool,
+        ) -> (egui::FullOutput, Rect) {
+            let mut button_rect = Rect::NOTHING;
+            let output = ctx.run(
+                egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
+                    events: pointer
+                        .map(|pos| vec![egui::Event::PointerMoved(pos)])
+                        .unwrap_or_default(),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let response = ui.add_enabled(enabled, egui::Button::new("Open"));
+                        button_rect = response.rect;
+                        on_hover_text_with_disabled_reason(
+                            response,
+                            "Open the viewer",
+                            "Wait for loading to finish",
+                        );
+                    });
+                },
+            );
+            (output, button_rect)
+        }
+
+        for (enabled, expected) in [
+            (true, "Open the viewer"),
+            (false, "Wait for loading to finish"),
+        ] {
+            let ctx = egui::Context::default();
+            ctx.style_mut(|style| style.interaction.tooltip_delay = 0.0);
+            let (_, button_rect) = draw(&ctx, 0.0, None, enabled);
+            let _ = draw(&ctx, 1.0, Some(button_rect.center()), enabled);
+            let (output, _) = draw(&ctx, 1.1, Some(button_rect.center()), enabled);
+            let texts = rendered_text(&output);
+            assert!(
+                texts.iter().any(|text| text == expected),
+                "expected hover text {expected:?}, got {texts:?}"
+            );
+        }
+    }
 
     #[test]
     fn canvas_badges_fit_compact_views_without_expanding_on_wide_canvases() {

@@ -694,8 +694,11 @@ impl AudioPreviewState {
                         }
                     }
                 } else {
-                    ui.add_enabled(false, trans_btn)
-                        .on_hover_text("Calculating audio spectral flux transients...");
+                    crate::ui_ext::on_hover_text_with_disabled_reason(
+                        ui.add_enabled(false, trans_btn),
+                        "Toggle transient marks and magnetic snapping for selections. Press [T] to toggle.",
+                        "Calculating audio spectral flux transients...",
+                    );
                 }
 
                 ui.add_space(8.0);
@@ -888,13 +891,12 @@ impl AudioPreviewState {
                     hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 );
-                if ui
-                    .add_enabled(has_analysis, copy_wave_btn)
-                    .on_hover_text(
-                        "Copy rendered waveform image with axes and tick marks to clipboard",
-                    )
-                    .clicked()
-                {
+                let copy_wave_response = crate::ui_ext::on_hover_text_with_disabled_reason(
+                    ui.add_enabled(has_analysis, copy_wave_btn),
+                    "Copy rendered waveform image with axes and tick marks to clipboard",
+                    "Wait for audio analysis to finish before copying the waveform image.",
+                );
+                if copy_wave_response.clicked() {
                     self.copy_waveform_image(palette, now);
                 }
 
@@ -906,13 +908,12 @@ impl AudioPreviewState {
                     hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 );
-                if ui
-                    .add_enabled(has_analysis, copy_spec_btn)
-                    .on_hover_text(
-                        "Copy rendered spectrum heatmap with frequency axes and timestamp ruler to clipboard",
-                    )
-                    .clicked()
-                {
+                let copy_spec_response = crate::ui_ext::on_hover_text_with_disabled_reason(
+                    ui.add_enabled(has_analysis, copy_spec_btn),
+                    "Copy rendered spectrum heatmap with frequency axes and timestamp ruler to clipboard",
+                    "Wait for audio analysis to finish before copying the spectrum image.",
+                );
+                if copy_spec_response.clicked() {
                     self.copy_spectrum_image(palette, now);
                 }
             });

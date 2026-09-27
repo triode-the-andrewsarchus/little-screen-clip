@@ -192,7 +192,7 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
 - [x] **E2.4a [Luna] Test equal sibling control sizing.** StudioShell render test verifies the three external-editor actions have equal actual button widths.
 - [x] **E2.4b [Luna] Test stable Play/Pause widths.** Audio Inspect reserves the measured max label width plus a one-point bold-shaping allowance; rendered Play and Pause buttons have identical width and shared 36-point height.
 - [x] **E2.4c [Luna] Test field focus behavior.** Palette search render test checks initial focus, surrender while audio-region interaction disables editing, refocus on activation, and retained focus after the region deactivates.
-- [ ] **E2.4d [Luna] Test tooltip and disabled-reason behavior.**
+- [x] **E2.4d [Luna] Test tooltip and disabled-reason behavior.** Disabled transients, waveform/spectrum copy, spreadsheet, and MIDI actions now expose a specific disabled reason while preserving their enabled help tooltip. A shared helper has a two-path egui hover-render test.
 - **E2.4e Modal Escape routing**
   - [x] **E2.4e1 [Luna] Verify Escape closes nested audio save dialogs before closing the studio.** Regression test covers audio and stem dialogs, then confirms a later Escape closes the studio.
   - [ ] **E2.4e2 [Luna] Verify Escape behavior for representative image and workbench dialogs.**

@@ -1124,7 +1124,12 @@ impl eframe::App for WorkbenchApp {
                                 sheet_bg,
                                 &self.ui_palette,
                             );
-                            if ui.add_enabled(self.spreadsheet_load_job.is_none(), sheet_btn).on_hover_text("Open full multi-sheet X/Y scrollable table").clicked() {
+                            let sheet_response = ui_ext::on_hover_text_with_disabled_reason(
+                                ui.add_enabled(self.spreadsheet_load_job.is_none(), sheet_btn),
+                                "Open full multi-sheet X/Y scrollable table",
+                                "Wait for the current spreadsheet load to finish.",
+                            );
+                            if sheet_response.clicked() {
                                 open_spreadsheet_requested = Some(slot);
                             }
                         }
@@ -1138,7 +1143,12 @@ impl eframe::App for WorkbenchApp {
                                 midi_bg,
                                 &self.ui_palette,
                             );
-                            if ui.add_enabled(self.midi_load_job.is_none(), midi_btn).on_hover_text("Open interactive MIDI piano roll visualizer & synth audio").clicked() {
+                            let midi_response = ui_ext::on_hover_text_with_disabled_reason(
+                                ui.add_enabled(self.midi_load_job.is_none(), midi_btn),
+                                "Open interactive MIDI piano roll visualizer & synth audio",
+                                "Wait for the current MIDI load to finish.",
+                            );
+                            if midi_response.clicked() {
                                 open_midi_requested = Some(midi_path);
                             }
                         }
