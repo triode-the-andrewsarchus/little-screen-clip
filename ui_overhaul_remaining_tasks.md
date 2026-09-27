@@ -69,6 +69,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H1.2a2c [Luna] Audit status interaction tokens.** `StatusToast`'s framed variants already use shared padding and corner tokens. Studio footers render their message inline against an existing footer surface; the rolling-audio status is an inline, severity-colored readout, so neither needs extra frame spacing.
   - [ ] **H1.2a3 [Primary] Finish shared chrome token use.**
     - [x] **H1.2a3a [Luna] Tokenize repeated frame insets.** Isotropic 4/6/8/12-point margins and the Text toolbar, Markup rows, and Barcode cards now consume shared control-spacing tokens; values are unchanged.
+    - [x] **H1.2a3b [Luna] Tokenize standard chrome frame corners.** Forty-nine shared frame corners now use `CONTROL_CORNER_RADIUS`; badge, display-surface, and data-visualization radii retain their distinct roles.
   - [ ] **H1.2a4 [Primary] Visually inspect component gallery in Light mode.**
   - [ ] **H1.2a5 [Primary] Visually inspect component gallery in Dark mode.** Existing gallery caught egui's default 22-point input; widget foreground/fill contrast tests exist and central chrome border clears 3:1 against recessed and panel fills in both modes.
   - [x] **H1.2b1 Switch both renderers to fixed colors and retire selector.** `AppConfig::resolve_palette` uses shared appearance and ignores legacy `[colors]`; workbench theme browser removed; F4/F6 switch appearance; renderer test proves mode changes a frame. Workspace tests pass. Runtime daemon/USB verification pending.

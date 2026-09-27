@@ -1503,7 +1503,7 @@ impl eframe::App for WorkbenchApp {
                                         crate::ui_ext::BUTTON_PADDING_X,
                                         crate::ui_ext::BUTTON_PADDING_Y,
                                     ))
-                                    .rounding(4.0);
+                                    .rounding(crate::ui_ext::CONTROL_CORNER_RADIUS);
 
                                 frame.show(ui, |ui| {
                                     ui.horizontal(|ui| {

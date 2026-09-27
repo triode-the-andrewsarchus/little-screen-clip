@@ -99,7 +99,7 @@ impl ImagePreviewState {
                     )
                     .fill(base_c)
                     .stroke(Stroke::new(1.0_f32, b_med))
-                    .rounding(Rounding::same(4.0))
+                    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                     .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                     if ui
@@ -185,7 +185,9 @@ impl ImagePreviewState {
                                             crate::ui_ext::SPACE_XS,
                                         ))
                                         .stroke(Stroke::new(1.0_f32, card_border))
-                                        .rounding(Rounding::same(4.0))
+                                        .rounding(Rounding::same(
+                                            crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                        ))
                                         .show(ui, |ui| {
                                             ui.horizontal_wrapped(|ui| {
                                                 chip_badge(ui, &det.format, base_c, b_low);

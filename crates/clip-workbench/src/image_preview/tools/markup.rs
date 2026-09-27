@@ -716,7 +716,7 @@ impl ImagePreviewState {
                                         b_med
                                     },
                                 ))
-                                .rounding(Rounding::same(4.0))
+                                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                                 .inner_margin(egui::Margin::symmetric(
                                     crate::ui_ext::ITEM_SPACING_Y,
                                     crate::ui_ext::SPACE_XS,

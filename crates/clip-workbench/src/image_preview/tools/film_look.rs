@@ -999,7 +999,7 @@ impl ImagePreviewState {
             egui::Frame::none()
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
-                .rounding(Rounding::same(4.0))
+                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                 .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
                 .show(ui, |ui| {
                     ui.set_width(left_w - 16.0);
@@ -1083,7 +1083,7 @@ impl ImagePreviewState {
 
                                 let row_frame = egui::Frame::none()
                                     .fill(row_bg)
-                                    .rounding(Rounding::same(4.0))
+                                    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                                     .inner_margin(egui::Margin::symmetric(4.0, 3.0));
 
                                 let resp = row_frame
@@ -1148,7 +1148,7 @@ impl ImagePreviewState {
         crate::shell::StudioPanelLayout::show_region(ui, panels.center, |ui| {
             egui::Frame::none()
                 .fill(hex_to_c32(&palette.colors.canvas))
-                .rounding(Rounding::same(4.0))
+                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                 .show(ui, |ui| {
                     ui.set_width(center_w);
                     ui.set_height(main_h);
@@ -1297,7 +1297,7 @@ impl ImagePreviewState {
             egui::Frame::none()
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
-                .rounding(Rounding::same(4.0))
+                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                 .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
                 .show(ui, |ui| {
                     ui.set_width(right_w - 16.0);
@@ -1349,7 +1349,7 @@ impl ImagePreviewState {
                                 )
                                 .fill(s_bg)
                                 .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
-                                .rounding(Rounding::same(4.0))
+                                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                                 .min_size(Vec2::new(right_w - 28.0, crate::ui_ext::CONTROL_HEIGHT));
 
                                 if ui.add(btn).on_hover_text(*tooltip).clicked() && !sel {
@@ -1549,7 +1549,7 @@ impl ImagePreviewState {
             egui::Frame::none()
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
-                .rounding(Rounding::same(4.0))
+                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                 .inner_margin(egui::Margin::symmetric(
                     crate::ui_ext::SPACE_MD,
                     crate::ui_ext::CONTROL_GROUP_INSET_Y,
@@ -1823,7 +1823,9 @@ impl ImagePreviewState {
                                                         .color(undo_fg),
                                                 )
                                                 .fill(b_med)
-                                                .rounding(Rounding::same(4.0));
+                                                .rounding(Rounding::same(
+                                                    crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                                ));
                                                 if ui.add(undo_btn).clicked() {
                                                     self.undo();
                                                     self.film_sim_state.preview_rgba = None;

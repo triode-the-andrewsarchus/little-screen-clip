@@ -394,7 +394,7 @@ impl ImagePreviewState {
                     1.0_f32,
                     if active { foreground } else { border },
                 ))
-                .rounding(Rounding::same(4.0));
+                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS));
                 if ui
                     .add_enabled_ui(!self.ocr_state.in_progress, |ui| {
                         ui.add_sized([engine_width, crate::ui_ext::CONTROL_HEIGHT], button)

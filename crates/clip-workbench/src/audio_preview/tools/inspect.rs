@@ -1177,7 +1177,7 @@ impl AudioPreviewState {
                                 )
                                 .fill(bg_col)
                                 .stroke(Stroke::new(1.0_f32, border_col))
-                                .rounding(Rounding::same(4.0))
+                                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                                 .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                                 let btn_resp = ui.add(btn).on_hover_text(

@@ -61,7 +61,7 @@ fn render_creative_fx_mask_button(
     )
     .fill(fill)
     .stroke(Stroke::new(1.0_f32, fill))
-    .rounding(Rounding::same(4.0))
+    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
     .min_size(Vec2::new(width, crate::ui_ext::CONTROL_HEIGHT));
     ui.add_enabled(!loading, button)
 }
@@ -832,7 +832,7 @@ impl ImagePreviewState {
             egui::Frame::none()
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
-                .rounding(Rounding::same(4.0))
+                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                 .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
                 .show(ui, |ui| {
                     ui.set_width(left_w - 16.0);
@@ -882,7 +882,7 @@ impl ImagePreviewState {
 
                                 let row_frame = egui::Frame::none()
                                     .fill(row_bg)
-                                    .rounding(Rounding::same(4.0))
+                                    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                                     .inner_margin(egui::Margin::symmetric(6.0, 5.0));
 
                                 let resp = row_frame
@@ -944,7 +944,7 @@ impl ImagePreviewState {
         crate::shell::StudioPanelLayout::show_region(ui, panels.center, |ui| {
             egui::Frame::none()
                 .fill(hex_to_c32(&palette.colors.canvas))
-                .rounding(Rounding::same(4.0))
+                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                 .show(ui, |ui| {
                     ui.set_width(center_w);
                     ui.set_height(main_h);
@@ -1094,7 +1094,7 @@ impl ImagePreviewState {
             egui::Frame::none()
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
-                .rounding(Rounding::same(4.0))
+                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                 .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
                 .show(ui, |ui| {
                     ui.set_width(right_w - 16.0);
@@ -1148,7 +1148,7 @@ impl ImagePreviewState {
                                 )
                                 .fill(s_bg)
                                 .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
-                                .rounding(Rounding::same(4.0))
+                                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                                 .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
 
                                 if ui.add(btn).on_hover_text(preset.description).clicked() {
@@ -1280,7 +1280,9 @@ impl ImagePreviewState {
                                                 1.0_f32,
                                                 if sel { base_c } else { b_med },
                                             ))
-                                            .rounding(Rounding::same(4.0));
+                                            .rounding(Rounding::same(
+                                                crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                            ));
                                             if ui.add(btn).clicked() && !sel {
                                                 self.creative_fx_state.trichromatic_params.mode =
                                                     mode;
@@ -1430,7 +1432,9 @@ impl ImagePreviewState {
                                                 1.0_f32,
                                                 if sel { base_c } else { b_med },
                                             ))
-                                            .rounding(Rounding::same(4.0));
+                                            .rounding(Rounding::same(
+                                                crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                            ));
                                             if ui.add(btn).clicked() && !sel {
                                                 self.creative_fx_state
                                                     .pixel_sort_params
@@ -1475,7 +1479,9 @@ impl ImagePreviewState {
                                                 1.0_f32,
                                                 if sel { base_c } else { b_med },
                                             ))
-                                            .rounding(Rounding::same(4.0));
+                                            .rounding(Rounding::same(
+                                                crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                            ));
                                             if ui.add(btn).clicked() && !sel {
                                                 self.creative_fx_state.pixel_sort_params.criteria =
                                                     c;
@@ -1517,7 +1523,9 @@ impl ImagePreviewState {
                                                 1.0_f32,
                                                 if sel { base_c } else { b_med },
                                             ))
-                                            .rounding(Rounding::same(4.0));
+                                            .rounding(Rounding::same(
+                                                crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                            ));
                                             if ui.add(btn).clicked() && !sel {
                                                 self.creative_fx_state.pixel_sort_params.order = o;
                                                 self.creative_fx_state.selected_preset_name =
@@ -1664,7 +1672,9 @@ impl ImagePreviewState {
                                                 1.0_f32,
                                                 if sel { base_c } else { b_med },
                                             ))
-                                            .rounding(Rounding::same(4.0));
+                                            .rounding(Rounding::same(
+                                                crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                            ));
                                             if ui.add(btn).clicked() && !sel {
                                                 self.creative_fx_state.cmyk_params.paper_tint =
                                                     *tint;
@@ -1858,7 +1868,9 @@ impl ImagePreviewState {
                                                 1.0_f32,
                                                 if sel { base_c } else { b_med },
                                             ))
-                                            .rounding(Rounding::same(4.0));
+                                            .rounding(Rounding::same(
+                                                crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                            ));
                                             if ui.add(btn).clicked() && !sel {
                                                 self.creative_fx_state.dither_params.palette = *pal;
                                                 self.creative_fx_state.selected_preset_name =
@@ -1895,7 +1907,9 @@ impl ImagePreviewState {
                                                 1.0_f32,
                                                 if sel { base_c } else { b_med },
                                             ))
-                                            .rounding(Rounding::same(4.0));
+                                            .rounding(Rounding::same(
+                                                crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                            ));
                                             if ui.add(btn).clicked() && !sel {
                                                 self.creative_fx_state.dither_params.method =
                                                     *method;
@@ -1934,7 +1948,9 @@ impl ImagePreviewState {
                                                 1.0_f32,
                                                 if sel { base_c } else { b_med },
                                             ))
-                                            .rounding(Rounding::same(4.0))
+                                            .rounding(Rounding::same(
+                                                crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                            ))
                                             .min_size(Vec2::new(32.0, 20.0));
                                             if ui.add(btn).clicked() && !sel {
                                                 self.creative_fx_state.dither_params.pixel_scale =
@@ -2069,7 +2085,9 @@ impl ImagePreviewState {
                                                 1.0_f32,
                                                 if sel { base_c } else { b_med },
                                             ))
-                                            .rounding(Rounding::same(4.0));
+                                            .rounding(Rounding::same(
+                                                crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                            ));
                                             if ui.add(btn).clicked() && !sel {
                                                 self.creative_fx_state.ntsc_params.demodulation =
                                                     *demo;
@@ -2108,7 +2126,9 @@ impl ImagePreviewState {
                                                 1.0_f32,
                                                 if sel { base_c } else { b_med },
                                             ))
-                                            .rounding(Rounding::same(4.0))
+                                            .rounding(Rounding::same(
+                                                crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                            ))
                                             .min_size(Vec2::new(38.0, 20.0));
                                             if ui.add(btn).clicked() && !sel {
                                                 self.creative_fx_state.ntsc_params.phase_shift =
@@ -2148,7 +2168,9 @@ impl ImagePreviewState {
                                                 1.0_f32,
                                                 if sel { base_c } else { b_med },
                                             ))
-                                            .rounding(Rounding::same(4.0));
+                                            .rounding(Rounding::same(
+                                                crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                            ));
                                             if ui.add(btn).clicked() && !sel {
                                                 self.creative_fx_state.ntsc_params.chroma_lowpass =
                                                     *cl;
@@ -2447,7 +2469,9 @@ impl ImagePreviewState {
                                                     1.0_f32,
                                                     if sel { base_c } else { b_med },
                                                 ))
-                                                .rounding(Rounding::same(4.0));
+                                                .rounding(Rounding::same(
+                                                    crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                                ));
                                                 if ui.add(btn).clicked() && !sel {
                                                     self.creative_fx_state.ntsc_params.tape_speed =
                                                         speed;
@@ -2656,7 +2680,7 @@ impl ImagePreviewState {
                             )
                             .fill(diff_add)
                             .stroke(Stroke::new(1.0_f32, diff_add))
-                            .rounding(Rounding::same(4.0))
+                            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                             .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
 
                             let apply_enabled = self.creative_fx_state.preview_rgba.is_some();
@@ -2681,7 +2705,7 @@ impl ImagePreviewState {
                             )
                             .fill(b_med)
                             .stroke(Stroke::new(1.0_f32, b_low))
-                            .rounding(Rounding::same(4.0))
+                            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                             .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
 
                             if ui

@@ -905,7 +905,7 @@ impl NodeCanvasState {
                                     for template in filtered {
                                         let frame = egui::Frame::none()
                                             .fill(hex_to_c32(&palette.colors.surface_panel))
-                                            .rounding(4.0)
+                                            .rounding(crate::ui_ext::CONTROL_CORNER_RADIUS)
                                             .inner_margin(egui::Margin::symmetric(
                                                 crate::ui_ext::BUTTON_PADDING_X,
                                                 crate::ui_ext::BUTTON_PADDING_Y,

@@ -163,7 +163,7 @@ impl ImagePreviewState {
                         )
                         .fill(base_c)
                         .stroke(Stroke::new(1.0_f32, b_med))
-                        .rounding(Rounding::same(4.0))
+                        .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                         .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                         if ui.add(depth_btn).on_hover_text("Generate AI metric depth map with Depth-Anything V2 neural network (Enter)").clicked() {
@@ -195,7 +195,7 @@ impl ImagePreviewState {
                                 egui::RichText::new("⟲ Undo (Ctrl+Z)").size(crate::ui_ext::BODY_FONT_SIZE).strong().color(undo_fg),
                             )
                             .fill(b_med)
-                            .rounding(Rounding::same(4.0))
+                            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                             .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
                             if ui.add(undo_btn).clicked() {
                                 self.undo();

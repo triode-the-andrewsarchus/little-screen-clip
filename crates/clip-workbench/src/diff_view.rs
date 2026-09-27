@@ -700,7 +700,7 @@ impl DiffViewerState {
                 crate::ui_ext::CONTROL_GROUP_INSET_Y,
             ))
             .stroke(Stroke::new(1.0_f32, b_med))
-            .rounding(Rounding::same(4.0))
+            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
             .show(ui, |ui| {
                 ui.set_min_height(CONTROL_HEIGHT);
                 ui.horizontal(|ui| {
@@ -1008,7 +1008,7 @@ impl DiffViewerState {
                 crate::ui_ext::CONTROL_GROUP_INSET_Y,
             ))
             .stroke(Stroke::new(1.0_f32, b_med))
-            .rounding(Rounding::same(4.0))
+            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
             .show(ui, |ui| {
                 ui.set_min_height(CONTROL_HEIGHT);
                 ui.horizontal(|ui| {

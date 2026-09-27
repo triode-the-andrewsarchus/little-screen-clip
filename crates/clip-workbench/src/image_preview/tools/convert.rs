@@ -355,7 +355,7 @@ impl ImagePreviewState {
                     1.0_f32,
                     if active { foreground } else { border },
                 ))
-                .rounding(Rounding::same(4.0));
+                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS));
                 if ui
                     .add_sized([format_width, crate::ui_ext::CONTROL_HEIGHT], button)
                     .clicked()

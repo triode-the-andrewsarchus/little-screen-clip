@@ -458,7 +458,7 @@ impl ImagePreviewState {
                                 1.0_f32,
                                 hex_to_c32(&palette.colors.surface_recessed),
                             ))
-                            .rounding(Rounding::same(4.0))
+                            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                             .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                             if ui.add(undo_btn).clicked() {

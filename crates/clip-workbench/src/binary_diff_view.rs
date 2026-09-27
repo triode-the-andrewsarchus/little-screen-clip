@@ -567,7 +567,7 @@ impl BinaryDiffViewState {
                 crate::ui_ext::CONTROL_GROUP_INSET_Y,
             ))
             .stroke(Stroke::new(1.0_f32, b_med))
-            .rounding(Rounding::same(4.0))
+            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     // Mode selector
@@ -1339,7 +1339,7 @@ impl BinaryDiffViewState {
                                 } else {
                                     Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel))
                                 })
-                                .rounding(Rounding::same(4.0))
+                                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                                 .inner_margin(egui::Margin {
                                     left: card_margin_x,
                                     right: card_margin_x,

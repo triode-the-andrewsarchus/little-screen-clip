@@ -1507,7 +1507,7 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
             hex_to_c32(&palette.colors.surface_panel),
         ))
         .inner_margin(egui::Margin::same(10.0))
-        .rounding(Rounding::same(4.0))
+        .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
         .show(ui, |ui| {
             if !lang.is_empty() {
                 ui.horizontal(|ui| {

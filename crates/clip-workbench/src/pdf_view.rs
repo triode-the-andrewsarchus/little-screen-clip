@@ -612,7 +612,7 @@ impl PdfEditorState {
                                                                 colors.canvas
                                                             })
                                                             .stroke(Stroke::new(stroke_w, border_col))
-                                                            .rounding(Rounding::same(4.0))
+                                                            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                                                             .inner_margin(egui::Margin::same(crate::ui_ext::ITEM_SPACING_Y))
                                                             .show(ui, |ui| {
                                                                 let aspect = if h > 0 {

@@ -1761,7 +1761,7 @@ fn image_studio_footer_hint(mode: ImageToolMode) -> &'static str {
 fn chip_badge(ui: &mut egui::Ui, text: &str, text_col: Color32, bg_col: Color32) {
     let frame = egui::Frame::none()
         .fill(bg_col)
-        .rounding(Rounding::same(4.0))
+        .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
         .inner_margin(egui::Margin::symmetric(6.0, 2.0));
     frame.show(ui, |ui| {
         ui.label(

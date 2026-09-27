@@ -200,7 +200,7 @@ impl ImagePreviewState {
                             )
                             .fill(btn_bg)
                             .stroke(Stroke::new(1.0_f32, btn_border))
-                            .rounding(Rounding::same(4.0))
+                            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                             .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
                             if ui.add(undo_btn).clicked() {
                                 self.undo();
