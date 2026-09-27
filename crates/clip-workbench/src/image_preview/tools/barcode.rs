@@ -79,7 +79,10 @@ impl ImagePreviewState {
 
         egui::Frame::none()
             .fill(b_low)
-            .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+            .inner_margin(egui::Margin::symmetric(
+                crate::ui_ext::PANEL_INSET_X,
+                crate::ui_ext::CONTROL_GROUP_INSET_Y,
+            ))
             .stroke(Stroke::new(1.0_f32, b_med))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {

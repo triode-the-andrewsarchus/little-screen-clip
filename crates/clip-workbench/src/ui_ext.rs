@@ -20,6 +20,7 @@ pub const ITEM_SPACING_Y: f32 = 6.0;
 pub const BADGE_PADDING_X: f32 = 6.0;
 pub const BADGE_PADDING_Y: f32 = 2.0;
 pub const PANEL_INSET_X: f32 = 14.0;
+pub const CONTROL_GROUP_INSET_Y: f32 = 6.0;
 pub const CONTROL_ROW_INSET_Y: f32 = 5.0;
 pub const FOOTER_INSET_Y: f32 = 6.0;
 pub const BADGE_CORNER_RADIUS: f32 = 3.0;

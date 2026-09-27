@@ -1148,7 +1148,13 @@ impl ImagePreviewState {
                         .size()
                         .y
                 });
-                let footer_height = footer_text_height + egui::Margin::symmetric(14.0, 6.0).sum().y;
+                let footer_height = footer_text_height
+                    + egui::Margin::symmetric(
+                        crate::ui_ext::PANEL_INSET_X,
+                        crate::ui_ext::CONTROL_GROUP_INSET_Y,
+                    )
+                    .sum()
+                    .y;
                 egui::TopBottomPanel::bottom(ui.make_persistent_id("image_studio_footer"))
                     .frame(egui::Frame::none())
                     .resizable(false)
@@ -1366,7 +1372,10 @@ impl ImagePreviewState {
     fn render_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.colors.surface_recessed))
-            .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+            .inner_margin(egui::Margin::symmetric(
+                crate::ui_ext::PANEL_INSET_X,
+                crate::ui_ext::CONTROL_GROUP_INSET_Y,
+            ))
             .stroke(Stroke::new(
                 1.0_f32,
                 hex_to_c32(&palette.colors.surface_panel),
@@ -1656,7 +1665,10 @@ impl ImagePreviewState {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         egui::Frame::none()
             .fill(hex_to_c32(&palette.colors.surface_recessed))
-            .inner_margin(egui::Margin::symmetric(14.0, 6.0))
+            .inner_margin(egui::Margin::symmetric(
+                crate::ui_ext::PANEL_INSET_X,
+                crate::ui_ext::CONTROL_GROUP_INSET_Y,
+            ))
             .show(ui, |ui| {
                 ui.allocate_ui_with_layout(
                     Vec2::new(ui.available_width(), text_height),
