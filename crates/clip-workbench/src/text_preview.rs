@@ -567,7 +567,9 @@ impl TextPreviewState {
             }
         }
 
-        if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F)) {
+        if !ctx.wants_keyboard_input()
+            && ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::F))
+        {
             self.show_find = true;
             self.focus_find_input = true;
         }
@@ -1541,6 +1543,40 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_shortcut_yields_to_focused_text_control() {
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let response = ui.add(egui::TextEdit::singleline(&mut text));
+                response.request_focus();
+            });
+        });
+        assert!(ctx.wants_keyboard_input());
+
+        let mut state =
+            TextPreviewState::from_text("editable content".to_owned(), None, &AppConfig::default());
+        let mut close = false;
+        let modifiers = egui::Modifiers::CTRL;
+        let _ = ctx.run(
+            egui::RawInput {
+                modifiers,
+                events: vec![egui::Event::Key {
+                    key: egui::Key::F,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            },
+            |ctx| state.handle_shortcuts(ctx, &mut close),
+        );
+        assert!(!state.show_find);
+        assert!(!close);
+    }
 
     fn contrast(a: Color32, b: Color32) -> f32 {
         little_clip_core::palette::contrast_ratio((a.r(), a.g(), a.b()), (b.r(), b.g(), b.b()))

@@ -99,7 +99,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [ ] **H1.3b2 [Primary] Specify remaining Enter precedence.**
   - [ ] **H1.3b3 [Primary] Specify remaining Space precedence.**
   - [x] **H1.3b4 [Primary] Specify remaining letter-key precedence.** `ui_overhaul_letter_key_contract.md` records current route bindings, focus/dialog behavior, and the intended precedence contract; it flags source/runtime gaps for H1.3b5 and later viewer checks.
-  - [ ] **H1.3b5 [Primary] Implement remaining key precedence without altering domain controls.**
+  - [x] **H1.3b5 [Primary] Implement remaining key precedence without altering domain controls.** Text-viewer Cmd/Ctrl+F now yields to an already focused text edit; image/audio/comparison guards were retained, and PDF/MIDI do not host text-entry fields. Added a focused egui input regression; `cargo test -p clip-workbench --quiet` passes (254 passed, one ignored).
   - [ ] **H1.3b6 [Primary] Implement focus return for representative nested edits and cancellation.**
   - **H1.3b7 Typed host actions and shared status/error path**
     - [ ] **H1.3b7a [Primary] Implement typed host actions.**
