@@ -210,7 +210,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **E2.4f2i [Luna] Audit text-preview labels.** Syntax hues, Markdown code/link/list markers, and search error/match labels now resolve foreground contrast against their code, panel, or recessed surface. Tests cover every syntax hue family and both appearances.
     - [x] **E2.4f2j [Luna] Audit PDF-viewer labels.** Selected-page labels and page-render error copy resolve contrast against their actual panel/recessed fills; other page metadata uses tested semantic text roles. Light/Dark color-pair regression passes.
     - [x] **E2.4f2k [Luna] Audit spreadsheet labels.** Sheet/corner labels use semantic muted text; sticky column/row headers and selected/data cells already resolve foreground contrast against their actual fills. Shared contrast tests cover the fallback behavior; interactive scrolling and dense-data readability remain separate under E2.3e/H2.2.
-    - [ ] **E2.4f2l [Luna] Audit diff and binary-diff labels.**
+    - [x] **E2.4f2l [Luna] Audit text-diff labels.** ANSI syntax foregrounds are contrast-resolved against the dark console; image-diff error, mask, column, and compute-readout accents are resolved against their view surfaces. Light/Dark image-diff color-pair regression passes; ANSI coverage remains under H2.2g.
+    - [ ] **E2.4f2m [Luna] Audit binary-diff labels.**
 - [x] **E2.4g [Luna] Test async-preview readiness behavior.** A regression test advances audio preview from Pending to Ready without changing item ID or payload kind, then proves the readiness change triggers slot hydration. The workbench update path marks arriving state dirty and requests repaint; suite passes (226 passed, one ignored).
 
 ## Hard 2 — Cross-view behavior, scale, and embedding (primary model)

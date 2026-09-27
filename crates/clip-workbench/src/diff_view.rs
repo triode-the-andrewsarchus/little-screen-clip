@@ -752,6 +752,12 @@ impl DiffViewerState {
         let f_high = crate::hex_to_c32(&palette.colors.text_primary);
         let f_med = crate::hex_to_c32(&palette.colors.text_secondary);
         let del_color = crate::hex_to_c32(&palette.diff_del);
+        let del_label_color = crate::ui_ext::contrast_text_c32_on(
+            ui.visuals().panel_fill,
+            ui.visuals().panel_fill,
+            Some(del_color),
+            palette,
+        );
 
         if self.is_computing {
             self.render_computing_ui(ui, palette);
@@ -868,7 +874,7 @@ impl DiffViewerState {
                         ui.label(
                             egui::RichText::new("Diff Mask (Dark Canvas + Glowing Difference)")
                                 .strong()
-                                .color(del_color),
+                                .color(del_label_color),
                         );
                         ui.add_space(4.0);
 
@@ -937,7 +943,7 @@ impl DiffViewerState {
                 ui.vertical_centered(|ui| {
                     ui.label(
                         egui::RichText::new("Unable to Compare Images")
-                            .color(del_color)
+                            .color(del_label_color)
                             .heading(),
                     );
                     ui.add_space(8.0);
@@ -1095,11 +1101,14 @@ impl DiffViewerState {
 
                         ui.add_space(8.0);
 
-                        ui.label(
-                            egui::RichText::new(readout)
-                                .size(BODY_FONT_SIZE)
-                                .color(accent),
-                        );
+                        ui.label(egui::RichText::new(readout).size(BODY_FONT_SIZE).color(
+                            crate::ui_ext::contrast_text_c32_on(
+                                b_med,
+                                b_med,
+                                Some(accent),
+                                palette,
+                            ),
+                        ));
 
                         ui.add_space(10.0);
 
@@ -1127,13 +1136,21 @@ impl DiffViewerState {
         let b_low = crate::hex_to_c32(&palette.colors.surface_recessed);
         let b_med = crate::hex_to_c32(&palette.colors.surface_panel);
         let f_low = crate::hex_to_c32(&palette.colors.text_muted);
+        let surface = ui.visuals().panel_fill;
 
         ui.vertical(|ui| {
             ui.set_width(w);
 
             // Column Header
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(title).strong().color(title_color));
+                ui.label(egui::RichText::new(title).strong().color(
+                    crate::ui_ext::contrast_text_c32_on(
+                        surface,
+                        surface,
+                        Some(title_color),
+                        palette,
+                    ),
+                ));
                 ui.label(
                     egui::RichText::new(format!("• {}", subtitle))
                         .size(BODY_FONT_SIZE)
@@ -1199,6 +1216,35 @@ fn strip_ansi_codes(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn image_diff_labels_meet_contrast_on_the_view_surface() {
+        for appearance in [
+            little_clip_core::config::WorkbenchAppearance::Dark,
+            little_clip_core::config::WorkbenchAppearance::Light,
+        ] {
+            let palette = crate::ui_appearance::palette(appearance);
+            let surface = crate::hex_to_c32(&palette.colors.canvas);
+            for preferred in [
+                crate::hex_to_c32(&palette.diff_del),
+                crate::hex_to_c32(&palette.harmonies.base),
+            ] {
+                let foreground = crate::ui_ext::contrast_text_c32_on(
+                    surface,
+                    surface,
+                    Some(preferred),
+                    &palette,
+                );
+                assert!(
+                    little_clip_core::palette::contrast_ratio(
+                        (surface.r(), surface.g(), surface.b()),
+                        (foreground.r(), foreground.g(), foreground.b()),
+                    ) >= 4.5,
+                    "{appearance:?} image-diff custom label lacks contrast"
+                );
+            }
+        }
+    }
 
     #[test]
     fn modified_s_does_not_swap_diff_operands() {
