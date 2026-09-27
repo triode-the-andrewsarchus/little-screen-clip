@@ -15,6 +15,141 @@ pub const SUBHEADING_FONT_SIZE: f32 = 19.0;
 pub const MONO_FONT_SIZE: f32 = 15.0;
 pub const CONTROL_CORNER_RADIUS: f32 = 4.0;
 
+/// A readable, content-sized annotation on an image or other preview canvas.
+pub struct CanvasBadge<'a> {
+    pub heading: &'a str,
+    pub value: Option<&'a str>,
+    pub accent: Option<Color32>,
+}
+
+impl CanvasBadge<'_> {
+    pub fn paint(
+        &self,
+        painter: &egui::Painter,
+        position: Pos2,
+        anchor: egui::Align2,
+        bounds: Rect,
+        max_width: f32,
+        palette: &AppPalette,
+    ) -> Rect {
+        let bounds = bounds.intersect(painter.clip_rect());
+        if !bounds.is_positive() {
+            return Rect::NOTHING;
+        }
+        let painter = painter.with_clip_rect(bounds);
+        let background = hex_to_c32(&palette.colors.surface_recessed);
+        let heading_color = contrast_text_c32(
+            background,
+            Some(hex_to_c32(&palette.colors.text_secondary)),
+            palette,
+        );
+        let value_color = contrast_text_c32(
+            background,
+            self.accent
+                .or(Some(hex_to_c32(&palette.colors.text_primary))),
+            palette,
+        );
+        let padding = Vec2::new(8.0, 5.0);
+        let heading_font = FontId::proportional(BODY_FONT_SIZE);
+        let value_font = FontId::monospace(MONO_FONT_SIZE);
+        let natural_width = painter
+            .layout_no_wrap(self.heading.to_owned(), heading_font.clone(), heading_color)
+            .size()
+            .x
+            .max(
+                self.value
+                    .map(|value| {
+                        painter
+                            .layout_no_wrap(value.to_owned(), value_font.clone(), value_color)
+                            .size()
+                            .x
+                    })
+                    .unwrap_or(0.0),
+            );
+        let width = (natural_width + padding.x * 2.0)
+            .min(max_width)
+            .min(bounds.width())
+            .max(1.0);
+        let text_width = (width - padding.x * 2.0).max(1.0);
+        let heading = painter.layout(
+            self.heading.to_owned(),
+            heading_font,
+            heading_color,
+            text_width,
+        );
+        let value = self
+            .value
+            .map(|value| painter.layout(value.to_owned(), value_font, value_color, text_width));
+        let heading_height = heading.size().y;
+        let value_height = value
+            .as_ref()
+            .map(|galley| galley.size().y + 2.0)
+            .unwrap_or(0.0);
+        let size = Vec2::new(width, heading_height + value_height + padding.y * 2.0);
+        let rect = clamp_overlay_rect(anchor.anchor_size(position, size).min, size, bounds);
+        painter.rect_filled(rect, Rounding::same(CONTROL_CORNER_RADIUS), background);
+        painter.rect_stroke(
+            rect,
+            Rounding::same(CONTROL_CORNER_RADIUS),
+            Stroke::new(
+                1.0_f32,
+                self.accent
+                    .unwrap_or_else(|| hex_to_c32(&palette.colors.surface_panel)),
+            ),
+        );
+        let text_min = rect.min + padding;
+        painter.galley(text_min, heading, heading_color);
+        if let Some(value) = value {
+            painter.galley(
+                text_min + Vec2::new(0.0, heading_height + 2.0),
+                value,
+                value_color,
+            );
+        }
+        rect
+    }
+}
+
+/// Draws the shared comparison handle and returns its matching hit radius.
+pub fn paint_split_handle(painter: &egui::Painter, center: Pos2, palette: &AppPalette) -> f32 {
+    let background = hex_to_c32(&palette.colors.surface_recessed);
+    let foreground = contrast_text_c32(
+        background,
+        Some(hex_to_c32(&palette.colors.text_primary)),
+        palette,
+    );
+    let galley = painter.layout_no_wrap(
+        "◀ ▶".to_owned(),
+        FontId::monospace(MONO_FONT_SIZE),
+        foreground,
+    );
+    let radius = (CONTROL_HEIGHT * 0.5).max(galley.size().length() * 0.5 + 3.0);
+    painter.circle(
+        center,
+        radius,
+        background,
+        Stroke::new(2.0_f32, hex_to_c32(&palette.harmonies.base)),
+    );
+    painter.galley(center - galley.size() * 0.5, galley, foreground);
+    radius
+}
+
+/// Hit-tests both the divider strip and its measured circular handle.
+pub fn split_handle_hit_test(
+    pointer: Option<Pos2>,
+    image: Rect,
+    center: Pos2,
+    radius: f32,
+    strip_half_width: f32,
+) -> bool {
+    pointer.is_some_and(|point| {
+        ((point.x - center.x).abs() <= strip_half_width
+            && point.y >= image.top()
+            && point.y <= image.bottom())
+            || point.distance(center) <= radius
+    })
+}
+
 /// Places a floating overlay inside its visible canvas whenever it fits.
 pub fn clamp_overlay_rect(ideal_min: Pos2, size: Vec2, bounds: Rect) -> Rect {
     let max_x = (bounds.max.x - size.x).max(bounds.min.x);
@@ -759,6 +894,127 @@ pub fn new_shared_audio_player() -> Option<rodio::Player> {
 mod tests {
     use super::*;
     use little_clip_core::config::WorkbenchAppearance;
+
+    #[test]
+    fn canvas_badges_fit_compact_views_without_expanding_on_wide_canvases() {
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
+            let ctx = egui::Context::default();
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let bounds =
+                        Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::new(320.0, 140.0));
+                    let value = "WEBP · 554.4 KB";
+                    let before = CanvasBadge {
+                        heading: "BEFORE",
+                        value: Some(value),
+                        accent: None,
+                    };
+                    let after = CanvasBadge {
+                        heading: "AFTER",
+                        value: Some(value),
+                        accent: Some(hex_to_c32(&palette.harmonies.base)),
+                    };
+                    let left = before.paint(
+                        ui.painter(),
+                        bounds.min + Vec2::splat(8.0),
+                        egui::Align2::LEFT_TOP,
+                        bounds,
+                        148.0,
+                        &palette,
+                    );
+                    let right = after.paint(
+                        ui.painter(),
+                        bounds.max - Vec2::new(8.0, bounds.height() - 8.0),
+                        egui::Align2::RIGHT_TOP,
+                        bounds,
+                        148.0,
+                        &palette,
+                    );
+                    assert!(bounds.contains_rect(left) && bounds.contains_rect(right));
+                    assert!(left.right() < right.left());
+                    let wide =
+                        Rect::from_min_size(Pos2::new(20.0, 200.0), Vec2::new(1000.0, 200.0));
+                    let badge = before.paint(
+                        ui.painter(),
+                        wide.min,
+                        egui::Align2::LEFT_TOP,
+                        wide,
+                        480.0,
+                        &palette,
+                    );
+                    assert!(
+                        badge.width() < 200.0,
+                        "a short badge must retain its natural width"
+                    );
+                });
+            });
+            let background = hex_to_c32(&palette.colors.surface_recessed);
+            for shape in &output.shapes {
+                if let egui::Shape::Text(text) = &shape.shape {
+                    for section in &text.galley.job.sections {
+                        assert!(
+                            contrast_ratio(
+                                (
+                                    section.format.color.r(),
+                                    section.format.color.g(),
+                                    section.format.color.b()
+                                ),
+                                (background.r(), background.g(), background.b())
+                            ) >= 4.5
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn split_handle_hit_radius_contains_the_readable_icon() {
+        let ctx = egui::Context::default();
+        let mut radius = 0.0;
+        let center = Pos2::new(100.0, 100.0);
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                radius = paint_split_handle(ui.painter(), center, &AppPalette::default());
+            });
+        });
+        let icon = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "◀ ▶" => Some(text),
+                _ => None,
+            })
+            .unwrap();
+        let icon_rect = Rect::from_min_size(icon.pos, icon.galley.size());
+        assert!(icon_rect.left_top().distance(center) <= radius);
+        assert!(icon_rect.right_bottom().distance(center) <= radius);
+        assert!(radius >= CONTROL_HEIGHT * 0.5);
+        let image = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(160.0));
+        assert!(split_handle_hit_test(
+            Some(center + Vec2::new(radius * 0.95, 0.0)),
+            image,
+            center,
+            radius,
+            16.0
+        ));
+        assert!(!split_handle_hit_test(
+            Some(center + Vec2::splat(radius)),
+            image,
+            center,
+            radius,
+            16.0
+        ));
+        assert!(split_handle_hit_test(
+            Some(Pos2::new(center.x, image.top())),
+            image,
+            center,
+            radius,
+            16.0
+        ));
+        assert!(!split_handle_hit_test(None, image, center, radius, 16.0));
+    }
 
     #[test]
     fn shared_control_gallery_keeps_readable_type_and_equal_hit_heights() {

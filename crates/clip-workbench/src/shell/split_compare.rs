@@ -4,8 +4,7 @@
 //! with draggable dividing knob, contrast divider stroke, texture UV partitioning,
 //! and double-click center reset.
 
-use crate::hex_to_c32;
-use crate::ui_ext::{CONTROL_HEIGHT, MONO_FONT_SIZE, contrast_text_c32};
+use crate::ui_ext::{CONTROL_HEIGHT, paint_split_handle};
 use eframe::egui::{self, Color32, Pos2, Rect, Response, Stroke};
 use little_clip_core::palette::AppPalette;
 
@@ -41,9 +40,6 @@ impl<'a> SplitCompareView<'a> {
         img_rect: Rect,
         palette: &AppPalette,
     ) {
-        let b_low = hex_to_c32(&palette.colors.surface_recessed);
-        let base_c = hex_to_c32(&palette.harmonies.base);
-
         let split = (*self.split_pos).clamp(0.02, 0.98);
         let split_x = img_rect.min.x + split * img_rect.width();
 
@@ -87,36 +83,19 @@ impl<'a> SplitCompareView<'a> {
 
         // Draggable knob
         let knob_center = Pos2::new(split_x, img_rect.center().y);
-        let knob_fg = contrast_text_c32(
-            b_low,
-            Some(hex_to_c32(&palette.colors.text_primary)),
-            palette,
-        );
-        painter.circle(
-            knob_center,
-            CONTROL_HEIGHT / 2.0,
-            b_low,
-            Stroke::new(2.0_f32, base_c),
-        );
-        painter.text(
-            knob_center,
-            egui::Align2::CENTER_CENTER,
-            "◀ ▶",
-            egui::FontId::monospace(MONO_FONT_SIZE),
-            knob_fg,
-        );
+        let knob_radius = paint_split_handle(painter, knob_center, palette);
 
         // Drag and click interaction
         let ptr_pos = response
             .hover_pos()
             .or_else(|| response.interact_pointer_pos());
-        let near_divider = if let Some(pos) = ptr_pos {
-            (pos.x - split_x).abs() <= CONTROL_HEIGHT / 2.0
-                && pos.y >= img_rect.min.y
-                && pos.y <= img_rect.max.y
-        } else {
-            false
-        };
+        let near_divider = crate::ui_ext::split_handle_hit_test(
+            ptr_pos,
+            img_rect,
+            knob_center,
+            knob_radius,
+            CONTROL_HEIGHT / 2.0,
+        );
 
         if near_divider || *self.is_dragging {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);

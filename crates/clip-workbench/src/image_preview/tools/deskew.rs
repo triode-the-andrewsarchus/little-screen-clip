@@ -1,5 +1,37 @@
 use super::super::*;
 
+fn draw_corner_label(
+    painter: &egui::Painter,
+    point: Pos2,
+    corner: usize,
+    label: &str,
+    palette: &AppPalette,
+) {
+    let bounds = painter.clip_rect();
+    if !bounds.contains(point) {
+        return;
+    }
+    let (offset, anchor) = match corner {
+        0 => (Vec2::new(-8.0, -8.0), egui::Align2::RIGHT_BOTTOM),
+        1 => (Vec2::new(8.0, -8.0), egui::Align2::LEFT_BOTTOM),
+        2 => (Vec2::new(8.0, 8.0), egui::Align2::LEFT_TOP),
+        _ => (Vec2::new(-8.0, 8.0), egui::Align2::RIGHT_TOP),
+    };
+    crate::ui_ext::CanvasBadge {
+        heading: label,
+        value: None,
+        accent: None,
+    }
+    .paint(
+        painter,
+        point + offset,
+        anchor,
+        bounds,
+        bounds.width(),
+        palette,
+    );
+}
+
 #[derive(Clone)]
 pub struct DeskewState {
     /// Normalized corner coordinates in \[0.0, 1.0] range relative to image:
@@ -312,13 +344,7 @@ impl ImagePreviewState {
                     Stroke::new(2.0_f32, hex_to_c32(&palette.colors.surface_recessed)),
                 );
                 painter.circle_filled(pt, 6.0, hex_to_c32(&palette.diff_add));
-                painter.text(
-                    pt + Vec2::new(8.0, -18.0),
-                    egui::Align2::LEFT_TOP,
-                    labels[i],
-                    egui::FontId::proportional(11.0),
-                    hex_to_c32(&palette.colors.text_primary),
-                );
+                draw_corner_label(painter, pt, i, labels[i], palette);
             }
 
             // Draw connecting lines between placed points
@@ -498,19 +524,7 @@ impl ImagePreviewState {
                 );
                 painter.circle_filled(pt, handle_radius, handle_col);
 
-                let offset = match i {
-                    0 => Vec2::new(-24.0, -18.0),
-                    1 => Vec2::new(8.0, -18.0),
-                    2 => Vec2::new(8.0, 8.0),
-                    _ => Vec2::new(-24.0, 8.0),
-                };
-                painter.text(
-                    pt + offset,
-                    egui::Align2::LEFT_TOP,
-                    labels[i],
-                    egui::FontId::proportional(11.0),
-                    hex_to_c32(&palette.colors.text_primary),
-                );
+                draw_corner_label(painter, pt, i, labels[i], palette);
             }
 
             // 4. Centroid Guide Badge

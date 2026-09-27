@@ -723,36 +723,13 @@ impl ImagePreviewState {
 
         // 4. Draggable Center Knob
         let knob_center = Pos2::new(split_x, img_rect.center().y);
-        let knob_radius = 16.0;
-        let b_low = hex_to_c32(&palette.colors.surface_recessed);
-        let b_med = hex_to_c32(&palette.colors.surface_panel);
         let base_c = hex_to_c32(&palette.harmonies.base);
-        let knob_fg = contrast_text_c32(
-            b_low,
-            Some(hex_to_c32(&palette.colors.text_primary)),
-            palette,
-        );
-        painter.circle(
-            knob_center,
-            knob_radius,
-            b_low,
-            Stroke::new(2.0_f32, base_c),
-        );
-        painter.text(
-            knob_center,
-            egui::Align2::CENTER_CENTER,
-            "◀ ▶",
-            egui::FontId::monospace(10.0),
-            knob_fg,
-        );
+        let knob_radius = crate::ui_ext::paint_split_handle(painter, knob_center, palette);
 
         // 5. Draggable Handle Interaction
         let ptr_pos = response.hover_pos();
-        let near_divider = if let Some(pos) = ptr_pos {
-            (pos.x - split_x).abs() <= 16.0 && pos.y >= img_rect.min.y && pos.y <= img_rect.max.y
-        } else {
-            false
-        };
+        let near_divider =
+            crate::ui_ext::split_handle_hit_test(ptr_pos, img_rect, knob_center, knob_radius, 16.0);
 
         if near_divider || self.convert_state.is_dragging_split {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -780,43 +757,36 @@ impl ImagePreviewState {
         let orig_fmt = self.mime.replace("image/", "").to_uppercase();
         let conv_fmt = self.convert_state.target_format.extension().to_uppercase();
 
-        let before_badge_pos = Pos2::new(img_rect.min.x + 12.0, img_rect.min.y + 12.0);
-        let before_rect = Rect::from_min_size(before_badge_pos, Vec2::new(140.0, 24.0));
-        let badge_bg = hex_to_c32_alpha(&palette.colors.surface_recessed, 210);
-        let before_fg = contrast_text_c32(
-            b_low,
-            Some(hex_to_c32(&palette.colors.text_secondary)),
+        let bounds = img_rect.intersect(painter.clip_rect());
+        let gap = 8.0;
+        let max_width = ((bounds.width() - gap * 3.0) * 0.5).max(1.0);
+        let before_value = format!("{} · {}", orig_fmt, orig_size_str);
+        let after_value = format!("{} · {}", conv_fmt, conv_size_str);
+        crate::ui_ext::CanvasBadge {
+            heading: "BEFORE",
+            value: Some(&before_value),
+            accent: None,
+        }
+        .paint(
+            painter,
+            bounds.min + Vec2::splat(gap),
+            egui::Align2::LEFT_TOP,
+            bounds,
+            max_width,
             palette,
         );
-        painter.rect_filled(before_rect, Rounding::same(4.0), badge_bg);
-        painter.rect_stroke(
-            before_rect,
-            Rounding::same(4.0),
-            Stroke::new(1.0_f32, b_med),
-        );
-        painter.text(
-            before_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            format!("BEFORE: {} ({})", orig_fmt, orig_size_str),
-            egui::FontId::proportional(11.0),
-            before_fg,
-        );
-
-        let after_badge_pos = Pos2::new(img_rect.max.x - 152.0, img_rect.min.y + 12.0);
-        let after_rect = Rect::from_min_size(after_badge_pos, Vec2::new(140.0, 24.0));
-        let after_fg = contrast_text_c32(b_low, Some(base_c), palette);
-        painter.rect_filled(after_rect, Rounding::same(4.0), badge_bg);
-        painter.rect_stroke(
-            after_rect,
-            Rounding::same(4.0),
-            Stroke::new(1.0_f32, base_c),
-        );
-        painter.text(
-            after_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            format!("AFTER: {} ({})", conv_fmt, conv_size_str),
-            egui::FontId::proportional(11.0),
-            after_fg,
+        crate::ui_ext::CanvasBadge {
+            heading: "AFTER",
+            value: Some(&after_value),
+            accent: Some(base_c),
+        }
+        .paint(
+            painter,
+            Pos2::new(bounds.right() - gap, bounds.top() + gap),
+            egui::Align2::RIGHT_TOP,
+            bounds,
+            max_width,
+            palette,
         );
     }
 }
