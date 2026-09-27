@@ -396,7 +396,7 @@ impl ImagePreviewState {
                     .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(f_med),
             );
-            ui.add_space(8.0);
+            ui.add_space(crate::ui_ext::SPACE_SM);
 
             ui.label(
                 egui::RichText::new("SHAPES & TOOLS")
@@ -405,7 +405,7 @@ impl ImagePreviewState {
                     .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(f_med),
             );
-            ui.add_space(4.0);
+            ui.add_space(crate::ui_ext::SPACE_XS);
 
             let tools = [
                 MarkupToolType::Select,
@@ -434,7 +434,7 @@ impl ImagePreviewState {
 
             ui.add_space(14.0);
             ui.separator();
-            ui.add_space(6.0);
+            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
             ui.label(
                 egui::RichText::new("COLOR PALETTE")
@@ -443,7 +443,7 @@ impl ImagePreviewState {
                     .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(f_med),
             );
-            ui.add_space(6.0);
+            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
             // Swatches grid: 3 columns
             egui::Grid::new("markup_color_swatches")
@@ -478,7 +478,7 @@ impl ImagePreviewState {
                     }
                 });
 
-            ui.add_space(8.0);
+            ui.add_space(crate::ui_ext::SPACE_SM);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Custom:").size(crate::ui_ext::BODY_FONT_SIZE).color(f_med));
                 let mut custom_c = self.markup_state.active_color;
@@ -500,7 +500,7 @@ impl ImagePreviewState {
 
             ui.add_space(14.0);
             ui.separator();
-            ui.add_space(6.0);
+            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
             ui.label(
                 egui::RichText::new("SHORTCUTS")
@@ -531,7 +531,7 @@ impl ImagePreviewState {
                     .size(15.0)
                     .color(f_high),
             );
-            ui.add_space(8.0);
+            ui.add_space(crate::ui_ext::SPACE_SM);
 
             // ── Section 1: Properties ──
             ui.label(
@@ -541,7 +541,7 @@ impl ImagePreviewState {
                     .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(f_med),
             );
-            ui.add_space(4.0);
+            ui.add_space(crate::ui_ext::SPACE_XS);
 
             // Stroke Width Slider
             ui.horizontal(|ui| {
@@ -657,7 +657,7 @@ impl ImagePreviewState {
 
             ui.add_space(10.0);
             ui.separator();
-            ui.add_space(6.0);
+            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
             // ── Section 2: Layers / Placed Items List ──
             ui.horizontal(|ui| {
@@ -676,7 +676,7 @@ impl ImagePreviewState {
                     );
                 });
             });
-            ui.add_space(4.0);
+            ui.add_space(crate::ui_ext::SPACE_XS);
 
             let list_h = (ui.available_height() - 90.0).max(60.0);
             egui::ScrollArea::vertical()
@@ -821,9 +821,9 @@ impl ImagePreviewState {
                     }
                 });
 
-            ui.add_space(8.0);
+            ui.add_space(crate::ui_ext::SPACE_SM);
             ui.separator();
-            ui.add_space(6.0);
+            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
             // ── Section 3: Global Actions (Clear All & Flatten) ──
             ui.vertical_centered_justified(|ui| {
@@ -852,7 +852,7 @@ impl ImagePreviewState {
                     self.apply_flatten_markup();
                 }
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Clear All button
                 let clear_btn = crate::ui_ext::danger_button_icon(

@@ -144,7 +144,7 @@ impl ImagePreviewState {
                 ui.horizontal(|ui| {
                     if self.bg_removal_in_progress {
                         ui.add(egui::Spinner::new().size(16.0).color(base_c));
-                        ui.add_space(6.0);
+                        ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                         let st = self.bg_removal_status.as_deref().unwrap_or("Estimating depth map with Depth-Anything...");
                         ui.label(
                             egui::RichText::new(st)
@@ -170,7 +170,7 @@ impl ImagePreviewState {
                             self.run_depth_estimation();
                         }
 
-                        ui.add_space(8.0);
+                        ui.add_space(crate::ui_ext::SPACE_SM);
                         ui.label(
                             egui::RichText::new("Depth-Anything V2 • Metric Monocular Depth Estimation • CUDA")
                                 .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -179,7 +179,7 @@ impl ImagePreviewState {
                     }
 
                     if let Some(err) = &self.bg_removal_error {
-                        ui.add_space(8.0);
+                        ui.add_space(crate::ui_ext::SPACE_SM);
                         ui.label(
                             egui::RichText::new(format!("⚠ {}", err))
                                 .size(crate::ui_ext::BODY_FONT_SIZE)

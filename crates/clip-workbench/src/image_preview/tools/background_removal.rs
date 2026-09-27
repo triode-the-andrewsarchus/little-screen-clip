@@ -239,7 +239,7 @@ impl ImagePreviewState {
             .color(muted),
         );
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("SEGMENTATION")
@@ -260,7 +260,7 @@ impl ImagePreviewState {
                 );
             });
         });
-        ui.add_space(6.0);
+        ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
         ui.label(
             egui::RichText::new("What should remain?")
@@ -279,7 +279,7 @@ impl ImagePreviewState {
         prompt_response.on_hover_text(
             "Leave this blank for automatic background removal. Use a prompt to keep a specific subject or concept.",
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         ui.label(
             egui::RichText::new(if has_prompt {
                 "MultiMatte will isolate the described subject. Ctrl+Enter runs while editing."
@@ -290,7 +290,7 @@ impl ImagePreviewState {
             .color(muted),
         );
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         let run_label = if self.bg_removal_in_progress {
             "Removing background…"
         } else if has_prompt {
@@ -319,14 +319,14 @@ impl ImagePreviewState {
 
         ui.add_space(10.0);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("PROCESSING")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
 
         if self.bg_removal_in_progress {
             ui.horizontal(|ui| {
@@ -359,7 +359,7 @@ impl ImagePreviewState {
                     .strong()
                     .color(text),
             );
-            ui.add_space(4.0);
+            ui.add_space(crate::ui_ext::SPACE_XS);
             ui.label(
                 egui::RichText::new("Acceleration")
                     .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -375,7 +375,7 @@ impl ImagePreviewState {
         if let Some(error) = self.bg_removal_error.clone() {
             ui.add_space(10.0);
             ui.separator();
-            ui.add_space(8.0);
+            ui.add_space(crate::ui_ext::SPACE_SM);
             ui.label(
                 egui::RichText::new("BACKGROUND REMOVAL FAILED")
                     .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -390,7 +390,7 @@ impl ImagePreviewState {
             );
 
             if error.contains("nobg") || error.contains("pip") {
-                ui.add_space(6.0);
+                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                 let copy_install = crate::secondary_button("Copy setup command", surface, palette);
                 if ui
                     .add_sized(
@@ -406,16 +406,16 @@ impl ImagePreviewState {
             }
         }
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("OUTPUT")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
 
         ui.vertical(|ui| {
             let left = crate::secondary_button("Left hand", surface, palette);
@@ -438,7 +438,7 @@ impl ImagePreviewState {
         });
 
         if !self.undo_stack.is_empty() {
-            ui.add_space(6.0);
+            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
             let undo = crate::secondary_button("Undo last edit (Ctrl+Z)", surface, palette);
             if ui
                 .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], undo)

@@ -67,7 +67,7 @@ impl ImagePreviewState {
                             .color(hex_to_c32(&palette.harmonies.base)),
                     );
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
 
                     // Rotate CCW
                     let ccw_btn = crate::ui_ext::secondary_button_icon(
@@ -114,7 +114,7 @@ impl ImagePreviewState {
                         self.rotate_180();
                     }
 
-                    ui.add_space(12.0);
+                    ui.add_space(crate::ui_ext::SPACE_MD);
                     ui.label(
                         egui::RichText::new("Mirror:")
                             .size(crate::ui_ext::BODY_FONT_SIZE)

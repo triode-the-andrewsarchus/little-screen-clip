@@ -229,7 +229,7 @@ impl ImagePreviewState {
 
         ui.add_space(10.0);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("DOMINANT COLORS")
@@ -245,10 +245,10 @@ impl ImagePreviewState {
                 );
             });
         });
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
 
         if self.palette_state.extracted_colors.is_empty() {
-            ui.add_space(8.0);
+            ui.add_space(crate::ui_ext::SPACE_SM);
             ui.label(
                 egui::RichText::new("No palette extracted yet.")
                     .size(crate::ui_ext::BODY_FONT_SIZE)

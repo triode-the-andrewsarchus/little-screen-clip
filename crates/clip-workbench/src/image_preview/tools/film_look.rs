@@ -1026,7 +1026,7 @@ impl ImagePreviewState {
                             .on_hover_text("Generating thumbnails in background…");
                         }
                     });
-                    ui.add_space(4.0);
+                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                     // Search box
                     ui.add_sized(
@@ -1035,7 +1035,7 @@ impl ImagePreviewState {
                             .hint_text("Filter stocks...")
                             .desired_width(left_w - 24.0),
                     );
-                    ui.add_space(4.0);
+                    ui.add_space(crate::ui_ext::SPACE_XS);
                     ui.separator();
                     ui.add_space(2.0);
 
@@ -1059,7 +1059,7 @@ impl ImagePreviewState {
                                 // Brand separator heading
                                 if entry.brand != current_brand {
                                     if !current_brand.is_empty() {
-                                        ui.add_space(6.0);
+                                        ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                                     }
                                     ui.label(
                                         egui::RichText::new(entry.brand.to_uppercase())
@@ -1316,7 +1316,7 @@ impl ImagePreviewState {
                                     .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(base_c),
                             );
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                             let styles = [
                                 (
@@ -1359,9 +1359,9 @@ impl ImagePreviewState {
                                 ui.add_space(2.0);
                             }
 
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
                             ui.separator();
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                             // 2. Optical Effects: Halation, Vignette, Light Leak, Grain
                             ui.label(
@@ -1370,7 +1370,7 @@ impl ImagePreviewState {
                                     .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(base_c),
                             );
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                             let full_w = (right_w - 32.0).max(100.0);
                             let opt_slider_w = (full_w - 68.0).max(60.0);
@@ -1387,7 +1387,7 @@ impl ImagePreviewState {
                             ) {
                                 self.film_sim_state.mark_dirty();
                             }
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                             if render_context_slider(
                                 ui,
@@ -1401,7 +1401,7 @@ impl ImagePreviewState {
                             ) {
                                 self.film_sim_state.mark_dirty();
                             }
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                             ui.label(
                                 egui::RichText::new("Light Leak")
@@ -1427,7 +1427,7 @@ impl ImagePreviewState {
                                         }
                                     }
                                 });
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                             let mut grain_on = self.film_sim_state.enable_grain;
                             if ui
@@ -1443,9 +1443,9 @@ impl ImagePreviewState {
                                 self.film_sim_state.mark_dirty();
                             }
 
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
                             ui.separator();
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                             // 3. Stock metadata
                             let idx = self
@@ -1459,7 +1459,7 @@ impl ImagePreviewState {
                                     .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(base_c),
                             );
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                             let stock_built = (entry.build)();
                             egui::Grid::new("film_sim_stock_meta_grid")
@@ -1530,7 +1530,7 @@ impl ImagePreviewState {
                                 });
 
                             if self.film_sim_state.last_render_duration_ms > 0 {
-                                ui.add_space(6.0);
+                                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                                 ui.label(
                                     egui::RichText::new(format!(
                                         "⏱ {:.2}s",
@@ -1698,9 +1698,9 @@ impl ImagePreviewState {
                                         }
                                     }
 
-                                    ui.add_space(6.0);
+                                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                                     ui.separator();
-                                    ui.add_space(6.0);
+                                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                                     // Auto Levels
                                     let al_btn = crate::ui_ext::secondary_button_icon(
@@ -1723,7 +1723,7 @@ impl ImagePreviewState {
                             self.show_toast("Auto levels applied");
                         }
 
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // Auto Enhance
                                     let ae_btn = crate::ui_ext::secondary_button_icon(
@@ -1773,7 +1773,7 @@ impl ImagePreviewState {
                                 self.apply_film_sim();
                             }
 
-                                            ui.add_space(4.0);
+                                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                                             let reset_btn = crate::ui_ext::secondary_button_icon(
                                                 Some(Icon::RotateCcw),
@@ -1808,7 +1808,7 @@ impl ImagePreviewState {
                                                 );
                                             }
 
-                                            ui.add_space(4.0);
+                                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                                             if !self.undo_stack.is_empty() {
                                                 let undo_fg = contrast_text_c32(

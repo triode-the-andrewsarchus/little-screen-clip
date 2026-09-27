@@ -125,7 +125,7 @@ impl ImagePreviewState {
                             .color(hex_to_c32(&palette.colors.text_secondary)),
                     );
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
 
                     // Burn / Apply Redactions button
                     let has_boxes = !self.redaction_state.boxes.is_empty();
@@ -170,7 +170,7 @@ impl ImagePreviewState {
                         self.clear_all_redactions();
                     }
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
 
                     // Strip Metadata / EXIF button
                     let has_meta = self.metadata.is_some();

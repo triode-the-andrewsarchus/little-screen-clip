@@ -385,7 +385,7 @@ impl ImagePreviewState {
                             .color(hex_to_c32(&palette.harmonies.base)),
                     );
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
                     ui.label(
                         egui::RichText::new("Ratio:")
                             .size(crate::ui_ext::BODY_FONT_SIZE)

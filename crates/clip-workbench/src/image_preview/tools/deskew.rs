@@ -171,7 +171,7 @@ impl ImagePreviewState {
                             .color(hex_to_c32(&palette.harmonies.base)),
                     );
 
-                    ui.add_space(4.0);
+                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                     // 1. Click 4 Points toggle button
                     let is_placing = self.deskew_state.is_clicking_points;
@@ -199,9 +199,9 @@ impl ImagePreviewState {
                         }
                     }
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
                     ui.separator();
-                    ui.add_space(4.0);
+                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                     // 2. Cropping mode buttons (Crop to Quad vs Minimal Crop)
                     ui.label(
@@ -240,7 +240,7 @@ impl ImagePreviewState {
                         self.deskew_state.crop_mode = DeskewCropMode::MinimalCrop;
                     }
 
-                    ui.add_space(6.0);
+                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                     // 3. Target dimensions calculation preview
                     let w_f = self.current_rgba.width() as f32;
@@ -270,7 +270,7 @@ impl ImagePreviewState {
                         palette,
                     );
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
 
                     // 4. Apply Deskew button
                     let apply_bg = hex_to_c32(&palette.diff_add);

@@ -25,7 +25,7 @@ fn render_creative_fx_mask_loading(ui: &mut egui::Ui, label: &str, color: Color3
                 .size(crate::ui_ext::CONTROL_ICON_SIZE)
                 .color(color),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         ui.label(
             egui::RichText::new(label)
                 .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -601,7 +601,7 @@ impl ImagePreviewState {
                 .strong()
                 .color(f_high),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
 
         if depth_loading {
             render_creative_fx_mask_loading(
@@ -691,7 +691,7 @@ impl ImagePreviewState {
 
         let b_med = hex_to_c32(&palette.colors.surface_panel);
         let f_high = hex_to_c32(&palette.colors.text_primary);
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         let invert_text = match (config.source, config.invert) {
             (CreativeFxMaskSource::DepthMap, true) => "⇄ Invert Mask: ON (Far / Background)",
             (CreativeFxMaskSource::DepthMap, false) => "⇄ Invert Mask: OFF (Near / Foreground)",
@@ -731,7 +731,7 @@ impl ImagePreviewState {
             return;
         }
 
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         let mut threshold = config.threshold;
         if render_context_slider(
             ui,
@@ -859,9 +859,9 @@ impl ImagePreviewState {
                             .on_hover_text("Generating preview thumbnails…");
                         }
                     });
-                    ui.add_space(4.0);
+                    ui.add_space(crate::ui_ext::SPACE_XS);
                     ui.separator();
-                    ui.add_space(4.0);
+                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                     egui::ScrollArea::vertical()
                         .id_source("creative_fx_list_scroll")
@@ -905,7 +905,7 @@ impl ImagePreviewState {
                                                     b_med,
                                                 );
                                             }
-                                            ui.add_space(4.0);
+                                            ui.add_space(crate::ui_ext::SPACE_XS);
                                             ui.vertical(|ui| {
                                                 ui.label(
                                                     egui::RichText::new(fx.name())
@@ -934,7 +934,7 @@ impl ImagePreviewState {
                                     self.creative_fx_state.selected_fx = *fx;
                                     self.creative_fx_state.mark_dirty();
                                 }
-                                ui.add_space(4.0);
+                                ui.add_space(crate::ui_ext::SPACE_XS);
                             }
                         });
                 });
@@ -1119,9 +1119,9 @@ impl ImagePreviewState {
                                     .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(f_low),
                             );
-                            ui.add_space(6.0);
+                            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                             ui.separator();
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                             // ── Presets Selector ──
                             ui.label(
@@ -1182,9 +1182,9 @@ impl ImagePreviewState {
                                 ui.add_space(2.0);
                             }
 
-                            ui.add_space(6.0);
+                            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                             ui.separator();
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                             // ── Parameter Controls ──
                             ui.label(
@@ -1193,7 +1193,7 @@ impl ImagePreviewState {
                                     .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .color(base_c),
                             );
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                             match cur_fx {
                                 CreativeFxType::LensAberration => {
@@ -1212,7 +1212,7 @@ impl ImagePreviewState {
                                             "Custom".to_string();
                                         self.creative_fx_state.mark_dirty();
                                     }
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // Falloff: 0..100 (0: entire image, 100: edges only)
                                     if render_context_slider(
@@ -1229,7 +1229,7 @@ impl ImagePreviewState {
                                             "Custom".to_string();
                                         self.creative_fx_state.mark_dirty();
                                     }
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // Color Balance: -50..+50 (-50: red/blue, +50: blue/yellow)
                                     if render_context_slider(
@@ -1290,7 +1290,7 @@ impl ImagePreviewState {
                                             }
                                         }
                                     });
-                                    ui.add_space(6.0);
+                                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                                     let names = self
                                         .creative_fx_state
@@ -1371,7 +1371,7 @@ impl ImagePreviewState {
                                                 "Custom".to_string();
                                             self.creative_fx_state.mark_dirty();
                                         }
-                                        ui.add_space(4.0);
+                                        ui.add_space(crate::ui_ext::SPACE_XS);
                                     }
 
                                     // Overlap crop window calculation
@@ -1441,7 +1441,7 @@ impl ImagePreviewState {
                                             }
                                         }
                                     });
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // Criteria
                                     ui.label(
@@ -1485,7 +1485,7 @@ impl ImagePreviewState {
                                             }
                                         }
                                     });
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // Order
                                     ui.label(
@@ -1526,7 +1526,7 @@ impl ImagePreviewState {
                                             }
                                         }
                                     });
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // Min Threshold
                                     if render_context_slider(
@@ -1636,7 +1636,7 @@ impl ImagePreviewState {
                                             "Custom".to_string();
                                         self.creative_fx_state.mark_dirty();
                                     }
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // Paper Tint
                                     ui.label(
@@ -1674,9 +1674,9 @@ impl ImagePreviewState {
                                             }
                                         }
                                     });
-                                    ui.add_space(6.0);
+                                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                                     ui.separator();
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // Plate Misregistration Offsets
                                     ui.label(
@@ -1867,7 +1867,7 @@ impl ImagePreviewState {
                                             }
                                         }
                                     });
-                                    ui.add_space(6.0);
+                                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                                     // Dither Method selection
                                     ui.label(
@@ -1905,7 +1905,7 @@ impl ImagePreviewState {
                                             }
                                         }
                                     });
-                                    ui.add_space(6.0);
+                                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                                     // Pixel Scale selection (1x..4x)
                                     ui.label(
@@ -1945,7 +1945,7 @@ impl ImagePreviewState {
                                             }
                                         }
                                     });
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // Dither Strength
                                     if render_context_slider(
@@ -2176,7 +2176,7 @@ impl ImagePreviewState {
                                             "Custom".to_string();
                                         self.creative_fx_state.mark_dirty();
                                     }
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // ── 2. Chrominance & YIQ ──
                                     ui.separator();
@@ -2290,7 +2290,7 @@ impl ImagePreviewState {
                                             "Custom".to_string();
                                         self.creative_fx_state.mark_dirty();
                                     }
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // ── 3. Noise & Static ──
                                     ui.separator();
@@ -2381,7 +2381,7 @@ impl ImagePreviewState {
                                             "Custom".to_string();
                                         self.creative_fx_state.mark_dirty();
                                     }
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // ── 4. VHS Magnetic Tape Simulation ──
                                     ui.separator();
@@ -2593,7 +2593,7 @@ impl ImagePreviewState {
                                             "Custom".to_string();
                                         self.creative_fx_state.mark_dirty();
                                     }
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // Detail Scale: -50..+50
                                     if render_context_slider(
@@ -2610,7 +2610,7 @@ impl ImagePreviewState {
                                             "Custom".to_string();
                                         self.creative_fx_state.mark_dirty();
                                     }
-                                    ui.add_space(4.0);
+                                    ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     // Edge Protection: 0..100
                                     if render_context_slider(
@@ -2634,17 +2634,17 @@ impl ImagePreviewState {
                             }
 
                             // ── Masking Controls ──
-                            ui.add_space(8.0);
+                            ui.add_space(crate::ui_ext::SPACE_SM);
                             ui.separator();
-                            ui.add_space(6.0);
+                            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                             self.render_creative_fx_mask_sources(ui, ctx, palette, full_w);
                             self.render_creative_fx_mask_options(
                                 ui, palette, cur_fx, full_w, slider_w,
                             );
 
-                            ui.add_space(8.0);
+                            ui.add_space(crate::ui_ext::SPACE_SM);
                             ui.separator();
-                            ui.add_space(6.0);
+                            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                             // ── Action Buttons ──
                             let apply_fg = contrast_text_c32(diff_add, Some(f_high), palette);
@@ -2670,7 +2670,7 @@ impl ImagePreviewState {
                                 self.apply_creative_fx();
                             }
 
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                             let reset_fg = contrast_text_c32(b_med, Some(f_med), palette);
                             let reset_btn = egui::Button::new(
@@ -2724,7 +2724,7 @@ impl ImagePreviewState {
                             }
 
                             if self.creative_fx_state.last_render_duration_ms > 0 {
-                                ui.add_space(6.0);
+                                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                                 ui.label(
                                     egui::RichText::new(format!(
                                         "⏱ {:.2}s",

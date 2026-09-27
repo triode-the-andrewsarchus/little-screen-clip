@@ -775,9 +775,9 @@ impl ImagePreviewState {
                 .movable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.add_space(4.0);
+                    ui.add_space(crate::ui_ext::SPACE_XS);
                     ui.label(egui::RichText::new("Enter destination file path:").strong());
-                    ui.add_space(4.0);
+                    ui.add_space(crate::ui_ext::SPACE_XS);
                     let path_field = ui.add_sized(
                         [
                             ui.available_width().clamp(260.0, 440.0),
@@ -789,7 +789,7 @@ impl ImagePreviewState {
                         path_field.request_focus();
                         self.fallback_save_needs_focus = false;
                     }
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
                     ui.horizontal(|ui| {
                         if ui
                             .add(crate::ui_ext::action_button_icon(
@@ -1166,7 +1166,7 @@ impl ImagePreviewState {
                 // 1. TOP HEADER & ESCAPE HATCHES
                 self.render_header(ui, ctx, palette, close);
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // 2. TOOLBAR (Mode selection & Viewport controls)
                 self.render_toolbar(ui, palette);
@@ -1174,7 +1174,7 @@ impl ImagePreviewState {
                 // Tool modules own their compact or panel-based controls.
                 self.render_active_tool_controls(ui, ctx, palette);
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // 3. MAIN INTERACTIVE VIEWPORT
                 self.render_active_tool_workspace(ui, ctx, palette);
@@ -1254,7 +1254,7 @@ impl ImagePreviewState {
                 clicked_copy = true;
             }
 
-            ui.add_space(4.0);
+            ui.add_space(crate::ui_ext::SPACE_XS);
 
             // Save As button
             let save_btn = crate::ui_ext::action_button_icon(

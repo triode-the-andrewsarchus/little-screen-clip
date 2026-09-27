@@ -112,7 +112,7 @@ impl ImagePreviewState {
                         self.run_barcode_scan();
                     }
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
                     let count = self.barcode_state.detections.len();
                     let (badge_txt, fg, bg) = if self.barcode_state.is_scanning {
                         ("Scanning image…".to_string(), base_c, b_low)
@@ -132,7 +132,7 @@ impl ImagePreviewState {
                     };
                     chip_badge(ui, &badge_txt, fg, bg);
 
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
                     ui.label(
                         egui::RichText::new("QR • DataMatrix • Aztec • PDF417 • Code 128 • EAN-13")
                             .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -167,7 +167,7 @@ impl ImagePreviewState {
                 });
 
                 if !self.barcode_state.detections.is_empty() {
-                    ui.add_space(4.0);
+                    ui.add_space(crate::ui_ext::SPACE_XS);
                     egui::ScrollArea::horizontal()
                         .max_height(75.0)
                         .show(ui, |ui| {

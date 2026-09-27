@@ -347,7 +347,7 @@ impl ImagePreviewState {
                 );
             });
         });
-        ui.add_space(6.0);
+        ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
         let copy_hex = crate::action_button("Copy current hex", accent, palette);
         if ui
             .add_sized(
@@ -359,9 +359,9 @@ impl ImagePreviewState {
             self.copy_color_to_clipboard(current, ctx);
         }
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("PICKED COLORS")
@@ -379,7 +379,7 @@ impl ImagePreviewState {
         });
 
         if self.pick_color_state.picked_colors.is_empty() {
-            ui.add_space(8.0);
+            ui.add_space(crate::ui_ext::SPACE_SM);
             ui.label(
                 egui::RichText::new("No colors picked yet.")
                     .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -389,7 +389,7 @@ impl ImagePreviewState {
             return;
         }
 
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         let copy_all = crate::secondary_button("Copy all colors", surface, palette);
         if ui
             .add_sized(

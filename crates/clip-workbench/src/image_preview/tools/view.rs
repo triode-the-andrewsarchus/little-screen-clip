@@ -120,9 +120,9 @@ impl ImagePreviewState {
                     // Expanded Metadata Drawer
                     if self.show_metadata_drawer {
                         if let Some(meta) = &self.metadata {
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
                             ui.separator();
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
 
                             egui::ScrollArea::vertical()
                                 .max_height(140.0)

@@ -295,7 +295,7 @@ impl ImagePreviewState {
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .color(muted),
         );
-        ui.add_space(6.0);
+        ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
         ui.allocate_ui_with_layout(
             Vec2::new(ui.available_width(), crate::ui_ext::CONTROL_HEIGHT),
             egui::Layout::left_to_right(egui::Align::Center),
@@ -324,14 +324,14 @@ impl ImagePreviewState {
             },
         );
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.label(
             egui::RichText::new("OUTPUT FORMAT")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
 
         let formats = [
             (ConvertTargetFormat::Png, "PNG"),
@@ -372,16 +372,16 @@ impl ImagePreviewState {
             }
         });
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("ENCODING")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
 
         match self.convert_state.target_format {
             ConvertTargetFormat::Png => {
@@ -499,16 +499,16 @@ impl ImagePreviewState {
             }
         }
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("FILE SIZE")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
 
         let original_size = self.file_size_bytes;
         let converted_size = self.convert_state.encoded_bytes.len();
@@ -579,7 +579,7 @@ impl ImagePreviewState {
             );
         }
 
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("Drag the canvas divider to compare before and after.")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -602,7 +602,7 @@ impl ImagePreviewState {
             self.open_save_dialog_with_ext(extension);
         }
 
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         let apply = crate::secondary_button("Apply to canvas (Enter)", success, palette);
         if ui
             .add_enabled_ui(output_ready, |ui| {
@@ -615,14 +615,14 @@ impl ImagePreviewState {
             self.apply_converted_to_canvas();
         }
 
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("COPY TO SLOT")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         let slot_width = ((ui.available_width() - 6.0) * 0.5).max(70.0);
         ui.horizontal(|ui| {
             let left = crate::secondary_button("Left hand", surface, palette);

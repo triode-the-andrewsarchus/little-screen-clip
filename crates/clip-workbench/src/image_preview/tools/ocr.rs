@@ -358,14 +358,14 @@ impl ImagePreviewState {
             .color(muted),
         );
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.label(
             egui::RichText::new("OCR ENGINE")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         let engine_width = ((ui.available_width() - 6.0) * 0.5).max(76.0);
         ui.horizontal_wrapped(|ui| {
             for (engine, label, tooltip) in [
@@ -407,7 +407,7 @@ impl ImagePreviewState {
                 }
             }
         });
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         ui.label(
             egui::RichText::new(match self.ocr_state.engine {
                 OcrEngine::GlmOcr => "Best for layouts, handwriting, and contextual recognition.",
@@ -417,7 +417,7 @@ impl ImagePreviewState {
             .color(muted),
         );
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.label(
             egui::RichText::new("Recognition prompt")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -434,7 +434,7 @@ impl ImagePreviewState {
                 .desired_rows(5),
         )
         .on_hover_text("Tell the OCR engine what to recognize or how to structure its response");
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         ui.label(
             egui::RichText::new(
                 "Leave blank for general text recognition. Ctrl+Enter runs while editing.",
@@ -443,7 +443,7 @@ impl ImagePreviewState {
             .color(muted),
         );
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         if self.ocr_state.in_progress {
             let cancel = crate::danger_button("Cancel OCR (Esc)", danger, palette);
             if ui
@@ -469,14 +469,14 @@ impl ImagePreviewState {
 
         ui.add_space(10.0);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("PROCESSING")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         if self.ocr_state.in_progress {
             ui.horizontal(|ui| {
                 ui.add(egui::Spinner::new().size(14.0).color(accent));
@@ -526,7 +526,7 @@ impl ImagePreviewState {
         if let Some(error) = &self.ocr_state.error {
             ui.add_space(10.0);
             ui.separator();
-            ui.add_space(8.0);
+            ui.add_space(crate::ui_ext::SPACE_SM);
             ui.label(
                 egui::RichText::new("OCR FAILED")
                     .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -566,7 +566,7 @@ impl ImagePreviewState {
                 .color(muted),
         );
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("Characters")
@@ -635,7 +635,7 @@ impl ImagePreviewState {
             self.show_toast("Extracted text copied to clipboard");
         }
 
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         let slot_width = ((ui.available_width() - 6.0) * 0.5).max(82.0);
         let output_for_slots = self.ocr_state.extracted_text.clone();
         ui.horizontal_wrapped(|ui| {
@@ -664,9 +664,9 @@ impl ImagePreviewState {
             }
         });
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("RECOGNIZED TEXT")
@@ -689,7 +689,7 @@ impl ImagePreviewState {
                 });
             }
         });
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
 
         let editor_height = (ui.clip_rect().height() * 0.55).clamp(240.0, 520.0);
         egui::ScrollArea::vertical()

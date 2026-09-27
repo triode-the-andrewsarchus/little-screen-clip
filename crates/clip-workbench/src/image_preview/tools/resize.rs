@@ -724,7 +724,7 @@ impl ImagePreviewState {
         let success = hex_to_c32(&palette.diff_add);
 
         ui.label(egui::RichText::new("Resize").strong().color(accent));
-        ui.add_space(6.0);
+        ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
         // Stable, equal-width mode selector at the top of the rail.
         let mode_button_width = ((ui.available_width() - 6.0) * 0.5).max(70.0);
@@ -761,9 +761,9 @@ impl ImagePreviewState {
             }
         });
 
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
 
         match self.resize_state.sub_tab {
             ResizeSubTab::Pixels => {
@@ -773,7 +773,7 @@ impl ImagePreviewState {
                         .strong()
                         .color(text),
                 );
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Width and height stay together as one WxH control.
                 ui.horizontal(|ui| {
@@ -826,7 +826,7 @@ impl ImagePreviewState {
                     });
                 });
 
-                ui.add_space(6.0);
+                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                 let lock_icon = if self.resize_state.lock_aspect {
                     Icon::Lock
                 } else {
@@ -858,14 +858,14 @@ impl ImagePreviewState {
                     }
                 }
 
-                ui.add_space(12.0);
+                ui.add_space(crate::ui_ext::SPACE_MD);
                 ui.label(
                     egui::RichText::new("SCALE PRESET")
                         .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
                         .color(text),
                 );
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
                 let current = (self.current_rgba.width(), self.current_rgba.height());
                 let presets = [
                     ("25%", 0.25_f32),
@@ -891,7 +891,7 @@ impl ImagePreviewState {
                     }
                 });
 
-                ui.add_space(12.0);
+                ui.add_space(crate::ui_ext::SPACE_MD);
                 ui.label(
                     egui::RichText::new("RESAMPLING")
                         .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -940,7 +940,7 @@ impl ImagePreviewState {
                         .strong()
                         .color(text),
                 );
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 let presets = [
                     ("250 KB", 250.0_f32, false),
@@ -967,7 +967,7 @@ impl ImagePreviewState {
                     }
                 });
 
-                ui.add_space(8.0);
+                ui.add_space(crate::ui_ext::SPACE_SM);
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("Custom")
@@ -994,7 +994,7 @@ impl ImagePreviewState {
                     }
                 });
 
-                ui.add_space(12.0);
+                ui.add_space(crate::ui_ext::SPACE_MD);
                 ui.label(
                     egui::RichText::new("OUTPUT FORMAT")
                         .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -1052,9 +1052,9 @@ impl ImagePreviewState {
                         );
                     });
                 } else if let Some(result) = self.resize_state.last_result.clone() {
-                    ui.add_space(12.0);
+                    ui.add_space(crate::ui_ext::SPACE_MD);
                     ui.separator();
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
                     ui.label(
                         egui::RichText::new("OPTIMIZED RESULT")
                             .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -1081,7 +1081,7 @@ impl ImagePreviewState {
                         .size(crate::ui_ext::BODY_FONT_SIZE)
                         .color(text),
                     );
-                    ui.add_space(6.0);
+                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                     let apply = crate::action_button("Apply to canvas", success, palette);
                     if ui
@@ -1102,9 +1102,9 @@ impl ImagePreviewState {
         }
 
         if !self.undo_stack.is_empty() {
-            ui.add_space(12.0);
+            ui.add_space(crate::ui_ext::SPACE_MD);
             ui.separator();
-            ui.add_space(6.0);
+            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
             let undo = crate::secondary_button("Undo resize (Ctrl+Z)", surface, palette);
             if ui
                 .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], undo)

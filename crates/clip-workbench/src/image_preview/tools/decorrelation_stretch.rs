@@ -118,14 +118,14 @@ impl ImagePreviewState {
                 .color(muted),
         );
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.label(
             egui::RichText::new("PRESET")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         let preset_width =
             crate::ui_ext::wrapped_equal_button_width(ui, &["NASA / ASTER", "Preserve"], false, 2);
         ui.horizontal_wrapped(|ui| {
@@ -172,16 +172,16 @@ impl ImagePreviewState {
             }
         });
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("COLOR MODEL")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         let mode_width =
             crate::ui_ext::wrapped_equal_button_width(ui, &["Correlation", "Covariance"], false, 2);
         ui.horizontal_wrapped(|ui| {
@@ -224,7 +224,7 @@ impl ImagePreviewState {
             }
         });
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.label(
             egui::RichText::new("OUTPUT DISTRIBUTION")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -278,7 +278,7 @@ impl ImagePreviewState {
             }
         }
 
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         let mut preserve_sigma =
             matches!(self.dcs_state.params.target_sigma, TargetValue::Preserve);
         if ui
@@ -327,16 +327,16 @@ impl ImagePreviewState {
             }
         }
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("SAMPLING & CLIPPING")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(text),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
 
         ui.label(
             egui::RichText::new("Highlight clipping")
@@ -367,7 +367,7 @@ impl ImagePreviewState {
                 }
             });
 
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("Statistics sampling")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -399,14 +399,14 @@ impl ImagePreviewState {
                 }
             });
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         let hold = crate::secondary_button("Hold to view original", surface, palette);
         let hold_response = ui
             .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], hold)
             .on_hover_text("Press and hold to temporarily hide the stretch");
         self.dcs_state.is_holding_original = hold_response.is_pointer_button_down_on();
 
-        ui.add_space(6.0);
+        ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
         let apply = crate::action_button("Apply stretch (Enter)", success, palette);
         if ui
             .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], apply)
@@ -416,7 +416,7 @@ impl ImagePreviewState {
             self.apply_decorrelation_stretch();
         }
 
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         let refresh = crate::secondary_button("Recompute preview", surface, palette);
         if ui
             .add_sized(
@@ -430,7 +430,7 @@ impl ImagePreviewState {
         }
 
         if !self.undo_stack.is_empty() {
-            ui.add_space(4.0);
+            ui.add_space(crate::ui_ext::SPACE_XS);
             let undo = crate::secondary_button("Undo last edit (Ctrl+Z)", surface, palette);
             if ui
                 .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], undo)
@@ -471,7 +471,7 @@ impl ImagePreviewState {
 
         let (Some(stats), Some(transform)) = (&self.dcs_state.stats, &self.dcs_state.transform)
         else {
-            ui.add_space(12.0);
+            ui.add_space(crate::ui_ext::SPACE_MD);
             ui.label(
                 egui::RichText::new("No analysis is available yet.")
                     .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -487,14 +487,14 @@ impl ImagePreviewState {
             self.dcs_state.params.stride
         };
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.label(
             egui::RichText::new("OVERVIEW")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(f_med),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         for (label, value) in [
             ("Samples", format!("{} px", stats.sample_count)),
             ("Compute", format!("{} ms", self.dcs_state.last_duration_ms)),
@@ -524,16 +524,16 @@ impl ImagePreviewState {
             });
         }
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("CHANNEL STATISTICS")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .strong()
                 .color(f_med),
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         for (index, band) in ["R", "G", "B"].into_iter().enumerate() {
             ui.horizontal_wrapped(|ui| {
                 ui.label(
@@ -557,9 +557,9 @@ impl ImagePreviewState {
             });
         }
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("CORRELATION MATRIX")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -591,9 +591,9 @@ impl ImagePreviewState {
             f_high,
         );
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("PRINCIPAL COMPONENTS")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -618,7 +618,7 @@ impl ImagePreviewState {
             });
         }
 
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("EIGENVECTORS")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -634,9 +634,9 @@ impl ImagePreviewState {
             f_high,
         );
 
-        ui.add_space(12.0);
+        ui.add_space(crate::ui_ext::SPACE_MD);
         ui.separator();
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
         ui.label(
             egui::RichText::new("RGB TRANSFORM")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -651,7 +651,7 @@ impl ImagePreviewState {
                 .map(|row| format!("[{:>6.3}  {:>6.3}  {:>6.3}]", row[0], row[1], row[2])),
             f_high,
         );
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         ui.label(
             egui::RichText::new(format!(
                 "Offset  [{:.1}, {:.1}, {:.1}]",
@@ -663,9 +663,9 @@ impl ImagePreviewState {
         );
 
         if let Some(limits) = transform.tol_limits {
-            ui.add_space(12.0);
+            ui.add_space(crate::ui_ext::SPACE_MD);
             ui.separator();
-            ui.add_space(8.0);
+            ui.add_space(crate::ui_ext::SPACE_SM);
             ui.label(
                 egui::RichText::new("CLIPPING LIMITS")
                     .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -695,9 +695,9 @@ impl ImagePreviewState {
         }
 
         if !transform.warnings.is_empty() {
-            ui.add_space(12.0);
+            ui.add_space(crate::ui_ext::SPACE_MD);
             ui.separator();
-            ui.add_space(8.0);
+            ui.add_space(crate::ui_ext::SPACE_SM);
             ui.label(
                 egui::RichText::new("DIAGNOSTICS")
                     .size(crate::ui_ext::BODY_FONT_SIZE)
