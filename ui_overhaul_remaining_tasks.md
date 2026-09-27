@@ -127,13 +127,13 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **H1.4a Reserve compact header row for right actions.** Shared studio header clips long titles before measured badges; headless 1177/1766/2500-point checks show labels/actions do not overlap.
   - [x] **H1.4b Order Image Studio Save As and Copy beside Close.**
   - [x] **H1.4c Align audio control-row labels with 36-point controls.** Vertical-center render test passes.
-  - [ ] **H1.4d [Primary] Live-check Image Studio button and row layout at compact host size.**
-  - [ ] **H1.4e [Primary] Live-check Image Studio button and row layout at standard host size.**
-  - [ ] **H1.4f [Primary] Live-check Image Studio button and row layout at wide host size.**
-  - [ ] **H1.4g [Primary] Live-check audio mode and transport layout at compact host size.**
-  - [ ] **H1.4h [Primary] Live-check audio mode and transport layout at standard host size.**
-  - [ ] **H1.4i [Primary] Live-check audio mode and transport layout at wide host size.**
-  - [ ] **H1.4j [Primary] Confirm every image tool remains directly accessible and toolbar wrapping does not strand labels or hide common actions.**
+  - [x] **H1.4d [Primary] Live-check Image Studio button and row layout at compact host size.** Isolated 1280×720 logical / 150% Light capture shows title/badges/actions on one slim header row, with every tool directly visible across two toolbar rows.
+  - [x] **H1.4e [Primary] Live-check Image Studio button and row layout at standard host size.** Isolated 1920×1080 logical / 100% Dark capture confirms right-aligned header actions and two non-overlapping toolbar rows.
+  - [x] **H1.4f [Primary] Live-check Image Studio button and row layout at wide host size.** Isolated 3440×1440 logical / 100% Light capture keeps header actions right-aligned and tool controls in two rows.
+  - [x] **H1.4g [Primary] Live-check audio mode and transport layout at compact host size.** Isolated 1280×720 logical / 150% Dark capture keeps four equal mode tabs, transport and export controls readable, and footer clear of the timeline.
+  - [x] **H1.4h [Primary] Live-check audio mode and transport layout at standard host size.** Isolated 1920×1080 logical / 100% Light capture shows the transport/export controls wrapping to a second row without collisions; mode tabs stay aligned.
+  - [x] **H1.4i [Primary] Live-check audio mode and transport layout at wide host size.** Isolated 3440×1440 logical / 100% Dark capture fits the transport/export controls in one row with the footer clear of the timeline.
+  - [x] **H1.4j [Primary] Confirm every image tool remains directly accessible and toolbar wrapping does not strand labels or hide common actions.** Compact, standard, and wide captures show every tool as a visible one-click button across at most two rows; no selector hides tools.
   - **H1.4k Image Studio header truncation and footer clipping (observed at compact and larger sizes)**
     - [x] **H1.4k1 [Primary] Keep the Image Studio title and short filename visible beside right actions.** StudioShell accepts a semantic compact title; Image Studio shows its filename when the full studio-prefixed title does not fit, with the full title retained in the tooltip. Wider hosts keep the full title.
     - [x] **H1.4k2 Reserve visible Image Studio footer space at every supported host size.** Luna implemented a native footer panel reserved before chrome/workspace; primary review reused its measured hint height for a read-only caption row and removed the duplicate measurement. The canvas no longer subtracts a guessed 32-point footer. Landed in `3258d1f`.
