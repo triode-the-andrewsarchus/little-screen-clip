@@ -15,6 +15,7 @@ use little_clip_core::audio::{
 };
 use little_clip_core::ipc::IpcRequest;
 use little_clip_core::palette::AppPalette;
+use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use rodio::stream::MixerDeviceSink;
 use rodio::{Decoder, Player, Source};
 use std::fs::File;
@@ -547,6 +548,7 @@ pub struct AudioPreviewState {
     pub save_filenames: Vec<String>,
     pub open_folder_after_save: bool,
     browse_rx: Option<Receiver<Option<String>>>,
+    save_job: Option<AudioSaveJob>,
 
     // Slice preview limit and looping state (for right-click slice preview and hold-to-loop)
     pub preview_stop_time: Option<f32>,
@@ -557,6 +559,109 @@ pub struct AudioPreviewState {
     stem_separation: StemSeparationState,
     digital_decode: DigitalDecodeState,
     pub hf_analysis: HfAnalysisState,
+}
+
+struct AudioSaveJob {
+    ticket: JobTicket,
+    receiver: Receiver<Result<Result<AudioSaveOutcome, String>, JobError>>,
+    destination_name: String,
+}
+
+impl Drop for AudioSaveJob {
+    fn drop(&mut self) {
+        self.ticket.cancel();
+    }
+}
+
+struct AudioSaveRegion {
+    start: f32,
+    end: f32,
+    filename: String,
+    filter: Option<String>,
+}
+
+struct AudioSavePlan {
+    destination: PathBuf,
+    source: PathBuf,
+    regions: Vec<AudioSaveRegion>,
+    open_folder: bool,
+}
+
+#[derive(Debug)]
+struct AudioSaveOutcome {
+    saved_count: usize,
+    failures: Vec<String>,
+}
+
+fn run_audio_save(plan: AudioSavePlan) -> Result<AudioSaveOutcome, String> {
+    std::fs::create_dir_all(&plan.destination)
+        .map_err(|error| format!("Cannot create destination directory: {error}"))?;
+    let mut saved_paths = Vec::new();
+    let mut failures = Vec::new();
+    for region in &plan.regions {
+        let out_path = plan.destination.join(&region.filename);
+        let mut cmd = std::process::Command::new("ffmpeg");
+        cmd.arg("-y")
+            .arg("-ss")
+            .arg(format!("{:.4}", region.start))
+            .arg("-to")
+            .arg(format!("{:.4}", region.end))
+            .arg("-i")
+            .arg(&plan.source);
+        if let Some(filter) = &region.filter {
+            cmd.arg("-af").arg(filter);
+        }
+        match out_path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("wav") => {
+                cmd.arg("-c:a").arg("pcm_s16le");
+            }
+            Some("flac") => {
+                cmd.arg("-c:a").arg("flac");
+            }
+            _ => {}
+        }
+        match cmd
+            .arg(&out_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+        {
+            Ok(status) if status.success() && out_path.exists() => saved_paths.push(out_path),
+            Ok(status) => failures.push(format!("{} (ffmpeg exit {})", region.filename, status)),
+            Err(error) => failures.push(format!("{} ({error})", region.filename)),
+        }
+    }
+    if saved_paths.is_empty() {
+        return Err(if failures.is_empty() {
+            "ffmpeg did not produce any output files".to_owned()
+        } else {
+            format!("Failed to save audio file(s): {}", failures.join(", "))
+        });
+    }
+    if plan.open_folder {
+        let _ = std::process::Command::new("xdg-open")
+            .arg(&plan.destination)
+            .spawn();
+    }
+    Ok(AudioSaveOutcome {
+        saved_count: saved_paths.len(),
+        failures,
+    })
+}
+
+fn plan_destination_name(path: &str) -> String {
+    Path::new(path.trim())
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("folder")
+        .to_owned()
 }
 
 impl AudioPreviewState {
@@ -1505,6 +1610,7 @@ impl AudioPreviewState {
             save_filenames: Vec::new(),
             open_folder_after_save: true,
             browse_rx: None,
+            save_job: None,
             preview_stop_time: None,
             preview_slice_range: None,
             preview_is_looping: false,
@@ -2626,16 +2732,11 @@ impl AudioPreviewState {
         });
     }
 
-    pub fn execute_save(&mut self, now: f64) -> Result<usize, String> {
-        let dest_dir = PathBuf::from(self.save_destination_dir.trim());
-        if !dest_dir.exists() {
-            if let Err(e) = std::fs::create_dir_all(&dest_dir) {
-                let err_msg = format!("⚠️ Cannot create destination directory: {}", e);
-                self.status_toast = Some((err_msg.clone(), now));
-                return Err(err_msg);
-            }
+    pub fn execute_save(&mut self, now: f64) -> Result<(), String> {
+        if self.save_job.is_some() {
+            return Err("An audio save is already in progress".to_owned());
         }
-
+        let dest_dir = PathBuf::from(self.save_destination_dir.trim());
         let slices: Vec<(f32, f32)> = match self.selection_mode {
             SelectionMode::Single => {
                 if let Some((s, e)) = self.selection {
@@ -2658,8 +2759,7 @@ impl AudioPreviewState {
             }
         };
 
-        let mut saved_paths: Vec<PathBuf> = Vec::new();
-
+        let mut regions = Vec::with_capacity(slices.len());
         for (i, &(start, end)) in slices.iter().enumerate() {
             let mut filename = self
                 .save_filenames
@@ -2680,17 +2780,6 @@ impl AudioPreviewState {
                 filename.push_str(".wav");
             }
 
-            let out_path = dest_dir.join(&filename);
-
-            let mut cmd = std::process::Command::new("ffmpeg");
-            cmd.arg("-y")
-                .arg("-ss")
-                .arg(format!("{:.4}", start))
-                .arg("-to")
-                .arg(format!("{:.4}", end))
-                .arg("-i")
-                .arg(&self.path);
-
             let gain_db = match self.selection_mode {
                 SelectionMode::Single if self.selection.is_some() => self.single_region_gain_db,
                 SelectionMode::Multi if !self.multi_selections.is_empty() => {
@@ -2710,56 +2799,64 @@ impl AudioPreviewState {
             };
             let region =
                 self.export_region_edit(start, end, 0.0, gain_db, low_pass_hz, high_pass_hz);
-            if let Some(filter) = Self::region_filter(region) {
-                cmd.arg("-af").arg(filter);
-            }
+            regions.push(AudioSaveRegion {
+                start,
+                end,
+                filename,
+                filter: Self::region_filter(region),
+            });
+        }
+        let plan = AudioSavePlan {
+            destination: dest_dir,
+            source: self.path.clone(),
+            regions,
+            open_folder: self.open_folder_after_save,
+        };
+        let destination_name = plan_destination_name(&self.save_destination_dir);
+        let (ticket, receiver) =
+            BackgroundJobs::global().submit(Duration::from_secs(600), move || run_audio_save(plan));
+        self.save_job = Some(AudioSaveJob {
+            ticket,
+            receiver,
+            destination_name,
+        });
+        self.status_toast = Some(("💾 Saving audio file(s)…".to_owned(), now));
+        Ok(())
+    }
 
-            let ext = out_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.to_lowercase())
-                .unwrap_or_default();
-
-            if ext == "wav" {
-                cmd.arg("-c:a").arg("pcm_s16le");
-            } else if ext == "flac" {
-                cmd.arg("-c:a").arg("flac");
-            }
-
-            cmd.arg(&out_path)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
-
-            if let Ok(s) = cmd.status() {
-                if s.success() && out_path.exists() {
-                    saved_paths.push(out_path);
+    fn poll_save_job(&mut self, ctx: &egui::Context, now: f64) {
+        let Some(job) = &self.save_job else {
+            return;
+        };
+        let destination_name = job.destination_name.clone();
+        ctx.request_repaint_after(Duration::from_millis(80));
+        let result = match job.receiver.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err(JobError::Cancelled),
+        };
+        self.save_job = None;
+        let message = match result {
+            Ok(Ok(outcome)) => {
+                self.save_dialog_open = false;
+                if outcome.failures.is_empty() {
+                    format!(
+                        "💾 Saved {} file(s) to {destination_name}/",
+                        outcome.saved_count
+                    )
+                } else {
+                    format!(
+                        "⚠️ Saved {} file(s) to {destination_name}; failed: {}",
+                        outcome.saved_count,
+                        outcome.failures.join(", ")
+                    )
                 }
             }
-        }
-
-        if !saved_paths.is_empty() {
-            let count = saved_paths.len();
-            let dest_name = dest_dir
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("folder");
-            self.status_toast =
-                Some((format!("💾 Saved {} file(s) to {}/", count, dest_name), now));
-
-            if self.open_folder_after_save {
-                let _ = std::process::Command::new("xdg-open")
-                    .arg(&dest_dir)
-                    .spawn();
-            }
-
-            self.save_dialog_open = false;
-            Ok(count)
-        } else {
-            let err_msg = "⚠️ Failed to save audio file(s) via ffmpeg".to_string();
-            self.status_toast = Some((err_msg.clone(), now));
-            Err(err_msg)
-        }
+            Ok(Err(error)) => format!("⚠️ {error}"),
+            Err(error) => format!("⚠️ Audio save failed: {error}"),
+        };
+        self.status_toast = Some((message, now));
+        ctx.request_repaint();
     }
 
     pub fn quick_save(&mut self, now: f64) {
@@ -2775,6 +2872,7 @@ impl AudioPreviewState {
     }
 
     pub fn render_save_dialog(&mut self, ctx: &egui::Context, palette: &AppPalette, now: f64) {
+        self.poll_save_job(ctx, now);
         if !self.save_dialog_open {
             return;
         }
@@ -3202,6 +3300,7 @@ impl AudioPreviewState {
         palette: &AppPalette,
         close_requested: &mut bool,
     ) {
+        self.poll_save_job(ctx, ctx.input(|input| input.time));
         if self.handle_studio_shortcuts(ctx, close_requested) {
             return;
         }
@@ -3246,6 +3345,18 @@ fn should_start_stem_separation_on_space(
 mod tests {
     use super::*;
     use little_clip_core::audio::compute_full_audio_analysis;
+
+    fn wait_for_audio_save(state: &mut AudioPreviewState) {
+        let ctx = egui::Context::default();
+        for _ in 0..500 {
+            state.poll_save_job(&ctx, 3.0);
+            if state.save_job.is_none() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("audio save did not finish within five seconds");
+    }
 
     #[test]
     fn audio_studio_space_starts_only_idle_empty_stem_separation_without_editor_focus() {
@@ -3551,6 +3662,7 @@ mod tests {
                 },
                 |ctx| state.render_save_dialog(ctx, &palette, 1.0),
             );
+            wait_for_audio_save(&mut state);
 
             assert!(
                 !state.save_dialog_open,
@@ -4658,9 +4770,20 @@ Separated track
             "test_track_00m01s000ms_01s500ms.wav"
         );
 
-        let res = state.execute_save(1.0);
-        assert!(res.is_ok());
-        assert_eq!(res.unwrap(), 1);
+        state.execute_save(1.0).unwrap();
+        assert!(
+            state.execute_save(1.0).is_err(),
+            "duplicate saves are rejected"
+        );
+        wait_for_audio_save(&mut state);
+        assert!(
+            state
+                .status_toast
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("Saved 1 file(s)")
+        );
         let saved_single = temp_dest.join("test_track_00m01s000ms_01s500ms.wav");
         assert!(saved_single.exists());
         assert!(std::fs::metadata(&saved_single).unwrap().len() > 0);
@@ -4680,9 +4803,16 @@ Separated track
             "test_track_00m02s000ms_00s800ms.wav"
         );
 
-        let res_multi = state.execute_save(2.0);
-        assert!(res_multi.is_ok());
-        assert_eq!(res_multi.unwrap(), 2);
+        state.execute_save(2.0).unwrap();
+        wait_for_audio_save(&mut state);
+        assert!(
+            state
+                .status_toast
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("Saved 2 file(s)")
+        );
 
         let saved_multi_1 = temp_dest.join("test_track_00m00s500ms_00s700ms.wav");
         let saved_multi_2 = temp_dest.join("test_track_00m02s000ms_00s800ms.wav");
@@ -4696,6 +4826,47 @@ Separated track
         let _ = std::fs::remove_file(saved_multi_1);
         let _ = std::fs::remove_file(saved_multi_2);
         let _ = std::fs::remove_dir(temp_dest);
+    }
+
+    #[test]
+    fn audio_save_reports_destination_directory_creation_failure() {
+        let (_source_dir, source) = generate_fixture_wav("save_error", 1.0);
+        let blocker =
+            std::env::temp_dir().join(format!("little_clip_save_blocker_{}", uuid::Uuid::new_v4()));
+        std::fs::write(&blocker, b"file blocks directory creation").unwrap();
+        let plan = AudioSavePlan {
+            destination: blocker.join("child"),
+            source,
+            regions: vec![AudioSaveRegion {
+                start: 0.0,
+                end: 0.5,
+                filename: "slice.wav".to_owned(),
+                filter: Some("volume=6dB,lowpass=f=3200.000:p=2".to_owned()),
+            }],
+            open_folder: false,
+        };
+        let error = run_audio_save(plan).unwrap_err();
+        assert!(error.contains("Cannot create destination directory"));
+        let _ = std::fs::remove_file(blocker);
+    }
+
+    #[test]
+    fn audio_save_reports_ffmpeg_process_failure_with_filename() {
+        let destination = tempfile::tempdir().unwrap();
+        let result = run_audio_save(AudioSavePlan {
+            destination: destination.path().to_owned(),
+            source: destination.path().join("missing-source.wav"),
+            regions: vec![AudioSaveRegion {
+                start: 0.0,
+                end: 0.5,
+                filename: "failed-slice.wav".to_owned(),
+                filter: None,
+            }],
+            open_folder: false,
+        });
+        let error = result.unwrap_err();
+        assert!(error.contains("Failed to save audio file(s)"));
+        assert!(error.contains("failed-slice.wav"));
     }
 
     #[test]
