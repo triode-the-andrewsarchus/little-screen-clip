@@ -193,6 +193,24 @@ pub fn clamp_overlay_rect(ideal_min: Pos2, size: Vec2, bounds: Rect) -> Rect {
 /// Set readable workbench defaults. Secondary text uses color and weight for
 /// hierarchy; `.small()` must remain as legible as ordinary control labels.
 pub fn configure_workbench_style(ctx: &egui::Context) {
+    // Add portable CJK and broad monochrome emoji fallbacks after Latin fonts.
+    let mut fonts = egui::FontDefinitions::default();
+    let fallback = "Noto Sans CJK JP";
+    fonts.font_data.insert(
+        fallback.to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSansCJK-JP-Regular.ttf")),
+    );
+    let emoji_fallback = "Noto Emoji Full";
+    fonts.font_data.insert(
+        emoji_fallback.to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/NotoEmoji-Regular.ttf")),
+    );
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        let fonts_for_family = fonts.families.entry(family).or_default();
+        fonts_for_family.push(fallback.to_owned());
+        fonts_for_family.push(emoji_fallback.to_owned());
+    }
+    ctx.set_fonts(fonts);
     ctx.style_mut(|style| {
         style.text_styles.insert(
             TextStyle::Small,
@@ -921,6 +939,64 @@ pub fn new_shared_audio_player() -> Option<rodio::Player> {
 mod tests {
     use super::*;
     use little_clip_core::config::WorkbenchAppearance;
+
+    #[test]
+    fn clipboard_unicode_renders_without_missing_glyphs_or_latin_layout_changes() {
+        for scale in [1.0, 1.5, 2.0] {
+            let defaults = egui::Context::default();
+            let configured = egui::Context::default();
+            configure_workbench_style(&configured);
+            for ctx in [&defaults, &configured] {
+                ctx.set_pixels_per_point(scale);
+                let _ = ctx.run(egui::RawInput::default(), |_| {});
+            }
+            for font in [
+                FontId::proportional(BODY_FONT_SIZE),
+                FontId::monospace(MONO_FONT_SIZE),
+            ] {
+                let latin = "clipboard test ";
+                let original = defaults.fonts(|fonts| {
+                    fonts.layout_no_wrap(latin.to_owned(), font.clone(), Color32::WHITE)
+                });
+                configured.fonts(|fonts| {
+                    let unchanged =
+                        fonts.layout_no_wrap(latin.to_owned(), font.clone(), Color32::WHITE);
+                    assert_eq!(unchanged.size(), original.size());
+                    for (actual, expected) in unchanged.rows[0]
+                        .glyphs
+                        .iter()
+                        .zip(&original.rows[0].glyphs)
+                    {
+                        assert_eq!(actual.pos, expected.pos);
+                        assert_eq!(actual.size, expected.size);
+                    }
+
+                    let text =
+                        "clipboard test 日本語 简体中文 繁體中文 한국어 ✓ ☀ 🙂 🥹 🫠 🫶 🩷 🫨";
+                    assert!(fonts.has_glyphs(&font, text));
+                    assert!(fonts.has_glyphs(&font, "ひらがな カタカナ"));
+                    let missing =
+                        fonts.layout_no_wrap("\u{10ffff}".to_owned(), font.clone(), Color32::WHITE);
+                    let missing_uv = missing.rows[0].glyphs[0].uv_rect;
+                    let galley =
+                        fonts.layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE);
+                    assert_eq!(galley.rows.len(), 1);
+                    assert_eq!(galley.rows[0].text(), text);
+                    for glyph in &galley.rows[0].glyphs {
+                        if "日本語简体中文繁體한국어✓☀🙂🥹🫠🫶🩷🫨".contains(glyph.chr)
+                        {
+                            assert!(
+                                !glyph.uv_rect.is_nothing(),
+                                "{} has no rendered pixels",
+                                glyph.chr
+                            );
+                            assert_ne!(glyph.uv_rect, missing_uv, "{} rendered as tofu", glyph.chr);
+                        }
+                    }
+                });
+            }
+        }
+    }
 
     fn rendered_text(output: &egui::FullOutput) -> Vec<String> {
         output

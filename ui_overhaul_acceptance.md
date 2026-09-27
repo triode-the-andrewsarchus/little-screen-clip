@@ -18,6 +18,8 @@ Isolated captures of the transparent-image fixture and stereo-audio fixture pass
 
 Audio Studio reports/screenshots: compact 1280×720 logical / 150% Dark `/tmp/clip-audio-layout-compact-20260927/report.json` and `settled.png`; standard 1920×1080 / 100% Light `/tmp/clip-audio-layout-standard-20260927/report.json` and `settled.png`; wide 3440×1440 / 100% Dark `/tmp/clip-audio-layout-wide-20260927/report.json` and `settled.png`. The four mode tabs remain equal and aligned. Transport/export controls wrap cleanly at compact and standard sizes and fit on one row at wide size; the timeline scrollbar and footer do not overlap. These observations cover the Inspect mode's toolbar/transport presentation, not the other Audio Studio modes or their actions.
 
+Additional isolated Audio Inspect capture `/tmp/clip-audio-inspect-compact-dark-20260927/settled.png` at 1280×720 logical / 100% / Dark uses a stereo WAV fixture. Primary visual review confirms equal-height mode buttons, aligned transport controls, wrapped export actions, and a distinct selection-info row; both waveform channels and the spectrum/chord lanes fit above the timeline scrollbar. This is another layout observation, not live playback or selection-interaction evidence.
+
 ## Starting evidence, 2026-09-23
 
 - Branch baseline: `4edf785`, architecture baseline `easy1-start`: 81,632 LOC, 1,863 functions, average CCN 5.01, 5.28% duplication, 467 clone groups, health 79.94. The local `config.toml` has an unrelated uncommitted edit; it is excluded from UI commits.
@@ -232,3 +234,13 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 
 - Isolated no-daemon capture `/tmp/clip-workbench-empty-compact-20260927` passed popup geometry/singleton checks and exposed a clipped duplicate IPC error toast beside the rolling-audio refresh status. Suppressed a toast when it duplicates the current refresh error; the short retry label keeps the full cause available by tooltip and in the waveform area. The existing 1177×662 footer/list render regression covers wrapped status and 40 results.
 - The 1280×720 recapture `/tmp/clip-workbench-empty-compact-after-error-fix-20260927` passes popup checks. Primary reviewed the settled screenshot: the Palette footer stays above the rolling strip, the redundant long header error is gone, and the remaining canvas error fits. The header render regression passes at 520/1200 points; this screenshot checks the combined no-daemon layout, not every status variant.
+
+## Audio Inspect compact layout, 2026-09-27
+
+Isolated 1280×720 logical / 100% / Dark capture `/tmp/clip-audio-inspect-compact-dark-20260927/settled.png` uses a stereo WAV fixture. Primary visual review confirms equal-height mode buttons, aligned transport controls, wrapped export actions, a distinct selection-info row, and two visible waveform channels plus spectrum/chord lanes above the timeline scrollbar. This is layout evidence, not live playback or selection-interaction evidence.
+
+## Bundled CJK and emoji fallback, 2026-09-27
+
+The workbench bundles Noto Sans CJK JP Regular (44,810 mapped characters) and a static Regular instance of Noto Emoji v3.002 (1,489 mapped characters), each under SIL OFL 1.1 with source and hashes documented in `crates/clip-workbench/assets/fonts/README.md`. Both append to egui's proportional and monospace fallback chains, leaving the existing default Latin and symbol fonts first. `clipboard_unicode_renders_without_missing_glyphs_or_latin_layout_changes` verifies Japanese, Simplified/Traditional Chinese, Korean, ✓, and modern monochrome emoji at 100/150/200% scale, confirms atlas pixels are distinct from tofu, and checks Latin glyph geometry remains unchanged.
+
+Post-fallback Barcode capture `/tmp/clip-image-barcode-unicode-final-fonts-20260927/image-barcode-enter.png` detects the QR and shows `clipboard test 日本語 ✓` legibly in the result row; popup geometry and singleton checks pass. This proves text layout for that payload, not Copy/Copy All/Open Link actions. egui 0.27 cannot render Noto Color Emoji bitmap strikes or compose multi-codepoint family, flag, or skin-tone sequences; uncommon scripts remain outside these two bundled fonts.
