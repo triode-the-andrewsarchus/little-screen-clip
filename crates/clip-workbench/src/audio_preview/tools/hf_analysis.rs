@@ -303,9 +303,9 @@ impl AudioPreviewState {
         let total_dur = self.duration_sec.max(0.01_f32);
 
         self.render_hf_toolbar(ui, palette, sample_rate, nyquist, total_dur);
-        ui.add_space(4.0_f32);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         self.render_hf_roi_bar(ui, palette, total_dur);
-        ui.add_space(4.0_f32);
+        ui.add_space(crate::ui_ext::SPACE_XS);
         self.render_hf_spectrogram_canvas(ui, ctx, palette, sample_rate, nyquist, total_dur);
     }
 

@@ -60,7 +60,9 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
         - [x] **H1.2a2a3d Tokenize repeated 12×6 viewer control frames.** Image/Text Diff, Binary Diff, and Film Look control surfaces share `SPACE_MD` and `CONTROL_GROUP_INSET_Y`.
         - [x] **H1.2a2a3e Reuse button padding on selectable action rows.** Quick Palette and Node Machine catalog rows now use the shared button padding tokens.
         - [x] **H1.2a2a3f Tokenize Image Studio spacing gaps.** 190 literal 4/6/8/12-point gaps across image tools and the studio view now use `SPACE_XS`, `ITEM_SPACING_Y`, `SPACE_SM`, and `SPACE_MD`; values are unchanged.
-        - [ ] **H1.2a2a3g Audit and tokenize repeated spacing gaps in remaining viewer families.** Keep content-specific canvas, timeline, and data-grid geometry local; split by view family as the audit proceeds.
+        - **H1.2a2a3g Audit and tokenize repeated spacing gaps in remaining viewer families.** Keep content-specific canvas, timeline, and data-grid geometry local.
+          - [x] **H1.2a2a3g1 Tokenize Audio Studio spacing gaps.** Its 27 literal 4/6/8/12-point gaps now use shared spacing tokens; values are unchanged.
+          - [ ] **H1.2a2a3g2 Audit and tokenize spacing in remaining viewer families.**
     - [x] **H1.2a2b [Luna] Migrate disabled-state styling to shared tokens.** egui's disabled fade now targets the centralized workbench canvas in both appearances; the Light/Dark appearance test asserts the configured fade target. The workbench suite passes (250 passed, one ignored).
     - [ ] **H1.2a2c [Primary] Migrate status interactions to shared tokens.**
   - [ ] **H1.2a3 [Primary] Finish shared chrome token use.**

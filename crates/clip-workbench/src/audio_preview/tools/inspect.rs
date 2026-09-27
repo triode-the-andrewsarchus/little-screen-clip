@@ -610,7 +610,7 @@ impl AudioPreviewState {
                     palette,
                 );
 
-                ui.add_space(12.0);
+                ui.add_space(crate::ui_ext::SPACE_MD);
 
                 if let Some(action) = layout::AudioWorkspace::zoom_control_bar(ui, palette) {
                     match action {
@@ -690,7 +690,7 @@ impl AudioPreviewState {
 
                     // Transient sensitivity slider
                     if self.show_transients {
-                        ui.add_space(4.0);
+                        ui.add_space(crate::ui_ext::SPACE_XS);
                         let mut sensitivity_position =
                             transient_sensitivity_to_slider(self.transient_sensitivity);
                         let sens_slider = egui::Slider::new(&mut sensitivity_position, 0.0..=1.0)
@@ -719,7 +719,7 @@ impl AudioPreviewState {
                     );
                 }
 
-                ui.add_space(8.0);
+                ui.add_space(crate::ui_ext::SPACE_SM);
 
                 self.render_normalize_button(ui, palette, now);
 
@@ -770,7 +770,7 @@ impl AudioPreviewState {
 
                         // Channel-Specific Copy Buttons (Left only mono, Right only mono)
                         if channels_count >= 2 {
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
                             let left_btn = layout::AudioWorkspace::secondary_button(
                                 "Copy left (mono)",
                                 hex_to_c32(&palette.colors.surface_recessed),
@@ -798,7 +798,7 @@ impl AudioPreviewState {
                             }
                         }
 
-                        ui.add_space(4.0);
+                        ui.add_space(crate::ui_ext::SPACE_XS);
                         let save_label = if self.selection.is_some() {
                             "Save File... [Ctrl+S]"
                         } else {
@@ -842,7 +842,7 @@ impl AudioPreviewState {
                         }
 
                         if channels_count >= 2 {
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
                             let left_btn = layout::AudioWorkspace::secondary_button(
                                 "Copy left (mono)",
                                 hex_to_c32(&palette.colors.surface_recessed),
@@ -874,7 +874,7 @@ impl AudioPreviewState {
                             }
                         }
 
-                        ui.add_space(4.0);
+                        ui.add_space(crate::ui_ext::SPACE_XS);
                         let save_label = if count > 0 {
                             format!("Save All ({}) [Ctrl+S]", count)
                         } else {
@@ -899,7 +899,7 @@ impl AudioPreviewState {
                     }
                 }
 
-                ui.add_space(6.0);
+                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
                 let has_analysis = self.analysis.is_some();
 
@@ -918,7 +918,7 @@ impl AudioPreviewState {
                     self.copy_waveform_image(palette, now);
                 }
 
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
 
                 let copy_spec_btn = layout::AudioWorkspace::secondary_button_icon(
                     Some(crate::icons::Icon::Copy),
@@ -939,7 +939,7 @@ impl AudioPreviewState {
 
         self.render_selection_info_bar(ui, palette, now);
 
-        ui.add_space(8.0);
+        ui.add_space(crate::ui_ext::SPACE_SM);
 
         // 3. Main Synchronized 3-View Representation Canvas
         let controls_spent = ui.cursor().min.y - editor_start_y;
@@ -958,7 +958,7 @@ impl AudioPreviewState {
                     .exact_height(footer_height)
                     .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 3.0)))
                     .show_inside(workspace, |ui| {
-                        ui.add_space(6.0);
+                        ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                         let (row_rect, response) = ui.allocate_exact_size(
                             Vec2::new(ui.available_width(), footer_galley.size().y),
                             egui::Sense::hover(),
@@ -1129,7 +1129,7 @@ impl AudioPreviewState {
             let has_multi_pills =
                 self.selection_mode == SelectionMode::Multi && !self.multi_selections.is_empty();
             if has_multi_pills {
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("Slices:")
@@ -1214,7 +1214,7 @@ impl AudioPreviewState {
                                 {
                                     remove_slice_idx = Some(idx);
                                 }
-                                ui.add_space(6.0);
+                                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                             }
                         });
 

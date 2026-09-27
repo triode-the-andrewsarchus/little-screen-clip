@@ -2797,7 +2797,7 @@ impl AudioPreviewState {
             .default_size(Vec2::new(580.0, 360.0))
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
-                ui.add_space(4.0);
+                ui.add_space(crate::ui_ext::SPACE_XS);
                 ui.heading(
                     egui::RichText::new("Save Audio Slices to Disk")
                         .strong()
@@ -2809,9 +2809,9 @@ impl AudioPreviewState {
                     )
                     .color(hex_to_c32(&palette.colors.text_secondary)),
                 );
-                ui.add_space(8.0);
+                ui.add_space(crate::ui_ext::SPACE_SM);
                 ui.separator();
-                ui.add_space(8.0);
+                ui.add_space(crate::ui_ext::SPACE_SM);
 
                 // 1. Destination Directory
                 ui.horizontal(|ui| {
@@ -2841,7 +2841,7 @@ impl AudioPreviewState {
                             .strong()
                             .color(hex_to_c32(&palette.colors.text_primary)),
                     );
-                    ui.add_space(8.0);
+                    ui.add_space(crate::ui_ext::SPACE_SM);
                     if ui.add(layout::AudioWorkspace::secondary_button("↺ Reset Names", hex_to_c32(&palette.colors.surface_recessed), palette))
                         .on_hover_text("Reset filenames to default original_name + timestamp + duration").clicked() {
                         self.reset_save_filenames();
@@ -2853,7 +2853,7 @@ impl AudioPreviewState {
                         .color(hex_to_c32(&palette.colors.text_muted)),
                 );
 
-                ui.add_space(6.0);
+                ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                 egui::ScrollArea::vertical()
                     .max_height(160.0)
                     .show(ui, |ui| {
@@ -2877,9 +2877,9 @@ impl AudioPreviewState {
                     "Open destination folder in file manager after saving",
                 );
 
-                ui.add_space(12.0);
+                ui.add_space(crate::ui_ext::SPACE_MD);
                 ui.separator();
-                ui.add_space(8.0);
+                ui.add_space(crate::ui_ext::SPACE_SM);
 
                 ui.horizontal(|ui| {
                     let btn_text = if slice_count == 1 {
@@ -3203,9 +3203,9 @@ impl AudioPreviewState {
         }
         layout::AudioWorkspace::show(ui, palette, |ui| {
             self.render_audio_header(ui, ctx, palette, close_requested);
-            ui.add_space(4.0);
+            ui.add_space(crate::ui_ext::SPACE_XS);
             self.render_audio_tool_bar(ui, palette);
-            ui.add_space(8.0);
+            ui.add_space(crate::ui_ext::SPACE_SM);
             match self.active_mode {
                 AudioToolMode::Inspect => {
                     self.render_standard_ui(ui, ctx, palette, close_requested, None)

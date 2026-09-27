@@ -298,7 +298,7 @@ impl AudioPreviewState {
         let canvas_h = (available_h * 0.58).clamp(240.0, 600.0);
 
         self.render_digital_decode_canvas(ui, ctx, palette, available_w, canvas_h);
-        ui.add_space(6.0);
+        ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
         self.render_digital_decode_transcript(ui, ctx, palette);
     }
 
@@ -1056,7 +1056,7 @@ impl AudioPreviewState {
             });
         });
 
-        ui.add_space(4.0);
+        ui.add_space(crate::ui_ext::SPACE_XS);
 
         // Transcript Panel Tabs & Filter Bar
         ui.horizontal_wrapped(|ui| {
@@ -1226,7 +1226,7 @@ impl AudioPreviewState {
                                     }
                                 });
                             });
-                            ui.add_space(4.0);
+                            ui.add_space(crate::ui_ext::SPACE_XS);
                         }
                     });
             }
