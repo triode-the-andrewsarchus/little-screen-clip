@@ -369,7 +369,7 @@ impl ImagePreviewState {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.colors.surface_recessed))
             .inner_margin(egui::Margin::symmetric(
-                crate::ui_ext::PANEL_INSET_X,
+                crate::ui_ext::PANEL_INSET,
                 crate::ui_ext::CONTROL_GROUP_INSET_Y,
             ))
             .stroke(Stroke::new(

@@ -11,7 +11,7 @@ use super::panel::{
 use crate::hex_to_c32;
 use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext::{
-    CONTROL_CORNER_RADIUS, CONTROL_HEIGHT, CONTROL_ICON_SIZE, FOOTER_INSET_Y, PANEL_INSET_X,
+    CONTROL_CORNER_RADIUS, CONTROL_HEIGHT, CONTROL_ICON_SIZE, FOOTER_INSET_Y, PANEL_INSET,
     SPACE_MD, SPACE_SM, SPACE_XS, StatusToast, contrast_text_c32, equal_button_width,
 };
 use eframe::egui::{self, Color32, Rect, Rounding, Stroke, Vec2};
@@ -545,7 +545,7 @@ impl<'a> StudioShell<'a> {
 
         egui::Frame::none()
             .fill(colors.recessed)
-            .inner_margin(egui::Margin::symmetric(PANEL_INSET_X, SPACE_SM))
+            .inner_margin(egui::Margin::symmetric(PANEL_INSET, SPACE_SM))
             .stroke(Stroke::new(1.0_f32, colors.panel))
             .show(ui, |ui| {
                 let (row_rect, _) = ui.allocate_exact_size(
@@ -734,7 +734,7 @@ impl<'a> StudioShell<'a> {
 
         egui::Frame::none()
             .fill(colors.recessed)
-            .inner_margin(egui::Margin::symmetric(PANEL_INSET_X, FOOTER_INSET_Y))
+            .inner_margin(egui::Margin::symmetric(PANEL_INSET, FOOTER_INSET_Y))
             .show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     if let Some(hints) = self.footer_hints {

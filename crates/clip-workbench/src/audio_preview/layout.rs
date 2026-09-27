@@ -131,7 +131,7 @@ impl AudioWorkspace {
             .fill(colors.recessed)
             .stroke(Stroke::new(1.0_f32, colors.panel))
             .inner_margin(egui::Margin::symmetric(
-                crate::ui_ext::PANEL_INSET_X,
+                crate::ui_ext::PANEL_INSET,
                 crate::ui_ext::CONTROL_ROW_INSET_Y,
             ))
             .show(ui, |ui| {
@@ -154,7 +154,7 @@ impl AudioWorkspace {
                 hex_to_c32_alpha(&palette.harmonies.base, 100),
             ))
             .inner_margin(egui::Margin::symmetric(
-                crate::ui_ext::PANEL_INSET_X,
+                crate::ui_ext::PANEL_INSET,
                 crate::ui_ext::FOOTER_INSET_Y,
             ))
             .show(ui, |ui| {
@@ -406,7 +406,7 @@ impl AudioPreviewState {
         egui::Frame::none()
             .fill(colors.recessed)
             .inner_margin(egui::Margin::symmetric(
-                crate::ui_ext::PANEL_INSET_X,
+                crate::ui_ext::PANEL_INSET,
                 crate::ui_ext::FOOTER_INSET_Y,
             ))
             .stroke(Stroke::new(1.0_f32, colors.panel))

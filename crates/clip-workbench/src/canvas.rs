@@ -827,7 +827,7 @@ impl NodeCanvasState {
                     .fill(hex_to_c32(&palette.colors.surface_recessed))
                     .stroke(Stroke::new(1.5_f32, hex_to_c32(&palette.harmonies.base)))
                     .rounding(crate::ui_ext::CARD_CORNER_RADIUS)
-                    .inner_margin(egui::Margin::same(14.0))
+                    .inner_margin(egui::Margin::same(crate::ui_ext::PANEL_INSET))
                     .show(ui, |ui| {
                         ui.set_width(modal_w);
                         ui.set_height(modal_h);

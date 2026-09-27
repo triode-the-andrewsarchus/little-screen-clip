@@ -168,7 +168,10 @@ fn show_workbench_footer(
     let mut captions_rect = egui::Rect::NOTHING;
     egui::TopBottomPanel::bottom("workbench_footer_panel")
         .exact_height(footer_height)
-        .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 6.0)))
+        .frame(
+            egui::Frame::none()
+                .inner_margin(egui::Margin::symmetric(0.0, crate::ui_ext::FOOTER_INSET_Y)),
+        )
         .show_inside(ui, |ui| {
             if let Some(galley) = &status_galley {
                 let (rect, _) = ui.allocate_exact_size(
@@ -577,7 +580,7 @@ impl WorkbenchApp {
             .frame(
                 egui::Frame::none()
                     .fill(header_bg)
-                    .inner_margin(egui::Margin::symmetric(14.0, 10.0)),
+                    .inner_margin(egui::Margin::symmetric(crate::ui_ext::PANEL_INSET, 10.0)),
             )
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
@@ -1087,7 +1090,7 @@ impl eframe::App for WorkbenchApp {
                     egui::Frame::none()
                         .fill(crate::hex_to_c32(&self.ui_palette.colors.canvas))
                         .inner_margin(egui::Margin::symmetric(
-                            crate::ui_ext::PANEL_INSET_X,
+                            crate::ui_ext::PANEL_INSET,
                             crate::ui_ext::FOOTER_INSET_Y,
                         ))
                         .stroke(egui::Stroke::new(

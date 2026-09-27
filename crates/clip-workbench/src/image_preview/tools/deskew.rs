@@ -158,7 +158,7 @@ impl ImagePreviewState {
         egui::Frame::none()
             .fill(frame_bg)
             .inner_margin(egui::Margin::symmetric(
-                crate::ui_ext::PANEL_INSET_X,
+                crate::ui_ext::PANEL_INSET,
                 crate::ui_ext::CONTROL_GROUP_INSET_Y,
             ))
             .stroke(Stroke::new(1.0_f32, frame_stroke))
