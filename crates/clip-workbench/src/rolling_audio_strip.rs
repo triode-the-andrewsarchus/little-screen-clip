@@ -492,7 +492,7 @@ impl RollingAudioStripState {
 
     fn render_header(&mut self, ui: &mut egui::Ui, palette: &AppPalette, total_dur: f32) {
         // Header Row: Badge & Status / Selection info
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             Icon::Microphone.ui(ui, 13.0, hex_to_c32(&palette.harmonies.base));
             ui.label(
                 egui::RichText::new("ROLLING AUDIO")
@@ -544,7 +544,7 @@ impl RollingAudioStripState {
                 )
                 .on_hover_text(error);
             } else if self.is_silent() {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     Icon::Alert.ui(ui, 12.0, hex_to_c32(&palette.diff_mod));
                     ui.label(
                         egui::RichText::new("Buffer is silence (play audio to capture)")
@@ -581,19 +581,17 @@ impl RollingAudioStripState {
             }
 
             if let Some((ref msg, _)) = self.status_toast {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let color = if self.error_msg.as_deref() == Some(msg.as_str()) {
-                        &palette.diff_del
-                    } else {
-                        &palette.diff_add
-                    };
-                    ui.label(
-                        egui::RichText::new(msg)
-                            .color(hex_to_c32(color))
-                            .strong()
-                            .size(crate::ui_ext::BODY_FONT_SIZE),
-                    );
-                });
+                let color = if self.error_msg.as_deref() == Some(msg.as_str()) {
+                    &palette.diff_del
+                } else {
+                    &palette.diff_add
+                };
+                ui.label(
+                    egui::RichText::new(msg)
+                        .color(hex_to_c32(color))
+                        .strong()
+                        .size(crate::ui_ext::BODY_FONT_SIZE),
+                );
             }
         });
 
@@ -1045,6 +1043,97 @@ mod tests {
             play_stop_time: None,
             status_toast: None,
         }
+    }
+
+    #[test]
+    fn header_wraps_at_narrow_width_without_extra_rows_when_wide() {
+        fn rendered_header_text(strip: &mut RollingAudioStripState, width: f32) -> Vec<String> {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 160.0))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        strip.render_header(ui, &palette, 120.0);
+                    });
+                },
+            );
+            let mut text = Vec::new();
+            for clipped_shape in output.shapes {
+                let egui::epaint::Shape::Text(shape) = clipped_shape.shape else {
+                    continue;
+                };
+                if shape.pos.y > 100.0 {
+                    continue;
+                }
+                let bounds = shape.galley.rect.translate(shape.pos.to_vec2());
+                assert!(
+                    bounds.left() >= clipped_shape.clip_rect.left() - 0.5,
+                    "header text starts outside its clip rect: {bounds:?} clipped to {:?}",
+                    clipped_shape.clip_rect
+                );
+                assert!(
+                    bounds.right() <= clipped_shape.clip_rect.right() + 0.5,
+                    "header text exceeds available width: {bounds:?} clipped to {:?}",
+                    clipped_shape.clip_rect
+                );
+                assert!(!shape.galley.elided, "header text was elided");
+                text.push(shape.galley.job.text.clone());
+            }
+            text
+        }
+
+        let mut strip = empty_test_strip();
+        strip.error_msg = Some("daemon unavailable".into());
+        let narrow_error = rendered_header_text(&mut strip, 520.0);
+        let wide_error = rendered_header_text(&mut strip, 1200.0);
+        assert!(
+            narrow_error
+                .iter()
+                .any(|text| text.contains("Refresh failed"))
+        );
+        assert!(
+            wide_error
+                .iter()
+                .any(|text| text.contains("Refresh failed"))
+        );
+
+        strip.error_msg = None;
+        strip.status_toast = Some(("Snapshot refreshed (120.0s, peak: 75%)".into(), 0.0));
+        let narrow_silent_toast = rendered_header_text(&mut strip, 520.0);
+        assert!(
+            narrow_silent_toast
+                .iter()
+                .any(|text| text.contains("Buffer is silence"))
+        );
+        assert!(
+            narrow_silent_toast
+                .iter()
+                .any(|text| text.contains("Snapshot refreshed"))
+        );
+        strip.mono_samples = vec![0.5; 32];
+        strip.selected_region = Some((8.0, 45.0));
+        let narrow_selected_toast = rendered_header_text(&mut strip, 520.0);
+        assert!(
+            narrow_selected_toast
+                .iter()
+                .any(|text| text.contains("Selected:"))
+        );
+        assert!(
+            narrow_selected_toast
+                .iter()
+                .any(|text| text.contains("[Space] Play"))
+        );
+        assert!(
+            narrow_selected_toast
+                .iter()
+                .any(|text| text.contains("Snapshot refreshed"))
+        );
     }
 
     #[test]

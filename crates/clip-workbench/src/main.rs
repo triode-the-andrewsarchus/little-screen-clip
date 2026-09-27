@@ -97,6 +97,86 @@ pub(crate) fn hex_to_c32_alpha(hex: &str, alpha: u8) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(r, g, b, alpha)
 }
 
+fn show_workbench_footer(
+    ui: &mut egui::Ui,
+    view: WorkbenchView,
+    status_msg: Option<&str>,
+    palette: &AppPalette,
+) -> egui::Rect {
+    let hint = match view {
+        WorkbenchView::Palette => {
+            "[Enter] Execute & Paste  |  [F2 / Tab] Big Node Machine  |  [Esc] Dismiss"
+        }
+        WorkbenchView::NodeMachine => {
+            "[Right/Mid Drag] Pan Canvas  |  [Scroll] Zoom  |  [F2] Quick Palette  |  [Esc] Dismiss"
+        }
+        WorkbenchView::AutoActions => "[Click] Toggle Setting  |  [Esc] Dismiss",
+    };
+    let wrap_width = ui.available_width().max(1.0);
+    let hint_galley = ui.fonts(|fonts| {
+        fonts.layout(
+            hint.to_owned(),
+            egui::FontId::proportional(BODY_FONT_SIZE),
+            hex_to_c32(&palette.colors.text_muted),
+            wrap_width,
+        )
+    });
+    let status_galley = status_msg
+        .filter(|_| view == WorkbenchView::Palette)
+        .map(|message| {
+            ui.fonts(|fonts| {
+                fonts.layout(
+                    message.to_owned(),
+                    egui::FontId::proportional(BODY_FONT_SIZE),
+                    hex_to_c32(&palette.diff_del),
+                    wrap_width,
+                )
+            })
+        });
+    let gap = if status_galley.is_some() {
+        ui.spacing().item_spacing.y
+    } else {
+        0.0
+    };
+    let footer_height = (hint_galley.size().y
+        + status_galley.as_ref().map_or(0.0, |galley| galley.size().y)
+        + gap
+        + 1.0
+        + 12.0)
+        .ceil();
+    let mut captions_rect = egui::Rect::NOTHING;
+    egui::TopBottomPanel::bottom("workbench_footer_panel")
+        .exact_height(footer_height)
+        .frame(egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, 6.0)))
+        .show_inside(ui, |ui| {
+            if let Some(galley) = &status_galley {
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), galley.size().y),
+                    egui::Sense::hover(),
+                );
+                ui.painter()
+                    .galley(rect.min, galley.clone(), egui::Color32::PLACEHOLDER);
+                captions_rect = captions_rect.union(rect);
+                ui.add_space(gap);
+            }
+            let separator_y = ui.cursor().min.y + 0.5;
+            ui.painter().hline(
+                ui.min_rect().x_range(),
+                separator_y,
+                egui::Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
+            );
+            ui.add_space(1.0);
+            let (rect, _) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), hint_galley.size().y),
+                egui::Sense::hover(),
+            );
+            ui.painter()
+                .galley(rect.min, hint_galley.clone(), egui::Color32::PLACEHOLDER);
+            captions_rect = captions_rect.union(rect);
+        });
+    captions_rect
+}
+
 /// Action item displayed in the command palette search list.
 #[derive(Clone)]
 enum PaletteAction {
@@ -846,6 +926,13 @@ impl eframe::App for WorkbenchApp {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.visuals_mut().override_text_color = Some(hex_to_c32(&self.ui_palette.colors.text_primary));
 
+            show_workbench_footer(
+                ui,
+                self.view,
+                self.status_msg.as_deref(),
+                &self.ui_palette,
+            );
+
             if self.view != WorkbenchView::Palette {
                 self.palette_search_needs_focus = true;
             }
@@ -1188,7 +1275,7 @@ impl eframe::App for WorkbenchApp {
                     ui.add_space(8.0);
 
                     // Filtered Action List filling available vertical height
-                    let avail_h = (ui.available_height() - 40.0).max(120.0);
+                    let avail_h = ui.available_height().max(0.0);
                     egui::ScrollArea::vertical().max_height(avail_h).show(ui, |ui| {
                         if filtered.is_empty() {
                             ui.add_space(10.0);
@@ -1246,21 +1333,6 @@ impl eframe::App for WorkbenchApp {
                         }
                     });
 
-                    if let Some(msg) = &self.status_msg {
-                        ui.add_space(6.0);
-                        ui.label(egui::RichText::new(msg).color(hex_to_c32(&self.ui_palette.diff_del)));
-                    }
-
-                    // Footer hints
-                    ui.add_space(8.0);
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("[Enter] Execute & Paste  |  [F2 / Tab] Big Node Machine  |  [Esc] Dismiss")
-                                .color(hex_to_c32(&self.ui_palette.colors.text_muted))
-                                .size(BODY_FONT_SIZE),
-                        );
-                    });
                 }
                 WorkbenchView::NodeMachine => {
                     let action = self.canvas_state.ui(ui, &self.state, &self.ui_palette);
@@ -1271,16 +1343,6 @@ impl eframe::App for WorkbenchApp {
                             ctx.request_repaint();
                         }
                     }
-
-                    ui.add_space(6.0);
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("[Right/Mid Drag] Pan Canvas  |  [Scroll] Zoom  |  [F2] Quick Palette  |  [Esc] Dismiss")
-                                .color(hex_to_c32(&self.ui_palette.colors.text_muted))
-                                .size(BODY_FONT_SIZE),
-                        );
-                    });
                 }
                 WorkbenchView::AutoActions => {
                     ui.add_space(4.0);
@@ -1361,15 +1423,6 @@ impl eframe::App for WorkbenchApp {
                             });
 
                         ui.add_space(14.0);
-                    });
-
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("[Click] Toggle Setting  |  [Esc] Dismiss")
-                                .color(hex_to_c32(&self.ui_palette.colors.text_muted))
-                                .size(BODY_FONT_SIZE),
-                        );
                     });
                 }
             }
@@ -2339,4 +2392,59 @@ fn main() -> Result<(), eframe::Error> {
             ))
         }),
     )
+}
+
+#[cfg(test)]
+mod workbench_layout_tests {
+    use super::*;
+
+    #[test]
+    fn compact_palette_footer_reserves_wrapped_status_above_scrollable_results() {
+        let ctx = egui::Context::default();
+        ui_ext::configure_workbench_style(&ctx);
+        let palette = ui_appearance::palette(WorkbenchAppearance::Dark);
+        let status = "Action failed: a long diagnostic message that wraps across the compact footer while preserving the palette hint and the full error status.";
+        let mut remaining_height = 0.0;
+        let mut footer_rect = egui::Rect::NOTHING;
+        let mut body_rect = egui::Rect::NOTHING;
+        let mut results_content_height = 0.0;
+        let mut results_viewport_height = 0.0;
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1177.0, 662.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.allocate_space(egui::vec2(ui.available_width(), 480.0));
+                    body_rect = ui.available_rect_before_wrap();
+                    footer_rect =
+                        show_workbench_footer(ui, WorkbenchView::Palette, Some(status), &palette);
+                    remaining_height = ui.available_height();
+                    let results = egui::ScrollArea::vertical()
+                        .max_height(ui.available_height().max(0.0))
+                        .show(ui, |ui| {
+                            for result in 0..40 {
+                                ui.label(format!("Result {result}: representative operation"));
+                            }
+                        });
+                    results_content_height = results.content_size.y;
+                    results_viewport_height = results.inner_rect.height();
+                });
+            },
+        );
+
+        assert!(remaining_height > 0.0);
+        assert!(footer_rect.min.y > 0.0);
+        assert!(
+            footer_rect.max.y <= body_rect.max.y,
+            "footer {footer_rect:?} exceeds body {body_rect:?}"
+        );
+        assert!(results_viewport_height > 0.0);
+        assert!(results_content_height > results_viewport_height);
+    }
 }

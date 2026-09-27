@@ -123,9 +123,9 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
       - [ ] **H1.4l3b [Primary] Verify the embedded stem editor footer live.**
   - **H1.4m Empty/no-daemon compact workbench footer and rolling-audio strip**
     - [x] **H1.4m1 [Primary] Determine provenance of the clipped rolling-audio strip header at 1280×720.** Baseline `4edf785` has the same sequential palette footer, 120-point list minimum, and unwrapped strip header; current 36-point search adds four points of pressure. A fresh isolated capture at `ad55623` reproduces vertical header occlusion. Original runtime severity is not independently replayed.
-    - [ ] **H1.4m2 [Primary] Reserve footer space for the empty/no-daemon mirror at 1280×720.**
-    - [ ] **H1.4m3 [Primary] Keep the no-daemon rolling-audio strip header visible at 1280×720.**
-    - [ ] **H1.4m4 [Primary] Add compact empty/no-daemon layout regression coverage.**
+    - [x] **H1.4m2 [Primary; Luna implementation] Reserve footer space for the empty/no-daemon mirror at 1280×720.** A measured shared footer panel now precedes central content; the palette result list uses remaining finite height without a 120-point floor. Isolated compact capture shows footer above rolling strip.
+    - [x] **H1.4m3 [Primary; Luna implementation] Keep the no-daemon rolling-audio strip header visible at 1280×720.** Long header states wrap, including the silent-state icon/text group; isolated capture shows the refresh-failure status fully within the strip.
+    - [ ] **H1.4m4 [Primary] Add compact empty/no-daemon layout regression coverage.** Focused production-footer test covers 1177×662 with wrapped status and 40 scroll rows; full empty-workbench layout remains a separate open regression case.
 
   - [ ] **H1.4n [Primary] Compare the observed title/footer layout defects with baseline `4edf785` and record their provenance.** Current visual evidence alone does not establish which are migration regressions.
 
