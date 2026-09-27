@@ -202,7 +202,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **E2.4f2a [Luna] Audit workbench header/status and StudioShell labels.** Both appearances meet contrast targets for the large brand title (3:1), secondary labels/footer hints (4.5:1), and small StudioShell footer readouts (4.5:1); dynamic action/status labels use the tested contrast helper.
     - [x] **E2.4f2b [Luna] Audit Audio Inspect and spectrogram plot labels.** Added a Light/Dark contrast check for the L/R/Mono waveform gutter accent against the recessed canvas; spectrogram axes and loading labels use the semantic secondary role, checked against every neutral surface.
     - [x] **E2.4f2c [Luna] Audit HF Analysis and stem-separation plot labels.** HF Analysis axes use the semantic secondary foreground; stem waveform placeholders use the accent or muted foreground over recessed fill. Both pairs are covered by the Light/Dark palette contrast checks added above.
-    - [ ] **E2.4f2d [Luna] Audit Digital Decode labels and protocol chips.**
+    - [x] **E2.4f2d [Luna] Audit Digital Decode labels and protocol chips.** Protocol hues remain on visual borders/data cues; small labels use a foreground resolved against control, badge, and symbol-chip fills. Tests cover all supported protocols and selected/hover/default chip opacity in Light and Dark; workbench suite passes (229 passed, one ignored).
     - [ ] **E2.4f2e [Luna] Audit Node Machine canvas labels.**
     - [ ] **E2.4f2f [Luna] Audit MIDI canvas labels.**
     - [ ] **E2.4f2g [Luna] Audit 3D viewport labels.**

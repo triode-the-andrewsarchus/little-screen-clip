@@ -518,11 +518,8 @@ impl AudioPreviewState {
             );
             let rgb = proto.chip_color();
             let proto_color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-            painter.rect_filled(
-                badge_rect,
-                Rounding::same(4.0),
-                Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], 40),
-            );
+            let badge_fill = Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], 40);
+            painter.rect_filled(badge_rect, Rounding::same(4.0), badge_fill);
             painter.rect_stroke(
                 badge_rect,
                 Rounding::same(4.0),
@@ -533,7 +530,12 @@ impl AudioPreviewState {
                 egui::Align2::CENTER_CENTER,
                 proto.label(),
                 egui::FontId::monospace(10.0),
-                proto_color,
+                crate::ui_ext::contrast_text_c32_on(
+                    badge_fill,
+                    bg_frame,
+                    Some(proto_color),
+                    palette,
+                ),
             );
 
             // Render symbol chips in this lane
@@ -586,11 +588,17 @@ impl AudioPreviewState {
 
                 // Chip label text
                 if chip_rect.width() >= 14.0 {
-                    let text_color = if is_selected {
+                    let preferred_text = if is_selected {
                         Color32::WHITE
                     } else {
                         crate::hex_to_c32(&palette.colors.text_primary)
                     };
+                    let text_color = crate::ui_ext::contrast_text_c32_on(
+                        chip_fill,
+                        bg_frame,
+                        Some(preferred_text),
+                        palette,
+                    );
                     let label = if chip_rect.width() < needed_w - 6.0 && is_cw {
                         sym.symbol.split_whitespace().next().unwrap_or(&sym.symbol)
                     } else {
@@ -1019,11 +1027,14 @@ impl AudioPreviewState {
                 let mut enabled = is_enabled;
                 let rgb = proto.chip_color();
                 let col = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                let label_text = egui::RichText::new(proto.label()).color(if is_enabled {
-                    col
-                } else {
-                    text_f_med
-                });
+                let controls_surface = ui.visuals().panel_fill;
+                let label_text =
+                    egui::RichText::new(proto.label()).color(crate::ui_ext::contrast_text_c32_on(
+                        controls_surface,
+                        controls_surface,
+                        Some(if is_enabled { col } else { text_f_med }),
+                        palette,
+                    ));
                 if ui.checkbox(&mut enabled, label_text).changed() {
                     if enabled {
                         self.digital_decode.enabled_protocols.insert(proto);
@@ -1176,7 +1187,12 @@ impl AudioPreviewState {
                                     ui.label(
                                         egui::RichText::new(format!("● {}", proto.label()))
                                             .strong()
-                                            .color(col),
+                                            .color(crate::ui_ext::contrast_text_c32_on(
+                                                ui.visuals().panel_fill,
+                                                ui.visuals().panel_fill,
+                                                Some(col),
+                                                palette,
+                                            )),
                                     );
                                     ui.label(
                                         egui::RichText::new(format!("({} symbols)", symbols.len()))
@@ -1274,9 +1290,14 @@ impl AudioPreviewState {
 
                                     // Protocol
                                     ui.label(
-                                        egui::RichText::new(sym.protocol.label())
-                                            .strong()
-                                            .color(proto_col),
+                                        egui::RichText::new(sym.protocol.label()).strong().color(
+                                            crate::ui_ext::contrast_text_c32_on(
+                                                ui.visuals().panel_fill,
+                                                ui.visuals().panel_fill,
+                                                Some(proto_col),
+                                                palette,
+                                            ),
+                                        ),
                                     );
 
                                     // Symbol
@@ -1330,6 +1351,21 @@ impl AudioPreviewState {
 mod tests {
     use super::*;
 
+    fn composite(fill: Color32, surface: Color32) -> Color32 {
+        let foreground = egui::Rgba::from(fill);
+        let background = egui::Rgba::from(surface);
+        let remaining = 1.0 - foreground.a();
+        Color32::from(egui::Rgba::from_rgb(
+            foreground.r() + background.r() * remaining,
+            foreground.g() + background.g() * remaining,
+            foreground.b() + background.b() * remaining,
+        ))
+    }
+
+    fn contrast(a: Color32, b: Color32) -> f32 {
+        little_clip_core::palette::contrast_ratio((a.r(), a.g(), a.b()), (b.r(), b.g(), b.b()))
+    }
+
     #[test]
     fn digital_decode_state_initializes_with_all_protocols_enabled() {
         let state = DigitalDecodeState::default();
@@ -1344,5 +1380,60 @@ mod tests {
         assert_eq!(TranscriptTab::default(), TranscriptTab::Plaintext);
         let tab = TranscriptTab::StructuredEvents;
         assert_ne!(tab, TranscriptTab::Plaintext);
+    }
+
+    #[test]
+    fn protocol_labels_meet_contrast_on_controls_and_timeline_chips() {
+        for appearance in [
+            little_clip_core::config::WorkbenchAppearance::Dark,
+            little_clip_core::config::WorkbenchAppearance::Light,
+        ] {
+            let palette = crate::ui_appearance::palette(appearance);
+            let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
+
+            for &protocol in DecoderProtocol::all() {
+                let rgb = protocol.chip_color();
+                let protocol_color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                let control_text = crate::ui_ext::contrast_text_c32_on(
+                    colors.panel,
+                    colors.panel,
+                    Some(protocol_color),
+                    &palette,
+                );
+                assert!(
+                    contrast(colors.panel, control_text) >= 4.5,
+                    "{appearance:?} {:?} control label lacks contrast",
+                    protocol
+                );
+
+                let badge_fill = Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], 40);
+                let badge_text = crate::ui_ext::contrast_text_c32_on(
+                    badge_fill,
+                    colors.canvas,
+                    Some(protocol_color),
+                    &palette,
+                );
+                assert!(
+                    contrast(composite(badge_fill, colors.canvas), badge_text) >= 4.5,
+                    "{appearance:?} {:?} timeline label lacks contrast",
+                    protocol
+                );
+
+                for alpha in [120, 180, 220] {
+                    let chip_fill = Color32::from_rgba_unmultiplied(rgb[0], rgb[1], rgb[2], alpha);
+                    let chip_text = crate::ui_ext::contrast_text_c32_on(
+                        chip_fill,
+                        colors.canvas,
+                        Some(colors.text_primary),
+                        &palette,
+                    );
+                    assert!(
+                        contrast(composite(chip_fill, colors.canvas), chip_text) >= 4.5,
+                        "{appearance:?} {:?} symbol chip lacks contrast at alpha {alpha}",
+                        protocol
+                    );
+                }
+            }
+        }
     }
 }
