@@ -1205,6 +1205,7 @@ impl ImagePreviewState {
             palette,
             close,
         )
+        .with_compact_title(self.title.clone())
         .with_badge(dim_text, Some(hex_to_c32(&palette.harmonies.split_comp_1)))
         .with_badge(fmt_str, Some(hex_to_c32(&palette.diff_add)))
         .with_badge(size_str, Some(hex_to_c32(&palette.diff_mod)))

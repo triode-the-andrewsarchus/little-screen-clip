@@ -453,6 +453,7 @@ impl StudioPanelLayout {
 /// The standard StudioShell component builder.
 pub struct StudioShell<'a> {
     pub title: String,
+    compact_title: Option<String>,
     pub icon: Option<Icon>,
     pub palette: &'a AppPalette,
     pub close: &'a mut bool,
@@ -471,6 +472,7 @@ impl<'a> StudioShell<'a> {
     ) -> Self {
         Self {
             title: title.into(),
+            compact_title: None,
             icon: icon.into(),
             palette,
             close,
@@ -483,6 +485,12 @@ impl<'a> StudioShell<'a> {
 
     pub fn with_badge(mut self, text: impl Into<String>, accent: Option<Color32>) -> Self {
         self.badges.push(HeaderBadge::new(text, accent));
+        self
+    }
+
+    /// Provide a shorter title to show when the full title cannot fit beside header actions.
+    pub fn with_compact_title(mut self, title: impl Into<String>) -> Self {
+        self.compact_title = Some(title.into());
         self
     }
 
@@ -662,6 +670,33 @@ impl<'a> StudioShell<'a> {
                 if let Some(icon) = self.icon {
                     name_ui.add(icon.image_tinted(18.0, colors.accent));
                 }
+                let title_font = egui::FontId::proportional(22.0);
+                let visible_title = self
+                    .compact_title
+                    .as_deref()
+                    .filter(|compact| {
+                        ui.fonts(|fonts| {
+                            let full_width = fonts
+                                .layout_no_wrap(
+                                    self.title.clone(),
+                                    title_font.clone(),
+                                    colors.text_primary,
+                                )
+                                .size()
+                                .x;
+                            let compact_width = fonts
+                                .layout_no_wrap(
+                                    compact.to_string(),
+                                    title_font.clone(),
+                                    colors.text_primary,
+                                )
+                                .size()
+                                .x;
+                            full_width > name_ui.available_width()
+                                && compact_width <= name_ui.available_width()
+                        })
+                    })
+                    .unwrap_or(&self.title);
                 let title_tooltip = if show_badges {
                     self.title.clone()
                 } else {
@@ -678,7 +713,7 @@ impl<'a> StudioShell<'a> {
                 name_ui
                     .add(
                         egui::Label::new(
-                            egui::RichText::new(&self.title)
+                            egui::RichText::new(visible_title)
                                 .strong()
                                 .size(22.0)
                                 .color(colors.text_primary),
@@ -751,6 +786,7 @@ mod tests {
                         &palette,
                         &mut close,
                     )
+                    .with_compact_title("fixture.webp")
                     .with_badge("6000×6000 (1:1)", None)
                     .with_badge("WEBP", None)
                     .with_badge("554.4 KB", None)
@@ -799,8 +835,13 @@ mod tests {
                     })
                     .unwrap_or_else(|| panic!("missing header label: {label}"))
             };
+            let title = if width == 1177.0 {
+                "fixture.webp"
+            } else {
+                "IMAGE STUDIO — a very long descriptive Unicode filename 日本語.webp"
+            };
             let labels = [
-                "IMAGE STUDIO — a very long descriptive Unicode filename 日本語.webp",
+                title,
                 "6000×6000 (1:1)",
                 "WEBP",
                 "554.4 KB",

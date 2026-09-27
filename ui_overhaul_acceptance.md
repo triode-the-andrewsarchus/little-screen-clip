@@ -138,3 +138,10 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 - Text now uses the badge center. `cargo test -p little-clip-render debug_handler_glyphs_stay_inside_the_badge` passes and inspects rendered pixels. `cargo fmt --check` and current `cargo build -p clip-workbench` pass.
 - Isolated Niri capture `/tmp/clip-mirror-badge-after-1280` at 1280×720 logical / 100% / Dark passed popup checks. Primary reviewed the settled screenshot; debug label is fully visible inside the badge.
 - Architecture comparison to `mirror-badge-start`: average/peak CCN and clone-group count unchanged; +32 LOC chiefly the pixel-bound regression. Tool reports REGRESSION and clone/chokepoint flags; source change adds no production helper or dependency.
+
+## Compact Image Studio filename title, 2026-09-27
+
+- Added optional compact-title behavior to existing `StudioShell`. When its full 22-point title is wider than its measured space and the compact label fits, it uses the compact label; the full title remains the hover tooltip. Image Studio supplies its filename as the compact label. Other studios without this option keep current titles.
+- `cargo test -p clip-workbench --bin clip-workbench long_image_header_keeps_actions_in_one_compact_row` passes; it checks compact filename at 1177 points and full title at wider hosts along with badges/action labels and row bounds. `cargo fmt --check`, build pass.
+- Isolated Niri capture `/tmp/clip-image-header-after-1280-light` at 1280×720 logical / 150% / Light passed popup geometry checks. Primary reviewed the settled screenshot: full `image-exif.tiff`, dimension/type/size badges, and Close/Save/Copy/external apps are visible together. Existing screenshot `/tmp/clip-image-footer-e2-1280-light` shows the before state. This only establishes a short filename case; long Unicode title handling and other modes remain in acceptance.
+- Architecture comparison `image-header-title-start`: average and peak CCN unchanged; duplication reduced 0.01%. Tool flags touched source as clone matches but reports no increased duplication percentage; no new dependency or high-complexity function.
