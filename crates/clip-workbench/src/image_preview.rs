@@ -1137,6 +1137,26 @@ impl ImagePreviewState {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.colors.canvas))
             .show(ui, |ui| {
+                let footer_hint = image_studio_footer_hint(self.active_mode);
+                let footer_text_height = ui.fonts(|fonts| {
+                    fonts
+                        .layout_no_wrap(
+                            footer_hint.to_owned(),
+                            egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
+                            Color32::WHITE,
+                        )
+                        .size()
+                        .y
+                });
+                let footer_height = footer_text_height + egui::Margin::symmetric(14.0, 6.0).sum().y;
+                egui::TopBottomPanel::bottom(ui.make_persistent_id("image_studio_footer"))
+                    .frame(egui::Frame::none())
+                    .resizable(false)
+                    .exact_height(footer_height)
+                    .show_inside(ui, |ui| {
+                        self.render_footer(ui, palette, now, footer_text_height)
+                    });
+
                 // 1. TOP HEADER & ESCAPE HATCHES
                 self.render_header(ui, ctx, palette, close);
 
@@ -1152,9 +1172,6 @@ impl ImagePreviewState {
 
                 // 3. MAIN INTERACTIVE VIEWPORT
                 self.render_active_tool_workspace(ui, ctx, palette);
-
-                // 4. BOTTOM STATUS / HELP BAR
-                self.render_footer(ui, palette, now);
             });
     }
 
@@ -1473,7 +1490,7 @@ impl ImagePreviewState {
     }
 
     fn render_viewport(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, palette: &AppPalette) {
-        let avail_size = ui.available_size() - Vec2::new(0.0, 32.0);
+        let avail_size = ui.available_size();
         if !self.auto_fitted && avail_size.x > 50.0 && avail_size.y > 50.0 {
             self.fit_to_view(avail_size);
             self.auto_fitted = true;
@@ -1628,40 +1645,39 @@ impl ImagePreviewState {
         }
     }
 
-    fn render_footer(&mut self, ui: &mut egui::Ui, palette: &AppPalette, now: f64) {
+    fn render_footer(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &AppPalette,
+        now: f64,
+        text_height: f32,
+    ) {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         egui::Frame::none()
             .fill(hex_to_c32(&palette.colors.surface_recessed))
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    // Help hints
-                    let hint_text = match self.active_mode {
-                        ImageToolMode::View => "🖱 Scroll: Zoom | Drag: Pan | ▼ EXIF Details | Ctrl+C: Copy Slot | Ctrl+S: Save As | 0: Fit",
-                        ImageToolMode::Crop => "🖱 Drag crop box/handles | Enter: Apply | Ctrl+C: Copy Slot | Ctrl+S: Save As | Esc: Cancel",
-                        ImageToolMode::Deskew => "🎯 Click 4 points (TL → TR → BR → BL) | 🖱 Drag handles | Enter: Apply | Esc: Close",
-                        ImageToolMode::Transform => "🖱 Rotate / Flip buttons above | Ctrl+Z: Undo | Ctrl+C: Copy Slot | Ctrl+S: Save As",
-                        ImageToolMode::Redact => "🖱 Drag on image: Place black bar | 🛡️ Strip EXIF | Del: Remove | Enter: Burn/Apply | Ctrl+C: Copy Slot",
-                        ImageToolMode::Markup => "🖱 Drag: Draw shape | 1-8: Tools | Del: Delete | Esc: Deselect | Enter: Flatten Layers | Ctrl+C: Copy Slot",
-                        ImageToolMode::PickColor => "🖱 Hover: Magnifying loupe | Click: Copy Hex code to clipboard | Ctrl+C: Copy Slot",
-                        ImageToolMode::Convert => "🖱 Drag vertical divider: Before/After comparison | Enter: Apply to Canvas | Ctrl+S: Save As",
-                        ImageToolMode::Ocr => "🖱 Choose engine and prompt on the left | Enter: Run OCR | Results appear on the right",
-                        ImageToolMode::Barcode => "🖱 Click code card or box to inspect | Enter: Rescan | 🌐 Open Link | 📋 Copy Payload",
-                        ImageToolMode::CreativeFx => "🖱 Split slider: Before/After comparison | Double-click: Fit | Sliders: Double-click to reset",
-                        _ => "🖱 Scroll: Zoom | Drag: Pan | Ctrl+C: Copy to Slot | Ctrl+S: Save As | 0: Fit | Esc: Close",
-                    };
+                ui.allocate_ui_with_layout(
+                    Vec2::new(ui.available_width(), text_height),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        ui.label(
+                            egui::RichText::new(image_studio_footer_hint(self.active_mode))
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
+                                .color(colors.text_secondary),
+                        );
 
-
-                    ui.label(
-                        egui::RichText::new(hint_text)
-                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .color(colors.text_secondary),
-                    );
-
-                    // Toast message
-                    ui.add_space(20.0);
-                    crate::ui_ext::StatusToast::render_opt(&self.status_toast, 5.0, ui, palette, now);
-                });
+                        // Toast message
+                        ui.add_space(20.0);
+                        crate::ui_ext::StatusToast::render_opt(
+                            &self.status_toast,
+                            5.0,
+                            ui,
+                            palette,
+                            now,
+                        );
+                    },
+                );
             });
     }
 
@@ -1685,6 +1701,47 @@ impl ImagePreviewState {
         let scale_y = avail_h / img_h;
         self.zoom = scale_x.min(scale_y).clamp(0.01, 5.0);
         self.pan = Vec2::ZERO;
+    }
+}
+
+fn image_studio_footer_hint(mode: ImageToolMode) -> &'static str {
+    match mode {
+        ImageToolMode::View => {
+            "🖱 Scroll: Zoom | Drag: Pan | ▼ EXIF Details | Ctrl+C: Copy Slot | Ctrl+S: Save As | 0: Fit"
+        }
+        ImageToolMode::Crop => {
+            "🖱 Drag crop box/handles | Enter: Apply | Ctrl+C: Copy Slot | Ctrl+S: Save As | Esc: Cancel"
+        }
+        ImageToolMode::Deskew => {
+            "🎯 Click 4 points (TL → TR → BR → BL) | 🖱 Drag handles | Enter: Apply | Esc: Close"
+        }
+        ImageToolMode::Transform => {
+            "🖱 Rotate / Flip buttons above | Ctrl+Z: Undo | Ctrl+C: Copy Slot | Ctrl+S: Save As"
+        }
+        ImageToolMode::Redact => {
+            "🖱 Drag on image: Place black bar | 🛡️ Strip EXIF | Del: Remove | Enter: Burn/Apply | Ctrl+C: Copy Slot"
+        }
+        ImageToolMode::Markup => {
+            "🖱 Drag: Draw shape | 1-8: Tools | Del: Delete | Esc: Deselect | Enter: Flatten Layers | Ctrl+C: Copy Slot"
+        }
+        ImageToolMode::PickColor => {
+            "🖱 Hover: Magnifying loupe | Click: Copy Hex code to clipboard | Ctrl+C: Copy Slot"
+        }
+        ImageToolMode::Convert => {
+            "🖱 Drag vertical divider: Before/After comparison | Enter: Apply to Canvas | Ctrl+S: Save As"
+        }
+        ImageToolMode::Ocr => {
+            "🖱 Choose engine and prompt on the left | Enter: Run OCR | Results appear on the right"
+        }
+        ImageToolMode::Barcode => {
+            "🖱 Click code card or box to inspect | Enter: Rescan | 🌐 Open Link | 📋 Copy Payload"
+        }
+        ImageToolMode::CreativeFx => {
+            "🖱 Split slider: Before/After comparison | Double-click: Fit | Sliders: Double-click to reset"
+        }
+        _ => {
+            "🖱 Scroll: Zoom | Drag: Pan | Ctrl+C: Copy to Slot | Ctrl+S: Save As | 0: Fit | Esc: Close"
+        }
     }
 }
 
@@ -1819,6 +1876,81 @@ fn render_svg_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
+    fn image_state_from_png(size: (u32, u32), title: &str) -> ImagePreviewState {
+        let mut png = Vec::new();
+        RgbaImage::new(size.0, size.1)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        ImagePreviewState::from_bytes_with_meta(
+            png,
+            "image/png".into(),
+            None,
+            title.into(),
+            &AppConfig::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn image_studio_footer_stays_inside_root_and_below_workspace_at_multiple_scales() {
+        for (size, zoom, mode) in [
+            (Vec2::new(820.0, 600.0), 1.0, ImageToolMode::View),
+            (Vec2::new(1280.0, 720.0), 1.5, ImageToolMode::Markup),
+            (Vec2::new(1600.0, 900.0), 2.0, ImageToolMode::View),
+        ] {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            ctx.set_zoom_factor(zoom);
+            let mut state = image_state_from_png((80, 60), "Footer layout test");
+            state.active_mode = mode;
+            let palette = AppPalette::default();
+            let mut root_rect = None;
+            let mut close_requested = false;
+
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        root_rect = Some(ui.max_rect());
+                        state.render_ui(ui, ctx, &palette, &mut close_requested);
+                    });
+                },
+            );
+
+            let root = root_rect.expect("root layout should render");
+            let footer_hint = image_studio_footer_hint(mode);
+            let footer = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::epaint::Shape::Text(text) if text.galley.text() == footer_hint => {
+                        Some(Rect::from_min_size(text.pos, text.galley.size()))
+                    }
+                    _ => None,
+                })
+                .expect("footer hint should paint");
+            let viewport = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::epaint::Shape::Rect(rect)
+                        if rect.fill == crate::hex_to_c32(&palette.colors.canvas)
+                            && rect.rounding == Rounding::same(6.0) =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .expect("viewport canvas should paint");
+            assert!(root.contains(footer.min) && root.contains(footer.max));
+            assert!(root.contains(viewport.min) && root.contains(viewport.max));
+            assert!(viewport.max.y < footer.min.y);
+        }
+    }
+
     #[test]
     fn image_editor_hatch_keeps_configured_command_and_fallback_help_together() {
         let hatch = image_editor_hatch("Inkscape", "inkscape", "/missing/path/inkscape");
@@ -1848,19 +1980,7 @@ mod tests {
 
     #[test]
     fn save_dialog_owns_image_shortcuts_until_dismissed() {
-        let image = RgbaImage::new(100, 100);
-        let mut png = Vec::new();
-        image
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .unwrap();
-        let mut state = ImagePreviewState::from_bytes_with_meta(
-            png,
-            "image/png".into(),
-            None,
-            "Test image".into(),
-            &AppConfig::default(),
-        )
-        .unwrap();
+        let mut state = image_state_from_png((100, 100), "Test image");
         state.active_mode = ImageToolMode::Crop;
         state.crop_state.normalized_rect =
             Rect::from_min_max(Pos2::new(0.1, 0.1), Pos2::new(0.6, 0.6));
