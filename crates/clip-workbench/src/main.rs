@@ -97,6 +97,27 @@ pub(crate) fn hex_to_c32_alpha(hex: &str, alpha: u8) -> egui::Color32 {
     egui::Color32::from_rgba_unmultiplied(r, g, b, alpha)
 }
 
+fn update_palette_search_focus(
+    ctx: &egui::Context,
+    response: &egui::Response,
+    needs_focus: &mut bool,
+    audio_region_active: bool,
+    activate_from_audio: bool,
+) {
+    if audio_region_active {
+        if response.has_focus() {
+            ctx.memory_mut(|memory| memory.surrender_focus(response.id));
+        }
+        if activate_from_audio {
+            response.request_focus();
+        }
+        *needs_focus = false;
+    } else if *needs_focus {
+        response.request_focus();
+        *needs_focus = false;
+    }
+}
+
 fn show_workbench_footer(
     ui: &mut egui::Ui,
     view: WorkbenchView,
@@ -1252,24 +1273,22 @@ impl eframe::App for WorkbenchApp {
                             [ui.available_width() - 20.0, ui_ext::CONTROL_HEIGHT],
                             text_edit,
                         );
-                        if !audio_region_active {
-                            if self.palette_search_needs_focus {
-                                response.request_focus();
-                                self.palette_search_needs_focus = false;
-                            }
-                        } else {
-                            if response.has_focus() {
-                                ctx.memory_mut(|m| m.surrender_focus(response.id));
-                            }
-                            if response.clicked() || (response.hovered() && ctx.input(|i| i.pointer.primary_clicked())) {
+                        let activate_from_audio = response.clicked()
+                            || (response.hovered()
+                                && ctx.input(|i| i.pointer.primary_clicked()));
+                        if audio_region_active && activate_from_audio {
                                 if let Some(strip) = &mut self.rolling_audio_strip {
                                     strip.selected_region = None;
                                     strip.stop();
                                 }
-                                response.request_focus();
-                                self.palette_search_needs_focus = false;
-                            }
                         }
+                        update_palette_search_focus(
+                            ctx,
+                            &response,
+                            &mut self.palette_search_needs_focus,
+                            audio_region_active,
+                            activate_from_audio,
+                        );
                     });
 
                     ui.add_space(8.0);
@@ -2397,6 +2416,62 @@ fn main() -> Result<(), eframe::Error> {
 #[cfg(test)]
 mod workbench_layout_tests {
     use super::*;
+
+    #[test]
+    fn palette_search_focus_yields_to_audio_and_returns_on_activation() {
+        fn render_field(
+            ctx: &egui::Context,
+            value: &mut String,
+            needs_focus: &mut bool,
+            audio_active: bool,
+            activate_from_audio: bool,
+        ) -> egui::Id {
+            let mut field_id = None;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(500.0, 180.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let mut field = egui::TextEdit::singleline(value);
+                        if audio_active {
+                            field = field.interactive(false);
+                        }
+                        let response = ui.add(field.desired_width(300.0));
+                        field_id = Some(response.id);
+                        update_palette_search_focus(
+                            ctx,
+                            &response,
+                            needs_focus,
+                            audio_active,
+                            activate_from_audio,
+                        );
+                    });
+                },
+            );
+            field_id.unwrap()
+        }
+
+        let ctx = egui::Context::default();
+        ui_ext::configure_workbench_style(&ctx);
+        let mut value = String::new();
+        let mut needs_focus = true;
+        let id = render_field(&ctx, &mut value, &mut needs_focus, false, false);
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(id));
+
+        render_field(&ctx, &mut value, &mut needs_focus, true, false);
+        assert_eq!(ctx.memory(|memory| memory.focused()), None);
+
+        render_field(&ctx, &mut value, &mut needs_focus, true, true);
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(id));
+
+        render_field(&ctx, &mut value, &mut needs_focus, false, false);
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(id));
+    }
 
     #[test]
     fn compact_palette_footer_reserves_wrapped_status_above_scrollable_results() {
