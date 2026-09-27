@@ -180,11 +180,14 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **E2.3b [Luna] Finish Quick Palette chrome checks.** Ordinary labels use body-size token; compact 1280×720 Dark no-daemon capture confirms search, result row and footer remain visible above rolling audio after the shared-footer fix.
   - **E2.3b1 Auto Actions chrome**
     - [x] **E2.3b1a [Luna] Wrap Auto Actions header and setting rows at narrow widths.** Header subtitle and setting status now flow onto another row instead of forcing a single-line layout; ordinary labels use body-size token.
-    - [ ] **E2.3b1b [Luna] Inspect Auto Actions at representative logical sizes.** Confirm the wrapped header, card status, and explanatory text remain visible at 1280×720 and a wide host size.
-  - [ ] **E2.3c [Luna] Finish rolling-audio chrome checks.** Ordinary labels use body-size token.
-  - [ ] **E2.3c1 [Luna] Finish MIDI chrome checks.** Ordinary labels, shared 36-point transport/track controls and narrow-width wrapping are done.
+    - [x] **E2.3b1b [Luna] Add production-render bounds regression for Auto Actions.** The production view renderer places header, subtitle, card, status badge, and explanatory text inside CentralPanel bounds at 1280×720 and 3440×1440; workbench suite passes.
+    - [ ] **E2.3b1c [Primary] Inspect Auto Actions in a live host at compact and wide sizes.** Confirm visual spacing and card readability; renderer tests are not compositor-level evidence.
+  - [x] **E2.3c [Luna] Finish rolling-audio chrome checks.** Ordinary labels use body-size metrics; egui render regression checks header text bounds/no elision at 520- and 1200-point widths for loading/error, silence/toast, and selected-region states. Light/Dark status contrast test passes. This is a host-render regression, not a manual Niri session.
+  - [x] **E2.3c1 [Luna] Finish MIDI chrome checks.** Ordinary labels and 36-point transport/track controls use shared metrics and wrap at compact widths. Production `render_ui` regression covers long solo/selection labels at 760, 1000, and 1760 points, verifies required controls remain present without elision, and checks painted text stays within host bounds. It exposed and fixed the shared footer's unwrapped readout; a StudioShell regression now covers 760/1200-point hosts.
   - [ ] **E2.3d [Luna] Finish text search/status live layout checks.**
-  - [ ] **E2.3d1 [Luna] Finish Markdown live layout checks.** Body/list/quote use shared metrics.
+  - **E2.3d1 Markdown body/list/quote layout**
+    - [x] **E2.3d1a [Luna] Add compact/wide production-render layout regression.** Checks body, list, and quote text wraps, stays within clip bounds, is not elided, and uses the shared body size at 390 and 1400 points; workbench suite passes.
+    - [ ] **E2.3d1b [Primary] Inspect Markdown in a live host at compact and wide sizes.** Renderer tests are not compositor-level evidence.
   - [ ] **E2.3e [Luna] Finish spreadsheet sheet-label/header-search live layout checks.** Width-limited header search is in place.
   - [ ] **E2.3f [Luna] Finish 3D loading/error and narrow-toolbar live checks.** Toolbar wraps at narrow widths.
   - [ ] **E2.3g [Luna] Finish node-machine forms/status live checks.**

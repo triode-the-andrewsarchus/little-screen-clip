@@ -1614,43 +1614,62 @@ mod tests {
         let palette = little_clip_core::palette::AppPalette::default();
         let ctx = egui::Context::default();
 
-        let _ = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::Vec2::new(1000.0, 600.0),
-                )),
-                ..Default::default()
-            },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let mut close = false;
-                    state.render_ui(ui, &palette, &mut close);
-                    assert!(!close);
-                });
-            },
-        );
-
-        // Verify solo toggle and render with solo active
         state.toggle_solo(0);
         assert_eq!(state.solo_track, Some(0));
+        state.selected_region = Some((0.5, 1.5));
 
-        let _ = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::Vec2::new(1000.0, 600.0),
-                )),
-                ..Default::default()
-            },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let mut close = false;
-                    state.render_ui(ui, &palette, &mut close);
-                    assert!(!close);
-                });
-            },
-        );
+        for width in [760.0, 1000.0, 1760.0] {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::Vec2::new(width, 600.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let mut close = false;
+                        state.render_ui(ui, &palette, &mut close);
+                        assert!(!close);
+                    });
+                },
+            );
+
+            let required_labels = [
+                "Copy Solo Slice (Melody)",
+                "Sel: 0.50s - 1.50s",
+                "Solo: Melody",
+                "Unsolo",
+                "Tracks:",
+            ];
+            let visible_text = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::epaint::Shape::Text(shape) => Some(shape),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            for required in required_labels {
+                assert!(
+                    visible_text.iter().any(|shape| {
+                        shape.galley.job.text.contains(required) && !shape.galley.elided
+                    }),
+                    "{required:?} missing or elided at {width} points"
+                );
+            }
+
+            for shape in visible_text {
+                let bounds = shape.galley.rect.translate(shape.pos.to_vec2());
+                assert!(
+                    bounds.left() >= 0.0 && bounds.right() <= width + 0.5,
+                    "MIDI label {:?} exceeds {width}-point host: {bounds:?}",
+                    shape.galley.job.text
+                );
+            }
+        }
 
         state.clear_solo();
         assert_eq!(state.solo_track, None);

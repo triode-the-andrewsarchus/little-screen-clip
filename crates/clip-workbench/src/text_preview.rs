@@ -1604,6 +1604,85 @@ mod tests {
     }
 
     #[test]
+    fn markdown_body_list_and_quote_wrap_without_clipping_at_compact_and_wide_widths() {
+        let markers = ["BODY_MARKER", "LIST_MARKER", "QUOTE_MARKER"];
+        let content = format!(
+            "BODY_MARKER {}\n\n- LIST_MARKER {}\n\n> QUOTE_MARKER {}",
+            "paragraph text that should wrap naturally without being elided or clipped ".repeat(5),
+            "list text that should wrap naturally without being elided or clipped ".repeat(5),
+            "quoted text that should wrap naturally without being elided or clipped ".repeat(5),
+        );
+
+        for (label, width) in [("compact", 390.0), ("wide", 1400.0)] {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette = AppPalette::default();
+            let mut state =
+                TextPreviewState::from_text(content.clone(), None, &AppConfig::default());
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 1800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_markdown_view(ui, &palette);
+                    });
+                },
+            );
+
+            for marker in markers {
+                let matching: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|clipped| match &clipped.shape {
+                        egui::Shape::Text(text) if text.galley.text().contains(marker) => {
+                            Some((clipped.clip_rect, text))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert!(
+                    !matching.is_empty(),
+                    "{label} Markdown render omitted {marker}"
+                );
+
+                let mut rendered_rows = 0;
+                for (clip_rect, text) in matching {
+                    let bounds = text.galley.rect.translate(text.pos.to_vec2());
+                    assert!(
+                        bounds.left() >= clip_rect.left() - 0.5
+                            && bounds.right() <= clip_rect.right() + 0.5,
+                        "{label} {marker} exceeds horizontal clip bounds: {bounds:?} vs {clip_rect:?}"
+                    );
+                    assert!(
+                        bounds.top() >= clip_rect.top() - 0.5
+                            && bounds.bottom() <= clip_rect.bottom() + 0.5,
+                        "{label} {marker} exceeds vertical clip bounds: {bounds:?} vs {clip_rect:?}"
+                    );
+                    assert!(!text.galley.elided, "{label} {marker} was elided");
+                    assert!(
+                        text.galley.job.sections.iter().all(|section| {
+                            (section.format.font_id.size - BODY_FONT_SIZE).abs() < 0.1
+                        }),
+                        "{label} {marker} did not use the shared body font size"
+                    );
+                    rendered_rows += text.galley.rows.len();
+                }
+                if label == "compact" {
+                    assert!(
+                        rendered_rows > 1,
+                        "compact {marker} did not wrap: {rendered_rows} rendered rows"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn measured_row_offsets_find_wrapped_rows_and_invalidate_on_width_change() {
         let mut rows = CodeRowHeights::default();
         rows.reset(4, 200.0, 20.0, 1.0);

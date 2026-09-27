@@ -735,7 +735,7 @@ impl<'a> StudioShell<'a> {
             .fill(colors.recessed)
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if let Some(hints) = self.footer_hints {
                         ui.label(egui::RichText::new(hints).color(colors.text_muted));
                     }
@@ -762,6 +762,55 @@ impl<'a> StudioShell<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn footer_readout_wraps_without_clipping_at_compact_width() {
+        let readout = "Selection: 0.50s - 1.50s (1.00s • Solo: Melody) • [Ctrl+C] Copy • [Space] Play • [Esc] Clear";
+        for width in [760.0, 1200.0] {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+            let mut close = false;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(width, 120.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let shell = StudioShell::new("MIDI", None, &palette, &mut close)
+                            .with_footer_hints("[Esc] Close | [Space] Play")
+                            .with_footer_readout(readout);
+                        shell.render_footer(ui, &None, 0.0);
+                    });
+                },
+            );
+            let shape = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::epaint::Shape::Text(shape) if shape.galley.job.text == readout => {
+                        Some((shape, clipped.clip_rect))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("footer readout was not painted at {width} points"));
+            let bounds = shape.0.galley.rect.translate(shape.0.pos.to_vec2());
+            assert!(
+                !shape.0.galley.elided,
+                "footer readout was elided at {width} points"
+            );
+            assert!(
+                bounds.left() >= shape.1.left() - 0.5 && bounds.right() <= shape.1.right() + 0.5,
+                "footer readout exceeds {width}-point footer: {bounds:?} clipped to {:?}",
+                shape.1
+            );
+        }
+    }
 
     #[test]
     fn related_external_editor_actions_share_width() {

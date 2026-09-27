@@ -333,6 +333,140 @@ fn route_workbench_escape(
     }
 }
 
+struct AutoActionsLayout {
+    header: egui::Rect,
+    subtitle: egui::Rect,
+    card: egui::Rect,
+    status: egui::Rect,
+    explanation: egui::Rect,
+    behavior: egui::Rect,
+}
+
+impl Default for AutoActionsLayout {
+    fn default() -> Self {
+        Self {
+            header: egui::Rect::NOTHING,
+            subtitle: egui::Rect::NOTHING,
+            card: egui::Rect::NOTHING,
+            status: egui::Rect::NOTHING,
+            explanation: egui::Rect::NOTHING,
+            behavior: egui::Rect::NOTHING,
+        }
+    }
+}
+
+fn render_auto_actions(
+    ui: &mut egui::Ui,
+    config: &mut AppConfig,
+    palette: &AppPalette,
+) -> (Option<bool>, AutoActionsLayout) {
+    let mut layout = AutoActionsLayout::default();
+    let mut changed = None;
+    ui.add_space(4.0);
+    ui.horizontal_wrapped(|ui| {
+        Icon::Settings.ui(ui, 18.0, hex_to_c32(&palette.harmonies.base));
+        layout.header = ui
+            .heading(
+                egui::RichText::new("Matched Auto-Actions")
+                    .color(hex_to_c32(&palette.harmonies.base))
+                    .strong(),
+            )
+            .rect;
+        layout.subtitle = ui
+            .label(
+                egui::RichText::new("— Actions trigger automatically on clipboard match")
+                    .color(hex_to_c32(&palette.colors.text_secondary)),
+            )
+            .rect;
+    });
+    ui.add_space(8.0);
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+        let card_bg = hex_to_c32(&palette.colors.surface_recessed);
+        let card_stroke = hex_to_c32(&palette.colors.surface_panel);
+        let card = egui::Frame::none()
+            .fill(card_bg)
+            .stroke(egui::Stroke::new(1.0_f32, card_stroke))
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(egui::Margin::symmetric(16.0, 14.0))
+            .show(ui, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    let mut trim = config.auto_actions.trim_link_tracking;
+                    let title_color = contrast_text_c32(
+                        card_bg,
+                        Some(hex_to_c32(&palette.colors.text_primary)),
+                        palette,
+                    );
+                    let cb = ui.checkbox(
+                        &mut trim,
+                        egui::RichText::new("Clean Tracking from Links")
+                            .strong()
+                            .size(BODY_FONT_SIZE)
+                            .color(title_color),
+                    );
+                    if cb.changed() {
+                        config.auto_actions.trim_link_tracking = trim;
+                        changed = Some(trim);
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let (status_text, badge_bg, pref_fg) = if trim {
+                            (
+                                "ENABLED",
+                                hex_to_c32(&palette.diff_add),
+                                hex_to_c32(&palette.colors.text_primary),
+                            )
+                        } else {
+                            (
+                                "DISABLED",
+                                hex_to_c32(&palette.colors.surface_panel),
+                                hex_to_c32(&palette.colors.text_secondary),
+                            )
+                        };
+                        let badge_fg = contrast_text_c32(badge_bg, Some(pref_fg), palette);
+                        egui::Frame::none()
+                            .fill(badge_bg)
+                            .rounding(egui::Rounding::same(4.0))
+                            .inner_margin(egui::Margin::symmetric(8.0, 3.0))
+                            .show(ui, |ui| {
+                                layout.status = ui
+                                    .label(
+                                        egui::RichText::new(status_text)
+                                            .size(BODY_FONT_SIZE)
+                                            .strong()
+                                            .color(badge_fg),
+                                    )
+                                    .rect;
+                            });
+                    });
+                });
+
+                ui.add_space(6.0);
+                layout.explanation = ui
+                    .label(
+                        egui::RichText::new(
+                            "Automatically strips tracking queries (utm_source, utm_medium, fbclid, gclid, twclid, si, etc.) when any HTTP or HTTPS URL is copied to the clipboard.",
+                        )
+                        .color(hex_to_c32(&palette.colors.text_primary)),
+                    )
+                    .rect;
+                ui.add_space(4.0);
+                layout.behavior = ui
+                    .label(
+                        egui::RichText::new(
+                            "↳ Behavior: Cleaned link is placed directly into the active hand; original untracked URL is preserved in Undo [Z] for instant bypass.",
+                        )
+                        .size(BODY_FONT_SIZE)
+                        .color(hex_to_c32(&palette.colors.text_secondary)),
+                    )
+                    .rect;
+            });
+        layout.card = card.response.rect;
+        ui.add_space(14.0);
+    });
+    (changed, layout)
+}
+
 impl WorkbenchApp {
     fn new(
         state: SlotManager,
@@ -1412,85 +1546,12 @@ impl eframe::App for WorkbenchApp {
                     }
                 }
                 WorkbenchView::AutoActions => {
-                    ui.add_space(4.0);
-                    ui.horizontal_wrapped(|ui| {
-                        Icon::Settings.ui(ui, 18.0, hex_to_c32(&self.ui_palette.harmonies.base));
-                        ui.heading(
-                            egui::RichText::new("Matched Auto-Actions")
-                                .color(hex_to_c32(&self.ui_palette.harmonies.base))
-                                .strong(),
-                        );
-                        ui.label(
-                            egui::RichText::new("— Actions trigger automatically on clipboard match")
-                                .color(hex_to_c32(&self.ui_palette.colors.text_secondary)),
-                        );
-                    });
-                    ui.add_space(8.0);
-
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        // Card 1: URL Tracking Cleaner
-                        let card_bg = hex_to_c32(&self.ui_palette.colors.surface_recessed);
-                        let card_stroke = hex_to_c32(&self.ui_palette.colors.surface_panel);
-                        egui::Frame::none()
-                            .fill(card_bg)
-                            .stroke(egui::Stroke::new(1.0_f32, card_stroke))
-                            .rounding(egui::Rounding::same(8.0))
-                            .inner_margin(egui::Margin::symmetric(16.0, 14.0))
-                            .show(ui, |ui| {
-                                ui.horizontal_wrapped(|ui| {
-                                    let mut trim = self.config.auto_actions.trim_link_tracking;
-                                    let title_color = contrast_text_c32(card_bg, Some(hex_to_c32(&self.ui_palette.colors.text_primary)), &self.ui_palette);
-                                    let cb = ui.checkbox(
-                                        &mut trim,
-                                        egui::RichText::new("Clean Tracking from Links")
-                                            .strong()
-                                            .size(BODY_FONT_SIZE)
-                                            .color(title_color),
-                                    );
-                                    if cb.changed() {
-                                        self.config.auto_actions.trim_link_tracking = trim;
-                                        let _ = send_ipc_request(&IpcRequest::SetAutoAction {
-                                            key: "trim_link_tracking".to_string(),
-                                            enabled: trim,
-                                        });
-                                    }
-
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        let (status_text, badge_bg, pref_fg) = if trim {
-                                            ("ENABLED", hex_to_c32(&self.ui_palette.diff_add), hex_to_c32(&self.ui_palette.colors.text_primary))
-                                        } else {
-                                            ("DISABLED", hex_to_c32(&self.ui_palette.colors.surface_panel), hex_to_c32(&self.ui_palette.colors.text_secondary))
-                                        };
-                                        let badge_fg = contrast_text_c32(badge_bg, Some(pref_fg), &self.ui_palette);
-                                        egui::Frame::none()
-                                            .fill(badge_bg)
-                                            .rounding(egui::Rounding::same(4.0))
-                                            .inner_margin(egui::Margin::symmetric(8.0, 3.0))
-                                            .show(ui, |ui| {
-                                                ui.label(egui::RichText::new(status_text).size(BODY_FONT_SIZE).strong().color(badge_fg));
-                                            });
-                                    });
-                                });
-
-                                ui.add_space(6.0);
-                                ui.label(
-                                    egui::RichText::new(
-                                        "Automatically strips tracking queries (utm_source, utm_medium, fbclid, gclid, twclid, si, etc.) when any HTTP or HTTPS URL is copied to the clipboard.",
-                                    )
-                                    .color(hex_to_c32(&self.ui_palette.colors.text_primary)),
-                                );
-                                ui.add_space(4.0);
-                                ui.label(
-                                    egui::RichText::new(
-                                        "↳ Behavior: Cleaned link is placed directly into the active hand; original untracked URL is preserved in Undo [Z] for instant bypass.",
-                                    )
-                                    .size(BODY_FONT_SIZE)
-                                    .color(hex_to_c32(&self.ui_palette.colors.text_secondary)),
-                                );
-                            });
-
-                        ui.add_space(14.0);
-                    });
+                    if let Some(enabled) = render_auto_actions(ui, &mut self.config, &self.ui_palette).0 {
+                        let _ = send_ipc_request(&IpcRequest::SetAutoAction {
+                            key: "trim_link_tracking".to_string(),
+                            enabled,
+                        });
+                    }
                 }
             }
         });
@@ -2455,6 +2516,51 @@ fn main() -> Result<(), eframe::Error> {
 #[cfg(test)]
 mod workbench_layout_tests {
     use super::*;
+
+    #[test]
+    fn auto_actions_chrome_stays_inside_compact_and_wide_hosts() {
+        for size in [egui::vec2(1280.0, 720.0), egui::vec2(3440.0, 1440.0)] {
+            let ctx = egui::Context::default();
+            ui_ext::configure_workbench_style(&ctx);
+            let palette = ui_appearance::palette(WorkbenchAppearance::Dark);
+            let mut config = AppConfig::default();
+            let mut host = egui::Rect::NOTHING;
+            let mut rendered = None;
+
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ctx| {
+                    ui_appearance::apply_visuals(ctx, &palette);
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        host = ui.available_rect_before_wrap();
+                        rendered = Some(render_auto_actions(ui, &mut config, &palette));
+                    });
+                },
+            );
+
+            let layout = rendered.expect("Auto Actions view should render").1;
+            for (name, rect) in [
+                ("header", layout.header),
+                ("subtitle", layout.subtitle),
+                ("card", layout.card),
+                ("status", layout.status),
+                ("explanation", layout.explanation),
+                ("behavior", layout.behavior),
+            ] {
+                assert!(
+                    rect.is_positive(),
+                    "{name} was not laid out at {size:?}: {rect:?}"
+                );
+                assert!(
+                    host.contains_rect(rect),
+                    "{name} {rect:?} falls outside Auto Actions host {host:?} at {size:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn node_dialogs_own_escape_before_returning_to_palette() {
