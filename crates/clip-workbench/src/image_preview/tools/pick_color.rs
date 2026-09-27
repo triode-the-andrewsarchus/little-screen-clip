@@ -157,13 +157,13 @@ impl ImagePreviewState {
         );
         let readout_lines = [
             (hex_str, true, hex_text_col),
-            (format!("R: {}", pixel_data[0]), false, info_text_col),
-            (format!("G: {}", pixel_data[1]), false, info_text_col),
-            (format!("B: {}", pixel_data[2]), false, info_text_col),
-            (format!("X: {px}"), true, info_text_col),
-            (format!("Y: {py}"), true, info_text_col),
-            ("Click to".to_owned(), false, hint_text_col),
-            ("keep".to_owned(), false, hint_text_col),
+            (
+                format!("R{} G{} B{}", pixel_data[0], pixel_data[1], pixel_data[2]),
+                true,
+                info_text_col,
+            ),
+            (format!("X: {px}  Y: {py}"), true, info_text_col),
+            ("Click to keep".to_owned(), false, hint_text_col),
         ];
         let readout: Vec<_> = readout_lines
             .into_iter()

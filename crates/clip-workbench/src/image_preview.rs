@@ -2646,94 +2646,127 @@ mod tests {
 
     #[test]
     fn pick_color_hover_renders_loupe_and_click_records_sampled_pixel() {
-        let mut state = image_state_from_png((8, 8), "color picker interaction");
         let expected = Color32::from_rgb(230, 83, 122);
-        state.current_rgba = RgbaImage::from_pixel(
-            8,
-            8,
-            image::Rgba([expected.r(), expected.g(), expected.b(), 255]),
-        );
         let palette =
             AppPalette::for_appearance(little_clip_core::config::WorkbenchAppearance::Light);
-        let ctx = egui::Context::default();
-        let sample_area = Rect::from_min_size(Pos2::new(80.0, 80.0), Vec2::new(200.0, 120.0));
-        let pointer = sample_area.center();
-        let render = |state: &mut ImagePreviewState, time, events| {
-            ctx.run(
-                egui::RawInput {
-                    time: Some(time),
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 300.0))),
-                    events,
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        let response = ui.interact(
-                            sample_area,
-                            ui.id().with("pick-color-interaction-sample"),
-                            egui::Sense::click(),
-                        );
-                        let painter = ui.painter().clone();
-                        state.render_pick_color_overlay(
-                            ui,
-                            &painter,
-                            &response,
-                            sample_area,
-                            &palette,
-                        );
-                    });
-                },
-            )
-        };
+        for viewport_size in [Vec2::new(400.0, 300.0), Vec2::new(1200.0, 800.0)] {
+            let mut state = image_state_from_png((8, 8), "color picker interaction");
+            state.current_rgba = RgbaImage::from_pixel(
+                8,
+                8,
+                image::Rgba([expected.r(), expected.g(), expected.b(), 255]),
+            );
+            let ctx = egui::Context::default();
+            let render = |state: &mut ImagePreviewState, time, events| {
+                let mut canvas_bounds = None;
+                let output = ctx.run(
+                    egui::RawInput {
+                        time: Some(time),
+                        screen_rect: Some(Rect::from_min_size(Pos2::ZERO, viewport_size)),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            let bounds = ui.available_rect_before_wrap();
+                            let sample_area = bounds.shrink(12.0);
+                            let response = ui.interact(
+                                sample_area,
+                                ui.id().with("pick-color-interaction-sample"),
+                                egui::Sense::click(),
+                            );
+                            let painter = ui.painter().clone();
+                            state.render_pick_color_overlay(
+                                ui,
+                                &painter,
+                                &response,
+                                sample_area,
+                                &palette,
+                            );
+                            canvas_bounds = Some(bounds);
+                        });
+                    },
+                );
+                (output, canvas_bounds.expect("canvas bounds were allocated"))
+            };
 
-        render(&mut state, 0.0, Vec::new());
-        let hover = render(&mut state, 0.1, vec![egui::Event::PointerMoved(pointer)]);
-        assert_eq!(state.pick_color_state.hovered_color, Some(expected));
-        assert_eq!(state.pick_color_state.hovered_pixel, Some((4, 4)));
-        let loupe_text = hover.shapes.iter().any(|shape| match &shape.shape {
-            egui::Shape::Text(text) => text.galley.text() == "#E6537A",
-            _ => false,
-        });
-        assert!(loupe_text, "hovering paints the sampled hex in the loupe");
-        let coordinate_readouts: Vec<_> = hover
-            .shapes
-            .iter()
-            .filter_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+            let (_, bounds) = render(&mut state, 0.0, Vec::new());
+            let sample_area = bounds.shrink(12.0);
+            let pointer = sample_area.center();
+            let (hover, _) = render(&mut state, 0.1, vec![egui::Event::PointerMoved(pointer)]);
+            assert_eq!(state.pick_color_state.hovered_color, Some(expected));
+            assert_eq!(state.pick_color_state.hovered_pixel, Some((4, 4)));
+            let readout_rects: Vec<_> = hover
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_owned(),
+                        Rect::from_min_size(text.pos, text.galley.size()),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            for expected_line in ["#E6537A", "R230 G83 B122", "X: 4  Y: 4", "Click to keep"] {
+                let readout = readout_rects
+                    .iter()
+                    .find(|(text, _)| text == expected_line)
+                    .map(|(_, rect)| *rect)
+                    .unwrap_or_else(|| panic!("loupe renders {expected_line}"));
+                assert!(
+                    bounds.contains_rect(readout),
+                    "readout {expected_line} at {readout:?} must stay within {bounds:?} for {viewport_size:?}"
+                );
+            }
+            let card_rect = hover.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect)
+                    if (rect.stroke.width - 1.5).abs() < f32::EPSILON
+                        && rect.rect.width() >= 92.0 =>
+                {
+                    Some(rect.rect)
+                }
                 _ => None,
-            })
-            .collect();
-        assert!(coordinate_readouts.iter().any(|text| text == "X: 4"));
-        assert!(coordinate_readouts.iter().any(|text| text == "Y: 4"));
+            });
+            let card_rect = card_rect.expect("loupe card border is rendered");
+            assert!(
+                bounds.contains_rect(card_rect),
+                "loupe card {card_rect:?} must stay within {bounds:?} for {viewport_size:?}"
+            );
+            assert!(
+                readout_rects
+                    .iter()
+                    .all(|(_, rect)| card_rect.contains_rect(*rect))
+            );
 
-        render(
-            &mut state,
-            0.2,
-            vec![
-                egui::Event::PointerMoved(pointer),
-                egui::Event::PointerButton {
-                    pos: pointer,
-                    button: egui::PointerButton::Primary,
-                    pressed: true,
-                    modifiers: egui::Modifiers::default(),
-                },
-            ],
-        );
-        render(
-            &mut state,
-            0.3,
-            vec![
-                egui::Event::PointerMoved(pointer),
-                egui::Event::PointerButton {
-                    pos: pointer,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: egui::Modifiers::default(),
-                },
-            ],
-        );
-        assert_eq!(state.pick_color_state.picked_colors, vec![expected]);
-        assert_eq!(state.pick_color_state.last_picked, Some(expected));
+            render(
+                &mut state,
+                0.2,
+                vec![
+                    egui::Event::PointerMoved(pointer),
+                    egui::Event::PointerButton {
+                        pos: pointer,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::default(),
+                    },
+                ],
+            );
+            render(
+                &mut state,
+                0.3,
+                vec![
+                    egui::Event::PointerMoved(pointer),
+                    egui::Event::PointerButton {
+                        pos: pointer,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::default(),
+                    },
+                ],
+            );
+            assert_eq!(state.pick_color_state.picked_colors, vec![expected]);
+            assert_eq!(state.pick_color_state.last_picked, Some(expected));
+        }
     }
 
     #[test]
