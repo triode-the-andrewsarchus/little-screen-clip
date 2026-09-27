@@ -3260,6 +3260,26 @@ mod tests {
         assert!(!close_requested);
         assert!(!state.save_dialog_open);
 
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::H,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close_requested);
+                });
+            },
+        );
+        assert!(!close_requested);
+        assert_eq!(state.active_mode, AudioToolMode::HfAnalysis);
+
         state.active_mode = AudioToolMode::StemSeparation;
         state.stem_separation.save_dialog_open = true;
         let _ = ctx.run(escape(), |ctx| {
