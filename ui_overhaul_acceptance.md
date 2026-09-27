@@ -2,6 +2,12 @@
 
 Working evidence sheet for E1.4 and final acceptance. Record each run with date, commit, display mode, compositor/UI scale, action, result, and screenshot or log path. A blank result means **not tested**, not passed. Keep hardware USB tests separate from virtual/display-render checks.
 
+## PDF viewer chrome captures, 2026-09-27
+
+Initial compact 1280×720 Light and wide 3440×1440 Dark captures at commit `10deb3dc9e968e51d399963ebd3d440c7b34f6a5` showed that selected-page content and the PDF thumbnail row could expand the panes beyond the compact host. Those observations are recorded in `/tmp/clip-e23a-pdf-compact-light-20260927/settled.png` and `/tmp/clip-e23a-pdf-wide-dark-20260927/settled.png`; ordinary chrome was readable, but compact page content was clipped.
+
+The PDF page list now stays within the left pane and scrolls vertically. Isolated recaptures using `/tmp/clip-e3-dense-fixtures/document-two-page.pdf` at 1280×720 Light (`/tmp/clip-e23a3-pdf-fit-compact-light-20260927/report.json`, `settled.png`) and 3440×1440 Dark (`/tmp/clip-e23a3-pdf-fit-wide-dark-20260927/report.json`, `settled.png`) pass geometry/singleton checks and show the selected page fully contained in the right pane. The 80-page 1280×720 Dark capture `/tmp/clip-e3-many-pages-dark-fixed-20260927/settled.png` confirms the page list remains scrollable while the selected page fits. Production-render test `selected_pdf_page_preview_stays_inside_compact_and_wide_panes` checks the selected raster and pane bounds at 1177×662 and 1766×993 logical sizes; all 19 `pdf_view::tests` pass, as do `cargo fmt --all --check` and `cargo build -p clip-workbench`. Navigation, page editing, and rendering performance remain unverified. All recaptures used private Weston/Niri and did not access the interactive desktop, daemon, or clipboard.
+
 ## E3.3h screen-reader and focus audit, 2026-09-27
 
 Source inspection: `clip-workbench` enables eframe `default_fonts`, `glow`, and `wayland`; it does not enable AccessKit. `cargo tree -e features -i egui-winit -p clip-workbench` confirms the resolved egui-winit feature set excludes `accesskit`, although the vendored egui-winit 0.27.2 source provides an optional AccessKit adapter. Existing focus code/tests cover application shortcuts yielding to focused text fields, palette/search focus, dialog Escape ordering, and explicit tool navigation. They do not establish screen-reader exposure, accessible names/roles, or complete keyboard traversal of controls.

@@ -741,7 +741,6 @@ impl PdfEditorState {
                     .clamp(180.0, 360.0)
                     .min((pane_width - 200.0).max(0.0));
                 let right_pane_w = (pane_width - left_pane_w).max(0.0);
-
                 ui.horizontal(|ui| {
                     // --- Left Pane: Page Selector Grid ---
                     ui.allocate_ui_with_layout(
@@ -779,9 +778,20 @@ impl PdfEditorState {
                                     ui.add_space(crate::ui_ext::SPACE_XS);
 
                                     egui::ScrollArea::vertical()
+                                        .max_width(
+                                            (left_pane_w
+                                                - 2.0 * crate::ui_ext::SPACE_SM
+                                                - 2.0)
+                                                .max(0.0),
+                                        )
                                         .auto_shrink([false, false])
                                         .show(ui, |ui| {
-                                            ui.horizontal_wrapped(|ui| {
+                                            let thumbnail_area_width = (left_pane_w
+                                                - 2.0 * crate::ui_ext::SPACE_SM
+                                                - 2.0)
+                                                .max(0.0);
+                                            ui.set_width(thumbnail_area_width);
+                                            ui.vertical(|ui| {
                                                 let pages_clone: Vec<(
                                                     usize,
                                                     u32,
@@ -827,8 +837,20 @@ impl PdfEditorState {
                                                                 } else {
                                                                     0.707
                                                                 };
-                                                                let thumb_h = 130.0;
-                                                                let thumb_w = thumb_h * aspect;
+                                                                let panel_insets =
+                                                                    2.0 * crate::ui_ext::SPACE_SM
+                                                                        + 2.0;
+                                                                let card_insets = 2.0
+                                                                    * (2.0
+                                                                        * crate::ui_ext::ITEM_SPACING_Y
+                                                                        + 2.0);
+                                                                let thumb_w_limit = (left_pane_w
+                                                                    - panel_insets
+                                                                    - card_insets)
+                                                                    .max(80.0);
+                                                                let thumb_w = (130.0 * aspect)
+                                                                    .min(thumb_w_limit);
+                                                                let thumb_h = thumb_w / aspect;
 
                                                                 let thumbnail_rect = egui::Rect::from_min_size(
                                                                     ui.next_widget_position(),
@@ -880,7 +902,7 @@ impl PdfEditorState {
                                                     });
 
                                                     ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-                                                }
+                                                        }
                                             });
                                         });
                                 });
@@ -1528,6 +1550,84 @@ mod tests {
             assert!(
                 (pane_widths - pane_width_budget).abs() < 1.0,
                 "panes do not fill their divider and gap-adjusted budget: {pane_widths} vs {pane_width_budget}"
+            );
+        }
+    }
+
+    #[test]
+    fn selected_pdf_page_preview_stays_inside_compact_and_wide_panes() {
+        for host_size in [Vec2::new(1177.0, 662.0), Vec2::new(1766.0, 993.0)] {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+            let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
+            let mut state = raster_state(2, 16);
+            for page in &mut state.pages {
+                page.width = 1200;
+                page.height = 800;
+            }
+            let texture = ctx.load_texture(
+                "pdf-preview-fit-test",
+                egui::ColorImage::new([16, 16], egui::Color32::WHITE),
+                egui::TextureOptions::LINEAR,
+            );
+            let texture_id = texture.id();
+            state.pages[0].texture = Some(texture);
+
+            let host = egui::Rect::from_min_size(egui::Pos2::ZERO, host_size);
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(host),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                },
+            );
+
+            let mut panes = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::epaint::Shape::Rect(rect)
+                        if rect.fill == colors.recessed && rect.rect.height() > 100.0 =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            panes.sort_by(|a, b| a.min.x.total_cmp(&b.min.x));
+            let preview_pane = *panes.get(1).expect("right preview pane should render");
+            let preview_rect = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::epaint::Shape::Rect(rect) if rect.fill_texture_id == texture_id => {
+                        Some(rect.rect)
+                    }
+                    egui::epaint::Shape::Mesh(mesh) if mesh.texture_id == texture_id => Some(
+                        mesh.vertices
+                            .iter()
+                            .fold(egui::Rect::NOTHING, |mut bounds, vertex| {
+                                bounds.extend_with(vertex.pos);
+                                bounds
+                            }),
+                    ),
+                    _ => None,
+                })
+                .max_by(|a, b| a.area().total_cmp(&b.area()))
+                .expect("selected page texture should be painted");
+            assert!(
+                host.contains_rect(preview_pane),
+                "selected PDF preview pane escapes host at {host_size:?}: pane={preview_pane:?}"
+            );
+            assert!(
+                preview_pane.contains_rect(preview_rect),
+                "selected page preview escapes its pane at {host_size:?}: page={preview_rect:?}, pane={preview_pane:?}"
             );
         }
     }
