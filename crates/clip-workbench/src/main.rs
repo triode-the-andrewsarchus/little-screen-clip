@@ -326,6 +326,11 @@ struct ImageLoadJob {
     receiver: Receiver<Result<Result<ImagePreviewState, String>, JobError>>,
 }
 
+struct TextFileLoadJob {
+    ticket: JobTicket,
+    receiver: Receiver<Result<Result<TextPreviewState, String>, JobError>>,
+}
+
 impl ImageLoadJob {
     fn new(source: ImageLoadSource, config: AppConfig) -> Self {
         let (ticket, receiver) =
@@ -359,6 +364,24 @@ impl Drop for ImageLoadJob {
     }
 }
 
+impl TextFileLoadJob {
+    fn new(path: PathBuf, config: AppConfig) -> Self {
+        let (ticket, receiver) =
+            BackgroundJobs::global().submit(Duration::from_secs(30), move || {
+                let failure_path = path.display().to_string();
+                TextPreviewState::from_file(&path, &config)
+                    .ok_or_else(|| format!("Could not read or prepare text file {failure_path}"))
+            });
+        Self { ticket, receiver }
+    }
+}
+
+impl Drop for TextFileLoadJob {
+    fn drop(&mut self) {
+        self.ticket.cancel();
+    }
+}
+
 struct WorkbenchApp {
     state: SlotManager,
     state_rx: Receiver<SlotManager>,
@@ -379,6 +402,7 @@ struct WorkbenchApp {
     viewer: Option<ViewerSession>,
     startup_viewers: VecDeque<ViewerSession>,
     image_load_job: Option<ImageLoadJob>,
+    text_load_job: Option<TextFileLoadJob>,
     spreadsheet_load_job: Option<(
         JobTicket,
         SpreadsheetLoadReceiver,
@@ -632,6 +656,7 @@ impl WorkbenchApp {
             viewer: None,
             startup_viewers,
             image_load_job: None,
+            text_load_job: None,
             spreadsheet_load_job: None,
             midi_load_job: None,
             rolling_audio_strip,
@@ -1136,6 +1161,9 @@ fn recipe_needs_prompt(recipe: &Recipe, state: &SlotManager) -> Option<(String, 
 
 impl Drop for WorkbenchApp {
     fn drop(&mut self) {
+        if let Some(job) = &self.text_load_job {
+            job.ticket.cancel();
+        }
         if let Some((ticket, _, _)) = &self.spreadsheet_load_job {
             ticket.cancel();
         }
@@ -1174,6 +1202,7 @@ impl eframe::App for WorkbenchApp {
         self.appearance_sync.render(ctx, &self.ui_palette);
 
         self.poll_image_load(ctx);
+        self.poll_text_load(ctx);
         if self.render_modal_viewers(ctx) {
             self.palette_search_needs_focus = true;
             return;
@@ -1685,17 +1714,22 @@ impl WorkbenchApp {
         }
 
         let Some(viewer) = self.viewer.as_mut() else {
-            if self.image_load_job.is_some() {
+            if self.image_load_job.is_some() || self.text_load_job.is_some() {
                 let mut cancel = false;
                 show_viewer_panel(ctx, |ui| {
                     ui.horizontal(|ui| {
                         ui.spinner();
-                        ui.label("Loading image…");
+                        ui.label(if self.image_load_job.is_some() {
+                            "Loading image…"
+                        } else {
+                            "Loading text…"
+                        });
                         cancel = ui.button("Cancel [Esc]").clicked();
                     });
                 });
                 if cancel || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
                     self.image_load_job = None;
+                    self.text_load_job = None;
                 }
                 ctx.request_repaint_after(Duration::from_millis(40));
                 return true;
@@ -1788,11 +1822,14 @@ impl WorkbenchApp {
             }
         }
 
-        if self.image_load_job.is_some()
-            || self
-                .status_msg
-                .as_deref()
-                .is_some_and(|message| message.starts_with("Image preview failed:"))
+        let image_loading = self.image_load_job.is_some();
+        let text_loading = self.text_load_job.is_some();
+        if image_loading
+            || text_loading
+            || self.status_msg.as_deref().is_some_and(|message| {
+                message.starts_with("Image preview failed:")
+                    || message.starts_with("Text preview failed:")
+            })
         {
             egui::Area::new(egui::Id::new("image_load_status"))
                 .order(egui::Order::Foreground)
@@ -1800,11 +1837,16 @@ impl WorkbenchApp {
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            if self.image_load_job.is_some() {
+                            if image_loading || text_loading {
                                 ui.spinner();
-                                ui.label("Loading image…");
+                                ui.label(if image_loading {
+                                    "Loading image…"
+                                } else {
+                                    "Loading text…"
+                                });
                                 if ui.button("Cancel").clicked() {
                                     self.image_load_job = None;
+                                    self.text_load_job = None;
                                 }
                             } else if let Some(message) = &self.status_msg {
                                 ui.label(message);
@@ -1815,12 +1857,13 @@ impl WorkbenchApp {
                         });
                     });
                 });
-            if self.image_load_job.is_some() {
+            if image_loading || text_loading {
                 ctx.request_repaint_after(Duration::from_millis(40));
             }
         }
         if close {
             self.image_load_job = None;
+            self.text_load_job = None;
             self.viewer = self.startup_viewers.pop_front();
             self.dirty_mirror |= pdf_dirty;
             ctx.request_repaint();
@@ -1937,6 +1980,7 @@ impl WorkbenchApp {
 
     fn replace_viewer(&mut self, viewer: Option<ViewerSession>) {
         self.image_load_job = None;
+        self.text_load_job = None;
         self.viewer = viewer;
     }
 
@@ -1945,6 +1989,7 @@ impl WorkbenchApp {
             Ok(source) => self.start_image_load(source),
             Err(error) => {
                 self.image_load_job = None;
+                self.text_load_job = None;
                 self.set_status_message(format!("Image preview failed: {error}"));
             }
         }
@@ -1952,6 +1997,7 @@ impl WorkbenchApp {
 
     fn start_image_load(&mut self, source: ImageLoadSource) {
         self.image_load_job = None;
+        self.text_load_job = None;
         if matches!(self.viewer, Some(ViewerSession::ImageLoading(_))) {
             self.replace_viewer(None);
         }
@@ -2004,8 +2050,49 @@ impl WorkbenchApp {
         ctx.request_repaint();
     }
 
+    fn start_text_file_load(&mut self, path: PathBuf) {
+        self.image_load_job = None;
+        self.text_load_job = None;
+        if matches!(self.viewer, Some(ViewerSession::ImageLoading(_))) {
+            self.replace_viewer(None);
+        }
+        if let Some((ticket, _, _)) = self.spreadsheet_load_job.take() {
+            ticket.cancel();
+        }
+        if let Some((ticket, _)) = self.midi_load_job.take() {
+            ticket.cancel();
+        }
+        self.text_load_job = Some(TextFileLoadJob::new(path, self.config.clone()));
+        self.clear_status_message();
+    }
+
+    fn poll_text_load(&mut self, ctx: &egui::Context) {
+        let Some(job) = &self.text_load_job else {
+            return;
+        };
+        let result = match job.receiver.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(40));
+                return;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(JobError::Cancelled),
+        };
+        self.text_load_job = None;
+        match result {
+            Ok(Ok(state)) => {
+                self.replace_viewer(Some(ViewerSession::Text(state)));
+                self.clear_status_message();
+            }
+            Ok(Err(error)) => self.set_status_message(format!("Text preview failed: {error}")),
+            Err(error) => self.set_status_message(format!("Text preview failed: {error}")),
+        }
+        ctx.request_repaint();
+    }
+
     fn start_spreadsheet_load(&mut self, source: SpreadsheetLoadSource) {
         self.image_load_job = None;
+        self.text_load_job = None;
         if let Some((ticket, _)) = self.midi_load_job.take() {
             ticket.cancel();
         }
@@ -2070,6 +2157,7 @@ impl WorkbenchApp {
 
     fn start_midi_load(&mut self, path: PathBuf) {
         self.image_load_job = None;
+        self.text_load_job = None;
         if let Some((ticket, _, _)) = self.spreadsheet_load_job.take() {
             ticket.cancel();
         }
@@ -2188,9 +2276,7 @@ impl WorkbenchApp {
         } else if is_image || is_image_path(fp) {
             self.start_image_load(ImageLoadSource::File(fp.to_path_buf()));
         } else if little_clip_ops::is_text_file(fp) {
-            if let Some(st) = TextPreviewState::from_file(fp, &self.config) {
-                self.replace_viewer(Some(ViewerSession::Text(st)));
-            }
+            self.start_text_file_load(fp.to_path_buf());
         }
     }
 
@@ -2813,6 +2899,7 @@ mod workbench_layout_tests {
             viewer,
             startup_viewers,
             image_load_job: None,
+            text_load_job: None,
             spreadsheet_load_job: None,
             midi_load_job: None,
             rolling_audio_strip: None,
@@ -3247,6 +3334,19 @@ mod workbench_layout_tests {
         }
     }
 
+    fn wait_for_text_load(app: &mut WorkbenchApp) {
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while app.text_load_job.is_some() {
+            app.poll_text_load(&ctx);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "text load did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
     fn write_test_image(path: &std::path::Path, width: u32) {
         image::RgbImage::from_pixel(width, 2, image::Rgb([24, 120, 180]))
             .save(path)
@@ -3319,6 +3419,64 @@ mod workbench_layout_tests {
         assert_eq!(state.current_rgba.dimensions(), (3, 2));
         assert_eq!(state.title, item.title);
         assert!(matches!(&item.payload, ClipPayload::Image { bytes, .. } if !bytes.is_empty()));
+    }
+
+    #[test]
+    fn text_file_preview_loads_on_worker_and_reports_read_errors() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("sample.rs");
+        std::fs::write(&path, "fn sample() {\n    42\n}\n").unwrap();
+        let mut app = test_workbench_app(Some(gallery_viewer()), VecDeque::new());
+
+        app.open_slot_file_preview(&path, false);
+        assert!(app.text_load_job.is_some());
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
+        wait_for_text_load(&mut app);
+        let Some(ViewerSession::Text(state)) = &app.viewer else {
+            panic!("missing text viewer")
+        };
+        assert_eq!(state.path.as_deref(), Some(path.as_path()));
+        assert!(state.content.contains("fn sample()"));
+        assert_eq!(state.language, "rs");
+        assert!(app.status_msg.is_none());
+
+        app.start_text_file_load(temp_dir.path().join("missing.rs"));
+        wait_for_text_load(&mut app);
+        assert!(matches!(app.viewer, Some(ViewerSession::Text(_))));
+        assert!(app.status_msg.as_deref().is_some_and(|message| {
+            message.starts_with("Text preview failed: Could not read or prepare text file")
+        }));
+    }
+
+    #[test]
+    fn replacing_text_file_request_cancels_stale_completion() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let first = temp_dir.path().join("large.txt");
+        let second = temp_dir.path().join("newer.txt");
+        std::fs::write(&first, "older text\n".repeat(50_000)).unwrap();
+        std::fs::write(&second, "newer text\n").unwrap();
+        let mut app = test_workbench_app(Some(gallery_viewer()), VecDeque::new());
+
+        app.start_text_file_load(first.clone());
+        app.start_text_file_load(second.clone());
+        wait_for_text_load(&mut app);
+        let Some(ViewerSession::Text(state)) = &app.viewer else {
+            panic!("missing text viewer")
+        };
+        assert_eq!(state.path.as_deref(), Some(second.as_path()));
+        assert!(state.content.contains("newer text"));
+
+        app.start_text_file_load(first);
+        app.replace_viewer(Some(gallery_viewer()));
+        assert!(app.text_load_job.is_none());
+        app.poll_text_load(&egui::Context::default());
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
     }
 
     #[test]

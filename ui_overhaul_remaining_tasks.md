@@ -309,22 +309,22 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [ ] **H2.1h1 [Primary] Add visible progress to remaining open/decode paths.**
       - [x] **H2.1h1a [Sol; Luna review] Show pending state for startup, file, and clipboard image loads.** The modal shows a spinner and cancellation action while an image is read, rasterized, decoded, and inspected on a bounded worker. Existing viewers remain visible until a requested replacement succeeds.
       - [ ] **H2.1h1b [Primary] Show pending state while PDF page PNGs are decoded for texture upload.**
-      - [ ] **H2.1h1c [Luna] Show pending state for text-file read and preparation.**
+      - [x] **H2.1h1c [Luna] Show pending state for text-file read and preparation.** File read, UTF-8 cleanup, language detection, and line-index construction now run on a bounded worker while the current viewer remains visible.
     - [ ] **H2.1h2 [Primary] Report errors from remaining open/decode paths.**
       - [x] **H2.1h2a [Sol; Luna review] Report startup, file, and clipboard image load failures.** The error stays visible through the existing workbench status path; a later successful image load clears it. Regression covers malformed-file reporting and recovery.
       - [ ] **H2.1h2b [Primary] Report PDF page PNG decode failures.**
-      - [ ] **H2.1h2c [Luna] Report text-file read/preparation failures.**
+      - [x] **H2.1h2c [Luna] Report text-file read/preparation failures.** Failed loads report a dismissible status message and leave the current viewer intact.
     - [ ] **H2.1h3 [Primary] Add revision checks to remaining preview/export paths.**
       - [ ] **H2.1h3a [Primary] Reject stale PDF decode results after page/view changes.**
-      - [ ] **H2.1h3b [Luna] Reject stale text preparation after a newer preview request.**
+      - [x] **H2.1h3b [Luna] Reject stale text preparation after a newer preview request.** A newer text-file request drops the prior receiver/ticket before it can publish; regression confirms the newer path wins and a later viewer replacement still cancels publication.
     - [ ] **H2.1h4 [Primary] Add cancellation to remaining open/preview/export paths.**
       - [x] **H2.1h4a [Sol; Luna review] Cancel image loads on replacement, dismissal, or viewer close.** Dropping the job ticket cancels publication; tests cover superseded requests, startup placeholders, and Escape cancellation.
       - [ ] **H2.1h4b [Primary] Cancel pending PDF page decode work when pages leave the visible selection.**
-      - [ ] **H2.1h4c [Luna] Cancel text-file preparation when another viewer request supersedes it.**
+      - [x] **H2.1h4c [Luna] Cancel text-file preparation when another viewer request supersedes it.** Replacing the viewer drops the job ticket and prevents stale publication.
     - [ ] **H2.1h5 [Primary] Repaint after remaining async completions.**
       - [x] **H2.1h5a [Sol; Luna review] Repaint after image-load completion and while loading.** The worker receiver is polled with scheduled repaint; regression tests exercise successful, failed, canceled, and replaced loads.
       - [ ] **H2.1h5b [Primary] Repaint after PDF page decode completion.**
-      - [ ] **H2.1h5c [Luna] Repaint after text-file preparation completion.**
+      - [x] **H2.1h5c [Luna] Repaint after text-file preparation completion.** The pending worker is polled with scheduled repaint and its completion requests a repaint.
     - **H2.1h6 Preserve output fidelity and destinations in remaining save/encode/export paths.**
       - [ ] **H2.1h6a [Primary] Offload image Save As and clipboard composition/encoding.** Preserve redaction/markup/crop composition, file format/quality, destination, and IPC/system-clipboard fallback; report failure and success on completion.
       - [ ] **H2.1h6b [Primary] Offload audio save, slice-copy, and editor-handoff jobs.** Preserve filters, slice order, naming, output destinations, and clipboard/slot handoff for Audio Studio and rolling-audio selection; show progress and report partial/multi-slice failures.
