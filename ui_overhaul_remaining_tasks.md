@@ -10,11 +10,11 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
 
 ## Two-model workflow
 
-- Easy implementation is assigned to `ui_luna_worker` (`gpt-6-luna`) with one ID or a small non-overlapping set, explicit acceptance checks, and file ownership. Primary reviews, repairs, checks feature parity, and commits a coherent increment.
-- Hard work changes cross-view ownership, async lifecycle, color contracts, coordinate systems, or complex viewer semantics. Primary designs and implements, or delegates an isolated piece with a review boundary.
+- Luna is the default implementer and reviewer for this queue. Work directly when confidence is good; use `ui_luna_worker` for a contained independent slice only when that saves time.
+- Escalate to `ui_sol_escalation` (`gpt-6-sol`) only after source inspection or a concrete implementation attempt shows a specific task exceeds Luna confidence. The Sol agent implements only the bounded delegated task; Luna reviews, checks feature parity, repairs, and commits.
 - Keep the app usable at each commit. Run affected tests during each task. At each phase gate run workspace fmt/test/clippy and architecture comparison; inspect the real UI at representative host sizes when layout changes. Do not alter personal `config.toml` or Niri settings.
 - Update this queue from the current tree before each phase; promote Easy work to Hard when dependencies or behavior are less contained than expected. Labels describe implementation risk.
-- Model sequence: Easy 1 → Hard 1 → Easy 2 → Hard 2 → Easy 3 → Hard 3. Primary reviews and repairs each Easy batch before advancing. Hard 1 contracts precede Easy 2; Hard 2 handles cross-cutting cases exposed by those contracts.
+- Keep easy and hard phases grouped to reduce model switching. Luna completes ordinary work and checks; invoke Sol only for demonstrated hard parts, then return to Luna for review and integration.
 
 ## Easy 1 — Inventory and contained repairs (Luna implementation; primary review)
 
