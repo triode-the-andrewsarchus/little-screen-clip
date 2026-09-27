@@ -1499,7 +1499,10 @@ impl eframe::App for WorkbenchApp {
 
                                 let frame = egui::Frame::none()
                                     .fill(bg)
-                                    .inner_margin(egui::Margin::symmetric(10.0, 6.0))
+                                    .inner_margin(egui::Margin::symmetric(
+                                        crate::ui_ext::BUTTON_PADDING_X,
+                                        crate::ui_ext::BUTTON_PADDING_Y,
+                                    ))
                                     .rounding(4.0);
 
                                 frame.show(ui, |ui| {

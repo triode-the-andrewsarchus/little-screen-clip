@@ -906,7 +906,10 @@ impl NodeCanvasState {
                                         let frame = egui::Frame::none()
                                             .fill(hex_to_c32(&palette.colors.surface_panel))
                                             .rounding(4.0)
-                                            .inner_margin(egui::Margin::symmetric(10.0, 6.0));
+                                            .inner_margin(egui::Margin::symmetric(
+                                                crate::ui_ext::BUTTON_PADDING_X,
+                                                crate::ui_ext::BUTTON_PADDING_Y,
+                                            ));
 
                                         frame.show(ui, |ui| {
                                             ui.horizontal(|ui| {

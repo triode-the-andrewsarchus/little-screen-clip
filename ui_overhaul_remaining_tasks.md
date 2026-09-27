@@ -58,7 +58,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
         - [x] **H1.2a2a3b Tokenize shared MIDI and Model 3D toolbar insets.** Their repeated 14×6 transport/tool frames now use the existing horizontal token and shared control-group vertical inset.
         - [x] **H1.2a2a3c Tokenize the rolling-audio panel inset.** Its 14×6 bottom-panel margin now uses the panel-width and footer-height tokens.
         - [x] **H1.2a2a3d Tokenize repeated 12×6 viewer control frames.** Image/Text Diff, Binary Diff, and Film Look control surfaces share `SPACE_MD` and `CONTROL_GROUP_INSET_Y`.
-        - [ ] **H1.2a2a3e Audit remaining viewer-specific repeated insets and gaps.** Keep content-specific canvas, timeline, and data-grid geometry local.
+        - [x] **H1.2a2a3e Reuse button padding on selectable action rows.** Quick Palette and Node Machine catalog rows now use the shared button padding tokens.
+        - [ ] **H1.2a2a3f Audit remaining viewer-specific repeated insets and gaps.** Keep content-specific canvas, timeline, and data-grid geometry local.
     - [x] **H1.2a2b [Luna] Migrate disabled-state styling to shared tokens.** egui's disabled fade now targets the centralized workbench canvas in both appearances; the Light/Dark appearance test asserts the configured fade target. The workbench suite passes (250 passed, one ignored).
     - [ ] **H1.2a2c [Primary] Migrate status interactions to shared tokens.**
   - [ ] **H1.2a3 [Primary] Finish shared chrome token use.**
