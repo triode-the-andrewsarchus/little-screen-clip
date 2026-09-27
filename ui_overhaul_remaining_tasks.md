@@ -117,7 +117,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - **H1.3c5 Prove async completion causes no repeated side effects.** New requests and app drop cancel prior jobs. Do not build a general plugin/docking system.
     - [x] **H1.3c5a [Luna] Keep Spreadsheet completion queued while a modal viewer is active.** The job receiver remains owned until modal viewers/startup routes finish; a focused regression proves the failure result is reported after the viewer closes.
     - [x] **H1.3c5b [Luna + primary review] Keep MIDI completion queued through active modal and startup viewers.** A regression proves completion remains pending through a foreground and queued gallery, opens after the queue drains, then remains single-published on a second poll. `cargo test -p clip-workbench --quiet` passes.
-    - [ ] **H1.3c5c [Primary] Verify successful and failed deferred loads publish at most once.** Cover both Spreadsheet and MIDI routes and confirm no hidden or duplicate viewer appears.
+    - [x] **H1.3c5c [Primary] Verify successful and failed deferred loads publish at most once.** Spreadsheet success/failure and MIDI success/failure are each polled after modal deferral; second polls preserve the single viewer or status result. `cargo test -p clip-workbench --quiet` passes.
 - **H1.4 Complete shared host controls.** Headers, tool groups, fields, transport, split panels, overlay/status, and escape hatches consume contracts above.
   - [x] **H1.4a Reserve compact header row for right actions.** Shared studio header clips long titles before measured badges; headless 1177/1766/2500-point checks show labels/actions do not overlap.
   - [x] **H1.4b Order Image Studio Save As and Copy beside Close.**

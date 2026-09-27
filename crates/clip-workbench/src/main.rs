@@ -2669,6 +2669,46 @@ mod workbench_layout_tests {
             app.status_msg.as_deref(),
             Some("Spreadsheet: fixture failure")
         );
+        app.poll_spreadsheet_load(&ctx);
+        assert!(matches!(app.viewer, None));
+        assert_eq!(
+            app.status_msg.as_deref(),
+            Some("Spreadsheet: fixture failure")
+        );
+
+        app.viewer = Some(ViewerSession::ComponentGallery(
+            component_gallery::ComponentGalleryState::default(),
+        ));
+        let (ticket, _ticket_receiver) =
+            BackgroundJobs::global().submit(Duration::from_secs(1), || ());
+        let (result_tx, receiver) = std::sync::mpsc::channel();
+        result_tx
+            .send(Ok(Ok((
+                SpreadsheetData {
+                    title: "fixture".into(),
+                    sheets: Vec::new(),
+                },
+                None,
+            ))))
+            .unwrap();
+        app.spreadsheet_load_job = Some((ticket, receiver, None));
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            if !app.render_modal_viewers(ctx) {
+                app.poll_spreadsheet_load(ctx);
+            }
+        });
+        assert!(app.spreadsheet_load_job.is_some());
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
+
+        app.viewer = None;
+        app.poll_spreadsheet_load(&ctx);
+        assert!(app.spreadsheet_load_job.is_none());
+        assert!(matches!(app.viewer, Some(ViewerSession::Spreadsheet(_))));
+        app.poll_spreadsheet_load(&ctx);
+        assert!(matches!(app.viewer, Some(ViewerSession::Spreadsheet(_))));
     }
 
     #[test]
@@ -2768,6 +2808,38 @@ mod workbench_layout_tests {
         assert!(matches!(app.viewer, Some(ViewerSession::Midi(_))));
         app.poll_midi_load(&ctx);
         assert!(matches!(app.viewer, Some(ViewerSession::Midi(_))));
+
+        app.viewer = Some(startup_viewer());
+        let (ticket, _ticket_receiver) =
+            BackgroundJobs::global().submit(Duration::from_secs(1), || ());
+        let (result_tx, receiver) = std::sync::mpsc::channel();
+        result_tx.send(Ok(Err("fixture failure".into()))).unwrap();
+        app.midi_load_job = Some((ticket, receiver));
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            if !app.render_modal_viewers(ctx) {
+                app.poll_midi_load(ctx);
+            }
+        });
+        assert!(app.midi_load_job.is_some());
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
+
+        app.viewer = None;
+        app.poll_midi_load(&ctx);
+        assert!(app.midi_load_job.is_none());
+        assert!(app.viewer.is_none());
+        assert_eq!(
+            app.status_msg.as_deref(),
+            Some("MIDI load failed: fixture failure")
+        );
+        app.poll_midi_load(&ctx);
+        assert!(app.viewer.is_none());
+        assert_eq!(
+            app.status_msg.as_deref(),
+            Some("MIDI load failed: fixture failure")
+        );
     }
 
     #[test]
