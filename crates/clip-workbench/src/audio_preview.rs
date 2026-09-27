@@ -3181,12 +3181,14 @@ impl AudioPreviewState {
             *close_requested = true;
             return true;
         }
-        if tool_shortcuts_enabled
-            && self.active_mode == AudioToolMode::StemSeparation
-            && ctx.input(|i| i.key_pressed(egui::Key::Space))
-            && self.stem_separation.stems.is_empty()
-            && !self.stem_separation.in_progress
-        {
+        let space_pressed = ctx.input(|i| i.key_pressed(egui::Key::Space));
+        if should_start_stem_separation_on_space(
+            space_pressed,
+            tool_shortcuts_enabled,
+            self.active_mode,
+            self.stem_separation.stems.is_empty(),
+            self.stem_separation.in_progress,
+        ) {
             self.start_stem_separation();
         }
         false
@@ -3226,10 +3228,100 @@ impl AudioPreviewState {
     }
 }
 
+fn should_start_stem_separation_on_space(
+    space_pressed: bool,
+    shortcuts_enabled: bool,
+    active_mode: AudioToolMode,
+    has_no_stems: bool,
+    in_progress: bool,
+) -> bool {
+    space_pressed
+        && shortcuts_enabled
+        && active_mode == AudioToolMode::StemSeparation
+        && has_no_stems
+        && !in_progress
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use little_clip_core::audio::compute_full_audio_analysis;
+
+    #[test]
+    fn audio_studio_space_starts_only_idle_empty_stem_separation_without_editor_focus() {
+        let can_start = |space, shortcuts_enabled, mode, no_stems, in_progress| {
+            should_start_stem_separation_on_space(
+                space,
+                shortcuts_enabled,
+                mode,
+                no_stems,
+                in_progress,
+            )
+        };
+        assert!(can_start(
+            true,
+            true,
+            AudioToolMode::StemSeparation,
+            true,
+            false,
+        ));
+        assert!(
+            !can_start(true, false, AudioToolMode::StemSeparation, true, false,),
+            "focused editor or save dialog owns Space"
+        );
+        assert!(!can_start(true, true, AudioToolMode::Inspect, true, false,));
+        assert!(!can_start(
+            true,
+            true,
+            AudioToolMode::StemSeparation,
+            false,
+            false,
+        ));
+        assert!(!can_start(
+            true,
+            true,
+            AudioToolMode::StemSeparation,
+            true,
+            true,
+        ));
+    }
+
+    #[test]
+    fn audio_studio_space_yields_to_focused_text_editor() {
+        let ctx = egui::Context::default();
+        let mut state = AudioPreviewState::new(
+            PathBuf::from("/__little_clip_missing_audio_space_focus__.wav"),
+            "test.wav".to_string(),
+        );
+        state.active_mode = AudioToolMode::StemSeparation;
+        let mut text = String::new();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.add(egui::TextEdit::singleline(&mut text))
+                    .request_focus();
+            });
+        });
+        assert!(ctx.wants_keyboard_input());
+
+        let mut close_requested = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Space,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                state.handle_studio_shortcuts(ctx, &mut close_requested);
+            },
+        );
+        assert!(!state.stem_separation.in_progress);
+        assert!(!close_requested);
+    }
 
     #[test]
     fn escape_cancels_nested_save_dialogs_before_closing_audio_studio() {

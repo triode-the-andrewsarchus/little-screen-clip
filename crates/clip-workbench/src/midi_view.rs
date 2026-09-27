@@ -567,10 +567,9 @@ impl MidiViewerState {
 
         // Handle Space key for Play/Pause
         if ui.input(|i| i.key_pressed(egui::Key::Space)) {
-            if self.is_playing {
-                self.pause();
-            } else {
-                self.play_selection();
+            match midi_space_action(self.is_playing) {
+                MidiSpaceAction::Pause => self.pause(),
+                MidiSpaceAction::Play => self.play_selection(),
             }
         }
 
@@ -1344,11 +1343,72 @@ impl Drop for MidiViewerState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MidiSpaceAction {
+    Play,
+    Pause,
+}
+
+fn midi_space_action(is_playing: bool) -> MidiSpaceAction {
+    if is_playing {
+        MidiSpaceAction::Pause
+    } else {
+        MidiSpaceAction::Play
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use little_clip_core::config::WorkbenchAppearance;
     use little_clip_core::palette::AppPalette;
+
+    #[test]
+    fn midi_space_runs_the_render_handler_and_sets_selected_region_bounds() {
+        let data = MidiData {
+            title: "Space test".to_string(),
+            track_count: 1,
+            track_names: vec!["Track".to_string()],
+            total_notes: 0,
+            duration_sec: 4.0,
+            bpm: 120.0,
+            min_key: 60,
+            max_key: 60,
+            notes: Vec::new(),
+        };
+        let mut state = MidiViewerState::from_data(data, None, "Space test".to_string());
+        // This empty cache is too short for the selected-region offset, so
+        // play_selection updates transport bounds and play returns before
+        // attempting to decode audio or open an output device.
+        state.wav_cache = Some(vec![0; 44]);
+        state.selected_region = Some((1.25, 2.75));
+        let palette = AppPalette::for_appearance(WorkbenchAppearance::Dark);
+        let mut close_requested = false;
+        let ctx = egui::Context::default();
+
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Space,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, &palette, &mut close_requested);
+                });
+            },
+        );
+
+        assert_eq!(state.playhead_sec, 1.25);
+        assert_eq!(state.play_stop_time, Some(2.75));
+        assert!(!state.is_playing);
+        assert!(!close_requested);
+    }
 
     #[test]
     fn piano_roll_pitch_labels_thin_out_before_lanes_get_too_short() {

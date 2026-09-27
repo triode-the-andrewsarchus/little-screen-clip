@@ -999,6 +999,12 @@ impl WorkbenchApp {
     }
 }
 
+fn audio_strip_space_pressed(ctx: &egui::Context, audio_region_active: bool) -> bool {
+    audio_region_active
+        && !ctx.wants_keyboard_input()
+        && ctx.input(|i| i.key_pressed(egui::Key::Space))
+}
+
 fn recipe_needs_prompt(recipe: &Recipe, state: &SlotManager) -> Option<(String, String)> {
     for node in &recipe.graph.nodes {
         if let NodeKind::PromptOrHandText = node.kind {
@@ -2092,10 +2098,7 @@ impl WorkbenchApp {
     }
 
     fn handle_audio_strip_playback(&mut self, ctx: &egui::Context, audio_region_active: bool) {
-        if !audio_region_active || ctx.wants_keyboard_input() {
-            return;
-        }
-        if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+        if audio_strip_space_pressed(ctx, audio_region_active) {
             if let Some(strip) = &mut self.rolling_audio_strip {
                 strip.toggle_playback();
             }
@@ -2608,6 +2611,81 @@ mod workbench_layout_tests {
             config,
             appearance_applied: true,
         }
+    }
+
+    fn space_key_event() -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::Space,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn quick_palette_space_routes_to_both_hands_only_without_audio_selection() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.selected_slots = vec![SlotId::LeftPrior1];
+        let ctx = egui::Context::default();
+
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![space_key_event()],
+                ..Default::default()
+            },
+            |ctx| app.handle_empty_search_shortcuts(ctx, false),
+        );
+        assert_eq!(
+            app.selected_slots,
+            vec![SlotId::LeftHand, SlotId::RightHand]
+        );
+        assert_eq!(app.selected_action_index, 0);
+
+        app.selected_slots = vec![SlotId::LeftPrior1];
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![space_key_event()],
+                ..Default::default()
+            },
+            |ctx| app.handle_empty_search_shortcuts(ctx, true),
+        );
+        assert_eq!(app.selected_slots, vec![SlotId::LeftPrior1]);
+    }
+
+    #[test]
+    fn rolling_audio_space_requires_selection_and_yields_to_focused_text() {
+        let mut query = String::new();
+        let mut eligible = false;
+        let focused_ctx = egui::Context::default();
+        let _ = focused_ctx.run(
+            egui::RawInput {
+                events: vec![space_key_event()],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut query))
+                        .request_focus();
+                    assert!(ctx.wants_keyboard_input());
+                    assert!(!audio_strip_space_pressed(ctx, true));
+                    assert!(!audio_strip_space_pressed(ctx, false));
+                });
+            },
+        );
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![space_key_event()],
+                ..Default::default()
+            },
+            |ctx| eligible = audio_strip_space_pressed(ctx, true),
+        );
+        assert!(
+            eligible,
+            "an unfocused Space with a selected audio region routes to playback"
+        );
     }
 
     #[test]

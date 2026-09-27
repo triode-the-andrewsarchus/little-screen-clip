@@ -195,3 +195,8 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 ## Palette search focus behavior, 2026-09-27
 
 - Extracted the existing inline focus transitions into `update_palette_search_focus`, used by the production Palette path. `palette_search_focus_yields_to_audio_and_returns_on_activation` renders a real egui text field over four frames: launch requests focus, active audio interaction surrenders it while the field is disabled, activation requests focus again, and subsequent editable frame retains it. Focused test passes.
+
+## Space-key route regressions, 2026-09-27
+
+- Added production-path checks for Quick Palette and rolling-audio Space routing. Quick Palette selects both hands only when the audio region is inactive; the rolling strip requires an active audio region and yields Space to focused text input. Audio Studio verifies Space starts stem separation only in the correct idle mode and that focused text input suppresses it. MIDI sends a synthetic Space event through `MidiViewerState::render_ui` and checks selected-region start/stop bounds; the inert WAV cache exits before decoding or output-device setup.
+- `cargo fmt --all --check`, `cargo test -p clip-workbench --bin clip-workbench space_ --quiet` (7 passed), full `cargo test -p clip-workbench --bin clip-workbench --quiet` (269 passed, 1 ignored), and `git diff --check` pass. These tests cover keyboard routing and focus precedence, not physical-keyboard or live-device behavior.
