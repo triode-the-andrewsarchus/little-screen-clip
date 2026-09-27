@@ -3333,6 +3333,61 @@ mod tests {
     }
 
     #[test]
+    fn audio_tool_shortcuts_yield_to_focused_text_editor() {
+        let ctx = egui::Context::default();
+        let mut state = AudioPreviewState::new(
+            PathBuf::from("/__little_clip_missing_audio_focus__.wav"),
+            "test.wav".to_string(),
+        );
+        state.save_dialog_open = true;
+        let mut close_requested = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::H,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                state.handle_studio_shortcuts(ctx, &mut close_requested);
+            },
+        );
+        assert_eq!(state.active_mode, AudioToolMode::Inspect);
+
+        state.save_dialog_open = false;
+        let mut edit_value = String::new();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.add(egui::TextEdit::singleline(&mut edit_value))
+                    .request_focus();
+            });
+        });
+        assert!(ctx.wants_keyboard_input());
+
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::H,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                state.handle_studio_shortcuts(ctx, &mut close_requested);
+            },
+        );
+        assert_eq!(state.active_mode, AudioToolMode::Inspect);
+        assert!(!close_requested);
+    }
+
+    #[test]
     fn inspect_footer_stays_after_canvas_in_full_and_embedded_views() {
         use egui::epaint::Shape;
 

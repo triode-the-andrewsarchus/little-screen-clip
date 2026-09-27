@@ -2062,11 +2062,27 @@ mod tests {
             &mut state,
             &ctx,
             &palette,
+            egui::Key::V,
+            egui::Modifiers::NONE
+        ));
+        assert_eq!(state.active_mode, ImageToolMode::Crop);
+        assert!(!key_frame(
+            &mut state,
+            &ctx,
+            &palette,
             egui::Key::Escape,
             egui::Modifiers::NONE
         ));
         assert!(!state.show_fallback_save_modal);
         assert_eq!(state.crop_state.normalized_rect.min, Pos2::new(0.1, 0.1));
+        assert!(!key_frame(
+            &mut state,
+            &ctx,
+            &palette,
+            egui::Key::V,
+            egui::Modifiers::NONE
+        ));
+        assert_eq!(state.active_mode, ImageToolMode::View);
     }
 
     #[test]

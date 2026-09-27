@@ -105,8 +105,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [ ] **H1.3b7a [Primary] Implement typed host actions.**
     - [ ] **H1.3b7b [Primary] Establish one shared status/error path.**
     - [ ] **H1.3b7c [Primary] Report image decode failures through the shared status/error path.** Malformed PNG startup currently returns silently to Workbench; preserve the error cause and show actionable feedback. Add focused failure/recovery coverage.
-  - [ ] **H1.3b8 [Primary] Add focus and keyboard tests for representative image paths.**
-  - [ ] **H1.3b9 [Primary] Add focus and keyboard tests for representative audio paths.**
+  - [x] **H1.3b8 [Primary] Add focus and keyboard tests for representative image paths.** The fallback Save As field owns focus and prevents image tool switching while open; Escape cancels it without changing the crop selection, then V switches to View after dismissal. Focused egui input regression passes.
+  - [x] **H1.3b9 [Primary] Add focus and keyboard tests for representative audio paths.** Audio tool shortcuts remain suppressed by save dialogs and focused text editors; the unmodified H/D/S/I mode-switch regression and modified-key check still pass.
   - [x] **H1.3b10 [Primary] Add focus and keyboard tests for representative text paths.** Cmd/Ctrl+F is ignored while another editor owns keyboard focus; without an editor it opens and focuses Find, and Escape closes Find without closing the viewer. Both focus paths pass egui input regressions.
   - [ ] **H1.3c1 [Primary] Add revision-aware ownership for async results.** Spreadsheet/MIDI loads, audio/image previews, and later exports need host-scoped identity.
   - **H1.3c2 Bound async work and completion behavior**
