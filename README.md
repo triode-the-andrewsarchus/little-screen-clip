@@ -254,9 +254,10 @@ clipctl unlock                       # Restore physical screen
 Edit `config.toml` in the project root (or `~/.config/little-screen-clip/config.toml`):
 
 - `[display]`: Screen rotation (180° for bottom-cable mounting), debug badge toggle, animation FPS limiter.
-- `[colors]`: Full 24-bit hex color theme for all 7 card slots, borders, highlights, and text previews.
 - `[audio]`: Rolling waveform analysis thresholds and snippet lengths.
-- `[workbench]`: Preferred external text editor for script nodes.
+- `[workbench]`: Preferred external text editor for script nodes and the saved shared `appearance` (`"dark"` or `"light"`). The appearance toggle in the workbench (or F4/F6) switches the workbench and little-screen display together.
+
+The old `[colors]` section is retired. Its `theme`, `background`, `hero_card_bg`, `prior_card_bg`, `undo_card_bg`, slot/border keys (`undo_border`, `left_hand_border`, `left_prior1_border`, `left_prior2_border`, `left_prior3_border`, `right_prior2_border`, `right_prior1_border`, `right_hand_border`, `cursor_border`, `selected_border`), text keys (`title_color`, `subtitle_color`, `body_color`, `url_color`), and debug badge keys (`debug_badge_bg`, `debug_badge_text`) are ignored. The Hundred Rabbits theme browser and per-color override controls were removed from both workbench and display. The application leaves existing legacy entries in place when saving appearance; remove them manually if you want to clean an old config.
 
 Reload configuration live without restarting:
 ```bash

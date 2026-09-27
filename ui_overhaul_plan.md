@@ -231,13 +231,13 @@ Use opaque resolved backgrounds for ordinary controls to reduce compositing ambi
 
 Source images/PDFs, exported media, scientific color maps, syntax, and ANSI content require deliberate policies rather than indiscriminate recoloring. Keep exports stable unless their export style is explicitly changed. Check axis labels, MIDI tracks, byte colors, diff overlays, and image overlays on their actual backgrounds. Add a backdrop/outline where text sits over arbitrary content.
 
-Migration policy:
+Migration policy (supersedes the original theme-preservation proposal above):
 
-- Introduce workbench appearance and UI scale preferences independently of legacy `[colors]` and display settings. Store personal internal-panel state in user state, not repository config; do not restore an outer window size in place of launch-time screen discovery.
-- On first migration, derive a Light/Dark default from the old theme's brightness; retain old display configuration verbatim.
-- Replace the workbench theme gallery with straightforward Appearance settings. Preserve legacy theme search/selection and override-reset capabilities under clearly labeled Display settings, so the hardware/virtual display still has those features.
-- The hardware mirror remains an accurate preview of the display palette. A workbench mode toggle must not reload or recolor the daemon display.
-- Convert workbench consumers to semantic colors, then remove their dependency on display-oriented `AppPalette`. Do not attempt to fix this by merely limiting the existing shared theme list to two entries.
+- Keep the legacy `[colors]` section only as inert compatibility input. Its former `theme`, `background`, `hero_card_bg`, `prior_card_bg`, `undo_card_bg`, slot/border (`undo_border`, `left_hand_border`, `left_prior1_border`, `left_prior2_border`, `left_prior3_border`, `right_prior2_border`, `right_prior1_border`, `right_hand_border`, `cursor_border`, `selected_border`), text (`title_color`, `subtitle_color`, `body_color`, `url_color`), and debug badge (`debug_badge_bg`, `debug_badge_text`) keys are ignored by `AppConfig`. Existing config files are not rewritten to delete them.
+- Persist the single `dark`/`light` choice as `[workbench].appearance`; the workbench toggle and F4/F6 update both desktop and little-screen palettes. The daemon reloads the same fixed palette selection.
+- Retire the Hundred Rabbits theme selector, theme search, color overrides, and override reset from both workbench and display. These controls are not feature-parity requirements.
+- Keep fixed base colors in `little-clip-core` and egui semantic roles in `clip-workbench/src/ui_appearance.rs`. The renderer and workbench share the fixed palette; domain data colors remain specific to their rendered content.
+- Do not modify a user's personal `config.toml` as part of repository migration or documentation work.
 
 ## 7. View-by-view migration and feature parity
 
