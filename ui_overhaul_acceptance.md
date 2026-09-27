@@ -171,3 +171,7 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 ## Nested audio modal Escape behavior, 2026-09-27
 
 - Existing `escape_cancels_nested_save_dialogs_before_closing_audio_studio` test was rerun and passes. It exercises the audio save dialog, the embedded stem save dialog, and a subsequent Escape that closes the studio. Image/workbench dialog ordering remains open as E2.4e2.
+
+## Shared control label contrast, 2026-09-27
+
+- Reran `cargo test -p clip-workbench --bin clip-workbench fixed_appearance_button_surfaces_meet_wcag_contrast`: pass. It evaluates active tab, inactive tab, add, secondary, delete, and translucent accent labels in both Light and Dark against effective backgrounds at >=4.5:1. This closes the shared control slice only; custom label coverage remains in H1.2c2/E2.4f2.

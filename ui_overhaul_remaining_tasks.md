@@ -196,7 +196,9 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
 - **E2.4e Modal Escape routing**
   - [x] **E2.4e1 [Luna] Verify Escape closes nested audio save dialogs before closing the studio.** Regression test covers audio and stem dialogs, then confirms a later Escape closes the studio.
   - [ ] **E2.4e2 [Luna] Verify Escape behavior for representative image and workbench dialogs.**
-- [ ] **E2.4f [Luna] Test label contrast.**
+- **E2.4f Label contrast**
+  - [x] **E2.4f1 [Luna] Verify shared control-label contrast in both appearances.** Existing WCAG test checks active/inactive, add, secondary, danger, and translucent accent surfaces against 4.5:1.
+  - [ ] **E2.4f2 [Luna] Audit custom labels outside shared controls.** Full surface contrast audit stays under H1.2c2.
 - [ ] **E2.4g [Luna] Test async-preview readiness behavior.** Tests must cover behavior, not restate widget construction.
 
 ## Hard 2 — Cross-view behavior, scale, and embedding (primary model)
