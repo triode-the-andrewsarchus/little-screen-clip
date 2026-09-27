@@ -107,7 +107,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [ ] **H1.3b7c [Primary] Report image decode failures through the shared status/error path.** Malformed PNG startup currently returns silently to Workbench; preserve the error cause and show actionable feedback. Add focused failure/recovery coverage.
   - [ ] **H1.3b8 [Primary] Add focus and keyboard tests for representative image paths.**
   - [ ] **H1.3b9 [Primary] Add focus and keyboard tests for representative audio paths.**
-  - [ ] **H1.3b10 [Primary] Add focus and keyboard tests for representative text paths.**
+  - [x] **H1.3b10 [Primary] Add focus and keyboard tests for representative text paths.** Cmd/Ctrl+F is ignored while another editor owns keyboard focus; without an editor it opens and focuses Find, and Escape closes Find without closing the viewer. Both focus paths pass egui input regressions.
   - [ ] **H1.3c1 [Primary] Add revision-aware ownership for async results.** Spreadsheet/MIDI loads, audio/image previews, and later exports need host-scoped identity.
   - **H1.3c2 Bound async work and completion behavior**
     - [ ] **H1.3c2a [Primary] Bound async work for viewer-owned results.**

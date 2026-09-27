@@ -1559,7 +1559,7 @@ mod tests {
         let mut state =
             TextPreviewState::from_text("editable content".to_owned(), None, &AppConfig::default());
         let mut close = false;
-        let modifiers = egui::Modifiers::CTRL;
+        let modifiers = egui::Modifiers::COMMAND;
         let _ = ctx.run(
             egui::RawInput {
                 modifiers,
@@ -1569,6 +1569,58 @@ mod tests {
                     pressed: true,
                     repeat: false,
                     modifiers,
+                }],
+                ..Default::default()
+            },
+            |ctx| state.handle_shortcuts(ctx, &mut close),
+        );
+        assert!(!state.show_find);
+        assert!(!close);
+    }
+
+    #[test]
+    fn find_shortcut_focuses_search_and_escape_dismisses_only_find() {
+        let ctx = egui::Context::default();
+        let palette = AppPalette::default();
+        let mut state = TextPreviewState::from_text(
+            "searchable content".to_owned(),
+            None,
+            &AppConfig::default(),
+        );
+        let mut close = false;
+        let modifiers = egui::Modifiers::COMMAND;
+        let _ = ctx.run(
+            egui::RawInput {
+                modifiers,
+                events: vec![egui::Event::Key {
+                    key: egui::Key::F,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                state.handle_shortcuts(ctx, &mut close);
+                if state.show_find {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_search_toolbar(ui, &palette);
+                    });
+                }
+            },
+        );
+        assert!(state.show_find);
+        assert!(ctx.wants_keyboard_input());
+
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
                 }],
                 ..Default::default()
             },
