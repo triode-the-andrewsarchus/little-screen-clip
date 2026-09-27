@@ -301,7 +301,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **H2.1c [Primary] Audit image open/decode for UI-thread blocking.** Startup images, file-path previews, and clipboard image previews all synchronously read bytes, rasterize SVG, decode full RGBA pixels, and extract metadata before publishing the viewer. The clipboard resolver can also read paths and clone the full payload in the same UI callback. Move these operations to background work under H2.1h; leave the current viewer intact while loading.
   - [x] **H2.1d [Primary] Audit PDF open/decode for UI-thread blocking.** Metadata load, PDF-to-PNG rasterization, and staged edit/validation run on background workers. Texture cache misses still PNG-decode, convert to RGBA, and upload during `render_ui`; after H2.1a introduced texture eviction, reselecting an evicted page repeats that work on the UI thread. Move decode/conversion off-frame in the remaining async-path work; preserve visible page loading/error states.
   - [x] **H2.1e [Primary] Audit text and 3D open/parse for UI-thread blocking.** 3D files load through the bounded worker pool with loading status; closing the viewer cancels publication (H2.1o). Text files read at most 2 MiB, but read/UTF-8 cleanup and line-index creation still run during the UI action. Clipboard text is unbounded and builds its line index synchronously; first-frame syntax/minimap work is tracked by H2.2c. Move file loading/progress to H2.1h; retain clipboard and pathological-text work under H2.2c.
-  - [ ] **H2.1f [Primary] Audit remaining save/encode/export paths for UI-thread blocking.**
+  - [x] **H2.1f [Primary] Audit remaining save/encode/export paths for UI-thread blocking.** Image Save As and copy compose/encode/write inline; Audio Studio Save, quick-save, single/multi-slice copy wait synchronously for FFmpeg; MIDI copy serializes and writes inline. Diff and binary-diff external handoff actions synchronously stage potentially large clipboard buffers to temporary files. See H2.1h6a–d for the required background work and fidelity checks.
   - [ ] **H2.1g [Primary] Audit external process waits for UI-thread blocking.**
   - **H2.1h Complete remaining async-path behavior**
     - [ ] **H2.1h1 [Primary] Add visible progress to remaining open/decode paths.**
@@ -309,7 +309,11 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [ ] **H2.1h3 [Primary] Add revision checks to remaining preview/export paths.**
     - [ ] **H2.1h4 [Primary] Add cancellation to remaining open/preview/export paths.**
     - [ ] **H2.1h5 [Primary] Repaint after remaining async completions.**
-    - [ ] **H2.1h6 [Primary] Preserve output fidelity and destinations in remaining save/encode/export paths.**
+    - **H2.1h6 Preserve output fidelity and destinations in remaining save/encode/export paths.**
+      - [ ] **H2.1h6a [Primary] Offload image Save As and clipboard composition/encoding.** Preserve redaction/markup/crop composition, file format/quality, destination, and IPC/system-clipboard fallback; report failure and success on completion.
+      - [ ] **H2.1h6b [Primary] Offload Audio Studio save and slice-copy FFmpeg jobs.** Preserve filters, slice order, naming, output destinations, and clipboard/slot handoff; show progress and report partial/multi-slice failures.
+      - [ ] **H2.1h6c [Primary] Offload MIDI slice serialization and file writes.** Preserve selected time range, solo-track behavior, destination naming, and clipboard/slot handoff.
+      - [ ] **H2.1h6d [Primary] Offload diff and binary-diff temporary-file staging.** Preserve exact source bytes/extensions and launch behavior while returning staging errors to the active viewer.
   - [x] **H2.1i Bound PDF page raster queue.** Three-message queue implemented.
   - [x] **H2.1j Load PDF initial/post-edit metadata through cancellable bounded job.** Visible loading badge included.
   - [x] **H2.1k Report PDF raster/decode errors.** Unavailable thumbnail and page error replace endless spinner.
