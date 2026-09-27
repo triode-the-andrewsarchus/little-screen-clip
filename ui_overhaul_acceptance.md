@@ -318,3 +318,7 @@ H2.1h6a1 moves Image Studio Save As canvas snapshotting, display composition, fo
 ## Isolated Niri launch and dismissal, 2026-09-27
 
 The isolated capture runner now supports `--verify-return`. At 1280×720 logical / 100% / Light, `/tmp/clip-e3-niri-return-light/report.json` records the first centered floating window at `(52,29)` with the expected 1177×662 fixed size; a second invocation exits successfully while the first focused popup remains the only workbench window. Sending Escape exits the workbench with status 0, removes its window, and leaves Niri responsive with the same logical output. `/tmp/clip-e3-niri-return-light/after-close.png` shows the private compositor after dismissal. This confirms popup dismissal and compositor responsiveness; there was no sentinel application to verify focus restoration. It does not close P1's live `launch.sh` first-invocation/other-output checks.
+
+## Film Look many-stock layout, 2026-09-27
+
+An isolated 1280×720 logical / 100% / Dark capture with the deterministic 1600×1000 image fixture `/tmp/clip-image-dense-e2.png` records all 57 Film Stocks in the searchable, scrollable browser and a settled Portra 400 comparison in `/tmp/clip-e3-many-presets-dark-settled/image-film-look.png`; the capture report passes popup geometry and singleton checks. This establishes dense list/layout behavior only; searching, selecting by pointer, and applying a stock remain unverified.

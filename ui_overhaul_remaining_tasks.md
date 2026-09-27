@@ -412,7 +412,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 - [x] **E3.3c [Luna] Capture Niri launch and return behavior.** Isolated 1280×720 Niri run confirms a centered fixed-size popup, second invocation reuses the focused window, and Escape removes it while Niri remains responsive; report and after-close screenshot are in `ui_overhaul_acceptance.md`. No prior application was present to test focus restoration. Live `launch.sh` first-invocation and other-output checks remain under P1.
 - [x] **E3.3d [Luna] Capture long-filename behavior.** Isolated 1280×720 Dark capture with `clip-image-dense-e2.png` shows a truncated filename prefix, badges/actions, wrapped tools, canvas and footer within the popup. Full title is available via the header tooltip.
 - **E3.3e Capture dense collection behavior**
-  - [ ] **E3.3e1 [Luna] Capture many-preset behavior.**
+  - [x] **E3.3e1 [Luna] Capture many-preset behavior.** Isolated 1280×720 Dark capture shows all 57 Film Stocks in the searchable/scrollable list and a settled Portra 400 comparison. Searching, pointer selection, and Apply remain action-parity work.
   - [ ] **E3.3e2 [Luna] Capture many-track behavior.**
   - [ ] **E3.3e3 [Luna] Capture many-page behavior.**
 - [ ] **E3.3f [Luna] Capture loading and error states.**
