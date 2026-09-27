@@ -24,18 +24,35 @@ The first window event reported a centered 1185×694 floating window at (48,13).
 
 ## Screen and scale matrix
 
-The sizes below are *expected client sizes from current policy*, not observed windows. Test physical modes with the compositor's resulting logical size; do not divide logical dimensions by scale again. Do not change the user's output configuration merely to populate this table.
+### E1 baseline scope
 
-| Logical output | Expected fixed client | Dark | Light | 100/125/150/200% scale | Niri centering / repeat-launch focus |
+E1 records representative starting behavior and assigns discovered defects; it does not sign off the overhaul. The isolated capture runner uses private runtime/config/cwd directories, nested Niri over headless Weston, software rendering, and direct binary entry points. It does not start the daemon or access USB hardware. Its `passed` result means only its explicit window checks passed. Screenshots, first Niri events, and Wayland constraints are separate evidence; a first-observed screenshot is not the first visible frame. Mixed-output/fallback, full action parity, daemon-backed mirror refresh, physical display colors, and 60 Hz performance remain final acceptance work.
+
+Representative additional runs on 2026-09-26 at `eb6be01`:
+
+- `/tmp/clip-e1-runner-review`: 1280×720 logical, 150%, Light. Initial and settled client geometry was 1177×662, centered within one logical pixel, with matching initial min/max constraints. Repeating the binary retained one focused window. All 16 image tools and Close/Save/Copy/external-app controls were visible. The Image Studio footer was clipped and the title hid even the short filename.
+- `/tmp/clip-e1-long-name`: 1280×720, 100%, Light, synthetic long Unicode filename. Header actions remained visible, but the title was truncated before any filename was displayed; the footer was clipped. This is a layout finding, not a feature-parity pass.
+- `/tmp/clip-e1-audio-baseline`: 1920×1080, 100%, Dark, synthetic 300-second stereo WAV (52,920,044 bytes). The first observed capture showed decoding/building waveform; after a three-second settling delay the waveform/spectrum appeared without reopening. The footer overlapped the bottom timeline/scrollbar. This demonstrates this direct studio's load-to-result transition, not clipboard/workbench mirror invalidation. The runtime attempted audio-device discovery but playback was not exercised.
+- `/tmp/clip-e1-malformed-image`: 1280×720, 100%, Dark, truncated PNG. Startup silently returned to the empty Workbench instead of showing a decode error; the popup remained mapped and repeat launch reused it. This failure-reporting omission is **pre-existing**: baseline `4edf785` also discards `ImagePreviewState::from_path` errors with `.ok()`. The compact empty/no-daemon Workbench also clipped its rolling-audio header. The expected private IPC failure appeared; normal clipboard/daemon recovery was not tested.
+
+The footer/title/rolling-strip findings have unresolved provenance unless stated otherwise; comparisons of source alone do not establish visual before/after causality. Dedicated layout and error tasks retain these defects. Malformed PDF/MIDI/UTF-8 GUI recovery remains untested through its normal daemon-backed entry path.
+
+Reference hardware: AMD Ryzen 9 5900XT, 16 cores/32 threads, approximately 78 GiB RAM. These runs use software rendering. Mapping/screenshot latency is diagnostic startup evidence, not UI frame time; matrix concurrency further prevents treating its timings as a serial performance benchmark.
+
+The seven matrix rows below were observed in isolated Niri with `prefer-no-csd`; the current DP-1 row retains its separate live-output evidence. Capture coverage is not a visual or feature-parity pass. Test physical modes with the compositor's resulting logical size; do not divide logical dimensions by scale again. Do not change the user's output configuration merely to populate this table.
+
+| Logical output | Expected fixed client | Dark captures | Light captures | 100/125/150/200% scale | Niri centering / repeat-launch focus |
 | --- | --- | --- | --- | --- | --- |
-| 1280×720 | 1177×662 | pending | pending | pending | pending |
-| 1366×768 | 1256×706 | pending | pending | pending | pending |
-| 1920×1080 | 1766×993 | pending | pending | pending | pending |
-| 1920×1200 | 1766×1104 | pending | pending | pending | pending |
-| 2560×1600 | 2355×1472 | pending | pending | pending | pending |
-| 3440×1440 | 3164×1324 | pending | pending | pending | pending |
-| 3840×2160 | 3532×1987 | pending | pending | pending | pending |
+| 1280×720 | 1177×662 | 4 scales captured | 4 scales captured | observed at all four | initial-event and settled geometry, hints, singleton: pass in isolated setup |
+| 1366×768 | 1256×706 | 4 scales captured | 4 scales captured | observed at all four | initial-event and settled geometry, hints, singleton: pass in isolated setup |
+| 1920×1080 | 1766×993 | 4 scales captured | 4 scales captured | observed at all four | initial-event and settled geometry, hints, singleton: pass in isolated setup |
+| 1920×1200 | 1766×1104 | 4 scales captured | 4 scales captured | observed at all four | initial-event and settled geometry, hints, singleton: pass in isolated setup |
+| 2560×1600 | 2355×1472 | 4 scales captured | 4 scales captured | observed at all four | initial-event and settled geometry, hints, singleton: pass in isolated setup |
+| 3440×1440 | 3164×1324 | 4 scales captured | 4 scales captured | observed at all four | initial-event and settled geometry, hints, singleton: pass in isolated setup |
+| 3840×2160 | 3532×1987 | 4 scales captured | 4 scales captured | observed at all four | initial-event and settled geometry, hints, singleton: pass in isolated setup |
 | Current DP-1: 2560×1440 logical at 150% | 2355×1324 | pending | pending | patched first Niri open event: 2355×1324 | **pass for direct startup and repeat-launch:** centered first event; first-visible-frame capture pending |
+
+Matrix evidence (2026-09-26, `eb6be01`): `/tmp/clip-e1-matrix/summary.json`, complete per-case reports/screenshots in `/tmp/clip-e1-matrix-complete/`, and serial retry in `/tmp/clip-e1-matrix-retries/`. Seven logical resolutions × four scales × two appearances produced 56 cases: **55 initial runtime-check passes and one mapping timeout** at 2560×1600 / 125% / Dark. That case logged `EGL_BAD_ALLOC` in nested Niri and passed a fresh serial retry. The original failure is retained; concurrency/software-renderer involvement is plausible but not established. Primary independently checked the initial event dimensions/centering for mapped runs and found no later `WindowLayoutsChanged` events. Representative settled screenshots were inspected at every logical size, spanning both appearances and compact, 16:10, ultrawide, and 4K cases; Image Studio footer clipping remains visible. Full visual review of all 56 captures remains unclaimed.
 
 For each row, capture the first visible frame and the settled frame. Check fixed, non-maximizable, floating hints; no top-left jump; no visible resize; content margins; all tool rows and status bars; no clipped close/save/copy action; internal split dragging without outer resize. Repeat after changing focused output, disconnect/failure fallback, and direct binary launch. If a window manager or display is unavailable, mark the row blocked by environment and retain the headless geometry result separately.
 
@@ -65,3 +82,5 @@ Automated partial evidence for T1: wrapped-code render tests cover 100%/150%/200
 ## Performance observations to add
 
 On named reference hardware, capture UI-frame time during idle, scroll, zoom, playback, and large-file load, plus task duration separately. Record item count/size, cache/job bounds and whether CPU decode, IPC, encode, or process wait occurred on the UI thread. The target from `ui_overhaul_plan.md` is smooth 60 Hz manipulation (16.7 ms frame budget) with next-frame visible response; this target is **not yet measured**.
+
+Baseline startup observation: the 55 initially mapped matrix cases took 328–1333 ms from process start to the first polling observation (median 359 ms); the serial retry took 330 ms. This includes process initialization/polling and runs under concurrent software-renderer load. No 16.7 ms UI-frame measurement or interaction-performance pass is implied. Dedicated profiling remains H2/H3 work.
