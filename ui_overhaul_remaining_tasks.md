@@ -1,81 +1,312 @@
-# Workbench UI overhaul: remaining task queue
+# Workbench UI overhaul: remaining task tree
 
-Status: open. Source audit updated 2026-09-24 on `feat/workbench-ui-overhaul`. This is a working queue, not a claim that the older `ui_overhaul_plan.md` is fully implemented. Re-check code and manual behavior before marking an item done; split, merge, or add tasks as discoveries warrant. The original plan remains the feature-parity and design reference.
+Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with the limitations below. Source audit updated 2026-09-24; runtime baseline observations updated 2026-09-26 on `feat/workbench-ui-overhaul`. This is a working queue, not a claim that the older `ui_overhaul_plan.md` is fully implemented. Re-check code and manual behavior before marking an item done. The original plan remains the feature-parity and design reference.
 
-## Already landed; verify in final acceptance
+## Status and scope
 
-- Fixed-size, screen-adaptive popup sizing; single-instance activation and centering fixes.
-- Readable shared control metrics, aligned HF controls, wrapping one-click Image Studio tools, compact header actions, shared studio panel geometry and image split handles.
-- Separate workbench Light/Dark appearance, shared bounded display mirror, and async-preview mirror invalidation.
-- Palette focus fix, image save-dialog shortcut precedence, background rolling-audio refresh and spreadsheet loading, and virtual spreadsheet rows/columns.
+- **Already landed; verify during acceptance:** fixed-size, screen-adaptive popup sizing; single-instance activation and centering fixes; readable shared control metrics; aligned HF controls; wrapping one-click Image Studio tools; compact header actions; shared studio panel geometry and image split handles; separate workbench Light/Dark appearance; shared bounded display mirror; async-preview mirror invalidation; palette focus fix; image save-dialog shortcut precedence; background rolling-audio refresh and spreadsheet loading; virtual spreadsheet rows/columns.
+- These are source observations, not completed Niri, mixed-DPI, visual, or feature-parity tests. The user's centering, mirror, and async-audio reports require live regression scenarios.
+- **Scope correction (2026-09-23):** remove runtime Hundred Rabbits themes and per-color overrides from workbench and little-screen display. Define fixed palettes centrally; Light/Dark is the only appearance choice and switches both outputs together. Theme search/filter/select/reset are retired, not parity requirements. Preserve other display, clipboard, media, and configuration behavior.
 
-These are code-level observations from the branch, **not** a completed Niri, mixed-DPI, visual, or feature-parity test. In particular, the user's centering, mirror, and async-audio reports deserve explicit live regression scenarios.
+## Two-model workflow
 
-Scope correction, 2026-09-23: the user expects the runtime Hundred Rabbits theme system and per-color overrides to be removed from both the workbench and the little-screen display. Fixed palettes should be defined centrally; Light/Dark is the only appearance choice and must switch **both** outputs together. Theme search/filter/select/reset are intentionally retired features, not parity requirements. Keep the other display, clipboard, media, and configuration behaviors intact.
-
-## Working agreement for the two-model flow
-
-- **Easy** means a bounded change with known behavior and localized ownership. Assign implementation to `ui_luna_worker` (`gpt-6-luna`); the primary model reviews its diff, checks feature parity, fixes any issue, and commits a coherent increment. Give the worker one task ID or a small non-overlapping set, explicit acceptance checks, and ownership of files. Let it write code.
-- **Hard** means changing cross-view ownership, async lifecycle, color contracts, coordinate systems, or complex viewer semantics. The primary model designs and implements these, or delegates a clearly isolated piece with an explicit review boundary.
-- Keep a usable app at each commit. Run affected tests during each task; run workspace fmt/test/clippy and architecture comparison at each phase gate. Inspect real UI at representative host sizes when layout changes. Do not alter personal `config.toml` or Niri settings.
-- Before each phase, update this list from the current tree. Promote an “easy” item to hard when its behavior or dependency is less contained than expected. The labels assign **implementation risk**, not importance.
-
-The ordering below makes five model switches: Easy 1 → Hard 1 → Easy 2 → Hard 2 → Easy 3 → Hard 3. The primary model reviews and repairs the whole easy batch before advancing. Hard 1 establishes contracts that Easy 2 can apply mechanically; Hard 2 handles the cross-cutting cases those contracts expose.
+- Easy implementation is assigned to `ui_luna_worker` (`gpt-6-luna`) with one ID or a small non-overlapping set, explicit acceptance checks, and file ownership. Primary reviews, repairs, checks feature parity, and commits a coherent increment.
+- Hard work changes cross-view ownership, async lifecycle, color contracts, coordinate systems, or complex viewer semantics. Primary designs and implements, or delegates an isolated piece with a review boundary.
+- Keep the app usable at each commit. Run affected tests during each task. At each phase gate run workspace fmt/test/clippy and architecture comparison; inspect the real UI at representative host sizes when layout changes. Do not alter personal `config.toml` or Niri settings.
+- Update this queue from the current tree before each phase; promote Easy work to Hard when dependencies or behavior are less contained than expected. Labels describe implementation risk.
+- Model sequence: Easy 1 → Hard 1 → Easy 2 → Hard 2 → Easy 3 → Hard 3. Primary reviews and repairs each Easy batch before advancing. Hard 1 contracts precede Easy 2; Hard 2 handles cross-cutting cases exposed by those contracts.
 
 ## Easy 1 — Inventory and contained repairs (Luna implementation; primary review)
 
-- [x] **E1.1a Seed the action-parity ledger.** `ui_overhaul_parity_ledger.md` now covers every surface in plan section 7 with source anchors and unrun scenarios. Reviewer caught and corrected initial shortcut errors; this is an inventory scaffold, not parity sign-off.
-- [x] **E1.1b Split the source inventory into action-level checks.** Luna added per-surface keyboard, button, output, parameter, and close/cancel checkpoints with explicit runtime-unverified markers. Primary review confirmed the checklist maps to the current source at a useful level, while leaving the source gaps below visible rather than claiming runtime parity.
-- [x] **E1.1c Close remaining source gaps.** Ledger now records source-defined search grammar, PDF sibling-output persistence, node template/type/property ownership and side effects, absent diff zoom/divider gestures, and 3D bounds/budgets. These are source findings only; actual output, usability, and interaction behavior remain unverified in E1.4b/final acceptance.
-- [x] **E1.2 Fix Image Studio external-app descriptors.** Descriptors now pair configured executable, displayed label, availability-aware tooltip, and selected launch target. Focused tests pass; live external-app/fallback behavior remains in the acceptance sheet.
-- [x] **E1.3 Remove only proven-dead UI paths.** Re-checked references and removed the unused `ui_ext::render_view_header`, `ShortcutDispatcher::handle_escape`, `StudioShell::render_mode_bar`, and closure-based `StudioShell::render_panels`/`PanelBody`. The active Escape path and directly used `StudioPanelLayout` geometry remain. Workbench tests pass.
-- [x] **E1.4a Establish reproducible inputs and starting evidence.** `scripts/ui_acceptance_fixtures.py` creates deterministic scratch data; `ui_overhaul_acceptance.md` records the architecture baseline, screen matrix and observed centered singleton popup on the current 150%-scale Niri output.
-- [ ] **E1.4b Complete baseline observations.** Deterministic PDF/MIDI/TIFF-EXIF/SVG fixtures and provenance are added (`3cbc014`); Deterministic malformed PDF/MIDI/PNG and invalid UTF-8 fixtures are now generated and independently checked; live decoder error/recovery behavior remains unverified. Exercise the 1280×720 through 3840×2160 and Light/Dark cases, first-visible-frame positioning, long names, many tools, loading/errors, and performance. Distinguish pre-existing defects from migration regressions; hardware access remains separate.
+- **E1.1 Parity ledger inventory**
+  - [x] **E1.1a Seed the action-parity ledger.** `ui_overhaul_parity_ledger.md` covers every surface in plan section 7 with source anchors and unrun scenarios. Reviewer caught and corrected initial shortcut errors; this is an inventory scaffold, not parity sign-off.
+  - [x] **E1.1b Split source inventory into action-level checks.** Per-surface keyboard, button, output, parameter, and close/cancel checkpoints have explicit runtime-unverified markers. Primary review confirmed useful source mapping while keeping source gaps visible.
+  - [x] **E1.1c Record remaining source gaps.** Ledger records source-defined search grammar, PDF sibling-output persistence, node template/type/property ownership and side effects, absent diff zoom/divider gestures, and 3D bounds/budgets. Output, usability, and interaction remain unverified in E1.4b/final acceptance.
+- [x] **E1.2 Fix Image Studio external-app descriptors.** Descriptors pair configured executable, displayed label, availability-aware tooltip, and selected launch target. Focused tests pass; live external-app/fallback behavior remains in acceptance.
+- [x] **E1.3 Remove proven-dead UI paths.** Rechecked references and removed unused `ui_ext::render_view_header`, `ShortcutDispatcher::handle_escape`, `StudioShell::render_mode_bar`, closure-based `StudioShell::render_panels`/`PanelBody`. Active Escape and used `StudioPanelLayout` remain. Workbench tests pass.
+- **E1.4 Establish and record baseline**
+  - [x] **E1.4a Prepare reproducible inputs and starting evidence.** `scripts/ui_acceptance_fixtures.py` creates deterministic scratch data; `ui_overhaul_acceptance.md` records architecture baseline, screen matrix, and observed centered singleton popup on current 150%-scale Niri output.
+  - [x] **E1.4b1 Add deterministic PDF/MIDI/TIFF-EXIF/SVG fixtures and provenance.** Added in `3cbc014`.
+  - [x] **E1.4b2 Add malformed PDF/MIDI/PNG and invalid UTF-8 fixtures.** Fixtures are generated and independently checked; live decoder error/recovery is unverified.
+  - [x] **E1.4b3 Record resolution and appearance baseline observations.** Matrix run executed 56 cases: 55 passed initially, and the single EGL_BAD_ALLOC timeout passed on serial retry. Primary reviewed representative visuals at every logical size. Record this transient failure and retry evidence in the acceptance sheet.
+  - [x] **E1.4b4 Record first-map geometry evidence and first-visible-frame limitation.** Primary independently validated centered expected-size initial event geometry with no later layout change. This does not prove first-visible-frame placement; that live proof remains open under H1.1/H3. Keep the observed 8×32 CSD contribution separately tracked.
+  - [x] **E1.4b5 Record long-name and many-tools baseline observations.** Representative visual checks completed at every logical size; retain the observed Image Studio truncation/clipping findings as defects to resolve.
+  - [x] **E1.4b6 Record loading and error baseline observations.** Record observed loading/error behavior and its limits; malformed PNG silent return is confirmed pre-existing and remains actionable under H1.3b7c.
+  - [x] **E1.4b7 Record startup/load timing baseline and profiling gaps.** Initial maps were 328–1333 ms (median 359 ms) under two concurrent software runs; 53 MB audio showed initial loading and a waveform in the capture taken after a three-second settling delay. These are not completion timing or 60 Hz evidence; profiling remains in H3.2.
+  - Baseline defect observations already recorded by primary: at 1280×720 logical / 150% scale, Image Studio footer clips and header truncates to `IMAGE STUD...`, hiding even a short filename behind right-side actions; at 1920×1080 Dark, Audio Studio footer overlaps the bottom timeline/scrollbar; default Niri CSD adds 8×32 to requested client size before mapping; no-daemon 1280×720 rolling-audio strip header clips at the bottom, with layout provenance unresolved. Preserve these as baseline findings and determine whether later work is regression or pre-existing.
+  - A malformed PNG currently returns silently to Workbench; source audit at `main.rs` (`and_then(from_path(...).ok())`, commit `4edf785`) confirms this is pre-existing. Add explicit reporting under H1.3b. Do not mark decoder recovery complete from fixture validation alone.
 
 ## Hard 1 — Shared contracts and platform decisions (primary model)
 
-- [x] **H1.1a1 Correct startup DPI conversion on the available output.** Niri event-stream originally observed a 4710×2648 top-left first map for a 2355×1324 request. A focused local egui-winit 0.27.2 patch now supplies logical startup dimensions; its first recorded open event is 2355×1324 and centered on the current 150%-scale output. Direct launch and repeated `./launch.sh ui` preserve the same fixed singleton. Workbench tests pass.
-- [ ] **H1.1a2 Prove other output/scale cases.** Exercise the first Niri event on different logical resolutions, mixed output scales and failure fallback, with fixed/non-maximizable hints; do not infer those results from the current 150% test.
-- [x] **H1.1b Settle the layout backend for this overhaul.** Continue with native egui 0.27 layout and the existing shared panel geometry. An isolated coherent egui 0.36.2 upgrade produced 427 workbench compile errors, while the current `StudioPanelLayout` already has compact/standard geometry and split tests and the Image Studio toolbar keeps all tools one click away with `horizontal_wrapped`. A `egui_taffy` 0.14 trial cannot exercise those real views without first completing that API migration, so it adds risk without evidence of a layout benefit now. Reassess after H1.4 host-size evidence; remove the local egui-winit patch when a later coherent upgrade is validated.
-- [ ] **H1.2a Finish semantic color and component tokens.** A shared fixed Light/Dark palette and desktop `WorkbenchColors` roles exist; actual widget foreground/fill pairs have contrast tests. A dedicated central chrome border now clears 3:1 against both recessed and panel fills in both modes. Shared buttons and slider/status controls use semantic colors, named typography/control geometry, and full-size labels. The two-mode egui component gallery caught egui's default 22-point text input; shared workbench, prompt, text, binary-diff, spreadsheet search, image save-path, audio save-path/filename, stem destination, and digital decode filter fields now request the 36-point control height. Finish remaining input migration, spacing, disabled/status interactions and shared chrome, then visually inspect the gallery in both modes.
-- [x] **H1.2b1 Switch both renderers to fixed colors and retire the selector.** `AppConfig::resolve_palette` now uses the shared appearance and ignores legacy `[colors]`, the workbench theme browser is removed, F4/F6 switch appearance, and the renderer test proves a frame changes with the mode. Workspace tests pass. Runtime daemon/USB verification remains pending.
-- [ ] **H1.2b2 Remove the remaining theme system and prove runtime behavior.** SVG parsing/loading, theme assets, override save helpers, and theme-specific tests are removed; both fixed modes have contrast/MIDI tests (`2b087a2`). Existing `[colors]` keys are ignored migration input and the personal config is untouched. Async daemon reload now reports a rejected/unavailable response in a dismissible workbench notice. The old `Theme` adapter and its raw field aliases are removed (`6719f33`). Still verify mirror and USB render colors plus virtual mode, persistent mode change, and failure feedback live.
-- [ ] **H1.2c Remove legacy palette API and audit color use.** `BaseColors` defines fixed Light/Dark semantic roles in core and desktop `WorkbenchColors` consumes them (`36b8c62`). Luna migrated display rendering, image/audio tools, shell, and remaining views to those roles; primary removed the old `Theme` adapter (`6719f33`), renamed the core module to `palette` (`bc774cf`), and removed duplicate base-color aliases (`728908c`). A shared dark `console_surface` now gives ANSI comparison output a deliberate high-contrast inset in both appearances. Continue auditing hard-coded UI colors; define each at the central palette boundary or justify media/data colors separately. Verify actual foreground/background contrast and purposeful accent use on all surfaces.
-- [ ] **H1.3a Own one active viewer session and its return route.** `WorkbenchApp` now stores one `ViewerSession` enum instead of nine independent optional viewers; a startup queue preserves the existing `--audio` then `--image` sequence and diff/binary-diff precedence. Closing audio/MIDI still stops playback and closing a dirty PDF still refreshes the mirror. The route/return contract and live image, audio, text, PDF and diff navigation/cleanup checks remain.
-- [ ] **H1.3b Define modal, focus, and action precedence.** Prompt, studio, Quick Palette, rolling audio, node canvas and global shortcuts currently own keys in separate handlers. Node Machine Escape now cancels its catalog/save dialog/cable drag before returning to Palette, instead of closing the popup; the host stops processing other shortcuts once Escape is handled. Palette search owns its text keys so S/X cannot swap twice. Both audio save dialogs own Escape before the studio, and the headless regression test covers each; audio mode and stem-start keys yield to dialogs and focused fields. Comparison view shortcuts now respect focused controls and modified S, with a regression test. Specify and implement the remaining Escape/Enter/Space/letter precedence, focus return, typed host actions, and one status/error path without altering domain controls. Gate: focus and keyboard tests for representative image, audio and text paths, including nested edits and cancellation.
-- [ ] **H1.3c Tie asynchronous results to the requesting session.** Spreadsheet/MIDI loads, audio/image previews and later exports need host-scoped identity, bounded work, revision checks, repaint and cancellation. Spreadsheet and MIDI completion is deferred while a viewer owns the screen; a newly opened viewer, prompt, or another workbench view cancels pending loads instead of surfacing a stale result after close. The full session migration still needs revision-aware ownership, stale success/failure tests, and proof of no repeated side effects. Do not build a general plugin/docking system.
-- [ ] **H1.4 Complete shared host controls.** Make headers, tool groups, fields, transport, split panels, overlay/status, and escape hatches consume the contracts above. The shared studio header now reserves one compact row for right actions and clips long titles before measured badges; headless 1177/1766/2500-point checks assert that its labels and actions do not overlap. The Image Studio Save As and Copy actions now appear in the requested order beside Close. Audio control-row labels use the same 36-point height as transport and mode buttons, with a vertical-center render test. Preserve direct access to every image tool; toolbar wrapping must not strand labels or hide common actions. Still validate the full Image Studio button/row and audio mode/transport examples live at compact, standard, and wide host sizes.
+- **H1.1 Startup geometry and layout backend**
+  - [x] **H1.1a1 Correct startup DPI conversion on available output.** Niri event stream initially observed 4710×2648 for a 2355×1324 request. Focused local egui-winit 0.27.2 patch supplies logical startup dimensions; first recorded open is 2355×1324 and centered on current 150%-scale output. Direct launch and repeated `./launch.sh ui` retain fixed singleton. Workbench tests pass.
+  - [x] **H1.1a2a Exercise first Niri event on another logical resolution.** Isolated logical-resolution evidence is recorded; mixed-scale, fallback, maximize-hint, and CSD cases remain open.
+  - [ ] **H1.1a2b [Primary] Exercise first Niri event on mixed output scales.** Record output scale and mapped dimensions.
+  - [ ] **H1.1a2c [Primary] Exercise startup failure fallback.** Record fallback geometry and visible behavior.
+  - [ ] **H1.1a2d [Primary] Confirm fixed/non-maximizable hints on tested outputs.** Record observed hints/behavior.
+  - [ ] **H1.1a2e [Primary] Resolve default Niri CSD effect on fixed popup geometry.** The observed CSD adds 8×32 to requested client size before mapping; account for it in the geometry contract.
+  - [ ] **H1.1a2f [Primary] Prove first-visible-frame positioning at representative sizes and scales.** Capture actual visible frame placement and centering; retain as an open runtime proof even after recording map events.
+  - [x] **H1.1b Settle layout backend for this overhaul.** Continue native egui 0.27 layout and shared panel geometry. Isolated egui 0.36.2 upgrade produced 427 workbench compile errors; current `StudioPanelLayout` has compact/standard geometry and split tests; toolbar keeps tools one click away with `horizontal_wrapped`. `egui_taffy` 0.14 trial cannot exercise real views without API migration. Reassess after H1.4 host-size evidence; remove local egui-winit patch when a later coherent upgrade is validated.
+- **H1.2 Fixed color system and controls**
+  - [ ] **H1.2a1 [Primary] Migrate remaining input controls to shared height and typography.** Shared workbench, prompt, text, binary-diff, spreadsheet search, image/audio save-path, audio filename, stem destination, and digital decode filter fields already request 36-point height; finish remaining inputs.
+  - **H1.2a2 Finish remaining shared interaction tokens**
+    - [ ] **H1.2a2a [Primary] Migrate remaining spacing to shared tokens.**
+    - [ ] **H1.2a2b [Primary] Migrate disabled-state styling to shared tokens.**
+    - [ ] **H1.2a2c [Primary] Migrate status interactions to shared tokens.**
+  - [ ] **H1.2a3 [Primary] Finish shared chrome token use.**
+  - [ ] **H1.2a4 [Primary] Visually inspect component gallery in Light mode.**
+  - [ ] **H1.2a5 [Primary] Visually inspect component gallery in Dark mode.** Existing gallery caught egui's default 22-point input; widget foreground/fill contrast tests exist and central chrome border clears 3:1 against recessed and panel fills in both modes.
+  - [x] **H1.2b1 Switch both renderers to fixed colors and retire selector.** `AppConfig::resolve_palette` uses shared appearance and ignores legacy `[colors]`; workbench theme browser removed; F4/F6 switch appearance; renderer test proves mode changes a frame. Workspace tests pass. Runtime daemon/USB verification pending.
+  - [ ] **H1.2b2a [Primary] Verify mirror colors in runtime.**
+  - [ ] **H1.2b2b [Primary] Verify USB renderer colors in runtime.**
+  - [ ] **H1.2b2c [Primary] Verify virtual mode behavior in runtime.**
+  - [ ] **H1.2b2d [Primary] Verify persistent appearance change in runtime.**
+  - [ ] **H1.2b2e [Primary] Verify dismissible failure feedback in runtime.** SVG parsing/loading, theme assets, override save helpers, and theme tests are removed (`2b087a2`); legacy `[colors]` is ignored migration input and personal config untouched. Async daemon reload reports rejected/unavailable response in dismissible workbench notice; old `Theme` adapter/raw field aliases removed (`6719f33`).
+  - [ ] **H1.2c1 [Primary] Audit remaining hard-coded UI colors.** Define each at central palette boundary or justify media/data colors separately. `BaseColors` in core defines fixed Light/Dark semantic roles; desktop `WorkbenchColors` consumes them (`36b8c62`). Display, image/audio tools, shell and views migrated; core renamed `palette` (`bc774cf`); duplicate base-color aliases removed (`728908c`).
+  - [ ] **H1.2c2 [Primary] Verify foreground/background contrast on all surfaces.**
+  - [ ] **H1.2c3 [Primary] Verify accent use is purposeful on all surfaces.** Shared dark `console_surface` keeps ANSI comparison output high contrast in both appearances.
+- **H1.3 Viewer sessions, actions, and async identity**
+  - [ ] **H1.3a1 [Primary] Document and implement viewer route/return contract.** `WorkbenchApp` has one `ViewerSession` enum instead of nine optional viewers; startup queue preserves `--audio` then `--image` sequence and diff/binary-diff precedence.
+  - [ ] **H1.3a2 [Primary] Verify image navigation and cleanup live.**
+  - [ ] **H1.3a3 [Primary] Verify audio navigation and cleanup live.** Closing audio/MIDI stops playback.
+  - [ ] **H1.3a4 [Primary] Verify text navigation and cleanup live.**
+  - [ ] **H1.3a5 [Primary] Verify PDF navigation and cleanup live.** Closing dirty PDF refreshes mirror.
+  - [ ] **H1.3a6 [Primary] Verify diff navigation and cleanup live.**
+  - [ ] **H1.3b1 [Primary] Specify remaining Escape precedence.** Prompt, studio, Quick Palette, rolling audio, node canvas, and global handlers are separate; Node Machine now cancels catalog/save/cable drag before returning to Palette; audio save dialogs own Escape; host stops after handling Escape.
+  - [ ] **H1.3b2 [Primary] Specify remaining Enter precedence.**
+  - [ ] **H1.3b3 [Primary] Specify remaining Space precedence.**
+  - [ ] **H1.3b4 [Primary] Specify remaining letter-key precedence.** Palette search owns text keys so S/X do not swap twice; audio mode/stem-start keys yield to dialogs and focused fields; comparison shortcuts respect focused controls and modified S.
+  - [ ] **H1.3b5 [Primary] Implement remaining key precedence without altering domain controls.**
+  - [ ] **H1.3b6 [Primary] Implement focus return for representative nested edits and cancellation.**
+  - **H1.3b7 Typed host actions and shared status/error path**
+    - [ ] **H1.3b7a [Primary] Implement typed host actions.**
+    - [ ] **H1.3b7b [Primary] Establish one shared status/error path.**
+    - [ ] **H1.3b7c [Primary] Report image decode failures through the shared status/error path.** Malformed PNG startup currently returns silently to Workbench; preserve the error cause and show actionable feedback. Add focused failure/recovery coverage.
+  - [ ] **H1.3b8 [Primary] Add focus and keyboard tests for representative image paths.**
+  - [ ] **H1.3b9 [Primary] Add focus and keyboard tests for representative audio paths.**
+  - [ ] **H1.3b10 [Primary] Add focus and keyboard tests for representative text paths.**
+  - [ ] **H1.3c1 [Primary] Add revision-aware ownership for async results.** Spreadsheet/MIDI loads, audio/image previews, and later exports need host-scoped identity.
+  - **H1.3c2 Bound async work and completion behavior**
+    - [ ] **H1.3c2a [Primary] Bound async work for viewer-owned results.**
+    - [ ] **H1.3c2b [Primary] Repaint after async completion.**
+  - [ ] **H1.3c3 [Primary] Add stale-success tests.**
+  - [ ] **H1.3c4 [Primary] Add stale-failure tests.**
+  - [ ] **H1.3c5 [Primary] Prove async completion causes no repeated side effects.** Loads defer while a viewer owns screen; opening a viewer, prompt, or other view cancels pending spreadsheet/MIDI loads. Do not build a general plugin/docking system.
+- **H1.4 Complete shared host controls.** Headers, tool groups, fields, transport, split panels, overlay/status, and escape hatches consume contracts above.
+  - [x] **H1.4a Reserve compact header row for right actions.** Shared studio header clips long titles before measured badges; headless 1177/1766/2500-point checks show labels/actions do not overlap.
+  - [x] **H1.4b Order Image Studio Save As and Copy beside Close.**
+  - [x] **H1.4c Align audio control-row labels with 36-point controls.** Vertical-center render test passes.
+  - [ ] **H1.4d [Primary] Live-check Image Studio button and row layout at compact host size.**
+  - [ ] **H1.4e [Primary] Live-check Image Studio button and row layout at standard host size.**
+  - [ ] **H1.4f [Primary] Live-check Image Studio button and row layout at wide host size.**
+  - [ ] **H1.4g [Primary] Live-check audio mode and transport layout at compact host size.**
+  - [ ] **H1.4h [Primary] Live-check audio mode and transport layout at standard host size.**
+  - [ ] **H1.4i [Primary] Live-check audio mode and transport layout at wide host size.**
+  - [ ] **H1.4j [Primary] Confirm every image tool remains directly accessible and toolbar wrapping does not strand labels or hide common actions.**
+  - **H1.4k Image Studio header truncation and footer clipping (observed at compact and larger sizes)**
+    - [ ] **H1.4k1 [Primary] Keep the Image Studio title and short filename visible beside right actions.**
+    - [ ] **H1.4k2 [Primary] Reserve visible Image Studio footer space at every supported host size.**
+    - [ ] **H1.4k3 [Primary] Add render/layout regression checks for the compact header and footer.**
+    - [ ] **H1.4k4 [Primary] Verify compact header and footer live.**
+  - **H1.4l Audio Studio footer defect (1920×1080 Dark)**
+    - [ ] **H1.4l1 [Primary] Reserve a nonoverlapping Audio Studio footer clear of the bottom timeline and scrollbar.**
+    - [ ] **H1.4l2 [Primary] Add render/layout regression checks for the Audio Studio footer.**
+    - [ ] **H1.4l3 [Primary] Verify the Audio Studio footer live.**
+  - **H1.4m Empty/no-daemon compact workbench footer and rolling-audio strip**
+    - [ ] **H1.4m1 [Primary] Determine provenance of the clipped rolling-audio strip header at 1280×720.**
+    - [ ] **H1.4m2 [Primary] Reserve footer space for the empty/no-daemon mirror at 1280×720.**
+    - [ ] **H1.4m3 [Primary] Keep the no-daemon rolling-audio strip header visible at 1280×720.**
+    - [ ] **H1.4m4 [Primary] Add compact empty/no-daemon layout regression coverage.**
+
+  - [ ] **H1.4n [Primary] Compare the observed title/footer layout defects with baseline `4edf785` and record their provenance.** Current visual evidence alone does not establish which are migration regressions.
 
 ## Easy 2 — View migration on established contracts (Luna implementation; primary review)
 
-- [ ] **E2.1 Migrate image tools in cohesive slices.** View/geometry; annotate/protect; color/looks; extract/analyze; output. Image View readout/footer plus Film Look, Creative FX, Resize, Markup, Crop, Deskew, Redact, Convert, Depth Map, Barcode, Transform, Background Removal, OCR, Pick Color, Palette, and Decorrelation Stretch ordinary controls now use shared typography and height; Film Look comparison badges measure actual text width. Resize and Decorrelation Stretch presets use measured equal-width wrapping (`bc033a1`); Barcode decoded text and actions also wrap at compact widths, and Unicode payload truncation no longer splits a code point. The Pick Color loupe stacks readable RGB/coordinate rows and accurately says a click keeps the color. Deskew guidance/status and the Redact selection-size badge use body type, with canvas overlays using shared bounded placement. Deskew corner annotations and Convert/Decorrelation comparison HUDs now share measured canvas badges; Decorrelation matrix rows retain their numeric precision and alignment at 15-point type with horizontal scrolling. Continue live dense-content checks in H2.2. Continue contrast audit and live parameter/undo/save/copy/external checks without changing transformations or one-click navigation.
-- [ ] **E2.2 Migrate ordinary audio control rows.** Audio Inspect's slice buttons share control height, its selection-info label uses body type, and its readable footer keeps detailed gesture hints in a tooltip; rolling-strip status, stem status, and HF row alignment have been migrated. Stem Separation's waveform loading/empty messages now use body type. Digital Decode already used shared button heights and has no ordinary `.small()` labels; its filter row now wraps around a full-height field and Copy action. Stem destination and Inspect save fields also use full-height body-type inputs. Continue shared transport, field, segmented-mode, progress and status components in remaining rows. Preserve seek, selections, filters, gain, export, playback, and keyboard semantics. Escalate any audio-engine or async-lifecycle change to Hard 2.
-- [ ] **E2.3 Migrate straightforward chrome in remaining viewers.** PDF chrome uses semantic color roles and readable metadata, and its pane widths now respect the space taken by gaps and the divider; Quick Palette, Auto Actions, rolling-audio status and MIDI ordinary labels use the body-size token. MIDI transport and track buttons use the shared 36-point height, and the transport/zoom row wraps at compact popup widths. Text search/status and rendered Markdown body/list/quote text, spreadsheet sheet label and width-limited header search, 3D loading/error, node-machine forms/status, and text/binary diff ordinary chrome now use shared metrics. Binary diff cards now wrap their readable ID/kind/byte count row and use shared typography for offsets and previews. The 3D viewer toolbar wraps at narrow popup widths so its actions remain available. Dense table/canvas data typography remains for H2.2; continue the remaining viewers and live layout checks. Gate: no ordinary chrome relies on `.small()` merely to fit.
-- [ ] **E2.4 Fill focused interaction and contrast tests.** Equal sibling controls, stable Play/Pause widths, field focus, tooltip/disabled reasons, modal Escape, label contrast, and async-preview readiness. Gate: tests cover behavior rather than restating widget construction.
+- **E2.1 Image tools in cohesive slices**
+  - Source evidence: Image View readout/footer and Film Look, Creative FX, Resize, Markup, Crop, Deskew, Redact, Convert, Depth Map, Barcode, Transform, Background Removal, OCR, Pick Color, Palette, and Decorrelation Stretch ordinary controls use shared typography and height. Film Look comparison badges measure actual text width. Resize and Decorrelation Stretch presets use measured equal-width wrapping (`bc033a1`). Barcode decoded text/actions wrap at compact widths, and Unicode payload truncation preserves code points. Pick Color loupe stacks readable RGB/coordinate rows and says a click keeps the color. Deskew guidance/status and Redact selection-size badge use body type; canvas overlays use bounded placement. Deskew annotations and Convert/Decorrelation HUDs use measured canvas badges; Decorrelation matrix rows retain precision/alignment at 15-point type with horizontal scrolling. These are source findings; the leaves below capture remaining live checks and behavior parity. Keep transformations and one-click navigation unchanged.
+  - [ ] **E2.1a [Luna] Verify Image View readout/footer live with dense content.**
+  - [ ] **E2.1b [Luna] Verify Film Look live, including comparison and parameters.**
+  - [ ] **E2.1c [Luna] Verify Creative FX live, including comparison and parameters.**
+  - [ ] **E2.1d [Luna] Verify Resize live, including measured wrapping presets.**
+  - [ ] **E2.1e [Luna] Verify Markup live.**
+  - [ ] **E2.1f [Luna] Verify Crop live.**
+  - [ ] **E2.1g [Luna] Verify Deskew live, including guidance and canvas annotations.**
+  - [ ] **E2.1h [Luna] Verify Redact live, including selection-size badge.**
+  - [ ] **E2.1i [Luna] Verify Convert live, including comparison HUD.**
+  - [ ] **E2.1j [Luna] Verify Depth Map live.**
+  - [ ] **E2.1k [Luna] Verify Barcode live at compact width, including decoded text/actions and Unicode payload.**
+  - [ ] **E2.1l [Luna] Verify Transform live.**
+  - [ ] **E2.1m [Luna] Verify Background Removal live.**
+  - [ ] **E2.1n [Luna] Verify OCR live.**
+  - [ ] **E2.1o [Luna] Verify Pick Color live, including loupe readability and click behavior.**
+  - [ ] **E2.1p [Luna] Verify Palette live.**
+  - [ ] **E2.1q [Luna] Verify Decorrelation Stretch live, including comparison HUD and matrix precision.**
+  - [ ] **E2.1r [Luna] Complete the image-tool contrast audit.**
+  - [ ] **E2.1s [Luna] Verify image parameters and undo live.**
+  - [ ] **E2.1t [Luna] Verify image save and copy live.**
+  - [ ] **E2.1u [Luna] Verify external-app launch and fallback live.**
+- **E2.2 Audio ordinary control rows**
+  - Source evidence: Audio Inspect slice buttons share control height; selection info uses body type and gesture hints remain available in a tooltip. Rolling-strip status, stem status, and HF row alignment are migrated. Stem Separation loading/empty messages use body type. Digital Decode has shared button heights, a wrapping filter row, full-height field, and Copy action. Stem destination and Inspect save fields are full-height. Leaves below finish remaining shared components and preserve seek, selections, filters, gain, export, playback, and keyboard behavior. Escalate audio-engine or async-lifecycle changes to Hard 2.
+  - [ ] **E2.2a [Luna] Migrate remaining shared transport components.**
+  - [ ] **E2.2b [Luna] Migrate remaining ordinary fields.** Stem destination and Inspect save fields have full-height body-type inputs.
+  - [ ] **E2.2c [Luna] Migrate remaining segmented-mode components.**
+  - [ ] **E2.2d [Luna] Migrate remaining progress components.**
+  - [ ] **E2.2e [Luna] Migrate remaining status components.** Inspect slice buttons, selection info/footer, rolling strip, stem status/loading/empty, HF alignment and Digital Decode filter row already use shared metrics.
+  - [ ] **E2.2f [Luna] Verify seek and selection semantics remain intact.**
+  - [ ] **E2.2g [Luna] Verify filter semantics remain intact.**
+  - [ ] **E2.2g1 [Luna] Verify gain semantics remain intact.**
+  - [ ] **E2.2h [Luna] Verify export semantics remain intact.**
+  - [ ] **E2.2h1 [Luna] Verify playback semantics remain intact.**
+  - [ ] **E2.2h2 [Luna] Verify keyboard semantics remain intact.** Escalate audio-engine or async-lifecycle changes to Hard 2.
+- **E2.3 Straightforward chrome in remaining viewers**
+  - Source evidence: PDF chrome has semantic colors/readable metadata and divider/gap-aware pane widths. Quick Palette, Auto Actions, rolling-audio status, and MIDI labels use body-size metrics; MIDI transport/track buttons use 36-point height and the row wraps narrowly. Text search/status and rendered Markdown body/list/quote, spreadsheet sheet label/width-limited search, 3D loading/error, node forms/status, and text/binary diff ordinary chrome use shared metrics. Binary-diff cards wrap readable IDs/kind/byte count and use shared typography for offsets/previews. 3D toolbar wraps at narrow widths. Remaining dense table/canvas data typography belongs to H2.2.
+  - [ ] **E2.3a [Luna] Finish remaining PDF chrome live layout checks.** Semantic colors and readable metadata are in place.
+  - [ ] **E2.3a1 [Luna] Verify sibling PDF pane widths remain correct when the divider and gaps are accounted for.**
+  - [ ] **E2.3a2 [Luna] Add or update a regression check for sibling PDF pane widths.**
+  - [ ] **E2.3b [Luna] Finish Quick Palette chrome checks.** Ordinary labels use body-size token.
+  - [ ] **E2.3b1 [Luna] Finish Auto Actions chrome checks.** Ordinary labels use body-size token.
+  - [ ] **E2.3c [Luna] Finish rolling-audio chrome checks.** Ordinary labels use body-size token.
+  - [ ] **E2.3c1 [Luna] Finish MIDI chrome checks.** Ordinary labels, shared 36-point transport/track controls and narrow-width wrapping are done.
+  - [ ] **E2.3d [Luna] Finish text search/status live layout checks.**
+  - [ ] **E2.3d1 [Luna] Finish Markdown live layout checks.** Body/list/quote use shared metrics.
+  - [ ] **E2.3e [Luna] Finish spreadsheet sheet-label/header-search live layout checks.** Width-limited header search is in place.
+  - [ ] **E2.3f [Luna] Finish 3D loading/error and narrow-toolbar live checks.** Toolbar wraps at narrow widths.
+  - [ ] **E2.3g [Luna] Finish node-machine forms/status live checks.**
+  - [ ] **E2.3h [Luna] Finish text ordinary chrome live checks.**
+  - [ ] **E2.3h1 [Luna] Finish binary-diff ordinary chrome live checks.** Card row wraps IDs/kind/bytes; offsets/previews use shared typography.
+  - [ ] **E2.3i [Luna] Audit remaining ordinary chrome for `.small()` used only to fit.** Dense table/canvas data typography remains for H2.2.
+- [ ] **E2.4a [Luna] Test equal sibling control sizing.**
+- [ ] **E2.4b [Luna] Test stable Play/Pause widths.**
+- [ ] **E2.4c [Luna] Test field focus behavior.**
+- [ ] **E2.4d [Luna] Test tooltip and disabled-reason behavior.**
+- [ ] **E2.4e [Luna] Test modal Escape behavior.**
+- [ ] **E2.4f [Luna] Test label contrast.**
+- [ ] **E2.4g [Luna] Test async-preview readiness behavior.** Tests must cover behavior, not restate widget construction.
 
 ## Hard 2 — Cross-view behavior, scale, and embedding (primary model)
 
-- [ ] **H2.1 Finish asynchronous file and export paths.** Audit image/PDF/text/3D and other opens, save/encode/export, external processes, and preview work for UI-thread blocking. PDF page rasters use a three-message bounded queue; initial and post-edit metadata load through a cancellable bounded job with a visible loading badge. Failed raster/decode results show an unavailable thumbnail and a page error instead of an endless spinner. PDF edits stage validated output in a temporary sibling directory and publish it only while the editor remains open; closing the editor or a failed edit removes the staged file without deleting an older output. MIDI file parsing from both workbench entry points now uses a bounded cancellable job, with a loading button and failure status; changing foreground view cancels pending MIDI/spreadsheet loads. MIDI synthesis uses the bounded job pool, cancels stale solo/viewer work, reports worker failures, and polls at 50 ms during synthesis; an already-running synthesis can still finish in the worker. The 3D viewer retains its load ticket, cancels pending publication on close, and polls at 50 ms while loading instead of repainting every frame; an already-running parse can still finish in the worker. Page texture storage, preview worker lifetime, and broader paths still need bounded jobs, progress/errors, revision checks, cancellation, and repaint on completion. Preserve output fidelity and destinations.
-- [ ] **H2.2 Make dense content scale-correct.** Raw code and Markdown code-block text now use shared 15-point monospace type; unwrapped code-row height, gutter width, and line-scroll estimates derive from the actual font metrics. Unicode literal search now preserves original UTF-8 byte offsets, and active/multiline search highlights project exact ranges into each syntax token; focused regression tests cover these cases. Wrapped raw-code rows now use measured variable-height virtualization, bounded background measurement batches, source-row scroll anchoring, and the same cumulative-height index for search/minimap geometry. Selectable labels retain source-row identities across virtualized scrolling; unwrapped text enables horizontal panning. MIDI piano-roll pitch/time labels use measured 15-point monospace type, with octave thinning, canvas bounds, collision suppression, and shared contrast. Large-line performance and live interaction evidence remain. Binary diff hex/ASCII cells, offsets, and column headers keep a 15-point monospace font at 8/16/32-byte densities, with matching row/hit-target geometry and horizontal panning; compact-width render and density tests cover this contract. Comparison ANSI text uses the same shared monospace size on a centrally defined dark console surface in both appearances; standard, truecolor, and 256-color foreground contrast have focused tests. Audit long-line scrolling. Validate spreadsheet two-axis scrolling, sticky headers, full-cell inspection, and large-data bounds. Gate: scroll/search/copy targets remain correct across UI/DPI scales and large fixtures.
-- [x] **H2.2a Correct wrapped text geometry.** Measured row heights replace fixed-row assumptions; logarithmic prefix updates avoid rebuilding all offsets on each measurement. Render tests at 100%/150%/200% scale cover non-overlapping wrapped rows, search offsets, unwrapped rows, and source anchoring while earlier measurements settle. The index retains heights only; font layout proceeds in batches of at most 64 rows with a 2 ms between-row budget. Architecture review found no additional clone groups or dependency cycles; total CCN rises for the necessary indexing/measurement and canvas-fit behavior while average and peak CCN do not rise. Live selection/copy and pointer/minimap checks remain acceptance work.
-- [x] **H2.2b Make MIDI canvas labels readable.** Luna implemented measured pitch/ruler labels; primary review removed the major-tick-only restriction so a tightly panned range can still show time values. Geometry tests cover lane density, tick spacing, and edge placement. Playback and selection geometry are retained; live interaction remains unverified.
-- [x] **H2.2d Consolidate image canvas readouts.** Luna implemented Convert badge measurement; primary review capped natural widths, used opaque centralized surfaces, and extracted `CanvasBadge` for Convert, Decorrelation Stretch, and Deskew corners. Comparison handles share measured drawing and matching hit tests, including Film Look/Creative FX through `SplitCompareView`. Tests cover compact/wide badge geometry, both-mode contrast, and handle hit bounds. Numeric matrix readouts scroll horizontally without shrinking or changing precision. Live overlays/dragging remain unverified. Architecture comparison reduces clone groups by three, leaves peak CCN unchanged, and introduces no increased-complexity hotspot.
-- [ ] **H2.2c Bound pathological text work and collect performance evidence.** A single exceptionally long source line can exceed the between-row measurement budget. Audit multi-megabyte single lines, large clipboard text, syntax/minimap preparation, and cache lifetime; keep 60 Hz interaction and exact search/copy semantics. Measure width/DPI changes, both appearances, and large-document scrolling. Do not infer performance from geometry tests.
-- [ ] **H2.3 Complete complex workspace semantics.** Migrate node editor, diff/comparison modes, PDF page/edit flow, 3D interaction, audio gesture-only controls, and Quick Palette/automation flows to the session/action/overlay contracts. Gate: the parity ledger's keyboard, output, and return-destination scenarios pass.
-- [ ] **H2.4 Prove reusable preview hosting.** Separate decoded source, preview view state, and editor state; render multiple independent inline previews and full studios using the same data where safe. Add revision-aware, bounded cache/job/texture lifetimes suitable for future file thumbnails, including invalidation and eviction. Gate: embedding harness demonstrates independence, no repeated side effects, and bounded loading. File-manager operations themselves are out of scope.
+- **H2.1 Async file and export paths**
+  - [ ] **H2.1a [Primary] Bound page texture storage.**
+  - [ ] **H2.1b [Primary] Bound preview worker lifetime.**
+  - [ ] **H2.1c [Primary] Audit image open/decode for UI-thread blocking.**
+  - [ ] **H2.1d [Primary] Audit PDF open/decode for UI-thread blocking.**
+  - [ ] **H2.1e [Primary] Audit text and 3D open/parse for UI-thread blocking.**
+  - [ ] **H2.1f [Primary] Audit remaining save/encode/export paths for UI-thread blocking.**
+  - [ ] **H2.1g [Primary] Audit external process waits for UI-thread blocking.**
+  - **H2.1h Complete remaining async-path behavior**
+    - [ ] **H2.1h1 [Primary] Add visible progress to remaining open/decode paths.**
+    - [ ] **H2.1h2 [Primary] Report errors from remaining open/decode paths.**
+    - [ ] **H2.1h3 [Primary] Add revision checks to remaining preview/export paths.**
+    - [ ] **H2.1h4 [Primary] Add cancellation to remaining open/preview/export paths.**
+    - [ ] **H2.1h5 [Primary] Repaint after remaining async completions.**
+    - [ ] **H2.1h6 [Primary] Preserve output fidelity and destinations in remaining save/encode/export paths.**
+  - [x] **H2.1i Bound PDF page raster queue.** Three-message queue implemented.
+  - [x] **H2.1j Load PDF initial/post-edit metadata through cancellable bounded job.** Visible loading badge included.
+  - [x] **H2.1k Report PDF raster/decode errors.** Unavailable thumbnail and page error replace endless spinner.
+  - [x] **H2.1l Stage PDF edits and publish only while editor remains open.** Validated temporary sibling output is removed on close/failure without deleting older output.
+  - [x] **H2.1m Parse MIDI files through bounded cancellable jobs.** Both workbench entry points use loading button/failure status; changing foreground cancels pending MIDI/spreadsheet loads.
+  - [x] **H2.1n Synthesize MIDI through bounded job pool.** Stale solo/viewer work cancels; failures reported; polls at 50 ms. Running synthesis may finish in worker.
+  - [x] **H2.1o Retain 3D load ticket and cancel pending publication on close.** Polls at 50 ms while loading rather than every frame; running parse may finish in worker.
+- **H2.2 Dense content scale correctness**
+  - **H2.2e Text and spreadsheet scale checks**
+    - [ ] **H2.2e1 [Primary] Audit long-line horizontal scrolling.** Raw code uses shared 15-point monospace; measured variable-height virtualization, bounded batches, source anchoring and exact UTF-8 search projection are implemented.
+    - [ ] **H2.2e2 [Primary] Validate spreadsheet two-axis scrolling.**
+    - [ ] **H2.2e3 [Primary] Validate spreadsheet sticky headers.**
+    - [ ] **H2.2e4 [Primary] Validate spreadsheet full-cell inspection.**
+    - [ ] **H2.2e5 [Primary] Validate spreadsheet large-data bounds.**
+    - [ ] **H2.2e6 [Primary] Validate scroll/search/copy targets across UI and DPI scales with large fixtures.**
+    - [ ] **H2.2e7 [Primary] Verify live selection and copy targets across wrapped virtual rows.**
+    - [ ] **H2.2e8 [Primary] Verify pointer and minimap geometry across wrapped virtual rows.**
+  - [x] **H2.2a Correct wrapped text geometry.** Measured row heights, logarithmic prefix updates, 100/150/200% render tests, bounded layout batches, and height-only index are implemented. Architecture review found no clone groups/cycles; necessary indexing/measurement raises total CCN while average/peak CCN do not rise.
+  - [x] **H2.2b Make MIDI canvas labels readable.** Measured pitch/ruler labels with octave thinning, canvas bounds, collision suppression and contrast; geometry tests cover density, spacing and edges. Live playback/selection remains unverified.
+  - [ ] **H2.2b1 [Primary] Verify MIDI playback interaction live.**
+  - [ ] **H2.2b2 [Primary] Verify MIDI selection interaction live.**
+  - [x] **H2.2d Consolidate image canvas readouts.** `CanvasBadge` covers Convert, Decorrelation Stretch and Deskew corners; bounded widths, opaque centralized surfaces, shared comparison drawing/hit tests; tests cover geometry, contrast and handles. Numeric matrix scrolls without shrinking/precision changes. Architecture comparison reduces clone groups by three, peak CCN unchanged, no new hotspot.
+  - [ ] **H2.2d1 [Primary] Verify image overlays live.**
+  - [ ] **H2.2d2 [Primary] Verify image comparison dragging live.**
+  - **H2.2c Bound pathological text work and collect performance evidence**
+    - [ ] **H2.2c1 [Primary] Bound measurement and rendering work for multi-megabyte single lines.** Preserve exact search/copy behavior.
+    - [ ] **H2.2c2 [Primary] Bound processing of large clipboard text.** Preserve exact search/copy behavior.
+    - [ ] **H2.2c3 [Primary] Bound syntax preparation for pathological documents.**
+    - [ ] **H2.2c4 [Primary] Bound minimap preparation for pathological documents.**
+    - [ ] **H2.2c5 [Primary] Bound text layout/cache lifetime.**
+    - [ ] **H2.2c6 [Primary] Measure large-document performance across width and DPI changes in both appearances.** Keep 60 Hz interaction target; geometry tests are not performance evidence.
+  - [ ] **H2.2f [Primary] Validate binary diff horizontal scrolling at long lines.** Hex/ASCII cells, offsets and column headers use 15-point monospace across 8/16/32-byte densities with matching row/hit targets and tests.
+  - [ ] **H2.2g [Primary] Validate comparison ANSI long-line scrolling.** Shared monospace size on central dark console surface in both modes; standard/truecolor/256-color foreground contrast tests pass.
+- **H2.3 Complex workspace semantics**
+  - [ ] **H2.3a [Primary] Migrate node editor semantics to session/action/overlay contracts.**
+  - [ ] **H2.3b [Primary] Migrate diff/comparison modes to session/action/overlay contracts.**
+  - [ ] **H2.3c [Primary] Migrate PDF page/edit flow to session/action/overlay contracts.**
+  - [ ] **H2.3d [Primary] Migrate 3D interaction to session/action/overlay contracts.**
+  - [ ] **H2.3e [Primary] Migrate audio gesture-only controls to session/action/overlay contracts.**
+  - [ ] **H2.3f [Primary] Migrate Quick Palette and automation flows to session/action/overlay contracts.**
+  - [ ] **H2.3g [Primary] Pass parity-ledger keyboard scenarios.**
+  - [ ] **H2.3h [Primary] Pass parity-ledger output scenarios.**
+  - [ ] **H2.3i [Primary] Pass parity-ledger return-destination scenarios.**
+- **H2.4 Reusable preview hosting**
+  - [ ] **H2.4a [Primary] Separate decoded source data from preview view state.**
+  - [ ] **H2.4b [Primary] Separate editor state from decoded source data.**
+  - [ ] **H2.4c [Primary] Render multiple independent inline previews from shared data where safe.**
+  - [ ] **H2.4d [Primary] Render full studios from shared data where safe.**
+  - [ ] **H2.4e [Primary] Add revision-aware bounded cache/job/texture lifetimes for future file thumbnails.**
+  - [ ] **H2.4f [Primary] Add preview cache/job/texture invalidation and eviction.**
+  - [ ] **H2.4g [Primary] Demonstrate independent previews and full studios in embedding harness.**
+  - [ ] **H2.4h [Primary] Demonstrate no repeated side effects and bounded loading in embedding harness.** File-manager operations are out of scope.
 
 ## Easy 3 — Consolidation and evidence (Luna implementation; primary review)
 
-- [ ] **E3.1 Remove superseded adapters and duplicate chrome.** Delete only paths made obsolete by Hard 1–2 and confirm architecture metrics improve for real reasons. Keep specialized domain behavior intact.
-- [ ] **E3.2 Update docs/config migration notes and parity ledger.** Replace the obsolete `ui_architecture_design.md` with actual implemented boundaries; update `AGENTS.md` for the fixed-palette convention. Document retired `[colors]` keys and display-theme controls without modifying personal config. Mark each retained ledger item with test/manual evidence, not mere existence of a control.
-- [ ] **E3.3 Build repeatable visual/interaction captures.** Collect Light/Dark screenshots at representative logical sizes and scales, plus Niri launch/return, long filenames, many presets/tracks/pages, loading/error, mirror freshness, and screen-reader/focus observations where feasible.
+- [ ] **E3.1a [Luna] Remove superseded adapters made obsolete by Hard 1–2.** Confirm each deletion is obsolete by reference and behavior review.
+- [ ] **E3.1b [Luna] Remove duplicate chrome made obsolete by Hard 1–2.** Confirm specialized domain behavior remains.
+- [ ] **E3.1c [Luna] Compare architecture metrics after consolidation.** Require genuine improvement; do not move code solely to change metrics.
+- [ ] **E3.2a [Luna] Replace obsolete `ui_architecture_design.md` with implemented boundaries.**
+- [ ] **E3.2b [Luna] Update `AGENTS.md` for fixed-palette convention.**
+- [ ] **E3.2c [Luna] Document retired `[colors]` keys and display-theme controls.** Do not modify personal config.
+- [ ] **E3.2d [Luna] Mark each retained parity-ledger item with test or manual evidence.** Control existence alone is insufficient.
+- [ ] **E3.3a [Luna] Capture Light screenshots at representative logical sizes/scales.**
+- [ ] **E3.3b [Luna] Capture Dark screenshots at representative logical sizes/scales.**
+- [ ] **E3.3c [Luna] Capture Niri launch and return behavior.**
+- [ ] **E3.3d [Luna] Capture long-filename behavior.**
+- **E3.3e Capture dense collection behavior**
+  - [ ] **E3.3e1 [Luna] Capture many-preset behavior.**
+  - [ ] **E3.3e2 [Luna] Capture many-track behavior.**
+  - [ ] **E3.3e3 [Luna] Capture many-page behavior.**
+- [ ] **E3.3f [Luna] Capture loading and error states.**
+- [ ] **E3.3g [Luna] Capture mirror freshness and async-audio behavior.**
+- [ ] **E3.3h [Luna] Record screen-reader and focus observations where feasible.**
 
 ## Hard 3 — Final integration and acceptance (primary model)
 
-- [ ] **H3.1 Review and fix the Easy 3 diff, then close all parity gaps.** Compare the full ledger with running behavior; reclassify any failing scenario into a concrete task and assign it to the appropriate model before final sign-off.
-- [ ] **H3.2 Verify reliability, performance, and boundaries.** Exercise the resolution/DPI matrix, fixed non-resizable centered singleton popup, virtual/no-hardware daemon behavior, idle repaint, 60 Hz interaction target, bounded caches/jobs, and no UI-thread decode/IPC/subprocess waits. Run `cargo fmt --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, and comparable architecture measurements. Manual hardware access requires deliberate separate testing.
-- [ ] **H3.3 Finish reviewable delivery.** Ensure every original feature is still reachable, both modes are readable, inline preview reuse works, docs match code, and no temporary second design system remains. Provide final before/after evidence and any explicit limitations.
+- **H3.1 Review Easy 3 and close parity gaps**
+  - [ ] **H3.1a [Primary] Review complete Easy 3 diff.**
+  - [ ] **H3.1b [Primary] Compare every parity-ledger item against running behavior.**
+  - [ ] **H3.1c [Primary] Create a concrete task for each failing scenario and assign the appropriate model.**
+  - [ ] **H3.1d [Primary] Resolve all assigned parity gaps before sign-off.**
+- **H3.2 Reliability, performance, and boundaries**
+  - [ ] **H3.2a [Primary] Exercise full resolution/DPI matrix.**
+  - [ ] **H3.2a1 [Primary] Prove first-visible-frame popup placement and centering across the matrix.** Map-event dimensions alone do not prove visible placement.
+  - [ ] **H3.2b [Primary] Verify fixed, non-resizable, centered singleton popup.**
+  - [ ] **H3.2b1 [Primary] Recheck repeated-launch reliability for the software-renderer matrix case that initially timed out.** Retain the original EGL allocation failure and successful serial retry.
+  - [ ] **H3.2c [Primary] Verify virtual/no-hardware daemon behavior.**
+  - [ ] **H3.2d [Primary] Verify idle repaint behavior.**
+  - [ ] **H3.2e [Primary] Measure 60 Hz interaction target.** Include frame-time profiling on representative dense interactions and fixtures.
+  - [ ] **H3.2f [Primary] Verify bounded cache and job lifetimes.**
+  - [ ] **H3.2g [Primary] Verify no UI-thread decode, IPC, or subprocess waits.**
+  - [ ] **H3.2h [Primary] Run `cargo fmt --check`.**
+  - [ ] **H3.2i [Primary] Run `cargo test --workspace`.**
+  - [ ] **H3.2j [Primary] Run `cargo clippy --workspace --all-targets -- -D warnings`.**
+  - [ ] **H3.2k [Primary] Run comparable architecture measurements and review the comparison.**
+  - [ ] **H3.2l [Hard, primary] Exercise hardware-backed display behavior in a deliberate separate run and record results.**
+- **H3.3 Reviewable delivery**
+  - [ ] **H3.3a [Primary] Verify every original feature remains reachable.**
+  - [ ] **H3.3b [Primary] Verify both appearance modes are readable.**
+  - [ ] **H3.3c [Primary] Verify inline preview reuse works.**
+  - [ ] **H3.3d [Primary] Verify documentation matches code.**
+  - [ ] **H3.3e [Primary] Verify no temporary second design system remains.**
+  - [ ] **H3.3f [Primary] Provide final before/after evidence and explicit limitations.**
 
-## Dependency notes
+## Dependencies
 
-`E1` can start now. `H1` must settle shared contracts before `E2`. `H2` follows the representative H1 slices and E2 findings. `E3` follows migration, and `H3` is the acceptance gate. Within a batch, split task IDs into bounded commits; do not run overlapping agents against the shared worktree. Revisit the queue after each review, since an uncovered interaction can change both task size and difficulty.
+- E1 is the source-inventory and baseline phase; its observed baseline is recorded with explicit limits in `ui_overhaul_acceptance.md`. First-visible-frame proof, interactive performance profiling, and malformed-input recovery remain open under H1/H2/H3. Do not interpret completion of E1 observations as feature-parity or runtime acceptance.
+- H1 settles shared contracts before E2. H1.4 representative layout evidence also informs backend reassessment in H1.1b.
+- H2 follows representative H1 slices and E2 findings. E3 follows migration. H3 is the final acceptance gate.
+- Children under each grouping are individual deliverables. Commit bounded items without overlapping shared-worktree agents. Revisit the tree after review because uncovered interactions can change scope or difficulty.
