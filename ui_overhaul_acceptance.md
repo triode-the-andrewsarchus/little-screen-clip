@@ -131,3 +131,10 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 - Runtime visible strip header and singleton geometry are observed in this capture. H1.4m4 remains open for broader compact empty-workbench render regression and status variants; the footer unit test covers the production footer boundary, not the whole WorkbenchApp tree.
 
 - Architecture comparison against `workbench-footer-start`: LOC 86,010→85,958 (footer implementation and test delta), average CCN 4.87 unchanged, max CCN 189 unchanged, duplication 5.09% unchanged. Tool reports REGRESSION, including an `update` +78 diff-aware CCN and clone matches around touched files; inspect showed the update change delegates duplicated captions out of three view branches, and its pre/post absolute complexity metric changes only +9 total. This tool classification is noisy for the structural diff but is recorded; no new high-CCN production helper or dependency cycle was added.
+
+## Compact mirror debug badge, 2026-09-27
+
+- `little-clip-render` previously placed the debug-handler text at badge top+22 with font size14 inside a 32px badge. Its rendered glyph bounds fell below the badge. The existing `draw_text` accepts this top-relative placement; no geometry or hit regions changed.
+- Text now uses the badge center. `cargo test -p little-clip-render debug_handler_glyphs_stay_inside_the_badge` passes and inspects rendered pixels. `cargo fmt --check` and current `cargo build -p clip-workbench` pass.
+- Isolated Niri capture `/tmp/clip-mirror-badge-after-1280` at 1280×720 logical / 100% / Dark passed popup checks. Primary reviewed the settled screenshot; debug label is fully visible inside the badge.
+- Architecture comparison to `mirror-badge-start`: average/peak CCN and clone-group count unchanged; +32 LOC chiefly the pixel-bound regression. Tool reports REGRESSION and clone/chokepoint flags; source change adds no production helper or dependency.

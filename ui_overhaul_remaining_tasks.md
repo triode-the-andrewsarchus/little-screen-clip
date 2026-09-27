@@ -131,8 +131,8 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
 
   - **H1.4o Compact display mirror summary badge**
     - [x] **H1.4o1 [Primary] Diagnose the clipped summary badge in the compact mirror.** Native debug handler badge is 32 points high but draws 14-point text at top+22; `draw_text_clipped` treats y as top-origin with baseline y+size, placing glyph bottoms beyond the badge. Compact mirror scaling also reduces 14 native pixels to about eight logical points. Repair native vertical placement and assess preview readability separately.
-    - [ ] **H1.4o2 [Primary] Keep the mirror summary badge readable within its bounds.** Preserve native display content and slot hit geometry.
-    - [ ] **H1.4o3 [Primary] Verify the compact mirror summary badge after repair.**
+    - [x] **H1.4o2 [Primary] Keep the mirror summary badge readable within its bounds.** Vertically centered debug-handler glyphs stay inside the existing 32px badge; slot layout and hit geometry are unchanged.
+    - [x] **H1.4o3 [Primary] Verify the compact mirror summary badge after repair.** Renderer pixel-bounds test passes; 1280×720 Dark isolated Niri capture shows the complete label inside its badge.
 
 ## Easy 2 — View migration on established contracts (Luna implementation; primary review)
 

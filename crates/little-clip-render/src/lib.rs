@@ -452,7 +452,7 @@ impl ScreenRenderer {
                     &mut pixmap,
                     &handler_text,
                     badge_x + 14.0,
-                    badge_y + 22.0,
+                    badge_y + (badge_h - 14.0) * 0.5,
                     14.0,
                     Color::from_rgba8(str_r, str_g, str_b, str_a),
                     true,
@@ -698,6 +698,41 @@ mod tests {
         let light = renderer.render_pixmap(&manager).unwrap();
         assert_ne!(dark.data(), light.data());
         assert_eq!(renderer.palette.colors.canvas, "#f4f2ea");
+    }
+
+    #[test]
+    fn debug_handler_glyphs_stay_inside_the_badge() {
+        let mut config = AppConfig::default();
+        config.display.show_debug_handler = true;
+        let renderer = ScreenRenderer::new(config).unwrap();
+        let pixmap = renderer.render_pixmap(&SlotManager::default()).unwrap();
+        let (r, g, b, _) = parse_hex_color(&renderer.palette.colors.text_inverse);
+        let (x_start, x_end) = (32usize, 460usize);
+        let badge_y = SCREEN_HEIGHT as usize - 42;
+        let badge_bottom = badge_y + 32;
+        let mut glyph_bounds = None::<(usize, usize)>;
+
+        for y in 0..SCREEN_HEIGHT as usize {
+            for x in x_start..x_end {
+                let pixel = &pixmap.data()[(y * SCREEN_WIDTH as usize + x) * 4..][..4];
+                if pixel[0] == r && pixel[1] == g && pixel[2] == b {
+                    glyph_bounds = Some(match glyph_bounds {
+                        Some((top, bottom)) => (top.min(y), bottom.max(y)),
+                        None => (y, y),
+                    });
+                }
+            }
+        }
+
+        let (top, bottom) = glyph_bounds.expect("debug handler label should render");
+        assert!(
+            top >= badge_y,
+            "glyphs start above badge: {top} < {badge_y}"
+        );
+        assert!(
+            bottom < badge_bottom,
+            "glyphs extend below badge: {bottom} >= {badge_bottom}"
+        );
     }
 
     #[test]
