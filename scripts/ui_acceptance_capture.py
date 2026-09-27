@@ -39,6 +39,7 @@ IMAGE_TOOL_KEYS = {
     "barcode": "b",
     "remove-background": "r",
     "depth-map": "d",
+    "film-look": "l",
 }
 
 
@@ -535,10 +536,9 @@ def capture_workbench(
     report["screenshots"]["first_observed"] = screenshot(
         niri_bin, niri_env, output / "first-observed.png"
     )
-    time.sleep(args.settle_ms / 1000)
     if args.image_tool:
         run_checked(["wtype", "-k", IMAGE_TOOL_KEYS[args.image_tool]], env=niri_env)
-        time.sleep(0.15)
+    time.sleep(args.settle_ms / 1000)
     final_windows = own_windows(niri_bin, niri_env, {app.pid})
     report["final_windows"] = final_windows
     capture_name = f"image-{args.image_tool}" if args.image_tool else "settled"

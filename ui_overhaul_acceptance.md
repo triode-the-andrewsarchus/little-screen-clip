@@ -175,16 +175,16 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 
 ## Isolated image-tool captures, 2026-09-27
 
-- Added `--image-tool` to `scripts/ui_acceptance_capture.py` to choose image tools through their existing one-key shortcuts inside the private Wayland session. The workbench passed the singleton and fixed centered geometry checks for every capture.
+- Added `--image-tool` to `scripts/ui_acceptance_capture.py` to choose image tools through their existing one-key shortcuts inside the private Wayland session. The `--settle-ms` delay now runs after selection so captures include the tool's repaint/debounce. The workbench passed the singleton and fixed centered geometry checks for every capture.
 - Crop Dark, Resize Dark, and Deskew Light were captured at 1280×720 with the dense image fixture. Each view keeps its controls, canvas, and footer within the window; Resize shows its 3-column scale presets, while Deskew shows its four-point annotations and guidance. These are layout checks only; E2.1s retains action/undo verification.
-- The runner did not switch to Film Look when sending its documented `L` shortcut, so it is not exposed as a supported `--image-tool` choice yet. Film Look remains unverified. Light/Dark capture scheduling did not touch the user's compositor or workbench.
+- Film Look Light (`/tmp/clip-image-film-look-postselect-20260927`) shows the stock browser, selected stock, split comparison, style panel, adjustment controls, and Apply action. Light/Dark capture scheduling did not touch the user's compositor or workbench.
 - The pre-fix dense-filename capture showed the compact fallback still clipping to `IMAGE …`; that finding is resolved by the follow-up title fix below. The short filename capture recorded under H1.4k3b remains valid.
 
 ## Image-tool layout captures, 2026-09-27
 
 - Markup Dark (`/tmp/clip-image-markup-dark-20260927`) shows both inspector rails and empty-state guidance around the canvas. Transform Light (`/tmp/clip-image-transform-light-20260927`) shows rotate, flip, and revert controls. Depth Map Dark (`/tmp/clip-image-depth-dark-20260927`) shows model and Left/Right destination controls. Background Removal Light (`/tmp/clip-image-removebg-light-20260927`) shows its prompt and action in a scrollable inspector. OCR Light (`/tmp/clip-image-ocr-light-20260927`) shows engine/prompt fields and the empty output pane. These captures verify layout and empty states only.
 - Redact Dark (`/tmp/clip-image-redact-dark-20260927`) shows placement guidance and strip-metadata controls, but does not establish the selection-size badge. Pick Color Dark (`/tmp/clip-image-pick-color-dark-20260927`) shows the loupe/value and palette panels with dominant colors, but does not establish hover magnification or click retention. Barcode Dark (`/tmp/clip-image-barcode-dark-20260927`) is ready-to-scan with no payload, so decoded text/actions and Unicode remain pending.
-- Convert Dark at 1.0 and 3.5 seconds (`/tmp/clip-image-convert-dark-20260927`, `/tmp/clip-image-convert-settled-dark-20260927`) remains in `Waiting for changes…` with no converted preview. This is a live unresolved state; keep E2.1i open until its debounce/preview path is understood.
+- The two earlier Convert captures placed `--settle-ms` before tool selection and therefore sampled its 180 ms debounce too early; do not use them as settled-state evidence. Corrected capture `/tmp/clip-image-convert-postselect-20260927` shows the encoded WebP size and comparison HUD after a 3.5-second post-selection settle.
 
 ## Remaining `.small()` audit, 2026-09-27
 
