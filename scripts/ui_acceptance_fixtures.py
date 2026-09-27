@@ -220,15 +220,41 @@ def svg_fixture(out: Path) -> None:
         '<text x="80" y="84" text-anchor="middle" fill="white">CLIP SVG</text></svg>\n', encoding="utf-8")
 
 
+def malformed_fixtures(out: Path) -> None:
+    # Deliberately truncated/corrupt synthetic inputs exercise decoder failures.
+    (out / "document-malformed.pdf").write_bytes(
+        b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\n"
+        b"2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\n"
+        b"3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] >>\n"
+        b"xref\nthis is not a cross-reference table\n%%EOF\n"
+    )
+    (out / "music-malformed.mid").write_bytes(b"MThd\x00\x00\x00\x06\x00\x01")
+    (out / "image-malformed.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", struct.pack(">2I5B", 8, 8, 8, 6, 0, 0, 0))
+        + b"\x00\x00\x00\x10IDAT\x78\x9c\x00"
+    )
+    (out / "text-invalid-utf8.txt").write_bytes(
+        b"Synthetic text preview decoding failure fixture\nInvalid UTF-8 byte: \xff\xfe\n"
+    )
+
+
 def validate_added_fixtures(out: Path) -> None:
     pdf = (out / "document-two-page.pdf").read_bytes()
     midi = (out / "music-three-track.mid").read_bytes()
     tiff = (out / "image-exif.tiff").read_bytes()
     svg = (out / "image-simple.svg").read_text(encoding="utf-8")
+    malformed_pdf = (out / "document-malformed.pdf").read_bytes()
+    malformed_midi = (out / "music-malformed.mid").read_bytes()
+    malformed_png = (out / "image-malformed.png").read_bytes()
+    malformed_text = (out / "text-invalid-utf8.txt").read_bytes()
     assert pdf.startswith(b"%PDF-1.4") and b"/Count 2" in pdf
     assert midi[:4] == b"MThd" and struct.unpack_from(">H", midi, 10)[0] == 3
     assert tiff[:4] == b"II*\x00" and struct.pack("<H", 274) in tiff and b"2026:01:02 03:04:05" in tiff
     assert svg.startswith("<svg ") and "<circle" in svg
+    assert malformed_pdf.startswith(b"%PDF-1.4") and b"not a cross-reference table" in malformed_pdf
+    assert malformed_midi.startswith(b"MThd") and len(malformed_midi) < 14
+    assert malformed_png.startswith(b"\x89PNG\r\n\x1a\n") and b"IDAT" in malformed_png and not malformed_png.endswith(b"IEND")
+    assert b"\xff\xfe" in malformed_text
 
 
 def generate(out: Path, large_audio_seconds: int = WAV_LARGE_SECONDS) -> list[Path]:
@@ -239,6 +265,7 @@ def generate(out: Path, large_audio_seconds: int = WAV_LARGE_SECONDS) -> list[Pa
         "image-transparent.png", "audio-stereo.wav", f"audio-large-{large_audio_seconds}s.wav",
         "audio-silence-transient.wav", "model-simple.stl",
         "document-two-page.pdf", "music-three-track.mid", "image-exif.tiff", "image-simple.svg",
+        "document-malformed.pdf", "music-malformed.mid", "image-malformed.png", "text-invalid-utf8.txt",
     ]
     conflicts = [name for name in names if (out / name).exists()]
     if conflicts:
@@ -253,6 +280,7 @@ def generate(out: Path, large_audio_seconds: int = WAV_LARGE_SECONDS) -> list[Pa
     midi_fixture(out)
     exif_tiff_fixture(out)
     svg_fixture(out)
+    malformed_fixtures(out)
     validate_added_fixtures(out)
     return [out / name for name in names]
 
@@ -265,7 +293,8 @@ def main() -> None:
             "sheet-tall.csv, binary-left.bin, binary-right.bin, image-transparent.png, "
             "audio-stereo.wav, audio-large-<seconds>s.wav, audio-silence-transient.wav, and "
             "model-simple.stl, document-two-page.pdf, music-three-track.mid, image-exif.tiff, "
-            "and image-simple.svg. The large WAV defaults to 30 seconds (~5.3 MB); use "
+            "image-simple.svg, document-malformed.pdf, music-malformed.mid, image-malformed.png, "
+            "and text-invalid-utf8.txt. The large WAV defaults to 30 seconds (~5.3 MB); use "
             "--large-audio-seconds 300 for 300 seconds (~53 MB).\n\n"
             "Exact command: python3 scripts/ui_acceptance_fixtures.py --output-dir /tmp/clip-ui-fixtures"
         ),
