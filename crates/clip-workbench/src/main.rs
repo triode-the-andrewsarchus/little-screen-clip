@@ -39,6 +39,7 @@ mod appearance_sync;
 mod audio_preview;
 mod binary_diff_view;
 mod canvas;
+mod component_gallery;
 mod diff_view;
 pub mod icons;
 mod image_preview;
@@ -255,6 +256,7 @@ enum ViewerSession {
     Midi(MidiViewerState),
     Model3d(Model3dViewerState),
     Text(TextPreviewState),
+    ComponentGallery(component_gallery::ComponentGalleryState),
 }
 
 fn show_viewer_panel(ctx: &egui::Context, contents: impl FnOnce(&mut egui::Ui)) {
@@ -477,6 +479,7 @@ impl WorkbenchApp {
         start_with_binary_diff: bool,
         initial_audio: Option<PathBuf>,
         initial_image: Option<PathBuf>,
+        open_component_gallery: bool,
     ) -> Self {
         let mut config = AppConfig::load();
         // Desktop monitor mirror is always upright (no 180 flip)
@@ -537,7 +540,11 @@ impl WorkbenchApp {
             appearance_applied: false,
         };
 
-        if start_with_binary_diff {
+        if open_component_gallery {
+            app.viewer = Some(ViewerSession::ComponentGallery(
+                component_gallery::ComponentGalleryState::default(),
+            ));
+        } else if start_with_binary_diff {
             app.open_binary_diff_viewer();
         } else if start_with_diff {
             app.open_diff_viewer();
@@ -1662,6 +1669,15 @@ impl WorkbenchApp {
                     state.render_ui(ui, ctx, &self.ui_palette, &mut close);
                 });
             }
+            ViewerSession::ComponentGallery(state) => {
+                if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+                    close = true;
+                } else {
+                    show_viewer_panel(ctx, |ui| {
+                        state.render_ui(ui, &self.ui_palette, &mut close);
+                    });
+                }
+            }
         }
 
         if close {
@@ -2426,6 +2442,7 @@ fn main() -> Result<(), eframe::Error> {
         println!("  -b, --binary         Open interactive binary diff viewer directly");
         println!("  -a, --audio <PATH>   Open audio waveform preview & slicer directly");
         println!("  -i, --image <PATH>   Open image preview & editor directly");
+        println!("      --component-gallery  Open the UI component styling page directly");
         println!("  -l, --last           Re-execute last action (with modal prompt if needed)");
         println!("  -h, --help           Print help");
         return Ok(());
@@ -2446,6 +2463,7 @@ fn main() -> Result<(), eframe::Error> {
         .position(|a| a == "--image" || a == "-i")
         .and_then(|idx| args.get(idx + 1))
         .map(PathBuf::from);
+    let open_component_gallery = args.iter().any(|a| a == "--component-gallery");
 
     if is_last {
         let state = match send_ipc_request(&IpcRequest::GetState) {
@@ -2517,6 +2535,7 @@ fn main() -> Result<(), eframe::Error> {
                 is_binary_diff,
                 initial_audio,
                 initial_image,
+                open_component_gallery,
             ))
         }),
     )
