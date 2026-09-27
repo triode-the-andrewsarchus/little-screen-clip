@@ -624,15 +624,40 @@ enum AudioSliceDelivery {
 fn handoff_audio_slice(
     path: &Path,
     cancelled: &AtomicBool,
-    mut send_to_daemon: impl FnMut(&IpcRequest) -> Result<(), String>,
+    send_to_daemon: impl FnMut(&IpcRequest) -> Result<(), String>,
     mut copy_to_system: impl FnMut(&Path) -> Result<(), String>,
+) -> Result<AudioSliceDelivery, String> {
+    let owned_path = path.to_path_buf();
+    handoff_audio_files(
+        std::slice::from_ref(&owned_path),
+        cancelled,
+        send_to_daemon,
+        |paths| copy_to_system(&paths[0]),
+    )
+}
+
+fn handoff_audio_files(
+    paths: &[PathBuf],
+    cancelled: &AtomicBool,
+    mut send_to_daemon: impl FnMut(&IpcRequest) -> Result<(), String>,
+    mut copy_to_system: impl FnMut(&[PathBuf]) -> Result<(), String>,
 ) -> Result<AudioSliceDelivery, String> {
     if cancelled.load(Ordering::Acquire) {
         return Err("Audio slice copy cancelled".to_owned());
     }
-    let request = IpcRequest::PushFile {
-        path: path.to_owned(),
-        hand: little_clip_core::HandSide::Left,
+    if paths.is_empty() {
+        return Err("No audio slices were available to hand off".to_owned());
+    }
+    let request = if paths.len() == 1 {
+        IpcRequest::PushFile {
+            path: paths[0].clone(),
+            hand: little_clip_core::HandSide::Left,
+        }
+    } else {
+        IpcRequest::PushFiles {
+            paths: paths.to_vec(),
+            hand: little_clip_core::HandSide::Left,
+        }
     };
     match send_to_daemon(&request) {
         Ok(()) => Ok(AudioSliceDelivery::Daemon),
@@ -640,7 +665,7 @@ fn handoff_audio_slice(
             if cancelled.load(Ordering::Acquire) {
                 return Err("Audio slice copy cancelled".to_owned());
             }
-            copy_to_system(path).map_err(|clipboard_error| {
+            copy_to_system(paths).map_err(|clipboard_error| {
                 format!("Daemon handoff failed ({ipc_error}); system clipboard failed ({clipboard_error})")
             })?;
             Ok(AudioSliceDelivery::SystemClipboard)
@@ -648,10 +673,10 @@ fn handoff_audio_slice(
     }
 }
 
-fn extract_and_handoff_audio_slice(
-    plan: AudioSliceCopyPlan,
+fn extract_audio_slice_file(
+    plan: &AudioSliceCopyPlan,
     cancelled: &AtomicBool,
-) -> Result<AudioSliceDelivery, String> {
+) -> Result<PathBuf, String> {
     if cancelled.load(Ordering::Acquire) {
         return Err("Audio slice copy cancelled".to_owned());
     }
@@ -700,8 +725,16 @@ fn extract_and_handoff_audio_slice(
             "Failed to extract audio segment via ffmpeg ({status})"
         ));
     }
+    Ok(plan.output.clone())
+}
+
+fn extract_and_handoff_audio_slice(
+    plan: AudioSliceCopyPlan,
+    cancelled: &AtomicBool,
+) -> Result<AudioSliceDelivery, String> {
+    let output = extract_audio_slice_file(&plan, cancelled)?;
     handoff_audio_slice(
-        &plan.output,
+        &output,
         cancelled,
         |request| match crate::send_ipc_request_with_timeout(request, Some(Duration::from_secs(2)))
         {
@@ -716,6 +749,73 @@ fn extract_and_handoff_audio_slice(
                 .map_err(|error| error.to_string())
         },
     )
+}
+
+fn run_audio_slice_batch(
+    plans: &[AudioSliceCopyPlan],
+    mode: ChannelCopyMode,
+    cancelled: &AtomicBool,
+    mut extract: impl FnMut(&AudioSliceCopyPlan, &AtomicBool) -> Result<PathBuf, String>,
+    send_to_daemon: impl FnMut(&IpcRequest) -> Result<(), String>,
+    copy_to_system: impl FnMut(&[PathBuf]) -> Result<(), String>,
+) -> Result<String, String> {
+    let mut paths = Vec::with_capacity(plans.len());
+    let mut completed = Vec::with_capacity(plans.len());
+    let mut failures = Vec::new();
+    for plan in plans {
+        if cancelled.load(Ordering::Acquire) {
+            return Err("Audio slice copy cancelled".to_owned());
+        }
+        let name = plan
+            .output
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("audio slice")
+            .to_owned();
+        match extract(plan, cancelled) {
+            Ok(path) => {
+                paths.push(path);
+                completed.push(name);
+            }
+            Err(error) => failures.push(format!("{name}: {error}")),
+        }
+    }
+    if paths.is_empty() {
+        return Err(format!(
+            "All {} audio slices failed: {}",
+            plans.len(),
+            failures.join("; ")
+        ));
+    }
+    let partial_failures = if failures.is_empty() {
+        String::new()
+    } else {
+        format!("; failed: {}", failures.join("; "))
+    };
+    let delivery = handoff_audio_files(&paths, cancelled, send_to_daemon, copy_to_system).map_err(
+        |error| {
+            format!(
+                "Failed to hand off {} extracted slice(s) ({}): {error}{partial_failures}",
+                paths.len(),
+                completed.join(", ")
+            )
+        },
+    )?;
+    let delivery = match delivery {
+        AudioSliceDelivery::Daemon => "Left Hand",
+        AudioSliceDelivery::SystemClipboard => "system clipboard fallback",
+    };
+    let mode = match mode {
+        ChannelCopyMode::Native => "",
+        ChannelCopyMode::LeftOnly => " LEFT (mono)",
+        ChannelCopyMode::RightOnly => " RIGHT (mono)",
+    };
+    Ok(format!(
+        "📋 Copied {}/{} audio{mode} slices to {delivery}; completed: {}{partial_failures}",
+        paths.len(),
+        plans.len(),
+        completed.join(", ")
+    ))
 }
 
 fn audio_slice_copy_status(
@@ -2580,118 +2680,73 @@ impl AudioPreviewState {
             self.copy_selected_segment(now, mode);
             return;
         }
-
-        let base_name = self
-            .path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("audio");
-
-        let staging_dir = std::env::temp_dir().join("little_clip_audio_segments");
-        if let Err(err) = std::fs::create_dir_all(&staging_dir) {
-            tracing::warn!(
-                "Failed to create audio staging directory {}: {err}",
-                staging_dir.display()
-            );
-            self.status_toast = Some(("Failed to create audio staging directory".into(), now));
+        if self.slice_copy_job.is_some() {
+            self.status_toast =
+                Some(("📋 Audio slice copy is already in progress".to_owned(), now));
             return;
         }
-
-        let mode_suffix = match mode {
-            ChannelCopyMode::Native => "",
-            ChannelCopyMode::LeftOnly => "_left_mono",
-            ChannelCopyMode::RightOnly => "_right_mono",
-        };
-
-        let mut out_paths: Vec<PathBuf> = Vec::new();
-
-        for (i, &(start, end)) in self.multi_selections.iter().enumerate() {
-            let (s, e) = if start < end {
-                (start, end)
-            } else {
-                (end, start)
-            };
-            let duration = (e - s).max(0.001);
-            let out_filename = format_sample_filename(base_name, s, duration, mode_suffix, "wav");
-            let out_path = staging_dir.join(out_filename);
-            let region = self.export_region_edit(
-                s,
-                e,
-                self.region_crossfade_sec.get(i).copied().unwrap_or(0.0),
-                self.region_gain_db.get(i).copied().unwrap_or(0.0),
-                self.region_low_pass_hz.get(i).copied().flatten(),
-                self.region_high_pass_hz.get(i).copied().flatten(),
-            );
-
-            let mut cmd = std::process::Command::new("ffmpeg");
-            cmd.arg("-y")
-                .arg("-ss")
-                .arg(format!("{:.4}", s))
-                .arg("-to")
-                .arg(format!("{:.4}", e))
-                .arg("-i")
-                .arg(&self.path);
-
-            if let Some(filter) = Self::channel_edit_filter(mode, region) {
-                cmd.arg("-af").arg(filter);
-            }
-            cmd.arg("-c:a").arg("pcm_s16le");
-
-            cmd.arg(&out_path)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null());
-
-            if let Ok(s) = cmd.status() {
-                if s.success() && out_path.exists() {
-                    out_paths.push(out_path);
-                }
-            }
-        }
-
-        if !out_paths.is_empty() {
-            // Push all files as a single batch into Left Hand (1 item, 1 hand!)
-            let req = if out_paths.len() == 1 {
-                IpcRequest::PushFile {
-                    path: out_paths[0].clone(),
-                    hand: little_clip_core::HandSide::Left,
-                }
-            } else {
-                IpcRequest::PushFiles {
-                    paths: out_paths.clone(),
-                    hand: little_clip_core::HandSide::Left,
-                }
-            };
-            let ipc_sent = crate::send_ipc_request(&req).is_ok();
-
-            // If the daemon is unavailable, use the shared local clipboard adapter.
-            if !ipc_sent {
-                if let Err(error) = little_clip_core::copy_file_uris_to_system_clipboard(&out_paths)
-                {
-                    tracing::debug!(%error, "failed to copy audio slices to system clipboard");
-                }
-            }
-
-            let mode_desc = match mode {
-                ChannelCopyMode::Native => "",
-                ChannelCopyMode::LeftOnly => " LEFT (mono)",
-                ChannelCopyMode::RightOnly => " RIGHT (mono)",
-            };
-
-            self.status_toast = Some((
-                format!(
-                    "📋 Copied {} audio{} slices to Left Hand (1 batch) & Clipboard!",
-                    out_paths.len(),
-                    mode_desc
-                ),
-                now,
-            ));
-        } else {
-            self.status_toast = Some((
-                "⚠️ Failed to extract multi-region slices via ffmpeg".to_string(),
-                now,
-            ));
-        }
+        let plans = self
+            .multi_selections
+            .iter()
+            .enumerate()
+            .map(|(i, &(start, end))| {
+                let (s, e) = if start < end {
+                    (start, end)
+                } else {
+                    (end, start)
+                };
+                let region = self.export_region_edit(
+                    s,
+                    e,
+                    self.region_crossfade_sec.get(i).copied().unwrap_or(0.0),
+                    self.region_gain_db.get(i).copied().unwrap_or(0.0),
+                    self.region_low_pass_hz.get(i).copied().flatten(),
+                    self.region_high_pass_hz.get(i).copied().flatten(),
+                );
+                audio_slice_copy_plan(
+                    &self.path,
+                    s,
+                    e,
+                    mode,
+                    Self::channel_edit_filter(mode, region),
+                )
+            })
+            .collect::<Vec<_>>();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::clone(&cancelled);
+        let (ticket, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
+            run_audio_slice_batch(
+                &plans,
+                mode,
+                &worker_cancelled,
+                extract_audio_slice_file,
+                |request| match crate::send_ipc_request_with_timeout(
+                    request,
+                    Some(Duration::from_secs(2)),
+                ) {
+                    Ok(little_clip_core::ipc::IpcResponse::Success { .. }) => Ok(()),
+                    Ok(little_clip_core::ipc::IpcResponse::Error { error }) => Err(error),
+                    Ok(response) => Err(format!("unexpected daemon response: {response:?}")),
+                    Err(error) => Err(error.to_string()),
+                },
+                |paths| {
+                    little_clip_core::copy_file_uris_to_system_clipboard(paths)
+                        .map_err(|error| error.to_string())
+                },
+            )
+        });
+        self.slice_copy_job = Some(AudioSliceCopyJob {
+            ticket,
+            cancelled,
+            receiver,
+        });
+        self.status_toast = Some((
+            format!(
+                "📋 Preparing {} audio slices for clipboard…",
+                self.multi_selections.len()
+            ),
+            now,
+        ));
     }
 
     pub fn copy_waveform_image(&mut self, palette: &AppPalette, now: f64) {
@@ -3626,6 +3681,151 @@ mod tests {
         );
         assert_eq!(result, Err("Audio slice copy cancelled".to_owned()));
         assert!(!published.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn audio_batch_copy_preserves_selection_order_and_pushes_ordered_files() {
+        let plans = [(0.8, 1.2), (0.1, 0.4), (2.0, 3.0)]
+            .into_iter()
+            .map(|(start, end)| {
+                audio_slice_copy_plan(
+                    Path::new("/music/Track.wav"),
+                    start,
+                    end,
+                    ChannelCopyMode::LeftOnly,
+                    Some("pan=mono|c0=c0,volume=3dB".to_owned()),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = plans
+            .iter()
+            .map(|plan| plan.output.clone())
+            .collect::<Vec<_>>();
+        let sent = std::cell::RefCell::new(None);
+        let result = run_audio_slice_batch(
+            &plans,
+            ChannelCopyMode::LeftOnly,
+            &AtomicBool::new(false),
+            |plan, _| Ok(plan.output.clone()),
+            |request| {
+                match request {
+                    IpcRequest::PushFiles { paths, hand } => {
+                        assert_eq!(*hand, little_clip_core::HandSide::Left);
+                        *sent.borrow_mut() = Some(paths.clone());
+                    }
+                    other => panic!("expected ordered batch request, received {other:?}"),
+                }
+                Ok(())
+            },
+            |_| panic!("clipboard fallback is skipped after daemon success"),
+        )
+        .unwrap();
+        assert_eq!(sent.into_inner().unwrap(), expected);
+        assert!(result.contains("Copied 3/3 audio LEFT (mono) slices"));
+        let first = result.find("00m00s800ms").unwrap();
+        let second = result.find("00m00s100ms").unwrap();
+        let third = result.find("00m02s000ms").unwrap();
+        assert!(first < second && second < third);
+    }
+
+    #[test]
+    fn audio_batch_copy_reports_mixed_and_total_failures() {
+        let plans = [(0.0, 0.5), (1.0, 1.5), (2.0, 2.5)]
+            .into_iter()
+            .map(|(start, end)| {
+                audio_slice_copy_plan(
+                    Path::new("/music/Track.wav"),
+                    start,
+                    end,
+                    ChannelCopyMode::Native,
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        let result = run_audio_slice_batch(
+            &plans,
+            ChannelCopyMode::Native,
+            &AtomicBool::new(false),
+            |plan, _| {
+                if plan.start == 1.0 {
+                    Err("ffmpeg exit status: 1".to_owned())
+                } else {
+                    Ok(plan.output.clone())
+                }
+            },
+            |request| {
+                match request {
+                    IpcRequest::PushFiles { paths, hand } => {
+                        assert_eq!(paths.len(), 2);
+                        assert_eq!(*hand, little_clip_core::HandSide::Left);
+                    }
+                    other => panic!("expected PushFiles, received {other:?}"),
+                }
+                Ok(())
+            },
+            |_| panic!("clipboard fallback is skipped after daemon success"),
+        )
+        .unwrap();
+        assert!(result.contains("Copied 2/3"));
+        assert!(result.contains("failed: Track_00m01s000ms_00s500ms.wav: ffmpeg exit status: 1"));
+
+        let error = run_audio_slice_batch(
+            &plans,
+            ChannelCopyMode::Native,
+            &AtomicBool::new(false),
+            |plan, _| Err(format!("{} could not be decoded", plan.source.display())),
+            |_| panic!("failed exports must not reach daemon"),
+            |_| panic!("failed exports must not reach clipboard"),
+        )
+        .unwrap_err();
+        assert!(error.contains("All 3 audio slices failed"));
+        assert!(error.contains("Track_00m00s000ms_00s500ms.wav"));
+        assert!(error.contains("Track_00m02s000ms_00s500ms.wav"));
+    }
+
+    #[test]
+    fn cancelled_audio_batch_never_extracts_or_hands_off() {
+        let plans = vec![audio_slice_copy_plan(
+            Path::new("/music/Track.wav"),
+            0.0,
+            1.0,
+            ChannelCopyMode::Native,
+            None,
+        )];
+        let result = run_audio_slice_batch(
+            &plans,
+            ChannelCopyMode::Native,
+            &AtomicBool::new(true),
+            |_, _| panic!("cancelled batch must not start extraction"),
+            |_| panic!("cancelled batch must not reach daemon"),
+            |_| panic!("cancelled batch must not reach clipboard"),
+        );
+        assert_eq!(result, Err("Audio slice copy cancelled".to_owned()));
+    }
+
+    #[test]
+    fn audio_batch_handoff_uses_ordered_clipboard_fallback() {
+        let paths = vec![
+            PathBuf::from("/tmp/first.wav"),
+            PathBuf::from("/tmp/second.wav"),
+        ];
+        let mut copied = None;
+        let result = handoff_audio_files(
+            &paths,
+            &AtomicBool::new(false),
+            |request| {
+                assert!(
+                    matches!(request, IpcRequest::PushFiles { paths: sent, hand: little_clip_core::HandSide::Left } if sent == &paths)
+                );
+                Err("daemon offline".to_owned())
+            },
+            |fallback_paths| {
+                copied = Some(fallback_paths.to_vec());
+                Ok(())
+            },
+        );
+        assert_eq!(result, Ok(AudioSliceDelivery::SystemClipboard));
+        assert_eq!(copied, Some(paths));
     }
 
     #[test]
@@ -4898,9 +5098,10 @@ Separated track
 
         // Test multi-region batch extraction
         state.copy_all_multi_segments(1.0, ChannelCopyMode::Native);
+        wait_for_slice_copy(&mut state);
         assert!(state.status_toast.is_some());
         let (toast, _) = state.status_toast.as_ref().unwrap();
-        assert!(toast.contains("Copied 2 audio slices"));
+        assert!(toast.contains("2/2 audio slices") || toast.contains("2 extracted slice(s)"));
 
         // Remove a region
         state.multi_selections.remove(0);
