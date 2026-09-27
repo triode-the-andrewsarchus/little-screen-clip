@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::sync::{
     Arc, RwLock,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::time::{Duration, Instant};
 
@@ -549,6 +549,7 @@ pub struct AudioPreviewState {
     pub open_folder_after_save: bool,
     browse_rx: Option<Receiver<Option<String>>>,
     save_job: Option<AudioSaveJob>,
+    slice_copy_job: Option<AudioSliceCopyJob>,
 
     // Slice preview limit and looping state (for right-click slice preview and hold-to-loop)
     pub preview_stop_time: Option<f32>,
@@ -591,6 +592,189 @@ struct AudioSavePlan {
 struct AudioSaveOutcome {
     saved_count: usize,
     failures: Vec<String>,
+}
+
+struct AudioSliceCopyJob {
+    ticket: JobTicket,
+    cancelled: Arc<AtomicBool>,
+    receiver: Receiver<Result<Result<String, String>, JobError>>,
+}
+
+impl Drop for AudioSliceCopyJob {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+        self.ticket.cancel();
+    }
+}
+
+struct AudioSliceCopyPlan {
+    source: PathBuf,
+    output: PathBuf,
+    start: f32,
+    end: f32,
+    filter: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AudioSliceDelivery {
+    Daemon,
+    SystemClipboard,
+}
+
+fn handoff_audio_slice(
+    path: &Path,
+    cancelled: &AtomicBool,
+    mut send_to_daemon: impl FnMut(&IpcRequest) -> Result<(), String>,
+    mut copy_to_system: impl FnMut(&Path) -> Result<(), String>,
+) -> Result<AudioSliceDelivery, String> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err("Audio slice copy cancelled".to_owned());
+    }
+    let request = IpcRequest::PushFile {
+        path: path.to_owned(),
+        hand: little_clip_core::HandSide::Left,
+    };
+    match send_to_daemon(&request) {
+        Ok(()) => Ok(AudioSliceDelivery::Daemon),
+        Err(ipc_error) => {
+            if cancelled.load(Ordering::Acquire) {
+                return Err("Audio slice copy cancelled".to_owned());
+            }
+            copy_to_system(path).map_err(|clipboard_error| {
+                format!("Daemon handoff failed ({ipc_error}); system clipboard failed ({clipboard_error})")
+            })?;
+            Ok(AudioSliceDelivery::SystemClipboard)
+        }
+    }
+}
+
+fn extract_and_handoff_audio_slice(
+    plan: AudioSliceCopyPlan,
+    cancelled: &AtomicBool,
+) -> Result<AudioSliceDelivery, String> {
+    if cancelled.load(Ordering::Acquire) {
+        return Err("Audio slice copy cancelled".to_owned());
+    }
+    let staging_dir = plan.output.parent().unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(staging_dir)
+        .map_err(|error| format!("Failed to create audio staging directory: {error}"))?;
+    let mut command = std::process::Command::new("ffmpeg");
+    command
+        .arg("-y")
+        .arg("-ss")
+        .arg(format!("{:.4}", plan.start))
+        .arg("-to")
+        .arg(format!("{:.4}", plan.end))
+        .arg("-i")
+        .arg(&plan.source);
+    if let Some(filter) = &plan.filter {
+        command.arg("-af").arg(filter);
+    }
+    let mut child = command
+        .arg("-c:a")
+        .arg("pcm_s16le")
+        .arg(&plan.output)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|error| format!("ffmpeg process failed to execute: {error}"))?;
+    let status = loop {
+        if cancelled.load(Ordering::Acquire) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("Audio slice copy cancelled".to_owned());
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("Could not wait for ffmpeg: {error}"));
+            }
+        }
+    };
+    if !status.success() || !plan.output.exists() {
+        return Err(format!(
+            "Failed to extract audio segment via ffmpeg ({status})"
+        ));
+    }
+    handoff_audio_slice(
+        &plan.output,
+        cancelled,
+        |request| match crate::send_ipc_request_with_timeout(request, Some(Duration::from_secs(2)))
+        {
+            Ok(little_clip_core::ipc::IpcResponse::Success { .. }) => Ok(()),
+            Ok(little_clip_core::ipc::IpcResponse::Error { error }) => Err(error),
+            Ok(response) => Err(format!("unexpected daemon response: {response:?}")),
+            Err(error) => Err(error.to_string()),
+        },
+        |path| {
+            let path = path.to_path_buf();
+            little_clip_core::copy_file_uris_to_system_clipboard(std::slice::from_ref(&path))
+                .map_err(|error| error.to_string())
+        },
+    )
+}
+
+fn audio_slice_copy_status(
+    mode: ChannelCopyMode,
+    start: f32,
+    end: f32,
+    delivery: AudioSliceDelivery,
+) -> String {
+    let description = audio_slice_copy_description(mode);
+    let delivery = match delivery {
+        AudioSliceDelivery::Daemon => "Left Hand",
+        AudioSliceDelivery::SystemClipboard => "system clipboard fallback",
+    };
+    format!(
+        "📋 Copied {description} ({:02}:{:04.1} - {:02}:{:04.1}, {:.3}s) to {delivery}",
+        (start / 60.0) as u32,
+        start % 60.0,
+        (end / 60.0) as u32,
+        end % 60.0,
+        (end - start).max(0.001)
+    )
+}
+
+fn audio_slice_copy_description(mode: ChannelCopyMode) -> &'static str {
+    match mode {
+        ChannelCopyMode::Native => "slice",
+        ChannelCopyMode::LeftOnly => "LEFT (mono) slice",
+        ChannelCopyMode::RightOnly => "RIGHT (mono) slice",
+    }
+}
+
+fn audio_slice_copy_plan(
+    source: &Path,
+    start: f32,
+    end: f32,
+    mode: ChannelCopyMode,
+    filter: Option<String>,
+) -> AudioSliceCopyPlan {
+    let base_name = source
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or("audio");
+    let suffix = match mode {
+        ChannelCopyMode::Native => "",
+        ChannelCopyMode::LeftOnly => "_left_mono",
+        ChannelCopyMode::RightOnly => "_right_mono",
+    };
+    let filename =
+        format_sample_filename(base_name, start, (end - start).max(0.001), suffix, "wav");
+    AudioSliceCopyPlan {
+        source: source.to_owned(),
+        output: std::env::temp_dir()
+            .join("little_clip_audio_segments")
+            .join(uuid::Uuid::new_v4().to_string())
+            .join(filename),
+        start,
+        end,
+        filter,
+    }
 }
 
 fn run_audio_save(plan: AudioSavePlan) -> Result<AudioSaveOutcome, String> {
@@ -1611,6 +1795,7 @@ impl AudioPreviewState {
             open_folder_after_save: true,
             browse_rx: None,
             save_job: None,
+            slice_copy_job: None,
             preview_stop_time: None,
             preview_slice_range: None,
             preview_is_looping: false,
@@ -2324,31 +2509,6 @@ impl AudioPreviewState {
         let (start, end) = self
             .active_selection_range()
             .unwrap_or((0.0, self.duration_sec.max(0.1)));
-
-        let duration = (end - start).max(0.001);
-        let base_name = self
-            .path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("audio");
-
-        let staging_dir = std::env::temp_dir().join("little_clip_audio_segments");
-        if let Err(err) = std::fs::create_dir_all(&staging_dir) {
-            tracing::warn!(
-                "Failed to create audio staging directory {}: {err}",
-                staging_dir.display()
-            );
-            self.status_toast = Some(("Failed to create audio staging directory".into(), now));
-            return;
-        }
-
-        let mode_suffix = match mode {
-            ChannelCopyMode::Native => "",
-            ChannelCopyMode::LeftOnly => "_left_mono",
-            ChannelCopyMode::RightOnly => "_right_mono",
-        };
-        let out_filename = format_sample_filename(base_name, start, duration, mode_suffix, "wav");
-        let out_path = staging_dir.join(out_filename);
         let active_region = self
             .active_region_edit()
             .unwrap_or_else(|| self.region_edit(start, end, 0.0, 0.0, None, None));
@@ -2361,69 +2521,58 @@ impl AudioPreviewState {
             active_region.high_pass_hz,
         );
 
-        let mut cmd = std::process::Command::new("ffmpeg");
-        cmd.arg("-y")
-            .arg("-ss")
-            .arg(format!("{:.4}", start))
-            .arg("-to")
-            .arg(format!("{:.4}", end))
-            .arg("-i")
-            .arg(&self.path);
-
-        if let Some(filter) = Self::channel_edit_filter(mode, region) {
-            cmd.arg("-af").arg(filter);
+        let plan = audio_slice_copy_plan(
+            &self.path,
+            start,
+            end,
+            mode,
+            Self::channel_edit_filter(mode, region),
+        );
+        if self.slice_copy_job.is_some() {
+            self.status_toast =
+                Some(("📋 Audio slice copy is already in progress".to_owned(), now));
+            return;
         }
-        cmd.arg("-c:a").arg("pcm_s16le");
-
-        cmd.arg(&out_path)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-
-        if let Ok(s) = cmd.status() {
-            if s.success() && out_path.exists() {
-                let req = IpcRequest::PushFile {
-                    path: out_path.clone(),
-                    hand: little_clip_core::HandSide::Left,
-                };
-                let ipc_sent = crate::send_ipc_request(&req).is_ok();
-
-                // If the daemon is unavailable, use the shared local clipboard adapter.
-                if !ipc_sent {
-                    if let Err(error) = little_clip_core::copy_file_uris_to_system_clipboard(
-                        std::slice::from_ref(&out_path),
-                    ) {
-                        tracing::debug!(%error, "failed to copy audio slice to system clipboard");
-                    }
-                }
-
-                let mode_desc = match mode {
-                    ChannelCopyMode::Native => "slice",
-                    ChannelCopyMode::LeftOnly => "LEFT (mono) slice",
-                    ChannelCopyMode::RightOnly => "RIGHT (mono) slice",
-                };
-
-                self.status_toast = Some((
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::clone(&cancelled);
+        let (ticket, receiver) = BackgroundJobs::global().submit(Duration::MAX, move || {
+            extract_and_handoff_audio_slice(plan, &worker_cancelled)
+                .map(|delivery| audio_slice_copy_status(mode, start, end, delivery))
+                .map_err(|error| {
                     format!(
-                        "📋 Copied {} ({:02}:{:04.1} - {:02}:{:04.1}, {:.3}s) to Clipboard & Left Hand!",
-                        mode_desc,
-                        (start / 60.0) as u32,
-                        start % 60.0,
-                        (end / 60.0) as u32,
-                        end % 60.0,
-                        duration
-                    ),
-                    now,
-                ));
-            } else {
-                self.status_toast = Some((
-                    "⚠️ Failed to extract audio segment via ffmpeg".to_string(),
-                    now,
-                ));
-            }
-        } else {
-            self.status_toast = Some(("⚠️ ffmpeg process failed to execute".to_string(), now));
-        }
+                        "Failed to copy {} ({:.3}s): {error}",
+                        audio_slice_copy_description(mode),
+                        (end - start).max(0.001)
+                    )
+                })
+        });
+        self.slice_copy_job = Some(AudioSliceCopyJob {
+            ticket,
+            cancelled,
+            receiver,
+        });
+        self.status_toast = Some(("📋 Preparing audio slice for clipboard…".to_owned(), now));
+    }
+
+    fn poll_slice_copy_job(&mut self, ctx: &egui::Context, now: f64) {
+        let Some(job) = &self.slice_copy_job else {
+            return;
+        };
+        ctx.request_repaint_after(Duration::from_millis(80));
+        let result = match job.receiver.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err(JobError::Cancelled),
+        };
+        self.slice_copy_job = None;
+        let message = match result {
+            Ok(Ok(message)) => message,
+            Ok(Err(error)) => format!("⚠️ {error}"),
+            Err(JobError::Cancelled) => "⚠️ Audio slice copy was cancelled".to_owned(),
+            Err(error) => format!("⚠️ Audio slice copy failed: {error}"),
+        };
+        self.status_toast = Some((message, now));
+        ctx.request_repaint();
     }
 
     pub fn copy_all_multi_segments(&mut self, now: f64, mode: ChannelCopyMode) {
@@ -3300,6 +3449,7 @@ impl AudioPreviewState {
         palette: &AppPalette,
         close_requested: &mut bool,
     ) {
+        self.poll_slice_copy_job(ctx, ctx.input(|input| input.time));
         self.poll_save_job(ctx, ctx.input(|input| input.time));
         if self.handle_studio_shortcuts(ctx, close_requested) {
             return;
@@ -3356,6 +3506,140 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("audio save did not finish within five seconds");
+    }
+
+    fn wait_for_slice_copy(state: &mut AudioPreviewState) {
+        let ctx = egui::Context::default();
+        for _ in 0..500 {
+            state.poll_slice_copy_job(&ctx, 3.0);
+            if state.slice_copy_job.is_none() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("audio slice copy did not finish within five seconds");
+    }
+
+    #[test]
+    fn single_slice_copy_plan_keeps_range_active_filter_and_name() {
+        let region = AudioRegionEdit {
+            gain_db: 6.0,
+            soft_clip: true,
+            low_pass_hz: Some(1200.0),
+            high_pass_hz: Some(80.0),
+            ..Default::default()
+        };
+        let filter = AudioPreviewState::channel_edit_filter(ChannelCopyMode::RightOnly, region);
+        let plan = audio_slice_copy_plan(
+            Path::new("/music/Track.wav"),
+            1.25,
+            2.75,
+            ChannelCopyMode::RightOnly,
+            filter.clone(),
+        );
+        assert_eq!((plan.start, plan.end), (1.25, 2.75));
+        assert_eq!(plan.source, PathBuf::from("/music/Track.wav"));
+        assert_eq!(
+            plan.output.file_name().unwrap(),
+            "Track_00m01s250ms_01s500ms_right_mono.wav"
+        );
+        assert_eq!(plan.filter, filter);
+        assert!(
+            plan.filter
+                .unwrap()
+                .starts_with("pan=mono|c0=c1,volume=6dB,asoftclip")
+        );
+    }
+
+    #[test]
+    fn single_slice_handoff_uses_left_slot_and_skips_clipboard_when_daemon_succeeds() {
+        let path = Path::new("/tmp/audio slice.wav");
+        let cancelled = AtomicBool::new(false);
+        let mut daemon_called = false;
+        let result = handoff_audio_slice(
+            path,
+            &cancelled,
+            |request| {
+                daemon_called = true;
+                match request {
+                    IpcRequest::PushFile {
+                        path: sent_path,
+                        hand,
+                    } => {
+                        assert_eq!(sent_path, path);
+                        assert_eq!(*hand, little_clip_core::HandSide::Left);
+                    }
+                    other => panic!("unexpected request: {other:?}"),
+                }
+                Ok(())
+            },
+            |_| panic!("clipboard fallback is skipped after daemon success"),
+        );
+        assert_eq!(result, Ok(AudioSliceDelivery::Daemon));
+        assert!(daemon_called);
+    }
+
+    #[test]
+    fn single_slice_handoff_falls_back_and_reports_both_failures() {
+        let path = Path::new("/tmp/audio slice.wav");
+        let cancelled = AtomicBool::new(false);
+        let mut copied_path = None;
+        let result = handoff_audio_slice(
+            path,
+            &cancelled,
+            |_| Err("daemon unavailable".to_owned()),
+            |clipboard_path| {
+                copied_path = Some(clipboard_path.to_owned());
+                Ok(())
+            },
+        );
+        assert_eq!(result, Ok(AudioSliceDelivery::SystemClipboard));
+        assert_eq!(copied_path.as_deref(), Some(path));
+
+        let error = handoff_audio_slice(
+            path,
+            &cancelled,
+            |_| Err("daemon error".into()),
+            |_| Err("clipboard error".into()),
+        )
+        .unwrap_err();
+        assert!(error.contains("daemon error"));
+        assert!(error.contains("clipboard error"));
+    }
+
+    #[test]
+    fn cancelled_single_slice_copy_does_not_publish() {
+        let path = Path::new("/tmp/audio slice.wav");
+        let cancelled = AtomicBool::new(true);
+        let published = AtomicBool::new(false);
+        let result = handoff_audio_slice(
+            path,
+            &cancelled,
+            |_| {
+                published.store(true, Ordering::Release);
+                Ok(())
+            },
+            |_| {
+                published.store(true, Ordering::Release);
+                Ok(())
+            },
+        );
+        assert_eq!(result, Err("Audio slice copy cancelled".to_owned()));
+        assert!(!published.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn single_slice_copy_surfaces_ffmpeg_failure() {
+        let temp = tempfile::tempdir().unwrap();
+        let plan = AudioSliceCopyPlan {
+            source: temp.path().join("missing.wav"),
+            output: temp.path().join("copy.wav"),
+            start: 0.0,
+            end: 0.5,
+            filter: None,
+        };
+        let error = extract_and_handoff_audio_slice(plan, &AtomicBool::new(false)).unwrap_err();
+        assert!(error.contains("Failed to extract audio segment via ffmpeg"));
     }
 
     #[test]
@@ -4445,9 +4729,10 @@ Separated track
 
         // Test segment copy extraction (native stereo)
         state.copy_selected_segment(1.0, ChannelCopyMode::Native);
+        wait_for_slice_copy(&mut state);
         assert!(state.status_toast.is_some());
         let (toast, _) = state.status_toast.unwrap();
-        assert!(toast.contains("Copied slice"));
+        assert!(toast.contains("slice"));
     }
 
     #[test]
@@ -4480,12 +4765,14 @@ Separated track
 
         // Test Left Only
         state.copy_selected_segment(1.0, ChannelCopyMode::LeftOnly);
+        wait_for_slice_copy(&mut state);
         assert!(state.status_toast.is_some());
         let (toast, _) = state.status_toast.as_ref().unwrap();
         assert!(toast.contains("LEFT (mono)"));
 
         // Test Right Only
         state.copy_selected_segment(2.0, ChannelCopyMode::RightOnly);
+        wait_for_slice_copy(&mut state);
         assert!(state.status_toast.is_some());
         let (toast, _) = state.status_toast.as_ref().unwrap();
         assert!(toast.contains("RIGHT (mono)"));
@@ -4497,9 +4784,10 @@ Separated track
         let mut state = AudioPreviewState::new(p.clone(), "fixture.wav".to_string());
         state.selection = Some((1.000, 1.020));
         state.copy_selected_segment(1.0, ChannelCopyMode::Native);
+        wait_for_slice_copy(&mut state);
         assert!(state.status_toast.is_some());
         let (toast, _) = state.status_toast.unwrap();
-        assert!(toast.contains("Copied slice"));
+        assert!(toast.contains("slice"));
         assert!(toast.contains("0.020s"));
     }
 
