@@ -193,7 +193,9 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
 - [x] **E2.4b [Luna] Test stable Play/Pause widths.** Audio Inspect reserves the measured max label width plus a one-point bold-shaping allowance; rendered Play and Pause buttons have identical width and shared 36-point height.
 - [ ] **E2.4c [Luna] Test field focus behavior.**
 - [ ] **E2.4d [Luna] Test tooltip and disabled-reason behavior.**
-- [ ] **E2.4e [Luna] Test modal Escape behavior.**
+- **E2.4e Modal Escape routing**
+  - [x] **E2.4e1 [Luna] Verify Escape closes nested audio save dialogs before closing the studio.** Regression test covers audio and stem dialogs, then confirms a later Escape closes the studio.
+  - [ ] **E2.4e2 [Luna] Verify Escape behavior for representative image and workbench dialogs.**
 - [ ] **E2.4f [Luna] Test label contrast.**
 - [ ] **E2.4g [Luna] Test async-preview readiness behavior.** Tests must cover behavior, not restate widget construction.
 

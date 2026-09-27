@@ -167,3 +167,7 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 ## PDF sibling pane geometry, 2026-09-27
 
 - Added a production `PdfEditorState::render_ui` egui render test with a no-job empty PDF state; it starts no background worker. At 1177×662 and 1766×993, it locates the actual left/right pane frames, verifies both remain inside the host and do not overlap, and verifies their summed widths equal the available width after outer frame margins, both horizontal item gaps, and the divider. `pdf_sibling_panes_stay_inside_compact_and_wide_hosts` passes. This validates layout geometry, not PDF loading or page navigation.
+
+## Nested audio modal Escape behavior, 2026-09-27
+
+- Existing `escape_cancels_nested_save_dialogs_before_closing_audio_studio` test was rerun and passes. It exercises the audio save dialog, the embedded stem save dialog, and a subsequent Escape that closes the studio. Image/workbench dialog ordering remains open as E2.4e2.
