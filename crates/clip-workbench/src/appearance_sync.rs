@@ -75,7 +75,10 @@ impl AppearanceSync {
                 egui::Frame::none()
                     .fill(colors.panel)
                     .stroke(egui::Stroke::new(1.0_f32, colors.danger))
-                    .inner_margin(egui::Margin::symmetric(12.0, 8.0))
+                    .inner_margin(egui::Margin::symmetric(
+                        crate::ui_ext::SPACE_MD,
+                        crate::ui_ext::SPACE_SM,
+                    ))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(egui::RichText::new(error).color(colors.text_primary));
