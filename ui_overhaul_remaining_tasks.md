@@ -83,19 +83,19 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [ ] **H1.2b2c [Primary] Verify virtual mode behavior in runtime.**
   - [ ] **H1.2b2d [Primary] Verify persistent appearance change in runtime.**
   - [ ] **H1.2b2e [Primary] Verify dismissible failure feedback in runtime.** SVG parsing/loading, theme assets, override save helpers, and theme tests are removed (`2b087a2`); legacy `[colors]` is ignored migration input and personal config untouched. Async daemon reload reports rejected/unavailable response in dismissible workbench notice; old `Theme` adapter/raw field aliases removed (`6719f33`).
-  - [ ] **H1.2c1 [Primary] Audit remaining hard-coded UI colors.** Define each at central palette boundary or justify media/data colors separately. `BaseColors` in core defines fixed Light/Dark semantic roles; desktop `WorkbenchColors` consumes them (`36b8c62`). Display, image/audio tools, shell and views migrated; core renamed `palette` (`bc774cf`); duplicate base-color aliases removed (`728908c`).
+  - [x] **H1.2c1 [Luna + primary review] Audit remaining hard-coded UI colors.** Fixed chrome colors resolve through `BaseColors`/`WorkbenchColors`; remaining local colors are intentional data or image-editing affordances: ANSI escape colors, markup swatches and contrast overlays on arbitrary images, HF chart markers, and waveform visualization. Color-clip hex text now uses semantic `text_primary` instead of hard-coded white. A source audit found no other production chrome literals requiring migration.
   - [ ] **H1.2c2 [Primary] Verify foreground/background contrast on all surfaces.**
   - [ ] **H1.2c3 [Primary] Verify accent use is purposeful on all surfaces.** Shared dark `console_surface` keeps ANSI comparison output high contrast in both appearances.
 - **H1.3 Viewer sessions, actions, and async identity**
   - **H1.3a1 Viewer route/return contract**
-    - [ ] **H1.3a1a [Primary] Document the viewer route/return contract.** Include ownership, close behavior, and startup route precedence.
+    - [x] **H1.3a1a [Luna + primary review] Document the viewer route/return contract.** `ui_overhaul_viewer_route_contract.md` records ownership, close/return behavior, startup precedence, singleton handling, and async-load interactions. It records the pending Spreadsheet/MIDI cancellation-vs-wait guidance discrepancy explicitly.
     - [ ] **H1.3a1b [Primary] Complete implementation of the viewer route/return contract.** `WorkbenchApp` has one `ViewerSession` enum instead of nine optional viewers; startup queue preserves `--audio` then `--image` sequence and diff/binary-diff precedence. Reconcile remaining behavior against the documented contract.
   - [ ] **H1.3a2 [Primary] Verify image navigation and cleanup live.**
   - [ ] **H1.3a3 [Primary] Verify audio navigation and cleanup live.** Closing audio/MIDI stops playback.
   - [ ] **H1.3a4 [Primary] Verify text navigation and cleanup live.**
   - [ ] **H1.3a5 [Primary] Verify PDF navigation and cleanup live.** Closing dirty PDF refreshes mirror.
   - [ ] **H1.3a6 [Primary] Verify diff navigation and cleanup live.**
-  - [ ] **H1.3b1 [Primary] Specify remaining Escape precedence.** Prompt, studio, Quick Palette, rolling audio, node canvas, and global handlers are separate; Node Machine now cancels catalog/save/cable drag before returning to Palette; audio save dialogs own Escape; host stops after handling Escape.
+  - [x] **H1.3b1 [Primary] Specify remaining Escape precedence.** `ui_overhaul_viewer_route_contract.md` documents modal prompt/viewer key ownership before workbench Escape; nested viewer Escape behavior then closes the active session/advances startup queue. With no modal route, Node Machine cancels catalog/save/cable drag, active rolling audio stops, secondary views return to Palette, and Palette closes the popup. Workbench global shortcuts now yield while a viewer/prompt is active.
   - [ ] **H1.3b2 [Primary] Specify remaining Enter precedence.**
   - [ ] **H1.3b3 [Primary] Specify remaining Space precedence.**
   - [ ] **H1.3b4 [Primary] Specify remaining letter-key precedence.** Palette search owns text keys so S/X do not swap twice; audio mode/stem-start keys yield to dialogs and focused fields; comparison shortcuts respect focused controls and modified S.

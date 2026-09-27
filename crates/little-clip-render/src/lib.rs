@@ -701,6 +701,37 @@ mod tests {
     }
 
     #[test]
+    fn light_mode_color_clip_hex_label_uses_semantic_text_color() {
+        let mut config = AppConfig::default();
+        config.workbench.appearance = WorkbenchAppearance::Light;
+        config.display.show_debug_handler = false;
+        let renderer = ScreenRenderer::new(config).unwrap();
+        let mut manager = SlotManager::default();
+        manager.push_left(ClipItem::from_color((245, 240, 220, "#F5F0DC".to_owned())));
+        let pixmap = renderer.render_pixmap(&manager).unwrap();
+        let expected = parse_hex_color(&renderer.palette.colors.text_primary);
+        let found_semantic_foreground = pixmap
+            .data()
+            .chunks_exact(4)
+            .enumerate()
+            .filter(|(index, pixel)| {
+                let x = index % SCREEN_WIDTH as usize;
+                let y = index / SCREEN_WIDTH as usize;
+                (250..600).contains(&x)
+                    && (300..380).contains(&y)
+                    && pixel[0] == expected.0
+                    && pixel[1] == expected.1
+                    && pixel[2] == expected.2
+            })
+            .count();
+
+        assert!(
+            found_semantic_foreground > 0,
+            "light color label should use semantic text color {expected:?}"
+        );
+    }
+
+    #[test]
     fn debug_handler_glyphs_stay_inside_the_badge() {
         let mut config = AppConfig::default();
         config.display.show_debug_handler = true;

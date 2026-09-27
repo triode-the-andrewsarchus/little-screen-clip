@@ -261,15 +261,8 @@ impl ScreenRenderer {
                     pixmap.fill_rect(sr, &paint, Transform::identity(), None);
                 }
                 // Hex label (Font 42px bold)
-                self.draw_text(
-                    pixmap,
-                    hex,
-                    rx + 16.0,
-                    ry + 320.0,
-                    42.0,
-                    Color::from_rgba8(255, 255, 255, 255),
-                    true,
-                );
+                let label_color = self.color_from_hex(&self.palette.colors.text_primary);
+                self.draw_text(pixmap, hex, rx + 16.0, ry + 320.0, 42.0, label_color, true);
             }
             ClipPayload::Url(url) => {
                 let url_str = url.as_str();
