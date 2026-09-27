@@ -1,6 +1,6 @@
 # Workbench UI overhaul: remaining task tree
 
-Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with the limitations below. Source audit updated 2026-09-24; runtime baseline observations updated 2026-09-26 on `feat/workbench-ui-overhaul`. This is a working queue, not a claim that the older `ui_overhaul_plan.md` is fully implemented. Re-check code and manual behavior before marking an item done. The original plan remains the feature-parity and design reference.
+Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with the limitations below. Source audit updated 2026-09-24; runtime baseline observations updated 2026-09-26 on `feat/workbench-ui-overhaul`. This is a working queue, not a claim that the older `ui_overhaul_plan.md` is fully implemented. Re-check code and manual behavior before marking an item done. The original plan remains the feature-parity and design reference.
 
 ## Status and scope
 
@@ -226,6 +226,20 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
   - [x] **H2.1n Synthesize MIDI through bounded job pool.** Stale solo/viewer work cancels; failures reported; polls at 50 ms. Running synthesis may finish in worker.
   - [x] **H2.1o Retain 3D load ticket and cancel pending publication on close.** Polls at 50 ms while loading rather than every frame; running parse may finish in worker.
 - **H2.2 Dense content scale correctness**
+  - [x] **H2.2a Correct wrapped text geometry.** Measured row heights, logarithmic prefix updates, 100/150/200% render tests, bounded layout batches, and height-only index are implemented. Architecture review found no clone groups/cycles; necessary indexing/measurement raises total CCN while average/peak CCN do not rise.
+  - [x] **H2.2b Make MIDI canvas labels readable.** Measured pitch/ruler labels with octave thinning, canvas bounds, collision suppression and contrast; geometry tests cover density, spacing and edges. Live playback/selection remains unverified.
+  - [ ] **H2.2b1 [Primary] Verify MIDI playback interaction live.**
+  - [ ] **H2.2b2 [Primary] Verify MIDI selection interaction live.**
+  - **H2.2c Bound pathological text work and collect performance evidence**
+    - [ ] **H2.2c1 [Primary] Bound measurement and rendering work for multi-megabyte single lines.** Preserve exact search/copy behavior.
+    - [ ] **H2.2c2 [Primary] Bound processing of large clipboard text.** Preserve exact search/copy behavior.
+    - [ ] **H2.2c3 [Primary] Bound syntax preparation for pathological documents.**
+    - [ ] **H2.2c4 [Primary] Bound minimap preparation for pathological documents.**
+    - [ ] **H2.2c5 [Primary] Bound text layout/cache lifetime.**
+    - [ ] **H2.2c6 [Primary] Measure large-document performance across width and DPI changes in both appearances.** Keep 60 Hz interaction target; geometry tests are not performance evidence.
+  - [x] **H2.2d Consolidate image canvas readouts.** `CanvasBadge` covers Convert, Decorrelation Stretch and Deskew corners; bounded widths, opaque centralized surfaces, shared comparison drawing/hit tests; tests cover geometry, contrast and handles. Numeric matrix scrolls without shrinking/precision changes. Architecture comparison reduces clone groups by three, peak CCN unchanged, no new hotspot.
+  - [ ] **H2.2d1 [Primary] Verify image overlays live.**
+  - [ ] **H2.2d2 [Primary] Verify image comparison dragging live.**
   - **H2.2e Text and spreadsheet scale checks**
     - [ ] **H2.2e1 [Primary] Audit long-line horizontal scrolling.** Raw code uses shared 15-point monospace; measured variable-height virtualization, bounded batches, source anchoring and exact UTF-8 search projection are implemented.
     - [ ] **H2.2e2 [Primary] Validate spreadsheet two-axis scrolling.**
@@ -235,20 +249,6 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
     - [ ] **H2.2e6 [Primary] Validate scroll/search/copy targets across UI and DPI scales with large fixtures.**
     - [ ] **H2.2e7 [Primary] Verify live selection and copy targets across wrapped virtual rows.**
     - [ ] **H2.2e8 [Primary] Verify pointer and minimap geometry across wrapped virtual rows.**
-  - [x] **H2.2a Correct wrapped text geometry.** Measured row heights, logarithmic prefix updates, 100/150/200% render tests, bounded layout batches, and height-only index are implemented. Architecture review found no clone groups/cycles; necessary indexing/measurement raises total CCN while average/peak CCN do not rise.
-  - [x] **H2.2b Make MIDI canvas labels readable.** Measured pitch/ruler labels with octave thinning, canvas bounds, collision suppression and contrast; geometry tests cover density, spacing and edges. Live playback/selection remains unverified.
-  - [ ] **H2.2b1 [Primary] Verify MIDI playback interaction live.**
-  - [ ] **H2.2b2 [Primary] Verify MIDI selection interaction live.**
-  - [x] **H2.2d Consolidate image canvas readouts.** `CanvasBadge` covers Convert, Decorrelation Stretch and Deskew corners; bounded widths, opaque centralized surfaces, shared comparison drawing/hit tests; tests cover geometry, contrast and handles. Numeric matrix scrolls without shrinking/precision changes. Architecture comparison reduces clone groups by three, peak CCN unchanged, no new hotspot.
-  - [ ] **H2.2d1 [Primary] Verify image overlays live.**
-  - [ ] **H2.2d2 [Primary] Verify image comparison dragging live.**
-  - **H2.2c Bound pathological text work and collect performance evidence**
-    - [ ] **H2.2c1 [Primary] Bound measurement and rendering work for multi-megabyte single lines.** Preserve exact search/copy behavior.
-    - [ ] **H2.2c2 [Primary] Bound processing of large clipboard text.** Preserve exact search/copy behavior.
-    - [ ] **H2.2c3 [Primary] Bound syntax preparation for pathological documents.**
-    - [ ] **H2.2c4 [Primary] Bound minimap preparation for pathological documents.**
-    - [ ] **H2.2c5 [Primary] Bound text layout/cache lifetime.**
-    - [ ] **H2.2c6 [Primary] Measure large-document performance across width and DPI changes in both appearances.** Keep 60 Hz interaction target; geometry tests are not performance evidence.
   - [ ] **H2.2f [Primary] Validate binary diff horizontal scrolling at long lines.** Hex/ASCII cells, offsets and column headers use 15-point monospace across 8/16/32-byte densities with matching row/hit targets and tests.
   - [ ] **H2.2g [Primary] Validate comparison ANSI long-line scrolling.** Shared monospace size on central dark console surface in both modes; standard/truecolor/256-color foreground contrast tests pass.
 - **H2.3 Complex workspace semantics**
@@ -268,8 +268,12 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
   - [ ] **H2.4d [Primary] Render full studios from shared data where safe.**
   - [ ] **H2.4e [Primary] Add revision-aware bounded cache/job/texture lifetimes for future file thumbnails.**
   - [ ] **H2.4f [Primary] Add preview cache/job/texture invalidation and eviction.**
-  - [ ] **H2.4g [Primary] Demonstrate independent previews and full studios in embedding harness.**
-  - [ ] **H2.4h [Primary] Demonstrate no repeated side effects and bounded loading in embedding harness.** File-manager operations are out of scope.
+  - **H2.4g Embedding reuse checks**
+    - [ ] **H2.4g1 [Primary] Demonstrate independent inline previews in the embedding harness.**
+    - [ ] **H2.4g2 [Primary] Demonstrate full studios rendered from shared data in the embedding harness.**
+  - **H2.4h Embedding lifecycle checks**
+    - [ ] **H2.4h1 [Primary] Demonstrate that embedded previews cause no repeated side effects.**
+    - [ ] **H2.4h2 [Primary] Demonstrate bounded embedded preview loading.** File-manager operations are out of scope.
 
 ## Easy 3 — Consolidation and evidence (Luna implementation; primary review)
 
@@ -308,7 +312,10 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
   - [ ] **H3.2d [Primary] Verify idle repaint behavior.**
   - [ ] **H3.2e [Primary] Measure 60 Hz interaction target.** Include frame-time profiling on representative dense interactions and fixtures.
   - [ ] **H3.2f [Primary] Verify bounded cache and job lifetimes.**
-  - [ ] **H3.2g [Primary] Verify no UI-thread decode, IPC, or subprocess waits.**
+  - **H3.2g Verify expensive work stays off the UI thread**
+    - [ ] **H3.2g1 [Primary] Verify decoding and parsing do not block the UI thread.**
+    - [ ] **H3.2g2 [Primary] Verify IPC waits do not block the UI thread.**
+    - [ ] **H3.2g3 [Primary] Verify subprocess waits do not block the UI thread.**
   - [ ] **H3.2h [Primary] Run `cargo fmt --check`.**
   - [ ] **H3.2i [Primary] Run `cargo test --workspace`.**
   - [ ] **H3.2j [Primary] Run `cargo clippy --workspace --all-targets -- -D warnings`.**
