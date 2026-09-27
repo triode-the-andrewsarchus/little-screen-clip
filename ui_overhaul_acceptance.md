@@ -54,6 +54,8 @@ Generate the available source-controlled fixture set with `python3 scripts/ui_ac
 
 For every scenario, capture the keyboard path and mouse path where both exist, source and destination of copied/saved data, and whether the prior document/session remains available. The detailed feature checklist lives in `ui_overhaul_parity_ledger.md`; a scenario passes only when its relevant ledger actions pass, not when the view merely opens.
 
+Automated partial evidence for T1: wrapped-code render tests cover 100%/150%/200% scale, non-overlapping source rows, search offsets, switching wrapping off, and source-row anchoring during incremental measurement. MIDI canvas geometry tests cover pitch-label density, ruler-label spacing, and edge placement. These checks do not establish live selection/copy behavior, rendered appearance, or frame-time targets; T1/A1 remain pending.
+
 ## Performance observations to add
 
 On named reference hardware, capture UI-frame time during idle, scroll, zoom, playback, and large-file load, plus task duration separately. Record item count/size, cache/job bounds and whether CPU decode, IPC, encode, or process wait occurred on the UI thread. The target from `ui_overhaul_plan.md` is smooth 60 Hz manipulation (16.7 ms frame budget) with next-frame visible response; this target is **not yet measured**.
