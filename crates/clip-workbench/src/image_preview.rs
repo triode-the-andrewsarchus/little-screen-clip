@@ -3186,6 +3186,99 @@ mod tests {
     }
 
     #[test]
+    fn barcode_copy_actions_emit_exact_payloads() {
+        let mut state = image_state_from_png((8, 8), "barcode copy actions");
+        let payloads = ["https://example.com", "clipboard 日本語 ✓"];
+        state.barcode_state = BarcodeScanState {
+            detections: payloads
+                .iter()
+                .map(|text| BarcodeDetection {
+                    format: "QR Code".to_owned(),
+                    text: (*text).to_owned(),
+                    points: vec![],
+                    bbox: [0.0; 4],
+                    is_url: text.starts_with("https://"),
+                })
+                .collect(),
+            selected_idx: Some(0),
+            is_scanning: false,
+            has_scanned: true,
+            last_scan_duration_ms: 3,
+        };
+
+        let palette =
+            AppPalette::for_appearance(little_clip_core::config::WorkbenchAppearance::Dark);
+        let ctx = egui::Context::default();
+        let render = |state: &mut ImagePreviewState, time, events| {
+            ctx.run(
+                egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 500.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_barcode_toolbar(ui, ctx, &palette);
+                    });
+                },
+            )
+        };
+        let text_center = |output: &egui::FullOutput, expected: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == expected => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("rendered action text {expected:?} not found"))
+        };
+        let click = |state: &mut ImagePreviewState, pos: Pos2, time: f64| {
+            render(state, time, vec![egui::Event::PointerMoved(pos)]);
+            render(
+                state,
+                time + 0.1,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::default(),
+                    },
+                ],
+            );
+            render(
+                state,
+                time + 0.2,
+                vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::default(),
+                    },
+                ],
+            )
+        };
+
+        render(&mut state, 0.0, vec![]);
+        let initial = render(&mut state, 0.1, vec![]);
+        let all_pos = text_center(&initial, "📋 Copy All");
+        let copied_all = click(&mut state, all_pos, 0.2);
+        assert_eq!(copied_all.platform_output.copied_text, payloads.join("\n"));
+
+        let after_copy_all = render(&mut state, 0.5, vec![]);
+        let selected_pos = text_center(&after_copy_all, "📋");
+        let copied_selected = click(&mut state, selected_pos, 0.6);
+        assert_eq!(copied_selected.platform_output.copied_text, payloads[0]);
+    }
+
+    #[test]
     fn test_ocr_state_transitions() {
         let config = AppConfig::default();
         let img = RgbaImage::new(20, 20);

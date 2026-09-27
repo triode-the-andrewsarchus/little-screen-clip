@@ -192,7 +192,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **E2.1k2 [Luna] Verify Barcode decoding preserves Unicode payloads.** Production-path test decodes both a URL and `clipboard test 日本語 ✓`, asserting exact strings; CJK and emoji display fallback is covered under H1.2d.
     - **E2.1k3 Barcode result text and actions**
       - [x] **E2.1k3a [Luna] Verify Japanese/check-mark payload glyphs.** The post-fallback capture shows `clipboard test 日本語 ✓` legibly in the decoded row; see `ui_overhaul_acceptance.md`.
-      - [ ] **E2.1k3b [Luna] Verify Copy Payload and Copy All.** Confirm the selected payload and all results reach the clipboard exactly.
+      - [x] **E2.1k3b [Luna] Verify Copy Payload and Copy All.** Production toolbar render test clicks both actions and checks egui emits the exact selected payload and newline-joined results, including Japanese/check-mark text.
       - [ ] **E2.1k3c [Luna] Verify Open Link action.** Confirm valid links open and non-link payloads do not launch an external handler.
   - [x] **E2.1l [Luna] Verify Transform live.** Isolated 1280×720 Light capture shows rotate/flip/revert controls, canvas, and footer in one view.
   - [x] **E2.1m [Luna] Verify Background Removal live.** Isolated 1280×720 Light capture shows segmentation mode, prompt, action, canvas, and footer; the left inspector scrolls to reach the lower action at this compact height.
