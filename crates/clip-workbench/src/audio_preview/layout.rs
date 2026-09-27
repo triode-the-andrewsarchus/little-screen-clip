@@ -487,4 +487,31 @@ mod tests {
         assert_eq!(control.height(), crate::ui_ext::CONTROL_HEIGHT);
         assert!((text_pos.y + text_size.y / 2.0 - control.center().y).abs() < 1.0);
     }
+
+    #[test]
+    fn audio_transport_button_families_share_control_height() {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut heights = Vec::new();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                for button in [
+                    AudioWorkspace::primary_button("Play", Color32::GREEN, &palette),
+                    AudioWorkspace::secondary_button("Stop", Color32::DARK_GRAY, &palette),
+                    AudioWorkspace::toggle_button("Loop", true, &palette),
+                ] {
+                    heights.push(ui.add(button).rect.height());
+                }
+            });
+        });
+
+        assert_eq!(heights.len(), 3);
+        assert!(
+            heights
+                .iter()
+                .all(|height| (*height - crate::ui_ext::CONTROL_HEIGHT).abs() < f32::EPSILON)
+        );
+    }
 }
