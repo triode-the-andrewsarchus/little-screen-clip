@@ -417,7 +417,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **E3.3e3 [Luna] Capture many-page behavior.** Isolated 1280×720 Dark capture `/tmp/clip-e3-many-pages-dark-final/settled.png` displays an 80-page PDF with an internally scrollable thumbnail row; popup geometry and singleton checks pass. Page navigation/edit actions and PDF rendering performance remain unverified.
 - [x] **E3.3f [Luna] Capture loading and error states.** Isolated captures show a 300-second stereo WAV moving from waveform-building state to rendered waveform and a malformed PNG error returning to Palette. Normal daemon recovery, playback, and mirror refresh remain separate acceptance tasks.
 - [ ] **E3.3g [Luna] Capture mirror freshness and async-audio behavior.**
-- [ ] **E3.3h [Luna] Record screen-reader and focus observations where feasible.**
+- [ ] **E3.3h [Luna] Record screen-reader and focus observations where feasible.** Source audit on 2026-09-27 found the workbench does not enable egui-winit's optional AccessKit feature; current focus tests cover shortcut/text-field ownership and selected focus transitions, not screen-reader names/roles or full keyboard traversal. Runtime observation is blocked because no screen-reader executable/service (Orca/AT-SPI) is installed or running. The private Weston/Niri capture harness is available, but it cannot establish spoken/accessibility-tree behavior until the workbench is built with AccessKit and a screen reader is available in the isolated session. Keep open; no runtime claim made. Details are in `ui_overhaul_acceptance.md`.
 
 ## Hard 3 — Final integration and acceptance (primary model)
 
