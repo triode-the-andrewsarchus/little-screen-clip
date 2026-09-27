@@ -3279,6 +3279,60 @@ mod tests {
     }
 
     #[test]
+    fn audio_tool_shortcuts_switch_modes_and_ignore_modified_keys() {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let mut state = AudioPreviewState::new(
+            PathBuf::from("/__little_clip_missing_audio_shortcuts__.wav"),
+            "test.wav".to_string(),
+        );
+        let mut close_requested = false;
+
+        for (key, modifiers, expected_mode) in [
+            (
+                egui::Key::H,
+                egui::Modifiers::NONE,
+                AudioToolMode::HfAnalysis,
+            ),
+            (
+                egui::Key::D,
+                egui::Modifiers::CTRL,
+                AudioToolMode::HfAnalysis,
+            ),
+            (
+                egui::Key::D,
+                egui::Modifiers::NONE,
+                AudioToolMode::DigitalDecode,
+            ),
+            (
+                egui::Key::S,
+                egui::Modifiers::NONE,
+                AudioToolMode::StemSeparation,
+            ),
+            (egui::Key::I, egui::Modifiers::NONE, AudioToolMode::Inspect),
+        ] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    modifiers,
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| {
+                    state.handle_studio_shortcuts(ctx, &mut close_requested);
+                },
+            );
+            assert_eq!(state.active_mode, expected_mode);
+            assert!(!close_requested);
+        }
+    }
+
+    #[test]
     fn inspect_footer_stays_after_canvas_in_full_and_embedded_views() {
         use egui::epaint::Shape;
 
