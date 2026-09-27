@@ -17,6 +17,13 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel, sync_channel};
 use std::time::Duration;
 
 const PREVIEW_QUEUE_CAPACITY: usize = 3;
+// Bound retained RGBA textures independently of document length. Compressed
+// rasters remain available for re-upload when an evicted page becomes visible.
+// Backend frees follow drawing; frame turnover can temporarily use twice these
+// limits, because textures uploaded in this frame cannot be evicted until the next.
+const PAGE_TEXTURE_LIMIT: usize = 32;
+const PAGE_TEXTURE_BYTE_LIMIT: usize = 32 * 1024 * 1024;
+const PAGE_RASTER_MAX_DIM: u32 = 1200;
 const STAGED_PDF_FILENAME: &str = "edited.pdf";
 
 struct PdfPreviewMsg {
@@ -40,6 +47,7 @@ pub struct PdfPageItem {
     pub page_num: usize,
     pub png_bytes: Vec<u8>,
     pub texture: Option<egui::TextureHandle>,
+    texture_last_used: u64,
     pub error: Option<String>,
     pub width: u32,
     pub height: u32,
@@ -64,6 +72,7 @@ pub struct PdfEditorState {
     previews_loading: bool,
     edit_rx: Option<Receiver<PdfEditMsg>>,
     edit_in_progress: bool,
+    texture_frame: u64,
 }
 
 impl PdfEditorState {
@@ -99,6 +108,7 @@ impl PdfEditorState {
             previews_loading: false,
             edit_rx: None,
             edit_in_progress: false,
+            texture_frame: 0,
         };
         state.start_info_worker();
         state
@@ -155,6 +165,7 @@ impl PdfEditorState {
                 page_num,
                 png_bytes: Vec::new(),
                 texture: None,
+                texture_last_used: 0,
                 error: None,
                 width: 0,
                 height: 0,
@@ -185,7 +196,11 @@ impl PdfEditorState {
             }
             order.extend((1..=page_count).filter(|page| *page != selected_page));
             for page_num in order {
-                let max_dim = if page_num == selected_page { 1200 } else { 360 };
+                let max_dim = if page_num == selected_page {
+                    PAGE_RASTER_MAX_DIM
+                } else {
+                    360
+                };
                 let result = render_pdf_page_preview(&path, page_num, max_dim);
                 if tx.send(PdfPreviewMsg { page_num, result }).is_err() {
                     break;
@@ -203,6 +218,7 @@ impl PdfEditorState {
                         if let Some(page) = self.pages.get_mut(message.page_num.saturating_sub(1)) {
                             match message.result {
                                 Ok((png_bytes, width, height)) => {
+                                    page.texture = None;
                                     page.png_bytes = png_bytes;
                                     page.width = width;
                                     page.height = height;
@@ -226,6 +242,92 @@ impl PdfEditorState {
         } else if self.previews_loading {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
+    }
+
+    /// Upload on demand and evict least recently used pages. The selected page
+    /// and any texture already referenced by this frame's paint shapes are
+    /// protected, so eviction cannot leave a dangling image in the draw list.
+    fn ensure_page_texture(
+        &mut self,
+        page_num: usize,
+        ctx: &egui::Context,
+    ) -> Option<egui::TextureId> {
+        let index = page_num.checked_sub(1)?;
+        let page = self.pages.get_mut(index)?;
+        if let Some(texture) = &page.texture {
+            page.texture_last_used = self.texture_frame;
+            return Some(texture.id());
+        }
+        if page.png_bytes.is_empty() {
+            return None;
+        }
+        let image = match image::load_from_memory(&page.png_bytes) {
+            Ok(image) => image,
+            Err(error) => {
+                page.error = Some(format!("PDF preview decode failed: {error}"));
+                page.png_bytes.clear();
+                return None;
+            }
+        };
+        // Workers already render at this limit; defend the cache budget if a
+        // future producer supplies a larger raster.
+        let image = if image.width().max(image.height()) > PAGE_RASTER_MAX_DIM {
+            image.thumbnail(PAGE_RASTER_MAX_DIM, PAGE_RASTER_MAX_DIM)
+        } else {
+            image
+        };
+        let rgba = image.to_rgba8();
+        let bytes = rgba.as_raw().len();
+        if !self.make_texture_room(bytes) {
+            // Newly selected pages get first priority on the next frame. Avoid
+            // freeing a texture that a thumbnail has already painted this frame.
+            if self.selected_page == Some(page_num) {
+                ctx.request_repaint();
+            }
+            return None;
+        }
+        let color_image = egui::ColorImage::from_rgba_unmultiplied(
+            [rgba.width() as usize, rgba.height() as usize],
+            rgba.as_raw(),
+        );
+        let page = &mut self.pages[index];
+        let texture = ctx.load_texture(
+            format!("pdf_page_{page_num}"),
+            color_image,
+            egui::TextureOptions::LINEAR,
+        );
+        let id = texture.id();
+        page.texture = Some(texture);
+        page.texture_last_used = self.texture_frame;
+        Some(id)
+    }
+
+    fn make_texture_room(&mut self, additional_bytes: usize) -> bool {
+        let (mut count, mut bytes) = self
+            .pages
+            .iter()
+            .filter_map(|page| page.texture.as_ref())
+            .fold((0, 0), |(count, bytes), texture| {
+                (count + 1, bytes + texture.byte_size())
+            });
+        while count >= PAGE_TEXTURE_LIMIT || bytes + additional_bytes > PAGE_TEXTURE_BYTE_LIMIT {
+            let candidate = self
+                .pages
+                .iter_mut()
+                .filter(|page| {
+                    page.texture.is_some()
+                        && Some(page.page_num) != self.selected_page
+                        && page.texture_last_used != self.texture_frame
+                })
+                .min_by_key(|page| page.texture_last_used);
+            let Some(page) = candidate else {
+                return false;
+            };
+            let texture = page.texture.take().expect("eviction candidate has texture");
+            count -= 1;
+            bytes -= texture.byte_size();
+        }
+        true
     }
 
     pub fn reload_pages(&mut self, ctx: &egui::Context) {
@@ -409,27 +511,9 @@ impl PdfEditorState {
             self.rotate_current_page(90, now);
         }
 
-        // Ensure textures loaded
-        for page in &mut self.pages {
-            if page.texture.is_none() && !page.png_bytes.is_empty() {
-                match image::load_from_memory(&page.png_bytes) {
-                    Ok(img) => {
-                        let rgba = img.to_rgba8();
-                        let color_img = egui::ColorImage::from_rgba_unmultiplied(
-                            [rgba.width() as usize, rgba.height() as usize],
-                            rgba.as_raw(),
-                        );
-                        page.texture = Some(ctx.load_texture(
-                            format!("pdf_page_{}", page.page_num),
-                            color_img,
-                            egui::TextureOptions::LINEAR,
-                        ));
-                    }
-                    Err(error) => page.error = Some(format!("PDF preview decode failed: {error}")),
-                }
-                page.png_bytes.clear();
-                page.png_bytes.shrink_to_fit();
-            }
+        self.texture_frame += 1;
+        if let Some(page_num) = self.selected_page {
+            self.ensure_page_texture(page_num, ctx);
         }
 
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
@@ -575,7 +659,6 @@ impl PdfEditorState {
                                             ui.horizontal_wrapped(|ui| {
                                                 let pages_clone: Vec<(
                                                     usize,
-                                                    Option<egui::TextureId>,
                                                     u32,
                                                     u32,
                                                     bool,
@@ -585,7 +668,6 @@ impl PdfEditorState {
                                                     .map(|p| {
                                                         (
                                                             p.page_num,
-                                                            p.texture.as_ref().map(|t| t.id()),
                                                             p.width,
                                                             p.height,
                                                             p.error.is_some(),
@@ -593,7 +675,7 @@ impl PdfEditorState {
                                                     })
                                                     .collect();
 
-                                                for (page_num, tex_id_opt, w, h, failed) in pages_clone {
+                                                for (page_num, w, h, failed) in pages_clone {
                                                     let is_selected =
                                                         self.selected_page == Some(page_num);
 
@@ -623,6 +705,13 @@ impl PdfEditorState {
                                                                 let thumb_h = 130.0;
                                                                 let thumb_w = thumb_h * aspect;
 
+                                                                let thumbnail_rect = egui::Rect::from_min_size(
+                                                                    ui.next_widget_position(),
+                                                                    Vec2::new(thumb_w, thumb_h),
+                                                                );
+                                                                let tex_id_opt = ui.is_rect_visible(thumbnail_rect)
+                                                                    .then(|| self.ensure_page_texture(page_num, ctx))
+                                                                    .flatten();
                                                                 if let Some(tex_id) = tex_id_opt {
                                                                     let img_btn = egui::ImageButton::new(
                                                                         egui::load::SizedTexture::new(
@@ -689,6 +778,9 @@ impl PdfEditorState {
                                 .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
                                 .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
                                 .show(ui, |ui| {
+                                    if let Some(page_num) = self.selected_page {
+                                        self.ensure_page_texture(page_num, ctx);
+                                    }
                                     let selected_item = self
                                         .selected_page
                                         .and_then(|sel| self.pages.iter().find(|p| p.page_num == sel));
@@ -792,6 +884,176 @@ impl Drop for PdfEditorState {
 mod tests {
     use super::*;
 
+    fn raster_state(page_count: usize, dimension: u32) -> PdfEditorState {
+        let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            dimension,
+            dimension,
+            image::Rgba([23, 45, 67, 255]),
+        ));
+        let mut png = std::io::Cursor::new(Vec::new());
+        image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        PdfEditorState {
+            path: PathBuf::from("fixture.pdf"),
+            title: "fixture.pdf".to_owned(),
+            page_count,
+            pages: (1..=page_count)
+                .map(|page_num| PdfPageItem {
+                    page_num,
+                    png_bytes: png.get_ref().clone(),
+                    texture: None,
+                    texture_last_used: 0,
+                    error: None,
+                    width: dimension,
+                    height: dimension,
+                    rotation: 0,
+                })
+                .collect(),
+            selected_page: (page_count > 0).then_some(1),
+            status_toast: StatusToast::new(),
+            dirty: false,
+            info_job: None,
+            preview_rx: None,
+            previews_loading: false,
+            edit_rx: None,
+            edit_in_progress: false,
+            texture_frame: 0,
+        }
+    }
+
+    fn resident_textures(state: &PdfEditorState) -> (usize, usize) {
+        state
+            .pages
+            .iter()
+            .filter_map(|page| page.texture.as_ref())
+            .fold((0, 0), |(count, bytes), texture| {
+                (count + 1, bytes + texture.byte_size())
+            })
+    }
+
+    #[test]
+    fn page_textures_obey_handle_and_byte_limits_while_selected_page_stays_resident() {
+        let ctx = egui::Context::default();
+        for dimension in [16, PAGE_RASTER_MAX_DIM] {
+            let mut state = raster_state(PAGE_TEXTURE_LIMIT * 2, dimension);
+            state.texture_frame += 1;
+            let mut selected_id = None;
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                selected_id = state.ensure_page_texture(1, ctx);
+            });
+            let selected_id = selected_id.unwrap();
+            for page_num in 2..=state.page_count {
+                state.texture_frame += 1;
+                let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                    assert!(state.ensure_page_texture(page_num, ctx).is_some());
+                });
+                let (count, bytes) = resident_textures(&state);
+                assert!(count <= PAGE_TEXTURE_LIMIT);
+                assert!(bytes <= PAGE_TEXTURE_BYTE_LIMIT);
+                assert_eq!(state.pages[0].texture.as_ref().unwrap().id(), selected_id);
+            }
+            assert!(state.pages[1].texture.is_none());
+        }
+    }
+
+    #[test]
+    fn evicted_page_reselection_reuploads_original_raster() {
+        let ctx = egui::Context::default();
+        let mut state = raster_state(PAGE_TEXTURE_LIMIT + 2, 16);
+        state.texture_frame += 1;
+        let original_id = state.ensure_page_texture(2, &ctx).unwrap();
+        let source = state.pages[1].png_bytes.clone();
+        for page_num in 3..=state.page_count {
+            state.texture_frame += 1;
+            state.ensure_page_texture(page_num, &ctx).unwrap();
+        }
+        assert!(state.pages[1].texture.is_none());
+        state.selected_page = Some(2);
+        state.texture_frame += 1;
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            let reloaded = state.ensure_page_texture(2, ctx).unwrap();
+            assert_ne!(reloaded, original_id);
+        });
+        assert_eq!(state.pages[1].png_bytes, source);
+        let texture = state.pages[1].texture.as_ref().unwrap();
+        assert_eq!(texture.size(), [16, 16]);
+        let upload = output
+            .textures_delta
+            .set
+            .iter()
+            .find(|(id, _)| *id == texture.id())
+            .unwrap();
+        match &upload.1.image {
+            egui::ImageData::Color(image) => {
+                assert!(
+                    image
+                        .pixels
+                        .iter()
+                        .all(|pixel| *pixel == egui::Color32::from_rgb(23, 45, 67))
+                );
+            }
+            _ => panic!("PDF reload must upload the original RGBA raster"),
+        }
+        let (count, bytes) = resident_textures(&state);
+        assert!(count <= PAGE_TEXTURE_LIMIT && bytes <= PAGE_TEXTURE_BYTE_LIMIT);
+    }
+
+    #[test]
+    fn current_frame_textures_are_not_evicted_and_next_frame_admits_new_selection() {
+        let ctx = egui::Context::default();
+        let mut state = raster_state(PAGE_TEXTURE_LIMIT + 1, 16);
+        state.texture_frame += 1;
+        let ids: Vec<_> = (1..=PAGE_TEXTURE_LIMIT)
+            .map(|page_num| state.ensure_page_texture(page_num, &ctx).unwrap())
+            .collect();
+        state.selected_page = Some(PAGE_TEXTURE_LIMIT + 1);
+        assert!(
+            state
+                .ensure_page_texture(PAGE_TEXTURE_LIMIT + 1, &ctx)
+                .is_none()
+        );
+        for (page, id) in state.pages.iter().zip(ids) {
+            assert_eq!(page.texture.as_ref().unwrap().id(), id);
+        }
+        assert_eq!(resident_textures(&state).0, PAGE_TEXTURE_LIMIT);
+        state.texture_frame += 1;
+        assert!(
+            state
+                .ensure_page_texture(PAGE_TEXTURE_LIMIT + 1, &ctx)
+                .is_some()
+        );
+        assert_eq!(resident_textures(&state).0, PAGE_TEXTURE_LIMIT);
+    }
+
+    #[test]
+    fn long_document_uploads_visible_thumbnails_and_selected_page_only() {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut state = raster_state(100, 16);
+        state.selected_page = Some(100);
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1177.0, 662.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                });
+            },
+        );
+        let (count, bytes) = resident_textures(&state);
+        assert!(count > 1 && count < PAGE_TEXTURE_LIMIT);
+        assert!(bytes <= PAGE_TEXTURE_BYTE_LIMIT);
+        assert!(state.pages[99].texture.is_some());
+        assert!(state.pages[50].texture.is_none());
+        assert!(state.pages.iter().all(|page| !page.png_bytes.is_empty()));
+    }
+
     #[test]
     fn pdf_selection_and_error_labels_meet_contrast_in_both_appearances() {
         for appearance in [
@@ -842,6 +1104,7 @@ mod tests {
                 previews_loading: false,
                 edit_rx: None,
                 edit_in_progress: false,
+                texture_frame: 0,
             };
             let host = egui::Rect::from_min_size(egui::Pos2::ZERO, host_size);
             let mut panes = Vec::new();
@@ -918,6 +1181,7 @@ mod tests {
             page_num: 1,
             png_bytes: Vec::new(),
             texture: None,
+            texture_last_used: 0,
             error: None,
             width: 0,
             height: 0,

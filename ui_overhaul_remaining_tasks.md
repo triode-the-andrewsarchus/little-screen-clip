@@ -296,7 +296,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 ## Hard 2 — Cross-view behavior, scale, and embedding (primary model)
 
 - **H2.1 Async file and export paths**
-  - [ ] **H2.1a [Primary] Bound page texture storage.**
+  - [x] **H2.1a [Primary] Bound page texture storage.** PDF uploads only selected/visible pages; LRU retains at most 32 handles and 32 MiB RGBA, protects current-frame draw references, and reloads evicted pages from their compressed raster. Four regressions cover both limits, selected-page retention, exact raster re-selection, frame-safe admission, and production 100-page visibility. Backend frees occur after rendering (at most 64 handles / 64 MiB during frame turnover); compressed raster storage is tracked separately below.
   - [ ] **H2.1b [Primary] Bound preview worker lifetime.**
   - [ ] **H2.1c [Primary] Audit image open/decode for UI-thread blocking.**
   - [ ] **H2.1d [Primary] Audit PDF open/decode for UI-thread blocking.**
@@ -317,6 +317,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **H2.1m Parse MIDI files through bounded cancellable jobs.** Both workbench entry points use loading button/failure status; a newer request or app drop cancels prior jobs, while completed results wait through an active modal viewer sequence.
   - [x] **H2.1n Synthesize MIDI through bounded job pool.** Stale solo/viewer work cancels; failures reported; polls at 50 ms. Running synthesis may finish in worker.
   - [x] **H2.1o Retain 3D load ticket and cancel pending publication on close.** Polls at 50 ms while loading rather than every frame; running parse may finish in worker.
+  - [ ] **H2.1p [Primary] Bound compressed PDF raster storage.** H2.1a retains compressed PNGs for re-upload; RAM use still grows with document length. Preserve evicted-page re-selection via disk cache or bounded rerender requests.
 - **H2.2 Dense content scale correctness**
   - [x] **H2.2a Correct wrapped text geometry.** Measured row heights, logarithmic prefix updates, 100/150/200% render tests, bounded layout batches, and height-only index are implemented. Architecture review found no clone groups/cycles; necessary indexing/measurement raises total CCN while average/peak CCN do not rise.
   - [x] **H2.2b Make MIDI canvas labels readable.** Measured pitch/ruler labels with octave thinning, canvas bounds, collision suppression and contrast; geometry tests cover density, spacing and edges. Live playback/selection remains unverified.
