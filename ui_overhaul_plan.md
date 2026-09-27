@@ -211,7 +211,7 @@ Use action identifiers shared by buttons, menus, and shortcuts so labels, enable
 
 Input precedence: active modal/popup, focused text/numeric editor, active tool interaction, active workspace, application. Consume an event once. Escape dismisses the current overlay or cancels the current interaction before closing a document. It should not silently erase accumulated edits. Where cancellation is supported, expose it explicitly and preserve existing tool-specific cancellation behavior through the action system.
 
-Tab performs focus traversal; existing view-mode switching remains available through a labeled contextual shortcut/menu. Preserve text editing Copy/Undo in fields and use document Copy/Undo only in the appropriate scope. Custom-painted sliders, canvases, minimaps, and split handles need accessible labels/values, focus indication, and keyboard equivalents for essential actions. Inspect AccessKit support on the selected egui version; do not equate painted labels with accessible widgets.
+Tab performs focus traversal; existing view-mode switching remains available through a labeled contextual shortcut/menu. Preserve text editing Copy/Undo in fields and use document Copy/Undo only in the appropriate scope. Custom-painted sliders, canvases, minimaps, and split handles need keyboard equivalents for essential actions as part of feature parity. Screen-reader names/values, accessibility-tree exposure, and AccessKit integration are deferred and are not acceptance goals for this overhaul.
 
 ### Background work
 
@@ -312,7 +312,7 @@ Test fresh launches on each target output, final size from the first visible fra
 - Contrast tests: semantic role pairs on their actual surfaces, independent alpha-compositing fixtures, hover/pressed/selection states, syntax/diff/chart labels, and readable overlays.
 - Session/task tests: stale results ignored, hidden views retain state, closed previews release resources, cancellation semantics, bounded queue saturation, file-change invalidation, independent preview IDs, and multi-pass rendering without repeated IPC/save/launch actions.
 - Preserve existing operation tests and add meaningful feature-parity scenarios for exports, clipboard destinations, selections, history, and external handoffs.
-- Visual regression captures at representative logical sizes/scales, plus actual native-window manual review. Headless geometry tests cannot establish optical alignment or screen-reader behavior alone.
+- Visual regression captures at representative logical sizes/scales, plus actual native-window manual review. Headless geometry tests cannot establish optical alignment or full interaction behavior alone.
 
 ### Performance and interaction gates
 
