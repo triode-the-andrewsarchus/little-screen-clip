@@ -369,7 +369,7 @@ impl AudioPreviewState {
             ui.separator();
 
             // Playback Mode selection
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 layout::AudioWorkspace::inline_label(ui, "Mode:", text_f_med);
                 let mode_width = crate::ui_ext::equal_button_width(
                     ui,

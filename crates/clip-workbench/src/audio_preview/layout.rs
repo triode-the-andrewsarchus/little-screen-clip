@@ -402,23 +402,35 @@ impl AudioPreviewState {
             .inner_margin(egui::Margin::symmetric(14.0, 6.0))
             .stroke(Stroke::new(1.0_f32, colors.panel))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for &mode in AudioToolMode::ALL {
-                        if ui
-                            .add(crate::ui_ext::mode_tab_button_icon(
-                                Some(mode.icon()),
-                                mode.label(),
-                                self.active_mode == mode,
-                                palette,
-                            ))
-                            .clicked()
-                        {
-                            self.active_mode = mode;
-                        }
-                    }
-                });
+                render_audio_tool_tabs(ui, &mut self.active_mode, palette);
             });
     }
+}
+
+fn render_audio_tool_tabs(
+    ui: &mut egui::Ui,
+    active_mode: &mut AudioToolMode,
+    palette: &AppPalette,
+) {
+    let labels = AudioToolMode::ALL
+        .iter()
+        .map(|mode| mode.label())
+        .collect::<Vec<_>>();
+    let width = crate::ui_ext::wrapped_equal_button_width(ui, &labels, true, labels.len());
+    ui.horizontal_wrapped(|ui| {
+        for &mode in AudioToolMode::ALL {
+            let button = crate::ui_ext::mode_tab_button_icon(
+                Some(mode.icon()),
+                mode.label(),
+                *active_mode == mode,
+                palette,
+            )
+            .min_size(Vec2::new(width, AudioWorkspace::BUTTON_HEIGHT));
+            if ui.add(button).clicked() {
+                *active_mode = mode;
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -513,5 +525,57 @@ mod tests {
                 .iter()
                 .all(|height| (*height - crate::ui_ext::CONTROL_HEIGHT).abs() < f32::EPSILON)
         );
+    }
+
+    #[test]
+    fn audio_tool_tabs_wrap_and_keep_equal_sizing() {
+        for width in [440.0, 1280.0] {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+            let host = Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 180.0));
+            let mut active_mode = AudioToolMode::Inspect;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(host),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        render_audio_tool_tabs(ui, &mut active_mode, &palette);
+                    });
+                },
+            );
+            let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
+            let button_rects = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Rect(rect)
+                        if (rect.rect.height() - crate::ui_ext::CONTROL_HEIGHT).abs() < 0.1
+                            && (rect.fill == colors.accent || rect.fill == colors.panel) =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+
+            assert_eq!(button_rects.len(), AudioToolMode::ALL.len());
+            assert!(button_rects.iter().all(|rect| {
+                (rect.width() - button_rects[0].width()).abs() < 0.1
+                    && rect.min.x >= host.min.x
+                    && rect.max.x <= host.max.x
+                    && rect.max.y <= host.max.y
+            }));
+            if width > 1000.0 {
+                assert!(
+                    button_rects
+                        .iter()
+                        .all(|rect| (rect.min.y - button_rects[0].min.y).abs() < 0.1)
+                );
+            }
+        }
     }
 }
