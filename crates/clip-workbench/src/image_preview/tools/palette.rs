@@ -306,3 +306,98 @@ impl ImagePreviewState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rendered_copy_csv_button_center(output: &egui::FullOutput) -> Pos2 {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Copy CSV" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("palette panel renders the Copy CSV button")
+    }
+
+    #[test]
+    fn rendered_copy_csv_button_emits_extracted_hex_values_in_order() {
+        let config = little_clip_core::config::AppConfig::default();
+        let image = RgbaImage::from_fn(4, 1, |x, _| match x {
+            0..=2 => image::Rgba([0x12, 0x34, 0x56, 255]),
+            _ => image::Rgba([0xFE, 0xDC, 0xBA, 255]),
+        });
+        let mut png_bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut png_bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let item = little_clip_core::ClipItem::from_image(png_bytes, 4, 1, "image/png");
+        let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
+        state.palette_state.num_colors = 2;
+        state.run_palette_extraction();
+
+        let extracted_hex: Vec<_> = state
+            .palette_state
+            .extracted_colors
+            .iter()
+            .map(|color| color.hex.as_str())
+            .collect();
+        assert_eq!(extracted_hex, ["#123456", "#FEDCBA"]);
+
+        let palette = AppPalette::default();
+        let context = egui::Context::default();
+        let render = |state: &mut ImagePreviewState, time, events| {
+            context.run(
+                egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_palette_panel(ui, ctx, &palette);
+                    });
+                },
+            )
+        };
+
+        let initial = render(&mut state, 0.0, Vec::new());
+        let button_center = rendered_copy_csv_button_center(&initial);
+        render(
+            &mut state,
+            0.1,
+            vec![
+                egui::Event::PointerMoved(button_center),
+                egui::Event::PointerButton {
+                    pos: button_center,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ],
+        );
+        let copied = render(
+            &mut state,
+            0.2,
+            vec![
+                egui::Event::PointerMoved(button_center),
+                egui::Event::PointerButton {
+                    pos: button_center,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ],
+        );
+
+        assert_eq!(copied.platform_output.copied_text, "#123456, #FEDCBA");
+    }
+}

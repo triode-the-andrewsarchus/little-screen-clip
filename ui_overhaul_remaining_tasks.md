@@ -203,7 +203,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **E2.1o3 [Luna] Verify clicking the canvas records the sampled color.** Production overlay render test sends egui hover/press/release events and confirms the expected center pixel, loupe readout, and picked-color state.
   - **E2.1p Palette extraction and output**
     - [x] **E2.1p1 [Luna] Inspect Palette extraction and swatches live.** The isolated Light capture shows seven sampled colors, labels, percentages, and the Copy CSV control.
-    - [ ] **E2.1p2 [Luna] Verify Copy CSV output matches the extracted colors.**
+    - [x] **E2.1p2 [Luna] Verify Copy CSV output matches the extracted colors.** A production-panel egui test extracts two known colors, clicks the rendered Copy CSV button, and verifies exact hex values and order in egui's clipboard payload. The asynchronous system clipboard adapter is not covered.
   - [ ] **E2.1q [Luna] Verify Decorrelation Stretch live, including comparison HUD and matrix precision.**
   - [x] **E2.1r [Luna] Complete the image-tool contrast audit.** Image chrome uses tested semantic text roles across canvas, raised, panel, and recessed surfaces; labels on generated fills/badges and transparent selections use the shared foreground resolver. Existing Light/Dark regressions cover every neutral text role, standard action/mode fills, and translucent accent compositing. This is source-and-render-test evidence, not a live visual check.
   - [ ] **E2.1s [Luna] Verify image parameters and undo live.**
