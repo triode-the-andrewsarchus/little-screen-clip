@@ -113,7 +113,7 @@ impl<'a> ScreenMirrorWidget<'a> {
         } else {
             painter.rect_filled(
                 rect,
-                Rounding::same(4.0),
+                Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS),
                 hex_to_c32(&palette.colors.surface_recessed),
             );
         }
@@ -143,14 +143,14 @@ impl<'a> ScreenMirrorWidget<'a> {
                 let stroke_color = hex_to_c32(&palette.harmonies.base);
                 painter.rect_stroke(
                     slot_screen_rect,
-                    Rounding::same(4.0),
+                    Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS),
                     Stroke::new(2.0_f32, stroke_color),
                 );
             } else if is_hovered && !is_dragging {
                 let stroke_color = hex_to_c32(&palette.colors.text_secondary);
                 painter.rect_stroke(
                     slot_screen_rect,
-                    Rounding::same(4.0),
+                    Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS),
                     Stroke::new(1.0_f32, stroke_color),
                 );
             }

@@ -13,9 +13,16 @@ pub const BODY_FONT_SIZE: f32 = 16.0;
 pub const SPACE_XS: f32 = 4.0;
 pub const SPACE_SM: f32 = 8.0;
 pub const SPACE_MD: f32 = 12.0;
+pub const BUTTON_PADDING_X: f32 = 10.0;
+pub const BUTTON_PADDING_Y: f32 = 6.0;
+pub const ITEM_SPACING_X: f32 = 8.0;
+pub const ITEM_SPACING_Y: f32 = 6.0;
+pub const BADGE_PADDING_X: f32 = 6.0;
+pub const BADGE_PADDING_Y: f32 = 2.0;
 pub const PANEL_INSET_X: f32 = 14.0;
 pub const CONTROL_ROW_INSET_Y: f32 = 5.0;
 pub const FOOTER_INSET_Y: f32 = 6.0;
+pub const BADGE_CORNER_RADIUS: f32 = 3.0;
 
 /// Keeps the regular help text available while explaining why a disabled control cannot run.
 pub fn on_hover_text_with_disabled_reason(
@@ -205,8 +212,8 @@ pub fn configure_workbench_style(ctx: &egui::Context) {
             FontId::new(MONO_FONT_SIZE, FontFamily::Monospace),
         );
         style.spacing.interact_size.y = CONTROL_HEIGHT;
-        style.spacing.button_padding = Vec2::new(10.0, 6.0);
-        style.spacing.item_spacing = Vec2::new(8.0, 6.0);
+        style.spacing.button_padding = Vec2::new(BUTTON_PADDING_X, BUTTON_PADDING_Y);
+        style.spacing.item_spacing = Vec2::new(ITEM_SPACING_X, ITEM_SPACING_Y);
     });
 }
 
@@ -743,7 +750,7 @@ impl StatusToast {
                 .fill(bg)
                 .stroke(Stroke::new(1.0_f32, stroke))
                 .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
-                .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+                .inner_margin(egui::Margin::symmetric(SPACE_SM, SPACE_XS))
                 .show(ui, |ui| {
                     ui.label(egui::RichText::new(msg).color(fg));
                 });
@@ -758,7 +765,7 @@ impl StatusToast {
             egui::Frame::none()
                 .fill(bg)
                 .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
-                .inner_margin(egui::Margin::symmetric(10.0, 4.0))
+                .inner_margin(egui::Margin::symmetric(BUTTON_PADDING_X, SPACE_XS))
                 .show(ui, |ui| {
                     ui.label(egui::RichText::new(msg).strong().color(fg));
                 });
@@ -776,7 +783,7 @@ pub fn stat_pill(
 ) {
     let colors = WorkbenchColors::from_palette(palette);
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing = Vec2::new(4.0, 0.0);
+        ui.spacing_mut().item_spacing = Vec2::new(SPACE_XS, 0.0);
         ui.label(egui::RichText::new(format!("{}:", label)).color(colors.text_muted));
         let color = val_color.unwrap_or(colors.accent);
         ui.label(
@@ -795,8 +802,8 @@ pub fn badge_pill(ui: &mut egui::Ui, label: &str, accent: Option<Color32>, palet
     let fg = contrast_text_c32(bg, Some(colors.text_primary), palette);
     egui::Frame::none()
         .fill(bg)
-        .rounding(Rounding::same(3.0))
-        .inner_margin(egui::Margin::symmetric(6.0, 2.0))
+        .rounding(Rounding::same(BADGE_CORNER_RADIUS))
+        .inner_margin(egui::Margin::symmetric(BADGE_PADDING_X, BADGE_PADDING_Y))
         .show(ui, |ui| {
             ui.label(egui::RichText::new(label).color(fg));
         });
