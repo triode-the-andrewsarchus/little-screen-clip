@@ -651,7 +651,12 @@ impl PdfEditorState {
                                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
                                                                         .strong()
                                                                         .color(if is_selected {
-                                                                            accent
+                                                                            crate::ui_ext::contrast_text_c32_on(
+                                                                                colors.panel,
+                                                                                colors.panel,
+                                                                                Some(accent),
+                                                                                palette,
+                                                                            )
                                                                         } else {
                                                                             colors.text_muted
                                                                         }),
@@ -740,7 +745,12 @@ impl PdfEditorState {
                                                 ui.label(
                                                     egui::RichText::new(error)
                                                         .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(colors.danger),
+                                                        .color(crate::ui_ext::contrast_text_c32_on(
+                                                            colors.recessed,
+                                                            colors.recessed,
+                                                            Some(colors.danger),
+                                                            palette,
+                                                        )),
                                                 );
                                             } else {
                                                 ui.spinner();
@@ -781,6 +791,35 @@ impl Drop for PdfEditorState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pdf_selection_and_error_labels_meet_contrast_in_both_appearances() {
+        for appearance in [
+            little_clip_core::config::WorkbenchAppearance::Dark,
+            little_clip_core::config::WorkbenchAppearance::Light,
+        ] {
+            let palette = crate::ui_appearance::palette(appearance);
+            let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
+            for (surface, preferred) in [
+                (colors.panel, colors.accent),
+                (colors.recessed, colors.danger),
+            ] {
+                let foreground = crate::ui_ext::contrast_text_c32_on(
+                    surface,
+                    surface,
+                    Some(preferred),
+                    &palette,
+                );
+                assert!(
+                    little_clip_core::palette::contrast_ratio(
+                        (surface.r(), surface.g(), surface.b()),
+                        (foreground.r(), foreground.g(), foreground.b()),
+                    ) >= 4.5,
+                    "{appearance:?} PDF custom label lacks contrast"
+                );
+            }
+        }
+    }
 
     #[test]
     fn pdf_sibling_panes_stay_inside_compact_and_wide_hosts() {
