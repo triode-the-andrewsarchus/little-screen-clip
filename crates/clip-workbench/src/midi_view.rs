@@ -1375,6 +1375,32 @@ mod tests {
     }
 
     #[test]
+    fn piano_roll_key_labels_keep_contrast_on_black_and_white_keys() {
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = AppPalette::for_appearance(appearance);
+            let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
+            for (key_fill, preferred) in [
+                (colors.panel, colors.text_muted),
+                (colors.text_primary, colors.canvas),
+            ] {
+                let foreground = crate::ui_ext::contrast_text_c32_on(
+                    key_fill,
+                    colors.recessed,
+                    Some(preferred),
+                    &palette,
+                );
+                assert!(
+                    little_clip_core::palette::contrast_ratio(
+                        (key_fill.r(), key_fill.g(), key_fill.b()),
+                        (foreground.r(), foreground.g(), foreground.b()),
+                    ) >= 4.5,
+                    "{appearance:?} piano key label lacks contrast"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_midi_view_track_colors() {
         for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
             let palette = AppPalette::for_appearance(appearance);
