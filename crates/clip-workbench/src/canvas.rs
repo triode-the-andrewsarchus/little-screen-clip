@@ -569,7 +569,7 @@ impl NodeCanvasState {
         action: &mut Option<CanvasAction>,
         palette: &AppPalette,
     ) {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             // Group 1: Add Node button (Prominent)
             let add_btn = crate::ui_ext::action_button_icon(
                 Some(Icon::Plus),
@@ -1772,6 +1772,66 @@ fn get_node_category_color(kind: &NodeKind, palette: &AppPalette) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_machine_toolbar_wraps_controls_and_status_at_compact_widths() {
+        for width in [760.0, 1280.0, 1760.0] {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+            let mut canvas = NodeCanvasState::with_config(AppConfig::default());
+            canvas.status_message = Some(("Pipeline complete".to_string(), false));
+            let slots = SlotManager::default();
+            let mut action = None;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(width, 120.0))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let host = ui.available_rect_before_wrap();
+                        canvas.render_toolbar(ui, &slots, &mut action, &palette);
+                        assert!(ui.min_rect().left() >= host.left() - 0.5);
+                    });
+                },
+            );
+
+            let required_labels = [
+                "Add Node",
+                "New Recipe",
+                "Save As...",
+                "Undo",
+                "Redo",
+                "Clear",
+                "RUN PIPELINE",
+                "Pipeline complete",
+            ];
+            for required in required_labels {
+                let shape = output.shapes.iter().find_map(|clipped| {
+                    let egui::epaint::Shape::Text(text) = &clipped.shape else {
+                        return None;
+                    };
+                    text.galley
+                        .job
+                        .text
+                        .contains(required)
+                        .then_some((clipped.clip_rect, text))
+                });
+                let Some((clip_rect, text)) = shape else {
+                    panic!("Node Machine toolbar omitted {required:?} at {width} points");
+                };
+                let bounds = text.galley.rect.translate(text.pos.to_vec2());
+                assert!(!text.galley.elided, "{required:?} elided at {width} points");
+                assert!(
+                    bounds.left() >= clip_rect.left() - 0.5
+                        && bounds.right() <= clip_rect.right() + 0.5,
+                    "{required:?} exceeds {width}-point toolbar: {bounds:?} clipped to {clip_rect:?}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn node_canvas_custom_labels_meet_contrast_for_every_category() {

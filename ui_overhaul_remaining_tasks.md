@@ -194,10 +194,20 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - **E2.3e Spreadsheet sheet/header chrome**
     - [x] **E2.3e1 [Luna] Add production-render check for compact and wide headers.** `SpreadsheetViewerState::render_ui` covers title, Copy Table, search, Calc, Close, and both sheet tabs at 900 and 1500 points; tests check host/clip bounds and header-label overlap. Workbench suite passes (243 passed, one ignored).
     - [ ] **E2.3e2 [Primary] Inspect spreadsheet sheet/header chrome in a live host.** Confirm search and tabs remain legible at compact and wide host sizes; renderer tests are not compositor-level evidence.
-  - [ ] **E2.3f [Luna] Finish 3D loading/error and narrow-toolbar live checks.** Toolbar wraps at narrow widths.
-  - [ ] **E2.3g [Luna] Finish node-machine forms/status live checks.**
-  - [ ] **E2.3h [Luna] Finish text ordinary chrome live checks.**
-  - [ ] **E2.3h1 [Luna] Finish binary-diff ordinary chrome live checks.** Card row wraps IDs/kind/bytes; offsets/previews use shared typography.
+  - **E2.3f 3D viewer chrome**
+    - [x] **E2.3f1 [Luna] Add compact/wide render regression for toolbar/loading/error states.** Production `render_ui` checks all four toolbar labels and representative loading/error copy at 420 and 1400 points for visibility, elision, and host bounds; workbench suite passes (247 passed, one ignored).
+    - [ ] **E2.3f2 [Primary] Inspect 3D viewer chrome in a live host.** Confirm toolbar wrapping and loading/error readability on a real compact and wide host; renderer tests are not compositor-level evidence.
+  - **E2.3g Node Machine forms and status**
+    - [x] **E2.3g1 [Luna] Wrap the Node Machine toolbar at compact widths.** Controls continue on additional rows so Add Node, recipe actions, history, Clear, and Run Pipeline stay available.
+    - [x] **E2.3g2 [Luna] Add production-toolbar bounds regression.** Required actions and pipeline status render without elision or overflow at 760, 1280, and 1760 points; workbench suite passes (247 passed, one ignored).
+    - [ ] **E2.3g3 [Primary] Inspect node property forms and status in a live host.** Include narrow canvas width, script property controls, recipe status, and overflow at normal/high zoom; canvas data sizing also remains under H2.2.
+  - **E2.3h Text and binary-diff ordinary chrome**
+    - **E2.3h1 Binary-diff viewer chrome**
+      - [x] **E2.3h1a [Luna] Add compact/wide production-render check for ordinary binary-diff controls.** Production `render_ui` at 1200×760 and 1760×760 covers title/badges, actions, mode/density/color controls, diff navigation/search, difference cards, inspector, and footer; each required text label is present and inside host/clip bounds.
+      - [ ] **E2.3h1b [Primary] Inspect binary-diff chrome in a live host.** Renderer tests are not compositor-level evidence; keep dense byte-grid validation under H2.2.
+    - **E2.3h2 Text viewer chrome**
+      - [x] **E2.3h2a [Luna] Add compact/wide production-render check for text-viewer chrome.** Copy/Find/Wrap/Lines controls and footer hints remain present, unelided, and within clip bounds at 760, 1280, and 1760 points.
+      - [ ] **E2.3h2b [Primary] Inspect text-viewer ordinary chrome in a live host.** Renderer tests are not compositor-level evidence.
   - [x] **E2.3i [Luna] Audit remaining ordinary chrome for `.small()` used only to fit.** Remaining uses are confined to spreadsheet row/column/cell data and node-canvas property labels. `ui_ext` maps Small to the 16-point body size; ordinary viewer chrome has no `.small()` calls. Dense table/canvas typography stays under H2.2.
 - [x] **E2.4a [Luna] Test equal sibling control sizing.** StudioShell render test verifies the three external-editor actions have equal actual button widths.
 - [x] **E2.4b [Luna] Test stable Play/Pause widths.** Audio Inspect reserves the measured max label width plus a one-point bold-shaping allowance; rendered Play and Pause buttons have identical width and shared 36-point height.

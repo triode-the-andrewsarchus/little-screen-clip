@@ -686,6 +686,54 @@ impl Drop for Model3dViewerState {
 mod tests {
     use super::*;
 
+    fn test_mesh() -> Model3d {
+        Model3d {
+            name: "shape.obj".to_owned(),
+            format: ModelFormat::Obj,
+            triangles: vec![],
+            thumbnail_triangles: vec![],
+            min_bounds: Vec3::ZERO,
+            max_bounds: Vec3::ZERO,
+            center: Vec3::ZERO,
+            size: Vec3::ZERO,
+            max_dimension: 1.0,
+        }
+    }
+
+    fn render_text_at_width(
+        viewer: &mut Model3dViewerState,
+        width: f32,
+    ) -> Vec<(String, egui::Rect, bool)> {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette = AppPalette::default();
+        let host = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 720.0));
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(host),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut close = false;
+                    viewer.render_ui(ui, &palette, &mut close);
+                });
+            },
+        );
+
+        output
+            .shapes
+            .iter()
+            .filter_map(|clipped| {
+                let egui::epaint::Shape::Text(text) = &clipped.shape else {
+                    return None;
+                };
+                let bounds = text.galley.rect.translate(text.pos.to_vec2());
+                Some((text.galley.job.text.clone(), bounds, text.galley.elided))
+            })
+            .collect()
+    }
+
     #[test]
     fn test_triangle_sample_step_preserves_full_density() {
         let budget = 120_000;
@@ -732,5 +780,60 @@ mod tests {
 
         let obj_viewer = Model3dViewerState::from_model(obj_model, None);
         assert_eq!(obj_viewer.up_axis, UpAxis::YUp);
+    }
+
+    #[test]
+    fn toolbar_loading_and_error_copy_fit_compact_and_wide_hosts() {
+        for (size_name, width) in [("compact", 420.0), ("wide", 1400.0)] {
+            let mut ready = Model3dViewerState::from_model(test_mesh(), None);
+            let toolbar_text = render_text_at_width(&mut ready, width);
+            for required in ["Pause Rotation", "Wireframe", "Axis: Y-Up", "Reset View"] {
+                let (text, bounds, elided) = toolbar_text
+                    .iter()
+                    .find(|(text, _, _)| text.contains(required))
+                    .unwrap_or_else(|| panic!("{required:?} missing at {size_name} width {width}"));
+                assert!(!elided, "{required:?} elided at {size_name} width {width}");
+                assert!(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 720.0))
+                        .contains_rect(*bounds),
+                    "{required:?} ({text:?}) outside host at {size_name} width {width}: {bounds:?}"
+                );
+            }
+
+            let mut loading = Model3dViewerState::from_model(test_mesh(), None);
+            loading.status = ModelLoadingStatus::Loading;
+            let loading_text = render_text_at_width(&mut loading, width);
+            let (_, loading_bounds, loading_elided) = loading_text
+                .iter()
+                .find(|(text, _, _)| text.contains("Parsing 3D mesh geometry with Scenix"))
+                .unwrap_or_else(|| panic!("loading copy missing at {size_name} width {width}"));
+            assert!(
+                !loading_elided,
+                "loading copy elided at {size_name} width {width}"
+            );
+            assert!(
+                egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 720.0))
+                    .contains_rect(*loading_bounds),
+                "loading copy outside host at {size_name} width {width}: {loading_bounds:?}"
+            );
+
+            let mut error = Model3dViewerState::from_model(test_mesh(), None);
+            error.status = ModelLoadingStatus::Error(
+                "Unsupported geometry format in this model file".to_owned(),
+            );
+            let error_text = render_text_at_width(&mut error, width);
+            for required in ["Unable to load 3D model:", "Unsupported geometry format"] {
+                let (_, bounds, elided) = error_text
+                    .iter()
+                    .find(|(text, _, _)| text.contains(required))
+                    .unwrap_or_else(|| panic!("{required:?} missing at {size_name} width {width}"));
+                assert!(!elided, "{required:?} elided at {size_name} width {width}");
+                assert!(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 720.0))
+                        .contains_rect(*bounds),
+                    "{required:?} outside host at {size_name} width {width}: {bounds:?}"
+                );
+            }
+        }
     }
 }

@@ -2055,6 +2055,128 @@ mod tests {
     }
 
     #[test]
+    fn binary_diff_ordinary_chrome_renders_within_compact_and_wide_hosts() {
+        let left = b"header shared-left tail".to_vec();
+        let right = b"header altered-right tail".to_vec();
+        let mut state = BinaryDiffViewState::new(
+            "left-source.bin".into(),
+            left.clone(),
+            "right-source.bin".into(),
+            right.clone(),
+        );
+        state.result = Some(compute_binary_diff(
+            "left-source.bin",
+            &left,
+            "right-source.bin",
+            &right,
+            BinaryDiffMode::Aligned,
+            8,
+        ));
+        state.is_computing = false;
+        state.receiver = None;
+        state.search_query = "header".into();
+        state.update_search();
+        state.hovered_cell = Some((0, 0));
+
+        let palette = AppPalette::default();
+        for width in [1200.0, 1760.0] {
+            let ctx = egui::Context::default();
+            let host = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(width, 760.0));
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(host),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                },
+            );
+
+            let visible_text: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) => Some((
+                        text.galley.text().to_string(),
+                        clipped.clip_rect,
+                        egui::Rect::from_min_size(text.pos, text.galley.size()),
+                    )),
+                    _ => None,
+                })
+                .collect();
+            for label in [
+                "Binary Diff",
+                "left-source.bin",
+                "right-source.bin",
+                "Swap [S]",
+                "Summary",
+                "Diffs (Hide)",
+                "Mode: Aligned [Tab]",
+                "Width:",
+                "8B",
+                "16B",
+                "32B",
+                "Digits",
+                "Bg",
+                "Prev [K]",
+                "Next [J]",
+                "1/1",
+                "header",
+                "#1",
+                "Replacement",
+                "9 B",
+                "0x000000",
+                "shle ≠ lter",
+                "INSPECT: ",
+            ] {
+                let (clip_rect, text_rect) = visible_text
+                    .iter()
+                    .find_map(|(text, clip_rect, text_rect)| {
+                        (text == label
+                            || (matches!(label, "left-source.bin" | "right-source.bin")
+                                && text.contains(label)))
+                        .then_some((*clip_rect, *text_rect))
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{label:?} missing at host width {width}; rendered: {:?}",
+                            visible_text
+                                .iter()
+                                .map(|(text, _, _)| text)
+                                .collect::<Vec<_>>()
+                        )
+                    });
+                assert!(
+                    host.contains_rect(text_rect),
+                    "{label:?} outside {width}-point host: {text_rect:?}"
+                );
+                assert!(
+                    clip_rect.contains_rect(text_rect),
+                    "{label:?} elided/clipped at {width} points: text={text_rect:?}, clip={clip_rect:?}"
+                );
+            }
+
+            let footer_hint = visible_text
+                .iter()
+                .find(|(text, _, _)| text.contains("Navigation: [Esc] Close"))
+                .unwrap_or_else(|| panic!("navigation footer missing at host width {width}"));
+            assert!(
+                host.contains_rect(footer_hint.2),
+                "navigation footer outside {width}-point host: {:?}",
+                footer_hint.2
+            );
+            assert!(
+                footer_hint.1.contains_rect(footer_hint.2),
+                "navigation footer clipped at {width} points: text={:?}, clip={:?}",
+                footer_hint.2,
+                footer_hint.1
+            );
+        }
+    }
+
+    #[test]
     fn test_binary_diff_view_state_creation_and_recompute() {
         let mut state = BinaryDiffViewState::new(
             "file_a.bin".to_string(),

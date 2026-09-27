@@ -1679,6 +1679,68 @@ mod tests {
     }
 
     #[test]
+    fn text_viewer_chrome_stays_inside_compact_and_wide_hosts() {
+        for width in [760.0, 1280.0, 1760.0] {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette = AppPalette::default();
+            let mut state = TextPreviewState::from_text(
+                "fn alpha() {}\nfn bravo() {}\nfn charlie() {}".to_owned(),
+                Some("Example.rs".to_owned()),
+                &AppConfig::default(),
+            );
+            state.language = "rs";
+            state.show_line_numbers = true;
+            state.wrap_lines = true;
+            let mut close = false;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 720.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut close);
+                    });
+                },
+            );
+
+            for required in [
+                "Copy All",
+                "Find (Ctrl+F)",
+                "Wrap: ON",
+                "Lines: ON",
+                "3 lines",
+                "Ctrl+F: Find",
+            ] {
+                let shape = output.shapes.iter().find_map(|clipped| {
+                    let egui::epaint::Shape::Text(text) = &clipped.shape else {
+                        return None;
+                    };
+                    text.galley
+                        .job
+                        .text
+                        .contains(required)
+                        .then_some((clipped.clip_rect, text))
+                });
+                let Some((clip_rect, text)) = shape else {
+                    panic!("text viewer chrome omitted {required:?} at {width} points");
+                };
+                let bounds = text.galley.rect.translate(text.pos.to_vec2());
+                assert!(!text.galley.elided, "{required:?} elided at {width} points");
+                assert!(
+                    bounds.left() >= clip_rect.left() - 0.5
+                        && bounds.right() <= clip_rect.right() + 0.5,
+                    "{required:?} exceeds text viewer at {width} points: {bounds:?} clipped to {clip_rect:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn markdown_body_list_and_quote_wrap_without_clipping_at_compact_and_wide_widths() {
         let markers = ["BODY_MARKER", "LIST_MARKER", "QUOTE_MARKER"];
         let content = format!(
