@@ -407,8 +407,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **E3.2d1 [Luna] Audit application, text, and non-image/audio viewer evidence.** The ledger now links palette focus/Space routing, viewer return, worker loading, PDF geometry/cache, MIDI layout/copy preparation, and Node Machine/contrast checks while retaining the uncovered actions.
   - [x] **E3.2d2 [Luna] Audit Image Studio evidence.** The ledger maps layout captures, synthetic Pick Color/Barcode input, clipboard export regressions, and explicitly unverified external handoffs and remaining operations.
   - [x] **E3.2d3 [Luna] Audit audio evidence.** The ledger links Inspect layout/size, synthetic Space routing, dialog Escape, rolling-audio worker handoff, and calculation tests while keeping playback, device, output, and editor behavior open.
-- [ ] **E3.3a [Luna] Capture Light screenshots at representative logical sizes/scales.**
-- [ ] **E3.3b [Luna] Capture Dark screenshots at representative logical sizes/scales.**
+- [x] **E3.3a [Luna] Capture Light screenshots at representative logical sizes/scales.** Fourteen serial isolated Image Studio captures cover seven logical sizes in Light and Dark at 100/150/200% scales (`/tmp/clip-image-footer-validation/summary.json`); compact Light and 1920×1200 Light screenshots were visually reviewed. Popup hints, centering and singleton checks pass.
+- [x] **E3.3b [Luna] Capture Dark screenshots at representative logical sizes/scales.** Same capture matrix; compact Dark and 3440×1440 Dark screenshots were visually reviewed. Footer and toolbar remain visible. Captures ran in private Weston/Niri sessions, independent of the interactive Film Look window.
 - [ ] **E3.3c [Luna] Capture Niri launch and return behavior.**
 - [x] **E3.3d [Luna] Capture long-filename behavior.** Isolated 1280×720 Dark capture with `clip-image-dense-e2.png` shows a truncated filename prefix, badges/actions, wrapped tools, canvas and footer within the popup. Full title is available via the header tooltip.
 - **E3.3e Capture dense collection behavior**
