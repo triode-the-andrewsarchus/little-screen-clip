@@ -1065,8 +1065,8 @@ impl eframe::App for WorkbenchApp {
             return;
         }
 
-        // Hold completed table loads while another viewer is active. Its receiver keeps
-        // the result until the current session closes, so it cannot open underneath it.
+        // Hold table-load jobs/results while another viewer is active. The receiver
+        // stays available, but polling waits until the foreground viewer closes.
         self.poll_spreadsheet_load(ctx);
         if self.render_modal_viewers(ctx) {
             self.palette_search_needs_focus = true;
@@ -1582,22 +1582,6 @@ impl WorkbenchApp {
     }
 
     fn render_modal_viewers(&mut self, ctx: &egui::Context) -> bool {
-        // A new foreground route supersedes a pending table request. Otherwise its
-        // result would open after the user closes the viewer they chose instead.
-        if (self.view != WorkbenchView::Palette
-            || self.in_app_prompt.is_some()
-            || self.viewer.is_some())
-            && let Some((ticket, _, _)) = self.spreadsheet_load_job.take()
-        {
-            ticket.cancel();
-        }
-        if (self.view != WorkbenchView::Palette
-            || self.in_app_prompt.is_some()
-            || self.viewer.is_some())
-            && let Some((ticket, _)) = self.midi_load_job.take()
-        {
-            ticket.cancel();
-        }
         if self.render_prompt_modal(ctx) {
             return true;
         }
@@ -2619,6 +2603,72 @@ mod workbench_layout_tests {
         );
         assert_eq!(view, WorkbenchView::Palette);
         assert!(search_needs_focus);
+    }
+
+    #[test]
+    fn spreadsheet_completion_waits_until_modal_viewer_closes() {
+        let config = AppConfig::default();
+        let palette = ui_appearance::palette(config.workbench.appearance);
+        let (state_tx, state_rx) = std::sync::mpsc::channel();
+        drop(state_tx);
+        let mut app = WorkbenchApp {
+            state: SlotManager::default(),
+            state_rx,
+            view: WorkbenchView::Palette,
+            canvas_state: NodeCanvasState::new(),
+            recipes: Vec::new(),
+            search_query: String::new(),
+            palette_search_needs_focus: false,
+            selected_action_index: 0,
+            selected_slots: vec![SlotId::LeftHand],
+            status_msg: None,
+            appearance_sync: AppearanceSync::default(),
+            renderer: ScreenRenderer::fallback(config.clone()),
+            ui_palette: palette,
+            mirror_texture: None,
+            dirty_mirror: false,
+            in_app_prompt: None,
+            viewer: Some(ViewerSession::ComponentGallery(
+                component_gallery::ComponentGalleryState::default(),
+            )),
+            startup_viewers: VecDeque::new(),
+            spreadsheet_load_job: None,
+            midi_load_job: None,
+            rolling_audio_strip: None,
+            dragging_slot: None,
+            config,
+            appearance_applied: true,
+        };
+        let (ticket, _ticket_receiver) =
+            BackgroundJobs::global().submit(Duration::from_secs(1), || ());
+        let (result_tx, receiver) = std::sync::mpsc::channel::<
+            Result<Result<(SpreadsheetData, Option<PathBuf>), String>, JobError>,
+        >();
+        result_tx.send(Ok(Err("fixture failure".into()))).unwrap();
+        app.spreadsheet_load_job = Some((ticket, receiver, None));
+
+        let ctx = egui::Context::default();
+        ui_ext::configure_workbench_style(&ctx);
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| assert!(app.render_modal_viewers(ctx)),
+        );
+        assert!(app.viewer.is_some());
+        assert!(app.spreadsheet_load_job.is_some());
+
+        app.viewer = None;
+        app.poll_spreadsheet_load(&ctx);
+        assert!(app.spreadsheet_load_job.is_none());
+        assert_eq!(
+            app.status_msg.as_deref(),
+            Some("Spreadsheet: fixture failure")
+        );
     }
 
     #[test]

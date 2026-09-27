@@ -88,7 +88,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [ ] **H1.2c3 [Primary] Verify accent use is purposeful on all surfaces.** Shared dark `console_surface` keeps ANSI comparison output high contrast in both appearances.
 - **H1.3 Viewer sessions, actions, and async identity**
   - **H1.3a1 Viewer route/return contract**
-    - [x] **H1.3a1a [Luna + primary review] Document the viewer route/return contract.** `ui_overhaul_viewer_route_contract.md` records ownership, close/return behavior, startup precedence, singleton handling, and async-load interactions. It records the pending Spreadsheet/MIDI cancellation-vs-wait guidance discrepancy explicitly.
+    - [x] **H1.3a1a [Luna + primary review] Document the viewer route/return contract.** `ui_overhaul_viewer_route_contract.md` records ownership, close/return behavior, startup precedence, singleton handling, Escape precedence, and the bounded Spreadsheet/MIDI wait behavior.
     - [ ] **H1.3a1b [Primary] Complete implementation of the viewer route/return contract.** `WorkbenchApp` has one `ViewerSession` enum instead of nine optional viewers; startup queue preserves `--audio` then `--image` sequence and diff/binary-diff precedence. Reconcile remaining behavior against the documented contract.
   - [ ] **H1.3a2 [Primary] Verify image navigation and cleanup live.**
   - [ ] **H1.3a3 [Primary] Verify audio navigation and cleanup live.** Closing audio/MIDI stops playback.
@@ -114,7 +114,10 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [ ] **H1.3c2b [Primary] Repaint after async completion.**
   - [ ] **H1.3c3 [Primary] Add stale-success tests.**
   - [ ] **H1.3c4 [Primary] Add stale-failure tests.**
-  - [ ] **H1.3c5 [Primary] Prove async completion causes no repeated side effects.** Loads defer while a viewer owns screen; opening a viewer, prompt, or other view cancels pending spreadsheet/MIDI loads. Do not build a general plugin/docking system.
+  - **H1.3c5 Prove async completion causes no repeated side effects.** New requests and app drop cancel prior jobs. Do not build a general plugin/docking system.
+    - [x] **H1.3c5a [Luna] Keep Spreadsheet completion queued while a modal viewer is active.** The job receiver remains owned until modal viewers/startup routes finish; a focused regression proves the failure result is reported after the viewer closes.
+    - [ ] **H1.3c5b [Luna] Keep MIDI completion queued through active modal and startup viewers.** Verify the result opens once after the queue drains.
+    - [ ] **H1.3c5c [Primary] Verify successful and failed deferred loads publish at most once.** Cover both Spreadsheet and MIDI routes and confirm no hidden or duplicate viewer appears.
 - **H1.4 Complete shared host controls.** Headers, tool groups, fields, transport, split panels, overlay/status, and escape hatches consume contracts above.
   - [x] **H1.4a Reserve compact header row for right actions.** Shared studio header clips long titles before measured badges; headless 1177/1766/2500-point checks show labels/actions do not overlap.
   - [x] **H1.4b Order Image Studio Save As and Copy beside Close.**
@@ -280,7 +283,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **H2.1j Load PDF initial/post-edit metadata through cancellable bounded job.** Visible loading badge included.
   - [x] **H2.1k Report PDF raster/decode errors.** Unavailable thumbnail and page error replace endless spinner.
   - [x] **H2.1l Stage PDF edits and publish only while editor remains open.** Validated temporary sibling output is removed on close/failure without deleting older output.
-  - [x] **H2.1m Parse MIDI files through bounded cancellable jobs.** Both workbench entry points use loading button/failure status; changing foreground cancels pending MIDI/spreadsheet loads.
+  - [x] **H2.1m Parse MIDI files through bounded cancellable jobs.** Both workbench entry points use loading button/failure status; a newer request or app drop cancels prior jobs, while completed results wait through an active modal viewer sequence.
   - [x] **H2.1n Synthesize MIDI through bounded job pool.** Stale solo/viewer work cancels; failures reported; polls at 50 ms. Running synthesis may finish in worker.
   - [x] **H2.1o Retain 3D load ticket and cancel pending publication on close.** Polls at 50 ms while loading rather than every frame; running parse may finish in worker.
 - **H2.2 Dense content scale correctness**
