@@ -45,6 +45,43 @@ mod effect_tests {
     use super::*;
 
     #[test]
+    fn inspect_play_and_pause_keep_the_same_button_width() {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut widths = Vec::new();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let width =
+                    crate::ui_ext::equal_button_width(ui, &["Play [Space]", "Pause [Space]"], true)
+                        + 1.0;
+                for (label, icon) in [
+                    ("Play [Space]", crate::icons::Icon::Play),
+                    ("Pause [Space]", crate::icons::Icon::Pause),
+                ] {
+                    widths.push(
+                        ui.add(
+                            layout::AudioWorkspace::primary_button_icon(
+                                Some(icon),
+                                label,
+                                hex_to_c32(&palette.diff_add),
+                                &palette,
+                            )
+                            .min_size(Vec2::new(width, crate::ui_ext::CONTROL_HEIGHT)),
+                        )
+                        .rect
+                        .size(),
+                    );
+                }
+            });
+        });
+        assert_eq!(widths.len(), 2);
+        assert_eq!(widths[0], widths[1]);
+        assert_eq!(widths[0].y, crate::ui_ext::CONTROL_HEIGHT);
+    }
+
+    #[test]
     fn wheel_effects_use_waveform_and_respective_spectrum_halves() {
         let wave = Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(100.0, 100.0));
         let spec = Rect::from_min_max(Pos2::new(0.0, 110.0), Pos2::new(100.0, 210.0));
@@ -480,6 +517,10 @@ impl AudioPreviewState {
                 } else {
                     hex_to_c32(&palette.diff_add)
                 };
+                // Leave one point for bold glyph shaping beyond the regular-label measurement.
+                let play_width =
+                    crate::ui_ext::equal_button_width(ui, &["Play [Space]", "Pause [Space]"], true)
+                        + 1.0;
 
                 let play_btn = layout::AudioWorkspace::primary_button_icon(
                     Some(play_icon),
@@ -487,6 +528,7 @@ impl AudioPreviewState {
                     play_color,
                     palette,
                 )
+                .min_size(Vec2::new(play_width, crate::ui_ext::CONTROL_HEIGHT))
                 .rounding(Rounding::same(6.0));
 
                 if ui.add(play_btn).clicked() {

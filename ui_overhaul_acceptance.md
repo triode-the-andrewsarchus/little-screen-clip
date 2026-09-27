@@ -153,3 +153,9 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 ## Remaining `.small()` audit, 2026-09-27
 
 - `rg -n '\\.small\\(\\)' crates/clip-workbench/src crates/little-clip-render/src` found only: node-canvas property labels (`canvas.rs` 1526/1564), spreadsheet corner/row/column/cell labels (`spreadsheet_view.rs`), and the shared style definition (`ui_ext.rs`). Canvas and spreadsheet hits are data content; the task queue already assigns dense canvas/table scale to H2.2. `ui_ext` explicitly maps TextStyle::Small to `BODY_FONT_SIZE`. No remaining ordinary viewer chrome `.small()` call was found. The broader review also found no `.small()` in `little-clip-render`.
+
+## Sibling and state-changing button widths, 2026-09-27
+
+- Actual StudioShell header buttons for Krita, Inkscape, and Nomacs render at equal widths; focused test `related_external_editor_actions_share_width` passes.
+- Audio Inspect now measures Play/Pause labels together and reserves one additional point because the first regression render found the bold Pause button exceeded the nominal measured width by 0.4 points. `inspect_play_and_pause_keep_the_same_button_width` renders both button states and verifies equal width and the shared 36-point height.
+- These are focused egui render checks; no live mouse playback was exercised.

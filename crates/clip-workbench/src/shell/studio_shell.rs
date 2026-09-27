@@ -764,6 +764,59 @@ mod tests {
     use super::*;
 
     #[test]
+    fn related_external_editor_actions_share_width() {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let colors = WorkbenchColors::from_palette(&palette);
+        let mut close = false;
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut shell = StudioShell::new("Image", Icon::Image, &palette, &mut close)
+                    .with_escape_hatch(EscapeHatch::new("Krita", "krita", "Edit"))
+                    .with_escape_hatch(EscapeHatch::new("Inkscape", "inkscape", "Edit"))
+                    .with_escape_hatch(EscapeHatch::new("Nomacs", "nomacs", "View"));
+                shell.render_header(ui, |_| {});
+            });
+        });
+
+        let hatch_widths: Vec<_> = ["Krita", "Inkscape", "Nomacs"]
+            .iter()
+            .map(|label| {
+                let text_center = output
+                    .shapes
+                    .iter()
+                    .find_map(|clipped| match &clipped.shape {
+                        egui::epaint::Shape::Text(text) if text.galley.text() == *label => {
+                            Some(text.pos.x + text.galley.size().x * 0.5)
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing hatch label {label}"));
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|clipped| match &clipped.shape {
+                        egui::epaint::Shape::Rect(rect)
+                            if rect.fill == colors.panel
+                                && (rect.rect.height() - crate::ui_ext::CONTROL_HEIGHT).abs()
+                                    < 0.1
+                                && rect.rect.left() <= text_center
+                                && text_center <= rect.rect.right() =>
+                        {
+                            Some(rect.rect.width())
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing button background for {label}"))
+            })
+            .collect();
+        assert_eq!(hatch_widths.len(), 3);
+        assert!(hatch_widths.iter().all(|width| *width == hatch_widths[0]));
+    }
+
+    #[test]
     fn long_image_header_keeps_actions_in_one_compact_row() {
         for width in [1177.0, 1766.0, 2500.0] {
             let ctx = egui::Context::default();
