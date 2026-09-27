@@ -82,6 +82,71 @@ static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 const MINIMAP_COLUMNS: usize = 96;
 const MINIMAP_WIDTH: f32 = 112.0;
 
+/// Cumulative row heights, updated in logarithmic time as wrapping is measured.
+/// Unmeasured rows start at one font row; the viewport retains its source anchor
+/// while those estimates settle. Only heights are retained, not document galleys.
+#[derive(Default)]
+struct CodeRowHeights {
+    key: Option<(f32, f32, f32)>,
+    heights: Vec<f32>,
+    sums: Vec<f64>,
+    next_measurement: usize,
+}
+
+impl CodeRowHeights {
+    fn reset(&mut self, count: usize, width: f32, height: f32, pixels_per_point: f32) {
+        let key = (width, height, pixels_per_point);
+        if self.key == Some(key) && self.heights.len() == count {
+            return;
+        }
+        self.key = Some(key);
+        self.heights = vec![height; count];
+        self.sums = (0..=count)
+            .map(|index| (index & index.wrapping_neg()) as f64 * height as f64)
+            .collect();
+        self.next_measurement = 0;
+    }
+
+    fn set_height(&mut self, row: usize, height: f32) {
+        let delta = height as f64 - self.heights[row] as f64;
+        self.heights[row] = height;
+        let mut index = row + 1;
+        while index < self.sums.len() {
+            self.sums[index] += delta;
+            index += index & index.wrapping_neg();
+        }
+    }
+
+    fn offset(&self, row: usize) -> f32 {
+        let mut index = row.min(self.heights.len());
+        let mut sum = 0.0;
+        while index > 0 {
+            sum += self.sums[index];
+            index &= index - 1;
+        }
+        sum as f32
+    }
+
+    fn total_height(&self) -> f32 {
+        self.offset(self.heights.len())
+    }
+
+    fn row_at(&self, offset: f32) -> usize {
+        let mut row = 0;
+        let mut sum = 0.0;
+        let mut step = self.heights.len().checked_next_power_of_two().unwrap_or(0);
+        while step > 0 {
+            let next = row + step;
+            if next < self.sums.len() && sum + self.sums[next] <= offset as f64 {
+                row = next;
+                sum += self.sums[next];
+            }
+            step >>= 1;
+        }
+        row.min(self.heights.len().saturating_sub(1))
+    }
+}
+
 /// A syntax-colored, character-free slice of one source line for the minimap.
 #[derive(Debug, Clone)]
 struct MinimapSegment {
@@ -144,6 +209,8 @@ pub struct TextPreviewState {
     /// Byte offsets for each line. This is built once when the preview opens so
     /// large files do not allocate/scan all lines every repaint.
     line_starts: Vec<usize>,
+    code_rows: CodeRowHeights,
+    code_scroll_offset: f32,
     pub minimap_fraction: f32,
     minimap_view_fraction: f32,
     minimap_content_height: f32,
@@ -209,6 +276,8 @@ impl TextPreviewState {
             scroll_to_line: None,
             scroll_to_offset: None,
             line_starts,
+            code_rows: CodeRowHeights::default(),
+            code_scroll_offset: 0.0,
             minimap_fraction: 0.0,
             minimap_view_fraction: 1.0,
             minimap_content_height: 1.0,
@@ -262,6 +331,8 @@ impl TextPreviewState {
             scroll_to_line: None,
             scroll_to_offset: None,
             line_starts,
+            code_rows: CodeRowHeights::default(),
+            code_scroll_offset: 0.0,
             minimap_fraction: 0.0,
             minimap_view_fraction: 1.0,
             minimap_content_height: 1.0,
@@ -758,6 +829,45 @@ impl TextPreviewState {
             });
     }
 
+    fn source_line(&self, row: usize) -> &str {
+        let start = self.line_starts[row];
+        let end = self
+            .line_starts
+            .get(row + 1)
+            .copied()
+            .unwrap_or(self.content.len());
+        self.content[start..end].trim_end_matches('\n')
+    }
+
+    /// Measure a small batch per frame; a single unusually long line can still
+    /// exceed the time budget and needs the broader large-document load audit.
+    fn measure_code_rows(&mut self, ui: &egui::Ui, width: f32, minimum_height: f32, font: &FontId) {
+        let started = std::time::Instant::now();
+        for _ in 0..64 {
+            let row = self.code_rows.next_measurement;
+            if row >= self.line_starts.len() {
+                break;
+            }
+            let galley = ui.fonts(|fonts| {
+                fonts.layout(
+                    self.source_line(row).to_owned(),
+                    font.clone(),
+                    Color32::WHITE,
+                    width,
+                )
+            });
+            self.code_rows
+                .set_height(row, (galley.size().y + 4.0).max(minimum_height));
+            self.code_rows.next_measurement += 1;
+            if started.elapsed() >= std::time::Duration::from_millis(2) {
+                break;
+            }
+        }
+        if self.code_rows.next_measurement < self.line_starts.len() {
+            ui.ctx().request_repaint();
+        }
+    }
+
     /// Renders raw / code view with syntax highlighting, line numbers gutter, and search match highlighting.
     fn render_raw_code_view(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         let syntax = find_syntax(self.language);
@@ -770,17 +880,10 @@ impl TextPreviewState {
         });
 
         let show_gutter = self.show_line_numbers;
-        let mut scroll_area = egui::ScrollArea::vertical()
+        let mut scroll_area = egui::ScrollArea::new([!self.wrap_lines, true])
             .id_source("text_code_virtual_scroll")
             .auto_shrink([false, false])
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
-
-        if let Some(offset) = self.scroll_to_offset.take() {
-            scroll_area = scroll_area.vertical_scroll_offset(offset);
-        } else if let Some(target_line) = self.scroll_to_line.take() {
-            let approx_y = (target_line.saturating_sub(5)) as f32 * line_height;
-            scroll_area = scroll_area.vertical_scroll_offset(approx_y);
-        }
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded);
 
         // Unified editor surface frame
         egui::Frame::none()
@@ -809,64 +912,91 @@ impl TextPreviewState {
                         Vec2::new(editor_width, surface_size.y.max(1.0)),
                         egui::Layout::top_down(egui::Align::Min),
                         |ui| {
-                            ui.spacing_mut().item_spacing.y = 0.0;
-                            let output =
-                                scroll_area.show_rows(ui, line_height, total_lines, |ui, rows| {
-                                    ui.spacing_mut().item_spacing.y = 0.0;
-                                    for line_index in rows {
-                                        let start = self.line_starts[line_index];
-                                        let end = self
-                                            .line_starts
-                                            .get(line_index + 1)
-                                            .copied()
-                                            .unwrap_or(self.content.len());
-                                        let line = self.content[start..end].trim_end_matches('\n');
-                                        ui.horizontal(|ui| {
-                                            if show_gutter {
-                                                ui.add_sized(
-                                                    [
-                                                        digit_width * (digits + 1) as f32 + 4.0,
-                                                        line_height,
-                                                    ],
-                                                    egui::Label::new(
-                                                        egui::RichText::new(format!(
-                                                            "{:>width$}",
-                                                            line_index + 1,
-                                                            width = digits
-                                                        ))
-                                                        .font(code_font.clone())
-                                                        .color(hex_to_c32(
-                                                            &palette.colors.text_muted,
-                                                        )),
-                                                    ),
-                                                );
-                                                ui.separator();
-                                            }
-                                            let match_ranges = line_highlight_ranges(
-                                                &self.matches,
-                                                self.active_match_idx,
-                                                start,
-                                                start + line.len(),
-                                            );
-                                            let mut job = build_highlighted_layout_job(
-                                                line,
-                                                syntax,
-                                                palette,
-                                                &match_ranges,
-                                            );
-                                            job.wrap.max_width = if self.wrap_lines {
-                                                ui.available_width()
-                                            } else {
-                                                f32::INFINITY
-                                            };
-                                            // `add_sized(available_width)` inside a horizontal
-                                            // row makes egui align the galley to the far edge of
-                                            // that oversized allocation.  Let the label occupy its
-                                            // natural, left-anchored layout space instead.
-                                            ui.add(egui::Label::new(job).wrap(self.wrap_lines));
-                                        });
-                                    }
+                            let gutter_width = if show_gutter {
+                                digit_width * (digits + 1) as f32 + 12.0
+                            } else {
+                                0.0
+                            };
+                            let wrap_width = if self.wrap_lines {
+                                (ui.available_width()
+                                    - gutter_width
+                                    - ui.spacing().scroll.allocated_width())
+                                .max(digit_width)
+                            } else {
+                                f32::INFINITY
+                            };
+                            // egui rounds scroll offsets to physical pixels. A
+                            // rounded boundary must still anchor the following
+                            // source row when preceding estimates are updated.
+                            let rounding_tolerance = 0.5 / ui.ctx().pixels_per_point();
+                            let anchor_row = self
+                                .code_rows
+                                .row_at(self.code_scroll_offset + rounding_tolerance);
+                            let anchor_inset = (self.code_scroll_offset
+                                - self.code_rows.offset(anchor_row))
+                            .max(0.0);
+                            self.code_rows.reset(
+                                total_lines,
+                                wrap_width,
+                                line_height,
+                                ui.ctx().pixels_per_point(),
+                            );
+                            self.measure_code_rows(ui, wrap_width, line_height, &code_font);
+                            let anchored_offset = self.code_rows.offset(anchor_row) + anchor_inset;
+                            let requested_offset =
+                                self.scroll_to_offset.take().unwrap_or_else(|| {
+                                    self.scroll_to_line
+                                        .take()
+                                        .map(|line| self.code_rows.offset(line.saturating_sub(1)))
+                                        .unwrap_or(anchored_offset)
                                 });
+                            scroll_area = scroll_area.vertical_scroll_offset(requested_offset);
+                            let output = scroll_area.show_viewport(ui, |ui, viewport| {
+                                let origin = ui.max_rect().min;
+                                let mut row =
+                                    self.code_rows.row_at(viewport.top() + rounding_tolerance);
+                                // Keep selectable-label identities tied to source rows
+                                // when virtualization changes the first visible row.
+                                ui.skip_ahead_auto_ids(row);
+                                let mut y = self.code_rows.offset(row);
+                                while row < total_lines && y <= viewport.bottom() {
+                                    let start = self.line_starts[row];
+                                    let line = self.source_line(row);
+                                    let matches = line_highlight_ranges(
+                                        &self.matches,
+                                        self.active_match_idx,
+                                        start,
+                                        start + line.len(),
+                                    );
+                                    let mut job = build_highlighted_layout_job(
+                                        line, syntax, palette, &matches,
+                                    );
+                                    job.wrap.max_width = wrap_width;
+                                    let galley = ui.fonts(|fonts| fonts.layout_job(job));
+                                    let height = (galley.size().y + 4.0).max(line_height);
+                                    self.code_rows.set_height(row, height);
+                                    let text_rect = egui::Rect::from_min_size(
+                                        origin + egui::vec2(gutter_width, y + 2.0),
+                                        galley.size(),
+                                    );
+                                    if show_gutter {
+                                        ui.painter().text(
+                                            origin + egui::vec2(gutter_width - 10.0, y + 2.0),
+                                            egui::Align2::RIGHT_TOP,
+                                            format!("{}", row + 1),
+                                            code_font.clone(),
+                                            hex_to_c32(&palette.colors.text_muted),
+                                        );
+                                    }
+                                    ui.push_id(row, |ui| {
+                                        ui.put(text_rect, egui::Label::new(galley));
+                                    });
+                                    y += height;
+                                    row += 1;
+                                }
+                                ui.set_min_height(self.code_rows.total_height());
+                            });
+                            self.code_scroll_offset = output.state.offset.y;
                             self.minimap_fraction = (output.state.offset.y
                                 / (output.content_size.y - output.inner_rect.height()).max(1.0))
                             .clamp(0.0, 1.0);
@@ -887,6 +1017,7 @@ impl TextPreviewState {
                         if let Some(fraction) = render_code_minimap(
                             ui,
                             self.minimap_lines.as_deref().unwrap_or_default(),
+                            &self.code_rows,
                             surface_size.y.max(1.0),
                             self.minimap_fraction,
                             self.minimap_view_fraction,
@@ -1105,6 +1236,7 @@ fn build_minimap_lines(text: &str, syntax: &SyntaxReference) -> Vec<MinimapLine>
 fn render_code_minimap(
     ui: &mut egui::Ui,
     lines: &[MinimapLine],
+    rows: &CodeRowHeights,
     height: f32,
     scroll_fraction: f32,
     view_fraction: f32,
@@ -1128,13 +1260,13 @@ fn render_code_minimap(
     let stride =
         ((line_count as f32 / content_rect.height().ceil().max(1.0)).ceil() as usize).max(1);
     for line_index in (0..lines.len()).step_by(stride) {
-        let row_top =
-            content_rect.top() + content_rect.height() * line_index as f32 / line_count as f32;
+        let row_top = content_rect.top()
+            + content_rect.height() * rows.offset(line_index) / rows.total_height().max(1.0);
         let row_bottom = (content_rect.top()
-            + content_rect.height() * (line_index + stride).min(line_count) as f32
-                / line_count as f32)
-            .max(row_top + 1.0)
-            .min(content_rect.bottom());
+            + content_rect.height() * rows.offset((line_index + stride).min(line_count))
+                / rows.total_height().max(1.0))
+        .max(row_top + 1.0)
+        .min(content_rect.bottom());
         for segment in &lines[line_index].segments {
             let x_start = content_rect.left()
                 + content_rect.width() * segment.start_column as f32 / MINIMAP_COLUMNS as f32;
@@ -1372,6 +1504,119 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn measured_row_offsets_find_wrapped_rows_and_invalidate_on_width_change() {
+        let mut rows = CodeRowHeights::default();
+        rows.reset(4, 200.0, 20.0, 1.0);
+        rows.set_height(0, 80.0);
+        rows.set_height(2, 40.0);
+        assert_eq!(rows.offset(2), 100.0);
+        assert_eq!(rows.total_height(), 160.0);
+        assert_eq!(rows.row_at(79.0), 0);
+        assert_eq!(rows.row_at(80.0), 1);
+        assert_eq!(rows.row_at(139.0), 2);
+        assert_eq!(rows.row_at(1000.0), 3);
+        rows.reset(4, 200.0, 20.0, 1.0);
+        assert_eq!(rows.total_height(), 160.0);
+        rows.reset(4, 400.0, 20.0, 1.0);
+        assert_eq!(rows.total_height(), 80.0);
+        rows.reset(0, 400.0, 20.0, 1.0);
+        assert_eq!(rows.row_at(0.0), 0);
+        assert_eq!(rows.total_height(), 0.0);
+    }
+
+    #[test]
+    fn wrapped_view_places_next_line_below_the_entire_galley() {
+        for scale in [1.0, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let _ = ctx.run(egui::RawInput::default(), |_| {});
+            let mut state = TextPreviewState::from_text(
+                format!("{}\nNEXT_ROW\n{}", "word ".repeat(30), "tail\n".repeat(60)),
+                None,
+                &AppConfig::default(),
+            );
+            let render_frame = |state: &mut TextPreviewState| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(480.0, 400.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            state.render_raw_code_view(ui, &AppPalette::default())
+                        });
+                    },
+                )
+            };
+            let output = render_frame(&mut state);
+            assert!(
+                state.code_rows.heights[0] > state.code_rows.heights[1] * 2.0,
+                "key {:?}, heights {:?}",
+                state.code_rows.key,
+                &state.code_rows.heights[..3]
+            );
+            let text_shapes: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        Some(text)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let first = text_shapes
+                .iter()
+                .find(|shape| shape.galley.text().starts_with("word "))
+                .unwrap();
+            let next = text_shapes
+                .iter()
+                .find(|shape| shape.galley.text() == "NEXT_ROW")
+                .unwrap();
+            assert!(
+                next.pos.y >= first.pos.y + first.galley.size().y,
+                "wrapped rows overlap at scale {scale}"
+            );
+            state.scroll_to_line = Some(2);
+            let _ = render_frame(&mut state);
+            assert!(
+                (state.code_scroll_offset - state.code_rows.offset(1)).abs() < 1.0,
+                "search uses wrapped source offset"
+            );
+            state.wrap_lines = false;
+            state.scroll_to_line = Some(1);
+            let _ = render_frame(&mut state);
+            assert!((state.code_rows.heights[0] - state.code_rows.heights[1]).abs() < 1.0);
+
+            // Navigate past the background measurement cursor, then measure more
+            // preceding wrapped lines. The same source row must stay at the top.
+            state = TextPreviewState::from_text(
+                format!("{}\n", "word ".repeat(30)).repeat(1024),
+                None,
+                &AppConfig::default(),
+            );
+            let _ = render_frame(&mut state);
+            let _ = render_frame(&mut state);
+            state.scroll_to_line = Some(801);
+            let _ = render_frame(&mut state);
+            for _ in 0..6 {
+                let _ = render_frame(&mut state);
+                assert!(
+                    (state.code_scroll_offset - state.code_rows.offset(800)).abs() < 1.0,
+                    "incremental measurements moved the source anchor at scale {scale}: actual {} expected {} row {}",
+                    state.code_scroll_offset,
+                    state.code_rows.offset(800),
+                    state.code_rows.row_at(state.code_scroll_offset)
+                );
+            }
+        }
+    }
 
     #[test]
     fn test_text_preview_creation_and_search() {
