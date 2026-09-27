@@ -2613,6 +2613,56 @@ mod workbench_layout_tests {
         }
     }
 
+    #[test]
+    fn closing_startup_viewers_advances_fifo_then_returns_to_selected_workbench_view() {
+        let gallery =
+            || ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::default());
+        let mut app = test_workbench_app(
+            Some(gallery()),
+            VecDeque::from([ViewerSession::Spreadsheet(SpreadsheetViewerState::new(
+                SpreadsheetData {
+                    title: "Queued spreadsheet".to_owned(),
+                    sheets: Vec::new(),
+                },
+                None,
+            ))]),
+        );
+        app.view = WorkbenchView::NodeMachine;
+        let ctx = egui::Context::default();
+        let input = |events| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 700.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let escape = || egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        let _ = ctx.run(input(vec![escape()]), |ctx| {
+            assert!(app.render_modal_viewers(ctx));
+        });
+        assert!(matches!(app.viewer, Some(ViewerSession::Spreadsheet(_))));
+        assert!(app.startup_viewers.is_empty());
+
+        let _ = ctx.run(input(Vec::new()), |ctx| {
+            assert!(app.render_modal_viewers(ctx));
+        });
+        assert!(matches!(app.viewer, Some(ViewerSession::Spreadsheet(_))));
+
+        let _ = ctx.run(input(vec![escape()]), |ctx| {
+            assert!(app.render_modal_viewers(ctx));
+        });
+        assert!(app.viewer.is_none());
+        assert_eq!(app.view, WorkbenchView::NodeMachine);
+    }
+
     fn space_key_event() -> egui::Event {
         egui::Event::Key {
             key: egui::Key::Space,

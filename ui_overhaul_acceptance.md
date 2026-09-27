@@ -200,3 +200,7 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 
 - Added production-path checks for Quick Palette and rolling-audio Space routing. Quick Palette selects both hands only when the audio region is inactive; the rolling strip requires an active audio region and yields Space to focused text input. Audio Studio verifies Space starts stem separation only in the correct idle mode and that focused text input suppresses it. MIDI sends a synthetic Space event through `MidiViewerState::render_ui` and checks selected-region start/stop bounds; the inert WAV cache exits before decoding or output-device setup.
 - `cargo fmt --all --check`, `cargo test -p clip-workbench --bin clip-workbench space_ --quiet` (7 passed), full `cargo test -p clip-workbench --bin clip-workbench --quiet` (269 passed, 1 ignored), and `git diff --check` pass. These tests cover keyboard routing and focus precedence, not physical-keyboard or live-device behavior.
+
+## Viewer route return regression, 2026-09-27
+
+- Added `closing_startup_viewers_advances_fifo_then_returns_to_selected_workbench_view`, which sends Escape through `render_modal_viewers` for a foreground Component Gallery, confirms the queued Spreadsheet is next, renders it without closing, then closes it and confirms the previously selected Node Machine view remains selected. The focused test passes. This exercises route handoff and return, not every viewer's domain-specific close cleanup or native window interaction.

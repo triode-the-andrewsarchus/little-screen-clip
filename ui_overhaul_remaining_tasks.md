@@ -89,7 +89,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 - **H1.3 Viewer sessions, actions, and async identity**
   - **H1.3a1 Viewer route/return contract**
     - [x] **H1.3a1a [Luna + primary review] Document the viewer route/return contract.** `ui_overhaul_viewer_route_contract.md` records ownership, close/return behavior, startup precedence, singleton handling, Escape precedence, and the bounded Spreadsheet/MIDI wait behavior.
-    - [ ] **H1.3a1b [Primary] Complete implementation of the viewer route/return contract.** `WorkbenchApp` has one `ViewerSession` enum instead of nine optional viewers; startup queue preserves `--audio` then `--image` sequence and diff/binary-diff precedence. Reconcile remaining behavior against the documented contract.
+    - [x] **H1.3a1b [Primary] Complete implementation of the viewer route/return contract.** `WorkbenchApp` has one `ViewerSession` enum instead of nine optional viewers; startup queue preserves `--audio` then `--image` sequence and diff/binary-diff precedence. A render-path regression closes a foreground modal, opens the queued Spreadsheet next, then returns to the previously selected Node Machine view after the queue drains.
   - [ ] **H1.3a2 [Primary] Verify image navigation and cleanup live.**
   - [ ] **H1.3a3 [Primary] Verify audio navigation and cleanup live.** Closing audio/MIDI stops playback.
   - [ ] **H1.3a4 [Primary] Verify text navigation and cleanup live.**
