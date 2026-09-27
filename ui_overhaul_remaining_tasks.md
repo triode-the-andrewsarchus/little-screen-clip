@@ -122,12 +122,17 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
       - [x] **H1.4l3a [Primary] Verify the full Audio Studio footer live.** Isolated Niri captures at 1920×1080 Dark / 100% and 1280×720 Light / 150% show the caption clear of the timeline scrollbar.
       - [ ] **H1.4l3b [Primary] Verify the embedded stem editor footer live.**
   - **H1.4m Empty/no-daemon compact workbench footer and rolling-audio strip**
-    - [ ] **H1.4m1 [Primary] Determine provenance of the clipped rolling-audio strip header at 1280×720.**
+    - [x] **H1.4m1 [Primary] Determine provenance of the clipped rolling-audio strip header at 1280×720.** Baseline `4edf785` has the same sequential palette footer, 120-point list minimum, and unwrapped strip header; current 36-point search adds four points of pressure. A fresh isolated capture at `ad55623` reproduces vertical header occlusion. Original runtime severity is not independently replayed.
     - [ ] **H1.4m2 [Primary] Reserve footer space for the empty/no-daemon mirror at 1280×720.**
     - [ ] **H1.4m3 [Primary] Keep the no-daemon rolling-audio strip header visible at 1280×720.**
     - [ ] **H1.4m4 [Primary] Add compact empty/no-daemon layout regression coverage.**
 
   - [ ] **H1.4n [Primary] Compare the observed title/footer layout defects with baseline `4edf785` and record their provenance.** Current visual evidence alone does not establish which are migration regressions.
+
+  - **H1.4o Compact display mirror summary badge**
+    - [x] **H1.4o1 [Primary] Diagnose the clipped summary badge in the compact mirror.** Native debug handler badge is 32 points high but draws 14-point text at top+22; `draw_text_clipped` treats y as top-origin with baseline y+size, placing glyph bottoms beyond the badge. Compact mirror scaling also reduces 14 native pixels to about eight logical points. Repair native vertical placement and assess preview readability separately.
+    - [ ] **H1.4o2 [Primary] Keep the mirror summary badge readable within its bounds.** Preserve native display content and slot hit geometry.
+    - [ ] **H1.4o3 [Primary] Verify the compact mirror summary badge after repair.**
 
 ## Easy 2 — View migration on established contracts (Luna implementation; primary review)
 
