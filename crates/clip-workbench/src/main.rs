@@ -2922,6 +2922,70 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn quick_palette_enter_executes_prompt_recipe_while_search_is_focused() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        let recipe_name = "Enter Prompt Fixture";
+        let node = little_clip_ops::pipeline::types::NodeInstance {
+            id: uuid::Uuid::new_v4(),
+            kind: NodeKind::PromptOrHandText,
+            title: "Prompt".to_owned(),
+            pos: [0.0, 0.0],
+            props: [
+                ("hand".to_owned(), "right".to_owned()),
+                ("prompt_message".to_owned(), "Enter test text".to_owned()),
+            ]
+            .into_iter()
+            .collect(),
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        };
+        app.recipes.push(Recipe {
+            name: recipe_name.to_owned(),
+            description: String::new(),
+            input_type: little_clip_ops::pipeline::types::RecipeInputType::None,
+            tags: Vec::new(),
+            graph: little_clip_ops::pipeline::types::NodeGraph {
+                nodes: vec![node],
+                ..Default::default()
+            },
+        });
+        app.search_query = recipe_name.to_owned();
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let response = ui.add(egui::TextEdit::singleline(&mut app.search_query));
+                    response.request_focus();
+                    assert!(ctx.wants_keyboard_input());
+                    app.handle_palette_nav_and_execution(ctx);
+                });
+            },
+        );
+
+        let prompt = app
+            .in_app_prompt
+            .as_ref()
+            .expect("Enter executes the selected recipe");
+        assert_eq!(prompt.recipe_name, recipe_name);
+        assert_eq!(prompt.message, "Enter test text");
+    }
+
+    #[test]
     fn shared_workbench_status_is_visible_in_every_host_view() {
         let palette = ui_appearance::palette(WorkbenchAppearance::Dark);
         for view in [
