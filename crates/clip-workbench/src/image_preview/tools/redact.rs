@@ -504,3 +504,68 @@ impl ImagePreviewState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{RawInput, Shape};
+
+    #[test]
+    fn selected_redaction_size_badge_stays_inside_compact_and_wide_viewports() {
+        for viewport_size in [Vec2::new(280.0, 220.0), Vec2::new(1040.0, 640.0)] {
+            let mut png = Vec::new();
+            RgbaImage::new(320, 240)
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .unwrap();
+            let mut state = ImagePreviewState::from_bytes_with_meta(
+                png,
+                "image/png".into(),
+                None,
+                "Redact badge test".into(),
+                &little_clip_core::config::AppConfig::default(),
+            )
+            .unwrap();
+            state.redaction_state.boxes.push(RedactionBox {
+                normalized_rect: Rect::from_min_max(Pos2::new(0.2, 0.2), Pos2::new(0.8, 0.8)),
+            });
+            state.redaction_state.selected_idx = Some(0);
+
+            let ctx = egui::Context::default();
+            let palette = AppPalette::default();
+            let mut viewport = None;
+            let output = ctx.run(
+                RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, viewport_size)),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let image_rect = ui.max_rect();
+                        let response = ui.allocate_rect(image_rect, egui::Sense::click_and_drag());
+                        state.render_redact_overlay(
+                            ui,
+                            &ui.painter().clone(),
+                            &response,
+                            image_rect,
+                            &palette,
+                        );
+                        viewport = Some(image_rect);
+                    });
+                },
+            );
+
+            let viewport = viewport.expect("overlay viewport was allocated");
+            let badge = output.shapes.iter().find_map(|shape| match &shape.shape {
+                Shape::Text(text) if text.galley.text() == "192 × 144 px" => {
+                    Some(Rect::from_min_size(text.pos, text.galley.size()))
+                }
+                _ => None,
+            });
+            let badge = badge.expect("selected redaction renders its size badge");
+            assert!(
+                viewport.contains_rect(badge),
+                "badge {badge:?} must stay within {viewport:?} at {viewport_size:?}"
+            );
+        }
+    }
+}
