@@ -422,6 +422,7 @@ struct WorkbenchApp {
     in_app_prompt: Option<InAppPromptState>,
     viewer: Option<ViewerSession>,
     startup_viewers: VecDeque<ViewerSession>,
+    startup_midi: Option<PathBuf>,
     image_load_job: Option<ImageLoadJob>,
     text_load_job: Option<TextFileLoadJob>,
     spreadsheet_load_job: Option<(
@@ -624,6 +625,8 @@ impl WorkbenchApp {
         start_with_binary_diff: bool,
         initial_audio: Option<PathBuf>,
         initial_image: Option<PathBuf>,
+        initial_pdf: Option<PathBuf>,
+        initial_midi: Option<PathBuf>,
         open_component_gallery: bool,
     ) -> Self {
         let mut config = AppConfig::load();
@@ -657,6 +660,9 @@ impl WorkbenchApp {
                 config.clone(),
             )));
         }
+        if let Some(path) = initial_pdf {
+            startup_viewers.push_back(ViewerSession::Pdf(PdfEditorState::new(path)));
+        }
 
         let mut app = Self {
             state,
@@ -677,6 +683,7 @@ impl WorkbenchApp {
             in_app_prompt: None,
             viewer: None,
             startup_viewers,
+            startup_midi: initial_midi,
             image_load_job: None,
             text_load_job: None,
             spreadsheet_load_job: None,
@@ -699,10 +706,19 @@ impl WorkbenchApp {
         }
 
         if app.viewer.is_none() {
-            app.viewer = app.startup_viewers.pop_front();
+            app.advance_startup();
         }
 
         app
+    }
+
+    fn advance_startup(&mut self) {
+        self.viewer = self.startup_viewers.pop_front();
+        if self.viewer.is_none() {
+            if let Some(path) = self.startup_midi.take() {
+                self.start_midi_load(path);
+            }
+        }
     }
 
     fn toggle_appearance(&mut self, ctx: &egui::Context) {
@@ -1889,7 +1905,7 @@ impl WorkbenchApp {
         if close {
             self.image_load_job = None;
             self.text_load_job = None;
-            self.viewer = self.startup_viewers.pop_front();
+            self.advance_startup();
             self.dirty_mirror |= pdf_dirty;
             ctx.request_repaint();
         }
@@ -2068,7 +2084,7 @@ impl WorkbenchApp {
                     Ok(Ok(_)) => unreachable!(),
                 });
                 if startup {
-                    self.viewer = self.startup_viewers.pop_front();
+                    self.advance_startup();
                 }
             }
         }
@@ -2900,6 +2916,8 @@ fn main() -> Result<(), eframe::Error> {
         println!("  -b, --binary         Open interactive binary diff viewer directly");
         println!("  -a, --audio <PATH>   Open audio waveform preview & slicer directly");
         println!("  -i, --image <PATH>   Open image preview & editor directly");
+        println!("      --pdf <PATH>     Open PDF page editor directly");
+        println!("      --midi <PATH>    Open MIDI piano roll directly");
         println!("      --component-gallery  Open the UI component styling page directly");
         println!("  -l, --last           Re-execute last action (with modal prompt if needed)");
         println!("  -h, --help           Print help");
@@ -2919,6 +2937,16 @@ fn main() -> Result<(), eframe::Error> {
     let initial_image = args
         .iter()
         .position(|a| a == "--image" || a == "-i")
+        .and_then(|idx| args.get(idx + 1))
+        .map(PathBuf::from);
+    let initial_pdf = args
+        .iter()
+        .position(|a| a == "--pdf")
+        .and_then(|idx| args.get(idx + 1))
+        .map(PathBuf::from);
+    let initial_midi = args
+        .iter()
+        .position(|a| a == "--midi")
         .and_then(|idx| args.get(idx + 1))
         .map(PathBuf::from);
     let open_component_gallery = args.iter().any(|a| a == "--component-gallery");
@@ -2993,6 +3021,8 @@ fn main() -> Result<(), eframe::Error> {
                 is_binary_diff,
                 initial_audio,
                 initial_image,
+                initial_pdf,
+                initial_midi,
                 open_component_gallery,
             ))
         }),
@@ -3030,6 +3060,7 @@ mod workbench_layout_tests {
             in_app_prompt: None,
             viewer,
             startup_viewers,
+            startup_midi: None,
             image_load_job: None,
             text_load_job: None,
             spreadsheet_load_job: None,
@@ -3090,6 +3121,24 @@ mod workbench_layout_tests {
         });
         assert!(app.viewer.is_none());
         assert_eq!(app.view, WorkbenchView::NodeMachine);
+    }
+
+    #[test]
+    fn startup_pdf_queue_precedes_background_midi_entry() {
+        let queued_pdf = ViewerSession::Pdf(PdfEditorState::new(PathBuf::from("queued.pdf")));
+        let mut app = test_workbench_app(None, VecDeque::from([queued_pdf]));
+        app.startup_midi = Some(PathBuf::from("dense.mid"));
+
+        app.advance_startup();
+        assert!(matches!(app.viewer, Some(ViewerSession::Pdf(_))));
+        assert!(app.startup_midi.is_some());
+        assert!(app.midi_load_job.is_none());
+
+        app.viewer = None;
+        app.advance_startup();
+        assert!(app.viewer.is_none());
+        assert!(app.startup_midi.is_none());
+        assert!(app.midi_load_job.is_some());
     }
 
     fn space_key_event() -> egui::Event {

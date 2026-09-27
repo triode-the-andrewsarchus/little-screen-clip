@@ -132,21 +132,22 @@ def stl_fixture(out: Path) -> None:
     )
 
 
-def pdf_fixture(out: Path) -> None:
+def pdf_fixture(out: Path, page_count: int, filename: str) -> None:
     # Small hand-built PDF keeps this generator dependency-free and byte-stable.
     def text_stream(label: bytes) -> bytes:
         content = b"BT /F1 18 Tf 40 140 Td (" + label + b") Tj ET"
         return b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n" + content + b"\nendstream"
 
-    objects = [
-        b"<< /Type /Catalog /Pages 2 0 R >>",
-        b"<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>",
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 7 0 R >> >> /Contents 4 0 R >>",
-        text_stream(b"Fixture page one"),
-        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 7 0 R >> >> /Contents 6 0 R >>",
-        text_stream(b"Fixture page two"),
-        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    ]
+    kids = b" ".join(f"{3 + 2 * index} 0 R".encode("ascii") for index in range(page_count))
+    objects = [b"<< /Type /Catalog /Pages 2 0 R >>"]
+    objects.append(b"<< /Type /Pages /Kids [" + kids + f"] /Count {page_count} >>".encode("ascii"))
+    for index in range(page_count):
+        page_num = index + 1
+        objects.append(
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 {3 + page_count * 2} 0 R >> >> /Contents {4 + index * 2} 0 R >>".encode("ascii")
+        )
+        objects.append(text_stream(f"Acceptance page {page_num:02}".encode("ascii")))
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
     data = bytearray(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
     offsets = [0]
     for number, body in enumerate(objects, 1):
@@ -157,7 +158,30 @@ def pdf_fixture(out: Path) -> None:
     for offset in offsets[1:]:
         data.extend(f"{offset:010} 00000 n \n".encode("ascii"))
     data.extend(f"trailer\n<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode("ascii"))
-    (out / "document-two-page.pdf").write_bytes(data)
+    (out / filename).write_bytes(data)
+
+
+def dense_midi_fixture(out: Path, track_count: int = 24) -> None:
+    def vlq(value: int) -> bytes:
+        encoded = [value & 0x7F]
+        value >>= 7
+        while value:
+            encoded.insert(0, (value & 0x7F) | 0x80)
+            value >>= 7
+        return bytes(encoded)
+
+    tracks = []
+    for index in range(track_count):
+        name = f"Track {index + 1:02}".encode("ascii")
+        events = b"\x00\xff\x03" + vlq(len(name)) + name + bytes([0, 0xC0 | (index % 16), index % 8])
+        pitch = 48 + index % 36
+        for beat in range(16):
+            events += bytes([0, 0x90 | (index % 16), pitch + beat % 5, 48 + (index * 7 + beat * 3) % 80])
+            events += vlq(120) + bytes([0x80 | (index % 16), pitch + beat % 5, 0])
+        events += b"\x00\xff\x2f\x00"
+        tracks.append(b"MTrk" + struct.pack(">I", len(events)) + events)
+    payload = b"MThd" + struct.pack(">IHHH", 6, 1, track_count, 480) + b"".join(tracks)
+    (out / "music-24-track.mid").write_bytes(payload)
 
 
 def midi_fixture(out: Path) -> None:
@@ -240,7 +264,9 @@ def malformed_fixtures(out: Path) -> None:
 
 def validate_added_fixtures(out: Path) -> None:
     pdf = (out / "document-two-page.pdf").read_bytes()
+    dense_pdf = (out / "document-80-page.pdf").read_bytes()
     midi = (out / "music-three-track.mid").read_bytes()
+    dense_midi = (out / "music-24-track.mid").read_bytes()
     tiff = (out / "image-exif.tiff").read_bytes()
     svg = (out / "image-simple.svg").read_text(encoding="utf-8")
     malformed_pdf = (out / "document-malformed.pdf").read_bytes()
@@ -248,7 +274,9 @@ def validate_added_fixtures(out: Path) -> None:
     malformed_png = (out / "image-malformed.png").read_bytes()
     malformed_text = (out / "text-invalid-utf8.txt").read_bytes()
     assert pdf.startswith(b"%PDF-1.4") and b"/Count 2" in pdf
+    assert dense_pdf.startswith(b"%PDF-1.4") and b"/Count 80" in dense_pdf
     assert midi[:4] == b"MThd" and struct.unpack_from(">H", midi, 10)[0] == 3
+    assert dense_midi[:4] == b"MThd" and struct.unpack_from(">H", dense_midi, 10)[0] == 24
     assert tiff[:4] == b"II*\x00" and struct.pack("<H", 274) in tiff and b"2026:01:02 03:04:05" in tiff
     assert svg.startswith("<svg ") and "<circle" in svg
     assert malformed_pdf.startswith(b"%PDF-1.4") and b"not a cross-reference table" in malformed_pdf
@@ -265,6 +293,7 @@ def generate(out: Path, large_audio_seconds: int = WAV_LARGE_SECONDS) -> list[Pa
         "image-transparent.png", "audio-stereo.wav", f"audio-large-{large_audio_seconds}s.wav",
         "audio-silence-transient.wav", "model-simple.stl",
         "document-two-page.pdf", "music-three-track.mid", "image-exif.tiff", "image-simple.svg",
+        "document-80-page.pdf", "music-24-track.mid",
         "document-malformed.pdf", "music-malformed.mid", "image-malformed.png", "text-invalid-utf8.txt",
     ]
     conflicts = [name for name in names if (out / name).exists()]
@@ -276,8 +305,10 @@ def generate(out: Path, large_audio_seconds: int = WAV_LARGE_SECONDS) -> list[Pa
     image_fixture(out)
     audio_fixtures(out, large_audio_seconds)
     stl_fixture(out)
-    pdf_fixture(out)
+    pdf_fixture(out, 2, "document-two-page.pdf")
     midi_fixture(out)
+    pdf_fixture(out, 80, "document-80-page.pdf")
+    dense_midi_fixture(out)
     exif_tiff_fixture(out)
     svg_fixture(out)
     malformed_fixtures(out)
@@ -292,8 +323,9 @@ def main() -> None:
             "text-large-1m2.txt, markdown-long.md, ansi-color.txt, sheet-wide.csv, "
             "sheet-tall.csv, binary-left.bin, binary-right.bin, image-transparent.png, "
             "audio-stereo.wav, audio-large-<seconds>s.wav, audio-silence-transient.wav, and "
-            "model-simple.stl, document-two-page.pdf, music-three-track.mid, image-exif.tiff, "
-            "image-simple.svg, document-malformed.pdf, music-malformed.mid, image-malformed.png, "
+            "model-simple.stl, document-two-page.pdf, document-80-page.pdf, music-three-track.mid, "
+            "music-24-track.mid, image-exif.tiff, image-simple.svg, document-malformed.pdf, "
+            "music-malformed.mid, image-malformed.png, "
             "and text-invalid-utf8.txt. The large WAV defaults to 30 seconds (~5.3 MB); use "
             "--large-audio-seconds 300 for 300 seconds (~53 MB).\n\n"
             "Exact command: python3 scripts/ui_acceptance_fixtures.py --output-dir /tmp/clip-ui-fixtures"

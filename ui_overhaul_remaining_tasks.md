@@ -413,8 +413,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 - [x] **E3.3d [Luna] Capture long-filename behavior.** Isolated 1280×720 Dark capture with `clip-image-dense-e2.png` shows a truncated filename prefix, badges/actions, wrapped tools, canvas and footer within the popup. Full title is available via the header tooltip.
 - **E3.3e Capture dense collection behavior**
   - [x] **E3.3e1 [Luna] Capture many-preset behavior.** Isolated 1280×720 Dark capture shows all 57 Film Stocks in the searchable/scrollable list and a settled Portra 400 comparison. Searching, pointer selection, and Apply remain action-parity work.
-  - [ ] **E3.3e2 [Luna] Capture many-track behavior.**
-  - [ ] **E3.3e3 [Luna] Capture many-page behavior.**
+  - [x] **E3.3e2 [Luna] Capture many-track behavior.** Isolated 1280×720 Dark capture `/tmp/clip-e3-many-tracks-dark-final/settled.png` displays 24 tracks and 384 notes in the fixed popup; popup geometry and singleton checks pass. MIDI editing, playback, export, and large-track performance remain unverified.
+  - [x] **E3.3e3 [Luna] Capture many-page behavior.** Isolated 1280×720 Dark capture `/tmp/clip-e3-many-pages-dark-final/settled.png` displays an 80-page PDF with an internally scrollable thumbnail row; popup geometry and singleton checks pass. Page navigation/edit actions and PDF rendering performance remain unverified.
 - [x] **E3.3f [Luna] Capture loading and error states.** Isolated captures show a 300-second stereo WAV moving from waveform-building state to rendered waveform and a malformed PNG error returning to Palette. Normal daemon recovery, playback, and mirror refresh remain separate acceptance tasks.
 - [ ] **E3.3g [Luna] Capture mirror freshness and async-audio behavior.**
 - [ ] **E3.3h [Luna] Record screen-reader and focus observations where feasible.**

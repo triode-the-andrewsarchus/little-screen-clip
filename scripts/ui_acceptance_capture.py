@@ -462,6 +462,10 @@ def app_arguments(args: argparse.Namespace, binary: Path) -> list[str]:
         command.extend(["--image", str(args.image.resolve())])
     if args.audio:
         command.extend(["--audio", str(args.audio.resolve())])
+    if args.pdf:
+        command.extend(["--pdf", str(args.pdf.resolve())])
+    if args.midi:
+        command.extend(["--midi", str(args.midi.resolve())])
     return command
 
 
@@ -613,6 +617,8 @@ def create_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--image", type=Path, help="optional existing image fixture")
     parser.add_argument("--audio", type=Path, help="optional existing audio fixture")
+    parser.add_argument("--pdf", type=Path, help="optional existing PDF fixture")
+    parser.add_argument("--midi", type=Path, help="optional existing MIDI fixture")
     parser.add_argument("--verify-return", action="store_true", help="send Escape and verify the popup closes while private Niri remains responsive")
     parser.add_argument("--binary", type=Path, help="workbench binary (default: target/debug/clip-workbench)")
     parser.add_argument("--settle-ms", type=int, default=500, help="settling delay before second capture (default: 500)")
@@ -622,7 +628,7 @@ def create_parser() -> argparse.ArgumentParser:
 def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
     if min(args.width, args.height, args.scale) <= 0 or not math.isfinite(args.scale) or args.settle_ms < 0:
         raise SystemExit("width, height, and scale must be positive; settle-ms cannot be negative")
-    for fixture in (args.image, args.audio):
+    for fixture in (args.image, args.audio, args.pdf, args.midi):
         if fixture is not None and not fixture.is_file():
             raise SystemExit(f"fixture does not exist: {fixture}")
     if args.image_tool and not args.image:
@@ -662,6 +668,8 @@ def main() -> int:
             "image_action": args.image_action,
             "image_fixture": str(args.image.resolve()) if args.image else None,
             "audio_fixture": str(args.audio.resolve()) if args.audio else None,
+            "pdf_fixture": str(args.pdf.resolve()) if args.pdf else None,
+            "midi_fixture": str(args.midi.resolve()) if args.midi else None,
             "verify_return": args.verify_return,
             "binary": str(binary),
             "settle_ms": args.settle_ms,
