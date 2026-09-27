@@ -3052,45 +3052,45 @@ mod tests {
     #[test]
     fn test_barcode_state_and_scan() {
         let config = AppConfig::default();
-        // Generate a QR code using rxing
         let writer = rxing::qrcode::QRCodeWriter;
         use rxing::Writer;
-        let bit_matrix = writer
-            .encode("https://github.com", &rxing::BarcodeFormat::QR_CODE, 64, 64)
-            .unwrap();
+        for payload in ["https://github.com", "clipboard test 日本語 ✓"] {
+            let bit_matrix = writer
+                .encode(payload, &rxing::BarcodeFormat::QR_CODE, 96, 96)
+                .unwrap();
 
-        let mut img = RgbaImage::new(64, 64);
-        for y in 0..64 {
-            for x in 0..64 {
-                let color = if bit_matrix.get(x, y) {
-                    image::Rgba([0, 0, 0, 255])
-                } else {
-                    image::Rgba([255, 255, 255, 255])
-                };
-                img.put_pixel(x as u32, y as u32, color);
+            let mut img = RgbaImage::new(96, 96);
+            for y in 0..96 {
+                for x in 0..96 {
+                    let color = if bit_matrix.get(x, y) {
+                        image::Rgba([0, 0, 0, 255])
+                    } else {
+                        image::Rgba([255, 255, 255, 255])
+                    };
+                    img.put_pixel(x as u32, y as u32, color);
+                }
             }
-        }
 
-        let mut png_bytes = Vec::new();
-        img.write_to(
-            &mut std::io::Cursor::new(&mut png_bytes),
-            image::ImageFormat::Png,
-        )
-        .unwrap();
-        let item = ClipItem::from_image(png_bytes, 64, 64, "image/png");
-        let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
+            let mut png_bytes = Vec::new();
+            img.write_to(
+                &mut std::io::Cursor::new(&mut png_bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+            let item = ClipItem::from_image(png_bytes, 96, 96, "image/png");
+            let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
 
-        // Run barcode scan
-        state.run_barcode_scan();
-        let ctx = egui::Context::default();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        while !state.barcode_state.has_scanned && std::time::Instant::now() < deadline {
-            state.poll_barcode_scan(&ctx);
-            std::thread::yield_now();
+            state.run_barcode_scan();
+            let ctx = egui::Context::default();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !state.barcode_state.has_scanned && std::time::Instant::now() < deadline {
+                state.poll_barcode_scan(&ctx);
+                std::thread::yield_now();
+            }
+            assert!(state.barcode_state.has_scanned);
+            assert_eq!(state.barcode_state.detections.len(), 1);
+            assert_eq!(state.barcode_state.detections[0].text, payload);
         }
-        assert!(state.barcode_state.has_scanned);
-        assert_eq!(state.barcode_state.detections.len(), 1);
-        assert_eq!(state.barcode_state.detections[0].text, "https://github.com");
     }
 
     #[test]

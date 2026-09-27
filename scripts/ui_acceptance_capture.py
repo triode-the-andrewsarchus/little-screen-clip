@@ -41,6 +41,7 @@ IMAGE_TOOL_KEYS = {
     "depth-map": "d",
     "film-look": "l",
 }
+IMAGE_ACTION_KEYS = {"enter": "Return"}
 
 
 def command_version(command: str) -> str | None:
@@ -538,10 +539,15 @@ def capture_workbench(
     )
     if args.image_tool:
         run_checked(["wtype", "-k", IMAGE_TOOL_KEYS[args.image_tool]], env=niri_env)
+        if args.image_action:
+            time.sleep(0.1)
+            run_checked(["wtype", "-k", IMAGE_ACTION_KEYS[args.image_action]], env=niri_env)
     time.sleep(args.settle_ms / 1000)
     final_windows = own_windows(niri_bin, niri_env, {app.pid})
     report["final_windows"] = final_windows
     capture_name = f"image-{args.image_tool}" if args.image_tool else "settled"
+    if args.image_action:
+        capture_name = f"{capture_name}-{args.image_action}"
     report["screenshots"][capture_name] = screenshot(
         niri_bin, niri_env, output / f"{capture_name}.png"
     )
@@ -572,6 +578,11 @@ def create_parser() -> argparse.ArgumentParser:
         choices=tuple(IMAGE_TOOL_KEYS),
         help="select an Image Studio tool by its existing keyboard shortcut before the settled capture",
     )
+    parser.add_argument(
+        "--image-action",
+        choices=tuple(IMAGE_ACTION_KEYS),
+        help="send one supported key action after selecting the image tool",
+    )
     parser.add_argument("--image", type=Path, help="optional existing image fixture")
     parser.add_argument("--audio", type=Path, help="optional existing audio fixture")
     parser.add_argument("--binary", type=Path, help="workbench binary (default: target/debug/clip-workbench)")
@@ -587,6 +598,8 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
             raise SystemExit(f"fixture does not exist: {fixture}")
     if args.image_tool and not args.image:
         raise SystemExit("--image-tool requires --image")
+    if args.image_action and not args.image_tool:
+        raise SystemExit("--image-action requires --image-tool")
     if args.image_tool and shutil.which("wtype") is None:
         raise SystemExit("--image-tool requires wtype")
     binary = (args.binary or (repo / "target/debug/clip-workbench")).resolve()
@@ -615,6 +628,7 @@ def main() -> int:
             "scale": args.scale,
             "appearance": args.appearance,
             "image_tool": args.image_tool,
+            "image_action": args.image_action,
             "image_fixture": str(args.image.resolve()) if args.image else None,
             "audio_fixture": str(args.audio.resolve()) if args.audio else None,
             "binary": str(binary),

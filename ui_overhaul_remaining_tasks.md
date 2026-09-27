@@ -86,6 +86,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **H1.2c1 [Luna + primary review] Audit remaining hard-coded UI colors.** Fixed chrome colors resolve through `BaseColors`/`WorkbenchColors`; remaining local colors are intentional data or image-editing affordances: ANSI escape colors, markup swatches and contrast overlays on arbitrary images, HF chart markers, and waveform visualization. Color-clip hex text now uses semantic `text_primary` instead of hard-coded white. A source audit found no other production chrome literals requiring migration.
   - [ ] **H1.2c2 [Primary] Verify foreground/background contrast on all surfaces.**
   - [ ] **H1.2c3 [Primary] Verify accent use is purposeful on all surfaces.** Shared dark `console_surface` keeps ANSI comparison output high contrast in both appearances.
+  - [ ] **H1.2d [Primary] Define and implement portable Unicode font fallback for UI text.** The compact Barcode result capture decodes Japanese and a check mark correctly but renders them as missing-glyph boxes; cover filenames, barcode/OCR output, and other user-provided text without depending on an incidental developer font installation.
 - **H1.3 Viewer sessions, actions, and async identity**
   - **H1.3a1 Viewer route/return contract**
     - [x] **H1.3a1a [Luna + primary review] Document the viewer route/return contract.** `ui_overhaul_viewer_route_contract.md` records ownership, close/return behavior, startup precedence, singleton handling, Escape precedence, and the bounded Spreadsheet/MIDI wait behavior.
@@ -186,7 +187,10 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [ ] **E2.1h [Luna] Verify Redact live, including selection-size badge.**
   - [x] **E2.1i [Luna] Verify Convert live, including comparison HUD.** Isolated 1280×720 Dark capture after a 3.5-second post-selection settle shows encoded WebP size in the After HUD, comparison divider, format choices, quality control, and footer. Apply/save behavior remains under E2.1s/t.
   - [x] **E2.1j [Luna] Verify Depth Map live.** Isolated 1280×720 Dark capture shows the Generate action, model description, Left/Right slot destinations, canvas, and footer; running/output behavior remains in E2.1s.
-  - [ ] **E2.1k [Luna] Verify Barcode live at compact width, including decoded text/actions and Unicode payload.**
+  - **E2.1k Barcode scan and result states**
+    - [x] **E2.1k1 [Luna] Capture decoded Barcode results at compact width.** Isolated QR capture detected one code in 3 ms and shows the result row, scan status, Copy All action, canvas, and footer.
+    - [x] **E2.1k2 [Luna] Verify Barcode decoding preserves Unicode payloads.** Production-path test decodes both a URL and `clipboard test 日本語 ✓`, asserting exact strings; display font coverage remains under H1.2d.
+    - [ ] **E2.1k3 [Luna] Verify Barcode payload actions and readable multilingual glyphs.** The live Japanese/check-mark result displays missing-glyph boxes; copy/open actions and glyph rendering remain to be verified after H1.2d.
   - [x] **E2.1l [Luna] Verify Transform live.** Isolated 1280×720 Light capture shows rotate/flip/revert controls, canvas, and footer in one view.
   - [x] **E2.1m [Luna] Verify Background Removal live.** Isolated 1280×720 Light capture shows segmentation mode, prompt, action, canvas, and footer; the left inspector scrolls to reach the lower action at this compact height.
   - [x] **E2.1n [Luna] Verify OCR live.** Isolated 1280×720 Light capture shows engine/prompt inputs, the empty output actions, canvas, and footer; extraction/output behavior remains unverified.
