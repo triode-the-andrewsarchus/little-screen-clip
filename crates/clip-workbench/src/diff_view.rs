@@ -695,7 +695,10 @@ impl DiffViewerState {
 
         egui::Frame::none()
             .fill(b_low)
-            .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+            .inner_margin(egui::Margin::symmetric(
+                crate::ui_ext::SPACE_MD,
+                crate::ui_ext::CONTROL_GROUP_INSET_Y,
+            ))
             .stroke(Stroke::new(1.0_f32, b_med))
             .rounding(Rounding::same(4.0))
             .show(ui, |ui| {
@@ -1000,7 +1003,10 @@ impl DiffViewerState {
 
         egui::Frame::none()
             .fill(b_low)
-            .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+            .inner_margin(egui::Margin::symmetric(
+                crate::ui_ext::SPACE_MD,
+                crate::ui_ext::CONTROL_GROUP_INSET_Y,
+            ))
             .stroke(Stroke::new(1.0_f32, b_med))
             .rounding(Rounding::same(4.0))
             .show(ui, |ui| {

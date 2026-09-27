@@ -1550,7 +1550,10 @@ impl ImagePreviewState {
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
                 .rounding(Rounding::same(4.0))
-                .inner_margin(egui::Margin::symmetric(12.0, 6.0))
+                .inner_margin(egui::Margin::symmetric(
+                    crate::ui_ext::SPACE_MD,
+                    crate::ui_ext::CONTROL_GROUP_INSET_Y,
+                ))
                 .show(ui, |ui| {
                     ui.set_width((bottom.width() - 24.0).max(1.0));
                     egui::ScrollArea::both()
