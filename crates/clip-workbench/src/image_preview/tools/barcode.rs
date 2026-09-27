@@ -149,7 +149,7 @@ impl ImagePreviewState {
                             )
                             .fill(b_med)
                             .stroke(Stroke::new(1.0_f32, b_low))
-                            .rounding(Rounding::same(3.0))
+                            .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
                             .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
                             if ui.add(copy_all_btn).clicked() {
@@ -226,7 +226,9 @@ impl ImagePreviewState {
                                                             .color(url_fg),
                                                     )
                                                     .fill(b_med)
-                                                    .rounding(Rounding::same(3.0))
+                                                    .rounding(Rounding::same(
+                                                        crate::ui_ext::BADGE_CORNER_RADIUS,
+                                                    ))
                                                     .min_size(Vec2::new(
                                                         0.0,
                                                         crate::ui_ext::CONTROL_HEIGHT,
@@ -240,7 +242,9 @@ impl ImagePreviewState {
 
                                                 let copy_btn =
                                                     crate::secondary_button("📋", b_med, palette)
-                                                        .rounding(Rounding::same(3.0));
+                                                        .rounding(Rounding::same(
+                                                            crate::ui_ext::BADGE_CORNER_RADIUS,
+                                                        ));
                                                 if ui
                                                     .add(copy_btn)
                                                     .on_hover_text("Copy this code")
@@ -266,7 +270,9 @@ impl ImagePreviewState {
                                                 )
                                                 .fill(b_low)
                                                 .stroke(Stroke::new(1.0_f32, diff_add))
-                                                .rounding(Rounding::same(3.0))
+                                                .rounding(Rounding::same(
+                                                    crate::ui_ext::BADGE_CORNER_RADIUS,
+                                                ))
                                                 .min_size(Vec2::new(
                                                     0.0,
                                                     crate::ui_ext::CONTROL_HEIGHT,

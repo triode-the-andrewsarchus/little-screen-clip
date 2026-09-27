@@ -209,7 +209,7 @@ impl ImagePreviewState {
                         )
                         .fill(b_low)
                         .stroke(Stroke::new(1.0_f32, diff_add))
-                        .rounding(Rounding::same(3.0))
+                        .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
                         .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
                         if ui.add(push_rh).on_hover_text("Push current depth map directly to Right Hand slot").clicked() {
                             self.copy_to_hand_slot(HandSide::Right);
@@ -221,7 +221,7 @@ impl ImagePreviewState {
                         )
                         .fill(b_low)
                         .stroke(Stroke::new(1.0_f32, base_c))
-                        .rounding(Rounding::same(3.0))
+                        .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
                         .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
                         if ui.add(push_lh).on_hover_text("Push current depth map directly to Left Hand slot").clicked() {
                             self.copy_to_hand_slot(HandSide::Left);

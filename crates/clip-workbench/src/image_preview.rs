@@ -1512,7 +1512,7 @@ impl ImagePreviewState {
         // Background canvas fill
         painter.rect_filled(
             canvas_rect,
-            Rounding::same(6.0),
+            Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
             hex_to_c32(&palette.colors.canvas),
         );
 
@@ -1951,7 +1951,8 @@ mod tests {
                 .find_map(|clipped| match &clipped.shape {
                     egui::epaint::Shape::Rect(rect)
                         if rect.fill == crate::hex_to_c32(&palette.colors.canvas)
-                            && rect.rounding == Rounding::same(6.0) =>
+                            && rect.rounding
+                                == Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS) =>
                     {
                         Some(rect.rect)
                     }

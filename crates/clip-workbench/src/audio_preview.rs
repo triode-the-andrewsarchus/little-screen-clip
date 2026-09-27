@@ -2888,7 +2888,7 @@ impl AudioPreviewState {
                         format!("💾 Save All {} Files [Enter]", slice_count)
                     };
                     let save_btn = layout::AudioWorkspace::primary_button(btn_text, hex_to_c32(&palette.diff_add), palette)
-                        .rounding(Rounding::same(6.0));
+                        .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
 
                     let is_enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if ui.add(save_btn).clicked() || is_enter {

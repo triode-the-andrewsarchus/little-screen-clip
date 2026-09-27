@@ -547,7 +547,7 @@ impl AudioPreviewState {
                     palette,
                 )
                 .min_size(Vec2::new(play_width, crate::ui_ext::CONTROL_HEIGHT))
-                .rounding(Rounding::same(6.0));
+                .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
 
                 if ui.add(play_btn).clicked() {
                     self.toggle_play();
@@ -758,7 +758,7 @@ impl AudioPreviewState {
                             hex_to_c32(&palette.harmonies.base),
                             palette,
                         )
-                        .rounding(Rounding::same(6.0));
+                        .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
 
                         if ui
                             .add(copy_btn)
@@ -810,7 +810,7 @@ impl AudioPreviewState {
                             hex_to_c32(&palette.diff_add),
                             palette,
                         )
-                        .rounding(Rounding::same(6.0));
+                        .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
                         if ui.add(save_btn).on_hover_text("Save slice to disk formatted as original_name + timestamp + duration [Ctrl+S]").clicked() {
                                 self.open_save_dialog();
                             }
@@ -829,7 +829,7 @@ impl AudioPreviewState {
                             hex_to_c32(&palette.harmonies.base),
                             palette,
                         )
-                        .rounding(Rounding::same(6.0));
+                        .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
 
                         if ui
                             .add(copy_btn)
@@ -886,7 +886,7 @@ impl AudioPreviewState {
                             hex_to_c32(&palette.diff_add),
                             palette,
                         )
-                        .rounding(Rounding::same(6.0));
+                        .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
                         if ui
                             .add(save_btn)
                             .on_hover_text(

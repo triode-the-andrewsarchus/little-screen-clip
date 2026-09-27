@@ -545,7 +545,7 @@ impl PdfEditorState {
                             egui::Frame::none()
                                 .fill(colors.recessed)
                                 .stroke(Stroke::new(1.0_f32, colors.panel))
-                                .rounding(Rounding::same(6.0))
+                                .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
                                 .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
@@ -686,7 +686,7 @@ impl PdfEditorState {
                             egui::Frame::none()
                                 .fill(colors.recessed)
                                 .stroke(Stroke::new(1.0_f32, colors.panel))
-                                .rounding(Rounding::same(6.0))
+                                .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
                                 .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_MD))
                                 .show(ui, |ui| {
                                     let selected_item = self

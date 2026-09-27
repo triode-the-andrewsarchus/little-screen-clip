@@ -708,7 +708,7 @@ impl ImagePreviewState {
                 .color(f_high),
         )
         .fill(b_med)
-        .rounding(Rounding::same(3.0))
+        .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
         .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
         if ui
             .add(invert_button)

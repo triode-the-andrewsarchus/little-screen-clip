@@ -1685,7 +1685,7 @@ impl WorkbenchApp {
                     egui::Frame::window(&ctx.style())
                         .fill(modal_bg)
                         .stroke(egui::Stroke::new(1.5_f32, modal_stroke))
-                        .rounding(8.0)
+                        .rounding(crate::ui_ext::CARD_CORNER_RADIUS)
                         .inner_margin(egui::Margin::symmetric(22.0, 18.0)),
                 )
                 .show(ctx, |ui| {

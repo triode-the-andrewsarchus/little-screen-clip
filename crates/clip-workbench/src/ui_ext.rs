@@ -24,6 +24,8 @@ pub const CONTROL_GROUP_INSET_Y: f32 = 6.0;
 pub const CONTROL_ROW_INSET_Y: f32 = 5.0;
 pub const FOOTER_INSET_Y: f32 = 6.0;
 pub const BADGE_CORNER_RADIUS: f32 = 3.0;
+pub const PANEL_CORNER_RADIUS: f32 = 6.0;
+pub const CARD_CORNER_RADIUS: f32 = 8.0;
 
 /// Keeps the regular help text available while explaining why a disabled control cannot run.
 pub fn on_hover_text_with_disabled_reason(

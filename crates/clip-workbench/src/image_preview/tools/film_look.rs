@@ -1690,7 +1690,9 @@ impl ImagePreviewState {
                                             1.0_f32,
                                             if sel { base_c } else { b_low },
                                         ))
-                                        .rounding(Rounding::same(3.0))
+                                        .rounding(Rounding::same(
+                                            crate::ui_ext::BADGE_CORNER_RADIUS,
+                                        ))
                                         .min_size(Vec2::new(36.0, crate::ui_ext::CONTROL_HEIGHT));
                                         if ui.add(b).clicked() && !sel {
                                             self.film_sim_state.wb_mode = mode;

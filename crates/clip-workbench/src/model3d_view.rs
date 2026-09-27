@@ -235,7 +235,11 @@ impl Model3dViewerState {
                 let available_size = ui.available_size();
                 let (rect, _) = ui.allocate_exact_size(available_size, egui::Sense::hover());
                 let painter = ui.painter_at(rect);
-                painter.rect_filled(rect, Rounding::same(6.0), b_low);
+                painter.rect_filled(
+                    rect,
+                    Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+                    b_low,
+                );
 
                 let center = rect.center();
                 let text = "Parsing 3D mesh geometry with Scenix...";
@@ -293,7 +297,11 @@ impl Model3dViewerState {
                 let available_size = ui.available_size();
                 let (rect, _) = ui.allocate_exact_size(available_size, egui::Sense::hover());
                 let painter = ui.painter_at(rect);
-                painter.rect_filled(rect, Rounding::same(6.0), b_low);
+                painter.rect_filled(
+                    rect,
+                    Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+                    b_low,
+                );
 
                 let text = format!("Unable to load 3D model:\n\n{}", err);
                 painter.text(
@@ -501,7 +509,7 @@ impl Model3dViewerState {
                 let painter = ui.painter_at(canvas_rect);
 
                 // Background dark canvas
-                painter.rect_filled(canvas_rect, Rounding::same(6.0), b_low);
+                painter.rect_filled(canvas_rect, Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS), b_low);
 
                 // Mouse interaction
                 if response.dragged_by(egui::PointerButton::Primary) {

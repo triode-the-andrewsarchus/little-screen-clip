@@ -850,7 +850,7 @@ impl DiffViewerState {
                         if let Some(tex) = &self.overlay_texture {
                             egui::Frame::none()
                                 .fill(b_low)
-                                .rounding(Rounding::same(6.0))
+                                .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
                                 .stroke(Stroke::new(1.0_f32, b_med))
                                 .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_XS))
                                 .show(ui, |ui| {
@@ -884,7 +884,7 @@ impl DiffViewerState {
                         if let Some(tex) = &self.mask_texture {
                             egui::Frame::none()
                                 .fill(b_low)
-                                .rounding(Rounding::same(6.0))
+                                .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
                                 .stroke(Stroke::new(1.0_f32, b_med))
                                 .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_XS))
                                 .show(ui, |ui| {
@@ -979,7 +979,7 @@ impl DiffViewerState {
 
         egui::Frame::none()
             .fill(b_low)
-            .rounding(Rounding::same(6.0))
+            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
             .stroke(Stroke::new(1.0_f32, b_med))
             .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
             .show(ui, |ui| {
@@ -1169,7 +1169,7 @@ impl DiffViewerState {
             // Image Frame Box
             egui::Frame::none()
                 .fill(b_low)
-                .rounding(Rounding::same(6.0))
+                .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
                 .stroke(Stroke::new(1.0_f32, b_med))
                 .inner_margin(egui::Margin::same(2.0))
                 .show(ui, |ui| {

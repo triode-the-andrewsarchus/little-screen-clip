@@ -754,7 +754,7 @@ impl TextPreviewState {
                 1.0_f32,
                 hex_to_c32(&palette.colors.surface_panel),
             ))
-            .rounding(Rounding::same(6.0))
+            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
             .inner_margin(egui::Margin::symmetric(
                 crate::ui_ext::BUTTON_PADDING_X,
                 crate::ui_ext::BUTTON_PADDING_Y,
@@ -911,7 +911,7 @@ impl TextPreviewState {
                 1.0_f32,
                 hex_to_c32(&palette.colors.surface_panel),
             ))
-            .rounding(Rounding::same(6.0))
+            .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
                 let total_lines = self.line_starts.len().max(1);
@@ -1173,7 +1173,7 @@ fn render_markdown_element(
                 .fill(hex_to_c32(&palette.colors.surface_recessed))
                 .stroke(Stroke::new(3.0_f32, hex_to_c32(&palette.harmonies.base)))
                 .inner_margin(egui::Margin::symmetric(10.0, 4.0))
-                .rounding(Rounding::same(3.0))
+                .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
                 .show(ui, |ui| {
                     ui.horizontal_wrapped(|ui| {
                         for span in spans {
@@ -1465,7 +1465,7 @@ fn render_markdown_span(
             egui::Frame::none()
                 .fill(hex_to_c32(&palette.colors.surface_panel))
                 .inner_margin(egui::Margin::symmetric(4.0, 1.0))
-                .rounding(Rounding::same(3.0))
+                .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(s)
