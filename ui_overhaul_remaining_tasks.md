@@ -398,7 +398,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 ## Easy 3 — Consolidation and evidence (Luna implementation; primary review)
 
 - [x] **E3.1a [Luna implementation; primary review] Remove superseded adapters made obsolete by Hard 1–2.** `ImagePreviewState::from_item` now exists only in tests: source search found no runtime callers after workbench item loading moved through `ImageLoadSource::from_item`. Retained the documented MIDI/STL compatibility adapters and still-used image constructors. Workbench check, formatting, and 51 focused image-preview tests pass.
-- [ ] **E3.1b [Luna] Remove duplicate chrome made obsolete by Hard 1–2.** Confirm specialized domain behavior remains.
+- [x] **E3.1b [Luna implementation; primary review] Remove duplicate chrome made obsolete by Hard 1–2.** Image Studio now builds its shared `StudioShell` once and uses `StudioShell::render_footer` for mode-specific hints and status toasts; removed its duplicate footer frame/spacing/toast renderer. The compact/wide footer geometry regression and all 104 image-preview tests pass. Gallery sample controls and save-dialog recovery controls remain because they serve distinct behavior.
 - [ ] **E3.1c [Luna] Compare architecture metrics after consolidation.** Require genuine improvement; do not move code solely to change metrics.
 - [ ] **E3.2a [Luna] Replace obsolete `ui_architecture_design.md` with implemented boundaries.**
 - [ ] **E3.2b [Luna] Update `AGENTS.md` for fixed-palette convention.**

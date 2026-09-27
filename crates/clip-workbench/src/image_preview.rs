@@ -1095,34 +1095,14 @@ impl ImagePreviewState {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.colors.canvas))
             .show(ui, |ui| {
-                let footer_hint = image_studio_footer_hint(self.active_mode);
-                let footer_text_height = ui.fonts(|fonts| {
-                    fonts
-                        .layout_no_wrap(
-                            footer_hint.to_owned(),
-                            egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
-                            Color32::WHITE,
-                        )
-                        .size()
-                        .y
-                });
-                let footer_height = footer_text_height
-                    + egui::Margin::symmetric(
-                        crate::ui_ext::PANEL_INSET,
-                        crate::ui_ext::CONTROL_GROUP_INSET_Y,
-                    )
-                    .sum()
-                    .y;
+                let mut shell = self.create_studio_shell(palette, close);
                 egui::TopBottomPanel::bottom(ui.make_persistent_id("image_studio_footer"))
                     .frame(egui::Frame::none())
                     .resizable(false)
-                    .exact_height(footer_height)
-                    .show_inside(ui, |ui| {
-                        self.render_footer(ui, palette, now, footer_text_height)
-                    });
+                    .show_inside(ui, |ui| shell.render_footer(ui, &self.status_toast, now));
 
                 // 1. TOP HEADER & ESCAPE HATCHES
-                self.render_header(ui, ctx, palette, close);
+                self.render_header(ui, ctx, palette, &mut shell);
 
                 ui.add_space(crate::ui_ext::SPACE_XS);
 
@@ -1143,13 +1123,11 @@ impl ImagePreviewState {
         }
     }
 
-    fn render_header(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        palette: &AppPalette,
-        close: &mut bool,
-    ) {
+    fn create_studio_shell<'a>(
+        &self,
+        palette: &'a AppPalette,
+        close: &'a mut bool,
+    ) -> crate::shell::StudioShell<'a> {
         let aspect_str = format_aspect_ratio(self.current_rgba.width(), self.current_rgba.height());
         let dim_text = format!(
             "{}×{} ({})",
@@ -1167,7 +1145,7 @@ impl ImagePreviewState {
         let is_primary_svg = self.is_svg && self.undo_stack.is_empty();
         let is_primary_raster = !is_primary_svg;
 
-        let mut shell = crate::shell::StudioShell::new(
+        crate::shell::StudioShell::new(
             format!("IMAGE STUDIO — {}", self.title),
             Icon::Image,
             palette,
@@ -1191,8 +1169,17 @@ impl ImagePreviewState {
             image_editor_hatch("Nomacs", "nomacs", &self.viewer)
                 .with_primary(false)
                 .with_icon(Icon::Eye),
-        );
+        )
+        .with_footer_hints(image_studio_footer_hint(self.active_mode))
+    }
 
+    fn render_header(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: &AppPalette,
+        shell: &mut crate::shell::StudioShell<'_>,
+    ) {
         let mut clicked_save_as = false;
         let mut clicked_copy = false;
 
@@ -1243,7 +1230,7 @@ impl ImagePreviewState {
         }
 
         if let Some(hatch) = clicked_hatch.and_then(|idx| shell.escape_hatches.get(idx)) {
-            self.launch_external_app(&hatch.command, ctx, close);
+            self.launch_external_app(&hatch.command, ctx, shell.close);
         }
     }
 
@@ -1616,45 +1603,6 @@ impl ImagePreviewState {
                 self.render_barcode_overlay(ui, &painter, &response, img_rect, palette);
             }
         }
-    }
-
-    fn render_footer(
-        &mut self,
-        ui: &mut egui::Ui,
-        palette: &AppPalette,
-        now: f64,
-        text_height: f32,
-    ) {
-        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
-        egui::Frame::none()
-            .fill(hex_to_c32(&palette.colors.surface_recessed))
-            .inner_margin(egui::Margin::symmetric(
-                crate::ui_ext::PANEL_INSET,
-                crate::ui_ext::CONTROL_GROUP_INSET_Y,
-            ))
-            .show(ui, |ui| {
-                ui.allocate_ui_with_layout(
-                    Vec2::new(ui.available_width(), text_height),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        ui.label(
-                            egui::RichText::new(image_studio_footer_hint(self.active_mode))
-                                .size(crate::ui_ext::BODY_FONT_SIZE)
-                                .color(colors.text_secondary),
-                        );
-
-                        // Toast message
-                        ui.add_space(20.0);
-                        crate::ui_ext::StatusToast::render_opt(
-                            &self.status_toast,
-                            5.0,
-                            ui,
-                            palette,
-                            now,
-                        );
-                    },
-                );
-            });
     }
 
     // ─── Film Simulation Methods ───────────────────────────────────────────────────
