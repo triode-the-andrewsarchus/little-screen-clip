@@ -204,3 +204,8 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 ## Viewer route return regression, 2026-09-27
 
 - Added `closing_startup_viewers_advances_fifo_then_returns_to_selected_workbench_view`, which sends Escape through `render_modal_viewers` for a foreground Component Gallery, confirms the queued Spreadsheet is next, renders it without closing, then closes it and confirms the previously selected Node Machine view remains selected. The focused test passes. This exercises route handoff and return, not every viewer's domain-specific close cleanup or native window interaction.
+
+## Compact empty workbench and rolling-audio error header, 2026-09-27
+
+- Isolated no-daemon capture `/tmp/clip-workbench-empty-compact-20260927` passed popup geometry/singleton checks and exposed a clipped duplicate IPC error toast beside the rolling-audio refresh status. Suppressed a toast when it duplicates the current refresh error; the short retry label keeps the full cause available by tooltip and in the waveform area. The existing 1177×662 footer/list render regression covers wrapped status and 40 results.
+- The 1280×720 recapture `/tmp/clip-workbench-empty-compact-after-error-fix-20260927` passes popup checks. Primary reviewed the settled screenshot: the Palette footer stays above the rolling strip, the redundant long header error is gone, and the remaining canvas error fits. The header render regression passes at 520/1200 points; this screenshot checks the combined no-daemon layout, not every status variant.

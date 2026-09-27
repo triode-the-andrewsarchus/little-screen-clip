@@ -607,22 +607,19 @@ impl RollingAudioStripState {
             }
 
             if let Some((ref msg, _)) = self.status_toast {
-                let color = if self.error_msg.as_deref() == Some(msg.as_str()) {
-                    &palette.diff_del
-                } else {
-                    &palette.diff_add
-                };
-                ui.label(
-                    egui::RichText::new(msg)
-                        .color(crate::ui_ext::contrast_text_c32_on(
-                            canvas,
-                            canvas,
-                            Some(hex_to_c32(color)),
-                            palette,
-                        ))
-                        .strong()
-                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                );
+                if self.error_msg.as_deref() != Some(msg.as_str()) {
+                    ui.label(
+                        egui::RichText::new(msg)
+                            .color(crate::ui_ext::contrast_text_c32_on(
+                                canvas,
+                                canvas,
+                                Some(hex_to_c32(&palette.diff_add)),
+                                palette,
+                            ))
+                            .strong()
+                            .size(crate::ui_ext::BODY_FONT_SIZE),
+                    );
+                }
             }
         });
 
@@ -1188,7 +1185,24 @@ mod tests {
                 .any(|text| text.contains("Refresh failed"))
         );
 
+        let connection_error = "IPC connection error: No such file or directory (os error 2)";
+        strip.error_msg = Some(connection_error.to_owned());
+        strip.status_toast = Some((connection_error.to_owned(), 0.0));
+        let error_toast = rendered_header_text(&mut strip, 520.0);
+        assert!(
+            error_toast
+                .iter()
+                .any(|text| text.contains("Refresh failed"))
+        );
+        assert!(
+            error_toast
+                .iter()
+                .all(|text| !text.contains("IPC connection error")),
+            "the current error is already available from the failure tooltip and canvas"
+        );
+
         strip.error_msg = None;
+        strip.status_toast = None;
         strip.status_toast = Some(("Snapshot refreshed (120.0s, peak: 75%)".into(), 0.0));
         let narrow_silent_toast = rendered_header_text(&mut strip, 520.0);
         assert!(
