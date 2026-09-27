@@ -43,6 +43,7 @@ fn inspect_footer_galley(
 #[cfg(test)]
 mod effect_tests {
     use super::*;
+    use little_clip_core::config::WorkbenchAppearance;
 
     #[test]
     fn inspect_play_and_pause_keep_the_same_button_width() {
@@ -79,6 +80,23 @@ mod effect_tests {
         assert_eq!(widths.len(), 2);
         assert_eq!(widths[0], widths[1]);
         assert_eq!(widths[0].y, crate::ui_ext::CONTROL_HEIGHT);
+    }
+
+    #[test]
+    fn waveform_channel_labels_have_readable_contrast_in_both_appearances() {
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = crate::ui_appearance::palette(appearance);
+            let background = crate::hex_to_c32(&palette.colors.surface_recessed);
+            let foreground = crate::hex_to_c32(&palette.harmonies.base);
+            let contrast = little_clip_core::palette::contrast_ratio(
+                (background.r(), background.g(), background.b()),
+                (foreground.r(), foreground.g(), foreground.b()),
+            );
+            assert!(
+                contrast >= 4.5,
+                "{appearance:?} waveform channel labels have only {contrast:.2}:1 contrast"
+            );
+        }
     }
 
     #[test]

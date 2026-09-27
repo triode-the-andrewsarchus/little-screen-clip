@@ -200,7 +200,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **E2.4f1 [Luna] Verify shared control-label contrast in both appearances.** Existing WCAG test checks active/inactive, add, secondary, danger, and translucent accent surfaces against 4.5:1.
   - **E2.4f2 Custom labels outside shared controls (Image Studio contrast stays under E2.1r)**
     - [x] **E2.4f2a [Luna] Audit workbench header/status and StudioShell labels.** Both appearances meet contrast targets for the large brand title (3:1), secondary labels/footer hints (4.5:1), and small StudioShell footer readouts (4.5:1); dynamic action/status labels use the tested contrast helper.
-    - [ ] **E2.4f2b [Luna] Audit Audio Inspect and spectrogram plot labels.**
+    - [x] **E2.4f2b [Luna] Audit Audio Inspect and spectrogram plot labels.** Added a Light/Dark contrast check for the L/R/Mono waveform gutter accent against the recessed canvas; spectrogram axes and loading labels use the semantic secondary role, checked against every neutral surface.
     - [ ] **E2.4f2c [Luna] Audit HF Analysis and stem-separation plot labels.**
     - [ ] **E2.4f2d [Luna] Audit Digital Decode labels and protocol chips.**
     - [ ] **E2.4f2e [Luna] Audit Node Machine canvas labels.**
