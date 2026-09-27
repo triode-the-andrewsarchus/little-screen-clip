@@ -1655,9 +1655,12 @@ fn format_cell_hex(
     color_mode: ByteColorMode,
     palette: &AppPalette,
 ) -> (String, Color32, Option<Color32>) {
+    let surface = hex_to_c32(&palette.colors.canvas);
+    let readable =
+        |preferred| crate::ui_ext::contrast_text_c32_on(surface, surface, Some(preferred), palette);
     match (cell.byte_val, cell.kind) {
         (Some(b), DiffKind::Match) => match color_mode {
-            ByteColorMode::Digits => (format!("{:02X}", b), byte_subtle_color(b), None),
+            ByteColorMode::Digits => (format!("{:02X}", b), readable(byte_subtle_color(b)), None),
             ByteColorMode::Background => {
                 let bg = byte_subtle_bg_opaque(b);
                 (
@@ -1668,7 +1671,11 @@ fn format_cell_hex(
             }
         },
         (Some(b), DiffKind::Mismatch) => match color_mode {
-            ByteColorMode::Digits => (format!("{:02X}", b), hex_to_c32(&palette.diff_mod), None),
+            ByteColorMode::Digits => (
+                format!("{:02X}", b),
+                readable(hex_to_c32(&palette.diff_mod)),
+                None,
+            ),
             ByteColorMode::Background => {
                 let bg = hex_to_c32(&palette.diff_mod);
                 (
@@ -1681,9 +1688,11 @@ fn format_cell_hex(
         (Some(b), DiffKind::LeftOnly) => {
             if is_left {
                 match color_mode {
-                    ByteColorMode::Digits => {
-                        (format!("{:02X}", b), hex_to_c32(&palette.diff_del), None)
-                    }
+                    ByteColorMode::Digits => (
+                        format!("{:02X}", b),
+                        readable(hex_to_c32(&palette.diff_del)),
+                        None,
+                    ),
                     ByteColorMode::Background => {
                         let bg = hex_to_c32(&palette.diff_del);
                         (
@@ -1704,9 +1713,11 @@ fn format_cell_hex(
         (Some(b), DiffKind::RightOnly) => {
             if !is_left {
                 match color_mode {
-                    ByteColorMode::Digits => {
-                        (format!("{:02X}", b), hex_to_c32(&palette.diff_add), None)
-                    }
+                    ByteColorMode::Digits => (
+                        format!("{:02X}", b),
+                        readable(hex_to_c32(&palette.diff_add)),
+                        None,
+                    ),
                     ByteColorMode::Background => {
                         let bg = hex_to_c32(&palette.diff_add);
                         (
@@ -1738,25 +1749,37 @@ fn format_cell_ascii(
     color_mode: ByteColorMode,
     palette: &AppPalette,
 ) -> (char, Color32) {
+    let surface = hex_to_c32(&palette.colors.canvas);
+    let readable =
+        |preferred| crate::ui_ext::contrast_text_c32_on(surface, surface, Some(preferred), palette);
     match (cell.byte_val, cell.kind) {
         (Some(b), DiffKind::Match) => {
             let col = match color_mode {
-                ByteColorMode::Digits => byte_subtle_color(b),
+                ByteColorMode::Digits => readable(byte_subtle_color(b)),
                 ByteColorMode::Background => hex_to_c32(&palette.colors.text_secondary),
             };
             (byte_to_ascii_char(b), col)
         }
-        (Some(b), DiffKind::Mismatch) => (byte_to_ascii_char(b), hex_to_c32(&palette.diff_mod)),
+        (Some(b), DiffKind::Mismatch) => (
+            byte_to_ascii_char(b),
+            readable(hex_to_c32(&palette.diff_mod)),
+        ),
         (Some(b), DiffKind::LeftOnly) => {
             if is_left {
-                (byte_to_ascii_char(b), hex_to_c32(&palette.diff_del))
+                (
+                    byte_to_ascii_char(b),
+                    readable(hex_to_c32(&palette.diff_del)),
+                )
             } else {
                 ('·', hex_to_c32(&palette.colors.text_muted))
             }
         }
         (Some(b), DiffKind::RightOnly) => {
             if !is_left {
-                (byte_to_ascii_char(b), hex_to_c32(&palette.diff_add))
+                (
+                    byte_to_ascii_char(b),
+                    readable(hex_to_c32(&palette.diff_add)),
+                )
             } else {
                 ('·', hex_to_c32(&palette.colors.text_muted))
             }
@@ -1810,6 +1833,56 @@ mod tests {
         // 0xFF: slightly red
         let c_ff = byte_subtle_color(0xFF);
         assert_eq!(c_ff, Color32::from_rgb(230, 150, 150));
+    }
+
+    #[test]
+    fn binary_cell_text_meets_contrast_for_all_byte_values_and_modes() {
+        fn contrast(a: Color32, b: Color32) -> f32 {
+            little_clip_core::palette::contrast_ratio((a.r(), a.g(), a.b()), (b.r(), b.g(), b.b()))
+        }
+
+        for appearance in [
+            little_clip_core::config::WorkbenchAppearance::Dark,
+            little_clip_core::config::WorkbenchAppearance::Light,
+        ] {
+            let palette = AppPalette::for_appearance(appearance);
+            let surface = hex_to_c32(&palette.colors.canvas);
+            for byte in 0..=u8::MAX {
+                for kind in [
+                    DiffKind::Match,
+                    DiffKind::Mismatch,
+                    DiffKind::LeftOnly,
+                    DiffKind::RightOnly,
+                ] {
+                    let cell = AlignedCell {
+                        byte_val: Some(byte),
+                        offset: Some(byte as usize),
+                        kind,
+                    };
+                    for color_mode in [ByteColorMode::Digits, ByteColorMode::Background] {
+                        for is_left in [true, false] {
+                            let (hex, foreground, fill) =
+                                format_cell_hex(&cell, is_left, color_mode, &palette);
+                            let background = fill.unwrap_or(surface);
+                            assert!(
+                                contrast(background, foreground) >= 4.5,
+                                "{appearance:?} byte {byte:02X} {kind:?} {color_mode:?} hex label lacks contrast"
+                            );
+
+                            let (character, ascii_foreground) =
+                                format_cell_ascii(&cell, is_left, color_mode, &palette);
+                            if character != '·' {
+                                assert!(
+                                    contrast(surface, ascii_foreground) >= 4.5,
+                                    "{appearance:?} byte {byte:02X} {kind:?} {color_mode:?} ASCII label lacks contrast"
+                                );
+                            }
+                            assert!(!hex.is_empty());
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
