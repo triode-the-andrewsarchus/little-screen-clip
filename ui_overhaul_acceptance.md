@@ -145,3 +145,7 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 - `cargo test -p clip-workbench --bin clip-workbench long_image_header_keeps_actions_in_one_compact_row` passes; it checks compact filename at 1177 points and full title at wider hosts along with badges/action labels and row bounds. `cargo fmt --check`, build pass.
 - Isolated Niri capture `/tmp/clip-image-header-after-1280-light` at 1280×720 logical / 150% / Light passed popup geometry checks. Primary reviewed the settled screenshot: full `image-exif.tiff`, dimension/type/size badges, and Close/Save/Copy/external apps are visible together. Existing screenshot `/tmp/clip-image-footer-e2-1280-light` shows the before state. This only establishes a short filename case; long Unicode title handling and other modes remain in acceptance.
 - Architecture comparison `image-header-title-start`: average and peak CCN unchanged; duplication reduced 0.01%. Tool flags touched source as clone matches but reports no increased duplication percentage; no new dependency or high-complexity function.
+
+## Image View dense content at compact size, 2026-09-27
+
+- Generated a deterministic 1600×1000 multicolor checker/line PNG at `/tmp/clip-image-dense-e2.png`. Isolated Niri capture `/tmp/clip-image-dense-e2-1280-dark` at 1280×720 logical / 100% / Dark passed popup checks. Primary reviewed the settled view: dimension/readout and full footer are visible; canvas is centered; toolbar wraps; header controls stay aligned. This checks canvas/readout/footer fit, not EXIF expansion or every image tool.
