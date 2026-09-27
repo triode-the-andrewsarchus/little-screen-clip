@@ -18,7 +18,9 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
+import wave
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +44,191 @@ IMAGE_TOOL_KEYS = {
     "film-look": "l",
 }
 IMAGE_ACTION_KEYS = {"enter": "Return"}
+
+
+class FakeAudioTransitionDaemon:
+    """Serve one stable audio item whose asynchronous preview becomes ready."""
+
+    ITEM_ID = "9b1de26a-4101-4e08-93d0-2ab14dad415f"
+    AUDIO_PATH = "/tmp/little-clip-acceptance-async-audio.wav"
+
+    def __init__(self, runtime: Path, log_path: Path, ready_delay: float = 2.0):
+        self.socket_path = runtime / "little-screen-clip.sock"
+        self.log_path = log_path
+        self.rolling_audio_path = log_path.parent / "fake-rolling-audio.wav"
+        with wave.open(str(self.rolling_audio_path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(48_000)
+            wav.writeframes(bytes(48_000 * 2))
+        self.ready_at = time.monotonic() + ready_delay
+        self.started_at = time.monotonic()
+        self.stop_event = threading.Event()
+        self.lock = threading.Lock()
+        self.events: list[dict[str, Any]] = []
+        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.listener.bind(str(self.socket_path))
+        os.chmod(self.socket_path, 0o600)
+        self.listener.listen(8)
+        self.listener.settimeout(0.2)
+        self.thread = threading.Thread(target=self._serve, name="fake-audio-ipc", daemon=True)
+        self.thread.start()
+
+    def _item(self, ready: bool) -> dict[str, Any]:
+        waveform = None
+        if ready:
+            waveform = {
+                "channels": 2,
+                "sample_rate": 48000,
+                "duration_ms": 12000,
+                "ch1_peaks": [0.1, 0.65, 0.3, 0.9, 0.2, 0.55, 0.8, 0.35],
+                "ch2_peaks": [0.45, 0.2, 0.75, 0.4, 0.9, 0.3, 0.6, 0.15],
+                "spectral_colors": [
+                    [44, 174, 202], [62, 194, 126], [230, 177, 78], [226, 106, 113],
+                    [155, 116, 220], [54, 183, 174], [234, 139, 74], [98, 151, 224],
+                ],
+                "is_snippet": False,
+                "snippet_start_ms": 0,
+                "snippet_duration_ms": 0,
+            }
+        return {
+            "id": self.ITEM_ID,
+            "created_at": int(time.time()),
+            "payload": {
+                "AudioRef": {
+                    "path": self.AUDIO_PATH,
+                    "duration_ms": 12000,
+                    "sample_rate": 48000,
+                    "channels": 2,
+                    "format": "WAV",
+                    "waveform": waveform,
+                }
+            },
+            "title": "async-preview-demo.wav",
+            "subtitle": "00:12 • 48.0 kHz • Stereo (WAV)",
+            "details": ["00:12", "Stereo"],
+            "handler_tag": "AUDIO (FILE)",
+        }
+
+    def _state(self, ready: bool) -> dict[str, Any]:
+        item = self._item(ready)
+        return {
+            "undo": None,
+            "left_hand": item,
+            "left_prior1": None,
+            "left_prior2": None,
+            "left_prior3": None,
+            "right_prior2": None,
+            "right_prior1": None,
+            "right_hand": None,
+            "cursor": "LeftHand",
+            "selected": ["LeftHand"],
+        }
+
+    def _summary(self, ready: bool) -> dict[str, Any]:
+        return {
+            "cards": [{
+                "slot": "LeftHand",
+                "item_id": self.ITEM_ID,
+                "payload_kind": "Audio",
+                "preview_phase": "Enhanced" if ready else "Pending",
+            }],
+            "cursor": "LeftHand",
+            "selected": ["LeftHand"],
+        }
+
+    def _response(self, request: Any) -> tuple[Any, dict[str, Any]]:
+        ready = time.monotonic() >= self.ready_at
+        if request == "GetState":
+            return {"State": self._state(ready)}, {"kind": "state", "ready": ready}
+        if request == "GetStateSummary":
+            return {"StateSummary": self._summary(ready)}, {"kind": "summary", "ready": ready}
+        if request == {"GetSlotItem": "LeftHand"}:
+            return {"SlotItem": self._item(ready)}, {"kind": "slot_item", "ready": ready}
+        if request == "GetRollingAudio":
+            return {
+                "RollingAudio": {
+                    "path": str(self.rolling_audio_path),
+                    "duration_secs": 1.0,
+                    "sample_rate": 48_000,
+                    "channels": 1,
+                }
+            }, {"kind": "rolling_audio"}
+        if request == "GetAutoActions":
+            return {"AutoActions": {}}, {"kind": "auto_actions"}
+        return {"Error": {"error": f"unsupported acceptance request: {request!r}"}}, {"kind": "unsupported"}
+
+    def _serve(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                connection, _ = self.listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            with connection:
+                try:
+                    request_line = connection.makefile("rb").readline(1_048_577)
+                    request = json.loads(request_line)
+                    response, event = self._response(request)
+                    event.update({"request": request, "elapsed_ms": round((time.monotonic() - self.started_at) * 1000)})
+                    with self.lock:
+                        self.events.append(event)
+                    connection.sendall((json.dumps(response, separators=(",", ":")) + "\n").encode())
+                except (OSError, ValueError, TypeError) as exc:
+                    with self.lock:
+                        self.events.append({"kind": "protocol_error", "error": str(exc)})
+
+    def close(self) -> dict[str, Any]:
+        self.stop_event.set()
+        self.listener.close()
+        self.thread.join(timeout=1)
+        with self.lock:
+            events = list(self.events)
+        self.log_path.write_text(json.dumps(events, indent=2) + "\n", encoding="utf-8")
+        pending_states = [
+            event for event in events if event.get("kind") == "state" and not event.get("ready")
+        ]
+        pending_summaries = [
+            event for event in events if event.get("kind") == "summary" and not event.get("ready")
+        ]
+        ready_summaries = [
+            event for event in events if event.get("kind") == "summary" and event.get("ready")
+        ]
+        ready_items = [
+            event for event in events if event.get("kind") == "slot_item" and event.get("ready")
+        ]
+        ready_summary_index = next(
+            (i for i, event in enumerate(events) if event.get("kind") == "summary" and event.get("ready")),
+            None,
+        )
+        ready_item_index = next(
+            (i for i, event in enumerate(events) if event.get("kind") == "slot_item" and event.get("ready")),
+            None,
+        )
+        summary_before_item = (
+            ready_summary_index is not None
+            and ready_item_index is not None
+            and ready_summary_index < ready_item_index
+        )
+        return {
+            "socket": str(self.socket_path),
+            "log": str(self.log_path),
+            "rolling_audio_fixture": str(self.rolling_audio_path),
+            "ready_delay_ms": round((self.ready_at - self.started_at) * 1000),
+            "initial_pending_state_observed": bool(pending_states),
+            "initial_pending_summary_observed": bool(pending_summaries),
+            "ready_summary_observed": bool(ready_summaries),
+            "ready_slot_item_requested": bool(ready_items),
+            "ready_summary_precedes_item_fetch": summary_before_item,
+            "pass": bool(
+                pending_states
+                and pending_summaries
+                and ready_summaries
+                and ready_items
+                and summary_before_item
+            ),
+        }
 
 
 def command_version(command: str) -> str | None:
@@ -619,6 +806,11 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--audio", type=Path, help="optional existing audio fixture")
     parser.add_argument("--pdf", type=Path, help="optional existing PDF fixture")
     parser.add_argument("--midi", type=Path, help="optional existing MIDI fixture")
+    parser.add_argument(
+        "--fake-audio-transition",
+        action="store_true",
+        help="serve a private pending-to-ready audio slot over IPC while the workbench stays open",
+    )
     parser.add_argument("--verify-return", action="store_true", help="send Escape and verify the popup closes while private Niri remains responsive")
     parser.add_argument("--binary", type=Path, help="workbench binary (default: target/debug/clip-workbench)")
     parser.add_argument("--settle-ms", type=int, default=500, help="settling delay before second capture (default: 500)")
@@ -631,6 +823,8 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
     for fixture in (args.image, args.audio, args.pdf, args.midi):
         if fixture is not None and not fixture.is_file():
             raise SystemExit(f"fixture does not exist: {fixture}")
+    if args.fake_audio_transition and any((args.image, args.audio, args.pdf, args.midi)):
+        raise SystemExit("--fake-audio-transition cannot be combined with file-entry fixtures")
     if args.image_tool and not args.image:
         raise SystemExit("--image-tool requires --image")
     if args.image_action and not args.image_tool:
@@ -670,6 +864,7 @@ def main() -> int:
             "audio_fixture": str(args.audio.resolve()) if args.audio else None,
             "pdf_fixture": str(args.pdf.resolve()) if args.pdf else None,
             "midi_fixture": str(args.midi.resolve()) if args.midi else None,
+            "fake_audio_transition": args.fake_audio_transition,
             "verify_return": args.verify_return,
             "binary": str(binary),
             "settle_ms": args.settle_ms,
@@ -690,6 +885,7 @@ def main() -> int:
         ],
     }
     children = ChildProcesses()
+    fake_audio_daemon: FakeAudioTransitionDaemon | None = None
     try:
         report["commit"] = run_checked(
             ["git", "-C", str(repo), "rev-parse", "HEAD"], env=os.environ.copy(), timeout=3
@@ -704,13 +900,30 @@ def main() -> int:
             "socket": str(socket_path),
             "wayland_display": niri_env["WAYLAND_DISPLAY"],
         }
+        if args.fake_audio_transition:
+            fake_audio_daemon = FakeAudioTransitionDaemon(
+                config["runtime"], output / "fake-daemon-events.json"
+            )
         capture_workbench(args, binary, output, config, niri_env, outputs, children, report)
-        report["status"] = "passed" if not report["failures"] else "failed"
     except Exception as exc:
         report["status"] = "failed"
         report["failures"].append(str(exc))
     finally:
         children.cleanup()
+        if fake_audio_daemon is not None:
+            transition = fake_audio_daemon.close()
+            report["fake_audio_transition"] = transition
+            if not transition["pass"]:
+                report["failures"].append("fake daemon did not observe a ready-summary hydration request")
+            elif report.get("mapped_elapsed_ms") is None:
+                transition["first_observed_before_ready_transition"] = False
+            elif report["mapped_elapsed_ms"] < transition["ready_delay_ms"]:
+                transition["first_observed_before_ready_transition"] = True
+            else:
+                transition["first_observed_before_ready_transition"] = False
+                report["failures"].append("workbench mapped after the fake preview was already ready")
+        if report["status"] == "running":
+            report["status"] = "passed" if not report["failures"] else "failed"
         report["processes"] = children.exit_statuses()
         report["finished_at_unix"] = time.time()
         report["duration_ms"] = round((report["finished_at_unix"] - started) * 1000)
