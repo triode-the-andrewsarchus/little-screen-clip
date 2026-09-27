@@ -295,6 +295,44 @@ struct WorkbenchApp {
     appearance_applied: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkbenchEscapeRoute {
+    Handled,
+    StopAudio,
+    ReturnToPalette,
+    CloseWorkbench,
+}
+
+fn route_workbench_escape(
+    view: &mut WorkbenchView,
+    canvas_state: &mut NodeCanvasState,
+    palette_search_needs_focus: &mut bool,
+    audio_region_active: bool,
+) -> WorkbenchEscapeRoute {
+    if *view == WorkbenchView::NodeMachine
+        && (canvas_state.catalog_open
+            || canvas_state.save_dialog_open
+            || canvas_state.dragging_from.is_some())
+    {
+        if canvas_state.catalog_open {
+            canvas_state.catalog_open = false;
+        } else if canvas_state.save_dialog_open {
+            canvas_state.save_dialog_open = false;
+        } else {
+            canvas_state.dragging_from = None;
+        }
+        WorkbenchEscapeRoute::Handled
+    } else if audio_region_active {
+        WorkbenchEscapeRoute::StopAudio
+    } else if *view == WorkbenchView::NodeMachine || *view == WorkbenchView::AutoActions {
+        *view = WorkbenchView::Palette;
+        *palette_search_needs_focus = true;
+        WorkbenchEscapeRoute::ReturnToPalette
+    } else {
+        WorkbenchEscapeRoute::CloseWorkbench
+    }
+}
+
 impl WorkbenchApp {
     fn new(
         state: SlotManager,
@@ -1912,31 +1950,22 @@ impl WorkbenchApp {
         if !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             return false;
         }
-        if self.view == WorkbenchView::NodeMachine
-            && (self.canvas_state.catalog_open
-                || self.canvas_state.save_dialog_open
-                || self.canvas_state.dragging_from.is_some())
-        {
-            if self.canvas_state.catalog_open {
-                self.canvas_state.catalog_open = false;
-            } else if self.canvas_state.save_dialog_open {
-                self.canvas_state.save_dialog_open = false;
-            } else {
-                self.canvas_state.dragging_from = None;
+        match route_workbench_escape(
+            &mut self.view,
+            &mut self.canvas_state,
+            &mut self.palette_search_needs_focus,
+            audio_region_active,
+        ) {
+            WorkbenchEscapeRoute::Handled | WorkbenchEscapeRoute::ReturnToPalette => {}
+            WorkbenchEscapeRoute::StopAudio => {
+                if let Some(strip) = &mut self.rolling_audio_strip {
+                    strip.selected_region = None;
+                    strip.stop();
+                }
             }
-        } else if audio_region_active {
-            if let Some(strip) = &mut self.rolling_audio_strip {
-                strip.selected_region = None;
-                strip.stop();
+            WorkbenchEscapeRoute::CloseWorkbench => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-        } else if self.view == WorkbenchView::NodeMachine {
-            self.view = WorkbenchView::Palette;
-            self.palette_search_needs_focus = true;
-        } else if self.view == WorkbenchView::AutoActions {
-            self.view = WorkbenchView::Palette;
-            self.palette_search_needs_focus = true;
-        } else {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         true
     }
@@ -2426,6 +2455,37 @@ fn main() -> Result<(), eframe::Error> {
 #[cfg(test)]
 mod workbench_layout_tests {
     use super::*;
+
+    #[test]
+    fn node_dialogs_own_escape_before_returning_to_palette() {
+        let mut view = WorkbenchView::NodeMachine;
+        let mut canvas = NodeCanvasState::with_config(AppConfig::default());
+        canvas.catalog_open = true;
+        canvas.save_dialog_open = true;
+        let mut search_needs_focus = false;
+
+        assert_eq!(
+            route_workbench_escape(&mut view, &mut canvas, &mut search_needs_focus, false),
+            WorkbenchEscapeRoute::Handled
+        );
+        assert!(!canvas.catalog_open);
+        assert!(canvas.save_dialog_open);
+        assert_eq!(view, WorkbenchView::NodeMachine);
+
+        assert_eq!(
+            route_workbench_escape(&mut view, &mut canvas, &mut search_needs_focus, false),
+            WorkbenchEscapeRoute::Handled
+        );
+        assert!(!canvas.save_dialog_open);
+        assert_eq!(view, WorkbenchView::NodeMachine);
+
+        assert_eq!(
+            route_workbench_escape(&mut view, &mut canvas, &mut search_needs_focus, false),
+            WorkbenchEscapeRoute::ReturnToPalette
+        );
+        assert_eq!(view, WorkbenchView::Palette);
+        assert!(search_needs_focus);
+    }
 
     #[test]
     fn palette_search_focus_yields_to_audio_and_returns_on_activation() {

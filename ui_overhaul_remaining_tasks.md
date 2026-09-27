@@ -195,7 +195,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 - [x] **E2.4d [Luna] Test tooltip and disabled-reason behavior.** Disabled transients, waveform/spectrum copy, spreadsheet, and MIDI actions now expose a specific disabled reason while preserving their enabled help tooltip. A shared helper has a two-path egui hover-render test.
 - **E2.4e Modal Escape routing**
   - [x] **E2.4e1 [Luna] Verify Escape closes nested audio save dialogs before closing the studio.** Regression test covers audio and stem dialogs, then confirms a later Escape closes the studio.
-  - [ ] **E2.4e2 [Luna] Verify Escape behavior for representative image and workbench dialogs.**
+  - [x] **E2.4e2 [Luna] Verify Escape behavior for representative image and workbench dialogs.** Existing Image Studio regression proves its save dialog consumes Escape without applying image shortcuts or closing the viewer. New workbench routing test proves catalog and save dialogs close one at a time before a later Escape returns to Palette and restores search focus. Workbench suite passes (225 passed, one ignored).
 - **E2.4f Label contrast**
   - [x] **E2.4f1 [Luna] Verify shared control-label contrast in both appearances.** Existing WCAG test checks active/inactive, add, secondary, danger, and translucent accent surfaces against 4.5:1.
   - [ ] **E2.4f2 [Luna] Audit custom labels outside shared controls.** Full surface contrast audit stays under H1.2c2.
