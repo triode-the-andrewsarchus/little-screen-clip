@@ -1401,10 +1401,8 @@ impl ImagePreviewState {
             }
             ImageToolMode::CreativeFx => {
                 self.creative_fx_state.auto_fitted = false;
-                // Trigger initial render if no preview yet.
-                if self.creative_fx_state.preview_rgba.is_none()
-                    && !self.creative_fx_state.is_rendering
-                {
+                // Re-entering after an image edit must not retain a hidden stale preview.
+                if !self.creative_fx_preview_is_current() && !self.creative_fx_state.is_rendering {
                     self.run_creative_fx_render();
                 }
                 // Trigger thumbnail batch if not generated yet.
@@ -3802,6 +3800,7 @@ mod tests {
             *p = image::Rgba([val, val, val, 255]);
         }
         state.creative_fx_state.cached_depth_map = Some(depth_map);
+        state.creative_fx_state.depth_map_input_stamp = Some(state.input_stamp());
 
         // 3. Enable depth mask on PixelSort
         state.creative_fx_state.selected_fx = CreativeFxType::PixelSort;

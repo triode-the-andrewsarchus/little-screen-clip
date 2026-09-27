@@ -190,7 +190,6 @@ impl ImagePreviewState {
                 .bg_removal_input_stamp
                 .as_ref()
                 .is_some_and(|stamp| stamp.crop.is_some());
-            self.creative_fx_state.cached_background_removal = Some(result_rgba.clone());
             self.undo_stack.push(self.current_rgba.clone());
             self.redo_stack.clear();
             self.current_rgba = result_rgba;
@@ -201,6 +200,10 @@ impl ImagePreviewState {
                 self.crop_state.normalized_rect =
                     Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
             }
+            self.creative_fx_state.cached_background_removal = Some(self.current_rgba.clone());
+            self.creative_fx_state.background_removal_input_stamp = Some(self.input_stamp());
+            self.creative_fx_state.mask_cache_revision =
+                self.creative_fx_state.mask_cache_revision.wrapping_add(1);
             self.dirty_texture = true;
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;

@@ -4,16 +4,492 @@ use crate::shell::{render_context_slider, slider_double_clicked};
 /// Message sent back from background thread rendering full creative FX.
 pub enum CreativeFxMsg {
     Done {
-        fx_type: CreativeFxType,
+        stamp: CreativeFxRenderStamp,
         rgba: RgbaImage,
         duration_ms: u128,
     },
-    Error(String),
+    Error {
+        stamp: CreativeFxRenderStamp,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CreativeFxRenderStamp {
+    pixel_revision: u64,
+    fx_type: CreativeFxType,
+    params: CreativeFxParams,
+    mask_cache_revision: u64,
+    params_revision: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct CreativeFxMaskStamp {
+    input: ImageInputStamp,
+    fx_type: CreativeFxType,
+    selection_revision: u64,
+    params_revision: u64,
+}
+
+#[derive(Debug)]
+pub(crate) struct CreativeFxMaskMsg {
+    stamp: CreativeFxMaskStamp,
+    result: Result<RgbaImage, String>,
+}
+
+fn send_creative_fx_mask_result(
+    tx: &std::sync::mpsc::Sender<CreativeFxMaskMsg>,
+    stamp: &CreativeFxMaskStamp,
+    result: Result<RgbaImage, String>,
+) {
+    let _ = tx.send(CreativeFxMaskMsg {
+        stamp: stamp.clone(),
+        result,
+    });
+}
+
+#[cfg(test)]
+mod ownership_tests {
+    use super::*;
+
+    fn state() -> ImagePreviewState {
+        let mut bytes = Vec::new();
+        RgbaImage::new(8, 8)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let mut state = ImagePreviewState::from_bytes_with_meta(
+            bytes,
+            "image/png".into(),
+            None,
+            "Creative FX ownership".into(),
+            &AppConfig::default(),
+        )
+        .unwrap();
+        state.active_mode = ImageToolMode::CreativeFx;
+        state
+    }
+
+    fn install_render_message(state: &mut ImagePreviewState, message: CreativeFxMsg) {
+        let stamp = match &message {
+            CreativeFxMsg::Done { stamp, .. } | CreativeFxMsg::Error { stamp, .. } => stamp.clone(),
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.creative_fx_state.render_stamp = Some(stamp);
+        state.creative_fx_state.render_rx = Some(rx);
+        state.creative_fx_state.is_rendering = true;
+        tx.send(message).unwrap();
+    }
+
+    #[test]
+    fn render_completion_accepts_current_success_and_discards_stale_success() {
+        let mut current = state();
+        let stamp = current.creative_fx_render_stamp();
+        install_render_message(
+            &mut current,
+            CreativeFxMsg::Done {
+                stamp,
+                rgba: RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255])),
+                duration_ms: 4,
+            },
+        );
+        current.poll_creative_fx();
+        assert_eq!(
+            current
+                .creative_fx_state
+                .preview_rgba
+                .as_ref()
+                .unwrap()
+                .get_pixel(0, 0),
+            &image::Rgba([1, 2, 3, 255])
+        );
+        assert_eq!(
+            current.creative_fx_state.preview_stamp,
+            Some(current.creative_fx_render_stamp())
+        );
+
+        let mut stale = state();
+        let old_stamp = stale.creative_fx_render_stamp();
+        install_render_message(
+            &mut stale,
+            CreativeFxMsg::Done {
+                stamp: old_stamp,
+                rgba: RgbaImage::from_pixel(8, 8, image::Rgba([9, 9, 9, 255])),
+                duration_ms: 4,
+            },
+        );
+        stale.creative_fx_state.lens_params.strength += 1.0;
+        stale.creative_fx_state.mark_dirty();
+        stale.creative_fx_state.lens_params.strength -= 1.0;
+        stale.creative_fx_state.mark_dirty();
+
+        stale.poll_creative_fx();
+
+        assert!(stale.creative_fx_state.preview_rgba.is_none());
+        assert!(!stale.creative_fx_state.is_rendering);
+    }
+
+    #[test]
+    fn render_failure_is_shown_only_for_current_stamp() {
+        let mut current = state();
+        let stamp = current.creative_fx_render_stamp();
+        install_render_message(
+            &mut current,
+            CreativeFxMsg::Error {
+                stamp,
+                message: "current failure".into(),
+            },
+        );
+        current.poll_creative_fx();
+        assert_eq!(
+            current.creative_fx_state.render_error.as_deref(),
+            Some("current failure")
+        );
+
+        let mut stale = state();
+        let old_stamp = stale.creative_fx_render_stamp();
+        install_render_message(
+            &mut stale,
+            CreativeFxMsg::Error {
+                stamp: old_stamp,
+                message: "stale failure".into(),
+            },
+        );
+        stale.creative_fx_state.select_fx(CreativeFxType::Structure);
+        stale
+            .creative_fx_state
+            .select_fx(CreativeFxType::LensAberration);
+
+        stale.poll_creative_fx();
+
+        assert!(stale.creative_fx_state.render_error.is_none());
+        assert!(!stale.creative_fx_state.is_rendering);
+    }
+
+    #[test]
+    fn mask_result_after_switch_is_cached_but_does_not_change_new_fx_settings() {
+        let mut state = state();
+        let stamp = state.current_creative_fx_mask_stamp();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.creative_fx_state.depth_estimation_stamp = Some(stamp.clone());
+        state.creative_fx_state.depth_estimation_rx = Some(rx);
+        state.creative_fx_state.depth_estimation_in_progress = true;
+        tx.send(CreativeFxMaskMsg {
+            stamp,
+            result: Ok(RgbaImage::from_pixel(8, 8, image::Rgba([50, 50, 50, 255]))),
+        })
+        .unwrap();
+        state.creative_fx_state.select_fx(CreativeFxType::Structure);
+
+        state.poll_creative_fx();
+
+        assert!(state.creative_fx_state.cached_depth_map.is_some());
+        assert!(state.depth_mask_cache_is_current());
+        assert!(!state.creative_fx_state.depth_mask_for_active_fx().enabled);
+        assert!(!state.creative_fx_state.depth_estimation_in_progress);
+        assert!(state.creative_fx_state.depth_estimation_rx.is_none());
+    }
+
+    #[test]
+    fn accepted_mask_completion_consumes_debounce_before_rendering() {
+        let mut state = state();
+        let stamp = state.current_creative_fx_mask_stamp();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.creative_fx_state.depth_estimation_stamp = Some(stamp.clone());
+        state.creative_fx_state.depth_estimation_rx = Some(rx);
+        state.creative_fx_state.depth_estimation_in_progress = true;
+        tx.send(CreativeFxMaskMsg {
+            stamp,
+            result: Ok(RgbaImage::from_pixel(8, 8, image::Rgba([64, 64, 64, 255]))),
+        })
+        .unwrap();
+
+        state.poll_creative_fx();
+
+        assert!(state.creative_fx_state.depth_mask_for_active_fx().enabled);
+        assert!(state.creative_fx_state.is_rendering);
+        assert!(state.creative_fx_state.params_dirty_at.is_none());
+    }
+
+    #[test]
+    fn depth_result_after_reset_is_cached_without_reenabling_mask() {
+        let mut state = state();
+        let stamp = state.current_creative_fx_mask_stamp();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.creative_fx_state.depth_estimation_stamp = Some(stamp.clone());
+        state.creative_fx_state.depth_estimation_rx = Some(rx);
+        state.creative_fx_state.depth_estimation_in_progress = true;
+
+        // Match Reset Defaults while the worker is running.
+        state.creative_fx_state.lens_params.strength = 80.0;
+        state.creative_fx_state.lens_params = LensAberrationParams::default();
+        state.creative_fx_state.selected_preset_name = "Default".to_string();
+        state.creative_fx_state.mark_dirty();
+        tx.send(CreativeFxMaskMsg {
+            stamp,
+            result: Ok(RgbaImage::from_pixel(8, 8, image::Rgba([80, 80, 80, 255]))),
+        })
+        .unwrap();
+
+        state.poll_creative_fx();
+
+        assert!(state.creative_fx_state.cached_depth_map.is_some());
+        assert!(!state.creative_fx_state.depth_mask_for_active_fx().enabled);
+        assert!(!state.creative_fx_state.is_rendering);
+    }
+
+    #[test]
+    fn depth_result_after_preset_change_preserves_new_mask_intent() {
+        let mut state = state();
+        let stamp = state.current_creative_fx_mask_stamp();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.creative_fx_state.depth_estimation_stamp = Some(stamp.clone());
+        state.creative_fx_state.depth_estimation_rx = Some(rx);
+        state.creative_fx_state.depth_estimation_in_progress = true;
+
+        // A preset can choose the other source and leave masking off.
+        state.creative_fx_state.selected_preset_name = "Alpha Portrait".to_string();
+        state.creative_fx_state.lens_params.depth_mask = DepthMaskConfig {
+            enabled: false,
+            source: CreativeFxMaskSource::BackgroundRemovalAlpha,
+            invert: true,
+            threshold: 0.4,
+            feather: 0.15,
+        };
+        state.creative_fx_state.mark_dirty();
+        tx.send(CreativeFxMaskMsg {
+            stamp,
+            result: Ok(RgbaImage::from_pixel(8, 8, image::Rgba([80, 80, 80, 255]))),
+        })
+        .unwrap();
+
+        state.poll_creative_fx();
+
+        assert!(state.creative_fx_state.cached_depth_map.is_some());
+        assert_eq!(
+            state.creative_fx_state.depth_mask_for_active_fx(),
+            &DepthMaskConfig {
+                enabled: false,
+                source: CreativeFxMaskSource::BackgroundRemovalAlpha,
+                invert: true,
+                threshold: 0.4,
+                feather: 0.15,
+            }
+        );
+        assert!(!state.creative_fx_state.is_rendering);
+    }
+
+    #[test]
+    fn alpha_result_after_reset_is_cached_without_reenabling_mask() {
+        let mut state = state();
+        let stamp = state.current_creative_fx_mask_stamp();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.creative_fx_state.alpha_mask_stamp = Some(stamp.clone());
+        state.creative_fx_state.alpha_mask_rx = Some(rx);
+        state.creative_fx_state.alpha_mask_in_progress = true;
+        state.creative_fx_state.lens_params.depth_mask.enabled = true;
+        state.creative_fx_state.lens_params = LensAberrationParams::default();
+        state.creative_fx_state.selected_preset_name = "Default".to_string();
+        state.creative_fx_state.mark_dirty();
+        tx.send(CreativeFxMaskMsg {
+            stamp,
+            result: Ok(RgbaImage::from_pixel(
+                8,
+                8,
+                image::Rgba([128, 128, 128, 128]),
+            )),
+        })
+        .unwrap();
+
+        state.poll_creative_fx();
+
+        assert!(state.creative_fx_state.cached_background_removal.is_some());
+        assert!(!state.creative_fx_state.depth_mask_for_active_fx().enabled);
+        assert!(!state.creative_fx_state.is_rendering);
+    }
+
+    #[test]
+    fn stale_mask_completion_is_discarded_and_old_cache_is_invalidated() {
+        let mut state = state();
+        let old_stamp = state.input_stamp();
+        state.mark_pixels_changed();
+        state.creative_fx_state.cached_depth_map =
+            Some(RgbaImage::from_pixel(8, 8, image::Rgba([20, 20, 20, 255])));
+        state.creative_fx_state.depth_map_input_stamp = Some(old_stamp.clone());
+        state.creative_fx_state.depth_estimation_stamp =
+            Some(state.creative_fx_state.mask_stamp(old_stamp.clone()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.creative_fx_state.depth_estimation_rx = Some(rx);
+        state.creative_fx_state.depth_estimation_in_progress = true;
+        tx.send(CreativeFxMaskMsg {
+            stamp: state.creative_fx_state.mask_stamp(old_stamp),
+            result: Err("old depth failure".into()),
+        })
+        .unwrap();
+        state.mark_pixels_changed();
+
+        state.poll_creative_fx();
+
+        assert!(state.creative_fx_state.cached_depth_map.is_none());
+        assert!(!state.depth_mask_cache_is_current());
+        assert!(state.creative_fx_state.depth_estimation_error.is_none());
+        assert!(!state.creative_fx_state.depth_estimation_in_progress);
+        assert!(state.creative_fx_state.depth_estimation_rx.is_none());
+    }
+
+    #[test]
+    fn invalidating_stale_mask_disables_only_configs_using_that_source() {
+        let mut state = state();
+        let old_stamp = state.input_stamp();
+        state.mark_pixels_changed();
+        state.creative_fx_state.cached_depth_map =
+            Some(RgbaImage::from_pixel(8, 8, image::Rgba([20, 20, 20, 255])));
+        state.creative_fx_state.depth_map_input_stamp = Some(old_stamp);
+        state.creative_fx_state.cached_background_removal = Some(RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([255, 255, 255, 255]),
+        ));
+        state.creative_fx_state.background_removal_input_stamp = Some(state.input_stamp());
+        state.creative_fx_state.lens_params.depth_mask.enabled = true;
+        state.creative_fx_state.lens_params.depth_mask.source = CreativeFxMaskSource::DepthMap;
+        state
+            .creative_fx_state
+            .trichromatic_params
+            .depth_mask
+            .enabled = true;
+        state
+            .creative_fx_state
+            .trichromatic_params
+            .depth_mask
+            .source = CreativeFxMaskSource::BackgroundRemovalAlpha;
+        state.invalidate_stale_creative_fx_masks();
+
+        assert!(state.creative_fx_state.cached_depth_map.is_none());
+        assert!(state.creative_fx_state.cached_background_removal.is_some());
+        assert!(!state.creative_fx_state.lens_params.depth_mask.enabled);
+        assert!(
+            state
+                .creative_fx_state
+                .trichromatic_params
+                .depth_mask
+                .enabled
+        );
+        assert!(state.creative_fx_state.params_dirty_at.is_none());
+    }
+
+    #[test]
+    fn reentering_creative_fx_after_pixel_edit_schedules_a_fresh_render() {
+        let mut state = state();
+        state.creative_fx_state.preview_rgba = Some(RgbaImage::new(8, 8));
+        state.creative_fx_state.preview_stamp = Some(state.creative_fx_render_stamp());
+        state.active_mode = ImageToolMode::Crop;
+        state.mark_pixels_changed();
+        state.creative_fx_state.params_dirty_at = Some(std::time::Instant::now());
+
+        state.set_tool_mode(ImageToolMode::CreativeFx);
+
+        assert!(state.creative_fx_state.is_rendering);
+        assert!(state.creative_fx_state.params_dirty_at.is_none());
+        assert_eq!(
+            state.creative_fx_state.render_stamp,
+            Some(state.creative_fx_render_stamp())
+        );
+    }
+
+    #[test]
+    fn thumbnail_batch_drops_pending_textures_and_messages_for_old_pixels() {
+        let ctx = egui::Context::default();
+        let mut state = state();
+        let old_revision = state.pixel_revision;
+        let old_epoch = 4;
+        state.creative_fx_state.thumbnail_epoch = old_epoch;
+        state.creative_fx_state.thumbnail_pixel_revision = Some(old_revision);
+        state.creative_fx_state.is_generating_thumbnails = true;
+        state
+            .creative_fx_state
+            .pending_thumbnails
+            .push((CreativeFxType::LensAberration, RgbaImage::new(2, 2)));
+        let texture = ctx.load_texture(
+            "stale_fx_thumbnail_test",
+            egui::ColorImage::new([2, 2], Color32::WHITE),
+            egui::TextureOptions::LINEAR,
+        );
+        state
+            .creative_fx_state
+            .fx_thumbnails
+            .insert(CreativeFxType::LensAberration, texture);
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.creative_fx_state.thumbnail_rx = Some(rx);
+        tx.send(CreativeFxThumbnailMsg {
+            epoch: old_epoch,
+            pixel_revision: old_revision,
+            fx_type: CreativeFxType::LensAberration,
+            rgba: RgbaImage::new(2, 2),
+        })
+        .unwrap();
+        state.mark_pixels_changed();
+
+        state.poll_creative_fx();
+
+        assert!(state.creative_fx_state.pending_thumbnails.is_empty());
+        assert!(state.creative_fx_state.fx_thumbnails.is_empty());
+        assert!(state.creative_fx_state.thumbnail_rx.is_none());
+        assert!(!state.creative_fx_state.is_generating_thumbnails);
+        assert_ne!(state.creative_fx_state.thumbnail_epoch, old_epoch);
+    }
+
+    #[test]
+    fn thumbnail_poller_keeps_queued_messages_before_disconnect() {
+        let mut state = state();
+        let epoch = 9;
+        let pixel_revision = state.pixel_revision;
+        state.creative_fx_state.thumbnail_epoch = epoch;
+        state.creative_fx_state.thumbnail_pixel_revision = Some(pixel_revision);
+        state.creative_fx_state.is_generating_thumbnails = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.creative_fx_state.thumbnail_rx = Some(rx);
+        tx.send(CreativeFxThumbnailMsg {
+            epoch,
+            pixel_revision,
+            fx_type: CreativeFxType::LensAberration,
+            rgba: RgbaImage::from_pixel(2, 2, image::Rgba([1, 2, 3, 255])),
+        })
+        .unwrap();
+        drop(tx);
+
+        state.poll_creative_fx();
+
+        assert_eq!(state.creative_fx_state.pending_thumbnails.len(), 1);
+        assert!(!state.creative_fx_state.is_generating_thumbnails);
+        assert!(state.creative_fx_state.thumbnail_rx.is_none());
+    }
+
+    #[test]
+    fn apply_rejects_a_preview_from_an_old_source_stamp() {
+        let mut state = state();
+        state.creative_fx_state.preview_rgba =
+            Some(RgbaImage::from_pixel(8, 8, image::Rgba([8, 8, 8, 255])));
+        state.creative_fx_state.preview_stamp = Some(state.creative_fx_render_stamp());
+        state.mark_pixels_changed();
+
+        state.apply_creative_fx();
+
+        assert!(state.undo_stack.is_empty());
+        assert_eq!(state.pixel_revision, 1);
+        assert_eq!(
+            state.current_rgba.get_pixel(0, 0),
+            &image::Rgba([0, 0, 0, 0])
+        );
+    }
 }
 
 /// Message sent back from low-priority background thread rendering mini 42x28 thumbnails.
 pub struct CreativeFxThumbnailMsg {
     pub epoch: u64,
+    pub pixel_revision: u64,
     pub fx_type: CreativeFxType,
     pub rgba: RgbaImage,
 }
@@ -78,6 +554,8 @@ pub struct CreativeFxState {
     pub structure_params: StructureParams,
 
     pub selected_preset_name: String,
+    params_revision: u64,
+    selection_revision: u64,
 
     // Preview state
     pub preview_rgba: Option<RgbaImage>,
@@ -90,6 +568,8 @@ pub struct CreativeFxState {
     // Async render worker (Main preview image)
     pub is_rendering: bool,
     pub render_rx: Option<std::sync::mpsc::Receiver<CreativeFxMsg>>,
+    render_stamp: Option<CreativeFxRenderStamp>,
+    preview_stamp: Option<CreativeFxRenderStamp>,
     pub render_error: Option<String>,
 
     // Async thumbnail worker (Sidebar 42x28 mini-photos for each FX)
@@ -97,6 +577,7 @@ pub struct CreativeFxState {
     pub pending_thumbnails: Vec<(CreativeFxType, RgbaImage)>,
     pub thumbnail_rx: Option<std::sync::mpsc::Receiver<CreativeFxThumbnailMsg>>,
     pub thumbnail_epoch: u64,
+    pub thumbnail_pixel_revision: Option<u64>,
     pub is_generating_thumbnails: bool,
 
     // Debounce timer
@@ -105,14 +586,19 @@ pub struct CreativeFxState {
 
     // Depth mask state
     pub cached_depth_map: Option<RgbaImage>,
+    pub(crate) depth_map_input_stamp: Option<ImageInputStamp>,
+    pub(super) mask_cache_revision: u64,
     pub depth_estimation_in_progress: bool,
-    pub depth_estimation_rx: Option<std::sync::mpsc::Receiver<Result<RgbaImage, String>>>,
+    pub depth_estimation_rx: Option<std::sync::mpsc::Receiver<CreativeFxMaskMsg>>,
+    depth_estimation_stamp: Option<CreativeFxMaskStamp>,
     pub depth_estimation_error: Option<String>,
 
     // Background-removal alpha mask state
     pub cached_background_removal: Option<RgbaImage>,
+    pub(super) background_removal_input_stamp: Option<ImageInputStamp>,
     pub alpha_mask_in_progress: bool,
-    pub alpha_mask_rx: Option<std::sync::mpsc::Receiver<Result<RgbaImage, String>>>,
+    pub alpha_mask_rx: Option<std::sync::mpsc::Receiver<CreativeFxMaskMsg>>,
+    alpha_mask_stamp: Option<CreativeFxMaskStamp>,
     pub alpha_mask_error: Option<String>,
 }
 
@@ -128,6 +614,8 @@ impl Default for CreativeFxState {
             ntsc_params: NtscParams::default(),
             structure_params: StructureParams::default(),
             selected_preset_name: "Default".to_string(),
+            params_revision: 0,
+            selection_revision: 0,
             preview_rgba: None,
             preview_texture: None,
             dirty_preview_texture: false,
@@ -136,21 +624,29 @@ impl Default for CreativeFxState {
             last_render_duration_ms: 0,
             is_rendering: false,
             render_rx: None,
+            render_stamp: None,
+            preview_stamp: None,
             render_error: None,
             fx_thumbnails: std::collections::HashMap::new(),
             pending_thumbnails: Vec::new(),
             thumbnail_rx: None,
             thumbnail_epoch: 0,
+            thumbnail_pixel_revision: None,
             is_generating_thumbnails: false,
             params_dirty_at: None,
             auto_fitted: false,
             cached_depth_map: None,
+            depth_map_input_stamp: None,
+            mask_cache_revision: 0,
             depth_estimation_in_progress: false,
             depth_estimation_rx: None,
+            depth_estimation_stamp: None,
             depth_estimation_error: None,
             cached_background_removal: None,
+            background_removal_input_stamp: None,
             alpha_mask_in_progress: false,
             alpha_mask_rx: None,
+            alpha_mask_stamp: None,
             alpha_mask_error: None,
         }
     }
@@ -159,6 +655,15 @@ impl Default for CreativeFxState {
 impl CreativeFxState {
     pub fn mark_dirty(&mut self) {
         self.params_dirty_at = Some(std::time::Instant::now());
+        self.params_revision = self.params_revision.wrapping_add(1);
+    }
+
+    fn select_fx(&mut self, fx_type: CreativeFxType) {
+        if self.selected_fx != fx_type {
+            self.selected_fx = fx_type;
+            self.selection_revision = self.selection_revision.wrapping_add(1);
+            self.mark_dirty();
+        }
     }
 
     pub fn depth_mask_for_active_fx(&self) -> &DepthMaskConfig {
@@ -198,24 +703,199 @@ impl CreativeFxState {
             CreativeFxType::Structure => CreativeFxParams::Structure(self.structure_params),
         }
     }
+
+    fn render_stamp(&self, pixel_revision: u64) -> CreativeFxRenderStamp {
+        CreativeFxRenderStamp {
+            pixel_revision,
+            fx_type: self.selected_fx,
+            params: self.current_params(),
+            mask_cache_revision: self.mask_cache_revision,
+            params_revision: self.params_revision,
+        }
+    }
+
+    fn mask_stamp(&self, input: ImageInputStamp) -> CreativeFxMaskStamp {
+        CreativeFxMaskStamp {
+            input,
+            fx_type: self.selected_fx,
+            selection_revision: self.selection_revision,
+            params_revision: self.params_revision,
+        }
+    }
+
+    fn disable_mask_source(&mut self, source: CreativeFxMaskSource) -> bool {
+        let configs = [
+            &mut self.lens_params.depth_mask,
+            &mut self.trichromatic_params.depth_mask,
+            &mut self.pixel_sort_params.depth_mask,
+            &mut self.cmyk_params.depth_mask,
+            &mut self.dither_params.depth_mask,
+            &mut self.ntsc_params.depth_mask,
+            &mut self.structure_params.depth_mask,
+        ];
+        configs.into_iter().fold(false, |changed, config| {
+            if config.enabled && config.source == source {
+                config.enabled = false;
+                true
+            } else {
+                changed
+            }
+        })
+    }
 }
 
 impl ImagePreviewState {
+    fn invalidate_stale_creative_fx_masks(&mut self) {
+        let current = self.input_stamp();
+        let stale_depth = self.creative_fx_state.cached_depth_map.is_some()
+            && self.creative_fx_state.depth_map_input_stamp.as_ref() != Some(&current);
+        let stale_alpha = self.creative_fx_state.cached_background_removal.is_some()
+            && self
+                .creative_fx_state
+                .background_removal_input_stamp
+                .as_ref()
+                != Some(&current);
+        if stale_depth {
+            self.clear_creative_fx_mask_cache(CreativeFxMaskSource::DepthMap);
+        }
+        if stale_alpha {
+            self.clear_creative_fx_mask_cache(CreativeFxMaskSource::BackgroundRemovalAlpha);
+        }
+        self.finish_creative_fx_mask_invalidation(stale_depth, stale_alpha);
+    }
+
+    fn clear_creative_fx_mask_cache(&mut self, source: CreativeFxMaskSource) {
+        match source {
+            CreativeFxMaskSource::DepthMap => {
+                self.creative_fx_state.cached_depth_map = None;
+                self.creative_fx_state.depth_map_input_stamp = None;
+            }
+            CreativeFxMaskSource::BackgroundRemovalAlpha => {
+                self.creative_fx_state.cached_background_removal = None;
+                self.creative_fx_state.background_removal_input_stamp = None;
+            }
+        }
+    }
+
+    fn finish_creative_fx_mask_invalidation(&mut self, stale_depth: bool, stale_alpha: bool) {
+        if !stale_depth && !stale_alpha {
+            return;
+        }
+        let active_config = *self.creative_fx_state.depth_mask_for_active_fx();
+        let active_source_invalidated = (stale_depth
+            && active_config.enabled
+            && active_config.source == CreativeFxMaskSource::DepthMap)
+            || (stale_alpha
+                && active_config.enabled
+                && active_config.source == CreativeFxMaskSource::BackgroundRemovalAlpha);
+        let disabled_depth_configs = stale_depth
+            && self
+                .creative_fx_state
+                .disable_mask_source(CreativeFxMaskSource::DepthMap);
+        let disabled_alpha_configs = stale_alpha
+            && self
+                .creative_fx_state
+                .disable_mask_source(CreativeFxMaskSource::BackgroundRemovalAlpha);
+        self.schedule_mask_preview_after_invalidation(
+            active_source_invalidated,
+            disabled_depth_configs || disabled_alpha_configs,
+        );
+    }
+
+    fn schedule_mask_preview_after_invalidation(
+        &mut self,
+        active_source_invalidated: bool,
+        any_config_disabled: bool,
+    ) {
+        if !active_source_invalidated || !any_config_disabled {
+            return;
+        }
+        self.creative_fx_state.mask_cache_revision =
+            self.creative_fx_state.mask_cache_revision.wrapping_add(1);
+        self.creative_fx_state.mark_dirty();
+        let preview_needs_refresh = self.active_mode == ImageToolMode::CreativeFx
+            && (self.creative_fx_state.preview_rgba.is_some()
+                || self.creative_fx_state.is_rendering);
+        if !preview_needs_refresh {
+            self.creative_fx_state.params_dirty_at = None;
+        }
+    }
+
+    fn current_creative_fx_mask_stamp(&self) -> CreativeFxMaskStamp {
+        self.creative_fx_state.mask_stamp(self.input_stamp())
+    }
+
+    fn creative_fx_render_stamp(&self) -> CreativeFxRenderStamp {
+        self.creative_fx_state.render_stamp(self.pixel_revision)
+    }
+
+    pub(crate) fn creative_fx_preview_is_current(&self) -> bool {
+        self.creative_fx_state.preview_stamp.as_ref() == Some(&self.creative_fx_render_stamp())
+    }
+
+    fn creative_fx_mask_source_matches(
+        &self,
+        expected: Option<&CreativeFxMaskStamp>,
+        actual: &CreativeFxMaskStamp,
+    ) -> bool {
+        expected == Some(actual) && actual.input == self.input_stamp()
+    }
+
+    fn creative_fx_mask_intent_matches(&self, stamp: &CreativeFxMaskStamp) -> bool {
+        stamp.params_revision == self.creative_fx_state.params_revision
+            && stamp.fx_type == self.creative_fx_state.selected_fx
+            && stamp.selection_revision == self.creative_fx_state.selection_revision
+    }
+
+    fn depth_mask_cache_is_current(&self) -> bool {
+        self.creative_fx_state.cached_depth_map.is_some()
+            && self.creative_fx_state.depth_map_input_stamp.as_ref() == Some(&self.input_stamp())
+    }
+
+    fn alpha_mask_cache_is_current(&self) -> bool {
+        self.creative_fx_state.cached_background_removal.is_some()
+            && self
+                .creative_fx_state
+                .background_removal_input_stamp
+                .as_ref()
+                == Some(&self.input_stamp())
+    }
+
+    fn invalidate_stale_creative_fx_thumbnails(&mut self) {
+        if self
+            .creative_fx_state
+            .thumbnail_pixel_revision
+            .is_some_and(|revision| revision != self.pixel_revision)
+        {
+            self.creative_fx_state.thumbnail_epoch =
+                self.creative_fx_state.thumbnail_epoch.wrapping_add(1);
+            self.creative_fx_state.thumbnail_pixel_revision = None;
+            self.creative_fx_state.thumbnail_rx = None;
+            self.creative_fx_state.pending_thumbnails.clear();
+            self.creative_fx_state.fx_thumbnails.clear();
+            self.creative_fx_state.is_generating_thumbnails = false;
+        }
+    }
+
     pub fn run_creative_fx_render(&mut self) {
         if self.creative_fx_state.is_rendering || self.current_rgba.is_empty() {
             return;
         }
 
+        self.invalidate_stale_creative_fx_masks();
+
         let input_rgba = self.current_rgba.clone();
-        let selected_fx = self.creative_fx_state.selected_fx;
+        let stamp = self.creative_fx_render_stamp();
         let params = self.creative_fx_state.current_params();
         let cached_depth = self.creative_fx_state.cached_depth_map.clone();
         let cached_background_removal = self.creative_fx_state.cached_background_removal.clone();
 
         let (tx, rx) = std::sync::mpsc::channel::<CreativeFxMsg>();
         self.creative_fx_state.render_rx = Some(rx);
+        self.creative_fx_state.render_stamp = Some(stamp.clone());
         self.creative_fx_state.is_rendering = true;
         self.creative_fx_state.render_error = None;
+        self.creative_fx_state.params_dirty_at = None;
 
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
@@ -231,7 +911,7 @@ impl ImagePreviewState {
                 Ok(out_rgba) => {
                     let duration_ms = start.elapsed().as_millis();
                     let _ = tx.send(CreativeFxMsg::Done {
-                        fx_type: selected_fx,
+                        stamp,
                         rgba: out_rgba,
                         duration_ms,
                     });
@@ -244,7 +924,10 @@ impl ImagePreviewState {
                     } else {
                         "Creative FX processing panicked".to_string()
                     };
-                    let _ = tx.send(CreativeFxMsg::Error(err_msg));
+                    let _ = tx.send(CreativeFxMsg::Error {
+                        stamp,
+                        message: err_msg,
+                    });
                 }
             }
         });
@@ -278,8 +961,10 @@ impl ImagePreviewState {
             ("python3".to_string(), vec![depth_script.to_string()])
         };
 
-        let (tx, rx) = std::sync::mpsc::channel::<Result<RgbaImage, String>>();
+        let stamp = self.current_creative_fx_mask_stamp();
+        let (tx, rx) = std::sync::mpsc::channel::<CreativeFxMaskMsg>();
         self.creative_fx_state.depth_estimation_rx = Some(rx);
+        self.creative_fx_state.depth_estimation_stamp = Some(stamp.clone());
         self.creative_fx_state.depth_estimation_in_progress = true;
         self.creative_fx_state.depth_estimation_error = None;
 
@@ -295,10 +980,14 @@ impl ImagePreviewState {
             {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.send(Err(format!(
-                        "Failed to launch depth estimation '{}': {}. Ensure Python environment is setup.",
-                        cmd_bin, e
-                    )));
+                    send_creative_fx_mask_result(
+                        &tx,
+                        &stamp,
+                        Err(format!(
+                            "Failed to launch depth estimation '{}': {}. Ensure Python environment is setup.",
+                            cmd_bin, e
+                        )),
+                    );
                     return;
                 }
             };
@@ -306,7 +995,11 @@ impl ImagePreviewState {
             if let Some(mut stdin) = child.stdin.take() {
                 use std::io::Write;
                 if let Err(e) = stdin.write_all(&png_bytes) {
-                    let _ = tx.send(Err(format!("Failed to write image data to worker: {}", e)));
+                    send_creative_fx_mask_result(
+                        &tx,
+                        &stamp,
+                        Err(format!("Failed to write image data to worker: {}", e)),
+                    );
                     return;
                 }
             }
@@ -314,23 +1007,35 @@ impl ImagePreviewState {
             let output = match child.wait_with_output() {
                 Ok(o) => o,
                 Err(e) => {
-                    let _ = tx.send(Err(format!("Depth estimation process failed: {}", e)));
+                    send_creative_fx_mask_result(
+                        &tx,
+                        &stamp,
+                        Err(format!("Depth estimation process failed: {}", e)),
+                    );
                     return;
                 }
             };
 
             if !output.status.success() {
                 let err_str = String::from_utf8_lossy(&output.stderr);
-                let _ = tx.send(Err(format!("Depth estimation failed:\n{}", err_str.trim())));
+                send_creative_fx_mask_result(
+                    &tx,
+                    &stamp,
+                    Err(format!("Depth estimation failed:\n{}", err_str.trim())),
+                );
                 return;
             }
 
             match image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png) {
                 Ok(dyn_img) => {
-                    let _ = tx.send(Ok(dyn_img.to_rgba8()));
+                    send_creative_fx_mask_result(&tx, &stamp, Ok(dyn_img.to_rgba8()));
                 }
                 Err(e) => {
-                    let _ = tx.send(Err(format!("Failed to decode output PNG: {}", e)));
+                    send_creative_fx_mask_result(
+                        &tx,
+                        &stamp,
+                        Err(format!("Failed to decode output PNG: {}", e)),
+                    );
                 }
             }
         });
@@ -358,8 +1063,10 @@ impl ImagePreviewState {
         }
 
         let configured_cmd = self.bg_removal_cmd.clone();
-        let (tx, rx) = std::sync::mpsc::channel::<Result<RgbaImage, String>>();
+        let stamp = self.current_creative_fx_mask_stamp();
+        let (tx, rx) = std::sync::mpsc::channel::<CreativeFxMaskMsg>();
         self.creative_fx_state.alpha_mask_rx = Some(rx);
+        self.creative_fx_state.alpha_mask_stamp = Some(stamp.clone());
         self.creative_fx_state.alpha_mask_in_progress = true;
         self.creative_fx_state.alpha_mask_error = None;
 
@@ -369,7 +1076,7 @@ impl ImagePreviewState {
                 configured_cmd.as_deref(),
                 None,
             );
-            let _ = tx.send(result);
+            send_creative_fx_mask_result(&tx, &stamp, result);
         });
     }
 
@@ -380,6 +1087,8 @@ impl ImagePreviewState {
         }
         self.creative_fx_state.thumbnail_epoch += 1;
         let epoch = self.creative_fx_state.thumbnail_epoch;
+        let pixel_revision = self.pixel_revision;
+        self.creative_fx_state.thumbnail_pixel_revision = Some(pixel_revision);
 
         // Downscale base image to 42x28 (sub-millisecond)
         let thumb_base = image::imageops::resize(
@@ -404,6 +1113,7 @@ impl ImagePreviewState {
                     if let Ok(rgba) = res {
                         let _ = tx.send(CreativeFxThumbnailMsg {
                             epoch,
+                            pixel_revision,
                             fx_type: *fx,
                             rgba,
                         });
@@ -413,114 +1123,257 @@ impl ImagePreviewState {
             .ok();
     }
 
-    /// Poll messages from Creative FX background render, depth estimation, and thumbnail threads.
+    /// Poll each Creative FX worker independently so result ownership and cleanup stay local.
     pub fn poll_creative_fx(&mut self) {
-        if let Some(rx) = self.creative_fx_state.render_rx.take() {
-            match rx.try_recv() {
-                Ok(CreativeFxMsg::Done {
-                    fx_type,
-                    rgba,
-                    duration_ms,
-                }) => {
-                    if fx_type == self.creative_fx_state.selected_fx {
-                        self.creative_fx_state.preview_rgba = Some(rgba);
-                        self.creative_fx_state.dirty_preview_texture = true;
-                        self.creative_fx_state.last_render_duration_ms = duration_ms;
-                    }
-                    self.creative_fx_state.is_rendering = false;
+        self.invalidate_stale_creative_fx_masks();
+        self.invalidate_stale_creative_fx_thumbnails();
+        self.poll_creative_fx_render();
+        self.poll_creative_fx_depth_mask();
+        self.poll_creative_fx_alpha_mask();
+        self.poll_creative_fx_thumbnails();
+    }
+
+    fn poll_creative_fx_render(&mut self) {
+        let Some(rx) = self.creative_fx_state.render_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(CreativeFxMsg::Done {
+                stamp,
+                rgba,
+                duration_ms,
+            }) => {
+                let is_current = self.creative_fx_state.render_stamp.as_ref() == Some(&stamp)
+                    && stamp == self.creative_fx_render_stamp();
+                if is_current {
+                    self.creative_fx_state.preview_rgba = Some(rgba);
+                    self.creative_fx_state.preview_stamp = Some(stamp);
+                    self.creative_fx_state.dirty_preview_texture = true;
+                    self.creative_fx_state.last_render_duration_ms = duration_ms;
                     self.creative_fx_state.render_error = None;
+                } else if self.active_mode == ImageToolMode::CreativeFx
+                    && self.creative_fx_state.params_dirty_at.is_none()
+                {
+                    self.creative_fx_state.mark_dirty();
                 }
-                Ok(CreativeFxMsg::Error(e)) => {
-                    self.creative_fx_state.render_error = Some(e);
-                    self.creative_fx_state.is_rendering = false;
+                self.creative_fx_state.is_rendering = false;
+                self.creative_fx_state.render_stamp = None;
+            }
+            Ok(CreativeFxMsg::Error { stamp, message }) => {
+                let is_current = self.creative_fx_state.render_stamp.as_ref() == Some(&stamp)
+                    && stamp == self.creative_fx_render_stamp();
+                if is_current {
+                    self.creative_fx_state.render_error = Some(message);
+                } else if self.active_mode == ImageToolMode::CreativeFx
+                    && self.creative_fx_state.params_dirty_at.is_none()
+                {
+                    self.creative_fx_state.mark_dirty();
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    self.creative_fx_state.render_rx = Some(rx);
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.creative_fx_state.is_rendering = false;
-                }
+                self.creative_fx_state.is_rendering = false;
+                self.creative_fx_state.render_stamp = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.creative_fx_state.render_rx = Some(rx);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.creative_fx_state.is_rendering = false;
+                self.creative_fx_state.render_stamp = None;
             }
         }
+    }
 
-        if let Some(rx) = self.creative_fx_state.depth_estimation_rx.take() {
+    fn poll_creative_fx_depth_mask(&mut self) {
+        if self.creative_fx_state.depth_estimation_rx.is_some()
+            && self
+                .creative_fx_state
+                .depth_estimation_stamp
+                .as_ref()
+                .map(|stamp| &stamp.input)
+                != Some(&self.input_stamp())
+        {
+            self.creative_fx_state.depth_estimation_rx = None;
+            self.creative_fx_state.depth_estimation_stamp = None;
+            self.creative_fx_state.depth_estimation_in_progress = false;
+            return;
+        }
+        let Some(rx) = self.creative_fx_state.depth_estimation_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(message) => {
+                let stamp = message.stamp;
+                let source_is_current = self.creative_fx_mask_source_matches(
+                    self.creative_fx_state.depth_estimation_stamp.as_ref(),
+                    &stamp,
+                );
+                let can_configure_selected =
+                    source_is_current && self.creative_fx_mask_intent_matches(&stamp);
+                match message.result {
+                    Ok(depth_rgba) if source_is_current => {
+                        self.accept_creative_fx_depth_mask(
+                            stamp,
+                            depth_rgba,
+                            can_configure_selected,
+                        );
+                    }
+                    Err(error) if can_configure_selected => {
+                        self.creative_fx_state.depth_estimation_error = Some(error);
+                    }
+                    _ => {}
+                }
+                self.creative_fx_state.depth_estimation_in_progress = false;
+                self.creative_fx_state.depth_estimation_stamp = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.creative_fx_state.depth_estimation_rx = Some(rx);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.creative_fx_state.depth_estimation_in_progress = false;
+                self.creative_fx_state.depth_estimation_stamp = None;
+            }
+        }
+    }
+
+    fn poll_creative_fx_alpha_mask(&mut self) {
+        if self.creative_fx_state.alpha_mask_rx.is_some()
+            && self
+                .creative_fx_state
+                .alpha_mask_stamp
+                .as_ref()
+                .map(|stamp| &stamp.input)
+                != Some(&self.input_stamp())
+        {
+            self.creative_fx_state.alpha_mask_rx = None;
+            self.creative_fx_state.alpha_mask_stamp = None;
+            self.creative_fx_state.alpha_mask_in_progress = false;
+            return;
+        }
+        let Some(rx) = self.creative_fx_state.alpha_mask_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(message) => {
+                let stamp = message.stamp;
+                let source_is_current = self.creative_fx_mask_source_matches(
+                    self.creative_fx_state.alpha_mask_stamp.as_ref(),
+                    &stamp,
+                );
+                let can_configure_selected =
+                    source_is_current && self.creative_fx_mask_intent_matches(&stamp);
+                match message.result {
+                    Ok(removal_result) if source_is_current => {
+                        self.accept_creative_fx_alpha_mask(
+                            stamp,
+                            removal_result,
+                            can_configure_selected,
+                        );
+                    }
+                    Err(error) if can_configure_selected => {
+                        self.creative_fx_state.alpha_mask_error = Some(error);
+                    }
+                    _ => {}
+                }
+                self.creative_fx_state.alpha_mask_in_progress = false;
+                self.creative_fx_state.alpha_mask_stamp = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.creative_fx_state.alpha_mask_rx = Some(rx);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.creative_fx_state.alpha_mask_in_progress = false;
+                self.creative_fx_state.alpha_mask_stamp = None;
+            }
+        }
+    }
+
+    fn poll_creative_fx_thumbnails(&mut self) {
+        let Some(rx) = self.creative_fx_state.thumbnail_rx.take() else {
+            return;
+        };
+        loop {
             match rx.try_recv() {
-                Ok(Ok(depth_rgba)) => {
-                    self.creative_fx_state.cached_depth_map = Some(depth_rgba);
-                    self.creative_fx_state.depth_estimation_in_progress = false;
-                    self.creative_fx_state.depth_estimation_error = None;
-                    self.creative_fx_state.depth_mask_for_active_fx_mut().source =
-                        CreativeFxMaskSource::DepthMap;
-                    self.creative_fx_state
-                        .depth_mask_for_active_fx_mut()
-                        .enabled = true;
-                    self.run_creative_fx_render();
-                }
-                Ok(Err(e)) => {
-                    self.creative_fx_state.depth_estimation_error = Some(e);
-                    self.creative_fx_state.depth_estimation_in_progress = false;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    self.creative_fx_state.depth_estimation_rx = Some(rx);
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.creative_fx_state.depth_estimation_in_progress = false;
-                }
-            }
-        }
-
-        if let Some(rx) = self.creative_fx_state.alpha_mask_rx.take() {
-            match rx.try_recv() {
-                Ok(Ok(removal_result)) => {
-                    self.creative_fx_state.cached_background_removal = Some(removal_result);
-                    self.creative_fx_state.alpha_mask_in_progress = false;
-                    self.creative_fx_state.alpha_mask_error = None;
-                    self.creative_fx_state.depth_mask_for_active_fx_mut().source =
-                        CreativeFxMaskSource::BackgroundRemovalAlpha;
-                    self.creative_fx_state
-                        .depth_mask_for_active_fx_mut()
-                        .enabled = true;
-                    self.run_creative_fx_render();
-                }
-                Ok(Err(error)) => {
-                    self.creative_fx_state.alpha_mask_error = Some(error);
-                    self.creative_fx_state.alpha_mask_in_progress = false;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    self.creative_fx_state.alpha_mask_rx = Some(rx);
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.creative_fx_state.alpha_mask_in_progress = false;
-                }
-            }
-        }
-
-        if let Some(rx) = self.creative_fx_state.thumbnail_rx.take() {
-            let mut disconnected = false;
-            while let Ok(msg) = rx.try_recv() {
-                if msg.epoch == self.creative_fx_state.thumbnail_epoch {
+                Ok(msg)
+                    if msg.epoch == self.creative_fx_state.thumbnail_epoch
+                        && Some(msg.pixel_revision)
+                            == self.creative_fx_state.thumbnail_pixel_revision
+                        && msg.pixel_revision == self.pixel_revision =>
+                {
                     self.creative_fx_state
                         .pending_thumbnails
                         .push((msg.fx_type, msg.rgba));
                 }
-            }
-            match rx.try_recv() {
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    disconnected = true;
+                Ok(_) => {}
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.creative_fx_state.thumbnail_rx = Some(rx);
+                    break;
                 }
-                _ => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.creative_fx_state.is_generating_thumbnails = false;
+                    break;
+                }
             }
-            if disconnected {
-                self.creative_fx_state.is_generating_thumbnails = false;
-            } else {
-                self.creative_fx_state.thumbnail_rx = Some(rx);
-            }
+        }
+    }
+
+    fn accept_creative_fx_depth_mask(
+        &mut self,
+        stamp: CreativeFxMaskStamp,
+        depth_rgba: RgbaImage,
+        can_configure_selected: bool,
+    ) {
+        self.creative_fx_state.cached_depth_map = Some(depth_rgba);
+        self.creative_fx_state.depth_map_input_stamp = Some(stamp.input);
+        self.creative_fx_state.depth_estimation_error = None;
+        let active_uses_cache = {
+            let config = self.creative_fx_state.depth_mask_for_active_fx();
+            config.enabled && config.source == CreativeFxMaskSource::DepthMap
+        };
+        if can_configure_selected {
+            let config = self.creative_fx_state.depth_mask_for_active_fx_mut();
+            config.source = CreativeFxMaskSource::DepthMap;
+            config.enabled = true;
+        }
+        if can_configure_selected || active_uses_cache {
+            self.creative_fx_state.mask_cache_revision =
+                self.creative_fx_state.mask_cache_revision.wrapping_add(1);
+            self.creative_fx_state.mark_dirty();
+            self.run_creative_fx_render();
+        }
+    }
+
+    fn accept_creative_fx_alpha_mask(
+        &mut self,
+        stamp: CreativeFxMaskStamp,
+        removal_result: RgbaImage,
+        can_configure_selected: bool,
+    ) {
+        self.creative_fx_state.cached_background_removal = Some(removal_result);
+        self.creative_fx_state.background_removal_input_stamp = Some(stamp.input);
+        self.creative_fx_state.alpha_mask_error = None;
+        let active_uses_cache = {
+            let config = self.creative_fx_state.depth_mask_for_active_fx();
+            config.enabled && config.source == CreativeFxMaskSource::BackgroundRemovalAlpha
+        };
+        if can_configure_selected {
+            let config = self.creative_fx_state.depth_mask_for_active_fx_mut();
+            config.source = CreativeFxMaskSource::BackgroundRemovalAlpha;
+            config.enabled = true;
+        }
+        if can_configure_selected || active_uses_cache {
+            self.creative_fx_state.mask_cache_revision =
+                self.creative_fx_state.mask_cache_revision.wrapping_add(1);
+            self.creative_fx_state.mark_dirty();
+            self.run_creative_fx_render();
         }
     }
 
     /// Commit creative FX result into current_rgba and push to undo stack.
 
     pub fn apply_creative_fx(&mut self) {
+        self.invalidate_stale_creative_fx_masks();
+        if self.creative_fx_state.preview_stamp.as_ref() != Some(&self.creative_fx_render_stamp()) {
+            return;
+        }
         let preview = match self.creative_fx_state.preview_rgba.take() {
             Some(p) => p,
             None => return,
@@ -530,16 +1383,19 @@ impl ImagePreviewState {
         self.redo_stack.clear();
         self.current_rgba = preview;
         self.mark_pixels_changed();
+        self.invalidate_stale_creative_fx_masks();
         self.dirty_texture = true;
         self.resize_state.sync_from_image(&self.current_rgba);
         self.palette_state.is_extracted = false;
 
         self.creative_fx_state.preview_rgba = None;
+        self.creative_fx_state.preview_stamp = None;
         self.creative_fx_state.preview_texture = None;
         self.creative_fx_state.dirty_preview_texture = false;
 
         self.creative_fx_state.fx_thumbnails.clear();
         self.creative_fx_state.pending_thumbnails.clear();
+        self.creative_fx_state.thumbnail_pixel_revision = None;
         self.run_creative_fx_thumbnail_batch();
         self.show_toast(format!("✨ {} applied", fx_name));
     }
@@ -557,11 +1413,10 @@ impl ImagePreviewState {
             return;
         }
 
+        self.invalidate_stale_creative_fx_masks();
         let cached = match source {
-            CreativeFxMaskSource::DepthMap => self.creative_fx_state.cached_depth_map.is_some(),
-            CreativeFxMaskSource::BackgroundRemovalAlpha => {
-                self.creative_fx_state.cached_background_removal.is_some()
-            }
+            CreativeFxMaskSource::DepthMap => self.depth_mask_cache_is_current(),
+            CreativeFxMaskSource::BackgroundRemovalAlpha => self.alpha_mask_cache_is_current(),
         };
         if cached {
             let config = self.creative_fx_state.depth_mask_for_active_fx_mut();
@@ -590,8 +1445,9 @@ impl ImagePreviewState {
         let depth_active = config.enabled && config.source == CreativeFxMaskSource::DepthMap;
         let alpha_active =
             config.enabled && config.source == CreativeFxMaskSource::BackgroundRemovalAlpha;
-        let has_depth = self.creative_fx_state.cached_depth_map.is_some();
-        let has_alpha = self.creative_fx_state.cached_background_removal.is_some();
+        self.invalidate_stale_creative_fx_masks();
+        let has_depth = self.depth_mask_cache_is_current();
+        let has_alpha = self.alpha_mask_cache_is_current();
         let depth_loading = self.creative_fx_state.depth_estimation_in_progress;
         let alpha_loading = self.creative_fx_state.alpha_mask_in_progress;
         let mask_loading = depth_loading || alpha_loading;
@@ -778,6 +1634,8 @@ impl ImagePreviewState {
         ctx: &egui::Context,
         palette: &AppPalette,
     ) {
+        self.invalidate_stale_creative_fx_masks();
+        self.invalidate_stale_creative_fx_thumbnails();
         let b_low = hex_to_c32(&palette.colors.surface_recessed);
         let b_med = hex_to_c32(&palette.colors.surface_panel);
         let base_c = hex_to_c32(&palette.harmonies.base);
@@ -932,8 +1790,7 @@ impl ImagePreviewState {
                                     .response;
 
                                 if resp.interact(egui::Sense::click()).clicked() && !selected {
-                                    self.creative_fx_state.selected_fx = *fx;
-                                    self.creative_fx_state.mark_dirty();
+                                    self.creative_fx_state.select_fx(*fx);
                                 }
                                 ui.add_space(crate::ui_ext::SPACE_XS);
                             }
@@ -951,7 +1808,12 @@ impl ImagePreviewState {
                     ui.set_height(main_h);
 
                     // Reload preview texture if dirty
-                    if self.creative_fx_state.dirty_preview_texture {
+                    let preview_is_current = self.creative_fx_state.preview_stamp.as_ref()
+                        == Some(&self.creative_fx_render_stamp());
+                    if !preview_is_current {
+                        self.creative_fx_state.preview_texture = None;
+                        self.creative_fx_state.dirty_preview_texture = false;
+                    } else if self.creative_fx_state.dirty_preview_texture {
                         if let Some(ref rgba) = self.creative_fx_state.preview_rgba {
                             let ci = egui::ColorImage::from_rgba_unmultiplied(
                                 [rgba.width() as usize, rgba.height() as usize],
@@ -2684,7 +3546,9 @@ impl ImagePreviewState {
                             .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                             .min_size(Vec2::new(full_w, crate::ui_ext::CONTROL_HEIGHT));
 
-                            let apply_enabled = self.creative_fx_state.preview_rgba.is_some();
+                            let apply_enabled = self.creative_fx_state.preview_rgba.is_some()
+                                && self.creative_fx_state.preview_stamp.as_ref()
+                                    == Some(&self.creative_fx_render_stamp());
                             if ui
                                 .add_enabled(apply_enabled, apply_btn)
                                 .on_hover_text(
@@ -2792,7 +3656,13 @@ impl ImagePreviewState {
         // Render split comparison using unified SplitCompareView
         let split_view = crate::shell::SplitCompareView::new(
             orig_tex,
-            self.creative_fx_state.preview_texture.as_ref(),
+            if self.creative_fx_state.preview_stamp.as_ref()
+                == Some(&self.creative_fx_render_stamp())
+            {
+                self.creative_fx_state.preview_texture.as_ref()
+            } else {
+                None
+            },
             &mut self.creative_fx_state.comparison_split,
             &mut self.creative_fx_state.is_dragging_split,
         );

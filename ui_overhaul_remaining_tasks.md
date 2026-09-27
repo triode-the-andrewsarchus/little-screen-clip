@@ -120,8 +120,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H1.3c1d [Luna + primary review] Gate OCR work and displayed/copied text by image input.** Stale completion cannot replace text, stale output is hidden from copy/slot actions, and terminal paths clear the child PID.
     - [x] **H1.3c1e [Luna + primary review] Gate barcode results by image input.** Stale success/error is discarded; current results remain available.
     - [x] **H1.3c1f [Luna + primary review] Gate conversion and resize-optimizer output by image input.** Stale output cannot be applied/exported, and reopening Convert schedules a current result.
-    - [ ] **H1.3c1g [Primary] Gate Creative FX render, mask, and thumbnail ownership.** Include source/preset/parameter identity, stale cache rejection, and Apply guards while preserving raw-pixel rendering behavior.
-    - [ ] **H1.3c1h [Primary] Add Creative FX stale-success, stale-failure, cache, and Apply regressions.** Keep the tested image preview paths above separate from this scope.
+    - [x] **H1.3c1g [Luna + primary/Sol review] Gate Creative FX render, mask, and thumbnail ownership.** Source/preset/parameter identity, stale cache rejection, and Apply guards preserve raw-pixel rendering. Mask completions cache valid output without overriding reset/preset intent; re-entry consumes pending debounce; stale thumbnail messages are drained without loss.
+    - [x] **H1.3c1h [Luna + primary/Sol review] Add Creative FX stale-success, stale-failure, cache, and Apply regressions.** Tests cover current/stale render success and error, parameter/selection changes, reset/preset mask intent, current/stale mask results, source-specific cache invalidation, preview re-entry, thumbnail revision/epoch and disconnect handling, and stale Apply. Full workbench suite passes (296 passed, one ignored).
   - **H1.3c2 Bound async work and completion behavior**
     - [ ] **H1.3c2a [Primary] Bound async work for viewer-owned results.**
     - [ ] **H1.3c2b [Primary] Repaint after async completion.**
