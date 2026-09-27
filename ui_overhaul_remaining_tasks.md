@@ -98,7 +98,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **H1.3b1 [Primary] Specify remaining Escape precedence.** `ui_overhaul_viewer_route_contract.md` documents modal prompt/viewer key ownership before workbench Escape; nested viewer Escape behavior then closes the active session/advances startup queue. With no modal route, Node Machine cancels catalog/save/cable drag, active rolling audio stops, secondary views return to Palette, and Palette closes the popup. Workbench global shortcuts now yield while a viewer/prompt is active.
   - [ ] **H1.3b2 [Primary] Specify remaining Enter precedence.**
   - [ ] **H1.3b3 [Primary] Specify remaining Space precedence.**
-  - [ ] **H1.3b4 [Primary] Specify remaining letter-key precedence.** Palette search owns text keys so S/X do not swap twice; audio mode/stem-start keys yield to dialogs and focused fields; comparison shortcuts respect focused controls and modified S.
+  - [x] **H1.3b4 [Primary] Specify remaining letter-key precedence.** `ui_overhaul_letter_key_contract.md` records current route bindings, focus/dialog behavior, and the intended precedence contract; it flags source/runtime gaps for H1.3b5 and later viewer checks.
   - [ ] **H1.3b5 [Primary] Implement remaining key precedence without altering domain controls.**
   - [ ] **H1.3b6 [Primary] Implement focus return for representative nested edits and cancellation.**
   - **H1.3b7 Typed host actions and shared status/error path**
@@ -116,7 +116,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [ ] **H1.3c4 [Primary] Add stale-failure tests.**
   - **H1.3c5 Prove async completion causes no repeated side effects.** New requests and app drop cancel prior jobs. Do not build a general plugin/docking system.
     - [x] **H1.3c5a [Luna] Keep Spreadsheet completion queued while a modal viewer is active.** The job receiver remains owned until modal viewers/startup routes finish; a focused regression proves the failure result is reported after the viewer closes.
-    - [ ] **H1.3c5b [Luna] Keep MIDI completion queued through active modal and startup viewers.** Verify the result opens once after the queue drains.
+    - [x] **H1.3c5b [Luna + primary review] Keep MIDI completion queued through active modal and startup viewers.** A regression proves completion remains pending through a foreground and queued gallery, opens after the queue drains, then remains single-published on a second poll. `cargo test -p clip-workbench --quiet` passes.
     - [ ] **H1.3c5c [Primary] Verify successful and failed deferred loads publish at most once.** Cover both Spreadsheet and MIDI routes and confirm no hidden or duplicate viewer appears.
 - **H1.4 Complete shared host controls.** Headers, tool groups, fields, transport, split panels, overlay/status, and escape hatches consume contracts above.
   - [x] **H1.4a Reserve compact header row for right actions.** Shared studio header clips long titles before measured badges; headless 1177/1766/2500-point checks show labels/actions do not overlap.

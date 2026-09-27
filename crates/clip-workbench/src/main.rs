@@ -2672,6 +2672,105 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn midi_completion_waits_for_foreground_and_startup_viewers() {
+        let config = AppConfig::default();
+        let palette = ui_appearance::palette(config.workbench.appearance);
+        let (state_tx, state_rx) = std::sync::mpsc::channel();
+        drop(state_tx);
+        let startup_viewer =
+            || ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::default());
+        let mut app = WorkbenchApp {
+            state: SlotManager::default(),
+            state_rx,
+            view: WorkbenchView::Palette,
+            canvas_state: NodeCanvasState::new(),
+            recipes: Vec::new(),
+            search_query: String::new(),
+            palette_search_needs_focus: false,
+            selected_action_index: 0,
+            selected_slots: vec![SlotId::LeftHand],
+            status_msg: None,
+            appearance_sync: AppearanceSync::default(),
+            renderer: ScreenRenderer::fallback(config.clone()),
+            ui_palette: palette,
+            mirror_texture: None,
+            dirty_mirror: false,
+            in_app_prompt: None,
+            viewer: Some(startup_viewer()),
+            startup_viewers: VecDeque::from([startup_viewer()]),
+            spreadsheet_load_job: None,
+            midi_load_job: None,
+            rolling_audio_strip: None,
+            dragging_slot: None,
+            config,
+            appearance_applied: true,
+        };
+        let (ticket, _ticket_receiver) =
+            BackgroundJobs::global().submit(Duration::from_secs(1), || ());
+        let (result_tx, receiver) =
+            std::sync::mpsc::channel::<Result<Result<(MidiData, PathBuf), String>, JobError>>();
+        result_tx
+            .send(Ok(Ok((
+                MidiData {
+                    title: "fixture".into(),
+                    track_count: 0,
+                    track_names: Vec::new(),
+                    total_notes: 0,
+                    duration_sec: 0.0,
+                    bpm: 120.0,
+                    min_key: 0,
+                    max_key: 0,
+                    notes: Vec::new(),
+                },
+                PathBuf::from("fixture.mid"),
+            ))))
+            .unwrap();
+        app.midi_load_job = Some((ticket, receiver));
+
+        let ctx = egui::Context::default();
+        ui_ext::configure_workbench_style(&ctx);
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                if !app.render_modal_viewers(ctx) {
+                    app.poll_midi_load(ctx);
+                }
+            },
+        );
+        assert!(app.midi_load_job.is_some());
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
+
+        app.viewer = app.startup_viewers.pop_front();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            if !app.render_modal_viewers(ctx) {
+                app.poll_midi_load(ctx);
+            }
+        });
+        assert!(app.midi_load_job.is_some());
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
+
+        app.viewer = app.startup_viewers.pop_front();
+        assert!(app.viewer.is_none());
+        app.poll_midi_load(&ctx);
+        assert!(app.midi_load_job.is_none());
+        assert!(matches!(app.viewer, Some(ViewerSession::Midi(_))));
+        app.poll_midi_load(&ctx);
+        assert!(matches!(app.viewer, Some(ViewerSession::Midi(_))));
+    }
+
+    #[test]
     fn palette_search_focus_yields_to_audio_and_returns_on_activation() {
         fn render_field(
             ctx: &egui::Context,
