@@ -149,3 +149,7 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 ## Image View dense content at compact size, 2026-09-27
 
 - Generated a deterministic 1600×1000 multicolor checker/line PNG at `/tmp/clip-image-dense-e2.png`. Isolated Niri capture `/tmp/clip-image-dense-e2-1280-dark` at 1280×720 logical / 100% / Dark passed popup checks. Primary reviewed the settled view: dimension/readout and full footer are visible; canvas is centered; toolbar wraps; header controls stay aligned. This checks canvas/readout/footer fit, not EXIF expansion or every image tool.
+
+## Remaining `.small()` audit, 2026-09-27
+
+- `rg -n '\\.small\\(\\)' crates/clip-workbench/src crates/little-clip-render/src` found only: node-canvas property labels (`canvas.rs` 1526/1564), spreadsheet corner/row/column/cell labels (`spreadsheet_view.rs`), and the shared style definition (`ui_ext.rs`). Canvas and spreadsheet hits are data content; the task queue already assigns dense canvas/table scale to H2.2. `ui_ext` explicitly maps TextStyle::Small to `BODY_FONT_SIZE`. No remaining ordinary viewer chrome `.small()` call was found. The broader review also found no `.small()` in `little-clip-render`.
