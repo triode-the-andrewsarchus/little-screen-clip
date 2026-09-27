@@ -492,11 +492,18 @@ impl RollingAudioStripState {
 
     fn render_header(&mut self, ui: &mut egui::Ui, palette: &AppPalette, total_dur: f32) {
         // Header Row: Badge & Status / Selection info
+        let canvas = hex_to_c32(&palette.colors.canvas);
         ui.horizontal_wrapped(|ui| {
-            Icon::Microphone.ui(ui, 13.0, hex_to_c32(&palette.harmonies.base));
+            let accent_text = crate::ui_ext::contrast_text_c32_on(
+                canvas,
+                canvas,
+                Some(hex_to_c32(&palette.harmonies.base)),
+                palette,
+            );
+            Icon::Microphone.ui(ui, 13.0, accent_text);
             ui.label(
                 egui::RichText::new("ROLLING AUDIO")
-                    .color(hex_to_c32(&palette.harmonies.base))
+                    .color(accent_text)
                     .strong()
                     .size(crate::ui_ext::BODY_FONT_SIZE),
             );
@@ -539,7 +546,12 @@ impl RollingAudioStripState {
             } else if let Some(error) = &self.error_msg {
                 ui.label(
                     egui::RichText::new("Refresh failed — retry")
-                        .color(hex_to_c32(&palette.diff_del))
+                        .color(crate::ui_ext::contrast_text_c32_on(
+                            canvas,
+                            canvas,
+                            Some(hex_to_c32(&palette.diff_del)),
+                            palette,
+                        ))
                         .size(crate::ui_ext::BODY_FONT_SIZE),
                 )
                 .on_hover_text(error);
@@ -548,7 +560,12 @@ impl RollingAudioStripState {
                     Icon::Alert.ui(ui, 12.0, hex_to_c32(&palette.diff_mod));
                     ui.label(
                         egui::RichText::new("Buffer is silence (play audio to capture)")
-                            .color(hex_to_c32(&palette.diff_mod))
+                            .color(crate::ui_ext::contrast_text_c32_on(
+                                canvas,
+                                canvas,
+                                Some(hex_to_c32(&palette.diff_mod)),
+                                palette,
+                            ))
                             .size(crate::ui_ext::BODY_FONT_SIZE),
                     );
                 });
@@ -561,7 +578,7 @@ impl RollingAudioStripState {
                         "• Selected: {:.1}s to {:.1}s ({:.2}s)",
                         s_rel, e_rel, sel_dur
                     ))
-                    .color(hex_to_c32(&palette.harmonies.base))
+                    .color(accent_text)
                     .strong()
                     .size(crate::ui_ext::BODY_FONT_SIZE),
                 );
@@ -588,7 +605,12 @@ impl RollingAudioStripState {
                 };
                 ui.label(
                     egui::RichText::new(msg)
-                        .color(hex_to_c32(color))
+                        .color(crate::ui_ext::contrast_text_c32_on(
+                            canvas,
+                            canvas,
+                            Some(hex_to_c32(color)),
+                            palette,
+                        ))
                         .strong()
                         .size(crate::ui_ext::BODY_FONT_SIZE),
                 );
@@ -677,7 +699,7 @@ impl RollingAudioStripState {
                     egui::Align2::LEFT_TOP,
                     tick_label,
                     egui::FontId::proportional(9.0),
-                    hex_to_c32_alpha(&palette.colors.text_secondary, 100),
+                    hex_to_c32(&palette.colors.text_secondary),
                 );
 
                 t_tick += tick_step_sec;
@@ -691,7 +713,7 @@ impl RollingAudioStripState {
                         egui::Align2::CENTER_CENTER,
                         "Capture buffer is currently silence — play audio and click Refresh (or press F5)",
                         egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
-                        hex_to_c32_alpha(&palette.colors.text_secondary, 160),
+                        hex_to_c32(&palette.colors.text_secondary),
                     );
                 } else {
                     let num_bars = (rect.width() as usize).clamp(50, 1000);
@@ -757,7 +779,12 @@ impl RollingAudioStripState {
                     egui::Align2::CENTER_CENTER,
                     format!("{}", err),
                     egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
-                    hex_to_c32(&palette.diff_del),
+                    crate::ui_ext::contrast_text_c32_on(
+                        hex_to_c32(&palette.colors.surface_recessed),
+                        hex_to_c32(&palette.colors.surface_recessed),
+                        Some(hex_to_c32(&palette.diff_del)),
+                        palette,
+                    ),
                 );
             } else {
                 painter.text(
@@ -1003,6 +1030,52 @@ fn load_pcm16_samples(path: &Path) -> Result<(Vec<f32>, u32, u16), std::io::Erro
 mod tests {
     use super::*;
     use little_clip_core::rolling_audio::RollingAudioBuffer;
+
+    #[test]
+    fn rolling_audio_status_labels_meet_contrast_in_both_appearances() {
+        for appearance in [
+            little_clip_core::config::WorkbenchAppearance::Dark,
+            little_clip_core::config::WorkbenchAppearance::Light,
+        ] {
+            let palette = crate::ui_appearance::palette(appearance);
+            let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
+            for preferred in [
+                hex_to_c32(&palette.harmonies.base),
+                hex_to_c32(&palette.diff_del),
+                hex_to_c32(&palette.diff_mod),
+                hex_to_c32(&palette.diff_add),
+            ] {
+                let foreground = crate::ui_ext::contrast_text_c32_on(
+                    colors.canvas,
+                    colors.canvas,
+                    Some(preferred),
+                    &palette,
+                );
+                assert!(
+                    little_clip_core::palette::contrast_ratio(
+                        (colors.canvas.r(), colors.canvas.g(), colors.canvas.b()),
+                        (foreground.r(), foreground.g(), foreground.b()),
+                    ) >= 4.5,
+                    "{appearance:?} rolling-audio status label lacks contrast"
+                );
+            }
+
+            assert!(
+                little_clip_core::palette::contrast_ratio(
+                    (
+                        colors.recessed.r(),
+                        colors.recessed.g(),
+                        colors.recessed.b()
+                    ),
+                    (
+                        colors.text_secondary.r(),
+                        colors.text_secondary.g(),
+                        colors.text_secondary.b()
+                    ),
+                ) >= 4.5
+            );
+        }
+    }
 
     fn complete_snapshot(
         strip: &mut RollingAudioStripState,
