@@ -84,3 +84,17 @@ Automated partial evidence for T1: wrapped-code render tests cover 100%/150%/200
 On named reference hardware, capture UI-frame time during idle, scroll, zoom, playback, and large-file load, plus task duration separately. Record item count/size, cache/job bounds and whether CPU decode, IPC, encode, or process wait occurred on the UI thread. The target from `ui_overhaul_plan.md` is smooth 60 Hz manipulation (16.7 ms frame budget) with next-frame visible response; this target is **not yet measured**.
 
 Baseline startup observation: the 55 initially mapped matrix cases took 328–1333 ms from process start to the first polling observation (median 359 ms); the serial retry took 330 ms. This includes process initialization/polling and runs under concurrent software-renderer load. No 16.7 ms UI-frame measurement or interaction-performance pass is implied. Dedicated profiling remains H2/H3 work.
+
+## Repeatable capture runner validation
+
+`scripts/ui_acceptance_capture.py` reproduces the isolated setup. Example:
+
+```bash
+python3 scripts/ui_acceptance_capture.py --output-dir /tmp/clip-ui-new-run \
+  --width 1920 --height 1200 --scale 1.5 --appearance light \
+  --image /tmp/clip-e1-baseline-fixtures/image-transparent.png
+```
+
+The output directory must be new. The runner records initial and settled geometry, initial Wayland min/max hints, app-associated Niri layout changes, singleton focus, screenshots, timing, and child exit statuses; it always cleans up its private subprocess groups. Run reports remain observations with explicit limitations.
+
+Primary validation after Luna's refactor: a live 1920×1200 / 150% / Light smoke run passed (`/tmp/clip-e1-final-refactor`); final geometry logic replayed all 56 successful matrix/retry reports and rejected a synthetic late top-left jump. All 112 matrix/retry PNGs passed decode verification. The runner compiles in memory; fractional-scale CLI parsing and event association were checked. Architecture review removed the new runner's excessive-complexity hotspots; the overall comparison still labels existing touched clone patterns as `REGRESSION`, so no whole-repository architecture pass is claimed. No Rust application code changed in this baseline/task-tree increment.
