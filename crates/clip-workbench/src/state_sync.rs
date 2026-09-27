@@ -131,4 +131,54 @@ mod tests {
             &manager
         ));
     }
+
+    #[test]
+    fn audio_preview_readiness_change_rehydrates_same_slot_item() {
+        let mut item = ClipItem::from_text("audio");
+        item.payload = ClipPayload::AudioRef {
+            path: "/tmp/preview.wav".into(),
+            duration_ms: 1000,
+            sample_rate: 44100,
+            channels: 1,
+            format: "WAV".into(),
+            waveform: None,
+        };
+        let item_id = item.id;
+        let mut manager = SlotManager::new();
+        manager.push_left(item);
+        let pending = SlotStateSummary::from_manager(&manager);
+
+        let waveform = little_clip_core::audio::AudioWaveform {
+            channels: 1,
+            sample_rate: 44100,
+            duration_ms: 1000,
+            ch1_peaks: vec![0.5],
+            ch2_peaks: None,
+            spectral_colors: None,
+            is_snippet: false,
+            snippet_start_ms: 0,
+            snippet_duration_ms: 0,
+        };
+        assert!(manager.update_audio_waveform(item_id, waveform));
+        let ready = SlotStateSummary::from_manager(&manager);
+
+        assert_eq!(
+            ready.card(SlotId::LeftHand).unwrap().item_id,
+            pending.card(SlotId::LeftHand).unwrap().item_id
+        );
+        assert_eq!(
+            ready.card(SlotId::LeftHand).unwrap().payload_kind,
+            pending.card(SlotId::LeftHand).unwrap().payload_kind
+        );
+        assert_ne!(
+            ready.card(SlotId::LeftHand).unwrap().preview_phase,
+            pending.card(SlotId::LeftHand).unwrap().preview_phase
+        );
+        assert!(needs_hydration(
+            SlotId::LeftHand,
+            &ready,
+            &pending,
+            &manager
+        ));
+    }
 }

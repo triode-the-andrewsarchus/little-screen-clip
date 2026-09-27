@@ -199,7 +199,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 - **E2.4f Label contrast**
   - [x] **E2.4f1 [Luna] Verify shared control-label contrast in both appearances.** Existing WCAG test checks active/inactive, add, secondary, danger, and translucent accent surfaces against 4.5:1.
   - [ ] **E2.4f2 [Luna] Audit custom labels outside shared controls.** Full surface contrast audit stays under H1.2c2.
-- [ ] **E2.4g [Luna] Test async-preview readiness behavior.** Tests must cover behavior, not restate widget construction.
+- [x] **E2.4g [Luna] Test async-preview readiness behavior.** A regression test advances audio preview from Pending to Ready without changing item ID or payload kind, then proves the readiness change triggers slot hydration. The workbench update path marks arriving state dirty and requests repaint; suite passes (226 passed, one ignored).
 
 ## Hard 2 — Cross-view behavior, scale, and embedding (primary model)
 
