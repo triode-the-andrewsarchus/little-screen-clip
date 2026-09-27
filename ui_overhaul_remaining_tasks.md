@@ -188,7 +188,7 @@ Status: open. Task tree reviewed 2026-09-26; E1 baseline inventory closed with t
   - [ ] **E2.3g [Luna] Finish node-machine forms/status live checks.**
   - [ ] **E2.3h [Luna] Finish text ordinary chrome live checks.**
   - [ ] **E2.3h1 [Luna] Finish binary-diff ordinary chrome live checks.** Card row wraps IDs/kind/bytes; offsets/previews use shared typography.
-  - [ ] **E2.3i [Luna] Audit remaining ordinary chrome for `.small()` used only to fit.** Dense table/canvas data typography remains for H2.2.
+  - [x] **E2.3i [Luna] Audit remaining ordinary chrome for `.small()` used only to fit.** Remaining uses are confined to spreadsheet row/column/cell data and node-canvas property labels. `ui_ext` maps Small to the 16-point body size; ordinary viewer chrome has no `.small()` calls. Dense table/canvas typography stays under H2.2.
 - [ ] **E2.4a [Luna] Test equal sibling control sizing.**
 - [ ] **E2.4b [Luna] Test stable Play/Pause widths.**
 - [ ] **E2.4c [Luna] Test field focus behavior.**
