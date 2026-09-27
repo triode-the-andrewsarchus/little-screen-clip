@@ -183,30 +183,18 @@ impl PdfEditorState {
         let page_count = self.page_count;
         let selected_page = self.selected_page.unwrap_or(1).min(page_count.max(1));
         // Bound pending raster data if rendering outruns the UI. Dropping this
-        // receiver on a route change also stops the old worker at its next send.
+        // receiver on a route change also stops the old worker at its next send;
+        // the worker can finish at most its current page render after that.
         let (tx, rx) = sync_channel(PREVIEW_QUEUE_CAPACITY);
         self.preview_rx = Some(rx);
         self.previews_loading = true;
-        std::thread::spawn(move || {
-            // A large selected-page raster arrives first; thumbnails then fill
-            // in incrementally. This keeps long manuals responsive.
-            let mut order = Vec::with_capacity(page_count);
-            if page_count > 0 {
-                order.push(selected_page);
-            }
-            order.extend((1..=page_count).filter(|page| *page != selected_page));
-            for page_num in order {
-                let max_dim = if page_num == selected_page {
-                    PAGE_RASTER_MAX_DIM
-                } else {
-                    360
-                };
-                let result = render_pdf_page_preview(&path, page_num, max_dim);
-                if tx.send(PdfPreviewMsg { page_num, result }).is_err() {
-                    break;
-                }
-            }
-        });
+        drop(spawn_preview_worker(
+            path,
+            page_count,
+            selected_page,
+            tx,
+            render_pdf_page_preview,
+        ));
     }
 
     fn poll_preview_worker(&mut self, ctx: &egui::Context) {
@@ -872,6 +860,38 @@ impl PdfEditorState {
     }
 }
 
+fn spawn_preview_worker<F>(
+    path: PathBuf,
+    page_count: usize,
+    selected_page: usize,
+    tx: std::sync::mpsc::SyncSender<PdfPreviewMsg>,
+    render_page: F,
+) -> std::thread::JoinHandle<()>
+where
+    F: Fn(&Path, usize, u32) -> Result<(Vec<u8>, u32, u32), String> + Send + 'static,
+{
+    std::thread::spawn(move || {
+        // A large selected-page raster arrives first; thumbnails then fill in
+        // incrementally. Dropping the receiver stops work at the next send.
+        let mut order = Vec::with_capacity(page_count);
+        if page_count > 0 {
+            order.push(selected_page);
+        }
+        order.extend((1..=page_count).filter(|page| *page != selected_page));
+        for page_num in order {
+            let max_dim = if page_num == selected_page {
+                PAGE_RASTER_MAX_DIM
+            } else {
+                360
+            };
+            let result = render_page(&path, page_num, max_dim);
+            if tx.send(PdfPreviewMsg { page_num, result }).is_err() {
+                break;
+            }
+        }
+    })
+}
+
 impl Drop for PdfEditorState {
     fn drop(&mut self) {
         if let Some((ticket, _)) = &self.info_job {
@@ -928,6 +948,34 @@ mod tests {
             .fold((0, 0), |(count, bytes), texture| {
                 (count + 1, bytes + texture.byte_size())
             })
+    }
+
+    #[test]
+    fn dropping_preview_receiver_stops_worker_after_bounded_in_flight_page() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let rendered = Arc::new(AtomicUsize::new(0));
+        let render_count = Arc::clone(&rendered);
+        let (tx, rx) = sync_channel(PREVIEW_QUEUE_CAPACITY);
+        let worker =
+            spawn_preview_worker(PathBuf::from("fixture.pdf"), 100, 1, tx, move |_, _, _| {
+                render_count.fetch_add(1, Ordering::SeqCst);
+                Ok((Vec::new(), 1, 1))
+            });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while rendered.load(Ordering::SeqCst) < PREVIEW_QUEUE_CAPACITY + 1
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::yield_now();
+        }
+        assert_eq!(rendered.load(Ordering::SeqCst), PREVIEW_QUEUE_CAPACITY + 1);
+        drop(rx);
+        worker
+            .join()
+            .expect("preview worker should exit when its receiver closes");
+        assert_eq!(rendered.load(Ordering::SeqCst), PREVIEW_QUEUE_CAPACITY + 1);
     }
 
     #[test]

@@ -297,7 +297,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 
 - **H2.1 Async file and export paths**
   - [x] **H2.1a [Primary] Bound page texture storage.** PDF uploads only selected/visible pages; LRU retains at most 32 handles and 32 MiB RGBA, protects current-frame draw references, and reloads evicted pages from their compressed raster. Four regressions cover both limits, selected-page retention, exact raster re-selection, frame-safe admission, and production 100-page visibility. Backend frees occur after rendering (at most 64 handles / 64 MiB during frame turnover); compressed raster storage is tracked separately below.
-  - [ ] **H2.1b [Primary] Bound preview worker lifetime.**
+  - [x] **H2.1b [Primary] Bound preview worker lifetime.** Dropping the PDF viewer's bounded preview receiver on route change or view drop stops the worker at its next send; it can finish at most its current page render. Regression fills the three-result queue, drops the receiver, and verifies the worker exits without rasterizing the rest of a 100-page document.
   - [ ] **H2.1c [Primary] Audit image open/decode for UI-thread blocking.**
   - [ ] **H2.1d [Primary] Audit PDF open/decode for UI-thread blocking.**
   - [ ] **H2.1e [Primary] Audit text and 3D open/parse for UI-thread blocking.**
