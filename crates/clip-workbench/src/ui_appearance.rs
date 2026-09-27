@@ -133,6 +133,28 @@ mod tests {
     }
 
     #[test]
+    fn workbench_and_studio_custom_labels_have_readable_contrast() {
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = palette(appearance);
+            let colors = WorkbenchColors::from_palette(&palette);
+            let ratio = |a: Color32, b: Color32| {
+                contrast_ratio((a.r(), a.g(), a.b()), (b.r(), b.g(), b.b()))
+            };
+
+            // The workbench brand is a large heading, so WCAG's large-text threshold applies.
+            assert!(
+                ratio(colors.canvas, hex_to_c32(&palette.left_hand_border)) >= 3.0,
+                "{appearance:?} workbench brand label lacks 3:1 contrast"
+            );
+            // Studio footer readouts use the accent as small monospace body text.
+            assert!(
+                ratio(colors.recessed, colors.accent) >= 4.5,
+                "{appearance:?} studio footer readout accent lacks 4.5:1 contrast"
+            );
+        }
+    }
+
+    #[test]
     fn widget_foregrounds_meet_contrast_on_their_actual_fills() {
         fn ratio(a: Color32, b: Color32) -> f32 {
             contrast_ratio((a.r(), a.g(), a.b()), (b.r(), b.g(), b.b()))

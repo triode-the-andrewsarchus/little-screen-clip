@@ -198,7 +198,19 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **E2.4e2 [Luna] Verify Escape behavior for representative image and workbench dialogs.** Existing Image Studio regression proves its save dialog consumes Escape without applying image shortcuts or closing the viewer. New workbench routing test proves catalog and save dialogs close one at a time before a later Escape returns to Palette and restores search focus. Workbench suite passes (225 passed, one ignored).
 - **E2.4f Label contrast**
   - [x] **E2.4f1 [Luna] Verify shared control-label contrast in both appearances.** Existing WCAG test checks active/inactive, add, secondary, danger, and translucent accent surfaces against 4.5:1.
-  - [ ] **E2.4f2 [Luna] Audit custom labels outside shared controls.** Full surface contrast audit stays under H1.2c2.
+  - **E2.4f2 Custom labels outside shared controls (Image Studio contrast stays under E2.1r)**
+    - [x] **E2.4f2a [Luna] Audit workbench header/status and StudioShell labels.** Both appearances meet contrast targets for the large brand title (3:1), secondary labels/footer hints (4.5:1), and small StudioShell footer readouts (4.5:1); dynamic action/status labels use the tested contrast helper.
+    - [ ] **E2.4f2b [Luna] Audit Audio Inspect and spectrogram plot labels.**
+    - [ ] **E2.4f2c [Luna] Audit HF Analysis and stem-separation plot labels.**
+    - [ ] **E2.4f2d [Luna] Audit Digital Decode labels and protocol chips.**
+    - [ ] **E2.4f2e [Luna] Audit Node Machine canvas labels.**
+    - [ ] **E2.4f2f [Luna] Audit MIDI canvas labels.**
+    - [ ] **E2.4f2g [Luna] Audit 3D viewport labels.**
+    - [ ] **E2.4f2h [Luna] Audit rolling-audio labels.**
+    - [ ] **E2.4f2i [Luna] Audit text-preview labels.**
+    - [ ] **E2.4f2j [Luna] Audit PDF-viewer labels.**
+    - [ ] **E2.4f2k [Luna] Audit spreadsheet labels.**
+    - [ ] **E2.4f2l [Luna] Audit diff and binary-diff labels.**
 - [x] **E2.4g [Luna] Test async-preview readiness behavior.** A regression test advances audio preview from Pending to Ready without changing item ID or payload kind, then proves the readiness change triggers slot hydration. The workbench update path marks arriving state dirty and requests repaint; suite passes (226 passed, one ignored).
 
 ## Hard 2 — Cross-view behavior, scale, and embedding (primary model)
