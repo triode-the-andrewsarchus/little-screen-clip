@@ -185,8 +185,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **E2.1e [Luna] Verify Markup live.** Isolated 1280×720 Dark capture shows the tool rail, properties/layers rail, empty-state guidance, canvas, and footer together; drawing/flatten actions remain in E2.1s.
   - [x] **E2.1f [Luna] Verify Crop live.** Isolated 1280×720 Dark capture shows ratio controls, Apply action, canvas annotations, and footer inside the popup; crop/undo behavior remains under E2.1s.
   - [x] **E2.1g [Luna] Verify Deskew live, including guidance and canvas annotations.** Isolated 1280×720 Light capture shows the four-point status, crop/output controls, corner guidance, canvas annotations, and footer; applying/canceling remains under E2.1s.
-  - [ ] **E2.1h [Luna] Verify Redact live, including selection-size badge.**
-    - [x] **E2.1h1 [Luna] Add a production-render regression for the selected box size badge.** The rendered pixel-size label stays inside compact and wide image viewports; live visual review remains open.
+  - [x] **E2.1h [Luna] Verify Redact live, including selection-size badge.** Isolated 1280×720 Dark capture creates a selection with private pointer drag and shows the `231 × 147 px` badge; see `ui_overhaul_acceptance.md`.
+    - [x] **E2.1h1 [Luna] Add a production-render regression for the selected box size badge.** The rendered pixel-size label stays inside compact and wide image viewports.
   - [x] **E2.1i [Luna] Verify Convert live, including comparison HUD.** Isolated 1280×720 Dark capture after a 3.5-second post-selection settle shows encoded WebP size in the After HUD, comparison divider, format choices, quality control, and footer. Apply/save behavior remains under E2.1s/t.
   - [x] **E2.1j [Luna] Verify Depth Map live.** Isolated 1280×720 Dark capture shows the Generate action, model description, Left/Right slot destinations, canvas, and footer; running/output behavior remains in E2.1s.
   - **E2.1k Barcode scan and result states**

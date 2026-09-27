@@ -768,7 +768,7 @@ def capture_workbench(
     report["actual_logical_size"] = list(logical_size)
     app_env = niri_env | {"WAYLAND_DEBUG": "client"}
     pointer_helper: Path | None = None
-    if args.click is not None or args.move is not None:
+    if args.click is not None or args.move is not None or args.drag is not None:
         verify_private_wayland_target(niri_env, config["runtime"])
         pointer_helper = build_private_virtual_pointer(output)
         probe = run_checked([str(pointer_helper), "probe"], env=niri_env)
@@ -798,6 +798,8 @@ def capture_workbench(
         if args.image_action:
             time.sleep(0.1)
             run_checked(["wtype", "-k", IMAGE_ACTION_KEYS[args.image_action]], env=niri_env)
+        if args.drag is not None:
+            time.sleep(0.25)
     def send_private_scroll() -> None:
         assert pointer_helper is not None and args.scroll is not None
         x, y, delta = args.scroll
@@ -824,6 +826,19 @@ def capture_workbench(
                 send_private_scroll()
         if args.scroll is not None and args.scroll_after_click is None:
             send_private_scroll()
+    if args.drag is not None and pointer_helper is not None:
+        report["pointer_input"]["drags"] = []
+        for start_x, start_y, end_x, end_y in args.drag:
+            drag_result = run_checked(
+                [str(pointer_helper), "drag", str(logical_size[0]), str(logical_size[1]),
+                 str(start_x), str(start_y), str(end_x), str(end_y)],
+                env=niri_env,
+            )
+            report["pointer_input"]["drags"].append({
+                "start": [start_x, start_y], "end": [end_x, end_y], "button": "left",
+                "result": drag_result.strip(),
+            })
+            time.sleep(0.5)
     if args.move is not None and pointer_helper is not None:
         x, y = args.move
         hover_log = output / "private-pointer-hover.log"
@@ -922,6 +937,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="move and hold a virtual pointer at logical screen coordinates in private Niri without clicking",
     )
     parser.add_argument(
+        "--drag", nargs=4, type=int,
+        metavar=("START_X", "START_Y", "END_X", "END_Y"), action="append",
+        help="send one left-button drag through private Niri; repeat for ordered gestures",
+    )
+    parser.add_argument(
         "--scroll", nargs=3, type=int, metavar=("X", "Y", "DELTA"),
         help="send one vertical wheel step at logical screen coordinates through private Niri; positive DELTA scrolls down",
     )
@@ -961,6 +981,12 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         not (0 <= args.move[0] < args.width) or not (0 <= args.move[1] < args.height)
     ):
         raise SystemExit("--move coordinates must be inside the requested logical output")
+    if args.drag is not None and any(
+        not (0 <= x < args.width) or not (0 <= y < args.height)
+        for start_x, start_y, end_x, end_y in args.drag
+        for x, y in ((start_x, start_y), (end_x, end_y))
+    ):
+        raise SystemExit("--drag coordinates must be inside the requested logical output")
     if args.scroll is not None and (
         not (0 <= args.scroll[0] < args.width) or not (0 <= args.scroll[1] < args.height)
         or args.scroll[2] == 0 or abs(args.scroll[2]) > 1000
@@ -1010,6 +1036,7 @@ def main() -> int:
             "image_fixture": str(args.image.resolve()) if args.image else None,
             "click": args.click,
             "move": args.move,
+            "drag": args.drag,
             "scroll": args.scroll,
             "scroll_after_click": args.scroll_after_click,
             "audio_fixture": str(args.audio.resolve()) if args.audio else None,

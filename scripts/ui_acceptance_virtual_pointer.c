@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <linux/input-event-codes.h>
 #include <wayland-client.h>
@@ -50,6 +51,7 @@ static void usage(const char *program) {
     fprintf(stderr,
             "usage: %s probe | move <width> <height> <x> <y> | "
             "click <width> <height> <x> <y> | "
+            "drag <width> <height> <start-x> <start-y> <end-x> <end-y> | "
             "scroll <width> <height> <x> <y> <logical-units>\n"
             "Connects only to WAYLAND_DISPLAY in XDG_RUNTIME_DIR.\n",
             program);
@@ -87,21 +89,32 @@ static int parse_scroll(const char *text, int *value) {
     return 1;
 }
 
+static uint32_t monotonic_msec(void) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        return 1;
+    }
+    return (uint32_t)((uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000);
+}
+
 int main(int argc, char **argv) {
-    uint32_t width = 0, height = 0, x = 0, y = 0;
+    uint32_t width = 0, height = 0, x = 0, y = 0, end_x = 0, end_y = 0;
     int probe = argc == 2 && strcmp(argv[1], "probe") == 0;
     int click = argc == 6 && strcmp(argv[1], "click") == 0;
     int move = argc == 6 && strcmp(argv[1], "move") == 0;
+    int drag = argc == 8 && strcmp(argv[1], "drag") == 0;
     int scroll = argc == 7 && strcmp(argv[1], "scroll") == 0;
     int scroll_amount = 0;
-    if (!probe && !click && !move && !scroll) {
+    if (!probe && !click && !move && !drag && !scroll) {
         usage(argv[0]);
         return 2;
     }
-    if ((click || move || scroll) &&
+    if ((click || move || drag || scroll) &&
         (!parse_positive(argv[2], &width) || !parse_positive(argv[3], &height) ||
          !parse_coordinate(argv[4], width, &x) ||
          !parse_coordinate(argv[5], height, &y) ||
+         (drag && (!parse_coordinate(argv[6], width, &end_x) ||
+                   !parse_coordinate(argv[7], height, &end_y))) ||
          (scroll && !parse_scroll(argv[6], &scroll_amount)))) {
         usage(argv[0]);
         return 2;
@@ -156,11 +169,12 @@ int main(int argc, char **argv) {
             return 5;
         }
 
-        zwlr_virtual_pointer_v1_motion_absolute(pointer, 1, x, y, width, height);
+        uint32_t time_ms = monotonic_msec();
+        zwlr_virtual_pointer_v1_motion_absolute(pointer, time_ms, x, y, width, height);
         if (scroll) {
             zwlr_virtual_pointer_v1_axis_source(pointer, WL_POINTER_AXIS_SOURCE_WHEEL);
             zwlr_virtual_pointer_v1_axis(
-                pointer, 2, WL_POINTER_AXIS_VERTICAL_SCROLL,
+                pointer, time_ms + 1, WL_POINTER_AXIS_VERTICAL_SCROLL,
                 wl_fixed_from_int(scroll_amount));
             zwlr_virtual_pointer_v1_frame(pointer);
             if (wl_display_roundtrip(display) < 0) {
@@ -191,8 +205,37 @@ int main(int argc, char **argv) {
                 fflush(stdout);
                 while (wl_display_dispatch(display) >= 0) {
                 }
+            } else if (drag) {
+                zwlr_virtual_pointer_v1_button(pointer, time_ms + 1, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+                zwlr_virtual_pointer_v1_frame(pointer);
+                if (wl_display_roundtrip(display) < 0) {
+                    fprintf(stderr, "private drag press failed\n");
+                    return 5;
+                }
+                struct timespec pause = {.tv_sec = 0, .tv_nsec = 50000000};
+                nanosleep(&pause, NULL);
+                for (uint32_t step = 1; step <= 4; step++) {
+                    uint32_t move_x = x + ((int64_t)end_x - x) * step / 4;
+                    uint32_t move_y = y + ((int64_t)end_y - y) * step / 4;
+                    zwlr_virtual_pointer_v1_motion_absolute(
+                        pointer, time_ms + 50 + step * 50, move_x, move_y, width, height);
+                    zwlr_virtual_pointer_v1_frame(pointer);
+                    if (wl_display_roundtrip(display) < 0) {
+                        fprintf(stderr, "private drag motion failed\n");
+                        return 5;
+                    }
+                    nanosleep(&pause, NULL);
+                }
+                zwlr_virtual_pointer_v1_button(pointer, time_ms + 251, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+                zwlr_virtual_pointer_v1_frame(pointer);
+                if (wl_display_roundtrip(display) < 0) {
+                    fprintf(stderr, "private drag release failed\n");
+                    return 5;
+                }
+                printf("dragged private Niri logical pointer from %u,%u to %u,%u of %u×%u\n",
+                       x, y, end_x, end_y, width, height);
             } else {
-                zwlr_virtual_pointer_v1_button(pointer, 2, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+                zwlr_virtual_pointer_v1_button(pointer, time_ms + 1, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
                 zwlr_virtual_pointer_v1_frame(pointer);
                 if (wl_display_roundtrip(display) < 0) {
                     fprintf(stderr, "private pointer press failed\n");
@@ -203,7 +246,7 @@ int main(int argc, char **argv) {
                     wl_display_disconnect(display);
                     return 5;
                 }
-                zwlr_virtual_pointer_v1_button(pointer, 3, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+                zwlr_virtual_pointer_v1_button(pointer, time_ms + 2, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
                 zwlr_virtual_pointer_v1_frame(pointer);
                 if (wl_display_roundtrip(display) < 0) {
                     fprintf(stderr, "private pointer release failed\n");
