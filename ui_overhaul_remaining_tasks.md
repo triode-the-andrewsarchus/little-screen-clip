@@ -205,7 +205,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **E2.4f2d [Luna] Audit Digital Decode labels and protocol chips.** Protocol hues remain on visual borders/data cues; small labels use a foreground resolved against control, badge, and symbol-chip fills. Tests cover all supported protocols and selected/hover/default chip opacity in Light and Dark; workbench suite passes (229 passed, one ignored).
     - [x] **E2.4f2e [Luna] Audit Node Machine canvas labels.** Category-header titles and last-output previews resolve a high-contrast foreground against their actual fills. Light/Dark tests cover all category colors and preview labels; workbench suite passes (230 passed, one ignored).
     - [x] **E2.4f2f [Luna] Audit MIDI canvas labels.** Pitch-key labels choose readable foregrounds on black and white keys; time-axis labels use the muted semantic foreground tested against every neutral surface. New Light/Dark regression covers both key fills.
-    - [ ] **E2.4f2g [Luna] Audit 3D viewport labels.**
+    - [x] **E2.4f2g [Luna] Audit 3D viewport labels.** Loading and error copy uses the semantic primary foreground on the recessed viewport; ready rendering paints no custom text. The semantic text-role test covers this surface in both appearances.
     - [ ] **E2.4f2h [Luna] Audit rolling-audio labels.**
     - [ ] **E2.4f2i [Luna] Audit text-preview labels.**
     - [ ] **E2.4f2j [Luna] Audit PDF-viewer labels.**
