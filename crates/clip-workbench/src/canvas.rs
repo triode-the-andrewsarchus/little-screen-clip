@@ -1391,6 +1391,12 @@ fn render_node_card(
         },
         cat_color,
     );
+    let category_text = crate::ui_ext::contrast_text_c32_on(
+        cat_color,
+        cat_color,
+        Some(hex_to_c32(&palette.colors.text_primary)),
+        palette,
+    );
 
     // Node Title
     painter.text(
@@ -1398,7 +1404,7 @@ fn render_node_card(
         egui::Align2::LEFT_CENTER,
         &node.title,
         egui::FontId::proportional(12.0 * zoom),
-        hex_to_c32(&palette.colors.text_primary),
+        category_text,
     );
 
     // Close / Delete button (×)
@@ -1414,11 +1420,13 @@ fn render_node_card(
     if close_resp.clicked() {
         *node_to_delete = Some(node.id);
     }
-    let close_col = if close_resp.hovered() {
+    let close_color = if close_resp.hovered() {
         hex_to_c32(&palette.diff_del)
     } else {
-        hex_to_c32_alpha(&palette.colors.text_primary, 180)
+        hex_to_c32(&palette.colors.text_primary)
     };
+    let close_col =
+        crate::ui_ext::contrast_text_c32_on(cat_color, cat_color, Some(close_color), palette);
     painter.text(
         close_rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -1584,7 +1592,12 @@ fn render_node_card(
             egui::Align2::LEFT_BOTTOM,
             format!("{}", preview_short),
             egui::FontId::proportional(9.5 * zoom),
-            hex_to_c32(&palette.diff_add),
+            crate::ui_ext::contrast_text_c32_on(
+                hex_to_c32(&palette.colors.surface_recessed),
+                hex_to_c32(&palette.colors.surface_recessed),
+                Some(hex_to_c32(&palette.diff_add)),
+                palette,
+            ),
         );
     }
 }
@@ -1759,6 +1772,61 @@ fn get_node_category_color(kind: &NodeKind, palette: &AppPalette) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_canvas_custom_labels_meet_contrast_for_every_category() {
+        let categories = [
+            NodeKind::LeftHandSource,
+            NodeKind::TextTrim,
+            NodeKind::ImagePadFrame,
+            NodeKind::AudioNormalize,
+            NodeKind::FileSha256,
+            NodeKind::PythonScript,
+            NodeKind::SetLeftHand,
+        ];
+        for appearance in [
+            little_clip_core::config::WorkbenchAppearance::Dark,
+            little_clip_core::config::WorkbenchAppearance::Light,
+        ] {
+            let palette = crate::ui_appearance::palette(appearance);
+            for kind in &categories {
+                let background = get_node_category_color(kind, &palette);
+                for preferred in [
+                    hex_to_c32(&palette.colors.text_primary),
+                    hex_to_c32(&palette.diff_del),
+                ] {
+                    let foreground = crate::ui_ext::contrast_text_c32_on(
+                        background,
+                        background,
+                        Some(preferred),
+                        &palette,
+                    );
+                    assert!(
+                        little_clip_core::palette::contrast_ratio(
+                            (background.r(), background.g(), background.b()),
+                            (foreground.r(), foreground.g(), foreground.b()),
+                        ) >= 4.5,
+                        "{appearance:?} node category {kind:?} label lacks contrast"
+                    );
+                }
+            }
+
+            let recessed = hex_to_c32(&palette.colors.surface_recessed);
+            let preview_text = crate::ui_ext::contrast_text_c32_on(
+                recessed,
+                recessed,
+                Some(hex_to_c32(&palette.diff_add)),
+                &palette,
+            );
+            assert!(
+                little_clip_core::palette::contrast_ratio(
+                    (recessed.r(), recessed.g(), recessed.b()),
+                    (preview_text.r(), preview_text.g(), preview_text.b()),
+                ) >= 4.5,
+                "{appearance:?} node preview label lacks contrast"
+            );
+        }
+    }
 
     #[test]
     fn test_canvas_undo_redo() {
