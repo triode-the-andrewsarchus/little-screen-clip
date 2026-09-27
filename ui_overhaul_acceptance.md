@@ -172,6 +172,13 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 
 - Generated a deterministic 1600×1000 multicolor checker/line PNG at `/tmp/clip-image-dense-e2.png`. Isolated Niri capture `/tmp/clip-image-dense-e2-1280-dark` at 1280×720 logical / 100% / Dark passed popup checks. Primary reviewed the settled view: dimension/readout and full footer are visible; canvas is centered; toolbar wraps; header controls stay aligned. This checks canvas/readout/footer fit, not EXIF expansion or every image tool.
 
+## Isolated image-tool captures, 2026-09-27
+
+- Added `--image-tool` to `scripts/ui_acceptance_capture.py` to choose image tools through their existing one-key shortcuts inside the private Wayland session. The workbench passed the singleton and fixed centered geometry checks for every capture.
+- Crop Dark, Resize Dark, and Deskew Light were captured at 1280×720 with the dense image fixture. Each view keeps its controls, canvas, and footer within the window; Resize shows its 3-column scale presets, while Deskew shows its four-point annotations and guidance. These are layout checks only; E2.1s retains action/undo verification.
+- The runner did not switch to Film Look when sending its documented `L` shortcut, so it is not exposed as a supported `--image-tool` choice yet. Film Look remains unverified. Light/Dark capture scheduling did not touch the user's compositor or workbench.
+- The dense filename `clip-image-dense-e2.png` exceeds the compact title width at this host size, so the header falls back to the studio-prefixed title and clips it to `IMAGE …`. This is the long-filename case already tracked by E3.3d; the short filename capture recorded under H1.4k3b remains valid.
+
 ## Remaining `.small()` audit, 2026-09-27
 
 - `rg -n '\\.small\\(\\)' crates/clip-workbench/src crates/little-clip-render/src` found only: node-canvas property labels (`canvas.rs` 1526/1564), spreadsheet corner/row/column/cell labels (`spreadsheet_view.rs`), and the shared style definition (`ui_ext.rs`). Canvas and spreadsheet hits are data content; the task queue already assigns dense canvas/table scale to H2.2. `ui_ext` explicitly maps TextStyle::Small to `BODY_FONT_SIZE`. No remaining ordinary viewer chrome `.small()` call was found. The broader review also found no `.small()` in `little-clip-render`.

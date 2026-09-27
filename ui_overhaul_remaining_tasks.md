@@ -179,10 +179,10 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **E2.1a [Luna] Verify Image View readout/footer live with dense content.** 1280×720 Dark capture with a 1600×1000 detail-rich fixture shows dimensions/clean-image readout and the full canvas footer within the popup; image header badges and tools wrap without displacing the canvas.
   - [ ] **E2.1b [Luna] Verify Film Look live, including comparison and parameters.**
   - [ ] **E2.1c [Luna] Verify Creative FX live, including comparison and parameters.**
-  - [ ] **E2.1d [Luna] Verify Resize live, including measured wrapping presets.**
+  - [x] **E2.1d [Luna] Verify Resize live, including measured wrapping presets.** Isolated 1280×720 Dark capture shows the dimensions/file-size controls, 3-column scale presets, and canvas within the host; operational resize/undo remains under E2.1s.
   - [ ] **E2.1e [Luna] Verify Markup live.**
-  - [ ] **E2.1f [Luna] Verify Crop live.**
-  - [ ] **E2.1g [Luna] Verify Deskew live, including guidance and canvas annotations.**
+  - [x] **E2.1f [Luna] Verify Crop live.** Isolated 1280×720 Dark capture shows ratio controls, Apply action, canvas annotations, and footer inside the popup; crop/undo behavior remains under E2.1s.
+  - [x] **E2.1g [Luna] Verify Deskew live, including guidance and canvas annotations.** Isolated 1280×720 Light capture shows the four-point status, crop/output controls, corner guidance, canvas annotations, and footer; applying/canceling remains under E2.1s.
   - [ ] **E2.1h [Luna] Verify Redact live, including selection-size badge.**
   - [ ] **E2.1i [Luna] Verify Convert live, including comparison HUD.**
   - [ ] **E2.1j [Luna] Verify Depth Map live.**
