@@ -311,7 +311,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [ ] **H2.1h5 [Primary] Repaint after remaining async completions.**
     - **H2.1h6 Preserve output fidelity and destinations in remaining save/encode/export paths.**
       - [ ] **H2.1h6a [Primary] Offload image Save As and clipboard composition/encoding.** Preserve redaction/markup/crop composition, file format/quality, destination, and IPC/system-clipboard fallback; report failure and success on completion.
-      - [ ] **H2.1h6b [Primary] Offload Audio Studio save and slice-copy FFmpeg jobs.** Preserve filters, slice order, naming, output destinations, and clipboard/slot handoff; show progress and report partial/multi-slice failures.
+      - [ ] **H2.1h6b [Primary] Offload audio save, slice-copy, and editor-handoff jobs.** Preserve filters, slice order, naming, output destinations, and clipboard/slot handoff for Audio Studio and rolling-audio selection; show progress and report partial/multi-slice failures.
       - [ ] **H2.1h6c [Primary] Offload MIDI slice serialization and file writes.** Preserve selected time range, solo-track behavior, destination naming, and clipboard/slot handoff.
       - [ ] **H2.1h6d [Primary] Offload diff and binary-diff temporary-file staging.** Preserve exact source bytes/extensions and launch behavior while returning staging errors to the active viewer.
   - [x] **H2.1i Bound PDF page raster queue.** Three-message queue implemented.
