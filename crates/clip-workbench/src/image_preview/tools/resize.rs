@@ -456,6 +456,8 @@ pub struct ResizeState {
     pub target_size_unit_mb: bool,
     pub target_format: TargetFormat,
     pub last_result: Option<FileSizeOptimizationResult>,
+    pub(crate) last_result_input_stamp: Option<ImageInputStamp>,
+    pub(crate) optimizer_input_stamp: Option<ImageInputStamp>,
     #[allow(dead_code)]
     pub is_optimizing: bool,
 }
@@ -475,6 +477,8 @@ impl Default for ResizeState {
             target_size_unit_mb: true,
             target_format: TargetFormat::Jpeg,
             last_result: None,
+            last_result_input_stamp: None,
+            optimizer_input_stamp: None,
             is_optimizing: false,
         }
     }
@@ -534,6 +538,84 @@ impl ResizeState {
     }
 }
 
+#[cfg(test)]
+mod input_stamp_tests {
+    use super::*;
+
+    fn state() -> ImagePreviewState {
+        let mut bytes = Vec::new();
+        RgbaImage::new(4, 4)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        ImagePreviewState::from_bytes_with_meta(
+            bytes,
+            "image/png".into(),
+            None,
+            "optimizer stamp test".into(),
+            &AppConfig::default(),
+        )
+        .unwrap()
+    }
+
+    fn result(color: [u8; 4]) -> FileSizeOptimizationResult {
+        FileSizeOptimizationResult {
+            target_bytes: 100,
+            achieved_bytes: 90,
+            width: 4,
+            height: 4,
+            scale: 1.0,
+            quality: 80,
+            format: TargetFormat::Png,
+            encoded_data: vec![1, 2, 3],
+            result_rgba: RgbaImage::from_pixel(4, 4, image::Rgba(color)),
+        }
+    }
+
+    #[test]
+    fn optimizer_discards_stale_result_and_keeps_current_result_applicable() {
+        let mut stale = state();
+        stale.resize_state.optimizer_input_stamp = Some(stale.input_stamp());
+        stale.resize_state.is_optimizing = true;
+        stale.optimizer_status = Some("working".into());
+        let (tx, rx) = std::sync::mpsc::channel();
+        stale.optimizer_rx = Some(rx);
+        tx.send(OptimizerMsg::Done(result([1, 2, 3, 255]))).unwrap();
+        stale.mark_pixels_changed();
+
+        stale.poll_optimizer();
+
+        assert!(stale.resize_state.last_result.is_none());
+        assert!(!stale.resize_state.is_optimizing);
+        assert!(stale.optimizer_status.is_none());
+        assert!(stale.optimizer_rx.is_none());
+
+        let mut current = state();
+        current.resize_state.optimizer_input_stamp = Some(current.input_stamp());
+        current.resize_state.is_optimizing = true;
+        let (tx, rx) = std::sync::mpsc::channel();
+        current.optimizer_rx = Some(rx);
+        tx.send(OptimizerMsg::Done(result([7, 8, 9, 255]))).unwrap();
+
+        current.poll_optimizer();
+
+        assert!(current.resize_state.last_result.is_some());
+        assert_eq!(
+            current.resize_state.last_result_input_stamp,
+            Some(current.input_stamp())
+        );
+        current.apply_optimized_result();
+        assert_eq!(
+            current.current_rgba.get_pixel(0, 0),
+            &image::Rgba([7, 8, 9, 255])
+        );
+        assert_eq!(current.pixel_revision, 1);
+        assert!(current.resize_state.last_result_input_stamp.is_none());
+    }
+}
+
 impl ImagePreviewState {
     pub fn apply_pixel_resize(&mut self, target_w: u32, target_h: u32, filter: ResizeFilter) {
         let (w, h) = (target_w.clamp(1, 16384), target_h.clamp(1, 16384));
@@ -551,6 +633,7 @@ impl ImagePreviewState {
 
         let resized = image::imageops::resize(&self.current_rgba, w, h, filter.to_image_filter());
         self.current_rgba = resized;
+        self.mark_pixels_changed();
         self.dirty_texture = true;
         self.resize_state.sync_from_image(&self.current_rgba);
         self.palette_state.is_extracted = false;
@@ -568,6 +651,7 @@ impl ImagePreviewState {
         let target_bytes = self.resize_state.target_bytes();
         let format = self.resize_state.target_format;
         let base_img = self.current_display_image();
+        self.resize_state.optimizer_input_stamp = Some(self.input_stamp());
 
         let (tx, rx) = std::sync::mpsc::channel::<OptimizerMsg>();
         self.optimizer_rx = Some(rx);
@@ -595,6 +679,15 @@ impl ImagePreviewState {
     /// and storing the final result when complete.
 
     pub fn poll_optimizer(&mut self) {
+        if self.optimizer_rx.is_some()
+            && self.resize_state.optimizer_input_stamp.as_ref() != Some(&self.input_stamp())
+        {
+            self.optimizer_rx = None;
+            self.resize_state.optimizer_input_stamp = None;
+            self.resize_state.is_optimizing = false;
+            self.optimizer_status = None;
+            return;
+        }
         let mut done_res = None;
         let mut disconnected = false;
         if let Some(rx) = &self.optimizer_rx {
@@ -619,19 +712,26 @@ impl ImagePreviewState {
         }
         if let Some(res) = done_res {
             self.resize_state.last_result = Some(res);
+            self.resize_state.last_result_input_stamp =
+                self.resize_state.optimizer_input_stamp.take();
             self.resize_state.is_optimizing = false;
             self.optimizer_status = None;
             self.optimizer_rx = None;
+            self.resize_state.optimizer_input_stamp = None;
         } else if disconnected {
             self.resize_state.is_optimizing = false;
             self.optimizer_status = None;
             self.optimizer_rx = None;
+            self.resize_state.optimizer_input_stamp = None;
         }
     }
 
     /// Applies the optimized image result directly to current_rgba.
 
     pub fn apply_optimized_result(&mut self) {
+        if self.resize_state.last_result_input_stamp.as_ref() != Some(&self.input_stamp()) {
+            return;
+        }
         let res = match self.resize_state.last_result.clone() {
             Some(r) => r,
             None => return,
@@ -645,6 +745,10 @@ impl ImagePreviewState {
         self.redo_stack.clear();
 
         self.current_rgba = res.result_rgba;
+        self.mark_pixels_changed();
+        self.redaction_state.boxes.clear();
+        self.markup_state.items.clear();
+        self.resize_state.last_result_input_stamp = None;
         self.file_size_bytes = res.achieved_bytes;
         self.dirty_texture = true;
         self.resize_state.sync_from_image(&self.current_rgba);
@@ -662,6 +766,9 @@ impl ImagePreviewState {
     /// and synchronizes with OS clipboard.
 
     pub fn copy_optimized_to_slot(&mut self) {
+        if self.resize_state.last_result_input_stamp.as_ref() != Some(&self.input_stamp()) {
+            return;
+        }
         let res = match &self.resize_state.last_result {
             Some(r) => r,
             None => return,
@@ -1051,7 +1158,10 @@ impl ImagePreviewState {
                             .color(accent),
                         );
                     });
-                } else if let Some(result) = self.resize_state.last_result.clone() {
+                } else if self.resize_state.last_result_input_stamp.as_ref()
+                    == Some(&self.input_stamp())
+                    && let Some(result) = self.resize_state.last_result.clone()
+                {
                     ui.add_space(crate::ui_ext::SPACE_MD);
                     ui.separator();
                     ui.add_space(crate::ui_ext::SPACE_SM);

@@ -887,6 +887,7 @@ impl ImagePreviewState {
 
         let count = self.markup_state.items.len();
         self.current_rgba = rasterize_markup(&self.current_rgba, &self.markup_state.items);
+        self.mark_pixels_changed();
         self.markup_state.items.clear();
         self.markup_state.selected_idx = None;
         self.markup_state.editing_text_idx = None;

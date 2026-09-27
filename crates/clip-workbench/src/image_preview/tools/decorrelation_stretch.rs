@@ -84,6 +84,7 @@ impl ImagePreviewState {
             self.undo_stack.push(self.current_rgba.clone());
             self.redo_stack.clear();
             self.current_rgba = stretched;
+            self.mark_pixels_changed();
             self.dirty_texture = true;
             self.resize_state.sync_from_image(&self.current_rgba);
             self.palette_state.is_extracted = false;

@@ -84,6 +84,7 @@ impl ImagePreviewState {
 
         let (tx, rx) = std::sync::mpsc::channel::<OcrMsg>();
         self.ocr_rx = Some(rx);
+        self.ocr_input_stamp = Some(self.input_stamp());
         self.ocr_state.in_progress = true;
         self.ocr_state.error = None;
         self.ocr_state.status_text = Some(format!("Starting {}...", engine.label()));
@@ -243,6 +244,24 @@ impl ImagePreviewState {
     }
 
     pub fn poll_ocr(&mut self) {
+        if self.ocr_rx.is_some() && self.ocr_input_stamp.as_ref() != Some(&self.input_stamp()) {
+            loop {
+                match self.ocr_rx.as_ref().map(|rx| rx.try_recv()) {
+                    Some(Ok(OcrMsg::Progress(_))) => {}
+                    Some(Ok(OcrMsg::Success { .. } | OcrMsg::Error(_)))
+                    | Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                        self.ocr_rx = None;
+                        self.ocr_input_stamp = None;
+                        self.ocr_state.in_progress = false;
+                        self.ocr_state.status_text = None;
+                        self.ocr_child_pid
+                            .store(0, std::sync::atomic::Ordering::SeqCst);
+                        return;
+                    }
+                    Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => return,
+                }
+            }
+        }
         if let Some(ref rx) = self.ocr_rx {
             while let Ok(msg) = rx.try_recv() {
                 match msg {
@@ -256,6 +275,7 @@ impl ImagePreviewState {
                     } => {
                         self.ocr_state.extracted_text = text;
                         self.ocr_state.duration_ms = Some(duration_ms);
+                        self.ocr_results_stamp = self.ocr_input_stamp.take();
                         self.ocr_state.in_progress = false;
                         self.ocr_state.status_text = None;
                         self.ocr_rx = None;
@@ -273,6 +293,7 @@ impl ImagePreviewState {
                         self.ocr_state.in_progress = false;
                         self.ocr_state.status_text = None;
                         self.ocr_rx = None;
+                        self.ocr_input_stamp = None;
                         self.ocr_child_pid
                             .store(0, std::sync::atomic::Ordering::SeqCst);
                         break;
@@ -286,21 +307,12 @@ impl ImagePreviewState {
         let pid = self
             .ocr_child_pid
             .swap(0, std::sync::atomic::Ordering::SeqCst);
-        if pid != 0 {
-            #[cfg(unix)]
-            unsafe {
-                // Send SIGTERM then SIGKILL to the entire process group
-                libc::kill(-(pid as i32), libc::SIGTERM);
-                libc::kill(-(pid as i32), libc::SIGKILL);
-                // Also signal the process directly
-                libc::kill(pid as i32, libc::SIGTERM);
-                libc::kill(pid as i32, libc::SIGKILL);
-            }
-        }
+        terminate_ocr_process(pid);
         if self.ocr_state.in_progress {
             self.ocr_state.in_progress = false;
             self.ocr_state.status_text = None;
             self.ocr_rx = None;
+            self.ocr_input_stamp = None;
             self.show_toast("⏹ OCR process cancelled");
         }
     }
@@ -552,7 +564,9 @@ impl ImagePreviewState {
         let surface = hex_to_c32(&palette.colors.surface_panel);
         let text = hex_to_c32(&palette.colors.text_secondary);
         let muted = hex_to_c32(&palette.colors.text_muted);
-        let has_output = !self.ocr_state.extracted_text.is_empty();
+        let output_is_current = self.ocr_output_is_current();
+        let output_visible = output_is_current || self.ocr_results_stamp.is_none();
+        let has_output = output_visible && !self.ocr_state.extracted_text.is_empty();
 
         ui.label(
             egui::RichText::new("OCR output")
@@ -575,10 +589,14 @@ impl ImagePreviewState {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
-                    egui::RichText::new(self.ocr_state.extracted_text.chars().count().to_string())
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .monospace()
-                        .color(text),
+                    egui::RichText::new(if output_visible {
+                        self.ocr_state.extracted_text.chars().count().to_string()
+                    } else {
+                        "0".to_string()
+                    })
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .monospace()
+                    .color(text),
                 );
             });
         });
@@ -610,8 +628,9 @@ impl ImagePreviewState {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(
-                        self.ocr_state
-                            .duration_ms
+                        output_is_current
+                            .then_some(self.ocr_state.duration_ms)
+                            .flatten()
                             .map(|ms| format!("{:.2}s", ms as f64 / 1000.0))
                             .unwrap_or_else(|| "—".to_string()),
                     )
@@ -685,6 +704,7 @@ impl ImagePreviewState {
                     {
                         self.ocr_state.extracted_text.clear();
                         self.ocr_state.duration_ms = None;
+                        self.ocr_results_stamp = None;
                     }
                 });
             }
@@ -692,23 +712,167 @@ impl ImagePreviewState {
         ui.add_space(crate::ui_ext::SPACE_XS);
 
         let editor_height = (ui.clip_rect().height() * 0.55).clamp(240.0, 520.0);
-        egui::ScrollArea::vertical()
-            .id_source("ocr_output_text_scroll")
-            .max_height(editor_height)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.add_sized(
-                    [ui.available_width(), editor_height],
-                    egui::TextEdit::multiline(&mut self.ocr_state.extracted_text)
-                        .font(egui::FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
-                        .hint_text(if self.ocr_state.in_progress {
-                            "OCR is running…"
-                        } else {
-                            "Recognized text will appear here."
-                        })
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(18),
-                );
-            });
+        let source_stamp = self.input_stamp();
+        let in_progress = self.ocr_state.in_progress;
+        let has_stale_text = !self.ocr_state.extracted_text.is_empty();
+        let text_changed = {
+            let mut stale_output = String::new();
+            let text_output = if output_visible {
+                &mut self.ocr_state.extracted_text
+            } else {
+                &mut stale_output
+            };
+            egui::ScrollArea::vertical()
+                .id_source("ocr_output_text_scroll")
+                .max_height(editor_height)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.add_enabled_ui(output_visible, |ui| {
+                        ui.add_sized(
+                            [ui.available_width(), editor_height],
+                            egui::TextEdit::multiline(text_output)
+                                .font(egui::FontId::monospace(crate::ui_ext::BODY_FONT_SIZE))
+                                .hint_text(if in_progress {
+                                    "OCR is running…"
+                                } else if has_stale_text {
+                                    "Image changed; run OCR again to view current text."
+                                } else {
+                                    "Recognized text will appear here."
+                                })
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(18),
+                        )
+                    })
+                    .inner
+                    .changed()
+                })
+                .inner
+        };
+        if text_changed
+            && self.ocr_results_stamp.is_none()
+            && !self.ocr_state.extracted_text.trim().is_empty()
+        {
+            self.ocr_results_stamp = Some(source_stamp);
+        }
+    }
+}
+
+fn terminate_ocr_process(pid: u32) {
+    if pid != 0 {
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(-(pid as i32), libc::SIGTERM);
+            libc::kill(-(pid as i32), libc::SIGKILL);
+            libc::kill(pid as i32, libc::SIGTERM);
+            libc::kill(pid as i32, libc::SIGKILL);
+        }
+    }
+}
+
+#[cfg(test)]
+mod input_stamp_tests {
+    use super::*;
+
+    fn state() -> ImagePreviewState {
+        let mut bytes = Vec::new();
+        RgbaImage::new(4, 4)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        ImagePreviewState::from_bytes_with_meta(
+            bytes,
+            "image/png".into(),
+            None,
+            "OCR stamp test".into(),
+            &AppConfig::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn stale_ocr_success_keeps_existing_text_and_clears_loading() {
+        let mut state = state();
+        state.ocr_state.extracted_text = "previous text".into();
+        state.ocr_state.in_progress = true;
+        state.ocr_state.status_text = Some("working".into());
+        state
+            .ocr_child_pid
+            .store(123, std::sync::atomic::Ordering::SeqCst);
+        state.ocr_input_stamp = Some(state.input_stamp());
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.ocr_rx = Some(rx);
+        tx.send(OcrMsg::Success {
+            text: "stale text".into(),
+            engine: "test".into(),
+            duration_ms: 1,
+        })
+        .unwrap();
+        state.markup_state.items.push(MarkupShape::Text {
+            pos: Pos2::ZERO,
+            text: "changed source".into(),
+            font_size: 10.0,
+        });
+
+        state.poll_ocr();
+
+        assert_eq!(state.ocr_state.extracted_text, "previous text");
+        assert!(!state.ocr_state.in_progress);
+        assert!(state.ocr_state.status_text.is_none());
+        assert!(state.ocr_rx.is_none());
+        assert!(state.ocr_state.error.is_none());
+        assert_eq!(
+            state
+                .ocr_child_pid
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+    }
+
+    #[test]
+    fn current_ocr_success_publishes_text() {
+        let mut state = state();
+        state.ocr_state.in_progress = true;
+        state.ocr_input_stamp = Some(state.input_stamp());
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.ocr_rx = Some(rx);
+        tx.send(OcrMsg::Success {
+            text: "current text".into(),
+            engine: "test".into(),
+            duration_ms: 1,
+        })
+        .unwrap();
+
+        state.poll_ocr();
+
+        assert_eq!(state.ocr_state.extracted_text, "current text");
+        assert!(state.ocr_output_is_current());
+        state.mark_pixels_changed();
+        assert!(!state.ocr_output_is_current());
+        assert_eq!(state.ocr_state.extracted_text, "current text");
+        assert!(!state.ocr_state.in_progress);
+        assert!(state.ocr_rx.is_none());
+        assert!(state.ocr_state.error.is_none());
+    }
+
+    #[test]
+    fn stale_ocr_error_is_discarded_and_loading_clears() {
+        let mut state = state();
+        state.ocr_state.in_progress = true;
+        state.ocr_input_stamp = Some(state.input_stamp());
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.ocr_rx = Some(rx);
+        tx.send(OcrMsg::Error("stale error".into())).unwrap();
+        state.redaction_state.boxes.push(RedactionBox {
+            normalized_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(0.5, 0.5)),
+        });
+
+        state.poll_ocr();
+
+        assert!(state.ocr_state.error.is_none());
+        assert!(!state.ocr_state.in_progress);
+        assert!(state.ocr_state.status_text.is_none());
+        assert!(state.ocr_rx.is_none());
     }
 }

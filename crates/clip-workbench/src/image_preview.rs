@@ -81,6 +81,8 @@ pub struct ImagePreviewState {
     #[allow(dead_code)]
     pub original_rgba: RgbaImage,
     pub current_rgba: RgbaImage,
+    /// Increases whenever the committed pixel buffer changes.
+    pub(crate) pixel_revision: u64,
     texture: Option<egui::TextureHandle>,
     dirty_texture: bool,
 
@@ -136,6 +138,7 @@ pub struct ImagePreviewState {
     // Background Removal Async Worker & State
     pub bg_removal_in_progress: bool,
     pub bg_removal_rx: Option<std::sync::mpsc::Receiver<BgRemovalMsg>>,
+    pub(crate) bg_removal_input_stamp: Option<ImageInputStamp>,
     pub bg_removal_status: Option<String>,
     pub bg_removal_error: Option<String>,
     pub bg_removal_cmd: Option<String>,
@@ -147,11 +150,15 @@ pub struct ImagePreviewState {
     // Multi-Model Document OCR
     pub ocr_state: OcrState,
     pub ocr_rx: Option<std::sync::mpsc::Receiver<OcrMsg>>,
+    pub(crate) ocr_input_stamp: Option<ImageInputStamp>,
+    pub(crate) ocr_results_stamp: Option<ImageInputStamp>,
     pub ocr_child_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
 
     // Barcode / QR / DataMatrix Decoder
     pub barcode_state: BarcodeScanState,
     pub barcode_rx: Option<std::sync::mpsc::Receiver<BarcodeScanMsg>>,
+    pub(crate) barcode_input_stamp: Option<ImageInputStamp>,
+    pub(crate) barcode_results_stamp: Option<ImageInputStamp>,
 
     // Decorrelation Stretch State
     pub dcs_state: DecorrelationStretchState,
@@ -168,6 +175,16 @@ pub struct ImagePreviewState {
 
     // 4-Point Perspective Deskew
     pub deskew_state: DeskewState,
+}
+
+/// Identity of the image pixels and overlays consumed by `current_display_image`.
+/// This intentionally snapshots only small edit state, never the full pixel buffer.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ImageInputStamp {
+    pixel_revision: u64,
+    redactions: Vec<RedactionBox>,
+    markup: Vec<MarkupShape>,
+    crop: Option<Rect>,
 }
 
 impl ImagePreviewState {
@@ -251,6 +268,7 @@ impl ImagePreviewState {
             raw_bytes: bytes,
             original_rgba: rgba.clone(),
             current_rgba: rgba,
+            pixel_revision: 0,
             texture: None,
             dirty_texture: true,
             undo_stack: Vec::new(),
@@ -281,6 +299,7 @@ impl ImagePreviewState {
             optimizer_status: None,
             bg_removal_in_progress: false,
             bg_removal_rx: None,
+            bg_removal_input_stamp: None,
             bg_removal_status: None,
             bg_removal_error: None,
             bg_removal_cmd: config.image.bg_removal_cmd.clone(),
@@ -288,9 +307,13 @@ impl ImagePreviewState {
             convert_state: ConvertState::default(),
             ocr_state: OcrState::default(),
             ocr_rx: None,
+            ocr_input_stamp: None,
+            ocr_results_stamp: None,
             ocr_child_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             barcode_state: BarcodeScanState::default(),
             barcode_rx: None,
+            barcode_input_stamp: None,
+            barcode_results_stamp: None,
             dcs_state: DecorrelationStretchState::default(),
             film_sim_state: FilmSimState::default(),
             creative_fx_state: CreativeFxState::default(),
@@ -308,6 +331,25 @@ impl ImagePreviewState {
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
         self.status_toast = Some((msg.into(), now));
+    }
+
+    pub(crate) fn input_stamp(&self) -> ImageInputStamp {
+        ImageInputStamp {
+            pixel_revision: self.pixel_revision,
+            redactions: self.redaction_state.boxes.clone(),
+            markup: self.markup_state.items.clone(),
+            crop: (self.active_mode == ImageToolMode::Crop)
+                .then_some(self.crop_state.normalized_rect),
+        }
+    }
+
+    pub(crate) fn mark_pixels_changed(&mut self) {
+        self.pixel_revision = self.pixel_revision.wrapping_add(1);
+    }
+
+    pub(crate) fn ocr_output_is_current(&self) -> bool {
+        self.ocr_results_stamp.as_ref() == Some(&self.input_stamp())
+            && !self.ocr_state.extracted_text.is_empty()
     }
 
     /// Returns the image as currently displayed/composed, taking into account any active crop selection if in Crop mode,
@@ -618,6 +660,7 @@ impl ImagePreviewState {
         if let Some(prev) = self.undo_stack.pop() {
             self.redo_stack.push(self.current_rgba.clone());
             self.current_rgba = prev;
+            self.mark_pixels_changed();
             self.dirty_texture = true;
             self.crop_state.normalized_rect =
                 Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
@@ -632,6 +675,7 @@ impl ImagePreviewState {
         if let Some(next) = self.redo_stack.pop() {
             self.undo_stack.push(self.current_rgba.clone());
             self.current_rgba = next;
+            self.mark_pixels_changed();
             self.dirty_texture = true;
             self.crop_state.normalized_rect =
                 Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
@@ -644,6 +688,7 @@ impl ImagePreviewState {
         if !self.undo_stack.is_empty() {
             self.undo_stack.push(self.current_rgba.clone());
             self.current_rgba = self.original_rgba.clone();
+            self.mark_pixels_changed();
             self.dirty_texture = true;
             self.crop_state.normalized_rect =
                 Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
@@ -899,7 +944,8 @@ impl ImagePreviewState {
                 ImageToolMode::RemoveBg => self.run_background_removal(),
                 ImageToolMode::DepthMap if image_shortcuts_enabled => self.run_depth_estimation(),
                 ImageToolMode::Convert
-                    if image_shortcuts_enabled && self.convert_state.output_is_current() =>
+                    if image_shortcuts_enabled
+                        && self.convert_state.output_matches(&self.input_stamp()) =>
                 {
                     self.apply_converted_to_canvas();
                 }
@@ -1323,7 +1369,10 @@ impl ImagePreviewState {
                 self.resize_state.sync_from_image(&self.current_rgba);
             }
             ImageToolMode::Convert => {
-                if self.convert_state.converted_rgba.is_none() {
+                if !self.convert_state.output_matches(&self.input_stamp())
+                    && !self.convert_state.is_encoding
+                    && self.convert_state.params_dirty_at.is_none()
+                {
                     self.schedule_conversion();
                 }
             }
@@ -1902,6 +1951,149 @@ mod tests {
             &AppConfig::default(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn composed_input_stamp_tracks_every_display_image_input() {
+        let mut state = image_state_from_png((8, 8), "input stamp test");
+        let initial = state.input_stamp();
+        assert_eq!(state.input_stamp(), initial);
+
+        state.redaction_state.boxes.push(RedactionBox {
+            normalized_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(0.5, 0.5)),
+        });
+        assert_ne!(state.input_stamp(), initial);
+        let redacted = state.input_stamp();
+
+        state.markup_state.items.push(MarkupShape::Text {
+            pos: Pos2::new(0.2, 0.2),
+            text: "stamp".into(),
+            font_size: 12.0,
+        });
+        assert_ne!(state.input_stamp(), redacted);
+        let marked = state.input_stamp();
+
+        state.active_mode = ImageToolMode::Crop;
+        assert_ne!(state.input_stamp(), marked);
+        let cropped = state.input_stamp();
+        state.crop_state.normalized_rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(0.5, 0.5));
+        assert_ne!(state.input_stamp(), cropped);
+        let cropped_selection = state.input_stamp();
+
+        state.active_mode = ImageToolMode::View;
+        assert_ne!(state.input_stamp(), cropped_selection);
+        let view_mode = state.input_stamp();
+        state.mark_pixels_changed();
+        assert_ne!(state.input_stamp(), view_mode);
+    }
+
+    #[test]
+    fn background_worker_discards_stale_success_and_clears_loading() {
+        let mut state = image_state_from_png((8, 8), "stale background result");
+        let previous_cache = RgbaImage::from_pixel(1, 1, image::Rgba([9, 8, 7, 255]));
+        state.creative_fx_state.cached_background_removal = Some(previous_cache.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.bg_removal_input_stamp = Some(state.input_stamp());
+        state.bg_removal_rx = Some(rx);
+        state.bg_removal_in_progress = true;
+        state.bg_removal_status = Some("working".into());
+        tx.send(BgRemovalMsg::Success {
+            result_rgba: RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255])),
+            duration_ms: 5,
+        })
+        .unwrap();
+        state.markup_state.items.push(MarkupShape::Text {
+            pos: Pos2::ZERO,
+            text: "new input".into(),
+            font_size: 10.0,
+        });
+
+        state.poll_bg_removal();
+
+        assert_eq!(
+            state.current_rgba.get_pixel(0, 0),
+            &image::Rgba([0, 0, 0, 0])
+        );
+        assert_eq!(
+            state.creative_fx_state.cached_background_removal,
+            Some(previous_cache)
+        );
+        assert!(!state.bg_removal_in_progress);
+        assert!(state.bg_removal_status.is_none());
+        assert!(state.bg_removal_rx.is_none());
+        assert!(state.bg_removal_error.is_none());
+    }
+
+    #[test]
+    fn background_worker_applies_unchanged_input_and_clears_baked_overlays() {
+        let mut state = image_state_from_png((8, 8), "current background result");
+        state.redaction_state.boxes.push(RedactionBox {
+            normalized_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(0.5, 0.5)),
+        });
+        state.markup_state.items.push(MarkupShape::Text {
+            pos: Pos2::ZERO,
+            text: "baked once".into(),
+            font_size: 10.0,
+        });
+        let stamp = state.input_stamp();
+        let output = RgbaImage::from_pixel(8, 8, image::Rgba([11, 22, 33, 255]));
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.bg_removal_input_stamp = Some(stamp);
+        state.bg_removal_rx = Some(rx);
+        state.bg_removal_in_progress = true;
+        tx.send(BgRemovalMsg::Success {
+            result_rgba: output.clone(),
+            duration_ms: 5,
+        })
+        .unwrap();
+
+        state.poll_bg_removal();
+
+        assert_eq!(state.current_rgba, output);
+        assert_eq!(state.pixel_revision, 1);
+        assert!(state.redaction_state.boxes.is_empty());
+        assert!(state.markup_state.items.is_empty());
+        assert_eq!(
+            state.creative_fx_state.cached_background_removal,
+            Some(output)
+        );
+        assert!(!state.bg_removal_in_progress);
+        assert!(state.bg_removal_rx.is_none());
+    }
+
+    #[test]
+    fn background_worker_discards_stale_error_without_showing_it() {
+        let mut state = image_state_from_png((8, 8), "stale background error");
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.bg_removal_input_stamp = Some(state.input_stamp());
+        state.bg_removal_rx = Some(rx);
+        state.bg_removal_in_progress = true;
+        tx.send(BgRemovalMsg::Error("stale worker failure".into()))
+            .unwrap();
+        state.redaction_state.boxes.push(RedactionBox {
+            normalized_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(0.25, 0.25)),
+        });
+
+        state.poll_bg_removal();
+
+        assert!(state.bg_removal_error.is_none());
+        assert!(!state.bg_removal_in_progress);
+        assert!(state.bg_removal_status.is_none());
+        assert!(state.bg_removal_rx.is_none());
+    }
+
+    #[test]
+    fn reentering_convert_schedules_when_cached_result_source_is_stale() {
+        let mut state = image_state_from_png((8, 8), "convert mode reentry");
+        state.convert_state.converted_rgba = Some(RgbaImage::new(8, 8));
+        state.convert_state.completed_generation = state.convert_state.request_generation;
+        state.convert_state.completed_input_stamp = Some(state.input_stamp());
+        state.mark_pixels_changed();
+
+        state.set_tool_mode(ImageToolMode::Convert);
+
+        assert!(state.convert_state.params_dirty_at.is_some());
+        assert!(!state.convert_state.output_matches(&state.input_stamp()));
     }
 
     #[test]

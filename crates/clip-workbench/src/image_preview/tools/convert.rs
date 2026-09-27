@@ -63,12 +63,16 @@ pub struct ConvertState {
     pub params_dirty_at: Option<std::time::Instant>,
     pub request_generation: u64,
     pub completed_generation: u64,
+    pub(crate) completed_input_stamp: Option<ImageInputStamp>,
+    render_input_stamp: Option<ImageInputStamp>,
+    pub(crate) render_error_input_stamp: Option<ImageInputStamp>,
     pub render_error: Option<String>,
     render_rx: Option<std::sync::mpsc::Receiver<ConvertWorkerMsg>>,
 }
 
 struct ConvertWorkerMsg {
     generation: u64,
+    input_stamp: ImageInputStamp,
     result: Result<(Vec<u8>, RgbaImage), String>,
 }
 
@@ -90,6 +94,9 @@ impl Default for ConvertState {
             params_dirty_at: None,
             request_generation: 0,
             completed_generation: 0,
+            completed_input_stamp: None,
+            render_input_stamp: None,
+            render_error_input_stamp: None,
             render_error: None,
             render_rx: None,
         }
@@ -103,6 +110,10 @@ impl ConvertState {
 
     pub fn output_is_current(&self) -> bool {
         self.completed_generation == self.request_generation && self.render_error.is_none()
+    }
+
+    pub fn output_matches(&self, input_stamp: &ImageInputStamp) -> bool {
+        self.output_is_current() && self.completed_input_stamp.as_ref() == Some(input_stamp)
     }
 }
 
@@ -129,6 +140,7 @@ impl ImagePreviewState {
     #[cfg(test)]
     pub fn update_conversion(&mut self) {
         let base_img = self.current_display_image();
+        let input_stamp = self.input_stamp();
         let fmt = self.convert_state.target_format;
         let quality = self.convert_state.quality;
         let lossless = self.convert_state.lossless;
@@ -137,6 +149,7 @@ impl ImagePreviewState {
         self.convert_state.params_dirty_at = None;
         self.convert_state.render_rx = None;
         self.convert_state.is_encoding = false;
+        self.convert_state.render_input_stamp = None;
 
         match encode_conversion(base_img, fmt, quality, lossless) {
             Ok((bytes, decoded_rgba)) => {
@@ -145,10 +158,13 @@ impl ImagePreviewState {
                 self.convert_state.dirty_texture = true;
                 self.convert_state.optipng_savings = None;
                 self.convert_state.render_error = None;
+                self.convert_state.render_error_input_stamp = None;
                 self.convert_state.completed_generation = self.convert_state.request_generation;
+                self.convert_state.completed_input_stamp = Some(input_stamp);
             }
             Err(e) => {
                 self.convert_state.render_error = Some(e.clone());
+                self.convert_state.render_error_input_stamp = Some(input_stamp);
                 self.show_toast(format!("Conversion failed: {}", e));
             }
         }
@@ -160,6 +176,7 @@ impl ImagePreviewState {
         self.convert_state.params_dirty_at = Some(std::time::Instant::now());
         self.convert_state.optipng_savings = None;
         self.convert_state.render_error = None;
+        self.convert_state.render_error_input_stamp = None;
     }
 
     pub fn run_conversion_worker(&mut self) {
@@ -168,6 +185,7 @@ impl ImagePreviewState {
         }
 
         let image = self.current_display_image();
+        let input_stamp = self.input_stamp();
         let format = self.convert_state.target_format;
         let quality = self.convert_state.quality;
         let lossless = self.convert_state.lossless;
@@ -175,6 +193,7 @@ impl ImagePreviewState {
         let (tx, rx) = std::sync::mpsc::channel();
 
         self.convert_state.render_rx = Some(rx);
+        self.convert_state.render_input_stamp = Some(input_stamp.clone());
         self.convert_state.is_encoding = true;
         self.convert_state.params_dirty_at = None;
 
@@ -182,11 +201,26 @@ impl ImagePreviewState {
             .name("image_conversion".to_string())
             .spawn(move || {
                 let result = encode_conversion(image, format, quality, lossless);
-                let _ = tx.send(ConvertWorkerMsg { generation, result });
+                let _ = tx.send(ConvertWorkerMsg {
+                    generation,
+                    input_stamp,
+                    result,
+                });
             });
     }
 
     pub fn poll_conversion(&mut self) {
+        if self.convert_state.is_encoding
+            && self.convert_state.render_input_stamp.as_ref() != Some(&self.input_stamp())
+        {
+            self.convert_state.render_rx = None;
+            self.convert_state.render_input_stamp = None;
+            self.convert_state.is_encoding = false;
+            if self.active_mode == ImageToolMode::Convert {
+                self.convert_state.params_dirty_at = Some(std::time::Instant::now());
+            }
+            return;
+        }
         let Some(rx) = self.convert_state.render_rx.take() else {
             return;
         };
@@ -194,7 +228,13 @@ impl ImagePreviewState {
         match rx.try_recv() {
             Ok(message) => {
                 self.convert_state.is_encoding = false;
-                if message.generation != self.convert_state.request_generation {
+                self.convert_state.render_input_stamp = None;
+                if message.generation != self.convert_state.request_generation
+                    || message.input_stamp != self.input_stamp()
+                {
+                    if self.active_mode == ImageToolMode::Convert {
+                        self.convert_state.params_dirty_at = Some(std::time::Instant::now());
+                    }
                     return;
                 }
                 match message.result {
@@ -203,10 +243,14 @@ impl ImagePreviewState {
                         self.convert_state.converted_rgba = Some(rgba);
                         self.convert_state.dirty_texture = true;
                         self.convert_state.completed_generation = message.generation;
+                        self.convert_state.completed_input_stamp = Some(message.input_stamp);
                         self.convert_state.render_error = None;
+                        self.convert_state.render_error_input_stamp = None;
                     }
                     Err(error) => {
                         self.convert_state.render_error = Some(error.clone());
+                        self.convert_state.render_error_input_stamp =
+                            Some(message.input_stamp.clone());
                         self.show_toast(format!("Conversion failed: {}", error));
                     }
                 }
@@ -216,16 +260,25 @@ impl ImagePreviewState {
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.convert_state.is_encoding = false;
+                self.convert_state.render_error_input_stamp =
+                    self.convert_state.render_input_stamp.take();
                 self.convert_state.render_error = Some("Conversion worker stopped".to_string());
             }
         }
     }
 
     pub fn apply_converted_to_canvas(&mut self) {
+        if !self.convert_state.output_matches(&self.input_stamp()) {
+            return;
+        }
         if let Some(converted) = self.convert_state.converted_rgba.clone() {
             self.undo_stack.push(self.current_rgba.clone());
             self.redo_stack.clear();
             self.current_rgba = converted;
+            self.mark_pixels_changed();
+            self.redaction_state.boxes.clear();
+            self.markup_state.items.clear();
+            self.convert_state.completed_input_stamp = None;
             self.dirty_texture = true;
             self.resize_state.sync_from_image(&self.current_rgba);
             self.palette_state.is_extracted = false;
@@ -235,6 +288,9 @@ impl ImagePreviewState {
     }
 
     pub fn run_optipng_conversion(&mut self) {
+        if !self.convert_state.output_matches(&self.input_stamp()) {
+            return;
+        }
         if self.convert_state.target_format != ConvertTargetFormat::Png {
             self.show_toast("⚠ OptiPNG is only applicable for PNG format");
             return;
@@ -300,7 +356,9 @@ impl ImagePreviewState {
             Vec2::new(ui.available_width(), crate::ui_ext::CONTROL_HEIGHT),
             egui::Layout::left_to_right(egui::Align::Center),
             |ui| {
-                if let Some(error) = &self.convert_state.render_error {
+                if self.convert_state.render_error_input_stamp.as_ref() == Some(&self.input_stamp())
+                    && let Some(error) = &self.convert_state.render_error
+                {
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(error)
@@ -483,7 +541,7 @@ impl ImagePreviewState {
             if ui
                 .add_enabled_ui(
                     !self.convert_state.is_running_optipng
-                        && self.convert_state.output_is_current(),
+                        && self.convert_state.output_matches(&self.input_stamp()),
                     |ui| {
                         ui.add_sized(
                             [ui.available_width(), crate::ui_ext::CONTROL_HEIGHT],
@@ -511,7 +569,11 @@ impl ImagePreviewState {
         ui.add_space(crate::ui_ext::SPACE_XS);
 
         let original_size = self.file_size_bytes;
-        let converted_size = self.convert_state.encoded_bytes.len();
+        let converted_size = if self.convert_state.output_matches(&self.input_stamp()) {
+            self.convert_state.encoded_bytes.len()
+        } else {
+            0
+        };
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new("Original")
@@ -569,7 +631,9 @@ impl ImagePreviewState {
             });
         }
 
-        if let Some((before, after)) = self.convert_state.optipng_savings {
+        if self.convert_state.output_matches(&self.input_stamp())
+            && let Some((before, after)) = self.convert_state.optipng_savings
+        {
             let saved = before.saturating_sub(after);
             ui.label(
                 egui::RichText::new(format!("OptiPNG saved {}", format_bytes_size(saved)))
@@ -588,7 +652,7 @@ impl ImagePreviewState {
         );
 
         ui.add_space(14.0);
-        let output_ready = self.convert_state.output_is_current();
+        let output_ready = self.convert_state.output_matches(&self.input_stamp());
         let extension = self.convert_state.target_format.extension();
         let save = crate::action_button(format!("Save as .{}", extension), accent, palette);
         if ui
@@ -663,7 +727,9 @@ impl ImagePreviewState {
         palette: &AppPalette,
     ) {
         // Ensure converted texture is loaded
-        if self.convert_state.dirty_texture || self.convert_state.converted_texture.is_none() {
+        if self.convert_state.output_matches(&self.input_stamp())
+            && (self.convert_state.dirty_texture || self.convert_state.converted_texture.is_none())
+        {
             if let Some(ref conv_rgba) = self.convert_state.converted_rgba {
                 let color_img = egui::ColorImage::from_rgba_unmultiplied(
                     [conv_rgba.width() as usize, conv_rgba.height() as usize],
@@ -691,12 +757,15 @@ impl ImagePreviewState {
         }
 
         // 2. Draw Right Side (Converted / After)
-        let conv_tex_id = self
-            .convert_state
-            .converted_texture
-            .as_ref()
-            .map(|t| t.id())
-            .or_else(|| self.texture.as_ref().map(|t| t.id()));
+        let conv_tex_id = if self.convert_state.output_matches(&self.input_stamp()) {
+            self.convert_state
+                .converted_texture
+                .as_ref()
+                .map(|t| t.id())
+                .or_else(|| self.texture.as_ref().map(|t| t.id()))
+        } else {
+            self.texture.as_ref().map(|t| t.id())
+        };
         if let Some(tex_id) = conv_tex_id {
             let right_rect = Rect::from_min_max(Pos2::new(split_x, img_rect.min.y), img_rect.max);
             let right_uv = Rect::from_min_max(Pos2::new(split, 0.0), Pos2::new(1.0, 1.0));
@@ -753,7 +822,11 @@ impl ImagePreviewState {
 
         // 6. Squoosh-Style Floating HUD Badges
         let orig_size_str = format_bytes_size(self.file_size_bytes);
-        let conv_size_str = format_bytes_size(self.convert_state.encoded_bytes.len());
+        let conv_size_str = if self.convert_state.output_matches(&self.input_stamp()) {
+            format_bytes_size(self.convert_state.encoded_bytes.len())
+        } else {
+            "—".to_string()
+        };
         let orig_fmt = self.mime.replace("image/", "").to_uppercase();
         let conv_fmt = self.convert_state.target_format.extension().to_uppercase();
 
@@ -788,5 +861,99 @@ impl ImagePreviewState {
             max_width,
             palette,
         );
+    }
+}
+
+#[cfg(test)]
+mod input_stamp_tests {
+    use super::*;
+
+    fn state() -> ImagePreviewState {
+        let mut bytes = Vec::new();
+        RgbaImage::new(4, 4)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        ImagePreviewState::from_bytes_with_meta(
+            bytes,
+            "image/png".into(),
+            None,
+            "conversion stamp test".into(),
+            &AppConfig::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn conversion_discards_stale_success_and_stale_failure() {
+        for result in [
+            Ok((
+                vec![1],
+                RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255])),
+            )),
+            Err("stale encode error".into()),
+        ] {
+            let mut state = state();
+            state.active_mode = ImageToolMode::Convert;
+            let old_stamp = state.input_stamp();
+            state.convert_state.render_input_stamp = Some(old_stamp.clone());
+            state.convert_state.is_encoding = true;
+            let (tx, rx) = std::sync::mpsc::channel();
+            state.convert_state.render_rx = Some(rx);
+            tx.send(ConvertWorkerMsg {
+                generation: state.convert_state.request_generation,
+                input_stamp: old_stamp,
+                result,
+            })
+            .unwrap();
+            state.mark_pixels_changed();
+
+            state.poll_conversion();
+
+            assert!(!state.convert_state.is_encoding);
+            assert!(state.convert_state.render_rx.is_none());
+            assert!(state.convert_state.render_error.is_none());
+            assert!(state.convert_state.encoded_bytes.is_empty());
+            assert!(state.convert_state.converted_rgba.is_none());
+            assert!(state.status_toast.is_none());
+        }
+    }
+
+    #[test]
+    fn conversion_accepts_current_result_and_applies_baked_overlays_once() {
+        let mut state = state();
+        state.active_mode = ImageToolMode::Convert;
+        state.redaction_state.boxes.push(RedactionBox {
+            normalized_rect: Rect::from_min_max(Pos2::ZERO, Pos2::new(0.5, 0.5)),
+        });
+        let input_stamp = state.input_stamp();
+        state.convert_state.render_input_stamp = Some(input_stamp.clone());
+        state.convert_state.is_encoding = true;
+        let output = RgbaImage::from_pixel(4, 4, image::Rgba([7, 8, 9, 255]));
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.convert_state.render_rx = Some(rx);
+        tx.send(ConvertWorkerMsg {
+            generation: state.convert_state.request_generation,
+            input_stamp,
+            result: Ok((vec![4, 5, 6], output.clone())),
+        })
+        .unwrap();
+
+        state.poll_conversion();
+        assert!(state.convert_state.output_matches(&state.input_stamp()));
+        assert_eq!(state.convert_state.encoded_bytes, vec![4, 5, 6]);
+
+        state.apply_converted_to_canvas();
+        assert_eq!(state.current_rgba, output);
+        assert_eq!(state.pixel_revision, 1);
+        assert!(state.redaction_state.boxes.is_empty());
+        assert!(!state.convert_state.output_matches(&state.input_stamp()));
+        let scheduled_generation = state.convert_state.request_generation;
+        assert!(state.convert_state.params_dirty_at.is_some());
+        state.set_tool_mode(ImageToolMode::View);
+        state.set_tool_mode(ImageToolMode::Convert);
+        assert_eq!(state.convert_state.request_generation, scheduled_generation);
     }
 }

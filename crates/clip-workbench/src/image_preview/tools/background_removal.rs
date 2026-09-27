@@ -107,6 +107,7 @@ impl ImagePreviewState {
 
         let (tx, rx) = std::sync::mpsc::channel::<BgRemovalMsg>();
         self.bg_removal_rx = Some(rx);
+        self.bg_removal_input_stamp = Some(self.input_stamp());
         self.bg_removal_in_progress = true;
         self.bg_removal_status = Some(status_desc);
         self.bg_removal_error = None;
@@ -144,6 +145,16 @@ impl ImagePreviewState {
     /// Runs AI depth estimation asynchronously using Depth-Anything / MiDaS.
 
     pub fn poll_bg_removal(&mut self) {
+        if self.bg_removal_rx.is_some()
+            && self.bg_removal_input_stamp.as_ref() != Some(&self.input_stamp())
+        {
+            self.bg_removal_rx = None;
+            self.bg_removal_input_stamp = None;
+            self.bg_removal_in_progress = false;
+            self.bg_removal_status = None;
+            return;
+        }
+
         let mut success_data = None;
         let mut error_msg = None;
         let mut disconnected = false;
@@ -175,14 +186,26 @@ impl ImagePreviewState {
         }
 
         if let Some((result_rgba, duration_ms)) = success_data {
+            let included_crop = self
+                .bg_removal_input_stamp
+                .as_ref()
+                .is_some_and(|stamp| stamp.crop.is_some());
             self.creative_fx_state.cached_background_removal = Some(result_rgba.clone());
             self.undo_stack.push(self.current_rgba.clone());
             self.redo_stack.clear();
             self.current_rgba = result_rgba;
+            self.mark_pixels_changed();
+            self.redaction_state.boxes.clear();
+            self.markup_state.items.clear();
+            if included_crop {
+                self.crop_state.normalized_rect =
+                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
+            }
             self.dirty_texture = true;
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
             self.bg_removal_rx = None;
+            self.bg_removal_input_stamp = None;
             self.bg_removal_error = None;
             self.resize_state.sync_from_image(&self.current_rgba);
             self.palette_state.is_extracted = false;
@@ -195,11 +218,13 @@ impl ImagePreviewState {
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
             self.bg_removal_rx = None;
+            self.bg_removal_input_stamp = None;
             self.bg_removal_error = Some(err);
         } else if disconnected {
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
             self.bg_removal_rx = None;
+            self.bg_removal_input_stamp = None;
         }
     }
 

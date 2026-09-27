@@ -24,6 +24,7 @@ impl ImagePreviewState {
         }
         self.barcode_state.is_scanning = true;
         let base_img = self.current_display_image();
+        self.barcode_input_stamp = Some(self.input_stamp());
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
@@ -37,27 +38,55 @@ impl ImagePreviewState {
     }
 
     pub(crate) fn poll_barcode_scan(&mut self, ctx: &egui::Context) {
-        let message = self.barcode_rx.as_ref().and_then(|rx| rx.try_recv().ok());
-        if let Some(message) = message {
+        let current_stamp = self.input_stamp();
+        if self
+            .barcode_results_stamp
+            .as_ref()
+            .is_some_and(|stamp| stamp != &current_stamp)
+        {
+            self.barcode_results_stamp = None;
+            self.barcode_state.detections.clear();
+            self.barcode_state.selected_idx = None;
+            self.barcode_state.has_scanned = false;
+            self.barcode_state.last_scan_duration_ms = 0;
+        }
+        if self.barcode_rx.is_some() && self.barcode_input_stamp.as_ref() != Some(&current_stamp) {
             self.barcode_rx = None;
+            self.barcode_input_stamp = None;
             self.barcode_state.is_scanning = false;
-            self.barcode_state.has_scanned = true;
-            self.barcode_state.last_scan_duration_ms = message.duration_ms;
-            let count = message.detections.len();
-            self.barcode_state.detections = message.detections;
-            self.barcode_state.selected_idx = (count > 0).then_some(0);
-            if count > 0 {
-                self.show_toast(format!(
-                    "Found {} code{} in {}ms",
-                    count,
-                    if count == 1 { "" } else { "s" },
-                    self.barcode_state.last_scan_duration_ms
-                ));
-            } else {
-                self.show_toast("No barcodes or QR codes found");
+            return;
+        }
+        match self.barcode_rx.as_ref().map(|rx| rx.try_recv()) {
+            Some(Ok(message)) => {
+                self.barcode_results_stamp = self.barcode_input_stamp.clone();
+                self.barcode_rx = None;
+                self.barcode_input_stamp = None;
+                self.barcode_state.is_scanning = false;
+                self.barcode_state.has_scanned = true;
+                self.barcode_state.last_scan_duration_ms = message.duration_ms;
+                let count = message.detections.len();
+                self.barcode_state.detections = message.detections;
+                self.barcode_state.selected_idx = (count > 0).then_some(0);
+                if count > 0 {
+                    self.show_toast(format!(
+                        "Found {} code{} in {}ms",
+                        count,
+                        if count == 1 { "" } else { "s" },
+                        self.barcode_state.last_scan_duration_ms
+                    ));
+                } else {
+                    self.show_toast("No barcodes or QR codes found");
+                }
             }
-        } else if self.barcode_state.is_scanning {
-            ctx.request_repaint();
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) if self.barcode_state.is_scanning => {
+                ctx.request_repaint();
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.barcode_rx = None;
+                self.barcode_input_stamp = None;
+                self.barcode_state.is_scanning = false;
+            }
+            _ => {}
         }
     }
 
@@ -304,6 +333,9 @@ impl ImagePreviewState {
         img_rect: Rect,
         palette: &AppPalette,
     ) {
+        if self.barcode_results_stamp.as_ref() != Some(&self.input_stamp()) {
+            return;
+        }
         let ptr_pos = response.hover_pos();
         let clicked = response.clicked();
         let diff_mod = hex_to_c32(&palette.diff_mod);
@@ -408,5 +440,85 @@ impl ImagePreviewState {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod input_stamp_tests {
+    use super::*;
+
+    fn state() -> ImagePreviewState {
+        let mut bytes = Vec::new();
+        RgbaImage::new(4, 4)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        ImagePreviewState::from_bytes_with_meta(
+            bytes,
+            "image/png".into(),
+            None,
+            "Barcode stamp test".into(),
+            &AppConfig::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn barcode_scan_discards_stale_and_accepts_current_results() {
+        let ctx = egui::Context::default();
+        let mut stale = state();
+        stale.barcode_state.is_scanning = true;
+        stale.barcode_input_stamp = Some(stale.input_stamp());
+        let (tx, rx) = std::sync::mpsc::channel();
+        stale.barcode_rx = Some(rx);
+        tx.send(BarcodeScanMsg {
+            detections: Vec::new(),
+            duration_ms: 1,
+        })
+        .unwrap();
+        stale.mark_pixels_changed();
+
+        stale.poll_barcode_scan(&ctx);
+
+        assert!(!stale.barcode_state.is_scanning);
+        assert!(!stale.barcode_state.has_scanned);
+        assert!(stale.barcode_rx.is_none());
+
+        let mut current = state();
+        current.barcode_state.is_scanning = true;
+        current.barcode_input_stamp = Some(current.input_stamp());
+        let (tx, rx) = std::sync::mpsc::channel();
+        current.barcode_rx = Some(rx);
+        tx.send(BarcodeScanMsg {
+            detections: Vec::new(),
+            duration_ms: 2,
+        })
+        .unwrap();
+
+        current.poll_barcode_scan(&ctx);
+
+        assert!(!current.barcode_state.is_scanning);
+        assert!(current.barcode_state.has_scanned);
+        assert_eq!(current.barcode_state.last_scan_duration_ms, 2);
+        assert!(current.barcode_rx.is_none());
+    }
+
+    #[test]
+    fn disconnected_barcode_worker_clears_loading_state() {
+        let ctx = egui::Context::default();
+        let mut state = state();
+        state.barcode_state.is_scanning = true;
+        state.barcode_input_stamp = Some(state.input_stamp());
+        let (tx, rx) = std::sync::mpsc::channel::<BarcodeScanMsg>();
+        state.barcode_rx = Some(rx);
+        drop(tx);
+
+        state.poll_barcode_scan(&ctx);
+
+        assert!(!state.barcode_state.is_scanning);
+        assert!(state.barcode_rx.is_none());
+        assert!(state.barcode_input_stamp.is_none());
     }
 }

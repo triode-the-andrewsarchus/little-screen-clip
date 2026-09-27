@@ -113,12 +113,20 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **H1.3b13 [Primary] Test Audio Save Enter after editing destination and filename fields.** Focused egui regressions submit with the destination and filename controls focused, then verify ffmpeg output uses both edited values. The explicit Enter handler remains active despite keyboard focus.
   - [x] **H1.3b14 [Primary] Add Space-key route regressions for Quick Palette and rolling audio.** Verify slot selection, selected-region playback, and keyboard-focus suppression do not overlap. Production routing checks prove Quick Palette selects both hands only without an active audio region, and rolling playback requires an active region and yields to focused text.
   - [x] **H1.3b15 [Primary] Add Space-key regressions for Audio Studio and MIDI.** Preserve mode-local playback/start behavior and focused-editor precedence. Audio Studio checks stem-separation mode/idle state and focused-editor suppression; MIDI sends synthetic Space through the actual render handler and verifies selected-region transport bounds without opening an audio device.
-  - [ ] **H1.3c1 [Primary] Add revision-aware ownership for async results.** Spreadsheet/MIDI loads, audio/image previews, and later exports need host-scoped identity.
+  - **H1.3c Revision-aware async ownership**
+    - [x] **H1.3c1a [Primary] Audit existing Spreadsheet/MIDI load ownership.** Their request generations, receivers, and modal deferral already prevent stale publication; defer a general host token/cache until separate inline-preview hosts exist.
+    - [x] **H1.3c1b [Luna + primary review] Track committed image revisions and composed preview inputs.** `ImageInputStamp` covers pixel edits, pending redactions/markup, and crop selection without hashing or copying pixel buffers.
+    - [x] **H1.3c1c [Luna + primary review] Gate background-removal and depth results by image input.** Stale success/error is discarded and loading clears; current results bake overlays once and invalidate the image revision.
+    - [x] **H1.3c1d [Luna + primary review] Gate OCR work and displayed/copied text by image input.** Stale completion cannot replace text, stale output is hidden from copy/slot actions, and terminal paths clear the child PID.
+    - [x] **H1.3c1e [Luna + primary review] Gate barcode results by image input.** Stale success/error is discarded; current results remain available.
+    - [x] **H1.3c1f [Luna + primary review] Gate conversion and resize-optimizer output by image input.** Stale output cannot be applied/exported, and reopening Convert schedules a current result.
+    - [ ] **H1.3c1g [Primary] Gate Creative FX render, mask, and thumbnail ownership.** Include source/preset/parameter identity, stale cache rejection, and Apply guards while preserving raw-pixel rendering behavior.
+    - [ ] **H1.3c1h [Primary] Add Creative FX stale-success, stale-failure, cache, and Apply regressions.** Keep the tested image preview paths above separate from this scope.
   - **H1.3c2 Bound async work and completion behavior**
     - [ ] **H1.3c2a [Primary] Bound async work for viewer-owned results.**
     - [ ] **H1.3c2b [Primary] Repaint after async completion.**
-  - [ ] **H1.3c3 [Primary] Add stale-success tests.**
-  - [ ] **H1.3c4 [Primary] Add stale-failure tests.**
+  - [x] **H1.3c3 [Luna + primary review] Add stale-success and current-success tests for image preview workers.** Background/depth, OCR, barcode, conversion, and optimizer ownership are covered; Creative FX cases remain under H1.3c1h.
+  - [x] **H1.3c4 [Luna + primary review] Add stale-failure and current-failure tests for image preview workers.** Background/depth, OCR, barcode, and conversion failures are covered; Creative FX cases remain under H1.3c1h.
   - **H1.3c5 Prove async completion causes no repeated side effects.** New requests and app drop cancel prior jobs. Do not build a general plugin/docking system.
     - [x] **H1.3c5a [Luna] Keep Spreadsheet completion queued while a modal viewer is active.** The job receiver remains owned until modal viewers/startup routes finish; a focused regression proves the failure result is reported after the viewer closes.
     - [x] **H1.3c5b [Luna + primary review] Keep MIDI completion queued through active modal and startup viewers.** A regression proves completion remains pending through a foreground and queued gallery, opens after the queue drains, then remains single-published on a second poll. `cargo test -p clip-workbench --quiet` passes.

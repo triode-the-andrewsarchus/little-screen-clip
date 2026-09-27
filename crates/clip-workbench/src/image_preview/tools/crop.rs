@@ -358,6 +358,7 @@ impl ImagePreviewState {
             let cropped =
                 image::imageops::crop_imm(&self.current_rgba, px_x, px_y, px_w, px_h).to_image();
             self.current_rgba = cropped;
+            self.mark_pixels_changed();
             self.dirty_texture = true;
             self.crop_state.normalized_rect =
                 Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));

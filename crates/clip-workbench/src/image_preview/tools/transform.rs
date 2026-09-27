@@ -5,6 +5,7 @@ impl ImagePreviewState {
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
         self.current_rgba = image::imageops::rotate90(&self.current_rgba);
+        self.mark_pixels_changed();
         self.dirty_texture = true;
         self.crop_state.normalized_rect =
             Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
@@ -15,6 +16,7 @@ impl ImagePreviewState {
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
         self.current_rgba = image::imageops::rotate270(&self.current_rgba);
+        self.mark_pixels_changed();
         self.dirty_texture = true;
         self.crop_state.normalized_rect =
             Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
@@ -25,6 +27,7 @@ impl ImagePreviewState {
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
         self.current_rgba = image::imageops::rotate180(&self.current_rgba);
+        self.mark_pixels_changed();
         self.dirty_texture = true;
         self.crop_state.normalized_rect =
             Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
@@ -35,6 +38,7 @@ impl ImagePreviewState {
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
         self.current_rgba = image::imageops::flip_horizontal(&self.current_rgba);
+        self.mark_pixels_changed();
         self.dirty_texture = true;
         self.show_toast("⇆ Flipped Horizontally");
     }
@@ -43,6 +47,7 @@ impl ImagePreviewState {
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
         self.current_rgba = image::imageops::flip_vertical(&self.current_rgba);
+        self.mark_pixels_changed();
         self.dirty_texture = true;
         self.show_toast("⇅ Flipped Vertically");
     }

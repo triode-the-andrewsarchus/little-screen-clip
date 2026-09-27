@@ -51,6 +51,7 @@ impl ImagePreviewState {
         self.redaction_state.selected_idx = None;
         self.redaction_state.active_drag = None;
         self.dirty_texture = true;
+        self.mark_pixels_changed();
 
         // Automatically ensure metadata is stripped when redactions are permanently burned
         if let Ok(clean) = strip_metadata(&self.current_rgba, &self.mime) {
