@@ -17,6 +17,7 @@ use std::sync::mpsc::{Receiver, TryRecvError, channel, sync_channel};
 use std::time::Duration;
 
 const PREVIEW_QUEUE_CAPACITY: usize = 3;
+const PAGE_DECODE_REQUEST_LIMIT: usize = 32;
 // Bound retained RGBA textures independently of document length. Compressed
 // rasters remain available for re-upload when an evicted page becomes visible.
 // Backend frees follow drawing; frame turnover can temporarily use twice these
@@ -29,6 +30,44 @@ const STAGED_PDF_FILENAME: &str = "edited.pdf";
 struct PdfPreviewMsg {
     page_num: usize,
     result: Result<(Vec<u8>, u32, u32), String>,
+}
+
+// One running/queued decode or completed ColorImage per editor (at most
+// 1200 * 1200 * 4 bytes of published pixels). Canceled jobs retain their slot
+// until acknowledged so rapid navigation cannot accumulate running decodes.
+struct PdfDecodeJob {
+    page_num: usize,
+    ticket: JobTicket,
+    rx: Receiver<Result<Result<egui::ColorImage, String>, JobError>>,
+    ready: Option<egui::ColorImage>,
+    cancelled: bool,
+}
+
+impl PdfDecodeJob {
+    fn cancel(&mut self) {
+        self.ticket.cancel();
+        self.cancelled = true;
+        self.ready = None;
+    }
+}
+
+fn decode_page_png(png: Vec<u8>) -> Result<egui::ColorImage, String> {
+    let mut reader =
+        image::ImageReader::with_format(std::io::Cursor::new(png), image::ImageFormat::Png);
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader.decode().map_err(|error| error.to_string())?;
+    let image = if image.width().max(image.height()) > PAGE_RASTER_MAX_DIM {
+        image.thumbnail(PAGE_RASTER_MAX_DIM, PAGE_RASTER_MAX_DIM)
+    } else {
+        image
+    };
+    let rgba = image.to_rgba8();
+    Ok(egui::ColorImage::from_rgba_unmultiplied(
+        [rgba.width() as usize, rgba.height() as usize],
+        rgba.as_raw(),
+    ))
 }
 
 /// Completion message for a potentially expensive, lossless PDF mutation.  PDF
@@ -73,6 +112,8 @@ pub struct PdfEditorState {
     edit_rx: Option<Receiver<PdfEditMsg>>,
     edit_in_progress: bool,
     texture_frame: u64,
+    decode_job: Option<PdfDecodeJob>,
+    decode_requests: Vec<usize>,
 }
 
 impl PdfEditorState {
@@ -109,6 +150,8 @@ impl PdfEditorState {
             edit_rx: None,
             edit_in_progress: false,
             texture_frame: 0,
+            decode_job: None,
+            decode_requests: Vec::new(),
         };
         state.start_info_worker();
         state
@@ -120,6 +163,10 @@ impl PdfEditorState {
         }
         self.preview_rx = None;
         self.previews_loading = false;
+        if let Some(job) = &mut self.decode_job {
+            job.cancel();
+        }
+        self.decode_requests.clear();
         self.pages.clear();
         self.page_count = 0;
         let path = self.path.clone();
@@ -203,6 +250,11 @@ impl PdfEditorState {
             loop {
                 match rx.try_recv() {
                     Ok(message) => {
+                        if let Some(job) = &mut self.decode_job {
+                            if job.page_num == message.page_num {
+                                job.cancel();
+                            }
+                        }
                         if let Some(page) = self.pages.get_mut(message.page_num.saturating_sub(1)) {
                             match message.result {
                                 Ok((png_bytes, width, height)) => {
@@ -246,38 +298,29 @@ impl PdfEditorState {
             page.texture_last_used = self.texture_frame;
             return Some(texture.id());
         }
-        if page.png_bytes.is_empty() {
+        if page.png_bytes.is_empty() || page.error.is_some() {
             return None;
         }
-        let image = match image::load_from_memory(&page.png_bytes) {
-            Ok(image) => image,
-            Err(error) => {
-                page.error = Some(format!("PDF preview decode failed: {error}"));
-                page.png_bytes.clear();
-                return None;
+        if !self.decode_requests.contains(&page_num) {
+            if self.decode_requests.len() == PAGE_DECODE_REQUEST_LIMIT
+                && self.selected_page == Some(page_num)
+            {
+                self.decode_requests.pop();
             }
-        };
-        // Workers already render at this limit; defend the cache budget if a
-        // future producer supplies a larger raster.
-        let image = if image.width().max(image.height()) > PAGE_RASTER_MAX_DIM {
-            image.thumbnail(PAGE_RASTER_MAX_DIM, PAGE_RASTER_MAX_DIM)
-        } else {
-            image
-        };
-        let rgba = image.to_rgba8();
-        let bytes = rgba.as_raw().len();
+            if self.decode_requests.len() < PAGE_DECODE_REQUEST_LIMIT {
+                self.decode_requests.push(page_num);
+            }
+        }
+        let job = self.decode_job.as_ref()?;
+        if job.page_num != page_num || job.cancelled {
+            return None;
+        }
+        let bytes = job.ready.as_ref()?.pixels.len() * 4;
         if !self.make_texture_room(bytes) {
-            // Newly selected pages get first priority on the next frame. Avoid
-            // freeing a texture that a thumbnail has already painted this frame.
-            if self.selected_page == Some(page_num) {
-                ctx.request_repaint();
-            }
+            ctx.request_repaint();
             return None;
         }
-        let color_image = egui::ColorImage::from_rgba_unmultiplied(
-            [rgba.width() as usize, rgba.height() as usize],
-            rgba.as_raw(),
-        );
+        let color_image = self.decode_job.take()?.ready?;
         let page = &mut self.pages[index];
         let texture = ctx.load_texture(
             format!("pdf_page_{page_num}"),
@@ -288,6 +331,98 @@ impl PdfEditorState {
         page.texture = Some(texture);
         page.texture_last_used = self.texture_frame;
         Some(id)
+    }
+
+    fn poll_decode_worker(&mut self, ctx: &egui::Context) {
+        let Some(job) = &mut self.decode_job else {
+            return;
+        };
+        if job.ready.is_some() {
+            return;
+        }
+        let result = match job.rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(20));
+                return;
+            }
+            Err(TryRecvError::Disconnected) => Err(JobError::Cancelled),
+        };
+        if job.cancelled {
+            self.decode_job = None;
+        } else {
+            match result {
+                Ok(Ok(image)) => job.ready = Some(image),
+                Err(JobError::QueueFull) => self.decode_job = None,
+                failure => {
+                    let error = match failure {
+                        Ok(Err(error)) => error,
+                        Err(error) => error.to_string(),
+                        Ok(Ok(_)) => unreachable!(),
+                    };
+                    if let Some(page) = self.pages.get_mut(job.page_num - 1) {
+                        page.error = Some(format!("PDF preview decode failed: {error}"));
+                    }
+                    self.decode_job = None;
+                }
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    // Called after painting, when the complete visible demand is known. No
+    // pixel work runs here; one job is submitted, selected page first.
+    fn schedule_page_decode(&mut self, ctx: &egui::Context) {
+        if let Some(job) = &mut self.decode_job {
+            let selected_waiting = self.selected_page.is_some_and(|selected| {
+                selected != job.page_num
+                    && self.decode_requests.contains(&selected)
+                    && self.pages.get(selected - 1).is_some_and(|page| {
+                        page.texture.is_none() && page.error.is_none() && !page.png_bytes.is_empty()
+                    })
+            });
+            if !self.decode_requests.contains(&job.page_num) || selected_waiting {
+                if job.ready.is_some() {
+                    self.decode_job = None;
+                } else {
+                    job.cancel();
+                }
+            }
+        }
+        if self.decode_job.is_none() {
+            let candidate = self
+                .selected_page
+                .into_iter()
+                .chain(self.decode_requests.iter().copied())
+                .find(|page_num| {
+                    self.decode_requests.contains(page_num)
+                        && self.pages.get(page_num - 1).is_some_and(|page| {
+                            page.texture.is_none()
+                                && page.error.is_none()
+                                && !page.png_bytes.is_empty()
+                        })
+                });
+            if let Some(page_num) = candidate {
+                let png = self.pages[page_num - 1].png_bytes.clone();
+                let repaint = ctx.clone();
+                let (ticket, rx) =
+                    BackgroundJobs::global().submit(Duration::from_secs(10), move || {
+                        let result = decode_page_png(png);
+                        repaint.request_repaint();
+                        result
+                    });
+                self.decode_job = Some(PdfDecodeJob {
+                    page_num,
+                    ticket,
+                    rx,
+                    ready: None,
+                    cancelled: false,
+                });
+            }
+        }
+        if self.decode_job.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(20));
+        }
     }
 
     fn make_texture_room(&mut self, additional_bytes: usize) -> bool {
@@ -500,6 +635,8 @@ impl PdfEditorState {
         }
 
         self.texture_frame += 1;
+        self.decode_requests.clear();
+        self.poll_decode_worker(ctx);
         if let Some(page_num) = self.selected_page {
             self.ensure_page_texture(page_num, ctx);
         }
@@ -857,6 +994,7 @@ impl PdfEditorState {
                 let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
                 shell.render_footer(ui, &toast_tuple, now);
             });
+        self.schedule_page_decode(ctx);
     }
 }
 
@@ -894,6 +1032,9 @@ where
 
 impl Drop for PdfEditorState {
     fn drop(&mut self) {
+        if let Some(job) = &mut self.decode_job {
+            job.cancel();
+        }
         if let Some((ticket, _)) = &self.info_job {
             ticket.cancel();
         }
@@ -937,7 +1078,41 @@ mod tests {
             edit_rx: None,
             edit_in_progress: false,
             texture_frame: 0,
+            decode_job: None,
+            decode_requests: Vec::new(),
         }
+    }
+
+    fn wait_for_decode(state: &mut PdfEditorState, page_num: usize, ctx: &egui::Context) {
+        state.decode_requests.clear();
+        state.decode_requests.push(page_num);
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            state.poll_decode_worker(ctx);
+            state.schedule_page_decode(ctx);
+            if state
+                .decode_job
+                .as_ref()
+                .is_some_and(|job| job.page_num == page_num && job.ready.is_some())
+                || state.pages[page_num - 1].error.is_some()
+            {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "decode did not complete"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn upload_page(
+        state: &mut PdfEditorState,
+        page_num: usize,
+        ctx: &egui::Context,
+    ) -> egui::TextureId {
+        wait_for_decode(state, page_num, ctx);
+        state.ensure_page_texture(page_num, ctx).unwrap()
     }
 
     fn resident_textures(state: &PdfEditorState) -> (usize, usize) {
@@ -948,6 +1123,153 @@ mod tests {
             .fold((0, 0), |(count, bytes), texture| {
                 (count + 1, bytes + texture.byte_size())
             })
+    }
+
+    #[test]
+    fn decode_requests_are_bounded_deduplicated_and_selected_first() {
+        let ctx = egui::Context::default();
+        let mut state = raster_state(100, 16);
+        state.selected_page = Some(100);
+        for _ in 0..3 {
+            for page in 1..=100 {
+                assert!(state.ensure_page_texture(page, &ctx).is_none());
+            }
+        }
+        assert_eq!(state.decode_requests.len(), PAGE_DECODE_REQUEST_LIMIT);
+        assert_eq!(
+            state
+                .decode_requests
+                .iter()
+                .filter(|page| **page == 1)
+                .count(),
+            1
+        );
+        state.schedule_page_decode(&ctx);
+        let job = state.decode_job.as_ref().unwrap();
+        assert_eq!(job.page_num, 100);
+        let revision = job.ticket.revision();
+        for _ in 0..10 {
+            state.schedule_page_decode(&ctx);
+            assert_eq!(
+                state.decode_job.as_ref().unwrap().ticket.revision(),
+                revision
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_png_sets_page_error_without_repeated_work_or_losing_source() {
+        let ctx = egui::Context::default();
+        let mut state = raster_state(1, 16);
+        let malformed = b"not a PNG".to_vec();
+        state.pages[0].png_bytes = malformed.clone();
+        wait_for_decode(&mut state, 1, &ctx);
+        assert!(
+            state.pages[0]
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("PDF preview decode failed")
+        );
+        assert_eq!(state.pages[0].png_bytes, malformed);
+        state.decode_requests.clear();
+        for _ in 0..3 {
+            assert!(state.ensure_page_texture(1, &ctx).is_none());
+            state.schedule_page_decode(&ctx);
+            assert!(state.decode_job.is_none());
+        }
+    }
+
+    // Block a running job so stale publication and admission can be inspected
+    // deterministically, without depending on image decoder timing.
+    fn blocked_decode(state: &mut PdfEditorState) -> (std::sync::mpsc::Sender<()>, JobTicket) {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (release, wait) = channel();
+        let (started, start) = channel();
+        let (ticket, rx) = jobs.submit(Duration::from_secs(10), move || {
+            started.send(()).unwrap();
+            wait.recv().unwrap();
+            Err("obsolete decode error".to_owned())
+        });
+        start.recv_timeout(Duration::from_secs(2)).unwrap();
+        state.decode_job = Some(PdfDecodeJob {
+            page_num: 1,
+            ticket: ticket.clone(),
+            rx,
+            ready: None,
+            cancelled: false,
+        });
+        (release, ticket)
+    }
+
+    #[test]
+    fn invisible_work_is_cancelled_and_retains_its_slot_until_acknowledged() {
+        let ctx = egui::Context::default();
+        let mut state = raster_state(2, 16);
+        let (release, ticket) = blocked_decode(&mut state);
+        state.selected_page = Some(2);
+        state.ensure_page_texture(2, &ctx);
+        state.schedule_page_decode(&ctx);
+        let job = state.decode_job.as_ref().unwrap();
+        assert!(job.cancelled);
+        assert_eq!(job.ticket.revision(), ticket.revision());
+        state.schedule_page_decode(&ctx);
+        assert_eq!(
+            state.decode_job.as_ref().unwrap().ticket.revision(),
+            ticket.revision()
+        );
+        release.send(()).unwrap();
+        wait_for_decode(&mut state, 2, &ctx);
+        assert!(state.pages[0].error.is_none());
+        assert!(state.pages[0].texture.is_none());
+        assert!(state.ensure_page_texture(2, &ctx).is_some());
+    }
+
+    #[test]
+    fn dropping_editor_cancels_running_decode_publication() {
+        let mut state = raster_state(1, 16);
+        let (release, _) = blocked_decode(&mut state);
+        let (_, placeholder) = channel();
+        let rx = std::mem::replace(&mut state.decode_job.as_mut().unwrap().rx, placeholder);
+        drop(state);
+        release.send(()).unwrap();
+        assert!(matches!(
+            rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            Err(JobError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn oversized_raster_decode_bounds_published_pixel_memory() {
+        let mut state = raster_state(1, PAGE_RASTER_MAX_DIM + 1);
+        let image = decode_page_png(std::mem::take(&mut state.pages[0].png_bytes)).unwrap();
+        assert_eq!(image.size, [PAGE_RASTER_MAX_DIM as usize; 2]);
+        assert_eq!(
+            image.pixels.len() * 4,
+            PAGE_RASTER_MAX_DIM as usize * PAGE_RASTER_MAX_DIM as usize * 4
+        );
+    }
+
+    #[test]
+    fn replacement_raster_cancels_old_decode_before_publishing() {
+        let ctx = egui::Context::default();
+        let mut state = raster_state(1, 16);
+        let (release, _) = blocked_decode(&mut state);
+        let (tx, rx) = channel();
+        state.preview_rx = Some(rx);
+        let replacement = state.pages[0].png_bytes.clone();
+        tx.send(PdfPreviewMsg {
+            page_num: 1,
+            result: Ok((replacement.clone(), 16, 16)),
+        })
+        .unwrap();
+        state.poll_preview_worker(&ctx);
+        assert!(state.decode_job.as_ref().unwrap().cancelled);
+        release.send(()).unwrap();
+        wait_for_decode(&mut state, 1, &ctx);
+        assert!(state.ensure_page_texture(1, &ctx).is_some());
+        assert!(state.pages[0].error.is_none());
+        assert_eq!(state.pages[0].png_bytes, replacement);
     }
 
     #[test]
@@ -986,13 +1308,13 @@ mod tests {
             state.texture_frame += 1;
             let mut selected_id = None;
             let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                selected_id = state.ensure_page_texture(1, ctx);
+                selected_id = Some(upload_page(&mut state, 1, ctx));
             });
             let selected_id = selected_id.unwrap();
             for page_num in 2..=state.page_count {
                 state.texture_frame += 1;
                 let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                    assert!(state.ensure_page_texture(page_num, ctx).is_some());
+                    upload_page(&mut state, page_num, ctx);
                 });
                 let (count, bytes) = resident_textures(&state);
                 assert!(count <= PAGE_TEXTURE_LIMIT);
@@ -1008,17 +1330,17 @@ mod tests {
         let ctx = egui::Context::default();
         let mut state = raster_state(PAGE_TEXTURE_LIMIT + 2, 16);
         state.texture_frame += 1;
-        let original_id = state.ensure_page_texture(2, &ctx).unwrap();
+        let original_id = upload_page(&mut state, 2, &ctx);
         let source = state.pages[1].png_bytes.clone();
         for page_num in 3..=state.page_count {
             state.texture_frame += 1;
-            state.ensure_page_texture(page_num, &ctx).unwrap();
+            upload_page(&mut state, page_num, &ctx);
         }
         assert!(state.pages[1].texture.is_none());
         state.selected_page = Some(2);
         state.texture_frame += 1;
         let output = ctx.run(egui::RawInput::default(), |ctx| {
-            let reloaded = state.ensure_page_texture(2, ctx).unwrap();
+            let reloaded = upload_page(&mut state, 2, ctx);
             assert_ne!(reloaded, original_id);
         });
         assert_eq!(state.pages[1].png_bytes, source);
@@ -1051,9 +1373,10 @@ mod tests {
         let mut state = raster_state(PAGE_TEXTURE_LIMIT + 1, 16);
         state.texture_frame += 1;
         let ids: Vec<_> = (1..=PAGE_TEXTURE_LIMIT)
-            .map(|page_num| state.ensure_page_texture(page_num, &ctx).unwrap())
+            .map(|page_num| upload_page(&mut state, page_num, &ctx))
             .collect();
         state.selected_page = Some(PAGE_TEXTURE_LIMIT + 1);
+        wait_for_decode(&mut state, PAGE_TEXTURE_LIMIT + 1, &ctx);
         assert!(
             state
                 .ensure_page_texture(PAGE_TEXTURE_LIMIT + 1, &ctx)
@@ -1080,20 +1403,31 @@ mod tests {
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
         let mut state = raster_state(100, 16);
         state.selected_page = Some(100);
-        let _ = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    Vec2::new(1177.0, 662.0),
-                )),
-                ..Default::default()
-            },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut false);
-                });
-            },
-        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(1177.0, 662.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                },
+            );
+            if state.decode_job.is_none() && resident_textures(&state).0 > 1 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "visible decodes did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
         let (count, bytes) = resident_textures(&state);
         assert!(count > 1 && count < PAGE_TEXTURE_LIMIT);
         assert!(bytes <= PAGE_TEXTURE_BYTE_LIMIT);
@@ -1153,6 +1487,8 @@ mod tests {
                 edit_rx: None,
                 edit_in_progress: false,
                 texture_frame: 0,
+                decode_job: None,
+                decode_requests: Vec::new(),
             };
             let host = egui::Rect::from_min_size(egui::Pos2::ZERO, host_size);
             let mut panes = Vec::new();
