@@ -143,18 +143,16 @@ fn show_workbench_footer(
             wrap_width,
         )
     });
-    let status_galley = status_msg
-        .filter(|_| view == WorkbenchView::Palette)
-        .map(|message| {
-            ui.fonts(|fonts| {
-                fonts.layout(
-                    message.to_owned(),
-                    egui::FontId::proportional(BODY_FONT_SIZE),
-                    hex_to_c32(&palette.diff_del),
-                    wrap_width,
-                )
-            })
-        });
+    let status_galley = status_msg.map(|message| {
+        ui.fonts(|fonts| {
+            fonts.layout(
+                message.to_owned(),
+                egui::FontId::proportional(BODY_FONT_SIZE),
+                hex_to_c32(&palette.diff_del),
+                wrap_width,
+            )
+        })
+    });
     let gap = if status_galley.is_some() {
         ui.spacing().item_spacing.y
     } else {
@@ -473,6 +471,14 @@ fn render_auto_actions(
 }
 
 impl WorkbenchApp {
+    fn set_status_message(&mut self, message: impl Into<String>) {
+        self.status_msg = Some(message.into());
+    }
+
+    fn clear_status_message(&mut self) {
+        self.status_msg = None;
+    }
+
     fn new(
         state: SlotManager,
         start_with_diff: bool,
@@ -501,8 +507,13 @@ impl WorkbenchApp {
             AudioPreviewState::new(p, title).with_editor(config.audio.editor.clone())
         });
 
-        let image_preview =
-            initial_image.and_then(|p| ImagePreviewState::from_path(p, &config).ok());
+        let (image_preview, image_preview_error) = match initial_image {
+            Some(path) => match ImagePreviewState::from_path(path, &config) {
+                Ok(preview) => (Some(preview), None),
+                Err(error) => (None, Some(format!("Image preview failed: {error}"))),
+            },
+            None => (None, None),
+        };
 
         let rolling_audio_strip = Some(RollingAudioStripState::new());
         let mut startup_viewers = VecDeque::new();
@@ -523,7 +534,7 @@ impl WorkbenchApp {
             palette_search_needs_focus: true,
             selected_action_index: 0,
             selected_slots: vec![SlotId::LeftHand],
-            status_msg: None,
+            status_msg: image_preview_error,
             appearance_sync: AppearanceSync::default(),
             renderer,
             ui_palette,
@@ -1181,8 +1192,15 @@ impl eframe::App for WorkbenchApp {
                                 &self.ui_palette,
                             );
                             if ui.add(img_btn).clicked() {
-                                if let Ok(state) = ImagePreviewState::from_item(img_item, &self.config) {
-                                    self.viewer = Some(ViewerSession::Image(state));
+                                match ImagePreviewState::from_item(img_item, &self.config) {
+                                    Ok(state) => {
+                                        self.status_msg = None;
+                                        self.viewer = Some(ViewerSession::Image(state));
+                                    }
+                                    Err(error) => {
+                                        self.status_msg =
+                                            Some(format!("Image preview failed: {error}"));
+                                    }
                                 }
                             }
                         }
@@ -1916,10 +1934,9 @@ impl WorkbenchApp {
                             .with_editor(self.config.audio.editor.clone());
                         self.viewer = Some(ViewerSession::Audio(editor));
                     }
-                    Err(error) => {
-                        self.status_msg =
-                            Some(format!("Could not open rolling audio selection: {error}"));
-                    }
+                    Err(error) => self.set_status_message(format!(
+                        "Could not open rolling audio selection: {error}"
+                    )),
                 }
             }
         }
@@ -1943,8 +1960,12 @@ impl WorkbenchApp {
         } else if is_spreadsheet_file(fp) {
             self.start_spreadsheet_load(SpreadsheetLoadSource::File(fp.to_path_buf()));
         } else if is_image || is_image_path(fp) {
-            if let Ok(editor) = ImagePreviewState::from_path(fp.to_path_buf(), &self.config) {
-                self.viewer = Some(ViewerSession::Image(editor));
+            match ImagePreviewState::from_path(fp.to_path_buf(), &self.config) {
+                Ok(editor) => {
+                    self.clear_status_message();
+                    self.viewer = Some(ViewerSession::Image(editor));
+                }
+                Err(error) => self.set_status_message(format!("Image preview failed: {error}")),
             }
         } else if little_clip_ops::is_text_file(fp) {
             if let Some(st) = TextPreviewState::from_file(fp, &self.config) {
@@ -1984,8 +2005,12 @@ impl WorkbenchApp {
         if let Some(fp) = item.file_path() {
             self.open_slot_file_preview(&fp, item.is_image());
         } else if item.is_image() {
-            if let Ok(editor) = ImagePreviewState::from_item(item, &self.config) {
-                self.viewer = Some(ViewerSession::Image(editor));
+            match ImagePreviewState::from_item(item, &self.config) {
+                Ok(editor) => {
+                    self.clear_status_message();
+                    self.viewer = Some(ViewerSession::Image(editor));
+                }
+                Err(error) => self.set_status_message(format!("Image preview failed: {error}")),
             }
         } else if let Some(text) = item.to_clipboard_text() {
             self.open_slot_text_preview(&text, &item.title);
@@ -2868,6 +2893,75 @@ mod workbench_layout_tests {
                 "Could not open rolling audio selection: rolling audio strip is no longer available"
             )
         );
+    }
+
+    #[test]
+    fn malformed_image_preview_reports_cause_and_valid_preview_recovers() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let malformed_path = temp_dir.path().join("broken.png");
+        std::fs::write(&malformed_path, b"not a PNG").unwrap();
+        let valid_path = temp_dir.path().join("valid.png");
+        image::RgbImage::from_pixel(2, 2, image::Rgb([24, 120, 180]))
+            .save(&valid_path)
+            .unwrap();
+        let mut app = test_workbench_app(None, VecDeque::new());
+
+        app.open_slot_file_preview(&malformed_path, true);
+
+        assert!(app.viewer.is_none());
+        assert!(
+            app.status_msg
+                .as_deref()
+                .is_some_and(|message| message.starts_with("Image preview failed:"))
+        );
+
+        app.open_slot_file_preview(&valid_path, true);
+
+        assert!(matches!(app.viewer, Some(ViewerSession::Image(_))));
+        assert!(app.status_msg.is_none());
+    }
+
+    #[test]
+    fn shared_workbench_status_is_visible_in_every_host_view() {
+        let palette = ui_appearance::palette(WorkbenchAppearance::Dark);
+        for view in [
+            WorkbenchView::Palette,
+            WorkbenchView::NodeMachine,
+            WorkbenchView::AutoActions,
+        ] {
+            let ctx = egui::Context::default();
+            let mut status_height = 0.0;
+            let mut hint_height = 0.0;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 700.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        status_height = show_workbench_footer(
+                            ui,
+                            view,
+                            Some("Image preview failed: invalid PNG header"),
+                            &palette,
+                        )
+                        .height();
+                    });
+                },
+            );
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    hint_height = show_workbench_footer(ui, view, None, &palette).height();
+                });
+            });
+            assert!(
+                status_height > hint_height,
+                "status was not reserved in {view:?}"
+            );
+        }
     }
 
     #[test]
