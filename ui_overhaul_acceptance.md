@@ -277,7 +277,7 @@ PDF metadata (`get_pdf_info`), Poppler page rendering and PNG file reads, and st
 
 ## Text and 3D open/parse UI-thread audit, 2026-09-27
 
-3D `Model3dViewerState::from_file` submits `Model3d::load_file` to the shared bounded executor with a loading state and timeout; the existing viewer-drop path cancels publication. Text file preview reads up to 2 MiB on the UI thread, performs UTF-8 cleanup and creates line offsets before assigning the viewer. Clipboard text preview accepts its complete payload and synchronously strips a BOM, creates line offsets, and detects Markdown; syntax highlighting and minimap preparation happen on first render. Move file read/preparation and loading status under H2.1h1–h5, while unbounded clipboard processing and first-render work remain in H2.2c2–c5.
+3D `Model3dViewerState::from_file` submits `Model3d::load_file` to the shared bounded executor with a loading state and timeout; the existing viewer-drop path cancels publication. Text file preview reads up to 2 MiB, performs UTF-8 cleanup, detects the language, and creates line offsets on a bounded worker while preserving the current viewer and reporting failures; its request is canceled if superseded. A small text-file type probe still runs on the UI thread. Clipboard text preview accepts its complete payload and synchronously strips a BOM, creates line offsets, and detects Markdown; syntax highlighting and minimap preparation happen on first render. Unbounded clipboard processing and first-render work remain in H2.2c2–c5.
 
 ## Save, encode, and export UI-thread audit, 2026-09-27
 
