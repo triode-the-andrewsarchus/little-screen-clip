@@ -3,6 +3,7 @@
 //! Provides pan/zoom, cropping with fixed aspect ratios, pixelation/blackout redaction,
 //! eyedropper color inspection, resizing, palette extraction, background removal, and 3D depth map generation.
 
+mod save;
 mod tools;
 use tools::*;
 
@@ -126,6 +127,7 @@ pub struct ImagePreviewState {
     pub status_toast: Option<(String, f64)>,
 
     // File Dialog & Save-As
+    save_job: Option<save::ImageSaveJob>,
     pub save_dialog_rx: Option<std::sync::mpsc::Receiver<PathBuf>>,
     pub show_fallback_save_modal: bool,
     fallback_save_needs_focus: bool,
@@ -175,6 +177,53 @@ pub struct ImagePreviewState {
 
     // 4-Point Perspective Deskew
     pub deskew_state: DeskewState,
+}
+
+fn compose_display_image(mut img: RgbaImage, stamp: &ImageInputStamp) -> RgbaImage {
+    // Burn any pending redactions onto the output image
+    if !stamp.redactions.is_empty() {
+        let img_w = img.width() as f32;
+        let img_h = img.height() as f32;
+        for b in &stamp.redactions {
+            let px_min_x = (b.normalized_rect.min.x * img_w).round().clamp(0.0, img_w) as u32;
+            let px_max_x = (b.normalized_rect.max.x * img_w).round().clamp(0.0, img_w) as u32;
+            let px_min_y = (b.normalized_rect.min.y * img_h).round().clamp(0.0, img_h) as u32;
+            let px_max_y = (b.normalized_rect.max.y * img_h).round().clamp(0.0, img_h) as u32;
+            for y in px_min_y..px_max_y {
+                for x in px_min_x..px_max_x {
+                    img.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+                }
+            }
+        }
+    }
+
+    // Burn any pending vector markup layers onto the output image
+    if !stamp.markup.is_empty() {
+        img = rasterize_markup(&img, &stamp.markup);
+    }
+
+    if let Some(norm) = stamp.crop {
+        let img_w = img.width() as f32;
+        let img_h = img.height() as f32;
+
+        let px_x = (norm.min.x * img_w).round().clamp(0.0, img_w - 1.0) as u32;
+        let px_y = (norm.min.y * img_h).round().clamp(0.0, img_h - 1.0) as u32;
+        let px_w = ((norm.max.x - norm.min.x) * img_w)
+            .round()
+            .clamp(1.0, img_w - px_x as f32) as u32;
+        let px_h = ((norm.max.y - norm.min.y) * img_h)
+            .round()
+            .clamp(1.0, img_h - px_y as f32) as u32;
+
+        if px_w > 0
+            && px_h > 0
+            && (px_w < img.width() || px_h < img.height() || px_x > 0 || px_y > 0)
+        {
+            return image::imageops::crop_imm(&img, px_x, px_y, px_w, px_h).to_image();
+        }
+    }
+
+    img
 }
 
 /// Identity of the image pixels and overlays consumed by `current_display_image`.
@@ -291,6 +340,7 @@ impl ImagePreviewState {
             svg_editor: config.image.svg_editor.clone(),
             viewer: config.image.viewer.clone(),
             status_toast: None,
+            save_job: None,
             save_dialog_rx: None,
             show_fallback_save_modal: false,
             fallback_save_needs_focus: false,
@@ -355,53 +405,7 @@ impl ImagePreviewState {
     /// Returns the image as currently displayed/composed, taking into account any active crop selection if in Crop mode,
     /// and burning any placed redaction bars so exports/copies never leak private information.
     pub fn current_display_image(&self) -> RgbaImage {
-        let mut img = self.current_rgba.clone();
-
-        // Burn any pending redactions onto the output image
-        if !self.redaction_state.boxes.is_empty() {
-            let img_w = img.width() as f32;
-            let img_h = img.height() as f32;
-            for b in &self.redaction_state.boxes {
-                let px_min_x = (b.normalized_rect.min.x * img_w).round().clamp(0.0, img_w) as u32;
-                let px_max_x = (b.normalized_rect.max.x * img_w).round().clamp(0.0, img_w) as u32;
-                let px_min_y = (b.normalized_rect.min.y * img_h).round().clamp(0.0, img_h) as u32;
-                let px_max_y = (b.normalized_rect.max.y * img_h).round().clamp(0.0, img_h) as u32;
-                for y in px_min_y..px_max_y {
-                    for x in px_min_x..px_max_x {
-                        img.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
-                    }
-                }
-            }
-        }
-
-        // Burn any pending vector markup layers onto the output image
-        if !self.markup_state.items.is_empty() {
-            img = rasterize_markup(&img, &self.markup_state.items);
-        }
-
-        if self.active_mode == ImageToolMode::Crop {
-            let norm = self.crop_state.normalized_rect;
-            let img_w = img.width() as f32;
-            let img_h = img.height() as f32;
-
-            let px_x = (norm.min.x * img_w).round().clamp(0.0, img_w - 1.0) as u32;
-            let px_y = (norm.min.y * img_h).round().clamp(0.0, img_h - 1.0) as u32;
-            let px_w = ((norm.max.x - norm.min.x) * img_w)
-                .round()
-                .clamp(1.0, img_w - px_x as f32) as u32;
-            let px_h = ((norm.max.y - norm.min.y) * img_h)
-                .round()
-                .clamp(1.0, img_h - px_y as f32) as u32;
-
-            if px_w > 0
-                && px_h > 0
-                && (px_w < img.width() || px_h < img.height() || px_x > 0 || px_y > 0)
-            {
-                return image::imageops::crop_imm(&img, px_x, px_y, px_w, px_h).to_image();
-            }
-        }
-
-        img
+        compose_display_image(self.current_rgba.clone(), &self.input_stamp())
     }
 
     /// Burns all pending redaction black bars permanently into current_rgba and records an undo point.
@@ -574,86 +578,6 @@ impl ImagePreviewState {
         }
     }
 
-    /// Saves the current display image to the specified file path, creating parent dirs if needed.
-    pub fn save_image_to_path(&mut self, path: &Path) {
-        let mut final_path = path.to_path_buf();
-        if final_path.extension().is_none() {
-            final_path.set_extension("png");
-        }
-
-        if let Some(parent) = final_path.parent() {
-            if !parent.as_os_str().is_empty() {
-                if let Err(err) = std::fs::create_dir_all(parent) {
-                    tracing::warn!(
-                        "Failed to create destination directory {}: {err}",
-                        parent.display()
-                    );
-                    self.status_toast = Some((format!("Failed to create directory: {err}"), 0.0));
-                    return;
-                }
-            }
-        }
-
-        let img = self.current_display_image();
-        let ext = final_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("png")
-            .to_lowercase();
-
-        let save_res = if self.active_mode == ImageToolMode::Convert
-            && !self.convert_state.encoded_bytes.is_empty()
-            && ext == self.convert_state.target_format.extension()
-        {
-            std::fs::write(&final_path, &self.convert_state.encoded_bytes)
-                .map_err(image::ImageError::IoError)
-        } else if ext == "jpg" || ext == "jpeg" {
-            // Composite RGBA onto white RGB background for JPEG
-            let mut rgb = image::RgbImage::new(img.width(), img.height());
-            for (x, y, pixel) in img.enumerate_pixels() {
-                let alpha = pixel[3] as f32 / 255.0;
-                let r = ((pixel[0] as f32 * alpha) + (255.0 * (1.0 - alpha))).round() as u8;
-                let g = ((pixel[1] as f32 * alpha) + (255.0 * (1.0 - alpha))).round() as u8;
-                let b = ((pixel[2] as f32 * alpha) + (255.0 * (1.0 - alpha))).round() as u8;
-                rgb.put_pixel(x, y, image::Rgb([r, g, b]));
-            }
-            rgb.save(&final_path)
-        } else if ext == "webp" {
-            let quality = self.convert_state.quality;
-            let lossless = self.convert_state.lossless;
-            if let Ok(bytes) = encode_webp(&img, lossless, quality) {
-                std::fs::write(&final_path, bytes).map_err(image::ImageError::IoError)
-            } else {
-                Err(image::ImageError::IoError(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "WebP encoding failed",
-                )))
-            }
-        } else {
-            img.save(&final_path)
-        };
-
-        match save_res {
-            Ok(_) => {
-                let file_name = final_path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                self.show_toast(format!("💾 Saved image to {}", file_name));
-                self.path = Some(final_path.clone());
-                self.title = file_name;
-                if let Ok(meta) = std::fs::metadata(&final_path) {
-                    self.file_size_bytes = meta.len() as usize;
-                }
-                self.mime = little_clip_core::item::guess_image_mime(&final_path);
-            }
-            Err(e) => {
-                self.show_toast(format!("❌ Failed to save: {}", e));
-            }
-        }
-    }
-
     // --- Transform & Crop Actions ---
 
     pub fn undo(&mut self) {
@@ -766,6 +690,11 @@ impl ImagePreviewState {
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
 
+        self.poll_save_job();
+        if self.save_snapshot_pending() && self.render_save_progress(ui, ctx, close) {
+            return;
+        }
+
         // Upload GPU texture if dirty or not loaded
         if self.texture.is_none() || self.dirty_texture {
             let color_image = egui::ColorImage::from_rgba_unmultiplied(
@@ -856,6 +785,10 @@ impl ImagePreviewState {
                         }
                     });
                 });
+        }
+
+        if self.render_save_progress(ui, ctx, close) {
+            return;
         }
 
         if save_modal_active && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -2523,6 +2456,7 @@ mod tests {
 
         // Save as PNG
         state.save_image_to_path(&tmp_png);
+        save::wait_for_save(&mut state);
         assert!(tmp_png.exists());
         let reloaded_png = image::open(&tmp_png).expect("Reload PNG failed");
         assert_eq!(reloaded_png.width(), 120);
@@ -2531,6 +2465,7 @@ mod tests {
 
         // Save as JPEG (exercises RGBA -> RGB flattening)
         state.save_image_to_path(&tmp_jpg);
+        save::wait_for_save(&mut state);
         assert!(tmp_jpg.exists());
         let reloaded_jpg = image::open(&tmp_jpg).expect("Reload JPG failed");
         assert_eq!(reloaded_jpg.width(), 120);
