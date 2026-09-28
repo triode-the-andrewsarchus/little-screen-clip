@@ -96,7 +96,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - **H1.3a3 Verify audio navigation and cleanup live.**
     - [x] **H1.3a3a [Primary] Close the Audio Studio and return to the live Palette.** Compact isolated Audio Studio run returns to the Palette on Escape with the popup still responsive; no playback was started. See `ui_overhaul_acceptance.md`.
     - [ ] **H1.3a3b [Primary] Close Audio Studio during active playback and verify playback stops.** Requires a live playback session; keep separate from navigation-only evidence.
-  - [ ] **H1.3a4 [Primary] Verify text navigation and cleanup live.**
+  - [x] **H1.3a4 [Primary] Verify text navigation and cleanup live.** Private fake-text run opens Preview Markdown, and Escape returns to Quick Palette with the workbench popup and single-instance route intact; acceptance notes explain the capture runner's expected whole-window-exit mismatch.
   - **H1.3a5 Verify PDF navigation and cleanup live.** Closing dirty PDF refreshes mirror.
     - [x] **H1.3a5a [Primary] Close a dirty PDF and return to the live Palette.** A compact isolated run rotated page 1, then Escape returned to the still-running workbench; see `ui_overhaul_acceptance.md`.
     - [ ] **H1.3a5b [Primary] Verify closing a dirty PDF refreshes the daemon mirror.** Requires a private daemon-backed PDF item and before/after mirror evidence.
