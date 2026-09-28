@@ -16,7 +16,7 @@ Runtime observation was unavailable: `orca`, `accerciser`, `speech-dispatcher`, 
 
 ## Quick Palette PDF context routing, 2026-09-27
 
-PDF clipboard items store the rendered page preview in an `Image` payload while retaining the PDF path and `application/pdf` MIME type. Mirror context dispatch previously treated every image-backed payload as an image file, bypassing the shared file-type router and causing PDF bytes to reach the image decoder. Context actions now use the common preview dispatcher. `mirror_context_preview_routes_pdf_image_payload_to_pdf_editor` asserts that this PDF-backed image payload opens `ViewerSession::Pdf` and starts no image-load job. The complete workbench binary suite passes (368 passed, 1 ignored), as do `cargo fmt --all --check` and `git diff --check`. The live pointer right-click remains unverified.
+PDF clipboard items store the rendered page preview in an `Image` payload while retaining the PDF path and `application/pdf` MIME type. Mirror context dispatch already routes path-backed PDFs to the PDF viewer, but the generic Preview & Edit Image action and Edit PDF action were still relying on a `.pdf` suffix. Preview routing now uses the PDF MIME too, and the regression uses a PDF payload backed by a `.data` path to verify both action filtering and mirror context open `ViewerSession::Pdf` without starting an image-load job. The focused test and `cargo fmt --all --check` pass. The live pointer right-click remains unverified.
 
 ## Image preview async ownership, 2026-09-27
 

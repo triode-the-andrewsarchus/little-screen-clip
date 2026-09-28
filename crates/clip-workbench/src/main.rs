@@ -266,10 +266,18 @@ fn show_viewer_panel(ctx: &egui::Context, contents: impl FnOnce(&mut egui::Ui)) 
 }
 
 fn is_image_preview_action_item(item: &ClipItem) -> bool {
-    item.is_image()
-        && !item
-            .file_path()
-            .is_some_and(|path| little_clip_core::pdf::is_pdf_path(&path))
+    item.is_image() && !is_pdf_clip_item(item)
+}
+
+fn is_pdf_clip_item(item: &ClipItem) -> bool {
+    item.file_path()
+        .as_deref()
+        .is_some_and(little_clip_core::pdf::is_pdf_path)
+        || matches!(
+            &item.payload,
+            little_clip_core::ClipPayload::Image { mime, .. }
+                if mime.eq_ignore_ascii_case("application/pdf")
+        )
 }
 
 type SpreadsheetLoadReceiver =
@@ -1410,8 +1418,11 @@ impl eframe::App for WorkbenchApp {
                             }
                         }
 
-                        let first_pdf_item = self.selected_slots.iter().find_map(|s| {
-                            self.state.get(*s).and_then(|it| it.file_path()).filter(|p| little_clip_core::pdf::is_pdf_path(p))
+                    let first_pdf_item = self.selected_slots.iter().find_map(|s| {
+                            self.state
+                                .get(*s)
+                                .filter(|item| is_pdf_clip_item(item))
+                                .and_then(ClipItem::file_path)
                         });
                         let first_spreadsheet_slot = self.selected_slots.iter().copied().find(|slot| {
                             let Some(item) = self.state.get(*slot) else { return false; };
@@ -2459,7 +2470,11 @@ impl WorkbenchApp {
             return;
         }
         if let Some(fp) = item.file_path() {
-            self.open_slot_file_preview(&fp, item.is_image());
+            if is_pdf_clip_item(item) {
+                self.replace_viewer(Some(ViewerSession::Pdf(PdfEditorState::new(fp))));
+            } else {
+                self.open_slot_file_preview(&fp, item.is_image());
+            }
         } else if item.is_image() {
             self.start_image_item_load(ImageLoadSource::from_item(item));
         } else if let Some(text) = item.to_clipboard_text() {
@@ -3656,7 +3671,7 @@ mod workbench_layout_tests {
     #[test]
     fn mirror_context_preview_routes_pdf_image_payload_to_pdf_editor() {
         let temp_dir = tempfile::tempdir().unwrap();
-        let pdf_path = temp_dir.path().join("document.pdf");
+        let pdf_path = temp_dir.path().join("document.data");
         std::fs::write(&pdf_path, b"%PDF-1.4\n").unwrap();
         let item = ClipItem {
             id: uuid::Uuid::new_v4(),
@@ -3677,7 +3692,7 @@ mod workbench_layout_tests {
         assert!(item.is_image(), "PDF slot previews are image-backed");
         assert!(
             !is_image_preview_action_item(&item),
-            "PDFs should use the PDF editor instead of the generic image preview action"
+            "PDF MIME should use the PDF editor even when its backing path has no .pdf extension"
         );
 
         let mut app = test_workbench_app(None, VecDeque::new());
