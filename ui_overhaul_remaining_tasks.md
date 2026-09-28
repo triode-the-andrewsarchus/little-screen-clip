@@ -227,7 +227,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s12 [Luna] Change the Decorrelation Stretch sampling stride.** Compact Dark capture shows `Every 2 pixels` selected, with updated sample count and preview; see `ui_overhaul_acceptance.md`.
     - **Film Look**
       - [x] **E2.1s13 [Luna] Select a different Film Look stock or preset.** Compact Dark capture selects Portra 160 from the initially selected Portra 400 stock and shows the updated comparison; see `ui_overhaul_acceptance.md`.
-      - [ ] **E2.1s14 [Luna] Change one Film Look adjustment and verify its preview updates.**
+      - [x] **E2.1s14 [Luna] Change one Film Look adjustment and verify its preview updates.** Compact Dark capture changes Brightness from 1.00× to 2.20× and keeps the Film Look comparison visible; see `ui_overhaul_acceptance.md`.
       - [ ] **E2.1s15 [Luna] Apply a Film Look preview to the canvas.**
       - [ ] **E2.1s16 [Luna] Undo a Film Look application.**
       - [ ] **E2.1s17 [Luna] Redo a Film Look application.**
