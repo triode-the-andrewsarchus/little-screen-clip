@@ -36,6 +36,18 @@ use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 const MAX_INLINE_MARKDOWN_CLASSIFICATION_BYTES: usize = 64 * 1024;
+const MAX_INLINE_TEXT_ROUTING_BYTES: usize = 64 * 1024;
+const MAX_FILE_PATH_TEXT_BYTES: usize = 4096;
+
+fn is_large_text_payload(item: &ClipItem) -> bool {
+    matches!(&item.payload, ClipPayload::Text(text) | ClipPayload::Markdown(text) if text.len() > MAX_FILE_PATH_TEXT_BYTES)
+}
+
+fn bounded_item_file_path(item: &ClipItem) -> Option<PathBuf> {
+    (!is_large_text_payload(item))
+        .then(|| item.file_path())
+        .flatten()
+}
 
 mod ansi;
 mod appearance_sync;
@@ -244,7 +256,7 @@ struct InAppPromptState {
 
 enum SpreadsheetLoadSource {
     File(PathBuf),
-    Text { content: Arc<str>, title: String },
+    Text { content: Arc<String>, title: String },
 }
 
 enum ViewerSession {
@@ -268,11 +280,11 @@ fn show_viewer_panel(ctx: &egui::Context, contents: impl FnOnce(&mut egui::Ui)) 
 }
 
 fn is_image_preview_action_item(item: &ClipItem) -> bool {
-    item.is_image() && !is_pdf_clip_item(item)
+    !is_large_text_payload(item) && item.is_image() && !is_pdf_clip_item(item)
 }
 
 fn is_pdf_clip_item(item: &ClipItem) -> bool {
-    item.file_path()
+    bounded_item_file_path(item)
         .as_deref()
         .is_some_and(little_clip_core::pdf::is_pdf_path)
         || matches!(
@@ -421,11 +433,11 @@ impl TextPreviewLoadJob {
         Self { ticket, receiver }
     }
 
-    fn from_shared_text(content: Arc<str>, title: String, config: AppConfig) -> Self {
+    fn from_shared_text(content: Arc<String>, title: String, config: AppConfig) -> Self {
         let (ticket, receiver) =
             BackgroundJobs::global().submit(Duration::from_secs(30), move || {
                 Ok(TextPreviewState::from_text(
-                    content.to_string(),
+                    content.as_str().to_owned(),
                     Some(title),
                     &config,
                 ))
@@ -466,7 +478,7 @@ struct WorkbenchApp {
     spreadsheet_load_job: Option<(
         JobTicket,
         SpreadsheetLoadReceiver,
-        Option<(Arc<str>, String)>,
+        Option<(Arc<String>, String)>,
     )>,
     midi_load_job: Option<(JobTicket, MidiLoadReceiver)>,
     rolling_editor_job: Option<RollingEditorLoadJob>,
@@ -1371,7 +1383,7 @@ impl eframe::App for WorkbenchApp {
                     // Selected slots banner & shortcuts
                     let slot_labels: Vec<&str> = self.selected_slots.iter().map(|s| s.label()).collect();
                     let first_audio_item = self.selected_slots.iter().find_map(|s| {
-                        self.state.get(*s).and_then(|it| it.audio_path().map(|p| (p, it.title.clone())))
+                        self.state.get(*s).and_then(|it| (!is_large_text_payload(it)).then(|| it.audio_path()).flatten().map(|p| (p, it.title.clone())))
                     });
                     let first_image_slot = self.selected_slots.iter().copied().find(|slot| {
                         self.state
@@ -1466,7 +1478,7 @@ impl eframe::App for WorkbenchApp {
                             self.state
                                 .get(*s)
                                 .filter(|item| is_pdf_clip_item(item))
-                                .and_then(ClipItem::file_path)
+                                .and_then(bounded_item_file_path)
                         });
                         let first_spreadsheet_slot = self
                             .inspector_text_preview_cache
@@ -1474,7 +1486,10 @@ impl eframe::App for WorkbenchApp {
                             .and_then(|cache| cache.spreadsheet_slot);
                         let first_midi_item = self.selected_slots.iter().find_map(|s| {
                             let it = self.state.get(*s)?;
-                            if let Some(p) = it.file_path().filter(|p| {
+                            if is_large_text_payload(it) {
+                                return None;
+                            }
+                            if let Some(p) = bounded_item_file_path(it).filter(|p| {
                                 p.extension().and_then(|e| e.to_str()).map(|ext| ext.eq_ignore_ascii_case("mid") || ext.eq_ignore_ascii_case("midi")).unwrap_or(false)
                             }) {
                                 Some(p)
@@ -1491,7 +1506,10 @@ impl eframe::App for WorkbenchApp {
                         });
                         let first_3d_model_item = self.selected_slots.iter().find_map(|s| {
                             let it = self.state.get(*s)?;
-                            if let Some(p) = it.file_path().filter(|p| is_3d_model_file(p)) {
+                            if is_large_text_payload(it) {
+                                return None;
+                            }
+                            if let Some(p) = bounded_item_file_path(it).filter(|p| is_3d_model_file(p)) {
                                 Some(p)
                             } else if let Some(txt) = it.to_clipboard_text() {
                                 let p = std::path::Path::new(txt.trim());
@@ -1586,7 +1604,7 @@ impl eframe::App for WorkbenchApp {
                                 _ => item.to_clipboard_text().map(std::borrow::Cow::Owned),
                             }
                         });
-                        if let Some(ref text) = first_text_item {
+                        if let Some(ref text) = first_text_item.filter(|text| text.len() <= MAX_INLINE_TEXT_ROUTING_BYTES) {
                             let trimmed = text.trim();
                             if let Some(conv) = detect_unit_conversion(trimmed) {
                                 ui.add_space(crate::ui_ext::SPACE_SM);
@@ -2162,7 +2180,7 @@ impl WorkbenchApp {
         self.clear_status_message();
     }
 
-    fn start_shared_text_preview_load(&mut self, content: Arc<str>, title: String) {
+    fn start_shared_text_preview_load(&mut self, content: Arc<String>, title: String) {
         self.prepare_text_load();
         self.text_load_job = Some(TextPreviewLoadJob::from_shared_text(
             content,
@@ -2315,15 +2333,13 @@ impl WorkbenchApp {
 
     fn open_spreadsheet_item(&mut self, slot: SlotId) {
         let source = self.state.get(slot).and_then(|item| {
-            if let Some(path) = item.file_path().filter(|p| is_spreadsheet_file(p)) {
+            if let Some(path) = bounded_item_file_path(item).filter(|p| is_spreadsheet_file(p)) {
                 Some(SpreadsheetLoadSource::File(path))
             } else {
                 match &item.payload {
-                    ClipPayload::Text(text) | ClipPayload::Markdown(text)
-                        if looks_like_csv_text(text) =>
-                    {
+                    ClipPayload::Text(text) | ClipPayload::Markdown(text) => {
                         Some(SpreadsheetLoadSource::Text {
-                            content: Arc::from(text.as_str()),
+                            content: Arc::new(text.clone()),
                             title: item.title.clone(),
                         })
                     }
@@ -2504,22 +2520,26 @@ impl WorkbenchApp {
     }
 
     fn open_slot_text_preview(&mut self, text: String, title: &str) {
-        let p = std::path::Path::new(text.trim());
-        if p.is_file() {
-            self.open_slot_file_preview(p, false);
-            return;
+        if text.len() <= MAX_FILE_PATH_TEXT_BYTES {
+            let p = std::path::Path::new(text.trim());
+            if p.is_file() {
+                self.open_slot_file_preview(p, false);
+                return;
+            }
         }
-        if looks_like_csv_text(&text) {
-            self.start_spreadsheet_load(SpreadsheetLoadSource::Text {
-                content: Arc::from(text),
-                title: title.to_string(),
-            });
-        } else {
-            self.start_text_preview_load(text, Some(title.to_string()));
-        }
+        self.start_spreadsheet_load(SpreadsheetLoadSource::Text {
+            content: Arc::new(text),
+            title: title.to_string(),
+        });
     }
 
     fn open_slot_preview_modal(&mut self, item: &ClipItem) {
+        if is_large_text_payload(item) {
+            if let Some(text) = item.to_clipboard_text() {
+                self.open_slot_text_preview(text, &item.title);
+            }
+            return;
+        }
         if is_pdf_clip_item(item) {
             if let Some(fp) = item.file_path() {
                 self.replace_viewer(Some(ViewerSession::Pdf(PdfEditorState::new(fp))));
@@ -2535,7 +2555,7 @@ impl WorkbenchApp {
             )));
             return;
         }
-        if let Some(fp) = item.file_path() {
+        if let Some(fp) = bounded_item_file_path(item) {
             self.open_slot_file_preview(&fp, item.is_image());
         } else if item.is_image() {
             self.start_image_item_load(ImageLoadSource::from_item(item));
@@ -2561,22 +2581,20 @@ impl WorkbenchApp {
             let Some(item) = self.state.get(*slot) else {
                 return false;
             };
-            if item
-                .file_path()
-                .is_some_and(|path| is_spreadsheet_file(&path))
-            {
+            if bounded_item_file_path(item).is_some_and(|path| is_spreadsheet_file(&path)) {
                 return true;
             }
             match &item.payload {
-                ClipPayload::Text(text) | ClipPayload::Markdown(text) => looks_like_csv_text(text),
+                ClipPayload::Text(text) | ClipPayload::Markdown(text) => {
+                    text.len() > MAX_INLINE_TEXT_ROUTING_BYTES || looks_like_csv_text(text)
+                }
                 _ => false,
             }
         });
         let text_preview = self.selected_slots.iter().find_map(|slot| {
             let item = self.state.get(*slot)?;
-            let file_path = if let Some(path) = item
-                .file_path()
-                .filter(|p| little_clip_ops::is_text_file(p))
+            let file_path = if let Some(path) =
+                bounded_item_file_path(item).filter(|p| little_clip_ops::is_text_file(p))
             {
                 Some(path)
             } else {
@@ -2589,6 +2607,9 @@ impl WorkbenchApp {
                     _ => item.to_clipboard_text().map(std::borrow::Cow::Owned),
                 };
                 text.as_deref().and_then(|text| {
+                    if text.len() > MAX_FILE_PATH_TEXT_BYTES {
+                        return None;
+                    }
                     let path = std::path::Path::new(text.trim());
                     (path.is_file() && little_clip_ops::is_text_file(path))
                         .then(|| path.to_path_buf())
@@ -3821,7 +3842,8 @@ mod workbench_layout_tests {
     fn wait_for_text_load(app: &mut WorkbenchApp) {
         let ctx = egui::Context::default();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while app.text_load_job.is_some() {
+        while app.text_load_job.is_some() || app.spreadsheet_load_job.is_some() {
+            app.poll_spreadsheet_load(&ctx);
             app.poll_text_load(&ctx);
             assert!(
                 std::time::Instant::now() < deadline,
@@ -4010,7 +4032,7 @@ mod workbench_layout_tests {
         item.title = "large clipboard".to_owned();
 
         app.open_slot_preview_modal(&item);
-        assert!(app.text_load_job.is_some());
+        assert!(app.spreadsheet_load_job.is_some());
         wait_for_text_load(&mut app);
 
         let Some(ViewerSession::Text(state)) = &mut app.viewer else {
@@ -4026,6 +4048,64 @@ mod workbench_layout_tests {
             &state.content[matched.start_byte..matched.end_byte],
             "TARGET_AT_END"
         );
+    }
+
+    #[test]
+    fn oversized_csv_remains_available_in_inspector_and_generic_preview() {
+        let content = format!("{}name,count\nalpha,1\nbeta,2", " ".repeat(100_000));
+        let mut app = test_workbench_app(None, VecDeque::new());
+        let slot = SlotId::LeftHand;
+        let item = ClipItem::from_text(content);
+        *app.state.get_mut(slot).unwrap() = Some(item.clone());
+
+        assert_eq!(
+            app.check_inspector_text_preview(),
+            Some((slot, None, false))
+        );
+        assert_eq!(
+            app.inspector_text_preview_cache
+                .as_ref()
+                .and_then(|cache| cache.spreadsheet_slot),
+            Some(slot)
+        );
+
+        app.open_slot_preview_modal(&item);
+        assert!(app.spreadsheet_load_job.is_some());
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while app.spreadsheet_load_job.is_some() {
+            app.poll_spreadsheet_load(&ctx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(matches!(app.viewer, Some(ViewerSession::Spreadsheet(_))));
+    }
+
+    #[test]
+    fn oversized_malformed_csv_falls_back_to_full_text_preview() {
+        let content = format!("{}name,count\nalpha,1,extra", " ".repeat(100_000));
+        let mut app = test_workbench_app(None, VecDeque::new());
+        let slot = SlotId::LeftHand;
+        *app.state.get_mut(slot).unwrap() = Some(ClipItem::from_text(content.clone()));
+
+        assert_eq!(
+            app.check_inspector_text_preview(),
+            Some((slot, None, false))
+        );
+        assert_eq!(
+            app.inspector_text_preview_cache
+                .as_ref()
+                .and_then(|cache| cache.spreadsheet_slot),
+            Some(slot)
+        );
+
+        app.open_spreadsheet_item(slot);
+        assert!(app.spreadsheet_load_job.is_some());
+        wait_for_text_load(&mut app);
+        let Some(ViewerSession::Text(state)) = &app.viewer else {
+            panic!("malformed CSV should open the text viewer")
+        };
+        assert_eq!(state.content, content);
     }
 
     #[test]
