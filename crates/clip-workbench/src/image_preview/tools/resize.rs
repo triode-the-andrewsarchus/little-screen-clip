@@ -431,6 +431,8 @@ impl TargetSizeSearch<'_> {
 
 impl Drop for ImagePreviewState {
     fn drop(&mut self) {
+        self.film_sim_state.cancel_render();
+        self.creative_fx_state.cancel_render();
         self.cancel_optimizer();
         self.cancel_optipng_process();
         self.cancel_ocr();

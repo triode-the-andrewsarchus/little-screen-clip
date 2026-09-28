@@ -24,11 +24,116 @@ pub use presets::*;
 pub use structure::*;
 pub use trichromatic::*;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[cfg(test)]
+static CANCEL_ON_CHECK: std::sync::Mutex<Option<(usize, usize, usize)>> =
+    std::sync::Mutex::new(None);
+
+#[inline]
+fn is_cancelled(cancel: Option<&AtomicBool>) -> bool {
+    #[cfg(test)]
+    if let Some(flag) = cancel {
+        let mut slot = CANCEL_ON_CHECK.lock().unwrap();
+        if let Some((token, count, limit)) = slot.as_mut()
+            && *token == flag as *const AtomicBool as usize
+        {
+            *count += 1;
+            if *count >= *limit {
+                flag.store(true, Ordering::Release);
+            }
+        }
+    }
+    cancel.is_some_and(|flag| flag.load(Ordering::Acquire))
+}
+
 #[cfg(test)]
 use image::{Rgba, RgbaImage};
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn creative_fx_reference_pixels() {
+        let image = RgbaImage::from_fn(48, 40, |x, y| {
+            Rgba([
+                ((x * 17 + y * 3) % 256) as u8,
+                ((x * 5 + y * 19) % 256) as u8,
+                ((x * 11 + y * 7) % 256) as u8,
+                200,
+            ])
+        });
+        let params = [
+            CreativeFxParams::LensAberration(LensAberrationParams::default()),
+            CreativeFxParams::Trichromatic(TrichromaticParams::default()),
+            CreativeFxParams::PixelSort(PixelSortParams::default()),
+            CreativeFxParams::CmykHalftone(CmykHalftoneParams::default()),
+            CreativeFxParams::DitherPalette(DitherPaletteParams::default()),
+            CreativeFxParams::Ntsc(NtscParams::default()),
+            CreativeFxParams::Structure(StructureParams::default()),
+        ];
+        let expected = [
+            (48, 40, 0x8b22bb5e2c1659d9u64),
+            (41, 39, 0x1df78d52d9c74883),
+            (48, 40, 0x022022c00c34b8bd),
+            (48, 40, 0x1d7116d15f7b7e38),
+            (48, 40, 0x3c200feb409cc845),
+            (48, 40, 0x9b41fac5214fb326),
+            (48, 40, 0x66888752fe25d1a0),
+        ];
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        for (params, (width, height, expected_hash)) in params.into_iter().zip(expected) {
+            let output = apply_creative_fx(&image, &params);
+            let hash = output
+                .as_raw()
+                .iter()
+                .fold(0xcbf29ce484222325u64, |h, byte| {
+                    (h ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+                });
+            assert_eq!(
+                (output.width(), output.height(), hash),
+                (width, height, expected_hash),
+                "{params:?}"
+            );
+            let cancellable =
+                apply_creative_fx_with_masks_cancellable(&image, None, None, &params, &cancelled)
+                    .unwrap();
+            assert_eq!(cancellable, output, "{params:?}");
+            cancelled.store(true, std::sync::atomic::Ordering::Release);
+            assert!(
+                apply_creative_fx_with_masks_cancellable(&image, None, None, &params, &cancelled)
+                    .is_none(),
+                "{params:?}"
+            );
+            cancelled.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+
+    #[test]
+    fn creative_fx_stops_at_effect_and_mask_row_checkpoints() {
+        let image = RgbaImage::from_pixel(48, 40, Rgba([60, 90, 120, 255]));
+        let mask = RgbaImage::from_pixel(48, 40, Rgba([128, 128, 128, 255]));
+        let mut lens = LensAberrationParams::default();
+        lens.depth_mask.enabled = true;
+        let params = CreativeFxParams::LensAberration(lens);
+
+        for limit in [3, 45] {
+            let cancel = AtomicBool::new(false);
+            *CANCEL_ON_CHECK.lock().unwrap() =
+                Some((&cancel as *const AtomicBool as usize, 0, limit));
+            let result = apply_creative_fx_with_masks_cancellable(
+                &image,
+                Some(&mask),
+                None,
+                &params,
+                &cancel,
+            );
+            let (_, checks, _) = CANCEL_ON_CHECK.lock().unwrap().take().unwrap();
+            assert!(cancel.load(Ordering::Acquire));
+            assert!(checks >= limit);
+            assert!(result.is_none());
+        }
+    }
 
     #[test]
     fn test_oklab_roundtrip() {

@@ -318,30 +318,60 @@ pub fn params_to_ntsc_effect(params: &NtscParams) -> ntsc_rs::NtscEffect {
 
 /// Apply NTSC composite and VHS tape emulation to an RGBA image.
 pub fn apply_ntsc_effect(img: &RgbaImage, params: &NtscParams) -> RgbaImage {
+    apply_ntsc_effect_cancellable(img, params, None)
+        .expect("uncancelled NTSC rendering cannot stop")
+}
+
+pub(super) fn apply_ntsc_effect_cancellable(
+    img: &RgbaImage,
+    params: &NtscParams,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<RgbaImage> {
+    if super::is_cancelled(cancel) {
+        return None;
+    }
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 {
-        return img.clone();
+        return Some(img.clone());
     }
 
     let effect = params_to_ntsc_effect(params);
     let mut raw_bytes = img.clone().into_raw();
     let ctx = ntsc_rs::ctx::global();
 
-    effect.apply_effect_to_buffer::<ntsc_rs::yiq_fielding::Rgbx, u8>(
-        ctx,
-        (w as usize, h as usize),
-        &mut raw_bytes,
-        0,
-        [1.0, 1.0],
-    );
+    match cancel {
+        Some(flag) => effect
+            .apply_effect_to_buffer_cancellable::<ntsc_rs::yiq_fielding::Rgbx, u8>(
+                ctx,
+                (w as usize, h as usize),
+                &mut raw_bytes,
+                0,
+                [1.0, 1.0],
+                flag,
+            )?,
+        None => effect.apply_effect_to_buffer::<ntsc_rs::yiq_fielding::Rgbx, u8>(
+            ctx,
+            (w as usize, h as usize),
+            &mut raw_bytes,
+            0,
+            [1.0, 1.0],
+        ),
+    }
+
+    if super::is_cancelled(cancel) {
+        return None;
+    }
 
     if let Some(mut out) = RgbaImage::from_raw(w, h, raw_bytes) {
         // Restore original alpha channel in case YIQ conversion altered it
         for (orig_p, dest_p) in img.pixels().zip(out.pixels_mut()) {
+            if super::is_cancelled(cancel) {
+                return None;
+            }
             dest_p[3] = orig_p[3];
         }
-        out
+        Some(out)
     } else {
-        img.clone()
+        Some(img.clone())
     }
 }

@@ -129,9 +129,20 @@ pub fn pixel_metric(pixel: Rgba<u8>, criteria: PixelSortCriteria) -> f32 {
 
 /// Apply pixel sorting to an RGBA image.
 pub fn apply_pixel_sort(img: &RgbaImage, params: &PixelSortParams) -> RgbaImage {
+    apply_pixel_sort_cancellable(img, params, None).expect("uncancelled pixel sort cannot stop")
+}
+
+pub(super) fn apply_pixel_sort_cancellable(
+    img: &RgbaImage,
+    params: &PixelSortParams,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<RgbaImage> {
+    if super::is_cancelled(cancel) {
+        return None;
+    }
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 {
-        return img.clone();
+        return Some(img.clone());
     }
 
     let mut out = img.clone();
@@ -163,6 +174,9 @@ pub fn apply_pixel_sort(img: &RgbaImage, params: &PixelSortParams) -> RgbaImage 
     match params.direction {
         PixelSortDirection::Horizontal => {
             for y in 0..h {
+                if super::is_cancelled(cancel) {
+                    return None;
+                }
                 let mut row_pixels = Vec::with_capacity(w as usize);
                 for x in 0..w {
                     row_pixels.push(*out.get_pixel(x, y));
@@ -190,6 +204,9 @@ pub fn apply_pixel_sort(img: &RgbaImage, params: &PixelSortParams) -> RgbaImage 
         }
         PixelSortDirection::Vertical => {
             for x in 0..w {
+                if super::is_cancelled(cancel) {
+                    return None;
+                }
                 let mut col_pixels = Vec::with_capacity(h as usize);
                 for y in 0..h {
                     col_pixels.push(*out.get_pixel(x, y));
@@ -218,6 +235,9 @@ pub fn apply_pixel_sort(img: &RgbaImage, params: &PixelSortParams) -> RgbaImage 
         PixelSortDirection::Diagonal => {
             let max_d = w + h - 2;
             for d in 0..=max_d {
+                if super::is_cancelled(cancel) {
+                    return None;
+                }
                 let mut coords = Vec::new();
                 let x_start = d.saturating_sub(h - 1);
                 let x_end = d.min(w - 1);
@@ -254,5 +274,5 @@ pub fn apply_pixel_sort(img: &RgbaImage, params: &PixelSortParams) -> RgbaImage 
         }
     }
 
-    out
+    (!super::is_cancelled(cancel)).then_some(out)
 }

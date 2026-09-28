@@ -136,9 +136,21 @@ pub fn trichromatic_intersection_box(
 
 /// Apply trichromatic camera emulation with 3-channel offsets, zoom, and auto-cropping.
 pub fn apply_trichromatic(img: &RgbaImage, params: &TrichromaticParams) -> RgbaImage {
+    apply_trichromatic_cancellable(img, params, None)
+        .expect("uncancelled trichromatic rendering cannot stop")
+}
+
+pub(super) fn apply_trichromatic_cancellable(
+    img: &RgbaImage,
+    params: &TrichromaticParams,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<RgbaImage> {
+    if super::is_cancelled(cancel) {
+        return None;
+    }
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 {
-        return img.clone();
+        return Some(img.clone());
     }
 
     let cx = (w as f32 - 1.0) / 2.0;
@@ -155,6 +167,9 @@ pub fn apply_trichromatic(img: &RgbaImage, params: &TrichromaticParams) -> RgbaI
     out.enumerate_rows_mut()
         .par_bridge()
         .for_each(|(out_y, row)| {
+            if super::is_cancelled(cancel) {
+                return;
+            }
             let orig_y = (start_y + out_y) as f32;
             for (out_x, _, pixel) in row {
                 let orig_x = (start_x + out_x) as f32;
@@ -215,5 +230,5 @@ pub fn apply_trichromatic(img: &RgbaImage, params: &TrichromaticParams) -> RgbaI
             }
         });
 
-    out
+    (!super::is_cancelled(cancel)).then_some(out)
 }

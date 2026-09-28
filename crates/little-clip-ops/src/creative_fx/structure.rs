@@ -54,7 +54,14 @@ pub fn compute_box_radii_3(sigma: f32) -> [usize; 3] {
 }
 
 /// 1D horizontal box blur pass using sliding-window summation on rows.
-fn box_blur_horizontal(src: &[f32], dst: &mut [f32], width: usize, _height: usize, r: usize) {
+fn box_blur_horizontal(
+    src: &[f32],
+    dst: &mut [f32],
+    width: usize,
+    _height: usize,
+    r: usize,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) {
     if r == 0 || width <= 1 {
         dst.copy_from_slice(src);
         return;
@@ -66,6 +73,9 @@ fn box_blur_horizontal(src: &[f32], dst: &mut [f32], width: usize, _height: usiz
     dst.par_chunks_exact_mut(width)
         .zip(src.par_chunks_exact(width))
         .for_each(|(dst_row, src_row)| {
+            if super::is_cancelled(cancel) {
+                return;
+            }
             let mut sum: f64 = 0.0;
             for x in -r_i..=r_i {
                 let idx = x.clamp(0, w_i - 1) as usize;
@@ -83,10 +93,19 @@ fn box_blur_horizontal(src: &[f32], dst: &mut [f32], width: usize, _height: usiz
 }
 
 /// Transpose a row-major matrix of dimensions (width, height) to (height, width).
-fn transpose(src: &[f32], dst: &mut [f32], width: usize, height: usize) {
+fn transpose(
+    src: &[f32],
+    dst: &mut [f32],
+    width: usize,
+    height: usize,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) {
     dst.par_chunks_exact_mut(height)
         .enumerate()
         .for_each(|(x, dst_col)| {
+            if super::is_cancelled(cancel) {
+                return;
+            }
             for y in 0..height {
                 dst_col[y] = src[y * width + x];
             }
@@ -95,6 +114,20 @@ fn transpose(src: &[f32], dst: &mut [f32], width: usize, height: usize) {
 
 /// Fast separable 3-pass box blur approximating Gaussian convolution in O(N) time.
 pub fn fast_gaussian_blur(src: &[f32], dst: &mut [f32], width: usize, height: usize, sigma: f32) {
+    fast_gaussian_blur_cancellable(src, dst, width, height, sigma, None);
+}
+
+fn fast_gaussian_blur_cancellable(
+    src: &[f32],
+    dst: &mut [f32],
+    width: usize,
+    height: usize,
+    sigma: f32,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) {
+    if super::is_cancelled(cancel) {
+        return;
+    }
     let radii = compute_box_radii_3(sigma);
     if radii == [0, 0, 0] || width <= 1 || height <= 1 {
         dst.copy_from_slice(src);
@@ -107,22 +140,40 @@ pub fn fast_gaussian_blur(src: &[f32], dst: &mut [f32], width: usize, height: us
     let mut temp_transposed = vec![0.0f32; width * height];
 
     for &r in &radii {
+        if super::is_cancelled(cancel) {
+            return;
+        }
         if r > 0 {
             // Horizontal blur on rows (width x height)
-            box_blur_horizontal(&current, &mut temp, width, height, r);
+            box_blur_horizontal(&current, &mut temp, width, height, r, cancel);
+            if super::is_cancelled(cancel) {
+                return;
+            }
             // Transpose (width x height) -> (height x width)
-            transpose(&temp, &mut transposed, width, height);
+            transpose(&temp, &mut transposed, width, height, cancel);
+            if super::is_cancelled(cancel) {
+                return;
+            }
             // Horizontal blur on transposed rows (height x width)
-            box_blur_horizontal(&transposed, &mut temp_transposed, height, width, r);
+            box_blur_horizontal(&transposed, &mut temp_transposed, height, width, r, cancel);
+            if super::is_cancelled(cancel) {
+                return;
+            }
             // Transpose back (height x width) -> (width x height)
-            transpose(&temp_transposed, &mut current, height, width);
+            transpose(&temp_transposed, &mut current, height, width, cancel);
         }
     }
     dst.copy_from_slice(&current);
 }
 
 /// Compute 2D gradient magnitude using Scharr 3x3 filter.
-fn compute_gradient_magnitude(luma: &[f32], grad: &mut [f32], width: usize, height: usize) {
+fn compute_gradient_magnitude(
+    luma: &[f32],
+    grad: &mut [f32],
+    width: usize,
+    height: usize,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) {
     let w = width;
     let h = height;
     let w_i = w as isize;
@@ -131,6 +182,9 @@ fn compute_gradient_magnitude(luma: &[f32], grad: &mut [f32], width: usize, heig
     grad.par_chunks_exact_mut(w)
         .enumerate()
         .for_each(|(y, grad_row)| {
+            if super::is_cancelled(cancel) {
+                return;
+            }
             let y_prev = ((y as isize) - 1).clamp(0, h_i - 1) as usize;
             let y_curr = y;
             let y_next = ((y as isize) + 1).clamp(0, h_i - 1) as usize;
@@ -173,9 +227,21 @@ fn soft_core(val: f32, tau: f32) -> f32 {
 
 /// Apply selective multiscale structure and texture enhancement with edge protection.
 pub fn apply_structure(img: &RgbaImage, params: &StructureParams) -> RgbaImage {
+    apply_structure_cancellable(img, params, None)
+        .expect("uncancelled structure rendering cannot stop")
+}
+
+pub(super) fn apply_structure_cancellable(
+    img: &RgbaImage,
+    params: &StructureParams,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<RgbaImage> {
+    if super::is_cancelled(cancel) {
+        return None;
+    }
     let (width, height) = (img.width() as usize, img.height() as usize);
     if width == 0 || height == 0 || params.amount.abs() < 0.001 {
-        return img.clone();
+        return Some(img.clone());
     }
 
     let n_pixels = width * height;
@@ -189,6 +255,9 @@ pub fn apply_structure(img: &RgbaImage, params: &StructureParams) -> RgbaImage {
         .zip(chromas.par_chunks_exact_mut(width))
         .zip(pixels.par_chunks_exact(width))
         .for_each(|((l_row, c_row), p_row)| {
+            if super::is_cancelled(cancel) {
+                return;
+            }
             for x in 0..width {
                 let p = p_row[x];
                 let r = p[0] as f32 / 255.0;
@@ -206,10 +275,16 @@ pub fn apply_structure(img: &RgbaImage, params: &StructureParams) -> RgbaImage {
 
     // 3. Compute edge protection mask from gradient magnitude
     let mut grad_raw = vec![0.0f32; n_pixels];
-    compute_gradient_magnitude(&luma, &mut grad_raw, width, height);
+    if super::is_cancelled(cancel) {
+        return None;
+    }
+    compute_gradient_magnitude(&luma, &mut grad_raw, width, height, cancel);
 
     let mut grad_smooth = vec![0.0f32; n_pixels];
-    fast_gaussian_blur(&grad_raw, &mut grad_smooth, width, height, 2.0 * s);
+    if super::is_cancelled(cancel) {
+        return None;
+    }
+    fast_gaussian_blur_cancellable(&grad_raw, &mut grad_smooth, width, height, 2.0 * s, cancel);
 
     let edge_threshold = 0.06 + (100.0 - params.edge_protection.clamp(0.0, 100.0)) * 0.0016;
 
@@ -224,16 +299,28 @@ pub fn apply_structure(img: &RgbaImage, params: &StructureParams) -> RgbaImage {
     let delta_sigma_4 = (sigma_4 * sigma_4 - sigma_3 * sigma_3).max(0.01).sqrt();
 
     let mut b1 = vec![0.0f32; n_pixels];
-    fast_gaussian_blur(&luma, &mut b1, width, height, sigma_1);
+    if super::is_cancelled(cancel) {
+        return None;
+    }
+    fast_gaussian_blur_cancellable(&luma, &mut b1, width, height, sigma_1, cancel);
 
     let mut b2 = vec![0.0f32; n_pixels];
-    fast_gaussian_blur(&b1, &mut b2, width, height, delta_sigma_2);
+    if super::is_cancelled(cancel) {
+        return None;
+    }
+    fast_gaussian_blur_cancellable(&b1, &mut b2, width, height, delta_sigma_2, cancel);
 
     let mut b3 = vec![0.0f32; n_pixels];
-    fast_gaussian_blur(&b2, &mut b3, width, height, delta_sigma_3);
+    if super::is_cancelled(cancel) {
+        return None;
+    }
+    fast_gaussian_blur_cancellable(&b2, &mut b3, width, height, delta_sigma_3, cancel);
 
     let mut b4 = vec![0.0f32; n_pixels];
-    fast_gaussian_blur(&b3, &mut b4, width, height, delta_sigma_4);
+    if super::is_cancelled(cancel) {
+        return None;
+    }
+    fast_gaussian_blur_cancellable(&b3, &mut b4, width, height, delta_sigma_4, cancel);
 
     // 5. Band weights modulated by detail_scale (-50 to +50)
     let k = params.detail_scale.clamp(-50.0, 50.0) / 50.0;
@@ -263,6 +350,9 @@ pub fn apply_structure(img: &RgbaImage, params: &StructureParams) -> RgbaImage {
         .par_chunks_exact_mut(width * 4)
         .enumerate()
         .for_each(|(y, out_row_bytes)| {
+            if super::is_cancelled(cancel) {
+                return;
+            }
             let row_start = y * width;
             for x in 0..width {
                 let idx = row_start + x;
@@ -304,5 +394,8 @@ pub fn apply_structure(img: &RgbaImage, params: &StructureParams) -> RgbaImage {
             }
         });
 
-    RgbaImage::from_raw(width as u32, height as u32, raw_bytes).unwrap_or_else(|| img.clone())
+    if super::is_cancelled(cancel) {
+        return None;
+    }
+    Some(RgbaImage::from_raw(width as u32, height as u32, raw_bytes).unwrap_or_else(|| img.clone()))
 }

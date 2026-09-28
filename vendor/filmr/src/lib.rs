@@ -1,0 +1,29 @@
+pub mod cie_data;
+pub mod depth;
+pub mod film;
+pub mod film_layer;
+pub mod filmic_curve;
+#[cfg(feature = "compute-gpu")]
+pub mod gpu;
+#[cfg(feature = "compute-gpu")]
+pub mod gpu_pipelines;
+pub mod grain;
+pub mod light_leak;
+pub mod metrics;
+pub mod physics;
+pub mod pipeline;
+pub mod presets;
+pub mod processor;
+pub mod shake;
+pub mod spectral;
+pub mod spectral_engine;
+pub mod utils;
+
+pub use film::{FilmStock, FilmStyle};
+pub use grain::GrainModel;
+pub use metrics::FilmMetrics;
+pub use processor::{
+    estimate_exposure_time, process_image, process_image_async, process_image_with_depth,
+    OutputMode, SimulationConfig, SimulationMode, WhiteBalanceMode,
+};
+pub use spectral::Spectrum;

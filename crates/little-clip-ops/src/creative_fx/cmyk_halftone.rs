@@ -95,9 +95,21 @@ pub fn rgb_to_cmyk(r: f32, g: f32, b: f32) -> (f32, f32, f32, f32) {
 
 /// Apply CMYK rosette halftone with plate misregistration.
 pub fn apply_cmyk_halftone(img: &RgbaImage, params: &CmykHalftoneParams) -> RgbaImage {
+    apply_cmyk_halftone_cancellable(img, params, None)
+        .expect("uncancelled CMYK rendering cannot stop")
+}
+
+pub(super) fn apply_cmyk_halftone_cancellable(
+    img: &RgbaImage,
+    params: &CmykHalftoneParams,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<RgbaImage> {
+    if super::is_cancelled(cancel) {
+        return None;
+    }
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 {
-        return img.clone();
+        return Some(img.clone());
     }
 
     let dot_size = params.dot_size.max(1.5);
@@ -139,6 +151,9 @@ pub fn apply_cmyk_halftone(img: &RgbaImage, params: &CmykHalftoneParams) -> Rgba
     let mut out = RgbaImage::new(w, h);
 
     out.enumerate_rows_mut().par_bridge().for_each(|(y, row)| {
+        if super::is_cancelled(cancel) {
+            return;
+        }
         let y_f = y as f32;
         for (x, _, pixel) in row {
             let x_f = x as f32;
@@ -210,5 +225,5 @@ pub fn apply_cmyk_halftone(img: &RgbaImage, params: &CmykHalftoneParams) -> Rgba
         }
     });
 
-    out
+    (!super::is_cancelled(cancel)).then_some(out)
 }

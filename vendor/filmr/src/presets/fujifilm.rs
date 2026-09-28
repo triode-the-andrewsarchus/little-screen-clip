@@ -1,0 +1,1105 @@
+//! Fujifilm film stock presets
+
+#![allow(non_snake_case)]
+
+use crate::film::{FilmStock, FilmType, ReciprocityFailure, SegmentedCurve};
+use crate::film_layer::*;
+use crate::grain::GrainModel;
+use crate::spectral::{FilmSpectralParams, BINS};
+
+/// Fujifilm Superia 400 (Consumer Color Negative)
+/// Source: Fujifilm Technical Data
+/// ISO: 400
+/// RMS: 12 -> Alpha = 0.0144
+/// Gamma: 0.65
+/// Dmax: 2.8, Dmin: 0.12
+/// Resolution: 120 lp/mm
+pub fn SUPERIA_400() -> FilmStock {
+    FilmStock {
+        manufacturer: "Fujifilm".to_string(),
+        name: "Superia 400".to_string(),
+        film_type: FilmType::ColorNegative,
+        iso: 400.0,
+        r_curve: SegmentedCurve {
+            d_min: 0.13,
+            d_max: 2.8,
+            gamma: 0.60, // red: max density 2.4
+            shoulder_point: 0.8,
+            exposure_offset: 0.05,
+        },
+        g_curve: SegmentedCurve {
+            d_min: 0.15,
+            d_max: 2.8,
+            gamma: 0.65, // green: max density 2.7
+            shoulder_point: 0.8,
+            exposure_offset: 0.05,
+        },
+        b_curve: SegmentedCurve {
+            d_min: 0.17,
+            d_max: 2.8,
+            gamma: 0.72, // blue: max density 3.1
+            shoulder_point: 0.8,
+            exposure_offset: 0.05,
+        },
+        color_matrix: [
+            [1.05, -0.03, -0.02],
+            [-0.02, 1.05, -0.03],
+            [-0.03, -0.02, 1.05],
+        ],
+        spectral_params: FilmSpectralParams::new_color_negative_standard(),
+        grain_model: GrainModel {
+            alpha: 0.000207,
+            sigma_read: 0.006,
+            monochrome: false,
+            blur_radius: 0.5,
+            roughness: 0.5,
+            color_correlation: 0.8,
+            shadow_noise: 0.001,
+            highlight_coarseness: 0.05,
+        },
+        resolution_lp_mm: 120.0,
+        vignette_strength: 0.5,
+        reciprocity: ReciprocityFailure { beta: 0.05 },
+        halation_strength: 0.16,
+        halation_threshold: 0.84,
+        halation_sigma: 0.015,
+        halation_tint: [1.0, 0.65, 0.45],
+        layer_stack: Some(FilmLayerStack {
+            inhibition: [
+                [0.00, -0.08, -0.04],
+                [-0.06, 0.00, -0.04],
+                [-0.06, -0.08, 0.00],
+            ],
+            layers: vec![
+                FilmLayer {
+                    name: "Overcoat".into(),
+                    kind: LayerKind::Overcoat,
+                    thickness_um: 1.0,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Blue Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Blue,
+                    },
+                    thickness_um: 5.5,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(450.0, 30.0, 0.12),
+                    scattering: 0.022,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Yellow Filter".into(),
+                    kind: LayerKind::YellowFilter,
+                    thickness_um: 1.0,
+                    refractive_index: 1.52,
+                    absorption: gaussian_absorption(440.0, 35.0, 0.85),
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Green Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Green,
+                    },
+                    thickness_um: 5.0,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(545.0, 33.0, 0.10),
+                    scattering: 0.022,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Interlayer".into(),
+                    kind: LayerKind::Interlayer,
+                    thickness_um: 1.0,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Red Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Red,
+                    },
+                    thickness_um: 5.0,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(640.0, 38.0, 0.09),
+                    scattering: 0.022,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Anti-Halation".into(),
+                    kind: LayerKind::AntiHalation,
+                    thickness_um: 2.0,
+                    refractive_index: 1.50,
+                    absorption: gaussian_absorption(600.0, 120.0, 0.5),
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Base".into(),
+                    kind: LayerKind::Base,
+                    thickness_um: 127.0,
+                    refractive_index: 1.65,
+                    absorption: [0.001; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+            ],
+        }),
+    }
+}
+
+/// Fujifilm Superia 200 (General Purpose Color Negative)
+/// Source: Fujifilm Technical Data
+/// ISO: 200
+/// RMS: 10 -> Alpha = 0.0100
+/// Gamma: 0.65
+/// Dmax: 2.7, Dmin: 0.12
+/// Resolution: 130 lp/mm
+pub fn SUPERIA_200() -> FilmStock {
+    FilmStock {
+        manufacturer: "Fujifilm".to_string(),
+        name: "Superia 200".to_string(),
+        film_type: FilmType::ColorNegative,
+        iso: 200.0,
+        r_curve: SegmentedCurve {
+            d_min: 0.13,
+            d_max: 2.7,
+            gamma: 0.58,
+            shoulder_point: 0.8,
+            exposure_offset: 0.10,
+        },
+        g_curve: SegmentedCurve {
+            d_min: 0.15,
+            d_max: 2.7,
+            gamma: 0.65,
+            shoulder_point: 0.8,
+            exposure_offset: 0.10,
+        },
+        b_curve: SegmentedCurve {
+            d_min: 0.17,
+            d_max: 2.7,
+            gamma: 0.70,
+            shoulder_point: 0.8,
+            exposure_offset: 0.10,
+        },
+        color_matrix: [
+            [1.08, -0.04, -0.04],
+            [-0.04, 1.08, -0.04],
+            [-0.04, -0.04, 1.08],
+        ],
+        spectral_params: FilmSpectralParams::new_color_negative_standard(),
+        grain_model: GrainModel {
+            alpha: 0.000100,
+            sigma_read: 0.005,
+            monochrome: false,
+            blur_radius: 0.5,
+            roughness: 0.4,
+            color_correlation: 0.8,
+            shadow_noise: 0.001,
+            highlight_coarseness: 0.05,
+        },
+        resolution_lp_mm: 130.0,
+        vignette_strength: 0.5,
+        reciprocity: ReciprocityFailure { beta: 0.05 },
+        halation_strength: 0.14,
+        halation_threshold: 0.86,
+        halation_sigma: 0.014,
+        halation_tint: [1.0, 0.65, 0.45],
+        layer_stack: Some(FilmLayerStack {
+            inhibition: [
+                [0.00, -0.08, -0.04],
+                [-0.06, 0.00, -0.04],
+                [-0.06, -0.08, 0.00],
+            ],
+            layers: vec![
+                FilmLayer {
+                    name: "Overcoat".into(),
+                    kind: LayerKind::Overcoat,
+                    thickness_um: 1.0,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Blue Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Blue,
+                    },
+                    thickness_um: 5.0,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(450.0, 28.0, 0.13),
+                    scattering: 0.018,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Yellow Filter".into(),
+                    kind: LayerKind::YellowFilter,
+                    thickness_um: 1.0,
+                    refractive_index: 1.52,
+                    absorption: gaussian_absorption(440.0, 35.0, 0.85),
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Green Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Green,
+                    },
+                    thickness_um: 4.5,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(545.0, 30.0, 0.11),
+                    scattering: 0.018,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Interlayer".into(),
+                    kind: LayerKind::Interlayer,
+                    thickness_um: 1.0,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Red Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Red,
+                    },
+                    thickness_um: 4.5,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(640.0, 36.0, 0.10),
+                    scattering: 0.018,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Anti-Halation".into(),
+                    kind: LayerKind::AntiHalation,
+                    thickness_um: 2.0,
+                    refractive_index: 1.50,
+                    absorption: gaussian_absorption(600.0, 120.0, 0.5),
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Base".into(),
+                    kind: LayerKind::Base,
+                    thickness_um: 127.0,
+                    refractive_index: 1.65,
+                    absorption: [0.001; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+            ],
+        }),
+    }
+}
+
+/// Fujifilm Superia 100 (Fine Grain Color Negative)
+/// Source: Fujifilm Technical Data
+/// ISO: 100
+/// RMS: 8 -> Alpha = 0.0064
+/// Gamma: 0.65
+/// Dmax: 2.6, Dmin: 0.12
+/// Resolution: 140 lp/mm
+pub fn SUPERIA_100() -> FilmStock {
+    FilmStock {
+        manufacturer: "Fujifilm".to_string(),
+        name: "Superia 100".to_string(),
+        film_type: FilmType::ColorNegative,
+        iso: 100.0,
+        r_curve: SegmentedCurve {
+            d_min: 0.13,
+            d_max: 2.6,
+            gamma: 0.60,
+            shoulder_point: 0.8,
+            exposure_offset: 0.20,
+        },
+        g_curve: SegmentedCurve {
+            d_min: 0.15,
+            d_max: 2.6,
+            gamma: 0.65,
+            shoulder_point: 0.8,
+            exposure_offset: 0.20,
+        },
+        b_curve: SegmentedCurve {
+            d_min: 0.17,
+            d_max: 2.6,
+            gamma: 0.72,
+            shoulder_point: 0.8,
+            exposure_offset: 0.20,
+        },
+        color_matrix: [
+            [1.10, -0.05, -0.05],
+            [-0.05, 1.10, -0.05],
+            [-0.05, -0.05, 1.10],
+        ],
+        spectral_params: FilmSpectralParams::new_color_negative_standard(),
+        grain_model: GrainModel {
+            alpha: 0.000041,
+            sigma_read: 0.004,
+            monochrome: false,
+            blur_radius: 0.5,
+            roughness: 0.3,
+            color_correlation: 0.8,
+            shadow_noise: 0.001,
+            highlight_coarseness: 0.05,
+        },
+        resolution_lp_mm: 140.0,
+        vignette_strength: 0.5,
+        reciprocity: ReciprocityFailure { beta: 0.05 },
+        halation_strength: 0.12,
+        halation_threshold: 0.88,
+        halation_sigma: 0.012,
+        halation_tint: [1.0, 0.65, 0.45],
+        layer_stack: Some(FilmLayerStack {
+            inhibition: [
+                [0.00, -0.09, -0.05],
+                [-0.07, 0.00, -0.05],
+                [-0.07, -0.09, 0.00],
+            ],
+            layers: vec![
+                FilmLayer {
+                    name: "Overcoat".into(),
+                    kind: LayerKind::Overcoat,
+                    thickness_um: 1.0,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Blue Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Blue,
+                    },
+                    thickness_um: 4.5,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(450.0, 26.0, 0.14),
+                    scattering: 0.015,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Yellow Filter".into(),
+                    kind: LayerKind::YellowFilter,
+                    thickness_um: 1.0,
+                    refractive_index: 1.52,
+                    absorption: gaussian_absorption(440.0, 35.0, 0.85),
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Green Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Green,
+                    },
+                    thickness_um: 4.0,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(545.0, 28.0, 0.12),
+                    scattering: 0.015,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Interlayer".into(),
+                    kind: LayerKind::Interlayer,
+                    thickness_um: 1.0,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Red Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Red,
+                    },
+                    thickness_um: 4.0,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(640.0, 34.0, 0.11),
+                    scattering: 0.015,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Anti-Halation".into(),
+                    kind: LayerKind::AntiHalation,
+                    thickness_um: 2.0,
+                    refractive_index: 1.50,
+                    absorption: gaussian_absorption(600.0, 120.0, 0.5),
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Base".into(),
+                    kind: LayerKind::Base,
+                    thickness_um: 127.0,
+                    refractive_index: 1.65,
+                    absorption: [0.001; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+            ],
+        }),
+    }
+}
+
+/// Fujifilm Neopan 400 (Professional B&W)
+/// Source: Fujifilm Technical Data
+/// ISO: 400
+/// RMS: 14 -> Alpha = 0.0196
+/// Gamma: 0.70
+/// Dmax: 2.2, Dmin: 0.10
+/// Resolution: 110 lp/mm
+pub fn NEOPAN_400() -> FilmStock {
+    FilmStock {
+        manufacturer: "Fujifilm".to_string(),
+        name: "Neopan 400".to_string(),
+        film_type: FilmType::BwNegative,
+        iso: 400.0,
+        r_curve: SegmentedCurve {
+            d_min: 0.10,
+            d_max: 2.2,
+            gamma: 0.70,
+            shoulder_point: 0.8,
+            exposure_offset: 0.05,
+        },
+        g_curve: SegmentedCurve {
+            d_min: 0.10,
+            d_max: 2.2,
+            gamma: 0.70,
+            shoulder_point: 0.8,
+            exposure_offset: 0.05,
+        },
+        b_curve: SegmentedCurve {
+            d_min: 0.10,
+            d_max: 2.2,
+            gamma: 0.70,
+            shoulder_point: 0.8,
+            exposure_offset: 0.05,
+        },
+        color_matrix: [[0.33, 0.33, 0.33], [0.33, 0.33, 0.33], [0.33, 0.33, 0.33]],
+        spectral_params: FilmSpectralParams::new_panchromatic(),
+        grain_model: GrainModel {
+            alpha: 0.000384,
+            sigma_read: 0.007,
+            monochrome: true,
+            blur_radius: 0.5,
+            roughness: 0.6,
+            color_correlation: 0.8,
+            shadow_noise: 0.001,
+            highlight_coarseness: 0.05,
+        },
+        resolution_lp_mm: 110.0,
+        vignette_strength: 0.5,
+        reciprocity: ReciprocityFailure { beta: 0.05 },
+        halation_strength: 0.20,
+        halation_threshold: 0.82,
+        halation_sigma: 0.016,
+        halation_tint: [0.85, 0.85, 0.85],
+        layer_stack: Some(FilmLayerStack {
+            inhibition: [[0.0; 3]; 3],
+            layers: vec![
+                FilmLayer {
+                    name: "Overcoat".into(),
+                    kind: LayerKind::Overcoat,
+                    thickness_um: 1.0,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Panchromatic Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Green,
+                    },
+                    thickness_um: 8.0,
+                    refractive_index: 1.54,
+                    absorption: gaussian_absorption(540.0, 90.0, 0.09),
+                    scattering: 0.035,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Anti-Halation".into(),
+                    kind: LayerKind::AntiHalation,
+                    thickness_um: 2.0,
+                    refractive_index: 1.50,
+                    absorption: gaussian_absorption(580.0, 110.0, 0.45),
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Base".into(),
+                    kind: LayerKind::Base,
+                    thickness_um: 127.0,
+                    refractive_index: 1.65,
+                    absorption: [0.001; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+            ],
+        }),
+    }
+}
+
+/// Fujifilm Neopan 100 (Fine Grain B&W)
+/// Source: Fujifilm Technical Data
+/// ISO: 100
+/// RMS: 9 -> Alpha = 0.0081
+/// Gamma: 0.75
+/// Dmax: 2.3, Dmin: 0.10
+/// Resolution: 140 lp/mm
+pub fn NEOPAN_100() -> FilmStock {
+    FilmStock {
+        manufacturer: "Fujifilm".to_string(),
+        name: "Neopan 100".to_string(),
+        film_type: FilmType::BwNegative,
+        iso: 100.0,
+        r_curve: SegmentedCurve {
+            d_min: 0.10,
+            d_max: 2.3,
+            gamma: 0.75,
+            shoulder_point: 0.8,
+            exposure_offset: 0.20,
+        },
+        g_curve: SegmentedCurve {
+            d_min: 0.10,
+            d_max: 2.3,
+            gamma: 0.75,
+            shoulder_point: 0.8,
+            exposure_offset: 0.20,
+        },
+        b_curve: SegmentedCurve {
+            d_min: 0.10,
+            d_max: 2.3,
+            gamma: 0.75,
+            shoulder_point: 0.8,
+            exposure_offset: 0.20,
+        },
+        color_matrix: [[0.33, 0.33, 0.33], [0.33, 0.33, 0.33], [0.33, 0.33, 0.33]],
+        spectral_params: FilmSpectralParams::new_panchromatic(),
+        grain_model: GrainModel {
+            alpha: 0.000066,
+            sigma_read: 0.005,
+            monochrome: true,
+            blur_radius: 0.5,
+            roughness: 0.4,
+            color_correlation: 0.8,
+            shadow_noise: 0.001,
+            highlight_coarseness: 0.05,
+        },
+        resolution_lp_mm: 140.0,
+        vignette_strength: 0.5,
+        reciprocity: ReciprocityFailure { beta: 0.05 },
+        halation_strength: 0.15,
+        halation_threshold: 0.85,
+        halation_sigma: 0.014,
+        halation_tint: [0.90, 0.90, 0.90],
+        layer_stack: Some(FilmLayerStack {
+            inhibition: [[0.0; 3]; 3],
+            layers: vec![
+                FilmLayer {
+                    name: "Overcoat".into(),
+                    kind: LayerKind::Overcoat,
+                    thickness_um: 1.0,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Panchromatic Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Green,
+                    },
+                    thickness_um: 6.0,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(540.0, 80.0, 0.11),
+                    scattering: 0.020,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Anti-Halation".into(),
+                    kind: LayerKind::AntiHalation,
+                    thickness_um: 2.0,
+                    refractive_index: 1.50,
+                    absorption: gaussian_absorption(580.0, 110.0, 0.45),
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Base".into(),
+                    kind: LayerKind::Base,
+                    thickness_um: 127.0,
+                    refractive_index: 1.65,
+                    absorption: [0.001; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+            ],
+        }),
+    }
+}
+
+/// Fujifilm Provia 100F (Professional Slide Film)
+/// Source: Fujifilm Technical Data
+/// ISO: 100
+/// RMS: 8 -> Alpha = 0.0064
+/// Gamma: 1.3
+/// Dmax: 3.5, Dmin: 0.12
+/// Resolution: 150 lp/mm
+pub fn PROVIA_100F() -> FilmStock {
+    FilmStock {
+        manufacturer: "Fujifilm".to_string(),
+        name: "Provia 100F".to_string(),
+        film_type: FilmType::ColorSlide,
+        iso: 100.0,
+        r_curve: SegmentedCurve {
+            d_min: 0.12,
+            d_max: 3.5,
+            gamma: 1.27, // red: max density 3.3
+            shoulder_point: 0.8,
+            exposure_offset: 0.20,
+        },
+        g_curve: SegmentedCurve {
+            d_min: 0.12,
+            d_max: 3.5,
+            gamma: 1.30, // green: max density 3.4
+            shoulder_point: 0.8,
+            exposure_offset: 0.20,
+        },
+        b_curve: SegmentedCurve {
+            d_min: 0.12,
+            d_max: 3.5,
+            gamma: 1.35, // blue: max density 3.6
+            shoulder_point: 0.8,
+            exposure_offset: 0.20,
+        },
+        color_matrix: [
+            [1.15, -0.08, -0.07],
+            [-0.07, 1.15, -0.08],
+            [-0.08, -0.07, 1.15],
+        ],
+        spectral_params: FilmSpectralParams::new_provia(),
+        grain_model: GrainModel {
+            alpha: 0.000041,
+            sigma_read: 0.004,
+            monochrome: false,
+            blur_radius: 0.5,
+            roughness: 0.3,
+            color_correlation: 0.8,
+            shadow_noise: 0.001,
+            highlight_coarseness: 0.05,
+        },
+        resolution_lp_mm: 150.0,
+        vignette_strength: 0.5,
+        reciprocity: ReciprocityFailure { beta: 0.05 },
+        halation_strength: 0.10,
+        halation_threshold: 0.90,
+        halation_sigma: 0.010,
+        halation_tint: [0.95, 0.95, 0.95],
+        layer_stack: Some(FilmLayerStack {
+            inhibition: [
+                [0.00, -0.11, -0.06],
+                [-0.10, 0.00, -0.06],
+                [-0.10, -0.11, 0.00],
+            ],
+            layers: vec![
+                FilmLayer {
+                    name: "Overcoat".into(),
+                    kind: LayerKind::Overcoat,
+                    thickness_um: 0.8,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Blue Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Blue,
+                    },
+                    thickness_um: 3.5,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(450.0, 24.0, 0.15),
+                    scattering: 0.010,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Yellow Filter".into(),
+                    kind: LayerKind::YellowFilter,
+                    thickness_um: 0.8,
+                    refractive_index: 1.52,
+                    absorption: gaussian_absorption(440.0, 30.0, 1.0),
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Green Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Green,
+                    },
+                    thickness_um: 3.0,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(545.0, 27.0, 0.13),
+                    scattering: 0.010,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Interlayer".into(),
+                    kind: LayerKind::Interlayer,
+                    thickness_um: 0.5,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Red Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Red,
+                    },
+                    thickness_um: 3.0,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(635.0, 30.0, 0.12),
+                    scattering: 0.010,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Base".into(),
+                    kind: LayerKind::Base,
+                    thickness_um: 97.0,
+                    refractive_index: 1.65,
+                    absorption: [0.002; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+            ],
+        }),
+    }
+}
+
+/// Fujifilm Velvia 50 (Ultra Vivid Slide Film)
+/// Source: Fujifilm 2020 Data Sheet
+/// ISO: 50
+/// RMS: 9 -> Alpha = 0.000081
+/// Gamma: 1.2-1.4
+/// Dmax: 3.5-4.0, Dmin: 0.15
+/// Resolution: 160 lp/mm
+pub fn VELVIA_50() -> FilmStock {
+    FilmStock {
+        manufacturer: "Fujifilm".to_string(),
+        name: "Velvia 50".to_string(),
+        film_type: FilmType::ColorSlide,
+        iso: 50.0,
+        r_curve: SegmentedCurve {
+            d_min: 0.15,
+            d_max: 3.6,
+            gamma: 1.35, // red: max density 3.4
+            shoulder_point: 0.8,
+            exposure_offset: 49.22617,
+        },
+        g_curve: SegmentedCurve {
+            d_min: 0.15,
+            d_max: 3.6,
+            gamma: 1.45, // green: max density 3.8 (highest)
+            shoulder_point: 0.8,
+            exposure_offset: 49.22617,
+        },
+        b_curve: SegmentedCurve {
+            d_min: 0.15,
+            d_max: 3.6,
+            gamma: 1.40, // blue: max density 3.7
+            shoulder_point: 0.8,
+            exposure_offset: 49.22617,
+        },
+        color_matrix: [
+            [1.30, -0.15, -0.15],
+            [-0.15, 1.30, -0.15],
+            [-0.15, -0.15, 1.30],
+        ],
+        spectral_params: FilmSpectralParams::new_velvia(),
+        grain_model: GrainModel {
+            alpha: 0.000081,
+            sigma_read: 0.003,
+            monochrome: false,
+            blur_radius: 0.5,
+            roughness: 0.2,
+            color_correlation: 0.8,
+            shadow_noise: 0.001,
+            highlight_coarseness: 0.05,
+        },
+        resolution_lp_mm: 160.0,
+        vignette_strength: 0.5,
+        reciprocity: ReciprocityFailure { beta: 0.05 },
+        halation_strength: 0.08,
+        halation_threshold: 0.92,
+        halation_sigma: 0.008,
+        halation_tint: [1.0, 0.4, 0.4],
+        layer_stack: Some(FilmLayerStack {
+            // Slide film: stronger interimage for vivid colour separation
+            inhibition: [
+                [0.00, -0.12, -0.06],
+                [-0.08, 0.00, -0.08],
+                [-0.06, -0.12, 0.00],
+            ],
+            layers: vec![
+                FilmLayer {
+                    name: "Overcoat".into(),
+                    kind: LayerKind::Overcoat,
+                    thickness_um: 0.8,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Blue Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Blue,
+                    },
+                    thickness_um: 3.5,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(450.0, 22.0, 0.16),
+                    scattering: 0.010,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Yellow Filter".into(),
+                    kind: LayerKind::YellowFilter,
+                    thickness_um: 0.8,
+                    refractive_index: 1.52,
+                    absorption: gaussian_absorption(440.0, 30.0, 1.0),
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Green Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Green,
+                    },
+                    thickness_um: 3.0,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(545.0, 25.0, 0.14),
+                    scattering: 0.010,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Interlayer".into(),
+                    kind: LayerKind::Interlayer,
+                    thickness_um: 0.5,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Red Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Red,
+                    },
+                    thickness_um: 3.0,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(635.0, 30.0, 0.13),
+                    scattering: 0.010,
+                    dye_spectrum: None,
+                },
+                // Slide film: no traditional antihalation, just base
+                FilmLayer {
+                    name: "Base".into(),
+                    kind: LayerKind::Base,
+                    thickness_um: 97.0,
+                    refractive_index: 1.65,
+                    absorption: [0.002; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+            ],
+        }),
+    }
+}
+
+/// Fujifilm Velvia 50 - Artistic (Ultra-saturated landscape look)
+/// Based on Velvia 50 with even more extreme color saturation
+pub fn VELVIA_50_ARTISTIC() -> FilmStock {
+    let mut stock = VELVIA_50();
+
+    // Extreme color separation (legendary Velvia saturation)
+    stock.color_matrix = [
+        [1.40, -0.20, -0.20],
+        [-0.20, 1.45, -0.25],
+        [-0.20, -0.25, 1.45],
+    ];
+
+    // Slightly higher contrast
+    stock.r_curve.gamma = 1.50;
+    stock.g_curve.gamma = 1.50;
+    stock.b_curve.gamma = 1.50;
+
+    // More visible grain (even though Velvia is fine-grained)
+    stock.grain_model.alpha *= 1.4;
+
+    // Subtle halation boost
+    stock.halation_strength = 0.12;
+
+    stock.name = "Velvia 50 Artistic".to_string();
+    stock
+}
+
+/// Fujifilm Astia 100F (Soft Tone Slide Film)
+/// Source: Fujifilm Technical Data
+/// ISO: 100
+/// RMS: 8 -> Alpha = 0.0064
+/// Gamma: 1.2
+/// Dmax: 3.4, Dmin: 0.12
+/// Resolution: 145 lp/mm
+pub fn ASTIA_100F() -> FilmStock {
+    FilmStock {
+        manufacturer: "Fujifilm".to_string(),
+        name: "Astia 100F".to_string(),
+        film_type: FilmType::ColorSlide,
+        iso: 100.0,
+        r_curve: SegmentedCurve {
+            d_min: 0.12,
+            d_max: 3.4,
+            gamma: 1.18, // red: max density 3.3
+            shoulder_point: 0.8,
+            exposure_offset: 0.20,
+        },
+        g_curve: SegmentedCurve {
+            d_min: 0.12,
+            d_max: 3.4,
+            gamma: 1.22, // green: max density 3.5
+            shoulder_point: 0.8,
+            exposure_offset: 0.20,
+        },
+        b_curve: SegmentedCurve {
+            d_min: 0.12,
+            d_max: 3.4,
+            gamma: 1.22, // blue: max density 3.5
+            shoulder_point: 0.8,
+            exposure_offset: 0.20,
+        },
+        color_matrix: [
+            [1.05, -0.03, -0.02],
+            [-0.02, 1.05, -0.03],
+            [-0.03, -0.02, 1.05],
+        ],
+        spectral_params: FilmSpectralParams::new_provia(),
+        grain_model: GrainModel {
+            alpha: 0.000041,
+            sigma_read: 0.004,
+            monochrome: false,
+            blur_radius: 0.5,
+            roughness: 0.3,
+            color_correlation: 0.8,
+            shadow_noise: 0.001,
+            highlight_coarseness: 0.05,
+        },
+        resolution_lp_mm: 145.0,
+        vignette_strength: 0.5,
+        reciprocity: ReciprocityFailure { beta: 0.05 },
+        halation_strength: 0.09,
+        halation_threshold: 0.91,
+        halation_sigma: 0.009,
+        halation_tint: [0.98, 0.98, 1.0],
+        layer_stack: Some(FilmLayerStack {
+            inhibition: [
+                [0.00, -0.09, -0.05],
+                [-0.08, 0.00, -0.05],
+                [-0.08, -0.09, 0.00],
+            ],
+            layers: vec![
+                FilmLayer {
+                    name: "Overcoat".into(),
+                    kind: LayerKind::Overcoat,
+                    thickness_um: 0.8,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Blue Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Blue,
+                    },
+                    thickness_um: 3.5,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(450.0, 26.0, 0.14),
+                    scattering: 0.010,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Yellow Filter".into(),
+                    kind: LayerKind::YellowFilter,
+                    thickness_um: 0.8,
+                    refractive_index: 1.52,
+                    absorption: gaussian_absorption(440.0, 30.0, 1.0),
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Green Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Green,
+                    },
+                    thickness_um: 3.0,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(545.0, 28.0, 0.12),
+                    scattering: 0.010,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Interlayer".into(),
+                    kind: LayerKind::Interlayer,
+                    thickness_um: 0.5,
+                    refractive_index: 1.50,
+                    absorption: [0.0; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Red Emulsion".into(),
+                    kind: LayerKind::Emulsion {
+                        channel: EmulsionChannel::Red,
+                    },
+                    thickness_um: 3.0,
+                    refractive_index: 1.53,
+                    absorption: gaussian_absorption(635.0, 32.0, 0.11),
+                    scattering: 0.010,
+                    dye_spectrum: None,
+                },
+                FilmLayer {
+                    name: "Base".into(),
+                    kind: LayerKind::Base,
+                    thickness_um: 97.0,
+                    refractive_index: 1.65,
+                    absorption: [0.002; BINS],
+                    scattering: 0.0,
+                    dye_spectrum: None,
+                },
+            ],
+        }),
+    }
+}
+
+/// Get all Fujifilm film stocks
+pub fn get_stocks() -> Vec<FilmStock> {
+    vec![
+        SUPERIA_400(),
+        SUPERIA_200(),
+        SUPERIA_100(),
+        PROVIA_100F(),
+        VELVIA_50(),
+        VELVIA_50_ARTISTIC(),
+        NEOPAN_400(),
+        NEOPAN_100(),
+        ASTIA_100F(),
+    ]
+}

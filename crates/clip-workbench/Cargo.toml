@@ -28,7 +28,8 @@ regex = { workspace = true }
 webp = "0.3.1"
 tempfile = "3.10"
 libc = "0.2"
-filmr = { git = "https://github.com/W-Mai/filmr", rev = "fee388e213dd77bfe6977b63071b1c136213373a", default-features = false }
+filmr = { path = "../../vendor/filmr", default-features = false }
 
 [dev-dependencies]
 rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
+filmr-pinned = { package = "filmr", git = "https://github.com/W-Mai/filmr", rev = "fee388e213dd77bfe6977b63071b1c136213373a", default-features = false }

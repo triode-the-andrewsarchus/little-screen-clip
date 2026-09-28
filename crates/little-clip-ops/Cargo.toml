@@ -25,7 +25,7 @@ midly = "0.5"
 rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }
 kamadak-exif = "0.6.1"
 rayon = { workspace = true }
-ntsc-rs = { git = "https://github.com/ntsc-rs/ntsc-rs", rev = "88f2df9a27863097eaffd8d1fe0080a174dfd4a5", package = "ntsc-rs", default-features = false, features = ["std", "rayon"] }
+ntsc-rs = { path = "../../vendor/ntsc-rs", default-features = false, features = ["std", "rayon"] }
 scenix-loader = "1.5.0"
 scenix-mesh = "1.5.0"
 scenix-math = "1.5.0"

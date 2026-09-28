@@ -21,8 +21,8 @@ use little_clip_ops::creative_fx::{
     DitherMethod, DitherPaletteParams, LensAberrationParams, NtscChromaLowpass, NtscDemodulation,
     NtscParams, NtscPhaseShift, PaperTint, PixelSortCriteria, PixelSortDirection, PixelSortOrder,
     PixelSortParams, RetroPalette, StructureParams, TrichromaticMode, TrichromaticParams,
-    VhsTapeSpeed, apply_creative_fx, apply_creative_fx_with_masks, default_preset_for_fx,
-    presets_for_fx, trichromatic_intersection_box,
+    VhsTapeSpeed, apply_creative_fx, apply_creative_fx_with_masks_cancellable,
+    default_preset_for_fx, presets_for_fx, trichromatic_intersection_box,
 };
 use little_clip_ops::decorrelation_stretch::{
     DecorrelationMatrixMode, DecorrelationStats, DecorrelationStretchParams,
@@ -411,6 +411,8 @@ impl ImagePreviewState {
     }
 
     pub(crate) fn mark_pixels_changed(&mut self) {
+        self.film_sim_state.cancel_render();
+        self.creative_fx_state.cancel_render();
         self.cancel_optimizer();
         self.cancel_optipng_process();
         self.film_sim_state.cancel_thumbnail_batch();
@@ -1223,9 +1225,11 @@ impl ImagePreviewState {
         let prev_mode = self.active_mode;
         self.active_mode = target_mode;
         if prev_mode == ImageToolMode::FilmSim && target_mode != ImageToolMode::FilmSim {
+            self.film_sim_state.cancel_render();
             self.film_sim_state.cancel_thumbnail_batch();
         }
         if prev_mode == ImageToolMode::CreativeFx && target_mode != ImageToolMode::CreativeFx {
+            self.creative_fx_state.cancel_render();
             self.cancel_creative_fx_thumbnail_batch();
         }
         if prev_mode == ImageToolMode::Ocr
@@ -4146,6 +4150,7 @@ mod tests {
         .unwrap();
         let item = ClipItem::from_image(png_bytes, 16, 16, "image/png");
         let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
+        state.active_mode = ImageToolMode::CreativeFx;
 
         // 1. Verify depth mask is disabled by default across effects
         assert!(!state.creative_fx_state.depth_mask_for_active_fx().enabled);

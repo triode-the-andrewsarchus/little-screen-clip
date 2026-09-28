@@ -72,6 +72,75 @@ mod ownership_tests {
         state
     }
 
+    #[test]
+    fn creative_render_tokens_cancel_on_edits_exit_and_drop_then_reentry_renders() {
+        let mut state = state();
+        state.run_creative_fx_render();
+        let parameter_job = state
+            .creative_fx_state
+            .render_cancel
+            .as_ref()
+            .unwrap()
+            .clone();
+        state.creative_fx_state.mark_dirty();
+        assert!(parameter_job.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!state.creative_fx_state.is_rendering);
+        assert!(state.creative_fx_state.render_rx.is_none());
+
+        state.run_creative_fx_render();
+        let pixel_job = state
+            .creative_fx_state
+            .render_cancel
+            .as_ref()
+            .unwrap()
+            .clone();
+        state.mark_pixels_changed();
+        assert!(pixel_job.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!state.creative_fx_state.is_rendering);
+
+        state.run_creative_fx_render();
+        let exit_job = state
+            .creative_fx_state
+            .render_cancel
+            .as_ref()
+            .unwrap()
+            .clone();
+        state.set_tool_mode(ImageToolMode::View);
+        assert!(exit_job.load(std::sync::atomic::Ordering::Acquire));
+        state.set_tool_mode(ImageToolMode::CreativeFx);
+        assert!(state.creative_fx_state.is_rendering);
+        let drop_job = state
+            .creative_fx_state
+            .render_cancel
+            .as_ref()
+            .unwrap()
+            .clone();
+        drop(state);
+        assert!(drop_job.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[test]
+    fn replacing_active_mask_cancels_old_creative_render() {
+        let mut state = state();
+        state.creative_fx_state.lens_params.depth_mask.enabled = true;
+        state.run_creative_fx_render();
+        let old_job = state
+            .creative_fx_state
+            .render_cancel
+            .as_ref()
+            .unwrap()
+            .clone();
+        let stamp = state.current_creative_fx_mask_stamp();
+        state.accept_creative_fx_depth_mask(
+            stamp,
+            RgbaImage::from_pixel(8, 8, image::Rgba([128, 128, 128, 255])),
+            true,
+        );
+        assert!(old_job.load(std::sync::atomic::Ordering::Acquire));
+        assert!(state.creative_fx_state.is_rendering);
+        assert!(state.creative_fx_state.render_cancel.is_some());
+    }
+
     #[cfg(unix)]
     fn sleeping_command(label: &str) -> (String, Vec<String>, std::path::PathBuf) {
         let script = std::env::temp_dir().join(format!(
@@ -712,6 +781,7 @@ pub struct CreativeFxState {
     pub render_rx: Option<std::sync::mpsc::Receiver<CreativeFxMsg>>,
     render_stamp: Option<CreativeFxRenderStamp>,
     preview_stamp: Option<CreativeFxRenderStamp>,
+    render_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub render_error: Option<String>,
 
     // Async thumbnail worker (Sidebar 42x28 mini-photos for each FX)
@@ -772,6 +842,7 @@ impl Default for CreativeFxState {
             render_rx: None,
             render_stamp: None,
             preview_stamp: None,
+            render_cancel: None,
             render_error: None,
             fx_thumbnails: std::collections::HashMap::new(),
             pending_thumbnails: Vec::new(),
@@ -803,8 +874,18 @@ impl Default for CreativeFxState {
 
 impl CreativeFxState {
     pub fn mark_dirty(&mut self) {
+        self.cancel_render();
         self.params_dirty_at = Some(std::time::Instant::now());
         self.params_revision = self.params_revision.wrapping_add(1);
+    }
+
+    pub(crate) fn cancel_render(&mut self) {
+        if let Some(cancel) = self.render_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        self.render_rx = None;
+        self.render_stamp = None;
+        self.is_rendering = false;
     }
 
     fn select_fx(&mut self, fx_type: CreativeFxType) {
@@ -1056,19 +1137,28 @@ impl ImagePreviewState {
         self.creative_fx_state.is_rendering = true;
         self.creative_fx_state.render_error = None;
         self.creative_fx_state.params_dirty_at = None;
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.creative_fx_state.render_cancel = Some(cancelled.clone());
 
         std::thread::spawn(move || {
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
             let start = std::time::Instant::now();
             let process_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                apply_creative_fx_with_masks(
+                apply_creative_fx_with_masks_cancellable(
                     &input_rgba,
                     cached_depth.as_ref(),
                     cached_background_removal.as_ref(),
                     &params,
+                    &cancelled,
                 )
             }));
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
             match process_result {
-                Ok(out_rgba) => {
+                Ok(Some(out_rgba)) => {
                     let duration_ms = start.elapsed().as_millis();
                     let _ = tx.send(CreativeFxMsg::Done {
                         stamp,
@@ -1076,6 +1166,7 @@ impl ImagePreviewState {
                         duration_ms,
                     });
                 }
+                Ok(None) => {}
                 Err(e) => {
                     let err_msg = if let Some(s) = e.downcast_ref::<&str>() {
                         s.to_string()
@@ -1293,6 +1384,16 @@ impl ImagePreviewState {
     }
 
     fn poll_creative_fx_render(&mut self) {
+        if self
+            .creative_fx_state
+            .render_stamp
+            .as_ref()
+            .is_some_and(|stamp| stamp != &self.creative_fx_render_stamp())
+            || (self.creative_fx_state.is_rendering
+                && self.active_mode != ImageToolMode::CreativeFx)
+        {
+            self.creative_fx_state.cancel_render();
+        }
         let Some(rx) = self.creative_fx_state.render_rx.take() else {
             return;
         };
@@ -1317,6 +1418,7 @@ impl ImagePreviewState {
                 }
                 self.creative_fx_state.is_rendering = false;
                 self.creative_fx_state.render_stamp = None;
+                self.creative_fx_state.render_cancel = None;
             }
             Ok(CreativeFxMsg::Error { stamp, message }) => {
                 let is_current = self.creative_fx_state.render_stamp.as_ref() == Some(&stamp)
@@ -1330,6 +1432,7 @@ impl ImagePreviewState {
                 }
                 self.creative_fx_state.is_rendering = false;
                 self.creative_fx_state.render_stamp = None;
+                self.creative_fx_state.render_cancel = None;
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 self.creative_fx_state.render_rx = Some(rx);
@@ -1337,6 +1440,7 @@ impl ImagePreviewState {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.creative_fx_state.is_rendering = false;
                 self.creative_fx_state.render_stamp = None;
+                self.creative_fx_state.render_cancel = None;
             }
         }
     }

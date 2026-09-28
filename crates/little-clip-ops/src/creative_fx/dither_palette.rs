@@ -268,9 +268,20 @@ fn apply_contrast_val(val: f32, contrast: f32) -> f32 {
 
 /// Apply dithering and quantize to retro hardware palette.
 pub fn apply_dither_palette(img: &RgbaImage, params: &DitherPaletteParams) -> RgbaImage {
+    apply_dither_palette_cancellable(img, params, None).expect("uncancelled dithering cannot stop")
+}
+
+pub(super) fn apply_dither_palette_cancellable(
+    img: &RgbaImage,
+    params: &DitherPaletteParams,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<RgbaImage> {
+    if super::is_cancelled(cancel) {
+        return None;
+    }
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 {
-        return img.clone();
+        return Some(img.clone());
     }
 
     let scale = params.pixel_scale.clamp(1, 16) as u32;
@@ -281,6 +292,9 @@ pub fn apply_dither_palette(img: &RgbaImage, params: &DitherPaletteParams) -> Rg
     // Sample downscaled grid cells
     let mut downsampled: Vec<[f32; 3]> = Vec::with_capacity((dw * dh) as usize);
     for dy in 0..dh {
+        if super::is_cancelled(cancel) {
+            return None;
+        }
         let src_y = (dy * scale + scale / 2).min(h - 1);
         for dx in 0..dw {
             let src_x = (dx * scale + scale / 2).min(w - 1);
@@ -299,6 +313,9 @@ pub fn apply_dither_palette(img: &RgbaImage, params: &DitherPaletteParams) -> Rg
         let mut nxt_err: Vec<[f32; 3]> = vec![[0.0, 0.0, 0.0]; dw as usize];
 
         for dy in 0..dh {
+            if super::is_cancelled(cancel) {
+                return None;
+            }
             for dx in 0..dw {
                 let idx = (dy * dw + dx) as usize;
                 let base = downsampled[idx];
@@ -341,6 +358,9 @@ pub fn apply_dither_palette(img: &RgbaImage, params: &DitherPaletteParams) -> Rg
     } else {
         // Ordered dithering (Bayer, Blue Noise, or None)
         for dy in 0..dh {
+            if super::is_cancelled(cancel) {
+                return None;
+            }
             for dx in 0..dw {
                 let idx = (dy * dw + dx) as usize;
                 let base = downsampled[idx];
@@ -373,6 +393,9 @@ pub fn apply_dither_palette(img: &RgbaImage, params: &DitherPaletteParams) -> Rg
     // Upscale quantized pixel blocks to output image
     let mut out = RgbaImage::new(w, h);
     out.enumerate_rows_mut().par_bridge().for_each(|(y, row)| {
+        if super::is_cancelled(cancel) {
+            return;
+        }
         let dy = (y / scale).min(dh - 1);
         for (x, _, pixel) in row {
             let dx = (x / scale).min(dw - 1);
@@ -382,5 +405,5 @@ pub fn apply_dither_palette(img: &RgbaImage, params: &DitherPaletteParams) -> Rg
         }
     });
 
-    out
+    (!super::is_cancelled(cancel)).then_some(out)
 }

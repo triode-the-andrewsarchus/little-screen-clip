@@ -5,7 +5,16 @@ const DEFAULT_WB_STRENGTH: f32 = 0.35;
 
 /// Correct an Auto-WB cast only from pixels that are plausible neutral highlights.
 /// Whole-image gray-world averages mistake warm or colorful scenes for lighting casts.
+#[cfg(test)]
 fn apply_auto_white_balance(image: &mut image::RgbImage, strength: f32) -> bool {
+    apply_auto_white_balance_inner(image, strength, None)
+}
+
+fn apply_auto_white_balance_inner(
+    image: &mut image::RgbImage,
+    strength: f32,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> bool {
     let strength = strength.clamp(0.0, 1.0);
     if strength == 0.0 || image.is_empty() {
         return false;
@@ -17,6 +26,11 @@ fn apply_auto_white_balance(image: &mut image::RgbImage, strength: f32) -> bool 
     let mut luma_squared_sum = 0.0_f32;
     let sample_stride = ((image.width() as usize * image.height() as usize) / 100_000).max(1);
     for (index, pixel) in image.pixels().enumerate() {
+        if index.is_multiple_of(4096)
+            && cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return false;
+        }
         if index % sample_stride != 0 {
             continue;
         }
@@ -55,16 +69,29 @@ fn apply_auto_white_balance(image: &mut image::RgbImage, strength: f32) -> bool 
         return false;
     }
 
-    apply_white_balance_gains(image, gains, strength)
+    apply_white_balance_gains_inner(image, gains, strength, cancel)
 }
 
+#[cfg(test)]
 fn gray_world_gains(image: &image::RgbImage) -> Option<[f32; 3]> {
+    gray_world_gains_inner(image, None)
+}
+
+fn gray_world_gains_inner(
+    image: &image::RgbImage,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<[f32; 3]> {
     let mut sums = [0.0_f32; 3];
     let count = image.width() as f32 * image.height() as f32;
     if count == 0.0 {
         return None;
     }
-    for pixel in image.pixels() {
+    for (index, pixel) in image.pixels().enumerate() {
+        if index.is_multiple_of(4096)
+            && cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return None;
+        }
         for (sum, channel) in sums.iter_mut().zip(pixel.0) {
             *sum += f32::from(channel);
         }
@@ -74,13 +101,26 @@ fn gray_world_gains(image: &image::RgbImage) -> Option<[f32; 3]> {
     Some(means.map(|mean| (target / mean.max(1.0)).clamp(0.7, 1.4)))
 }
 
+#[cfg(test)]
 fn white_patch_gains(image: &image::RgbImage) -> Option<[f32; 3]> {
+    white_patch_gains_inner(image, None)
+}
+
+fn white_patch_gains_inner(
+    image: &image::RgbImage,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<[f32; 3]> {
     let pixel_count = image.width() as usize * image.height() as usize;
     if pixel_count == 0 {
         return None;
     }
     let mut histograms = [[0_usize; 256]; 3];
-    for pixel in image.pixels() {
+    for (index, pixel) in image.pixels().enumerate() {
+        if index.is_multiple_of(4096)
+            && cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return None;
+        }
         for (histogram, channel) in histograms.iter_mut().zip(pixel.0) {
             histogram[usize::from(channel)] += 1;
         }
@@ -102,12 +142,27 @@ fn white_patch_gains(image: &image::RgbImage) -> Option<[f32; 3]> {
     Some(white_points.map(|white_point| (target / white_point.max(1.0)).clamp(0.7, 1.4)))
 }
 
+#[cfg(test)]
 fn apply_white_balance_gains(image: &mut image::RgbImage, gains: [f32; 3], strength: f32) -> bool {
+    apply_white_balance_gains_inner(image, gains, strength, None)
+}
+
+fn apply_white_balance_gains_inner(
+    image: &mut image::RgbImage,
+    gains: [f32; 3],
+    strength: f32,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> bool {
     let strength = strength.clamp(0.0, 1.0);
     if strength == 0.0 {
         return false;
     }
-    for pixel in image.pixels_mut() {
+    for (index, pixel) in image.pixels_mut().enumerate() {
+        if index.is_multiple_of(4096)
+            && cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+        {
+            return false;
+        }
         for (channel, gain) in pixel.0.iter_mut().zip(gains) {
             let adjusted_gain = 1.0 + (gain - 1.0) * strength;
             *channel = (f32::from(*channel) * adjusted_gain)
@@ -305,6 +360,38 @@ mod render_identity_tests {
     use super::{FilmSimMsg, ImagePreviewState};
     use crate::{AppConfig, image_preview::ImageToolMode};
 
+    #[test]
+    fn cancellable_filmr_preserves_pinned_pixels_and_honors_pre_cancel() {
+        let image = image::RgbImage::from_fn(32, 24, |x, y| {
+            image::Rgb([
+                ((x * 7 + y * 3) % 256) as u8,
+                ((x * 5 + y * 11) % 256) as u8,
+                ((x * 13 + y * 17) % 256) as u8,
+            ])
+        });
+        let stock = filmr::presets::kodak::KODAK_PORTRA_400();
+        let pinned_stock = filmr_pinned::presets::kodak::KODAK_PORTRA_400();
+        let config = filmr::processor::SimulationConfig {
+            enable_grain: false,
+            ..Default::default()
+        };
+        let pinned_config = filmr_pinned::processor::SimulationConfig {
+            enable_grain: false,
+            ..Default::default()
+        };
+        let pinned = filmr_pinned::processor::process_image(&image, &pinned_stock, &pinned_config);
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        assert_eq!(
+            filmr::processor::process_image_cancellable(&image, &stock, &config, &cancelled),
+            Some(pinned)
+        );
+        cancelled.store(true, std::sync::atomic::Ordering::Release);
+        assert!(
+            filmr::processor::process_image_cancellable(&image, &stock, &config, &cancelled)
+                .is_none()
+        );
+    }
+
     fn state() -> ImagePreviewState {
         let image = image::RgbaImage::from_pixel(4, 4, image::Rgba([64, 96, 128, 255]));
         let mut bytes = Vec::new();
@@ -330,6 +417,34 @@ mod render_identity_tests {
         state.film_sim_state.render_rx = Some(rx);
         state.film_sim_state.is_rendering = true;
         state.film_sim_state.render_stamp = Some(state.current_film_sim_render_stamp());
+    }
+
+    #[test]
+    fn film_render_tokens_cancel_on_edits_exit_and_drop_then_reentry_renders() {
+        let mut state = state();
+        state.active_mode = ImageToolMode::FilmSim;
+        state.run_film_sim_render();
+        let parameter_job = state.film_sim_state.render_cancel.as_ref().unwrap().clone();
+        state.film_sim_state.mark_dirty();
+        assert!(parameter_job.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!state.film_sim_state.is_rendering);
+        assert!(state.film_sim_state.render_rx.is_none());
+
+        state.run_film_sim_render();
+        let pixel_job = state.film_sim_state.render_cancel.as_ref().unwrap().clone();
+        state.mark_pixels_changed();
+        assert!(pixel_job.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!state.film_sim_state.is_rendering);
+
+        state.run_film_sim_render();
+        let exit_job = state.film_sim_state.render_cancel.as_ref().unwrap().clone();
+        state.set_tool_mode(ImageToolMode::View);
+        assert!(exit_job.load(std::sync::atomic::Ordering::Acquire));
+        state.set_tool_mode(ImageToolMode::FilmSim);
+        assert!(state.film_sim_state.is_rendering);
+        let drop_job = state.film_sim_state.render_cancel.as_ref().unwrap().clone();
+        drop(state);
+        assert!(drop_job.load(std::sync::atomic::Ordering::Acquire));
     }
 
     #[test]
@@ -402,19 +517,32 @@ fn process_film_image(
     stock: &filmr::film::FilmStock,
     config: &SimulationConfig,
 ) -> image::RgbImage {
+    process_film_image_inner(image, stock, config, None)
+        .expect("uncancelled film processing cannot stop")
+}
+
+fn process_film_image_inner(
+    image: &image::RgbImage,
+    stock: &filmr::film::FilmStock,
+    config: &SimulationConfig,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<image::RgbImage> {
+    if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+        return None;
+    }
     let mut source = image.clone();
     let mut config = config.clone();
     let gains = match config.white_balance_mode {
         WhiteBalanceMode::Auto => {
-            apply_auto_white_balance(&mut source, config.white_balance_strength);
+            apply_auto_white_balance_inner(&mut source, config.white_balance_strength, cancel);
             None
         }
-        WhiteBalanceMode::Gray => gray_world_gains(&source),
-        WhiteBalanceMode::White => white_patch_gains(&source),
+        WhiteBalanceMode::Gray => gray_world_gains_inner(&source, cancel),
+        WhiteBalanceMode::White => white_patch_gains_inner(&source, cancel),
         WhiteBalanceMode::Off => None,
     };
     if let Some(gains) = gains {
-        apply_white_balance_gains(&mut source, gains, config.white_balance_strength);
+        apply_white_balance_gains_inner(&mut source, gains, config.white_balance_strength, cancel);
     }
     if config.white_balance_mode != WhiteBalanceMode::Off {
         // Apply these modes before film simulation. The pinned filmr release currently
@@ -422,7 +550,13 @@ fn process_film_image(
         config.white_balance_mode = WhiteBalanceMode::Off;
         config.white_balance_strength = 0.0;
     }
-    filmr::processor::process_image(&source, stock, &config)
+    if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+        return None;
+    }
+    match cancel {
+        Some(flag) => filmr::processor::process_image_cancellable(&source, stock, &config, flag),
+        None => Some(filmr::processor::process_image(&source, stock, &config)),
+    }
 }
 
 /// Descriptor for one entry in the film stock picker list.
@@ -856,14 +990,34 @@ pub fn apply_film_sim_post_adjustments(
     contrast: f32,
     tint: f32,
 ) -> image::RgbaImage {
+    apply_film_sim_post_adjustments_inner(out_rgb, contrast, tint, None)
+        .expect("uncancelled film adjustment cannot stop")
+}
+
+fn apply_film_sim_post_adjustments_inner(
+    out_rgb: &image::RgbImage,
+    contrast: f32,
+    tint: f32,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<image::RgbaImage> {
+    if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+        return None;
+    }
     let has_contrast = contrast.abs() > 0.001;
     let has_tint = tint.abs() > 0.001;
 
     if !has_contrast && !has_tint {
-        return image::RgbaImage::from_fn(out_rgb.width(), out_rgb.height(), |x, y| {
-            let p = out_rgb.get_pixel(x, y);
-            image::Rgba([p[0], p[1], p[2], 255])
-        });
+        let mut out = image::RgbaImage::new(out_rgb.width(), out_rgb.height());
+        for y in 0..out_rgb.height() {
+            if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+                return None;
+            }
+            for x in 0..out_rgb.width() {
+                let p = out_rgb.get_pixel(x, y);
+                out.put_pixel(x, y, image::Rgba([p[0], p[1], p[2], 255]));
+            }
+        }
+        return Some(out);
     }
 
     // Precompute 256-entry S-curve LUT for contrast
@@ -903,17 +1057,24 @@ pub fn apply_film_sim_post_adjustments(
         (1.0, 1.0, 1.0)
     };
 
-    image::RgbaImage::from_fn(out_rgb.width(), out_rgb.height(), |x, y| {
-        let p = out_rgb.get_pixel(x, y);
-        let r_c = lut[p[0] as usize] as f32;
-        let g_c = lut[p[1] as usize] as f32;
-        let b_c = lut[p[2] as usize] as f32;
+    let mut out = image::RgbaImage::new(out_rgb.width(), out_rgb.height());
+    for y in 0..out_rgb.height() {
+        if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+            return None;
+        }
+        for x in 0..out_rgb.width() {
+            let p = out_rgb.get_pixel(x, y);
+            let r_c = lut[p[0] as usize] as f32;
+            let g_c = lut[p[1] as usize] as f32;
+            let b_c = lut[p[2] as usize] as f32;
 
-        let r_final = (r_c * r_mult).clamp(0.0, 255.0).round() as u8;
-        let g_final = (g_c * g_mult).clamp(0.0, 255.0).round() as u8;
-        let b_final = (b_c * b_mult).clamp(0.0, 255.0).round() as u8;
-        image::Rgba([r_final, g_final, b_final, 255])
-    })
+            let r_final = (r_c * r_mult).clamp(0.0, 255.0).round() as u8;
+            let g_final = (g_c * g_mult).clamp(0.0, 255.0).round() as u8;
+            let b_final = (b_c * b_mult).clamp(0.0, 255.0).round() as u8;
+            out.put_pixel(x, y, image::Rgba([r_final, g_final, b_final, 255]));
+        }
+    }
+    Some(out)
 }
 
 /// Messages sent from the film sim background render thread.
@@ -1066,6 +1227,7 @@ pub struct FilmSimState {
     pub render_error: Option<String>,
     pub(crate) render_stamp: Option<FilmSimRenderStamp>,
     pub(crate) preview_stamp: Option<FilmSimRenderStamp>,
+    render_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     parameter_revision: u64,
 
     // ── Async thumbnail worker (Sidebar 42x28 mini-photos) ──
@@ -1113,6 +1275,7 @@ impl Default for FilmSimState {
             render_error: None,
             render_stamp: None,
             preview_stamp: None,
+            render_cancel: None,
             parameter_revision: 0,
             stock_thumbnails: std::collections::HashMap::new(),
             pending_thumbnails: Vec::new(),
@@ -1131,6 +1294,7 @@ impl Default for FilmSimState {
 impl FilmSimState {
     /// Mark parameters as dirty (triggers debounced re-render for both main preview and thumbnails).
     pub fn mark_dirty(&mut self) {
+        self.cancel_render();
         self.cancel_thumbnail_batch();
         self.stock_thumbnails.clear();
         self.pending_thumbnails.clear();
@@ -1138,6 +1302,15 @@ impl FilmSimState {
         let now = std::time::Instant::now();
         self.params_dirty_at = Some(now);
         self.thumbnail_dirty_at = Some(now + std::time::Duration::from_millis(250));
+    }
+
+    pub(crate) fn cancel_render(&mut self) {
+        if let Some(cancel) = self.render_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        self.render_rx = None;
+        self.render_stamp = None;
+        self.is_rendering = false;
     }
 
     pub(crate) fn cancel_thumbnail_batch(&mut self) {
@@ -1208,15 +1381,33 @@ impl ImagePreviewState {
         self.film_sim_state.render_rx = Some(rx);
         self.film_sim_state.is_rendering = true;
         self.film_sim_state.render_error = None;
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.film_sim_state.render_cancel = Some(cancelled.clone());
 
         std::thread::spawn(move || {
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
             let start = std::time::Instant::now();
             let process_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                process_film_image(&rgb_img, &stock, &config)
+                process_film_image_inner(&rgb_img, &stock, &config, Some(&cancelled))
             }));
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
             match process_result {
-                Ok(out_rgb) => {
-                    let out_rgba = apply_film_sim_post_adjustments(&out_rgb, contrast, tint);
+                Ok(Some(out_rgb)) => {
+                    let Some(out_rgba) = apply_film_sim_post_adjustments_inner(
+                        &out_rgb,
+                        contrast,
+                        tint,
+                        Some(&cancelled),
+                    ) else {
+                        return;
+                    };
+                    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                        return;
+                    }
                     let duration_ms = start.elapsed().as_millis();
                     let _ = tx.send(FilmSimMsg::Done {
                         stamp,
@@ -1224,6 +1415,7 @@ impl ImagePreviewState {
                         duration_ms,
                     });
                 }
+                Ok(None) => {}
                 Err(e) => {
                     let err_msg = if let Some(s) = e.downcast_ref::<&str>() {
                         s.to_string()
@@ -1358,6 +1550,15 @@ impl ImagePreviewState {
 
     pub fn poll_film_sim(&mut self) {
         let current_stamp = self.current_film_sim_render_stamp();
+        if self
+            .film_sim_state
+            .render_stamp
+            .as_ref()
+            .is_some_and(|stamp| stamp != &current_stamp)
+            || (self.film_sim_state.is_rendering && self.active_mode != ImageToolMode::FilmSim)
+        {
+            self.film_sim_state.cancel_render();
+        }
         if let Some(rx) = self.film_sim_state.render_rx.take() {
             match rx.try_recv() {
                 Ok(FilmSimMsg::Done {
@@ -1376,6 +1577,7 @@ impl ImagePreviewState {
                     }
                     self.film_sim_state.is_rendering = false;
                     self.film_sim_state.render_stamp = None;
+                    self.film_sim_state.render_cancel = None;
                 }
                 Ok(FilmSimMsg::Error { stamp, message }) => {
                     if stamp == current_stamp
@@ -1385,6 +1587,7 @@ impl ImagePreviewState {
                     }
                     self.film_sim_state.is_rendering = false;
                     self.film_sim_state.render_stamp = None;
+                    self.film_sim_state.render_cancel = None;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     self.film_sim_state.render_rx = Some(rx);
@@ -1392,6 +1595,7 @@ impl ImagePreviewState {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.film_sim_state.is_rendering = false;
                     self.film_sim_state.render_stamp = None;
+                    self.film_sim_state.render_cancel = None;
                 }
             }
         }

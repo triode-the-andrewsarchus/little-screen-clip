@@ -1,6 +1,6 @@
 //! Lens chromatic aberration effect.
 
-use super::{DepthMaskConfig, sample_bilinear_channel};
+use super::{DepthMaskConfig, is_cancelled, sample_bilinear_channel};
 use image::{Rgba, RgbaImage};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -32,9 +32,21 @@ impl Default for LensAberrationParams {
 
 /// Apply lens-shaped chromatic aberration to an RGBA image.
 pub fn apply_lens_aberration(img: &RgbaImage, params: &LensAberrationParams) -> RgbaImage {
+    apply_lens_aberration_cancellable(img, params, None)
+        .expect("uncancelled lens aberration cannot stop")
+}
+
+pub(super) fn apply_lens_aberration_cancellable(
+    img: &RgbaImage,
+    params: &LensAberrationParams,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Option<RgbaImage> {
+    if is_cancelled(cancel) {
+        return None;
+    }
     let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 || params.strength <= 0.001 {
-        return img.clone();
+        return Some(img.clone());
     }
 
     let cx = (w as f32 - 1.0) / 2.0;
@@ -60,6 +72,9 @@ pub fn apply_lens_aberration(img: &RgbaImage, params: &LensAberrationParams) -> 
     let mut out = RgbaImage::new(w, h);
 
     out.enumerate_rows_mut().par_bridge().for_each(|(y, row)| {
+        if is_cancelled(cancel) {
+            return;
+        }
         let dy = y as f32 - cy;
         for (x, _, pixel) in row {
             let dx = x as f32 - cx;
@@ -98,5 +113,5 @@ pub fn apply_lens_aberration(img: &RgbaImage, params: &LensAberrationParams) -> 
         }
     });
 
-    out
+    (!is_cancelled(cancel)).then_some(out)
 }

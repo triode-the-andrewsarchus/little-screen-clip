@@ -1,0 +1,702 @@
+use crate::grain::GrainModel;
+use crate::physics;
+use crate::spectral::{FilmSensitivities, FilmSpectralParams};
+
+/// Film Modeling Module
+///
+/// Handles Characteristic Curves (H-D Curves) and Color Coupling.
+/// Section 3 & 5 of the documentation.
+use serde::{Deserialize, Serialize};
+
+/// Film rendering style
+/// Controls the balance between physical accuracy and artistic appeal
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum FilmStyle {
+    /// Physical accuracy - based on manufacturer datasheets
+    #[default]
+    Accurate,
+    /// Enhanced for visual appeal - boosted colors, contrast, grain
+    Artistic,
+    /// Aged/faded film look - reduced contrast, color shifts
+    Vintage,
+    /// High contrast black & white look
+    HighContrast,
+    /// Soft, muted pastel tones
+    Pastel,
+}
+
+impl FilmStyle {
+    /// Returns all available film styles
+    pub const fn all() -> [FilmStyle; 5] {
+        [
+            FilmStyle::Accurate,
+            FilmStyle::Artistic,
+            FilmStyle::Vintage,
+            FilmStyle::HighContrast,
+            FilmStyle::Pastel,
+        ]
+    }
+
+    /// Returns a short display name
+    pub const fn name(&self) -> &'static str {
+        match self {
+            FilmStyle::Accurate => "Accurate",
+            FilmStyle::Artistic => "Artistic",
+            FilmStyle::Vintage => "Vintage",
+            FilmStyle::HighContrast => "High Contrast",
+            FilmStyle::Pastel => "Pastel",
+        }
+    }
+
+    /// Returns a description for UI
+    pub const fn description(&self) -> &'static str {
+        match self {
+            FilmStyle::Accurate => "Physical accuracy based on datasheets",
+            FilmStyle::Artistic => "Enhanced colors, contrast, and grain",
+            FilmStyle::Vintage => "Aged film with faded colors",
+            FilmStyle::HighContrast => "Dramatic B&W look",
+            FilmStyle::Pastel => "Soft, muted tones",
+        }
+    }
+
+    /// Returns a short description for simple mode
+    pub const fn short_description(&self) -> &'static str {
+        match self {
+            FilmStyle::Accurate => "Physical accuracy",
+            FilmStyle::Artistic => "Enhanced colors & grain",
+            FilmStyle::Vintage => "Aged film look",
+            FilmStyle::HighContrast => "Dramatic B&W",
+            FilmStyle::Pastel => "Soft, muted tones",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilmStockCollection {
+    pub stocks: std::collections::HashMap<String, FilmStock>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SegmentedCurve {
+    pub d_min: f32,
+    pub d_max: f32,
+    pub gamma: f32,
+    pub exposure_offset: f32, // E0 in the doc, controls speed
+    pub shoulder_point: f32,  // Density where shoulder softening begins
+}
+
+impl SegmentedCurve {
+    pub fn new(d_min: f32, d_max: f32, gamma: f32, exposure_offset: f32) -> Self {
+        Self {
+            d_min,
+            d_max,
+            gamma,
+            exposure_offset,
+            shoulder_point: 0.8 * d_max, // Default to 80% of D_max
+        }
+    }
+
+    /// Maps log10(Exposure) to Density.
+    /// Implements a simplified sigmoid-like S-curve based on the segmented model logic
+    /// but smoothed for better visual results if exact break points aren't provided.
+    pub fn map(&self, log_e: f32) -> f32 {
+        self.map_erf(log_e)
+    }
+
+    /// Implementation using the Error Function (Erf), which corresponds to the
+    /// Gaussian distribution of crystal sensitivities. This is the scientifically
+    /// accurate model mentioned in the documentation.
+    ///
+    /// D(E) = D_min + (D_max - D_min) * (1 + erf((log E - log E0) / sigma)) / 2
+    pub fn map_erf(&self, log_e: f32) -> f32 {
+        let log_e0 = self.exposure_offset.log10();
+        let range = self.d_max - self.d_min;
+
+        if range <= 0.0 {
+            return self.d_min;
+        }
+
+        // Relationship between Gamma and Sigma:
+        // Gamma is the slope at the inflection point (log_e = log_e0).
+        // D'(log_e) = range * (1/sqrt(pi)) * exp(-z^2) * (1/sigma)
+        // At z=0, D' = range / (sigma * sqrt(pi))
+        // So Gamma = range / (sigma * sqrt(pi))
+        // Sigma = range / (Gamma * sqrt(pi))
+
+        let sqrt_pi = 1.772_453_9;
+        let sigma = range / (self.gamma * sqrt_pi);
+
+        let z = (log_e - log_e0) / sigma;
+
+        let val = 0.5 * (1.0 + physics::erf(z));
+        self.d_min + range * val
+    }
+
+    /// A smoother implementation using interpolation, closer to real film.
+    pub fn map_smooth(&self, log_e: f32) -> f32 {
+        let log_e0 = self.exposure_offset.log10();
+        let x = log_e - log_e0;
+
+        // A sigmoid that goes from D_min to D_max with slope gamma at origin
+        // y = D_min + (D_max - D_min) * (1 / (1 + exp(-k * x)))
+        // Derivative y' = range * k * sigmoid * (1-sigmoid). At x=0, sigmoid=0.5.
+        // y'(0) = range * k * 0.25 = gamma
+        // k = 4 * gamma / range
+
+        let range = self.d_max - self.d_min;
+        if range <= 0.0 {
+            return self.d_min;
+        }
+
+        let k = 4.0 * self.gamma / range;
+
+        let sigmoid = 1.0 / (1.0 + (-k * x).exp());
+        self.d_min + range * sigmoid
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum FilmType {
+    ColorNegative,
+    ColorSlide,
+    BwNegative,
+}
+
+/// Reciprocity Failure Parameters.
+///
+/// Describes how the film responds to long exposures (Schwarzschild effect).
+/// Effective Exposure = I * t / (1 + beta * (log10(t))^2)
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ReciprocityFailure {
+    /// The beta coefficient (sensitivity to time).
+    /// Typical values range from 0.05 to 0.3.
+    pub beta: f32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FilmStock {
+    /// Film Type (affects processing pipeline)
+    pub film_type: FilmType,
+
+    /// ISO Sensitivity (e.g. 400.0, 50.0).
+    /// Used for metadata and reciprocity calculations.
+    pub iso: f32,
+
+    /// Response of the Red-sensitive layer (Bottom Layer -> Cyan Dye)
+    pub r_curve: SegmentedCurve,
+    /// Response of the Green-sensitive layer (Middle Layer -> Magenta Dye)
+    pub g_curve: SegmentedCurve,
+    /// Response of the Blue-sensitive layer (Top Layer -> Yellow Dye)
+    pub b_curve: SegmentedCurve,
+
+    // 3x3 Matrix for crosstalk. Rows: R_out, G_out, B_out. Cols: R_in, G_in, B_in.
+    // D_out = Matrix * D_in
+    pub color_matrix: [[f32; 3]; 3],
+
+    /// Spectral Sensitivity Parameters.
+    /// Used to generate the spectral response curves at runtime.
+    pub spectral_params: FilmSpectralParams,
+
+    /// Grain parameters derived from RMS Granularity.
+    pub grain_model: GrainModel,
+
+    /// Resolution limit in line pairs per mm (lp/mm).
+    /// Used to simulate optical softness before grain.
+    pub resolution_lp_mm: f32,
+
+    /// Vignetting strength (0.0 = none, 1.0 = full cos⁴ falloff).
+    /// Simulates lens light falloff at edges.
+    pub vignette_strength: f32,
+
+    /// Reciprocity Failure parameters.
+    pub reciprocity: ReciprocityFailure,
+
+    /// Halation strength.
+    /// Simulates light reflecting off the film base back into the emulsion.
+    /// Primarily affects the Red layer (bottom layer) and spreads out (blur).
+    pub halation_strength: f32,
+
+    /// Linear light threshold for halation (0.0 to 1.0).
+    /// Only highlights above this threshold trigger halation.
+    pub halation_threshold: f32,
+
+    /// Blur radius for halation as a fraction of image width (e.g. 0.02).
+    /// Controls the spread of the glow.
+    pub halation_sigma: f32,
+
+    /// Tint color for the halation glow (RGB).
+    /// Usually reddish-orange [1.0, 0.4, 0.2] due to base reflection.
+    pub halation_tint: [f32; 3],
+
+    /// Manufacturer name (e.g., "Kodak", "Fujifilm", "Ilford").
+    #[serde(default)]
+    pub manufacturer: String,
+
+    /// Stock name (e.g., "Portra 400", "Velvia 50").
+    #[serde(default)]
+    pub name: String,
+
+    /// Optional custom layer stack for full-spectrum simulation.
+    /// When None, a default stack is used based on film_type.
+    #[serde(skip)]
+    pub layer_stack: Option<crate::film_layer::FilmLayerStack>,
+}
+
+impl FilmStock {
+    /// Create a custom film stock
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        film_type: FilmType,
+        iso: f32,
+        r_curve: SegmentedCurve,
+        g_curve: SegmentedCurve,
+        b_curve: SegmentedCurve,
+        color_matrix: [[f32; 3]; 3],
+        spectral_params: FilmSpectralParams,
+        grain_model: GrainModel,
+        resolution_lp_mm: f32,
+        reciprocity: ReciprocityFailure,
+        halation_strength: f32,
+        halation_threshold: f32,
+        halation_sigma: f32,
+        halation_tint: [f32; 3],
+        manufacturer: String,
+        name: String,
+    ) -> Self {
+        Self {
+            film_type,
+            iso,
+            r_curve,
+            g_curve,
+            b_curve,
+            spectral_params,
+            color_matrix,
+            grain_model,
+            resolution_lp_mm,
+            vignette_strength: 0.5,
+            reciprocity,
+            halation_strength,
+            halation_threshold,
+            halation_sigma,
+            halation_tint,
+            manufacturer,
+            name,
+            layer_stack: None,
+        }
+    }
+
+    /// Saturation score [0,1].
+    /// Narrower spectral bands = purer colors = higher saturation.
+    /// Also penalizes halation (light bleed desaturates) and cross-channel gamma mismatch.
+    pub fn saturation_score(&self) -> f32 {
+        let avg_width = (self.spectral_params.r_width
+            + self.spectral_params.g_width
+            + self.spectral_params.b_width)
+            / 3.0;
+        // Narrow width [20,60] → high saturation; map to [0,1]
+        let width_score = ((60.0 - avg_width) / 40.0).clamp(0.0, 1.0);
+        // Halation desaturates: strength [0,0.3] → penalty [0,0.3]
+        let halation_penalty = (self.halation_strength * 1.0).clamp(0.0, 0.3);
+        // Cross-channel gamma mismatch desaturates
+        let gamma_spread = (self.r_curve.gamma - self.b_curve.gamma).abs();
+        let mismatch_penalty = (gamma_spread * 0.5).clamp(0.0, 0.2);
+        (width_score - halation_penalty - mismatch_penalty).clamp(0.0, 1.0)
+    }
+
+    /// Contrast score [0,1] — higher gamma = more contrast.
+    pub fn contrast_score(&self) -> f32 {
+        let avg_gamma = (self.r_curve.gamma + self.g_curve.gamma + self.b_curve.gamma) / 3.0;
+        // gamma range [0.6, 1.5] → [0, 1]
+        ((avg_gamma - 0.6) / 0.9).clamp(0.0, 1.0)
+    }
+
+    pub fn full_name(&self) -> String {
+        if self.manufacturer.is_empty() {
+            self.name.clone()
+        } else {
+            format!("{} {}", self.manufacturer, self.name)
+        }
+    }
+
+    /// Generate spectral sensitivities from parameters
+    pub fn get_spectral_sensitivities(&self) -> FilmSensitivities {
+        FilmSensitivities::from_params(self.spectral_params)
+    }
+
+    /// Helper to modify halation strength (common operation)
+    pub fn with_halation(mut self, strength: f32) -> Self {
+        self.halation_strength = strength;
+        self
+    }
+
+    /// Apply a rendering style to the film stock
+    /// Modifies parameters to achieve different aesthetic goals
+    pub fn with_style(mut self, style: FilmStyle) -> Self {
+        match style {
+            FilmStyle::Accurate => self, // No changes
+            FilmStyle::Artistic => {
+                // Boost color separation
+                self.color_matrix = boost_color_matrix(self.color_matrix, 1.15);
+
+                // Increase contrast
+                self.r_curve.gamma *= 1.12;
+                self.g_curve.gamma *= 1.12;
+                self.b_curve.gamma *= 1.12;
+
+                // More visible grain
+                self.grain_model.alpha *= 1.6;
+                self.grain_model.blur_radius *= 1.15;
+
+                // Enhanced halation
+                self.halation_strength *= 1.4;
+                self.halation_sigma *= 1.2;
+
+                self
+            }
+            FilmStyle::Vintage => {
+                // Reduce contrast (faded look)
+                self.r_curve.gamma *= 0.85;
+                self.g_curve.gamma *= 0.85;
+                self.b_curve.gamma *= 0.85;
+
+                // Increase D_min (fog/base density)
+                self.r_curve.d_min += 0.08;
+                self.g_curve.d_min += 0.08;
+                self.b_curve.d_min += 0.08;
+
+                // Color shift (yellowing)
+                self.color_matrix[0][1] += 0.05; // R from G (yellow shift)
+                self.color_matrix[1][2] -= 0.03; // G less from B (cyan loss)
+
+                // More grain (aging)
+                self.grain_model.alpha *= 1.3;
+
+                self
+            }
+            FilmStyle::HighContrast => {
+                // Extreme contrast
+                self.r_curve.gamma *= 1.35;
+                self.g_curve.gamma *= 1.35;
+                self.b_curve.gamma *= 1.35;
+
+                // Earlier shoulder (crushed highlights)
+                self.r_curve.shoulder_point *= 0.85;
+                self.g_curve.shoulder_point *= 0.85;
+                self.b_curve.shoulder_point *= 0.85;
+
+                // Reduce color (B&W-like for color films)
+                if self.film_type != FilmType::BwNegative {
+                    self.color_matrix = reduce_saturation(self.color_matrix, 0.7);
+                }
+
+                // Prominent grain
+                self.grain_model.alpha *= 2.0;
+                self.grain_model.roughness = self.grain_model.roughness.max(0.7);
+
+                self
+            }
+            FilmStyle::Pastel => {
+                // Reduce contrast (soft)
+                self.r_curve.gamma *= 0.80;
+                self.g_curve.gamma *= 0.80;
+                self.b_curve.gamma *= 0.80;
+
+                // Lift shadows (reduce D_max)
+                self.r_curve.d_max *= 0.90;
+                self.g_curve.d_max *= 0.90;
+                self.b_curve.d_max *= 0.90;
+
+                // Muted colors
+                self.color_matrix = reduce_saturation(self.color_matrix, 0.75);
+
+                // Fine grain
+                self.grain_model.alpha *= 0.7;
+
+                // Soft halation
+                self.halation_strength *= 1.2;
+                self.halation_threshold *= 0.95;
+
+                self
+            }
+        }
+    }
+
+    /// Save the film stock to a JSON file
+    pub fn save_to_file<P: AsRef<std::path::Path>>(&self, path: P) -> Result<(), std::io::Error> {
+        let file = std::fs::File::create(path)?;
+        let writer = std::io::BufWriter::new(file);
+        serde_json::to_writer_pretty(writer, self)?;
+        Ok(())
+    }
+
+    /// Load a film stock from a JSON file
+    pub fn load_from_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self, std::io::Error> {
+        let file = std::fs::File::open(path)?;
+        let reader = std::io::BufReader::new(file);
+        let stock = serde_json::from_reader(reader)?;
+        Ok(stock)
+    }
+
+    /// Precompute the 3x3 spectral matrix that maps Linear RGB -> Film Layer Exposure.
+    /// This avoids per-pixel full spectrum integration (~600 FLOPS -> 15 FLOPS).
+    /// The matrix incorporates camera sensitivities, D65 illuminant, and film sensitivities.
+    /// Compute normalized RGB→mono weights from the film's spectral response.
+    /// Used by BW films to merge color channels into grayscale.
+    pub fn bw_weights(&self) -> [f32; 3] {
+        let sm = self.compute_spectral_matrix();
+        let wr = sm[0][0] + sm[1][0] + sm[2][0];
+        let wg = sm[0][1] + sm[1][1] + sm[2][1];
+        let wb = sm[0][2] + sm[1][2] + sm[2][2];
+        let wsum = (wr + wg + wb).max(1e-6);
+        [wr / wsum, wg / wsum, wb / wsum]
+    }
+
+    pub fn compute_spectral_matrix(&self) -> [[f32; 3]; 3] {
+        use crate::spectral::{CameraSensitivities, Spectrum};
+
+        let camera_sens = CameraSensitivities::srgb();
+        let mut film_sens = self.get_spectral_sensitivities();
+        let illuminant = Spectrum::new_d65();
+
+        let system_white = camera_sens.uplift(1.0, 1.0, 1.0).multiply(&illuminant);
+        film_sens.calibrate_to_white_point(&system_white);
+
+        let r_cam = camera_sens.r_curve.multiply(&illuminant);
+        let g_cam = camera_sens.g_curve.multiply(&illuminant);
+        let b_cam = camera_sens.b_curve.multiply(&illuminant);
+
+        [
+            [
+                film_sens.r_sensitivity.integrate_product(&r_cam) * film_sens.r_factor,
+                film_sens.r_sensitivity.integrate_product(&g_cam) * film_sens.r_factor,
+                film_sens.r_sensitivity.integrate_product(&b_cam) * film_sens.r_factor,
+            ],
+            [
+                film_sens.g_sensitivity.integrate_product(&r_cam) * film_sens.g_factor,
+                film_sens.g_sensitivity.integrate_product(&g_cam) * film_sens.g_factor,
+                film_sens.g_sensitivity.integrate_product(&b_cam) * film_sens.g_factor,
+            ],
+            [
+                film_sens.b_sensitivity.integrate_product(&r_cam) * film_sens.b_factor,
+                film_sens.b_sensitivity.integrate_product(&g_cam) * film_sens.b_factor,
+                film_sens.b_sensitivity.integrate_product(&b_cam) * film_sens.b_factor,
+            ],
+        ]
+    }
+
+    /// Apply the film simulation to RGB log-exposures
+    pub fn map_log_exposure(&self, log_e: [f32; 3]) -> [f32; 3] {
+        // 1. Map each channel through its H-D curve using logistic sigmoid
+        // (Consistent with GPU path; logistic has longer tails than erf,
+        //  better matching real film toe/shoulder behavior)
+        let d_r = self.r_curve.map_smooth(log_e[0]);
+        let d_g = self.g_curve.map_smooth(log_e[1]);
+        let d_b = self.b_curve.map_smooth(log_e[2]);
+
+        // Sigmoid already provides natural shoulder; skip additional softening
+        let net_r = (d_r - self.r_curve.d_min).max(0.0);
+        let net_g = (d_g - self.g_curve.d_min).max(0.0);
+        let net_b = (d_b - self.b_curve.d_min).max(0.0);
+
+        // 2. Apply Color Matrix (Simulates Section 5 - Layer Coupling)
+        // [Dr']   [ M00 M01 M02 ] [ Dr ]
+        // [Dg'] = [ M10 M11 M12 ] [ Dg ]
+        // [Db']   [ M20 M21 M22 ] [ Db ]
+
+        let d_r_out = self.color_matrix[0][0] * net_r
+            + self.color_matrix[0][1] * net_g
+            + self.color_matrix[0][2] * net_b;
+        let d_g_out = self.color_matrix[1][0] * net_r
+            + self.color_matrix[1][1] * net_g
+            + self.color_matrix[1][2] * net_b;
+        let d_b_out = self.color_matrix[2][0] * net_r
+            + self.color_matrix[2][1] * net_g
+            + self.color_matrix[2][2] * net_b;
+
+        [
+            d_r_out + self.r_curve.d_min,
+            d_g_out + self.g_curve.d_min,
+            d_b_out + self.b_curve.d_min,
+        ]
+    }
+}
+
+/// Boost color matrix cross-talk for enhanced color separation
+fn boost_color_matrix(matrix: [[f32; 3]; 3], factor: f32) -> [[f32; 3]; 3] {
+    let mut result = matrix;
+    for i in 0..3 {
+        for j in 0..3 {
+            if i == j {
+                // Boost diagonal (main channel)
+                result[i][j] = 1.0 + (matrix[i][j] - 1.0) * factor;
+            } else {
+                // Boost off-diagonal (cross-talk)
+                result[i][j] = matrix[i][j] * factor;
+            }
+        }
+    }
+    result
+}
+
+/// Reduce color saturation by moving matrix towards grayscale
+fn reduce_saturation(matrix: [[f32; 3]; 3], amount: f32) -> [[f32; 3]; 3] {
+    let gray = [[0.33, 0.33, 0.33], [0.33, 0.33, 0.33], [0.33, 0.33, 0.33]];
+    let mut result = matrix;
+    for i in 0..3 {
+        for j in 0..3 {
+            result[i][j] = matrix[i][j] * amount + gray[i][j] * (1.0 - amount);
+        }
+    }
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_segmented_curve_monotonicity() {
+        let curve = SegmentedCurve::new(0.1, 2.5, 0.8, 1.0);
+        let mut prev_d = curve.map(-5.0); // Very low exposure
+
+        // Test a range of log exposures
+        for i in -50..50 {
+            let log_e = i as f32 / 10.0;
+            let d = curve.map(log_e);
+
+            assert!(
+                d >= prev_d,
+                "Curve must be monotonic increasing. At log_e={}, d={}, prev_d={}",
+                log_e,
+                d,
+                prev_d
+            );
+            assert!(
+                d >= curve.d_min - 1e-6,
+                "Density {} below d_min {}",
+                d,
+                curve.d_min
+            );
+            assert!(
+                d <= curve.d_max + 1e-6,
+                "Density {} above d_max {}",
+                d,
+                curve.d_max
+            );
+
+            prev_d = d;
+        }
+    }
+
+    #[test]
+    fn test_segmented_curve_gamma() {
+        // Gamma should be the slope at exposure_offset (log_e0)
+        let gamma = 1.5;
+        let offset = 10.0;
+        let curve = SegmentedCurve::new(0.0, 3.0, gamma, offset);
+
+        let log_e0 = offset.log10();
+        let epsilon = 0.001;
+
+        let _d_center = curve.map(log_e0);
+        let d_plus = curve.map(log_e0 + epsilon);
+        let d_minus = curve.map(log_e0 - epsilon);
+
+        let slope = (d_plus - d_minus) / (2.0 * epsilon);
+
+        // The slope in the ERF model should be close to gamma.
+        // Let's check how close.
+        let diff = (slope - gamma).abs();
+        assert!(
+            diff < 0.05,
+            "Slope at midpoint {} should be close to gamma {}, diff {}",
+            slope,
+            gamma,
+            diff
+        );
+    }
+
+    #[test]
+    fn test_segmented_curve_limits() {
+        let curve = SegmentedCurve::new(0.2, 2.8, 1.0, 1.0);
+
+        // Test asymptotic limits
+        let d_low = curve.map(-10.0);
+        let d_high = curve.map(10.0);
+
+        assert!(
+            (d_low - curve.d_min).abs() < 0.01,
+            "Should approach d_min at low exposure"
+        );
+        assert!(
+            (d_high - curve.d_max).abs() < 0.01,
+            "Should approach d_max at high exposure"
+        );
+    }
+
+    #[test]
+    fn test_film_stock_creation() {
+        let curve = SegmentedCurve::new(0.0, 2.0, 1.0, 1.0);
+        let stock = FilmStock::new(
+            FilmType::ColorNegative,
+            100.0,
+            curve,
+            curve,
+            curve,
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            FilmSpectralParams::new_panchromatic(),
+            GrainModel::medium_grain(),
+            100.0,
+            ReciprocityFailure { beta: 0.1 },
+            0.0,
+            0.0,
+            0.0,
+            [0.0, 0.0, 0.0],
+            "Generic".to_string(),
+            "Test Stock".to_string(),
+        );
+
+        assert_eq!(stock.iso, 100.0);
+        assert_eq!(stock.film_type, FilmType::ColorNegative);
+    }
+
+    #[test]
+    fn test_film_style_artistic() {
+        let curve = SegmentedCurve::new(0.1, 2.0, 0.65, 1.0);
+        let stock = FilmStock::new(
+            FilmType::ColorNegative,
+            400.0,
+            curve,
+            curve,
+            curve,
+            [
+                [1.05, -0.03, -0.02],
+                [-0.02, 1.05, -0.03],
+                [-0.03, -0.02, 1.05],
+            ],
+            FilmSpectralParams::new_color_negative_standard(),
+            GrainModel::medium_grain(),
+            100.0,
+            ReciprocityFailure { beta: 0.05 },
+            0.15,
+            0.85,
+            0.015,
+            [1.0, 0.7, 0.5],
+            "Test".to_string(),
+            "Film".to_string(),
+        );
+
+        let original_gamma = stock.r_curve.gamma;
+        let original_alpha = stock.grain_model.alpha;
+        let original_halation = stock.halation_strength;
+
+        let artistic = stock.with_style(FilmStyle::Artistic);
+
+        // Check gamma increased
+        assert!(artistic.r_curve.gamma > original_gamma);
+        // Check grain increased
+        assert!(artistic.grain_model.alpha > original_alpha);
+        // Check halation increased
+        assert!(artistic.halation_strength > original_halation);
+    }
+}
