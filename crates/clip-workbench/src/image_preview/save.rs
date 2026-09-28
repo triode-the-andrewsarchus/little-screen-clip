@@ -370,6 +370,7 @@ impl ImagePreviewState {
         let Some(job) = self.copy_job.as_mut() else {
             return;
         };
+        let mut restored_now = false;
         let completion = match job.receiver.try_recv() {
             Ok(result) => Some(
                 result
@@ -390,6 +391,7 @@ impl ImagePreviewState {
             if let Some(canvas) = slot.take() {
                 self.current_rgba = canvas;
                 job.restored = true;
+                restored_now = true;
             }
         }
         if let Some(completion) = completion {
@@ -404,6 +406,9 @@ impl ImagePreviewState {
                 }
                 Err(error) => self.show_toast(format!("❌ Failed to copy image: {error}")),
             }
+        }
+        if restored_now && self.copy_job.is_some() {
+            self.show_toast("Copying image to clipboard…");
         }
     }
 
@@ -768,6 +773,39 @@ mod tests {
         wait_for_copy(&mut state);
         assert_eq!(state.current_rgba, original);
         assert!(state.status_toast.as_ref().unwrap().0.contains("cancelled"));
+    }
+
+    #[test]
+    fn restored_copy_snapshot_reports_clipboard_delivery_phase() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_ticket, _rx) = jobs.submit(SAVE_TIMEOUT, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv().unwrap();
+
+        let mut state = state();
+        let original = state.current_rgba.clone();
+        state.start_copy_to_hand_slot(HandSide::Right, &jobs);
+        state
+            .copy_job
+            .as_ref()
+            .unwrap()
+            .snapshot_ready
+            .store(true, Ordering::Release);
+
+        state.poll_copy_job();
+        assert_eq!(state.current_rgba, original);
+        assert_eq!(
+            state.status_toast.as_ref().unwrap().0,
+            "Copying image to clipboard…"
+        );
+
+        state.copy_job.as_ref().unwrap().cancel();
+        release_tx.send(()).unwrap();
+        wait_for_copy(&mut state);
     }
 
     fn state() -> ImagePreviewState {

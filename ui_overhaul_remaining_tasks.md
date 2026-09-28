@@ -276,7 +276,9 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **E2.1s52 [Luna] Undo a Depth Map result.** Depends on successful generation and remains open with E2.1s51.
   - **E2.1t Image save and copy live checks**
     - [x] **E2.1t1 [Luna] Verify Image Studio Save As and save completion.** Save As uses the centered in-workbench modal; a compact Dark capture completed the save and showed its success toast. The modal also restores overwrite confirmation before replacing an existing path.
-    - [ ] **E2.1t2 [Luna] Diagnose and verify image Copy live.** The private capture remains at “Preparing image for clipboard…” seven seconds after activation; investigate the worker stall, then verify completion.
+    - [x] **E2.1t2 [Primary] Show the image-copy delivery phase after snapshot restoration.** Footer status advances from “Preparing image…” to “Copying image…” while delivery continues; focused async-state regression passes.
+    - [x] **E2.1t3 [Luna] Verify image Copy reaches the OS clipboard in the isolated workbench.** Compact Dark capture reports success; the runner has no daemon, so it correctly uses the OS-only fallback.
+    - [ ] **E2.1t4 [Luna] Verify image Copy updates a private daemon hand slot.** The isolated capture runner does not start a daemon; validate the complete daemon-plus-OS path without accessing the user's daemon or clipboard.
   - [ ] **E2.1u [Luna] Verify external-app launch and fallback live.**
     - [x] **E2.1u1 [Luna] Test launcher success, fallback, and total failure without opening desktop apps.** Uses `/bin/true` and missing executable paths; production still defaults to `xdg-open`. The live editor-launch check remains open.
 - **E2.2 Audio ordinary control rows**
