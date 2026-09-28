@@ -1073,6 +1073,7 @@ pub struct FilmSimState {
     pub pending_thumbnails: Vec<(usize, image::RgbaImage)>,
     pub thumbnail_rx: Option<std::sync::mpsc::Receiver<FilmSimThumbnailMsg>>,
     pub thumbnail_epoch: u64,
+    pub(crate) thumbnail_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub thumbnail_dirty_at: Option<std::time::Instant>,
     pub is_generating_thumbnails: bool,
 
@@ -1117,6 +1118,7 @@ impl Default for FilmSimState {
             pending_thumbnails: Vec::new(),
             thumbnail_rx: None,
             thumbnail_epoch: 0,
+            thumbnail_cancel: None,
             thumbnail_dirty_at: None,
             is_generating_thumbnails: false,
             params_dirty_at: None,
@@ -1129,10 +1131,22 @@ impl Default for FilmSimState {
 impl FilmSimState {
     /// Mark parameters as dirty (triggers debounced re-render for both main preview and thumbnails).
     pub fn mark_dirty(&mut self) {
+        self.cancel_thumbnail_batch();
+        self.stock_thumbnails.clear();
+        self.pending_thumbnails.clear();
         self.parameter_revision = self.parameter_revision.wrapping_add(1);
         let now = std::time::Instant::now();
         self.params_dirty_at = Some(now);
         self.thumbnail_dirty_at = Some(now + std::time::Duration::from_millis(250));
+    }
+
+    pub(crate) fn cancel_thumbnail_batch(&mut self) {
+        if let Some(cancel) = self.thumbnail_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        self.thumbnail_epoch = self.thumbnail_epoch.wrapping_add(1);
+        self.thumbnail_rx = None;
+        self.is_generating_thumbnails = false;
     }
 }
 
@@ -1233,7 +1247,8 @@ impl ImagePreviewState {
         if self.current_rgba.is_empty() {
             return;
         }
-        self.film_sim_state.thumbnail_epoch += 1;
+        self.film_sim_state.cancel_thumbnail_batch();
+        self.film_sim_state.thumbnail_epoch = self.film_sim_state.thumbnail_epoch.wrapping_add(1);
         let epoch = self.film_sim_state.thumbnail_epoch;
 
         // Downscale base image to 42x28 (sub-3ms per stock)
@@ -1266,52 +1281,77 @@ impl ImagePreviewState {
         let enable_grain = self.film_sim_state.enable_grain;
 
         let (tx, rx) = std::sync::mpsc::channel::<FilmSimThumbnailMsg>();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mut completed: std::collections::HashSet<usize> = self
+            .film_sim_state
+            .stock_thumbnails
+            .keys()
+            .copied()
+            .collect();
+        completed.extend(
+            self.film_sim_state
+                .pending_thumbnails
+                .iter()
+                .map(|(idx, _)| *idx),
+        );
+        let todo: Vec<_> = all_film_stocks()
+            .into_iter()
+            .enumerate()
+            .filter(|(idx, _)| !completed.contains(idx))
+            .collect();
+        if todo.is_empty() {
+            return;
+        }
+        self.film_sim_state.thumbnail_cancel = Some(cancelled.clone());
         self.film_sim_state.thumbnail_rx = Some(rx);
         self.film_sim_state.is_generating_thumbnails = true;
 
-        std::thread::Builder::new()
+        let spawn_result = std::thread::Builder::new()
             .name("film_sim_thumbnails".to_string())
             .spawn(move || {
-                let stocks = all_film_stocks();
-                for (idx, entry) in stocks.iter().enumerate() {
-                    let mut stock = (entry.build)().with_style(style);
-                    stock.halation_strength = halation;
-                    stock.vignette_strength = vignette;
+                super::run_thumbnail_items(
+                    todo,
+                    || cancelled.load(std::sync::atomic::Ordering::Acquire),
+                    |(idx, entry)| {
+                        let mut stock = (entry.build)().with_style(style);
+                        stock.halation_strength = halation;
+                        stock.vignette_strength = vignette;
 
-                    let config = SimulationConfig {
-                        exposure_time: brightness,
-                        warmth,
-                        saturation: intensity,
-                        auto_levels: false,
-                        white_balance_mode: wb_mode,
-                        white_balance_strength: wb_strength,
-                        output_mode: OutputMode::Positive,
-                        enable_grain,
-                        light_leak: light_leak.to_config(),
-                        ..SimulationConfig::default()
-                    };
+                        let config = SimulationConfig {
+                            exposure_time: brightness,
+                            warmth,
+                            saturation: intensity,
+                            auto_levels: false,
+                            white_balance_mode: wb_mode,
+                            white_balance_strength: wb_strength,
+                            output_mode: OutputMode::Positive,
+                            enable_grain,
+                            light_leak: light_leak.to_config(),
+                            ..SimulationConfig::default()
+                        };
 
-                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        process_film_image(&thumb_rgb, &stock, &config)
-                    }));
+                        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            process_film_image(&thumb_rgb, &stock, &config)
+                        }));
 
-                    if let Ok(out_rgb) = res {
-                        let out_rgba = apply_film_sim_post_adjustments(&out_rgb, contrast, tint);
-                        if tx
-                            .send(FilmSimThumbnailMsg {
+                        if let Ok(out_rgb) = res {
+                            let out_rgba =
+                                apply_film_sim_post_adjustments(&out_rgb, contrast, tint);
+                            tx.send(FilmSimThumbnailMsg {
                                 epoch,
                                 stock_idx: idx,
                                 rgba: out_rgba,
                             })
-                            .is_err()
-                        {
-                            // Receiver dropped (new epoch started), terminate worker
-                            break;
+                            .is_ok()
+                        } else {
+                            true
                         }
-                    }
-                }
-            })
-            .ok();
+                    },
+                );
+            });
+        if spawn_result.is_err() {
+            self.film_sim_state.cancel_thumbnail_batch();
+        }
     }
 
     /// Drain any messages from the film sim background thread and thumbnail worker.
@@ -1385,6 +1425,7 @@ impl ImagePreviewState {
         }
         if thumbs_done {
             self.film_sim_state.is_generating_thumbnails = false;
+            self.film_sim_state.thumbnail_cancel = None;
         }
     }
 
@@ -1448,8 +1489,9 @@ impl ImagePreviewState {
             self.film_sim_state.stock_thumbnails.insert(idx, tex);
         }
 
-        // Kick off thumbnail generation if empty
-        if self.film_sim_state.stock_thumbnails.is_empty()
+        // Fill thumbnails that were still outstanding when the mode was left.
+        if self.film_sim_state.stock_thumbnails.len() + self.film_sim_state.pending_thumbnails.len()
+            < all_film_stocks().len()
             && !self.film_sim_state.is_generating_thumbnails
             && !self.current_rgba.is_empty()
         {

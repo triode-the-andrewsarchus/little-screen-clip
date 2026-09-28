@@ -413,6 +413,13 @@ impl ImagePreviewState {
     pub(crate) fn mark_pixels_changed(&mut self) {
         self.cancel_optimizer();
         self.cancel_optipng_process();
+        self.film_sim_state.cancel_thumbnail_batch();
+        self.cancel_creative_fx_thumbnail_batch();
+        self.film_sim_state.stock_thumbnails.clear();
+        self.film_sim_state.pending_thumbnails.clear();
+        self.creative_fx_state.fx_thumbnails.clear();
+        self.creative_fx_state.pending_thumbnails.clear();
+        self.creative_fx_state.thumbnail_pixel_revision = None;
         self.pixel_revision = self.pixel_revision.wrapping_add(1);
     }
 
@@ -1215,6 +1222,12 @@ impl ImagePreviewState {
         }
         let prev_mode = self.active_mode;
         self.active_mode = target_mode;
+        if prev_mode == ImageToolMode::FilmSim && target_mode != ImageToolMode::FilmSim {
+            self.film_sim_state.cancel_thumbnail_batch();
+        }
+        if prev_mode == ImageToolMode::CreativeFx && target_mode != ImageToolMode::CreativeFx {
+            self.cancel_creative_fx_thumbnail_batch();
+        }
         if prev_mode == ImageToolMode::Ocr
             && target_mode != ImageToolMode::Ocr
             && self.ocr_state.in_progress
@@ -1275,8 +1288,9 @@ impl ImagePreviewState {
                     self.run_film_sim_render();
                 }
                 // Trigger thumbnail batch if not generated yet.
-                if self.film_sim_state.stock_thumbnails.is_empty()
-                    && self.film_sim_state.pending_thumbnails.is_empty()
+                if self.film_sim_state.stock_thumbnails.len()
+                    + self.film_sim_state.pending_thumbnails.len()
+                    < tools::all_film_stocks().len()
                     && !self.film_sim_state.is_generating_thumbnails
                 {
                     self.run_thumbnail_batch();
@@ -1289,8 +1303,9 @@ impl ImagePreviewState {
                     self.run_creative_fx_render();
                 }
                 // Trigger thumbnail batch if not generated yet.
-                if self.creative_fx_state.fx_thumbnails.is_empty()
-                    && self.creative_fx_state.pending_thumbnails.is_empty()
+                if self.creative_fx_state.fx_thumbnails.len()
+                    + self.creative_fx_state.pending_thumbnails.len()
+                    < CreativeFxType::all().len()
                     && !self.creative_fx_state.is_generating_thumbnails
                 {
                     self.run_creative_fx_thumbnail_batch();
@@ -3451,6 +3466,71 @@ mod tests {
         assert_eq!(state.active_mode, ImageToolMode::View);
         assert!(!state.ocr_state.in_progress);
         assert!(state.ocr_process_control.is_none());
+    }
+
+    #[test]
+    fn thumbnail_batches_cancel_on_mode_exit_and_source_change() {
+        let config = AppConfig::default();
+        let image = RgbaImage::from_pixel(42, 28, image::Rgba([40, 80, 120, 255]));
+        let mut png_bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut png_bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let item = ClipItem::from_image(png_bytes, 42, 28, "image/png");
+        let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
+
+        state.set_tool_mode(ImageToolMode::FilmSim);
+        let film_cancel = state
+            .film_sim_state
+            .thumbnail_cancel
+            .as_ref()
+            .expect("Film Look batch started")
+            .clone();
+        state.set_tool_mode(ImageToolMode::View);
+        assert!(film_cancel.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!state.film_sim_state.is_generating_thumbnails);
+        assert!(state.film_sim_state.thumbnail_rx.is_none());
+
+        state.set_tool_mode(ImageToolMode::CreativeFx);
+        let fx_cancel = state
+            .creative_fx_state
+            .thumbnail_cancel
+            .as_ref()
+            .expect("Creative FX batch started")
+            .clone();
+        state.mark_pixels_changed();
+        assert!(fx_cancel.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!state.creative_fx_state.is_generating_thumbnails);
+        assert!(state.creative_fx_state.thumbnail_rx.is_none());
+        assert!(state.creative_fx_state.pending_thumbnails.is_empty());
+        assert!(state.creative_fx_state.fx_thumbnails.is_empty());
+    }
+
+    #[test]
+    fn dropping_image_preview_cancels_both_thumbnail_batches() {
+        let mut state = image_state_from_png((42, 28), "thumbnail drop test");
+        state.run_thumbnail_batch();
+        state.run_creative_fx_thumbnail_batch();
+        let film_cancel = state
+            .film_sim_state
+            .thumbnail_cancel
+            .as_ref()
+            .expect("Film Look batch started")
+            .clone();
+        let fx_cancel = state
+            .creative_fx_state
+            .thumbnail_cancel
+            .as_ref()
+            .expect("Creative FX batch started")
+            .clone();
+
+        drop(state);
+
+        assert!(film_cancel.load(std::sync::atomic::Ordering::Acquire));
+        assert!(fx_cancel.load(std::sync::atomic::Ordering::Acquire));
     }
 
     #[test]

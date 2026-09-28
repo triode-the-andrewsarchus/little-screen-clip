@@ -418,8 +418,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
         - [ ] **H2.1h4g3 [Primary] Cancel conversion preview encoding after its image or settings become stale.**
         - [ ] **H2.1h4g4 [Primary] Cancel barcode scanning when its image changes or the Barcode view is left.**
       - **H2.1h4h Stop thumbnail batches when their view/request is no longer current.** Inputs are small, but stale batches still consume avoidable work after dismissal.
-        - [ ] **H2.1h4h1 [Primary] Stop Film Look stock thumbnail generation after a stale request or mode exit.**
-        - [ ] **H2.1h4h2 [Primary] Stop Creative FX thumbnail generation after a stale request or mode exit.** The current loop ignores failed sends and completes all seven effects.
+        - [x] **H2.1h4h1 [Primary] Stop Film Look stock thumbnail generation after a stale request, mode exit, or viewer drop.** A per-run cancellation token stops the ordered worker between stocks; image edits, Film Look parameter edits, leaving Film Look, and dropping the viewer invalidate the run. Re-entry requests only missing stocks.
+        - [x] **H2.1h4h2 [Primary] Stop Creative FX thumbnail generation after a stale request, mode exit, or viewer drop.** A per-run cancellation token stops the ordered worker between effects; source edits, leaving Creative FX, and dropping the viewer invalidate the run. Preset/parameter intent changes do not cancel fixed-default thumbnails, and re-entry requests only missing effects.
     - [ ] **H2.1h5 [Primary] Repaint after remaining async completions.**
       - [x] **H2.1h5a [Sol; Luna review] Repaint after image-load completion and while loading.** The worker receiver is polled with scheduled repaint; regression tests exercise successful, failed, canceled, and replaced loads.
       - [x] **H2.1h5b [Sol; Luna review] Repaint after PDF page decode completion.** Worker completion and receiver polling request repaint; the render test waits through multiple selected and visible page uploads.

@@ -585,6 +585,31 @@ mod ownership_tests {
     }
 
     #[test]
+    fn replacing_a_thumbnail_batch_cancels_only_its_own_run() {
+        let mut state = state();
+        state.run_creative_fx_thumbnail_batch();
+        let old_run = state
+            .creative_fx_state
+            .thumbnail_cancel
+            .as_ref()
+            .unwrap()
+            .clone();
+
+        state.run_creative_fx_thumbnail_batch();
+        let current_run = state
+            .creative_fx_state
+            .thumbnail_cancel
+            .as_ref()
+            .unwrap()
+            .clone();
+
+        assert!(old_run.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!current_run.load(std::sync::atomic::Ordering::Acquire));
+        state.cancel_creative_fx_thumbnail_batch();
+        assert!(current_run.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[test]
     fn apply_rejects_a_preview_from_an_old_source_stamp() {
         let mut state = state();
         state.creative_fx_state.preview_rgba =
@@ -695,6 +720,8 @@ pub struct CreativeFxState {
     pub thumbnail_rx: Option<std::sync::mpsc::Receiver<CreativeFxThumbnailMsg>>,
     pub thumbnail_epoch: u64,
     pub thumbnail_pixel_revision: Option<u64>,
+    pub(in crate::image_preview) thumbnail_cancel:
+        Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub is_generating_thumbnails: bool,
 
     // Debounce timer
@@ -751,6 +778,7 @@ impl Default for CreativeFxState {
             thumbnail_rx: None,
             thumbnail_epoch: 0,
             thumbnail_pixel_revision: None,
+            thumbnail_cancel: None,
             is_generating_thumbnails: false,
             params_dirty_at: None,
             auto_fitted: false,
@@ -988,6 +1016,7 @@ impl ImagePreviewState {
             .thumbnail_pixel_revision
             .is_some_and(|revision| revision != self.pixel_revision)
         {
+            self.cancel_creative_fx_thumbnail_batch();
             self.creative_fx_state.thumbnail_epoch =
                 self.creative_fx_state.thumbnail_epoch.wrapping_add(1);
             self.creative_fx_state.thumbnail_pixel_revision = None;
@@ -996,6 +1025,16 @@ impl ImagePreviewState {
             self.creative_fx_state.fx_thumbnails.clear();
             self.creative_fx_state.is_generating_thumbnails = false;
         }
+    }
+
+    pub(crate) fn cancel_creative_fx_thumbnail_batch(&mut self) {
+        if let Some(cancel) = self.creative_fx_state.thumbnail_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        self.creative_fx_state.thumbnail_epoch =
+            self.creative_fx_state.thumbnail_epoch.wrapping_add(1);
+        self.creative_fx_state.thumbnail_rx = None;
+        self.creative_fx_state.is_generating_thumbnails = false;
     }
 
     pub fn run_creative_fx_render(&mut self) {
@@ -1172,7 +1211,9 @@ impl ImagePreviewState {
         if self.current_rgba.is_empty() {
             return;
         }
-        self.creative_fx_state.thumbnail_epoch += 1;
+        self.cancel_creative_fx_thumbnail_batch();
+        self.creative_fx_state.thumbnail_epoch =
+            self.creative_fx_state.thumbnail_epoch.wrapping_add(1);
         let epoch = self.creative_fx_state.thumbnail_epoch;
         let pixel_revision = self.pixel_revision;
         self.creative_fx_state.thumbnail_pixel_revision = Some(pixel_revision);
@@ -1186,28 +1227,59 @@ impl ImagePreviewState {
         );
 
         let (tx, rx) = std::sync::mpsc::channel::<CreativeFxThumbnailMsg>();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let completed: std::collections::HashSet<_> = self
+            .creative_fx_state
+            .fx_thumbnails
+            .keys()
+            .copied()
+            .chain(
+                self.creative_fx_state
+                    .pending_thumbnails
+                    .iter()
+                    .map(|(fx, _)| *fx),
+            )
+            .collect();
+        let todo: Vec<_> = CreativeFxType::all()
+            .into_iter()
+            .copied()
+            .filter(|fx| !completed.contains(fx))
+            .collect();
+        if todo.is_empty() {
+            return;
+        }
+        self.creative_fx_state.thumbnail_cancel = Some(cancelled.clone());
         self.creative_fx_state.thumbnail_rx = Some(rx);
         self.creative_fx_state.is_generating_thumbnails = true;
 
-        std::thread::Builder::new()
+        let spawn_result = std::thread::Builder::new()
             .name("creative_fx_thumbnails".to_string())
             .spawn(move || {
-                for fx in CreativeFxType::all() {
-                    let preset = default_preset_for_fx(*fx);
-                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        apply_creative_fx(&thumb_base, &preset.params)
-                    }));
-                    if let Ok(rgba) = res {
-                        let _ = tx.send(CreativeFxThumbnailMsg {
-                            epoch,
-                            pixel_revision,
-                            fx_type: *fx,
-                            rgba,
-                        });
-                    }
-                }
-            })
-            .ok();
+                super::run_thumbnail_items(
+                    todo,
+                    || cancelled.load(std::sync::atomic::Ordering::Acquire),
+                    |fx| {
+                        let preset = default_preset_for_fx(fx);
+                        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            apply_creative_fx(&thumb_base, &preset.params)
+                        }));
+                        if let Ok(rgba) = res {
+                            tx.send(CreativeFxThumbnailMsg {
+                                epoch,
+                                pixel_revision,
+                                fx_type: fx,
+                                rgba,
+                            })
+                            .is_ok()
+                        } else {
+                            true
+                        }
+                    },
+                );
+            });
+        if spawn_result.is_err() {
+            self.cancel_creative_fx_thumbnail_batch();
+        }
     }
 
     /// Poll each Creative FX worker independently so result ownership and cleanup stay local.
@@ -1406,6 +1478,7 @@ impl ImagePreviewState {
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.creative_fx_state.is_generating_thumbnails = false;
+                    self.creative_fx_state.thumbnail_cancel = None;
                     break;
                 }
             }
@@ -1755,8 +1828,10 @@ impl ImagePreviewState {
             self.creative_fx_state.fx_thumbnails.insert(fx_type, tex);
         }
 
-        // Kick off thumbnail generation if empty
-        if self.creative_fx_state.fx_thumbnails.is_empty()
+        // Fill thumbnails that were still outstanding when the mode was left.
+        if self.creative_fx_state.fx_thumbnails.len()
+            + self.creative_fx_state.pending_thumbnails.len()
+            < CreativeFxType::all().len()
             && !self.creative_fx_state.is_generating_thumbnails
             && !self.current_rgba.is_empty()
         {

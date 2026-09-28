@@ -6,6 +6,20 @@
 
 use crate::icons::Icon;
 
+/// Process a thumbnail batch in order, checking its per-run cancellation token
+/// between items and stopping if publishing a result is no longer useful.
+pub(super) fn run_thumbnail_items<T>(
+    items: impl IntoIterator<Item = T>,
+    is_cancelled: impl Fn() -> bool,
+    mut process_and_publish: impl FnMut(T) -> bool,
+) {
+    for item in items {
+        if is_cancelled() || !process_and_publish(item) {
+            break;
+        }
+    }
+}
+
 /// Active image manipulation tool mode selected in the toolbar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImageToolMode {
@@ -44,6 +58,49 @@ pub enum ImageToolMode {
     CreativeFx,
     /// Interactive screenshot markup (arrow, circle, rectangle, line, text, badge).
     Markup,
+}
+
+#[cfg(test)]
+mod thumbnail_batch_tests {
+    use super::run_thumbnail_items;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    #[test]
+    fn thumbnail_worker_stops_before_the_next_item_after_cancellation() {
+        let cancelled = AtomicBool::new(false);
+        let processed = AtomicUsize::new(0);
+        let published = AtomicUsize::new(0);
+
+        run_thumbnail_items(
+            0..8,
+            || cancelled.load(Ordering::Acquire),
+            |item| {
+                processed.fetch_add(1, Ordering::Relaxed);
+                published.fetch_add(1, Ordering::Relaxed);
+                if item == 0 {
+                    cancelled.store(true, Ordering::Release);
+                }
+                true
+            },
+        );
+
+        assert_eq!(processed.load(Ordering::Relaxed), 1);
+        assert_eq!(published.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn thumbnail_worker_stops_when_receiver_rejects_a_result() {
+        let processed = AtomicUsize::new(0);
+        run_thumbnail_items(
+            0..8,
+            || false,
+            |_| {
+                processed.fetch_add(1, Ordering::Relaxed);
+                false
+            },
+        );
+        assert_eq!(processed.load(Ordering::Relaxed), 1);
+    }
 }
 
 impl ImageToolMode {
