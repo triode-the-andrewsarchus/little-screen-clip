@@ -453,7 +453,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **H2.2a Correct wrapped text geometry.** Measured row heights, logarithmic prefix updates, 100/150/200% render tests, bounded layout batches, and height-only index are implemented. Architecture review found no clone groups/cycles; necessary indexing/measurement raises total CCN while average/peak CCN do not rise.
   - [x] **H2.2b Make MIDI canvas labels readable.** Measured pitch/ruler labels with octave thinning, canvas bounds, collision suppression and contrast; geometry tests cover density, spacing and edges. Live playback/selection remains unverified.
   - [ ] **H2.2b1 [Primary] Verify MIDI playback interaction live.**
-  - [ ] **H2.2b2 [Primary] Verify MIDI selection interaction live.**
+  - [x] **H2.2b2 [Primary] Verify MIDI selection interaction live.** A private virtual-pointer drag selects a 0.27-second region in the 24-track fixture; visible range and Copy Slice action update, and popup checks pass. This does not verify playback or audio output.
   - **H2.2c Bound pathological text work and collect performance evidence**
     - [x] **H2.2c1 [Primary] Bound measurement and rendering work for multi-megabyte single lines.** Raw text now splits oversized logical lines into UTF-8-safe 4 KiB display fragments, so measurement and paint never shape an unbounded line. Search and full-content copy still use the original source; the wrap toggle only controls wrapping inside each fragment. Focused regressions and the workbench suite pass; see `ui_overhaul_acceptance.md`.
     - **H2.2c2 Bound processing of large clipboard text.** Preserve exact search/copy behavior.
