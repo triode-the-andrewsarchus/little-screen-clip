@@ -931,6 +931,171 @@ mod tests {
     }
 
     #[test]
+    fn spreadsheet_scroll_targets_stay_aligned_across_host_sizes_and_zoom() {
+        let rows = (0..320)
+            .map(|row| {
+                (0..72)
+                    .map(|column| format!("r{row}c{column}"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let data = SpreadsheetData {
+            title: "Zoomed scroll alignment".into(),
+            sheets: vec![SpreadsheetSheet::new("Data".into(), rows)],
+        };
+        let palette = little_clip_core::palette::AppPalette::default();
+
+        for (size, zoom) in [
+            (Vec2::new(640.0, 520.0), 1.0),
+            (Vec2::new(640.0, 520.0), 1.5),
+            (Vec2::new(1180.0, 720.0), 1.0),
+            (Vec2::new(1180.0, 720.0), 1.5),
+        ] {
+            let mut state = SpreadsheetViewerState::new(data.clone(), None);
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            ctx.set_zoom_factor(zoom);
+            let mut time = 0.0;
+            let mut render = |events: Vec<egui::Event>| {
+                time += 0.05;
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            state.render_ui(ui, ctx, &palette, &mut false);
+                        });
+                    },
+                );
+                (output, state.scroll_offset)
+            };
+
+            let (initial, initial_offset) = render(Vec::new());
+            assert_eq!(initial_offset, Vec2::ZERO, "host={size:?}, zoom={zoom}");
+            let cell_clip = initial
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "r0c0" => {
+                        Some((text.pos + text.galley.size() * 0.5, clipped.clip_rect))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("initial cell missing at host={size:?}, zoom={zoom}"));
+            let initial_header_y = initial
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "A (1)" => Some(text.pos.y),
+                    _ => None,
+                })
+                .expect("initial column header should render");
+            let gutter_left = initial
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "1" => {
+                        Some(clipped.clip_rect.left())
+                    }
+                    _ => None,
+                })
+                .expect("initial row number should render");
+
+            let (cell_center, grid_clip) = cell_clip;
+            assert!(
+                grid_clip.contains(cell_center),
+                "initial cell center {cell_center:?} outside grid clip {grid_clip:?} at host={size:?}, zoom={zoom}"
+            );
+            let _ = render(vec![
+                egui::Event::PointerMoved(cell_center),
+                egui::Event::Scroll(Vec2::new(800.0, -800.0)),
+            ]);
+            let mut settled = None;
+            for _ in 0..10 {
+                settled = Some(render(Vec::new()));
+            }
+            let (output, offset) = settled.expect("scroll settling frames ran");
+            assert!(
+                offset.x > 10.0 && offset.y > 10.0,
+                "two-axis scroll should move at host={size:?}, zoom={zoom}: {offset:?}"
+            );
+
+            let (row, column, cell_center) = output
+                .shapes
+                .iter()
+                .find_map(|clipped| {
+                    let egui::Shape::Text(text) = &clipped.shape else {
+                        return None;
+                    };
+                    let (row, column) = text.galley.text().strip_prefix('r')?.split_once('c')?;
+                    let row = row.parse::<usize>().ok()?;
+                    let column = column.parse::<usize>().ok()?;
+                    (row > 0 && column > 0).then_some((
+                        row,
+                        column,
+                        text.pos + text.galley.size() * 0.5,
+                    ))
+                })
+                .unwrap_or_else(|| {
+                    panic!("no later cell visible at host={size:?}, zoom={zoom}, offset={offset:?}")
+                });
+            let header_label = format!("{} ({})", col_label(column), column + 1);
+            let header = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == header_label => {
+                        Some((text.pos, text.galley.size()))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| {
+                    panic!("scrolled header {header_label:?} missing at host={size:?}, zoom={zoom}")
+                });
+            let header_center = header.0 + header.1 * 0.5;
+            assert!(
+                (header_center.x - cell_center.x).abs() <= 4.0,
+                "cell/header x mismatch at host={size:?}, zoom={zoom}: cell={cell_center:?}, header={header_center:?}"
+            );
+            assert!(
+                (header.0.y - initial_header_y).abs() <= 1.0,
+                "sticky column header moved vertically at host={size:?}, zoom={zoom}"
+            );
+
+            let row_label = (row + 1).to_string();
+            let gutter = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text)
+                        if text.galley.text() == row_label
+                            && clipped.clip_rect.left() == gutter_left =>
+                    {
+                        Some((text.pos, text.galley.size(), clipped.clip_rect))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| {
+                    panic!("scrolled row label {row_label:?} missing at host={size:?}, zoom={zoom}")
+                });
+            let gutter_center = gutter.0 + gutter.1 * 0.5;
+            assert_eq!(
+                gutter.2.left(),
+                gutter_left,
+                "row-number gutter shifted horizontally at host={size:?}, zoom={zoom}"
+            );
+            assert!(
+                (gutter_center.y - cell_center.y).abs() <= 14.0,
+                "row gutter/cell y mismatch at host={size:?}, zoom={zoom}: gutter={gutter_center:?}, cell={cell_center:?}"
+            );
+        }
+    }
+
+    #[test]
     fn selecting_long_cell_shows_and_copies_full_value() {
         let long_value = format!(
             "Long clipboard cell value: {}",
