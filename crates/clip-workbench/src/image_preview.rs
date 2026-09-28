@@ -6,6 +6,10 @@
 mod save;
 mod tools;
 use tools::*;
+pub(crate) use tools::{
+    ImageToolProcessControl, clear_image_tool_pid_if_owned, spawn_image_tool_child,
+    terminate_image_tool_process,
+};
 
 use crate::icons::Icon;
 use crate::{contrast_text_c32, hex_to_c32, hex_to_c32_alpha};
@@ -178,6 +182,7 @@ pub struct ImagePreviewState {
     // Barcode / QR / DataMatrix Decoder
     pub barcode_state: BarcodeScanState,
     pub barcode_rx: Option<std::sync::mpsc::Receiver<BarcodeScanMsg>>,
+    pub(crate) barcode_cancel: Option<std::sync::Arc<ImageToolProcessControl>>,
     pub(crate) barcode_input_stamp: Option<ImageInputStamp>,
     pub(crate) barcode_results_stamp: Option<ImageInputStamp>,
 
@@ -395,6 +400,7 @@ impl ImagePreviewState {
             ocr_process_control: None,
             barcode_state: BarcodeScanState::default(),
             barcode_rx: None,
+            barcode_cancel: None,
             barcode_input_stamp: None,
             barcode_results_stamp: None,
             dcs_state: DecorrelationStretchState::default(),
@@ -427,6 +433,7 @@ impl ImagePreviewState {
     }
 
     pub(crate) fn mark_pixels_changed(&mut self) {
+        self.cancel_barcode_scan();
         self.film_sim_state.cancel_render();
         self.creative_fx_state.cancel_render();
         self.cancel_optimizer();
@@ -1256,6 +1263,9 @@ impl ImagePreviewState {
             && self.ocr_state.in_progress
         {
             self.cancel_ocr();
+        }
+        if prev_mode == ImageToolMode::Barcode && target_mode != ImageToolMode::Barcode {
+            self.cancel_barcode_scan();
         }
         let leaving_active_image_tool = matches!(
             (prev_mode, self.bg_removal_operation),

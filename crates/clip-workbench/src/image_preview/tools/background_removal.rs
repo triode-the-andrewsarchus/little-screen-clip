@@ -139,7 +139,7 @@ pub(super) fn decode_image_tool_output(output: std::process::Output) -> Result<R
         .map_err(|e| format!("Failed to decode output PNG: {}", e))
 }
 
-pub(super) fn terminate_image_tool_process(pid: u32) {
+pub(crate) fn terminate_image_tool_process(pid: u32) {
     if pid == 0 {
         return;
     }
@@ -182,7 +182,7 @@ pub(super) fn run_image_tool_status_command(
     Ok(status)
 }
 
-pub(super) fn spawn_image_tool_child(
+pub(crate) fn spawn_image_tool_child(
     mut cmd: Command,
     control: &ImageToolProcessControl,
 ) -> Result<std::process::Child, String> {
@@ -220,7 +220,7 @@ impl ImageToolProcessControl {
     }
 }
 
-pub(super) fn clear_image_tool_pid_if_owned(
+pub(crate) fn clear_image_tool_pid_if_owned(
     child_pid: &std::sync::atomic::AtomicU32,
     pid: u32,
 ) -> bool {

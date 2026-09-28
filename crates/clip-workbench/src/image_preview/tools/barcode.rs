@@ -15,10 +15,26 @@ pub struct BarcodeScanState {
 pub struct BarcodeScanMsg {
     detections: Vec<BarcodeDetection>,
     duration_ms: u128,
+    error: Option<String>,
 }
 
 impl ImagePreviewState {
     pub fn run_barcode_scan(&mut self) {
+        #[cfg(test)]
+        {
+            // Unit tests exercise the UI model without recursively launching libtest.
+            self.run_barcode_scan_in_process_for_test();
+            return;
+        }
+        #[cfg(not(test))]
+        match std::env::current_exe() {
+            Ok(program) => self.run_barcode_scan_with_program(program),
+            Err(error) => self.show_toast(format!("Barcode scan failed: {error}")),
+        }
+    }
+
+    #[cfg(test)]
+    fn run_barcode_scan_in_process_for_test(&mut self) {
         if self.barcode_state.is_scanning {
             return;
         }
@@ -32,9 +48,48 @@ impl ImagePreviewState {
             let _ = tx.send(BarcodeScanMsg {
                 detections,
                 duration_ms: start.elapsed().as_millis(),
+                error: None,
             });
         });
         self.barcode_rx = Some(rx);
+    }
+
+    pub(crate) fn run_barcode_scan_with_program(&mut self, program: std::path::PathBuf) {
+        if self.barcode_state.is_scanning {
+            return;
+        }
+        let image = self.current_display_image();
+        let control = std::sync::Arc::new(ImageToolProcessControl::new());
+        self.barcode_cancel = Some(std::sync::Arc::clone(&control));
+        self.barcode_state.is_scanning = true;
+        self.barcode_input_stamp = Some(self.input_stamp());
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let result = crate::barcode_worker::scan_in_child(image, &program, &control);
+            if control.cancel.load(std::sync::atomic::Ordering::Acquire) {
+                return;
+            }
+            let (detections, error) = match result {
+                Ok(detections) => (detections, None),
+                Err(error) => (Vec::new(), Some(error)),
+            };
+            let _ = tx.send(BarcodeScanMsg {
+                detections,
+                duration_ms: start.elapsed().as_millis(),
+                error,
+            });
+        });
+        self.barcode_rx = Some(rx);
+    }
+
+    pub(crate) fn cancel_barcode_scan(&mut self) {
+        if let Some(control) = self.barcode_cancel.take() {
+            control.cancel();
+        }
+        self.barcode_rx = None;
+        self.barcode_input_stamp = None;
+        self.barcode_state.is_scanning = false;
     }
 
     pub(crate) fn poll_barcode_scan(&mut self, ctx: &egui::Context) {
@@ -51,17 +106,24 @@ impl ImagePreviewState {
             self.barcode_state.last_scan_duration_ms = 0;
         }
         if self.barcode_rx.is_some() && self.barcode_input_stamp.as_ref() != Some(&current_stamp) {
-            self.barcode_rx = None;
-            self.barcode_input_stamp = None;
-            self.barcode_state.is_scanning = false;
+            self.cancel_barcode_scan();
             return;
         }
         match self.barcode_rx.as_ref().map(|rx| rx.try_recv()) {
             Some(Ok(message)) => {
-                self.barcode_results_stamp = self.barcode_input_stamp.clone();
+                self.barcode_cancel = None;
                 self.barcode_rx = None;
                 self.barcode_input_stamp = None;
                 self.barcode_state.is_scanning = false;
+                if let Some(error) = message.error {
+                    self.barcode_results_stamp = None;
+                    self.barcode_state.detections.clear();
+                    self.barcode_state.selected_idx = None;
+                    self.barcode_state.has_scanned = false;
+                    self.show_toast(format!("Barcode scan failed: {error}"));
+                    return;
+                }
+                self.barcode_results_stamp = Some(current_stamp);
                 self.barcode_state.has_scanned = true;
                 self.barcode_state.last_scan_duration_ms = message.duration_ms;
                 let count = message.detections.len();
@@ -82,9 +144,15 @@ impl ImagePreviewState {
                 ctx.request_repaint();
             }
             Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.barcode_cancel = None;
                 self.barcode_rx = None;
                 self.barcode_input_stamp = None;
                 self.barcode_state.is_scanning = false;
+                self.barcode_results_stamp = None;
+                self.barcode_state.detections.clear();
+                self.barcode_state.selected_idx = None;
+                self.barcode_state.has_scanned = false;
+                self.show_toast("Barcode scan worker stopped unexpectedly");
             }
             _ => {}
         }
@@ -445,9 +513,10 @@ impl ImagePreviewState {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod input_stamp_tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     fn state() -> ImagePreviewState {
         let mut bytes = Vec::new();
@@ -478,6 +547,7 @@ mod input_stamp_tests {
         tx.send(BarcodeScanMsg {
             detections: Vec::new(),
             duration_ms: 1,
+            error: None,
         })
         .unwrap();
         stale.mark_pixels_changed();
@@ -496,6 +566,7 @@ mod input_stamp_tests {
         tx.send(BarcodeScanMsg {
             detections: Vec::new(),
             duration_ms: 2,
+            error: None,
         })
         .unwrap();
 
@@ -522,5 +593,88 @@ mod input_stamp_tests {
         assert!(!state.barcode_state.is_scanning);
         assert!(state.barcode_rx.is_none());
         assert!(state.barcode_input_stamp.is_none());
+    }
+
+    #[test]
+    fn mode_exit_cancels_scan_and_reentry_accepts_current_result() {
+        let directory = tempfile::tempdir().unwrap();
+        let slow = directory.path().join("slow.sh");
+        std::fs::write(&slow, "#!/bin/sh\nsleep 30\n").unwrap();
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let quick = directory.path().join("quick.sh");
+        std::fs::write(&quick, "#!/bin/sh\nprintf '[]' > \"$3\"\n").unwrap();
+        std::fs::set_permissions(&quick, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let mut state = state();
+        state.set_tool_mode(ImageToolMode::Barcode);
+        state.run_barcode_scan_with_program(slow);
+        assert!(state.barcode_state.is_scanning);
+        state.set_tool_mode(ImageToolMode::View);
+        assert!(!state.barcode_state.is_scanning);
+        assert!(state.barcode_rx.is_none());
+        state.set_tool_mode(ImageToolMode::Barcode);
+        state.run_barcode_scan_with_program(quick);
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while state.barcode_state.is_scanning && std::time::Instant::now() < deadline {
+            state.poll_barcode_scan(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(state.barcode_state.has_scanned);
+        assert!(state.barcode_state.detections.is_empty());
+    }
+
+    #[test]
+    fn image_change_and_viewer_drop_cancel_active_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        let slow = directory.path().join("slow.sh");
+        let pid_path = directory.path().join("pid");
+        std::fs::write(
+            &slow,
+            format!(
+                "#!/bin/sh\nprintf '%s' \"$$\" > {:?}\nexec sleep 30\n",
+                pid_path
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&slow, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let mut changed = state();
+        changed.run_barcode_scan_with_program(slow.clone());
+        let changed_control = changed.barcode_cancel.as_ref().unwrap().clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !pid_path.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            pid_path.exists(),
+            "helper did not start before source change"
+        );
+        let pid: i32 = std::fs::read_to_string(&pid_path).unwrap().parse().unwrap();
+        changed.mark_pixels_changed();
+        changed.poll_barcode_scan(&egui::Context::default());
+        assert!(
+            changed_control
+                .cancel
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
+        assert!(!changed.barcode_state.is_scanning);
+        assert!(!changed.barcode_state.has_scanned);
+        assert!(changed.barcode_rx.is_none());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+
+        let mut dropped = state();
+        dropped.run_barcode_scan_with_program(slow);
+        let dropped_control = dropped.barcode_cancel.as_ref().unwrap().clone();
+        drop(dropped);
+        assert!(
+            dropped_control
+                .cancel
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
     }
 }

@@ -153,7 +153,10 @@ impl ImageToolMode {
 
 mod background_removal;
 pub(super) use background_removal::BgRemovalMsg;
-pub(super) use background_removal::ImageToolProcessControl;
+pub(crate) use background_removal::ImageToolProcessControl;
+pub(crate) use background_removal::{
+    clear_image_tool_pid_if_owned, spawn_image_tool_child, terminate_image_tool_process,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum BgRemovalOperation {

@@ -52,6 +52,7 @@ fn bounded_item_file_path(item: &ClipItem) -> Option<PathBuf> {
 mod ansi;
 mod appearance_sync;
 mod audio_preview;
+mod barcode_worker;
 mod binary_diff_view;
 mod canvas;
 mod component_gallery;
@@ -3061,6 +3062,27 @@ fn run_prompt_modal(
 
 fn main() -> Result<(), eframe::Error> {
     let args: Vec<String> = std::env::args().collect();
+    if args
+        .get(1)
+        .is_some_and(|arg| arg == "--internal-barcode-worker")
+    {
+        let result = match (args.get(2), args.get(3), args.len()) {
+            (Some(input), Some(output), 4) => barcode_worker::run_helper(
+                std::path::Path::new(input),
+                std::path::Path::new(output),
+            ),
+            _ => Err("invalid barcode worker arguments".into()),
+        };
+        if let Err(error) = result {
+            if let Some(output) = args.get(3) {
+                let _ =
+                    std::fs::write(std::path::Path::new(output).with_extension("error"), &error);
+            }
+            eprintln!("barcode worker: {error}");
+            std::process::exit(2);
+        }
+        return Ok(());
+    }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("Little Screen Clip — Crafting Workbench");
         println!("\nUsage: clip-workbench [OPTIONS]");

@@ -440,6 +440,7 @@ impl Drop for ImagePreviewState {
         self.cancel_optimizer();
         self.cancel_optipng_process();
         self.cancel_ocr();
+        self.cancel_barcode_scan();
         self.cancel_image_tool_process();
         self.film_sim_state.cancel_thumbnail_batch();
         self.cancel_creative_fx_thumbnail_batch();
