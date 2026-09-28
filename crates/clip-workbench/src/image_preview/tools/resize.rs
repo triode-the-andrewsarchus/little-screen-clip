@@ -431,6 +431,10 @@ impl TargetSizeSearch<'_> {
 
 impl Drop for ImagePreviewState {
     fn drop(&mut self) {
+        if let Some(ticket) = self.palette_ticket.take() {
+            ticket.cancel();
+        }
+        self.palette_rx = None;
         self.film_sim_state.cancel_render();
         self.creative_fx_state.cancel_render();
         self.cancel_optimizer();

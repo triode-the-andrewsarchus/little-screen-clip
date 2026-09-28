@@ -134,6 +134,8 @@ pub struct PaletteState {
     pub extracted_colors: Vec<PaletteColor>,
     pub num_colors: usize,
     pub is_extracted: bool,
+    pub is_extracting: bool,
+    pub error: Option<String>,
     pub total_sampled: usize,
 }
 
@@ -143,6 +145,8 @@ impl Default for PaletteState {
             extracted_colors: Vec::new(),
             num_colors: 8,
             is_extracted: false,
+            is_extracting: false,
+            error: None,
             total_sampled: 0,
         }
     }
@@ -150,16 +154,102 @@ impl Default for PaletteState {
 
 impl ImagePreviewState {
     pub fn run_palette_extraction(&mut self) {
+        self.start_palette_extraction(BackgroundJobs::global());
+    }
+
+    fn start_palette_extraction(&mut self, jobs: &BackgroundJobs) {
+        if let Some(ticket) = self.palette_ticket.take() {
+            ticket.cancel();
+        }
+        self.palette_rx = None;
         let disp_img = self.current_display_image();
-        let (colors, total_sampled) = extract_palette(&disp_img, self.palette_state.num_colors);
-        self.palette_state.extracted_colors = colors;
-        self.palette_state.total_sampled = total_sampled;
-        self.palette_state.is_extracted = true;
-        self.show_toast(format!(
-            "🎨 Extracted {} dominant colors ({} sampled px)",
-            self.palette_state.extracted_colors.len(),
-            total_sampled
-        ));
+        let target_count = self.palette_state.num_colors;
+        let stamp = self.input_stamp();
+        self.invalidate_stale_palette_result_for(&stamp, target_count);
+        let (ticket, receiver) = jobs.submit(std::time::Duration::MAX, move || {
+            extract_palette(&disp_img, target_count)
+        });
+        self.palette_ticket = Some(ticket);
+        self.palette_rx = Some(receiver);
+        self.palette_request_stamp = Some(stamp);
+        self.palette_request_count = Some(target_count);
+        self.palette_state.is_extracting = true;
+        self.palette_state.error = None;
+    }
+
+    pub(crate) fn poll_palette_extraction(&mut self, ctx: &egui::Context) {
+        let Some(receiver) = &self.palette_rx else {
+            return;
+        };
+        let request_is_stale = self.palette_request_stamp.as_ref() != Some(&self.input_stamp())
+            || self.palette_request_count != Some(self.palette_state.num_colors);
+        if request_is_stale {
+            if let Some(ticket) = self.palette_ticket.take() {
+                ticket.cancel();
+            }
+            self.palette_rx = None;
+            self.palette_request_stamp = None;
+            self.palette_request_count = None;
+            self.palette_state.is_extracting = false;
+            self.palette_state.is_extracted = false;
+            self.palette_state.extracted_colors.clear();
+            self.palette_state.total_sampled = 0;
+            self.palette_results_stamp = None;
+            self.palette_results_count = None;
+            return;
+        }
+
+        match receiver.try_recv() {
+            Ok(Ok((colors, total_sampled))) => {
+                let count = colors.len();
+                self.palette_results_stamp = self.palette_request_stamp.take();
+                self.palette_results_count = self.palette_request_count.take();
+                self.palette_state.extracted_colors = colors;
+                self.palette_state.total_sampled = total_sampled;
+                self.palette_state.is_extracted = true;
+                self.palette_state.is_extracting = false;
+                self.palette_state.error = None;
+                self.palette_ticket = None;
+                self.palette_rx = None;
+                self.show_toast(format!(
+                    "🎨 Extracted {count} dominant colors ({total_sampled} sampled px)"
+                ));
+            }
+            Ok(Err(error)) => {
+                self.palette_state.is_extracting = false;
+                self.palette_state.error = Some(format!("Palette extraction failed: {error}"));
+                self.palette_ticket = None;
+                self.palette_rx = None;
+                self.palette_request_stamp = None;
+                self.palette_request_count = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.palette_state.is_extracting = false;
+                self.palette_state.error = Some("Palette extraction worker disconnected".into());
+                self.palette_ticket = None;
+                self.palette_rx = None;
+                self.palette_request_stamp = None;
+                self.palette_request_count = None;
+            }
+        }
+    }
+
+    fn invalidate_stale_palette_result_for(&mut self, stamp: &ImageInputStamp, count: usize) {
+        if self.palette_results_stamp.as_ref() != Some(stamp)
+            || self.palette_results_count != Some(count)
+        {
+            self.palette_state.extracted_colors.clear();
+            self.palette_state.total_sampled = 0;
+            self.palette_state.is_extracted = false;
+            self.palette_results_stamp = None;
+            self.palette_results_count = None;
+        }
+    }
+
+    pub(crate) fn invalidate_stale_palette_result(&mut self) {
+        let stamp = self.input_stamp();
+        self.invalidate_stale_palette_result_for(&stamp, self.palette_state.num_colors);
     }
 
     pub(crate) fn render_palette_panel(
@@ -168,6 +258,8 @@ impl ImagePreviewState {
         ctx: &egui::Context,
         palette: &AppPalette,
     ) {
+        self.invalidate_stale_palette_result();
+
         let accent = hex_to_c32(&palette.harmonies.base);
         let secondary = hex_to_c32(&palette.harmonies.triadic_1);
         let surface = hex_to_c32(&palette.colors.surface_panel);
@@ -196,6 +288,7 @@ impl ImagePreviewState {
                 .clicked()
             {
                 self.run_palette_extraction();
+                ctx.request_repaint();
             }
 
             let copy = crate::secondary_button("Copy CSV", surface, palette);
@@ -228,6 +321,15 @@ impl ImagePreviewState {
         });
 
         ui.add_space(10.0);
+        if self.palette_state.is_extracting {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Extracting palette…");
+            });
+        }
+        if let Some(error) = &self.palette_state.error {
+            ui.colored_label(hex_to_c32(&palette.colors.text_primary), error);
+        }
         ui.separator();
         ui.add_space(crate::ui_ext::SPACE_SM);
         ui.horizontal(|ui| {
@@ -264,6 +366,7 @@ impl ImagePreviewState {
                 .clicked()
             {
                 self.run_palette_extraction();
+                ctx.request_repaint();
             }
             return;
         }
@@ -341,7 +444,9 @@ mod tests {
         let item = little_clip_core::ClipItem::from_image(png_bytes, 4, 1, "image/png");
         let mut state = ImagePreviewState::from_item(&item, &config).unwrap();
         state.palette_state.num_colors = 2;
-        state.run_palette_extraction();
+        let jobs = BackgroundJobs::new(1, 1);
+        state.start_palette_extraction(&jobs);
+        wait_for_palette(&mut state);
 
         let extracted_hex: Vec<_> = state
             .palette_state
@@ -399,5 +504,308 @@ mod tests {
         );
 
         assert_eq!(copied.platform_output.copied_text, "#123456, #FEDCBA");
+    }
+
+    fn palette_state_for_image(image: RgbaImage) -> ImagePreviewState {
+        let mut bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let item = little_clip_core::ClipItem::from_image(
+            bytes,
+            image.width(),
+            image.height(),
+            "image/png",
+        );
+        ImagePreviewState::from_item(&item, &little_clip_core::config::AppConfig::default())
+            .unwrap()
+    }
+
+    fn wait_for_palette(state: &mut ImagePreviewState) {
+        let context = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while state.palette_state.is_extracting && std::time::Instant::now() < deadline {
+            state.poll_palette_extraction(&context);
+            std::thread::yield_now();
+        }
+        assert!(
+            !state.palette_state.is_extracting,
+            "palette worker timed out"
+        );
+    }
+
+    #[test]
+    fn large_palette_extraction_preserves_exact_colors_and_order() {
+        let image = RgbaImage::from_fn(2048, 512, |x, y| {
+            let band = ((x / 256) + (y / 128)) % 4;
+            let rgb = match band {
+                0 => [0x12, 0x34, 0x56],
+                1 => [0xFE, 0xDC, 0xBA],
+                2 => [0x36, 0x9A, 0x20],
+                _ => [0x75, 0x28, 0xC0],
+            };
+            image::Rgba([rgb[0], rgb[1], rgb[2], 255])
+        });
+        let mut state = palette_state_for_image(image);
+        state.palette_state.num_colors = 4;
+        let expected = extract_palette(&state.current_display_image(), 4);
+        let jobs = BackgroundJobs::new(1, 1);
+
+        state.start_palette_extraction(&jobs);
+        assert!(state.palette_state.is_extracting);
+        wait_for_palette(&mut state);
+
+        assert_eq!(state.palette_state.extracted_colors, expected.0);
+        assert_eq!(state.palette_state.total_sampled, expected.1);
+        assert!(state.palette_state.is_extracted);
+        assert!(state.palette_state.error.is_none());
+    }
+
+    #[test]
+    fn palette_queue_saturation_is_visible_and_clears_pending_state() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let _blocker = jobs.submit(Duration::MAX, move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let _queued = jobs.submit(Duration::MAX, || ());
+
+        let mut state = palette_state_for_image(RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([0x12, 0x34, 0x56, 255]),
+        ));
+        state.start_palette_extraction(&jobs);
+        let context = egui::Context::default();
+        state.poll_palette_extraction(&context);
+
+        assert!(!state.palette_state.is_extracting);
+        let expected = "Palette extraction failed: background job queue is full";
+        assert_eq!(state.palette_state.error.as_deref(), Some(expected));
+        let palette = AppPalette::default();
+        let output = context.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_palette_panel(ui, ctx, &palette);
+                });
+            },
+        );
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == expected)
+        }));
+
+        let _ = release_tx.send(());
+    }
+
+    #[test]
+    fn pending_palette_extraction_is_visible() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let _blocker = jobs.submit(Duration::MAX, move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let mut state = palette_state_for_image(RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([0x12, 0x34, 0x56, 255]),
+        ));
+        state.start_palette_extraction(&jobs);
+
+        let context = egui::Context::default();
+        let palette = AppPalette::default();
+        let output = context.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_palette_panel(ui, ctx, &palette);
+                });
+            },
+        );
+        assert!(state.palette_state.is_extracting);
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == "Extracting palette…")
+        }));
+
+        drop(state);
+        let _ = release_tx.send(());
+    }
+
+    #[test]
+    fn palette_result_is_ignored_after_source_changes() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let _blocker = jobs.submit(Duration::MAX, move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let mut state = palette_state_for_image(RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([0x12, 0x34, 0x56, 255]),
+        ));
+        state.start_palette_extraction(&jobs);
+        state.mark_pixels_changed();
+        state.poll_palette_extraction(&egui::Context::default());
+
+        assert!(!state.palette_state.is_extracting);
+        assert!(!state.palette_state.is_extracted);
+        assert!(state.palette_state.extracted_colors.is_empty());
+        assert!(state.palette_ticket.is_none());
+        assert!(state.palette_rx.is_none());
+
+        let _ = release_tx.send(());
+    }
+
+    #[test]
+    fn palette_result_is_ignored_after_target_count_changes() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let _blocker = jobs.submit(Duration::MAX, move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let mut state = palette_state_for_image(RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([0x12, 0x34, 0x56, 255]),
+        ));
+        state.palette_state.num_colors = 5;
+        state.start_palette_extraction(&jobs);
+        state.palette_state.num_colors = 2;
+        state.poll_palette_extraction(&egui::Context::default());
+
+        assert!(!state.palette_state.is_extracting);
+        assert!(!state.palette_state.is_extracted);
+        assert!(state.palette_state.extracted_colors.is_empty());
+        assert!(state.palette_ticket.is_none());
+        assert!(state.palette_rx.is_none());
+
+        let _ = release_tx.send(());
+    }
+
+    #[test]
+    fn dropping_image_viewer_cancels_queued_palette_extraction() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let _blocker = jobs.submit(Duration::MAX, move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let mut state = palette_state_for_image(RgbaImage::from_pixel(
+            8,
+            8,
+            image::Rgba([0x12, 0x34, 0x56, 255]),
+        ));
+        state.start_palette_extraction(&jobs);
+        let result_rx = state.palette_rx.take().unwrap();
+        drop(state);
+
+        let _ = release_tx.send(());
+        assert!(matches!(
+            result_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Err(little_clip_core::JobError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn changed_source_invalidates_previous_palette_before_copy() {
+        let image = RgbaImage::from_pixel(4, 4, image::Rgba([0x12, 0x34, 0x56, 255]));
+        let mut state = palette_state_for_image(image);
+        let (colors, total_sampled) = extract_palette(&state.current_display_image(), 8);
+        state.palette_state.extracted_colors = colors;
+        state.palette_state.total_sampled = total_sampled;
+        state.palette_state.is_extracted = true;
+        state.palette_results_stamp = Some(state.input_stamp());
+        state.palette_results_count = Some(8);
+        state.mark_pixels_changed();
+
+        let palette = AppPalette::default();
+        let context = egui::Context::default();
+        let render = |state: &mut ImagePreviewState, time, events| {
+            context.run(
+                egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_palette_panel(ui, ctx, &palette);
+                    });
+                },
+            )
+        };
+        let initial = render(&mut state, 0.0, Vec::new());
+        assert!(state.palette_state.extracted_colors.is_empty());
+        assert!(!state.palette_state.is_extracted);
+        let copy_center = rendered_copy_csv_button_center(&initial);
+        render(
+            &mut state,
+            0.1,
+            vec![
+                egui::Event::PointerMoved(copy_center),
+                egui::Event::PointerButton {
+                    pos: copy_center,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ],
+        );
+        let clicked = render(
+            &mut state,
+            0.2,
+            vec![
+                egui::Event::PointerMoved(copy_center),
+                egui::Event::PointerButton {
+                    pos: copy_center,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::default(),
+                },
+            ],
+        );
+        assert!(clicked.platform_output.copied_text.is_empty());
     }
 }

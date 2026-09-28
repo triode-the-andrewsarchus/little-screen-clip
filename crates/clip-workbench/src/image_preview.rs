@@ -14,7 +14,9 @@ use image::RgbaImage;
 #[cfg(test)]
 use little_clip_core::ClipItem;
 use little_clip_core::palette::AppPalette;
-use little_clip_core::{AppConfig, CommandRequest, HandSide, IpcRequest};
+use little_clip_core::{
+    AppConfig, BackgroundJobs, CommandRequest, HandSide, IpcRequest, JobTicket,
+};
 use little_clip_ops::barcode::BarcodeDetection;
 use little_clip_ops::creative_fx::{
     CmykHalftoneParams, CreativeFxMaskSource, CreativeFxParams, CreativeFxType, DepthMaskConfig,
@@ -110,6 +112,14 @@ pub struct ImagePreviewState {
 
     // Palette State
     pub palette_state: PaletteState,
+    pub(crate) palette_ticket: Option<JobTicket>,
+    pub(crate) palette_rx: Option<
+        std::sync::mpsc::Receiver<Result<(Vec<PaletteColor>, usize), little_clip_core::JobError>>,
+    >,
+    pub(crate) palette_request_stamp: Option<ImageInputStamp>,
+    pub(crate) palette_request_count: Option<usize>,
+    pub(crate) palette_results_stamp: Option<ImageInputStamp>,
+    pub(crate) palette_results_count: Option<usize>,
 
     // Viewport Navigation
     pub pan: Vec2,
@@ -338,6 +348,12 @@ impl ImagePreviewState {
             pick_color_state: PickColorState::default(),
             resize_state,
             palette_state,
+            palette_ticket: None,
+            palette_rx: None,
+            palette_request_stamp: None,
+            palette_request_count: None,
+            palette_results_stamp: None,
+            palette_results_count: None,
             pan: Vec2::ZERO,
             zoom: 1.0,
             auto_fitted: false,
@@ -972,6 +988,9 @@ impl ImagePreviewState {
         }
 
         // Poll background file size optimizer if running
+        self.poll_palette_extraction(ctx);
+
+        // Poll background file size optimizer if running
         self.poll_optimizer();
         if self.resize_state.is_optimizing {
             ctx.request_repaint();
@@ -1259,6 +1278,7 @@ impl ImagePreviewState {
             | ImageToolMode::RemoveBg
             | ImageToolMode::DepthMap => {}
             ImageToolMode::PickColor | ImageToolMode::Palette => {
+                self.invalidate_stale_palette_result();
                 if !self.palette_state.is_extracted
                     || self.palette_state.extracted_colors.is_empty()
                 {
@@ -3442,7 +3462,7 @@ mod tests {
         // Switching to Palette routes to PickColor and auto-runs palette extraction
         state.set_tool_mode(ImageToolMode::Palette);
         assert_eq!(state.active_mode, ImageToolMode::PickColor);
-        assert!(state.palette_state.is_extracted);
+        assert!(state.palette_state.is_extracting);
 
         // Switching to Crop
         state.set_tool_mode(ImageToolMode::Crop);
