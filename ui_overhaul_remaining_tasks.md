@@ -132,7 +132,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H1.3c1h [Luna + primary/Sol review] Add Creative FX stale-success, stale-failure, cache, and Apply regressions.** Tests cover current/stale render success and error, parameter/selection changes, reset/preset mask intent, current/stale mask results, source-specific cache invalidation, preview re-entry, thumbnail revision/epoch and disconnect handling, and stale Apply. Full workbench suite passes (296 passed, one ignored).
   - **H1.3c2 Bound async work and completion behavior**
     - [ ] **H1.3c2a [Primary] Bound async work for viewer-owned results.**
-    - [ ] **H1.3c2b [Primary] Repaint after async completion.**
+    - [x] **H1.3c2b [Luna implementation; primary review] Repaint after async completion.** The async repaint audit found one gap in Audio Inspect's directory-browse receiver; it now schedules a 50 ms poll while pending. A headless channel test verifies the repaint deadline and destination update. Other audited loader/viewer completions render in the polling frame or already schedule repaint. See `ui_overhaul_acceptance.md`.
   - [x] **H1.3c3 [Luna + primary review] Add stale-success and current-success tests for image preview workers.** Background/depth, OCR, barcode, conversion, and optimizer ownership are covered; Creative FX cases remain under H1.3c1h.
   - [x] **H1.3c4 [Luna + primary review] Add stale-failure and current-failure tests for image preview workers.** Background/depth, OCR, barcode, and conversion failures are covered; Creative FX cases remain under H1.3c1h.
   - **H1.3c5 Prove async completion causes no repeated side effects.** New requests and app drop cancel prior jobs. Do not build a general plugin/docking system.
