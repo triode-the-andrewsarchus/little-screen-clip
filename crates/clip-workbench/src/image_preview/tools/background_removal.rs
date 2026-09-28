@@ -15,6 +15,16 @@ pub(super) fn remove_background_rgba(
     configured_cmd: Option<&str>,
     prompt: Option<&str>,
 ) -> Result<RgbaImage, String> {
+    remove_background_rgba_cancellable(png_bytes, configured_cmd, prompt, None, None)
+}
+
+fn remove_background_rgba_cancellable(
+    png_bytes: &[u8],
+    configured_cmd: Option<&str>,
+    prompt: Option<&str>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    child_pid: Option<&std::sync::atomic::AtomicU32>,
+) -> Result<RgbaImage, String> {
     let (cmd_bin, cmd_args) = if let Some(cmd) = configured_cmd {
         let parts: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
         if parts.is_empty() {
@@ -32,6 +42,11 @@ pub(super) fn remove_background_rgba(
     };
 
     let mut cmd = Command::new(&cmd_bin);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     cmd.args(&cmd_args);
     if let Some(prompt) = prompt {
         cmd.arg("--prompt").arg(prompt);
@@ -50,16 +65,51 @@ pub(super) fn remove_background_rgba(
             )
         })?;
 
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        stdin
-            .write_all(png_bytes)
-            .map_err(|e| format!("Failed to write image data to worker: {}", e))?;
+    let pid = child.id();
+    if let Some(child_pid) = child_pid {
+        child_pid.store(pid, std::sync::atomic::Ordering::SeqCst);
+    }
+    if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) {
+        terminate_bg_removal_process(pid);
+        let _ = child.wait();
+        if let Some(child_pid) = child_pid {
+            clear_bg_removal_pid_if_owned(child_pid, pid);
+        }
+        return Err("Background removal cancelled".to_string());
     }
 
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Worker process failed: {}", e))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        if let Err(error) = stdin.write_all(png_bytes) {
+            terminate_bg_removal_process(pid);
+            let _ = child.wait();
+            if let Some(child_pid) = child_pid {
+                clear_bg_removal_pid_if_owned(child_pid, pid);
+            }
+            return Err(format!("Failed to write image data to worker: {}", error));
+        }
+    }
+
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(error) => {
+            if let Some(child_pid) = child_pid {
+                let owns_pid = clear_bg_removal_pid_if_owned(child_pid, pid);
+                if owns_pid {
+                    terminate_bg_removal_process(pid);
+                }
+            } else {
+                terminate_bg_removal_process(pid);
+            }
+            return Err(format!("Worker process failed: {}", error));
+        }
+    };
+    if let Some(child_pid) = child_pid {
+        clear_bg_removal_pid_if_owned(child_pid, pid);
+    }
+    if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) {
+        return Err("Background removal cancelled".to_string());
+    }
     if !output.status.success() {
         let err_str = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
@@ -72,6 +122,70 @@ pub(super) fn remove_background_rgba(
     image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
         .map(|image| image.to_rgba8())
         .map_err(|e| format!("Failed to decode output PNG: {}", e))
+}
+
+pub(super) fn terminate_bg_removal_process(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGTERM);
+        libc::kill(-(pid as i32), libc::SIGKILL);
+        libc::kill(pid as i32, libc::SIGTERM);
+        libc::kill(pid as i32, libc::SIGKILL);
+    }
+    #[cfg(not(unix))]
+    let _ = pid;
+}
+
+fn clear_bg_removal_pid_if_owned(child_pid: &std::sync::atomic::AtomicU32, pid: u32) -> bool {
+    child_pid
+        .compare_exchange(
+            pid,
+            0,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
+        .is_ok()
+}
+
+#[cfg(all(test, unix))]
+mod cancellation_tests {
+    use super::*;
+
+    #[test]
+    fn old_worker_cannot_clear_a_new_process_pid() {
+        let published_pid = std::sync::atomic::AtomicU32::new(202);
+
+        assert!(!clear_bg_removal_pid_if_owned(&published_pid, 101));
+        assert_eq!(published_pid.load(std::sync::atomic::Ordering::SeqCst), 202);
+    }
+
+    #[test]
+    fn cancellation_requested_before_pid_publication_terminates_spawned_child() {
+        let script =
+            std::env::temp_dir().join(format!("clip-bg-start-race-{}.py", std::process::id()));
+        std::fs::write(
+            &script,
+            "import sys,time\nsys.stdin.buffer.read()\ntime.sleep(30)\n",
+        )
+        .unwrap();
+        let configured = format!("python3 {}", script.display());
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        let pid = std::sync::atomic::AtomicU32::new(0);
+        let result = remove_background_rgba_cancellable(
+            b"input",
+            Some(&configured),
+            None,
+            Some(&cancelled),
+            Some(&pid),
+        );
+        assert_eq!(result.unwrap_err(), "Background removal cancelled");
+        let child_pid = pid.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(child_pid, 0);
+        let _ = std::fs::remove_file(script);
+    }
 }
 
 impl ImagePreviewState {
@@ -112,6 +226,10 @@ impl ImagePreviewState {
         self.bg_removal_in_progress = true;
         self.bg_removal_status = Some(status_desc);
         self.bg_removal_error = None;
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.bg_removal_cancel = Some(cancel.clone());
+        self.bg_removal_child_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let child_pid = self.bg_removal_child_pid.clone();
 
         let configured_cmd = self.bg_removal_cmd.clone();
         let thread_prompt = prompt_opt.clone();
@@ -125,10 +243,12 @@ impl ImagePreviewState {
             };
             let _ = tx_prog.send(BgRemovalMsg::Progress(init_msg));
 
-            match remove_background_rgba(
+            match remove_background_rgba_cancellable(
                 &png_bytes,
                 configured_cmd.as_deref(),
                 thread_prompt.as_deref(),
+                Some(&cancel),
+                Some(&child_pid),
             ) {
                 Ok(result_rgba) => {
                     let _ = tx.send(BgRemovalMsg::Success {
@@ -137,7 +257,9 @@ impl ImagePreviewState {
                     });
                 }
                 Err(error) => {
-                    let _ = tx.send(BgRemovalMsg::Error(error));
+                    if !cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        let _ = tx.send(BgRemovalMsg::Error(error));
+                    }
                 }
             }
         });
@@ -149,6 +271,7 @@ impl ImagePreviewState {
         if self.bg_removal_rx.is_some()
             && self.bg_removal_input_stamp.as_ref() != Some(&self.input_stamp())
         {
+            self.cancel_background_removal();
             self.bg_removal_rx = None;
             self.bg_removal_input_stamp = None;
             self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
@@ -240,6 +363,20 @@ impl ImagePreviewState {
             self.bg_removal_input_stamp = None;
             self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
         }
+    }
+
+    pub(crate) fn cancel_background_removal(&mut self) {
+        if let Some(cancel) = self.bg_removal_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        let pid = self
+            .bg_removal_child_pid
+            .swap(0, std::sync::atomic::Ordering::SeqCst);
+        terminate_bg_removal_process(pid);
+        self.bg_removal_rx = None;
+        self.bg_removal_input_stamp = None;
+        self.bg_removal_in_progress = false;
+        self.bg_removal_status = None;
     }
 
     /// Opens a native save-as dialog (zenity) or falls back to an in-app path input modal.

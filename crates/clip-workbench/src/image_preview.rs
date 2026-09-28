@@ -151,6 +151,8 @@ pub struct ImagePreviewState {
     pub bg_removal_status: Option<String>,
     pub bg_removal_error: Option<String>,
     pub bg_removal_cmd: Option<String>,
+    pub(crate) bg_removal_child_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    pub(crate) bg_removal_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub multimatte_prompt: String,
 
     // Format Conversion (Squoosh-style)
@@ -366,6 +368,8 @@ impl ImagePreviewState {
             bg_removal_status: None,
             bg_removal_error: None,
             bg_removal_cmd: config.image.bg_removal_cmd.clone(),
+            bg_removal_child_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            bg_removal_cancel: None,
             multimatte_prompt: String::new(),
             convert_state: ConvertState::default(),
             ocr_state: OcrState::default(),
@@ -1215,6 +1219,13 @@ impl ImagePreviewState {
             && self.ocr_state.in_progress
         {
             self.cancel_ocr();
+        }
+        if prev_mode == ImageToolMode::RemoveBg
+            && target_mode != ImageToolMode::RemoveBg
+            && self.bg_removal_in_progress
+            && self.bg_removal_operation == BgRemovalOperation::BackgroundRemoval
+        {
+            self.cancel_background_removal();
         }
         match target_mode {
             ImageToolMode::View
@@ -2920,6 +2931,98 @@ mod tests {
         // Test Redo
         state.redo();
         assert_eq!(state.current_rgba.get_pixel(10, 10)[3], 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn background_removal_process_is_terminated_for_stale_input_mode_exit_and_drop() {
+        fn start_sleeping_job(
+            state: &mut ImagePreviewState,
+        ) -> (
+            std::sync::Arc<std::sync::atomic::AtomicBool>,
+            u32,
+            std::path::PathBuf,
+        ) {
+            let script =
+                std::env::temp_dir().join(format!("clip-bg-sleep-{}.py", std::process::id()));
+            std::fs::write(
+                &script,
+                "import sys,time\nsys.stdin.buffer.read()\ntime.sleep(30)\n",
+            )
+            .unwrap();
+            state.bg_removal_cmd = Some(format!("python3 {}", script.display()));
+            state.set_tool_mode(ImageToolMode::RemoveBg);
+            state.run_background_removal();
+            let cancel = state.bg_removal_cancel.as_ref().unwrap().clone();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while state
+                .bg_removal_child_pid
+                .load(std::sync::atomic::Ordering::SeqCst)
+                == 0
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_ne!(
+                state
+                    .bg_removal_child_pid
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                0
+            );
+            let pid = state
+                .bg_removal_child_pid
+                .load(std::sync::atomic::Ordering::SeqCst);
+            (cancel, pid, script)
+        }
+
+        fn assert_process_exited(pid: u32) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while std::time::Instant::now() < deadline {
+                let result = unsafe { libc::kill(pid as i32, 0) };
+                if result == -1
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+                {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            panic!("background-removal child {pid} remained alive after cancellation");
+        }
+
+        let mut stale = image_state_from_png((8, 8), "cancel stale background");
+        let (stale_cancel, stale_pid, stale_script) = start_sleeping_job(&mut stale);
+        stale.markup_state.items.push(MarkupShape::Text {
+            pos: Pos2::ZERO,
+            text: "changed".into(),
+            font_size: 10.0,
+        });
+        stale.poll_bg_removal();
+        assert!(stale_cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_process_exited(stale_pid);
+        assert_eq!(
+            stale
+                .bg_removal_child_pid
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        drop(stale);
+        let _ = std::fs::remove_file(stale_script);
+
+        let mut mode_exit = image_state_from_png((8, 8), "cancel background mode");
+        let (mode_cancel, mode_pid, mode_script) = start_sleeping_job(&mut mode_exit);
+        mode_exit.set_tool_mode(ImageToolMode::View);
+        assert!(mode_cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_process_exited(mode_pid);
+        assert!(!mode_exit.bg_removal_in_progress);
+        drop(mode_exit);
+        let _ = std::fs::remove_file(mode_script);
+
+        let mut viewer_drop = image_state_from_png((8, 8), "drop background viewer");
+        let (drop_cancel, drop_pid, drop_script) = start_sleeping_job(&mut viewer_drop);
+        drop(viewer_drop);
+        assert!(drop_cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_process_exited(drop_pid);
+        let _ = std::fs::remove_file(drop_script);
     }
 
     #[test]
