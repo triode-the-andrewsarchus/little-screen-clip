@@ -243,6 +243,23 @@ On named reference hardware, capture UI-frame time during idle, scroll, zoom, pl
 
 Baseline startup observation: the 55 initially mapped matrix cases took 328–1333 ms from process start to the first polling observation (median 359 ms); the serial retry took 330 ms. This includes process initialization/polling and runs under concurrent software-renderer load. No 16.7 ms UI-frame measurement or interaction-performance pass is implied. Dedicated profiling remains H2/H3 work.
 
+### H2.2c6 headless text-preview benchmark
+
+Command: `cargo test --release -p clip-workbench --bin clip-workbench benchmark_large_text_preview_frames_across_width_dpi_appearance -- --ignored --nocapture --test-threads=1` (passed in 372.48 s). The fixture has 12,000 logical Rust-like lines, 819,650 source bytes, 12,095 display fragments, and periodic 8 KiB lines. Eight cases cover 640×520 and 1180×720 point viewports, native pixel scales 1.0/1.5, and Light/Dark appearance. Timings are milliseconds; idle and scroll columns are p50/p95/max across 60 frames. Reflow changes viewport width by 80 points and flips scale, then records geometry settlement.
+
+| Appearance | Viewport | Scale | Construct | Cold frame | Idle p50/p95/max | Scroll p50/p95/max | Reflow first | Reflow settle |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Light | 640×520 | 1.0 | 0.629 | 111.780 | 90.909/94.195/94.822 | 90.099/93.685/94.705 | 92.313 | 189 frames / 17.211 s |
+| Light | 640×520 | 1.5 | 0.495 | 94.418 | 91.014/92.775/93.510 | 90.968/92.403/92.793 | 94.168 | 189 frames / 17.182 s |
+| Dark | 640×520 | 1.0 | 0.350 | 90.619 | 91.203/92.614/94.331 | 89.685/91.141/91.304 | 89.263 | 189 frames / 16.942 s |
+| Dark | 640×520 | 1.5 | 0.301 | 93.340 | 88.829/90.248/91.199 | 89.336/91.135/92.080 | 92.107 | 189 frames / 16.920 s |
+| Light | 1180×720 | 1.0 | 0.312 | 90.590 | 91.747/93.317/93.635 | 92.687/183.692/184.375 | 91.279 | 189 frames / 17.115 s |
+| Light | 1180×720 | 1.5 | 0.320 | 91.374 | 90.760/92.702/92.873 | 92.265/182.109/182.258 | 92.461 | 189 frames / 17.048 s |
+| Dark | 1180×720 | 1.0 | 0.336 | 89.663 | 90.720/92.068/92.376 | 92.972/185.111/186.212 | 93.054 | 189 frames / 17.216 s |
+| Dark | 1180×720 | 1.5 | 0.332 | 93.347 | 90.679/91.994/92.274 | 91.700/182.999/184.138 | 93.527 | 189 frames / 17.162 s |
+
+Each timed frame measures the CPU duration around headless `egui::Context::run` and reports emitted shape count. This includes egui layout and shape generation, but excludes tessellation, graphics backend/GPU, window system, vsync, and compositor work; it cannot certify real 16.7 ms presentation. The synthetic minimap is prepopulated with 4,001 deterministic samples, so these timings include its production paint/index lookup path but exclude asynchronous syntax-highlighting preparation and worker scheduling. Observed warmed idle p50 was 88.829–91.747 ms; scroll p95 was 91.135–185.111 ms. The measured CPU work is well above 16.7 ms, so the headless result does not pass the interaction target. Source inspection identifies full-source line/character counts and per-sample minimap row lookups in the render path, but this benchmark does not isolate their individual costs. Named-hardware frame profiling remains open under H3.2e.
+
 ## Repeatable capture runner validation
 
 `scripts/ui_acceptance_capture.py` reproduces the isolated setup. Example:
