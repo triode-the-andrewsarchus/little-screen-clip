@@ -1155,6 +1155,9 @@ impl TextPreviewState {
                                     &self.line_starts,
                                     syntax,
                                 );
+                                if self.minimap_lines.next_source_line < self.line_starts.len() {
+                                    ui.ctx().request_repaint();
+                                }
                             }
                         },
                     );

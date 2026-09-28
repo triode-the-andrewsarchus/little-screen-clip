@@ -459,7 +459,9 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **H2.2c2b [Primary] Prepare clipboard text previews on the cancellable background loader.** Full content, Markdown detection, line indexing, and fragment indexing stay intact; exact search and copy data remain available after loading.
       - [ ] **H2.2c2c [Primary] Bound CSV and smart-preview routing checks for pathological clipboard payloads.** Preserve valid spreadsheet routing and text fallback without long frame work.
     - [ ] **H2.2c3 [Primary] Bound syntax preparation for pathological documents.**
-    - [ ] **H2.2c4 [Primary] Bound minimap preparation for pathological documents.**
+    - **H2.2c4 Bound minimap preparation for pathological documents.**
+      - [x] **H2.2c4a [Luna/Primary] Batch minimap syntax work and cap retained samples.** Process at most 128 source lines per frame, schedule repaint until complete, retain at most 4096 source-positioned samples, and keep navigation aligned to original rows.
+      - [ ] **H2.2c4b [Primary] Bound highlighting cost for a single pathological source line.** The current frame budget is line-count based; one extremely long line can still take substantial time inside syntect.
     - [ ] **H2.2c5 [Primary] Bound text layout/cache lifetime.**
     - [ ] **H2.2c6 [Primary] Measure large-document performance across width and DPI changes in both appearances.** Keep 60 Hz interaction target; geometry tests are not performance evidence.
   - [x] **H2.2d Consolidate image canvas readouts.** `CanvasBadge` covers Convert, Decorrelation Stretch and Deskew corners; bounded widths, opaque centralized surfaces, shared comparison drawing/hit tests; tests cover geometry, contrast and handles. Numeric matrix scrolls without shrinking/precision changes. Architecture comparison reduces clone groups by three, peak CCN unchanged, no new hotspot.
