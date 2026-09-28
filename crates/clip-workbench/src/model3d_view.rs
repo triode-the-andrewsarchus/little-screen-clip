@@ -366,10 +366,10 @@ impl Model3dViewerState {
                         "Open 3D model in Blender / FreeCAD",
                     ).with_icon(Icon::Model3d))
                     .with_footer_hints(
-                        "Left Drag: Orbit • Right/Mid Drag: Pan • Scroll: Zoom • Esc: Close",
+                        "Drag: Orbit • Right/Mid: Pan • Scroll: Zoom • Esc: Close",
                     )
                     .with_footer_readout(format!(
-                        "Pitch: {:.1}° • Yaw: {:.1}° • Zoom: {:.1}x",
+                        "Pitch {:.1}° • Yaw {:.1}° • Zoom {:.1}×",
                         self.pitch.to_degrees(),
                         self.yaw.to_degrees(),
                         self.zoom
@@ -501,11 +501,17 @@ impl Model3dViewerState {
                 ui.separator();
                 ui.add_space(crate::ui_ext::SPACE_XS);
 
-                // Interactive 3D Canvas
-                let mut available_size = ui.available_size();
-                available_size.y = (available_size.y - 32.0).max(100.0);
-                let (canvas_rect, response) =
-                    ui.allocate_exact_size(available_size, egui::Sense::click_and_drag());
+                let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
+                // Place the footer first in a bottom-up region. Its actual wrapped height is
+                // reserved before allocating the canvas, so narrow hosts do not clip it and
+                // wide hosts keep the extra height for the model.
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    shell.render_footer(ui, &toast_tuple, now);
+
+                    // Interactive 3D Canvas
+                    let available_size = ui.available_size();
+                    let (canvas_rect, response) =
+                        ui.allocate_exact_size(available_size, egui::Sense::click_and_drag());
                 let painter = ui.painter_at(canvas_rect);
 
                 // Background dark canvas
@@ -550,9 +556,7 @@ impl Model3dViewerState {
                     accent,
                     budget,
                 );
-
-                let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
-                shell.render_footer(ui, &toast_tuple, now);
+                });
             });
     }
 }
@@ -714,11 +718,19 @@ mod tests {
     fn render_text_at_width(
         viewer: &mut Model3dViewerState,
         width: f32,
-    ) -> Vec<(String, egui::Rect, bool)> {
+    ) -> Vec<(String, egui::Rect, bool, egui::Rect)> {
+        render_text_at_size(viewer, width, 720.0)
+    }
+
+    fn render_text_at_size(
+        viewer: &mut Model3dViewerState,
+        width: f32,
+        height: f32,
+    ) -> Vec<(String, egui::Rect, bool, egui::Rect)> {
         let ctx = egui::Context::default();
         crate::ui_ext::configure_workbench_style(&ctx);
         let palette = AppPalette::default();
-        let host = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 720.0));
+        let host = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
         let output = ctx.run(
             egui::RawInput {
                 screen_rect: Some(host),
@@ -740,7 +752,12 @@ mod tests {
                     return None;
                 };
                 let bounds = text.galley.rect.translate(text.pos.to_vec2());
-                Some((text.galley.job.text.clone(), bounds, text.galley.elided))
+                Some((
+                    text.galley.job.text.clone(),
+                    bounds,
+                    text.galley.elided,
+                    clipped.clip_rect,
+                ))
             })
             .collect()
     }
@@ -799,9 +816,9 @@ mod tests {
             let mut ready = Model3dViewerState::from_model(test_mesh(), None);
             let toolbar_text = render_text_at_width(&mut ready, width);
             for required in ["Pause Rotation", "Wireframe", "Axis: Y-Up", "Reset View"] {
-                let (text, bounds, elided) = toolbar_text
+                let (text, bounds, elided, _) = toolbar_text
                     .iter()
-                    .find(|(text, _, _)| text.contains(required))
+                    .find(|(text, _, _, _)| text.contains(required))
                     .unwrap_or_else(|| panic!("{required:?} missing at {size_name} width {width}"));
                 assert!(!elided, "{required:?} elided at {size_name} width {width}");
                 assert!(
@@ -814,9 +831,9 @@ mod tests {
             let mut loading = Model3dViewerState::from_model(test_mesh(), None);
             loading.status = ModelLoadingStatus::Loading;
             let loading_text = render_text_at_width(&mut loading, width);
-            let (_, loading_bounds, loading_elided) = loading_text
+            let (_, loading_bounds, loading_elided, _) = loading_text
                 .iter()
-                .find(|(text, _, _)| text.contains("Parsing 3D mesh geometry with Scenix"))
+                .find(|(text, _, _, _)| text.contains("Parsing 3D mesh geometry with Scenix"))
                 .unwrap_or_else(|| panic!("loading copy missing at {size_name} width {width}"));
             assert!(
                 !loading_elided,
@@ -834,15 +851,73 @@ mod tests {
             );
             let error_text = render_text_at_width(&mut error, width);
             for required in ["Unable to load 3D model:", "Unsupported geometry format"] {
-                let (_, bounds, elided) = error_text
+                let (_, bounds, elided, _) = error_text
                     .iter()
-                    .find(|(text, _, _)| text.contains(required))
+                    .find(|(text, _, _, _)| text.contains(required))
                     .unwrap_or_else(|| panic!("{required:?} missing at {size_name} width {width}"));
                 assert!(!elided, "{required:?} elided at {size_name} width {width}");
                 assert!(
                     egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 720.0))
                         .contains_rect(*bounds),
                     "{required:?} outside host at {size_name} width {width}: {bounds:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ready_footer_fits_short_compact_and_wide_hosts() {
+        let hint = "Drag: Orbit • Right/Mid: Pan • Scroll: Zoom • Esc: Close";
+        for (size_name, width, height) in [("compact", 588.0, 331.0), ("wide", 736.0, 414.0)] {
+            let mut ready = Model3dViewerState::from_model(test_mesh(), None);
+            let texts = render_text_at_size(&mut ready, width, height);
+            for required in [
+                "Drag: Orbit",
+                "Right/Mid: Pan",
+                "Scroll: Zoom",
+                "Esc: Close",
+            ] {
+                let (text, bounds, elided, clip_rect) = texts
+                    .iter()
+                    .find(|(text, _, _, _)| text.contains(required))
+                    .unwrap_or_else(|| panic!("{required:?} missing at {size_name}"));
+                assert!(!elided, "{required:?} elided at {size_name}: {text:?}");
+                assert!(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))
+                        .contains_rect(*bounds),
+                    "{required:?} outside {size_name} host: {bounds:?}"
+                );
+                assert!(
+                    clip_rect.contains_rect(*bounds),
+                    "{required:?} clipped at {size_name}: bounds={bounds:?}, clip={clip_rect:?}"
+                );
+            }
+
+            assert_eq!(
+                hint,
+                texts
+                    .iter()
+                    .find(|(text, _, _, _)| text == hint)
+                    .map(|(text, _, _, _)| text.as_str())
+                    .unwrap_or_else(|| panic!("complete hint missing at {size_name}"))
+            );
+            for required in ["Pitch", "Yaw", "Zoom"] {
+                let (text, bounds, elided, clip_rect) = texts
+                    .iter()
+                    .find(|(text, _, _, _)| text.contains(required))
+                    .unwrap_or_else(|| panic!("{required:?} readout missing at {size_name}"));
+                assert!(
+                    !elided,
+                    "{required:?} readout elided at {size_name}: {text:?}"
+                );
+                assert!(
+                    egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))
+                        .contains_rect(*bounds),
+                    "{required:?} readout outside {size_name} host: {bounds:?}"
+                );
+                assert!(
+                    clip_rect.contains_rect(*bounds),
+                    "{required:?} readout clipped at {size_name}: bounds={bounds:?}, clip={clip_rect:?}"
                 );
             }
         }
