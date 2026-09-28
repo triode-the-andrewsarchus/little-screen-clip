@@ -2,6 +2,10 @@
 
 Working evidence sheet for E1.4 and final acceptance. Record each run with date, commit, display mode, compositor/UI scale, action, result, and screenshot or log path. A blank result means **not tested**, not passed. Keep hardware USB tests separate from virtual/display-render checks.
 
+## Fixed popup hints across the recorded size matrix, 2026-09-28
+
+The 56-case private Niri matrix in `/tmp/clip-e1-matrix-complete` plus serial retry `/tmp/clip-e1-matrix-retries` covers every recorded logical-size, scale, and appearance case. Each successful report records `initial_wayland_size_hints.min_size == max_size`, matching the expected popup size; the initial map and final size checks also pass. The first timed-out case produced no hint report and its serial retry did. This confirms fixed size hints on these tested private outputs; mixed physical output scales, actual maximize requests, and first-visible-frame placement remain separate open checks.
+
 ## Large single-line text previews, 2026-09-28
 
 H2.2c1 splits raw text lines into UTF-8-safe display fragments of at most 4 KiB before measurement or rendering. The source remains intact for regex/literal search and full-content copy; search navigation maps the exact match byte to the fragment containing it. Regression tests verify exact fragment reconstruction, Unicode boundaries, far-end search/navigation, and the maximum text size passed to rendered galleys. `cargo test -p clip-workbench --bin clip-workbench -- --test-threads=1` passes (416 passed, 1 ignored), and formatting plus `git diff --check` pass. Live pointer selection across forced continuation fragments and performance measurements remain unverified; these are tracked separately under H2.2e7 and H2.2c6. The architecture baseline service timed out after five minutes, so no metric comparison is claimed.
