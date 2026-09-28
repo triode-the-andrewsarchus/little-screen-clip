@@ -802,13 +802,13 @@ impl TextPreviewState {
         self.search_revision = self.search_revision.wrapping_add(1);
         self.matches = None;
         self.match_count = 0;
-        self.active_match_idx = 0;
         self.regex_error = None;
         self.search_error = None;
         self.search_retry_at = None;
         if self.find_query.is_empty() {
             self.search_pending = false;
             self.search_debounce_until = None;
+            self.active_match_idx = 0;
             return;
         }
         self.search_pending = true;
@@ -867,8 +867,7 @@ impl TextPreviewState {
                 let job = self.search_job.take().expect("polled search job");
                 if job.revision == self.search_revision {
                     self.search_pending = false;
-                    self.search_error =
-                        Some("search worker stopped before returning results".into());
+                    self.fail_search("search worker stopped before returning results".into());
                 }
                 return;
             }
@@ -881,10 +880,16 @@ impl TextPreviewState {
             Ok(Ok(SearchBuildOutput::Matches(spool))) => {
                 self.match_count = spool.len();
                 self.matches = Some(spool);
+                self.active_match_idx = if self.match_count == 0 {
+                    0
+                } else {
+                    self.active_match_idx.min(self.match_count - 1)
+                };
                 self.search_pending = false;
                 self.search_retry_at = None;
             }
             Ok(Ok(SearchBuildOutput::InvalidRegex(error))) => {
+                self.active_match_idx = 0;
                 self.regex_error = Some(error);
                 self.search_pending = false;
             }
@@ -893,23 +898,37 @@ impl TextPreviewState {
                 self.search_retry_at = Some(now + SEARCH_RETRY_DELAY);
             }
             Ok(Err(error)) => {
-                self.search_error = Some(error);
+                self.fail_search(error);
                 self.search_pending = false;
             }
             Err(JobError::Cancelled) => {
                 self.search_pending = false;
             }
             Err(error) => {
-                self.search_error = Some(error.to_string());
+                self.fail_search(error.to_string());
                 self.search_pending = false;
             }
         }
     }
 
     fn search_match_at(&mut self, index: u64) -> Option<SearchMatch> {
-        let range = self.matches.as_mut()?.get(index).ok()?;
-        let start_byte = usize::try_from(range.start_byte).ok()?;
-        let end_byte = usize::try_from(range.end_byte).ok()?;
+        let range = match self.matches.as_mut()?.get(index) {
+            Ok(range) => range,
+            Err(error) => {
+                self.fail_search(format!("could not read search results: {error}"));
+                return None;
+            }
+        };
+        let (start_byte, end_byte) = match (
+            usize::try_from(range.start_byte),
+            usize::try_from(range.end_byte),
+        ) {
+            (Ok(start), Ok(end)) => (start, end),
+            _ => {
+                self.fail_search("search result exceeds platform address size".into());
+                return None;
+            }
+        };
         let line = self
             .line_starts
             .partition_point(|start| *start <= start_byte);
@@ -918,6 +937,13 @@ impl TextPreviewState {
             end_byte,
             line,
         })
+    }
+
+    fn fail_search(&mut self, error: String) {
+        self.matches = None;
+        self.match_count = 0;
+        self.active_match_idx = 0;
+        self.search_error = Some(error);
     }
 
     pub fn match_count(&self) -> u64 {
@@ -1037,6 +1063,7 @@ impl TextPreviewState {
             .unwrap_or(0.0);
 
         self.handle_shortcuts(ctx, close);
+        self.service_search_jobs(ctx, BackgroundJobs::global(), Instant::now());
 
         let total_lines = self.content.lines().count().max(1);
         let total_chars = self.content.chars().count();
@@ -1314,7 +1341,6 @@ impl TextPreviewState {
     }
 
     fn render_search_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        self.service_search_jobs(ui.ctx(), BackgroundJobs::global(), Instant::now());
         ui.add_space(crate::ui_ext::SPACE_SM);
         egui::Frame::none()
             .fill(hex_to_c32(&palette.colors.surface_recessed))
@@ -1380,7 +1406,6 @@ impl TextPreviewState {
                     self.render_search_options(ui, palette);
                 });
             });
-        self.service_search_jobs(ui.ctx(), BackgroundJobs::global(), Instant::now());
     }
 
     /// Renders styled markdown view.
@@ -1545,19 +1570,28 @@ impl TextPreviewState {
                                     let fragment = self.code_fragments[row];
                                     let line =
                                         &self.content[fragment.start_byte..fragment.end_byte];
-                                    let matches =
-                                        self.matches.as_mut().map_or_else(Vec::new, |spool| {
-                                            line_highlight_ranges_from_spool(
-                                                spool,
-                                                self.active_match_idx,
-                                                fragment.start_byte,
-                                                fragment.end_byte,
-                                            )
-                                            .unwrap_or_default()
-                                        });
+                                    let highlight_result = self.matches.as_mut().map(|spool| {
+                                        line_highlight_ranges_from_spool(
+                                            spool,
+                                            self.active_match_idx,
+                                            fragment.start_byte,
+                                            fragment.end_byte,
+                                        )
+                                    });
+                                    let (matches, search_read_error) = match highlight_result {
+                                        Some(Ok(matches)) => (matches, None),
+                                        Some(Err(error)) => (
+                                            Vec::new(),
+                                            Some(format!("could not read search results: {error}")),
+                                        ),
+                                        None => (Vec::new(), None),
+                                    };
                                     let mut job = build_highlighted_layout_job(
                                         line, syntax, palette, &matches,
                                     );
+                                    if let Some(error) = search_read_error {
+                                        self.fail_search(error);
+                                    }
                                     job.wrap.max_width = wrap_width;
                                     let galley = ui.fonts(|fonts| fonts.layout_job(job));
                                     let height = (galley.size().y + 4.0).max(line_height);
@@ -2247,6 +2281,79 @@ mod tests {
         assert!(state.search_pending);
         assert_eq!(state.match_count(), 0);
         assert!(state.matches.is_none());
+    }
+
+    #[test]
+    fn pending_search_completes_when_find_toolbar_is_hidden() {
+        let mut state =
+            TextPreviewState::from_text("needle here".to_owned(), None, &AppConfig::default());
+        state.find_query = "needle".to_owned();
+        state.update_search_matches();
+        state.search_debounce_until = Some(Instant::now());
+        assert!(!state.show_find);
+
+        let context = egui::Context::default();
+        let palette = AppPalette::default();
+        let mut close = false;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while state.search_pending && Instant::now() < deadline {
+            let _ = context.run(Default::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                });
+            });
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!state.search_pending);
+        assert_eq!(state.match_count(), 1);
+    }
+
+    #[test]
+    fn spool_read_failure_clears_completed_search_results() {
+        let mut state =
+            TextPreviewState::from_text("needle".to_owned(), None, &AppConfig::default());
+        let mut spool = SearchMatchSpool::new().unwrap();
+        spool.append(0, 6).unwrap();
+        spool.file.roll().unwrap();
+        spool.file.set_len(0).unwrap();
+        state.matches = Some(spool);
+        state.match_count = 1;
+        state.active_match_idx = 0;
+        state.search_match_at(0);
+
+        assert!(
+            state
+                .search_error
+                .as_deref()
+                .is_some_and(|error| { error.starts_with("could not read search results:") })
+        );
+        assert_eq!(state.match_count(), 0);
+        assert_eq!(state.active_match_idx, 0);
+        assert!(state.matches.is_none());
+    }
+
+    #[test]
+    fn recomputing_search_preserves_and_clamps_active_match_ordinal() {
+        let mut state =
+            TextPreviewState::from_text("one two two two".to_owned(), None, &AppConfig::default());
+        state.find_query = "two".to_owned();
+        update_search_matches_and_wait(&mut state);
+        state.active_match_idx = 2;
+        state.find_query = "t".to_owned();
+        update_search_matches_and_wait(&mut state);
+        assert_eq!(state.match_count(), 3);
+        assert_eq!(state.active_match_idx, 2);
+
+        state.find_query = "one".to_owned();
+        update_search_matches_and_wait(&mut state);
+        assert_eq!(state.match_count(), 1);
+        assert_eq!(state.active_match_idx, 0);
+
+        state.is_regex = true;
+        state.find_query = "(".to_owned();
+        update_search_matches_and_wait(&mut state);
+        assert!(state.regex_error.is_some());
+        assert_eq!(state.active_match_idx, 0);
     }
 
     #[test]
