@@ -3678,11 +3678,15 @@ mod tests {
         }]);
         let fraction =
             clicked_fraction.expect("marker click should yield a normalized scroll target");
-        let requested =
-            (fraction * rows.total_height() - 140.0).clamp(0.0, rows.total_height() - 280.0);
+        let marker_fraction = (click.y - content.top()) / content.height();
+        assert!((fraction - marker_fraction).abs() < 0.01);
+        let viewport_height = rows.total_height() * 0.2;
+        let requested = (fraction * rows.total_height() - viewport_height * 0.5)
+            .clamp(0.0, rows.total_height() - viewport_height);
         assert!(
             requested < rows.offset(first_fragment[target_line + 1])
-                && requested + 280.0 > rows.offset(first_fragment[target_line])
+                && requested + viewport_height > rows.offset(first_fragment[target_line]),
+            "centered synthetic viewport should overlap the wrapped source-line span"
         );
     }
 
