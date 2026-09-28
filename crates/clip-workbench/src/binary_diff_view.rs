@@ -2598,6 +2598,120 @@ mod tests {
         assert!(hex_hovered_output.shapes.iter().any(|clipped| {
             matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text().contains("LEFT: 0x55") && text.galley.text().contains("Off: 0x00000014"))
         }), "inspection footer should report the hovered later hex byte and offset");
+
+        // Pan farther in a second stage so the right ASCII section enters the
+        // viewport while the earlier hex checks remain at their smaller offset.
+        let _ = render(vec![
+            egui::Event::PointerMoved(pointer),
+            egui::Event::Scroll(Vec2::new(-410.0, 0.0)),
+        ]);
+        let mut ascii_settled = None;
+        for _ in 0..10 {
+            ascii_settled = Some(render(Vec::new()));
+        }
+        let (ascii_scrolled, ascii_scroll_x, _) = ascii_settled.unwrap();
+
+        let ascii_headers = |output: &egui::FullOutput| {
+            let mut headers: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "ASCII" => {
+                        Some((text.pos, text.galley.size(), clipped.clip_rect))
+                    }
+                    _ => None,
+                })
+                .collect();
+            headers.sort_by(|left, right| left.0.x.total_cmp(&right.0.x));
+            headers
+        };
+        let initial_ascii_headers = ascii_headers(&initial);
+        let scrolled_ascii_headers = ascii_headers(&ascii_scrolled);
+        assert_eq!(
+            initial_ascii_headers.len(),
+            2,
+            "both ASCII headers should be laid out"
+        );
+        assert!(
+            !scrolled_ascii_headers.is_empty(),
+            "right ASCII header should remain laid out after panning"
+        );
+        // At this scroll position the left ASCII header has moved offscreen; the
+        // surviving label belongs to the right ASCII block. Match it to the
+        // rightmost initial header's expected translated x, not by sorted index.
+        let initial_right_ascii_header = initial_ascii_headers[1];
+        let expected_right_header_x = initial_right_ascii_header.0.x - ascii_scroll_x;
+        let (right_ascii_header, header_size, header_clip) = scrolled_ascii_headers
+            .iter()
+            .copied()
+            .min_by(|left, right| {
+                (left.0.x - expected_right_header_x)
+                    .abs()
+                    .total_cmp(&(right.0.x - expected_right_header_x).abs())
+            })
+            .expect("right ASCII header should remain visible after panning");
+        assert!(
+            (right_ascii_header.x - expected_right_header_x).abs() <= 3.0,
+            "right ASCII header should move by -scroll_x: {} -> {}, offset {}",
+            initial_right_ascii_header.0.x,
+            right_ascii_header.x,
+            ascii_scroll_x
+        );
+        assert!(
+            header_clip.contains_rect(egui::Rect::from_min_size(right_ascii_header, header_size)),
+            "right ASCII header should be fully visible at x={}",
+            right_ascii_header.x
+        );
+
+        let initial_right_ascii_byte = initial
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text() == "F" && text.pos.x > initial_right_ascii_header.0.x =>
+                {
+                    Some((text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .min_by(|left, right| left.0.x.total_cmp(&right.0.x))
+            .expect("right ASCII byte F should be laid out initially");
+        let expected_byte_x = initial_right_ascii_byte.0.x - ascii_scroll_x;
+        let ascii_byte = ascii_scrolled
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text() == "F"
+                        && clipped.clip_rect.contains_rect(egui::Rect::from_min_size(
+                            text.pos,
+                            text.galley.size(),
+                        )) =>
+                {
+                    Some((text.pos, text.galley.size()))
+                }
+                _ => None,
+            })
+            .min_by(|left, right| {
+                (left.0.x - expected_byte_x)
+                    .abs()
+                    .total_cmp(&(right.0.x - expected_byte_x).abs())
+            })
+            .filter(|(pos, _)| (pos.x - expected_byte_x).abs() <= 3.0)
+            .map(|(pos, size)| pos + size * 0.5)
+            .expect(
+                "right ASCII byte F (column 5) should be fully visible in the intermediate view",
+            );
+        let (ascii_hovered_output, _, ascii_hovered) =
+            render(vec![egui::Event::PointerMoved(ascii_byte)]);
+        assert_eq!(
+            ascii_hovered,
+            Some((0, 5)),
+            "right ASCII hit target should map to row 0, byte 5"
+        );
+        assert!(ascii_hovered_output.shapes.iter().any(|clipped| {
+            matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text().contains("RIGHT: 0x46") && text.galley.text().contains("Off: 0x00000005"))
+        }), "inspection footer should report the hovered right ASCII byte and offset");
     }
 
     #[test]
