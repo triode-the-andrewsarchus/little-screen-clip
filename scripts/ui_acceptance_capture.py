@@ -246,6 +246,8 @@ class FakeTextPreviewDaemon:
     """Serve one Markdown clipboard item from the private acceptance runtime."""
 
     ITEM_ID = "9b1de26a-4101-4e08-93d0-2ab14dad415e"
+    DIFF_LEFT_ITEM_ID = "3f6ea64c-9b6a-4db8-a3dd-108c92b70b21"
+    DIFF_RIGHT_ITEM_ID = "aa64938e-27ae-4f16-861f-8a24dfd5d2e2"
     TEXT = (
         "# Markdown Preview\n\n"
         "A body paragraph with **emphasis**, `inline code`, and a [link](https://example.invalid).\n\n"
@@ -272,6 +274,7 @@ class FakeTextPreviewDaemon:
         xlsx_preview: bool = False,
         model3d_variant: str | None = None,
         binary_diff_preview: bool = False,
+        diff_preview: bool = False,
     ):
         self.socket_path = runtime / "little-screen-clip.sock"
         self.log_path = log_path
@@ -279,6 +282,7 @@ class FakeTextPreviewDaemon:
         self.xlsx_preview = xlsx_preview
         self.model3d_variant = model3d_variant
         self.binary_diff_preview = binary_diff_preview
+        self.diff_preview = diff_preview
         self.xlsx_path = log_path.parent / "acceptance-multisheet.xlsx"
         if xlsx_preview:
             self._write_xlsx_fixture()
@@ -386,6 +390,16 @@ class FakeTextPreviewDaemon:
             stl.write("endsolid acceptance_mesh\n")
 
     def _item(self) -> dict[str, Any]:
+        if self.diff_preview:
+            return {
+                "id": self.DIFF_LEFT_ITEM_ID,
+                "created_at": int(time.time()),
+                "payload": {"Text": "left item: common line\nleft-only value\n"},
+                "title": "acceptance-left.txt",
+                "subtitle": "Text • Diff fixture",
+                "details": ["Text", "Left"],
+                "handler_tag": "TEXT",
+            }
         if self.binary_diff_preview:
             text = f"{self.binary_left_path}\n{self.binary_right_path}"
             title = "acceptance-binary-pair.txt"
@@ -425,9 +439,18 @@ class FakeTextPreviewDaemon:
 
     def _state(self) -> dict[str, Any]:
         return {
-            "undo": None, "left_hand": self._item(), "left_prior1": None,
+            "undo": None, "left_hand": self._item(),
+            "right_hand": ({
+                "id": self.DIFF_RIGHT_ITEM_ID,
+                "created_at": int(time.time()),
+                "payload": {"Text": "right item: common line\nright-only value\n"},
+                "title": "acceptance-right.txt",
+                "subtitle": "Text • Diff fixture",
+                "details": ["Text", "Right"],
+                "handler_tag": "TEXT",
+            } if self.diff_preview else None), "left_prior1": None,
             "left_prior2": None, "left_prior3": None, "right_prior2": None,
-            "right_prior1": None, "right_hand": None, "cursor": "LeftHand",
+            "right_prior1": None, "cursor": "LeftHand",
             "selected": ["LeftHand"],
         }
 
@@ -435,12 +458,25 @@ class FakeTextPreviewDaemon:
         if request == "GetState":
             return {"State": self._state()}, "state"
         if request == "GetStateSummary":
-            return {"StateSummary": {"cards": [{
-                "slot": "LeftHand", "item_id": self.ITEM_ID,
-                "payload_kind": "Text" if self.csv_preview or self.xlsx_preview or self.model3d_variant else "Markdown",
+            cards = [{
+                "slot": "LeftHand",
+                "item_id": self.DIFF_LEFT_ITEM_ID if self.diff_preview else self.ITEM_ID,
+                "payload_kind": "Text" if self.csv_preview or self.xlsx_preview or self.model3d_variant or self.diff_preview else "Markdown",
                 "preview_phase": "Ready",
-            }], "cursor": "LeftHand", "selected": ["LeftHand"]}}, "summary"
-        if request == {"GetSlotItem": "LeftHand"}:
+            }]
+            if self.diff_preview:
+                cards.append({
+                    "slot": "RightHand",
+                    "item_id": self.DIFF_RIGHT_ITEM_ID,
+                    "payload_kind": "Text",
+                    "preview_phase": "NotApplicable",
+                })
+            return {"StateSummary": {"cards": cards, "cursor": "LeftHand", "selected": ["LeftHand"]}}, "summary"
+        if request in ({"GetSlotItem": "LeftHand"}, {"GetSlotItem": "RightHand"}):
+            if request == {"GetSlotItem": "RightHand"} and not self.diff_preview:
+                return {"Error": {"error": "acceptance Right Hand fixture is unavailable"}}, "unsupported"
+            if request == {"GetSlotItem": "RightHand"}:
+                return {"SlotItem": self._state()["right_hand"]}, "slot_item"
             return {"SlotItem": self._item()}, "slot_item"
         if request == "GetRollingAudio":
             return {"RollingAudio": {
@@ -1151,6 +1187,9 @@ def capture_workbench(
         else:
             raise RuntimeError(f"timed out waiting for private hover pointer at ({x}, {y})")
         report["pointer_input"]["move"] = {"x": x, "y": y, "button": "none", "held_until_cleanup": True}
+    if args.verify_viewer_return and args.type_text:
+        run_checked(["wtype", args.type_text], env=niri_env)
+        report.setdefault("pointer_input", {})["typed_text"] = args.type_text
     if args.key_action:
         report.setdefault("pointer_input", {})
         report["pointer_input"]["key_actions"] = []
@@ -1158,7 +1197,7 @@ def capture_workbench(
             run_checked(["wtype", *KEY_ACTIONS[action]], env=niri_env)
             report["pointer_input"]["key_actions"].append(action)
             time.sleep(0.25)
-    if args.type_text:
+    if args.type_text and not args.verify_viewer_return:
         run_checked(["wtype", args.type_text], env=niri_env)
         report.setdefault("pointer_input", {})["typed_text"] = args.type_text
     if args.capture_after_actions:
@@ -1214,6 +1253,30 @@ def capture_workbench(
         )
         if not report["return_check"]["pass"]:
             report["failures"].append("Escape did not return cleanly to the responsive private Niri session")
+    if args.verify_viewer_return:
+        run_checked(["wtype", "-k", "Escape"], env=niri_env)
+        time.sleep(max(args.settle_ms / 1000, 0.25))
+        returned_windows = own_windows(niri_bin, niri_env, {app.pid})
+        app_alive = app.poll() is None
+        focused = (
+            len(returned_windows) == 1
+            and returned_windows[0].get("pid") == app.pid
+            and returned_windows[0].get("is_focused") is True
+        )
+        report["screenshots"]["after-viewer-close"] = screenshot(
+            niri_bin, niri_env, output / "after-viewer-close.png"
+        )
+        report["viewer_return_check"] = {
+            "escape_sent": True,
+            "workbench_remained_open": app_alive,
+            "remaining_workbench_windows": returned_windows,
+            "existing_popup_remained_focused": focused,
+            "pass": app_alive and focused,
+        }
+        if not report["viewer_return_check"]["pass"]:
+            report["failures"].append(
+                "Escape did not return from the viewer to the existing focused workbench popup"
+            )
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -1306,9 +1369,13 @@ def create_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--fake-binary-diff", action="store_true",
                         help="serve private byte fixtures for binary-diff viewer acceptance")
+    parser.add_argument("--fake-diff-preview", action="store_true",
+                        help="serve two private text items for regular Diff route acceptance")
     parser.add_argument("--binary-diff-view", action="store_true",
                         help="open binary diff directly (requires --fake-binary-diff)")
     parser.add_argument("--verify-return", action="store_true", help="send Escape and verify the popup closes while private Niri remains responsive")
+    parser.add_argument("--verify-viewer-return", action="store_true",
+                        help="send Escape and verify a nested viewer returns to the existing popup")
     parser.add_argument("--binary", type=Path, help="workbench binary (default: target/debug/clip-workbench)")
     parser.add_argument("--settle-ms", type=int, default=500, help="settling delay before second capture (default: 500)")
     return parser
@@ -1353,14 +1420,30 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         or any((args.image, args.audio, args.pdf, args.midi))
     ):
         raise SystemExit("--fake-binary-diff cannot be combined with other fixture routes")
+    if args.fake_diff_preview and (
+        args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
+        or args.fake_model3d or args.fake_binary_diff or args.fake_audio_transition
+        or any((args.image, args.audio, args.pdf, args.midi))
+    ):
+        raise SystemExit("--fake-diff-preview cannot be combined with other fixture routes")
     if args.fake_node_machine and (
         args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
         or args.fake_model3d or args.fake_audio_transition or args.fake_binary_diff
+        or args.fake_diff_preview
         or any((args.image, args.audio, args.pdf, args.midi))
     ):
         raise SystemExit("--fake-node-machine cannot be combined with other fixture routes")
     if args.binary_diff_view and not args.fake_binary_diff:
         raise SystemExit("--binary-diff-view requires --fake-binary-diff")
+    if args.verify_viewer_return and not (
+        args.fake_diff_preview and args.type_text == "diff"
+        and args.key_action and "enter" in args.key_action
+    ):
+        raise SystemExit(
+            "--verify-viewer-return requires --fake-diff-preview --type-text diff --key-action enter"
+        )
+    if args.verify_viewer_return and args.verify_return:
+        raise SystemExit("--verify-viewer-return cannot be combined with --verify-return")
     if args.image_tool and not args.image:
         raise SystemExit("--image-tool requires --image")
     if args.click is not None and any(
@@ -1396,6 +1479,8 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         if not (
             args.fake_text_preview
             and all(action in {"f3", "ctrl-f"} for action in args.key_action)
+            or args.fake_diff_preview
+            and all(action == "enter" for action in args.key_action)
         ):
             raise SystemExit(
                 "only --key-action f3 may be used without an image fixture, "
@@ -1403,11 +1488,11 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
             )
     if args.type_text and not (
         args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
-        or args.fake_model3d
+        or args.fake_diff_preview or args.fake_model3d
     ):
         raise SystemExit("--type-text requires a fake text preview route")
     if (
-        args.verify_return or args.image_tool or args.key_action or args.type_text
+        args.verify_return or args.verify_viewer_return or args.image_tool or args.key_action or args.type_text
         or args.fake_node_machine
     ) and shutil.which("wtype") is None:
         raise SystemExit("keyboard input requires wtype")
@@ -1457,9 +1542,11 @@ def main() -> int:
             "fake_multisheet_xlsx": args.fake_multisheet_xlsx,
             "fake_model3d": args.fake_model3d,
             "fake_binary_diff": args.fake_binary_diff,
+            "fake_diff_preview": args.fake_diff_preview,
             "fake_node_machine": args.fake_node_machine,
             "binary_diff_view": args.binary_diff_view,
             "verify_return": args.verify_return,
+            "verify_viewer_return": args.verify_viewer_return,
             "binary": str(binary),
             "settle_ms": args.settle_ms,
         },
@@ -1501,7 +1588,7 @@ def main() -> int:
             )
         if (
             args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
-            or args.fake_model3d or args.fake_binary_diff
+            or args.fake_model3d or args.fake_binary_diff or args.fake_diff_preview
         ):
             fake_text_daemon = FakeTextPreviewDaemon(
                 config["runtime"], output / "fake-text-daemon-events.json",
@@ -1509,6 +1596,7 @@ def main() -> int:
                 xlsx_preview=args.fake_multisheet_xlsx,
                 model3d_variant=args.fake_model3d,
                 binary_diff_preview=args.fake_binary_diff,
+                diff_preview=args.fake_diff_preview,
             )
         capture_workbench(args, binary, output, config, niri_env, outputs, children, report)
     except Exception as exc:
@@ -1532,6 +1620,8 @@ def main() -> int:
             text_route = fake_text_daemon.close()
             if args.fake_binary_diff:
                 report["fake_binary_diff"] = text_route
+            elif args.fake_diff_preview:
+                report["fake_diff_preview"] = text_route
             elif args.fake_model3d:
                 report["fake_model3d"] = text_route
             elif args.fake_multisheet_xlsx:
