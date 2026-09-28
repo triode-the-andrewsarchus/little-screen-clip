@@ -3141,6 +3141,79 @@ mod tests {
     }
 
     #[test]
+    fn unwrapped_raw_line_scrolls_horizontally_without_eliding_its_end() {
+        let ctx = egui::Context::default();
+        let content = format!("LEFT_EDGE{}RIGHT_EDGE", "M".repeat(600));
+        let mut state = TextPreviewState::from_text(content, None, &AppConfig::default());
+        state.wrap_lines = false;
+        let mut time = 0.0;
+
+        let mut render = |events: Vec<egui::Event>| {
+            time += 0.05;
+            ctx.run(
+                egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(540.0, 360.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_raw_code_view(ui, &AppPalette::default());
+                    });
+                },
+            )
+        };
+
+        let first = render(Vec::new());
+        let text_shape = |output: &egui::FullOutput| {
+            output.shapes.iter().find_map(|clipped| {
+                let egui::Shape::Text(text) = &clipped.shape else {
+                    return None;
+                };
+                text.galley.text().starts_with("LEFT_EDGE").then_some((
+                    clipped.clip_rect,
+                    text.pos.x,
+                    text.galley.size().x,
+                    text.galley.elided,
+                ))
+            })
+        };
+        let (clip, first_x, first_width, first_elided) =
+            text_shape(&first).expect("initial code row should render");
+        assert!(first_width > clip.width() * 2.0);
+        assert!(!first_elided);
+
+        let scrolled = render(vec![
+            egui::Event::PointerMoved(clip.center()),
+            egui::Event::Scroll(egui::vec2(-8_000.0, 0.0)),
+        ]);
+        let mut settled = scrolled;
+        for _ in 0..8 {
+            settled = render(Vec::new());
+        }
+        let (scrolled_clip, scrolled_x, _, scrolled_elided) =
+            text_shape(&settled).expect("code row should remain visible after horizontal scroll");
+        assert!(scrolled_clip.width() <= clip.width());
+        assert!(
+            scrolled_x < first_x - 20.0,
+            "horizontal wheel should move code left: {} -> {}",
+            first_x,
+            scrolled_x
+        );
+        assert!(!scrolled_elided);
+        let scrolled_right = scrolled_x + first_width;
+        assert!(
+            scrolled_right <= scrolled_clip.right() + 1.0 && scrolled_right >= scrolled_clip.left(),
+            "horizontal scrolling should reach the line end: right edge {scrolled_right}, viewport {:?}",
+            scrolled_clip
+        );
+    }
+
+    #[test]
     fn wrapped_view_places_next_line_below_the_entire_galley() {
         for scale in [1.0, 1.5, 2.0] {
             let ctx = egui::Context::default();

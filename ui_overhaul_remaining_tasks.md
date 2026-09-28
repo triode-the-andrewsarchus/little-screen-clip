@@ -483,7 +483,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [ ] **H2.2d1 [Primary] Verify image overlays live.**
   - [ ] **H2.2d2 [Primary] Verify image comparison dragging live.**
   - **H2.2e Text and spreadsheet scale checks**
-    - [ ] **H2.2e1 [Primary] Audit long-line horizontal scrolling.** Raw code uses shared 15-point monospace; measured variable-height virtualization, bounded batches, source anchoring and exact UTF-8 search projection are implemented.
+    - [x] **H2.2e1 [Primary] Audit long-line horizontal scrolling.** Raw code uses shared 15-point monospace; `unwrapped_raw_line_scrolls_horizontally_without_eliding_its_end` sends a horizontal wheel event through egui, waits for the scroll animation, and verifies the right edge can be brought into the viewport without elision.
     - [ ] **H2.2e2 [Primary] Validate spreadsheet two-axis scrolling.**
     - [ ] **H2.2e3 [Primary] Validate spreadsheet sticky headers.**
     - [ ] **H2.2e4 [Primary] Validate spreadsheet full-cell inspection.**
