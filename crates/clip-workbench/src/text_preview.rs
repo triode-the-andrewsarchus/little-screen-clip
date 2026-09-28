@@ -2070,6 +2070,25 @@ mod tests {
     }
 
     #[test]
+    fn search_match_spool_requires_ordered_ranges_and_recovers_after_partial_iteration() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut spool = SearchMatchSpool::new_in(directory.path()).unwrap();
+        spool.append(2, 4).unwrap();
+        spool.append(5, 7).unwrap();
+        assert!(spool.append(4, 6).is_err(), "starts must be ordered");
+        assert!(spool.append(8, 6).is_err(), "ranges cannot be reversed");
+        assert!(spool.append(6, 6).is_err(), "ends must be ordered");
+
+        let mut ranges = spool.ranges_for_fragment(0, 10).unwrap();
+        assert_eq!(ranges.next().unwrap().unwrap().start_byte, 2);
+        drop(ranges);
+
+        spool.append(9, 10).unwrap();
+        assert_eq!(spool.len(), 3);
+        assert_eq!(spool.get(2).unwrap().start_byte, 9);
+    }
+
+    #[test]
     fn search_match_spool_rolls_over_only_after_the_memory_threshold_and_cleans_up() {
         let directory = tempfile::tempdir().unwrap();
         let mut spool = SearchMatchSpool::new_in(directory.path()).unwrap();
