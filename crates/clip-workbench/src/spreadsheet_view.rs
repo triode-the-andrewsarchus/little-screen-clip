@@ -1224,6 +1224,114 @@ mod tests {
     }
 
     #[test]
+    fn spreadsheet_search_highlights_visible_result_across_host_sizes_and_zoom() {
+        let match_row = 137;
+        let match_column = 2;
+        let rows = (0..320)
+            .map(|row| {
+                (0..72)
+                    .map(|column| {
+                        if row == match_row && column == match_column {
+                            "needle".to_owned()
+                        } else {
+                            format!("r{row}c{column}")
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let data = SpreadsheetData {
+            title: "Zoomed search result".into(),
+            sheets: vec![SpreadsheetSheet::new("Data".into(), rows)],
+        };
+        let palette = little_clip_core::palette::AppPalette::default();
+        let highlight = crate::hex_to_c32(&palette.harmonies.warm_attention);
+
+        for (size, zoom) in [
+            (Vec2::new(640.0, 520.0), 1.0),
+            (Vec2::new(640.0, 520.0), 1.5),
+            (Vec2::new(1180.0, 720.0), 1.0),
+            (Vec2::new(1180.0, 720.0), 1.5),
+        ] {
+            let mut state = SpreadsheetViewerState::new(data.clone(), None);
+            // Use the same state path the search field updates; rendering applies
+            // row filtering and the per-cell match background.
+            state.search_query = "needle".into();
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            ctx.set_zoom_factor(zoom);
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                },
+            );
+
+            assert_eq!(state.data.sheets[0].rows.len(), 320);
+            assert_eq!(state.filtered_rows, vec![0, match_row]);
+            let target_center = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "needle" => {
+                        let center = text.pos + text.galley.size() * 0.5;
+                        clipped.clip_rect.contains(center).then_some(center)
+                    }
+                    _ => None,
+                })
+                .find(|center| {
+                    output.shapes.iter().any(|clipped| {
+                        matches!(&clipped.shape, egui::Shape::Rect(rect) if rect.fill == highlight && rect.rect.contains(*center))
+                    })
+                })
+                .unwrap_or_else(|| {
+                    panic!("matching cell should be visible and highlighted at host={size:?}, zoom={zoom}")
+                });
+
+            let highlight_rect = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Rect(rect)
+                        if rect.fill == highlight && rect.rect.contains(target_center) =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .expect("matching cell should have the search highlight background");
+            let row_label = (match_row + 1).to_string();
+            let gutter = output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == row_label => {
+                        let center = text.pos + text.galley.size() * 0.5;
+                        clipped.clip_rect.contains(center).then_some(center)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| {
+                    panic!("matching row number {row_label} should be visible at host={size:?}, zoom={zoom}")
+                });
+            assert!(
+                (gutter.y - target_center.y).abs() <= 14.0,
+                "search result and row label lost alignment at host={size:?}, zoom={zoom}: cell={target_center:?}, gutter={gutter:?}"
+            );
+            assert!(
+                highlight_rect.contains(target_center),
+                "highlight should cover the visible result at host={size:?}, zoom={zoom}"
+            );
+            assert!(state.scroll_offset.y == 0.0);
+        }
+    }
+
+    #[test]
     fn selecting_long_cell_shows_and_copies_full_value() {
         let long_value = format!(
             "Long clipboard cell value: {}",
