@@ -1,6 +1,8 @@
 use super::super::*;
 use crate::shell::render_context_slider;
 
+const DEFAULT_WB_STRENGTH: f32 = 0.35;
+
 /// Descriptor for one entry in the film stock picker list.
 #[derive(Clone)]
 pub struct FilmStockEntry {
@@ -602,7 +604,7 @@ pub struct FilmSimState {
     pub intensity: f32,
     /// White balance correction mode
     pub wb_mode: WhiteBalanceMode,
-    /// White balance correction strength: 0.0 .. 1.0, default 1.0
+    /// White balance correction strength: 0.0 .. 1.0, default 0.35 to preserve scene color.
     pub wb_strength: f32,
 
     // ── Optical & Creative Effects ──
@@ -655,7 +657,7 @@ impl Default for FilmSimState {
             tint: 0.0,
             intensity: 1.0,
             wb_mode: WhiteBalanceMode::Auto,
-            wb_strength: 1.0,
+            wb_strength: DEFAULT_WB_STRENGTH,
             halation: 0.25,
             vignette: 0.35,
             light_leak: LightLeakPreset::None,
@@ -1648,7 +1650,7 @@ impl ImagePreviewState {
                                         "WB Str",
                                         &mut self.film_sim_state.wb_strength,
                                         0.0..=1.0,
-                                        1.0,
+                                        DEFAULT_WB_STRENGTH,
                                         "%",
                                         slider_w,
                                         palette,
@@ -1798,7 +1800,8 @@ impl ImagePreviewState {
                                                 self.film_sim_state.intensity = 1.0;
                                                 self.film_sim_state.wb_mode =
                                                     WhiteBalanceMode::Auto;
-                                                self.film_sim_state.wb_strength = 1.0;
+                                                self.film_sim_state.wb_strength =
+                                                    DEFAULT_WB_STRENGTH;
                                                 self.film_sim_state.halation = 0.25;
                                                 self.film_sim_state.vignette = 0.35;
                                                 self.film_sim_state.light_leak =

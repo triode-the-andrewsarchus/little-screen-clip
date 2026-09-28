@@ -3748,7 +3748,7 @@ mod tests {
         // Defaults for expanded controls
         assert_eq!(state.film_sim_state.tint, 0.0);
         assert_eq!(state.film_sim_state.wb_mode, WhiteBalanceMode::Auto);
-        assert_eq!(state.film_sim_state.wb_strength, 1.0);
+        assert_eq!(state.film_sim_state.wb_strength, 0.35);
         assert_eq!(state.film_sim_state.halation, 0.25);
         assert_eq!(state.film_sim_state.vignette, 0.35);
         assert_eq!(state.film_sim_state.light_leak, LightLeakPreset::None);
@@ -3774,6 +3774,50 @@ mod tests {
         let first_thumb = &state.film_sim_state.pending_thumbnails[0];
         assert_eq!(first_thumb.1.width(), 42);
         assert_eq!(first_thumb.1.height(), 28);
+    }
+
+    #[test]
+    fn film_look_default_white_balance_retains_scene_color() {
+        let source = image::RgbImage::from_pixel(64, 64, image::Rgb([220, 160, 100]));
+        let default_strength = FilmSimState::default().wb_strength;
+
+        let render = |strength| {
+            let config = SimulationConfig {
+                white_balance_mode: WhiteBalanceMode::Auto,
+                white_balance_strength: strength,
+                enable_grain: false,
+                ..SimulationConfig::default()
+            };
+            filmr::processor::process_image(
+                &source,
+                &filmr::presets::kodak::KODAK_PORTRA_400(),
+                &config,
+            )
+        };
+        let channel_means = |image: &image::RgbImage| {
+            let pixel_count = (image.width() * image.height()) as f32;
+            std::array::from_fn(|channel| {
+                image
+                    .pixels()
+                    .map(|pixel| f32::from(pixel[channel]))
+                    .sum::<f32>()
+                    / pixel_count
+            })
+        };
+        let channel_spread = |means: [f32; 3]| {
+            let min = means.iter().copied().fold(f32::INFINITY, f32::min);
+            let max = means.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+            max - min
+        };
+
+        let default_means = channel_means(&render(default_strength));
+        let full_strength_means = channel_means(&render(1.0));
+
+        assert_eq!(default_strength, 0.35);
+        assert!(
+            channel_spread(default_means) > channel_spread(full_strength_means) + 20.0,
+            "the default should avoid gray-world white balance flattening a warm scene: default={default_means:?}, full={full_strength_means:?}"
+        );
     }
 
     #[test]
