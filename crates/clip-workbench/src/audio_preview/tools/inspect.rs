@@ -349,11 +349,17 @@ impl AudioPreviewState {
 
         // Poll asynchronous folder browsing dialog if running
         if let Some(ref rx) = self.browse_rx {
-            if let Ok(res) = rx.try_recv() {
-                if let Some(dir) = res {
-                    self.save_destination_dir = dir;
+            match rx.try_recv() {
+                Ok(res) => {
+                    if let Some(dir) = res {
+                        self.save_destination_dir = dir;
+                    }
+                    self.browse_rx = None;
                 }
-                self.browse_rx = None;
+                Err(TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(50));
+                }
+                Err(TryRecvError::Disconnected) => self.browse_rx = None,
             }
         }
 

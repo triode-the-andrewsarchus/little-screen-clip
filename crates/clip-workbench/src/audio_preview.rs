@@ -4112,6 +4112,51 @@ mod tests {
     }
 
     #[test]
+    fn pending_audio_folder_browse_requests_repaint_and_updates_destination() {
+        let (_temp_dir, path) = generate_fixture_wav("audio-folder-browse", 0.25);
+        let mut state = AudioPreviewState::new(path, "fixture.wav".to_owned());
+        state.analysis_rx = None;
+        state.save_dialog_open = true;
+        state.save_destination_dir = "/previous/destination".to_owned();
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut close_requested = false;
+        let mut render = |state: &mut AudioPreviewState, ctx: &egui::Context| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 700.0))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_standard_ui(ui, ctx, &palette, &mut close_requested, None);
+                    });
+                },
+            )
+        };
+
+        let _ = render(&mut state, &ctx);
+        let (tx, rx) = channel();
+        state.browse_rx = Some(rx);
+        let output = render(&mut state, &ctx);
+        assert!(
+            output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+                <= Duration::from_millis(50),
+            "pending folder browse should keep a frame scheduled to poll its receiver"
+        );
+
+        let destination_dir = tempfile::tempdir().unwrap();
+        let destination = destination_dir.path().to_path_buf();
+        tx.send(Some(destination.to_string_lossy().into_owned()))
+            .unwrap();
+        let _ = render(&mut state, &ctx);
+        assert_eq!(state.save_destination_dir, destination.to_string_lossy());
+    }
+
+    #[test]
     fn enter_saves_edited_audio_fields_while_destination_or_filename_is_focused() {
         for (focused_id, filename) in [
             (
