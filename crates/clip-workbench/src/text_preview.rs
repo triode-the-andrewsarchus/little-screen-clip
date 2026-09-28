@@ -623,6 +623,8 @@ pub struct TextPreviewState {
     line_first_fragment: Vec<usize>,
     code_rows: CodeRowHeights,
     code_scroll_offset: f32,
+    code_selection: Option<(usize, usize)>,
+    code_selection_dragging: bool,
     pub minimap_fraction: f32,
     minimap_view_fraction: f32,
     minimap_content_height: f32,
@@ -720,6 +722,8 @@ impl TextPreviewState {
             line_first_fragment,
             code_rows: CodeRowHeights::default(),
             code_scroll_offset: 0.0,
+            code_selection: None,
+            code_selection_dragging: false,
             minimap_fraction: 0.0,
             minimap_view_fraction: 1.0,
             minimap_content_height: 1.0,
@@ -785,6 +789,8 @@ impl TextPreviewState {
             line_first_fragment,
             code_rows: CodeRowHeights::default(),
             code_scroll_offset: 0.0,
+            code_selection: None,
+            code_selection_dragging: false,
             minimap_fraction: 0.0,
             minimap_view_fraction: 1.0,
             minimap_content_height: 1.0,
@@ -1480,6 +1486,29 @@ impl TextPreviewState {
 
     /// Renders raw / code view with syntax highlighting, line numbers gutter, and search match highlighting.
     fn render_raw_code_view(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        if !ui.ctx().wants_keyboard_input()
+            && ui.input(|input| {
+                input
+                    .events
+                    .iter()
+                    .any(|event| matches!(event, egui::Event::Copy))
+                    || (input.key_pressed(egui::Key::C)
+                        && (input.modifiers.command || input.modifiers.ctrl))
+            })
+        {
+            let text = self
+                .code_selection
+                .filter(|(anchor, focus)| anchor != focus)
+                .map(|(anchor, focus)| &self.content[anchor.min(focus)..anchor.max(focus)])
+                .unwrap_or(&self.content);
+            ui.ctx().copy_text(text.to_owned());
+            // The platform output serves egui's clipboard integration. The
+            // workbench also writes through its desktop clipboard adapter.
+            #[cfg(not(test))]
+            if let Err(error) = little_clip_core::copy_text_to_system_clipboard(text) {
+                tracing::debug!(%error, "failed to copy raw text selection to system clipboard");
+            }
+        }
         let syntax = find_syntax(self.language);
         let code_font = FontId::monospace(crate::ui_ext::MONO_FONT_SIZE);
         let (line_height, digit_width) = ui.fonts(|fonts| {
@@ -1565,14 +1594,15 @@ impl TextPreviewState {
                                 let origin = ui.max_rect().min;
                                 let mut row =
                                     self.code_rows.row_at(viewport.top() + rounding_tolerance);
-                                // Keep selectable-label identities tied to source rows
-                                // when virtualization changes the first visible row.
+                                // Keep row identities stable while the visible range changes.
                                 ui.skip_ahead_auto_ids(row);
+                                let pointer = ui.ctx().pointer_interact_pos();
+                                let pressed = ui.input(|input| input.pointer.primary_pressed());
+                                let down = ui.input(|input| input.pointer.primary_down());
+                                let released = ui.input(|input| input.pointer.any_released());
                                 let mut y = self.code_rows.offset(row);
                                 while row < total_rows && y <= viewport.bottom() {
                                     let fragment = self.code_fragments[row];
-                                    let line =
-                                        &self.content[fragment.start_byte..fragment.end_byte];
                                     let highlight_result = self.matches.as_mut().map(|spool| {
                                         line_highlight_ranges_from_spool(
                                             spool,
@@ -1590,13 +1620,18 @@ impl TextPreviewState {
                                         None => (Vec::new(), None),
                                     };
                                     let mut job = build_highlighted_layout_job(
-                                        line, syntax, palette, &matches,
+                                        &self.content[fragment.start_byte..fragment.end_byte],
+                                        syntax,
+                                        palette,
+                                        &matches,
                                     );
                                     if let Some(error) = search_read_error {
                                         self.fail_search(error);
                                     }
                                     job.wrap.max_width = wrap_width;
                                     let galley = ui.fonts(|fonts| fonts.layout_job(job));
+                                    let line =
+                                        &self.content[fragment.start_byte..fragment.end_byte];
                                     let height = (galley.size().y + 4.0).max(line_height);
                                     self.code_rows.set_height(row, height);
                                     let text_rect = egui::Rect::from_min_size(
@@ -1614,11 +1649,61 @@ impl TextPreviewState {
                                             hex_to_c32(&palette.colors.text_muted),
                                         );
                                     }
-                                    ui.push_id(row, |ui| {
-                                        ui.put(text_rect, egui::Label::new(galley));
-                                    });
+                                    let response = ui
+                                        .push_id(row, |ui| {
+                                            ui.put(
+                                                text_rect,
+                                                egui::Label::new(galley.clone())
+                                                    .selectable(false)
+                                                    .sense(egui::Sense::click_and_drag()),
+                                            )
+                                        })
+                                        .inner;
+                                    if let Some(pointer) = pointer.filter(|point| {
+                                        text_rect.contains(*point)
+                                            && ui.clip_rect().contains(*point)
+                                    }) {
+                                        if (pressed && response.contains_pointer())
+                                            || (self.code_selection_dragging && (down || released))
+                                        {
+                                            let cursor =
+                                                galley.cursor_from_pos(pointer - text_rect.min);
+                                            let local_byte = line
+                                                .char_indices()
+                                                .nth(cursor.ccursor.index)
+                                                .map_or(line.len(), |(byte, _)| byte);
+                                            let source_byte = fragment.start_byte + local_byte;
+                                            if pressed {
+                                                self.code_selection =
+                                                    Some((source_byte, source_byte));
+                                                self.code_selection_dragging = true;
+                                            } else if let Some((_, focus)) =
+                                                &mut self.code_selection
+                                            {
+                                                if *focus != source_byte {
+                                                    *focus = source_byte;
+                                                    ui.ctx().request_repaint();
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if let Some((anchor, focus)) = self.code_selection {
+                                        paint_code_selection(
+                                            ui,
+                                            &galley,
+                                            text_rect.min,
+                                            line,
+                                            fragment,
+                                            anchor.min(focus),
+                                            anchor.max(focus),
+                                            hex_to_c32_alpha(&palette.harmonies.base, 90),
+                                        );
+                                    }
                                     y += height;
                                     row += 1;
+                                }
+                                if released {
+                                    self.code_selection_dragging = false;
                                 }
                                 ui.set_min_height(self.code_rows.total_height());
                             });
@@ -2022,6 +2107,39 @@ fn line_highlight_ranges_from_spool(
             ))
         })
         .collect()
+}
+
+fn paint_code_selection(
+    ui: &egui::Ui,
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    line: &str,
+    fragment: CodeFragment,
+    selection_start: usize,
+    selection_end: usize,
+    color: Color32,
+) {
+    let start = selection_start.max(fragment.start_byte);
+    let end = selection_end.min(fragment.end_byte);
+    if start >= end {
+        return;
+    }
+    let start_char = line[..start - fragment.start_byte].chars().count();
+    let end_char = line[..end - fragment.start_byte].chars().count();
+    let mut row_start = 0;
+    for row in &galley.rows {
+        let row_end = row_start + row.char_count_including_newline();
+        let from = start_char.max(row_start).min(row_end) - row_start;
+        let to = end_char.max(row_start).min(row_end) - row_start;
+        if from < to {
+            let rect = egui::Rect::from_min_max(
+                galley_pos + egui::vec2(row.x_offset(from), row.min_y()),
+                galley_pos + egui::vec2(row.x_offset(to), row.max_y()),
+            );
+            ui.painter().rect_filled(rect, egui::Rounding::ZERO, color);
+        }
+        row_start = row_end;
+    }
 }
 
 /// Appends only the intersecting part of a syntax token with a search background.
@@ -3246,6 +3364,186 @@ mod tests {
             rendered_fragment_lengths
                 .iter()
                 .all(|length| *length <= MAX_CODE_FRAGMENT_BYTES)
+        );
+    }
+
+    #[test]
+    fn raw_selection_copies_exact_source_across_fragments_and_virtual_scroll() {
+        let prefix = (0..180)
+            .map(|row| format!("before-{row}\n"))
+            .collect::<String>();
+        let long_line = format!("{}界{}", "a".repeat(4090), "b".repeat(4200));
+        let content = format!("{prefix}{long_line}\nafter\n");
+        let mut state = TextPreviewState::from_text(content.clone(), None, &AppConfig::default());
+        state.wrap_lines = true;
+        let first_row = state.line_first_fragment[180];
+        let first = state.code_fragments[first_row];
+        let second = state.code_fragments[first_row + 1];
+        let start = first.end_byte - 12;
+        let end = second.start_byte + 16;
+        assert!(content.is_char_boundary(start));
+        let ctx = egui::Context::default();
+        let mut time = 0.0;
+        state.scroll_to_line = Some(first_row + 1);
+        let render = |state: &mut TextPreviewState, time: &mut f64, events: Vec<egui::Event>| {
+            *time += 0.05;
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(5_000.0, 700.0),
+                    )),
+                    time: Some(*time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_raw_code_view(ui, &AppPalette::default());
+                    });
+                },
+            )
+        };
+        let mut frame = render(&mut state, &mut time, Vec::new());
+        for _ in 0..4 {
+            frame = render(&mut state, &mut time, Vec::new());
+        }
+        assert!(frame.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == &content[first.start_byte..first.end_byte] && text.galley.rows.len() > 1)
+        }));
+        let point_for = |frame: &egui::FullOutput, fragment: CodeFragment, byte: usize| {
+            let fragment_text = &content[fragment.start_byte..fragment.end_byte];
+            frame
+                .shapes
+                .iter()
+                .find_map(|clipped| {
+                    let egui::Shape::Text(text) = &clipped.shape else {
+                        return None;
+                    };
+                    if text.galley.text() != fragment_text {
+                        return None;
+                    }
+                    let char_index = content[fragment.start_byte..byte].chars().count();
+                    let cursor = text
+                        .galley
+                        .pos_from_ccursor(egui::text::CCursor::new(char_index));
+                    assert_eq!(
+                        text.galley
+                            .cursor_from_pos(cursor.center().to_vec2())
+                            .ccursor
+                            .index,
+                        char_index,
+                        "galley cursor round-trip failed for source byte {byte}"
+                    );
+                    let point = text.pos + cursor.center().to_vec2();
+                    clipped.clip_rect.contains(point).then_some(point)
+                })
+                .expect("source cursor must be visible")
+        };
+        let start_pos = point_for(&frame, first, start);
+        let end_pos = point_for(&frame, second, end);
+        for (from, to, expected_anchor, expected_focus) in [
+            (start_pos, end_pos, start, end),
+            (end_pos, start_pos, end, start),
+        ] {
+            render(
+                &mut state,
+                &mut time,
+                vec![
+                    egui::Event::PointerMoved(from),
+                    egui::Event::PointerButton {
+                        pos: from,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+            let dragged = render(&mut state, &mut time, vec![egui::Event::PointerMoved(to)]);
+            let selection_color = hex_to_c32_alpha(&AppPalette::default().harmonies.base, 90);
+            assert!(dragged.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::Shape::Rect(rect) if rect.fill == selection_color)
+            }));
+            render(
+                &mut state,
+                &mut time,
+                vec![egui::Event::PointerButton {
+                    pos: to,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            assert_eq!(
+                state.code_selection,
+                Some((expected_anchor, expected_focus))
+            );
+            assert_eq!(
+                render(&mut state, &mut time, vec![egui::Event::Copy])
+                    .platform_output
+                    .copied_text,
+                content[start..end]
+            );
+        }
+        state.scroll_to_line = Some(1);
+        let offscreen = render(&mut state, &mut time, Vec::new());
+        assert!(!offscreen.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == &content[first.start_byte..first.end_byte])
+        }));
+        assert_eq!(state.code_selection, Some((end, start)));
+        assert_eq!(
+            render(&mut state, &mut time, vec![egui::Event::Copy])
+                .platform_output
+                .copied_text,
+            content[start..end]
+        );
+
+        state.code_selection = None;
+        assert_eq!(
+            render(&mut state, &mut time, vec![egui::Event::Copy])
+                .platform_output
+                .copied_text,
+            content
+        );
+
+        state.scroll_to_line = Some(first_row);
+        let frame = render(&mut state, &mut time, Vec::new());
+        let previous = state.code_fragments[first_row - 1];
+        let line_start = previous.end_byte - 3;
+        let line_end = first.start_byte + 9;
+        let from = point_for(&frame, previous, line_start);
+        let to = point_for(&frame, first, line_end);
+        render(
+            &mut state,
+            &mut time,
+            vec![
+                egui::Event::PointerMoved(from),
+                egui::Event::PointerButton {
+                    pos: from,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        render(&mut state, &mut time, vec![egui::Event::PointerMoved(to)]);
+        render(
+            &mut state,
+            &mut time,
+            vec![egui::Event::PointerButton {
+                pos: to,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert_eq!(state.code_selection, Some((line_start, line_end)));
+        assert!(content[line_start..line_end].contains('\n'));
+        assert_eq!(
+            render(&mut state, &mut time, vec![egui::Event::Copy])
+                .platform_output
+                .copied_text,
+            content[line_start..line_end]
         );
     }
 
