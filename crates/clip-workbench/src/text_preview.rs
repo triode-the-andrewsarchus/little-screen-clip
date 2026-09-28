@@ -616,9 +616,6 @@ pub struct TextPreviewState {
     pub scroll_to_line: Option<usize>,
     /// Exact pixel offset requested by minimap navigation.
     scroll_to_offset: Option<f32>,
-    /// Byte offsets for each line. This is built once when the preview opens so
-    /// large files do not allocate/scan all lines every repaint.
-    line_starts: Vec<usize>,
     code_fragments: Vec<CodeFragment>,
     line_first_fragment: Vec<usize>,
     code_rows: CodeRowHeights,
@@ -717,7 +714,6 @@ impl TextPreviewState {
             status_toast: crate::ui_ext::StatusToast::new(),
             scroll_to_line: None,
             scroll_to_offset: None,
-            line_starts,
             code_fragments,
             line_first_fragment,
             code_rows: CodeRowHeights::default(),
@@ -784,7 +780,6 @@ impl TextPreviewState {
             status_toast: crate::ui_ext::StatusToast::new(),
             scroll_to_line: None,
             scroll_to_offset: None,
-            line_starts,
             code_fragments,
             line_first_fragment,
             code_rows: CodeRowHeights::default(),
@@ -938,9 +933,11 @@ impl TextPreviewState {
                 return None;
             }
         };
-        let line = self
-            .line_starts
-            .partition_point(|start| *start <= start_byte);
+        // Each source line's first display fragment retains its exact start
+        // byte, so use that index instead of keeping a duplicate line-start Vec.
+        let line = self.line_first_fragment.partition_point(|first_fragment| {
+            self.code_fragments[*first_fragment].start_byte <= start_byte
+        });
         Some(SearchMatch {
             start_byte,
             end_byte,
@@ -1535,7 +1532,7 @@ impl TextPreviewState {
             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
                 let total_rows = self.code_fragments.len().max(1);
-                let digits = self.line_starts.len().to_string().len().max(2);
+                let digits = self.line_first_fragment.len().to_string().len().max(2);
                 // A horizontal layout shrink-wraps children by default.  That left the
                 // virtual ScrollArea with a one-row-high clip rect on some egui backends.
                 // Reserve the viewport explicitly before asking it to virtualize rows.
@@ -4050,6 +4047,28 @@ mod tests {
         assert_eq!(state.match_count(), 1);
         let matched = state.search_match(0).unwrap();
         assert_eq!(&state.content[matched.start_byte..matched.end_byte], "[x]");
+    }
+
+    #[test]
+    fn search_line_numbers_derive_from_first_fragments_for_empty_and_trailing_lines() {
+        let mut empty = TextPreviewState::from_text(String::new(), None, &AppConfig::default());
+        empty.find_query = "(?m)^".into();
+        empty.is_regex = true;
+        update_search_matches_and_wait(&mut empty);
+        assert_eq!(empty.line_first_fragment.len(), 1);
+        assert_eq!(empty.search_match(0).unwrap().line, 1);
+
+        let mut trailing =
+            TextPreviewState::from_text("alpha\nbeta\n".into(), None, &AppConfig::default());
+        trailing.find_query = "(?m)^".into();
+        trailing.is_regex = true;
+        update_search_matches_and_wait(&mut trailing);
+        assert_eq!(trailing.line_first_fragment.len(), 3);
+        assert_eq!(
+            trailing.search_match(2).unwrap().start_byte,
+            trailing.content.len()
+        );
+        assert_eq!(trailing.search_match(2).unwrap().line, 3);
     }
 
     #[test]
