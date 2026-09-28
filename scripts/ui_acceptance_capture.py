@@ -271,12 +271,14 @@ class FakeTextPreviewDaemon:
         csv_preview: bool = False,
         xlsx_preview: bool = False,
         model3d_variant: str | None = None,
+        binary_diff_preview: bool = False,
     ):
         self.socket_path = runtime / "little-screen-clip.sock"
         self.log_path = log_path
         self.csv_preview = csv_preview
         self.xlsx_preview = xlsx_preview
         self.model3d_variant = model3d_variant
+        self.binary_diff_preview = binary_diff_preview
         self.xlsx_path = log_path.parent / "acceptance-multisheet.xlsx"
         if xlsx_preview:
             self._write_xlsx_fixture()
@@ -285,6 +287,11 @@ class FakeTextPreviewDaemon:
         )
         if model3d_variant:
             self._write_model3d_fixture()
+        self.binary_left_path = log_path.parent / "acceptance-left.bin"
+        self.binary_right_path = log_path.parent / "acceptance-right.bin"
+        if binary_diff_preview:
+            self.binary_left_path.write_bytes(b"little-screen-clip\x00\x01\x02\x03\x04\noriginal\n")
+            self.binary_right_path.write_bytes(b"little-screen-clip\x00\x01\x09\x03\x04\nupdated\n")
         self.rolling_audio_path = log_path.parent / "fake-rolling-audio.wav"
         with wave.open(str(self.rolling_audio_path), "wb") as wav:
             wav.setnchannels(1)
@@ -379,7 +386,10 @@ class FakeTextPreviewDaemon:
             stl.write("endsolid acceptance_mesh\n")
 
     def _item(self) -> dict[str, Any]:
-        if self.model3d_variant:
+        if self.binary_diff_preview:
+            text = f"{self.binary_left_path}\n{self.binary_right_path}"
+            title = "acceptance-binary-pair.txt"
+        elif self.model3d_variant:
             text = str(self.model3d_path)
             title = self.model3d_path.name
         elif self.xlsx_preview:
@@ -391,18 +401,22 @@ class FakeTextPreviewDaemon:
         payload_kind = (
             "Text" if self.csv_preview or self.xlsx_preview or self.model3d_variant else "Markdown"
         )
+        if self.binary_diff_preview:
+            payload_kind = "Text"
         return {
             "id": self.ITEM_ID,
             "created_at": int(time.time()),
             "payload": {payload_kind: text},
             "title": title,
             "subtitle": (
-                "STL • acceptance mesh" if self.model3d_variant
+                "Binary • 2 fixtures" if self.binary_diff_preview
+                else "STL • acceptance mesh" if self.model3d_variant
                 else "Excel • 2 sheets" if self.xlsx_preview
                 else "CSV • 5 rows × 4 columns" if self.csv_preview
                 else "Markdown • 15 lines"
             ),
-            "details": (["3D", "STL"] if self.model3d_variant
+            "details": (["Binary", "2 files"] if self.binary_diff_preview
+                        else ["3D", "STL"] if self.model3d_variant
                         else ["XLSX", "2 sheets"] if self.xlsx_preview
                         else ["CSV", "Text"] if self.csv_preview
                         else ["Markdown", "Text"]),
@@ -823,6 +837,37 @@ def prepare_configuration(args: argparse.Namespace, output: Path) -> dict[str, A
     user_config = config_home / "little-screen-clip" / "config.toml"
     user_config.parent.mkdir(mode=0o700)
     user_config.write_text(config, encoding="utf-8")
+    if args.fake_node_machine:
+        recipes_dir = user_config.parent / "recipes"
+        recipes_dir.mkdir(mode=0o700)
+        (recipes_dir / "pad_and_caption.yaml").write_text(
+            """name: Pad and Caption
+description: Deterministic Node Machine script-property acceptance fixture
+input_type: any
+tags: [acceptance]
+graph:
+  nodes:
+    - id: 00000000-0000-4000-8000-000000000001
+      kind: PythonScript
+      title: Python Transform
+      pos: [20.0, 20.0]
+      props:
+        script_file: transform.py
+      inputs:
+        - name: In
+          port_type: Text
+      outputs:
+        - name: Out
+          port_type: Text
+  connections: []
+  pan: [0.0, 0.0]
+  zoom: 1.0
+""",
+            encoding="utf-8",
+        )
+        (recipes_dir / "transform.py").write_text(
+            "def transform(value):\n    return value\n", encoding="utf-8"
+        )
     niri_config = output / "niri.kdl"
     niri_config.write_text(
         "hotkey-overlay { skip-at-startup; }\n"
@@ -934,6 +979,8 @@ def start_compositors(
 
 def app_arguments(args: argparse.Namespace, binary: Path) -> list[str]:
     command = [str(binary)]
+    if args.binary_diff_view:
+        command.append("--binary")
     if args.component_gallery:
         command.append("--component-gallery")
     if args.image:
@@ -1006,7 +1053,7 @@ def capture_workbench(
     report["actual_logical_size"] = list(logical_size)
     app_env = niri_env | {"WAYLAND_DEBUG": "client"}
     pointer_helper: Path | None = None
-    if args.click is not None or args.move is not None or args.drag is not None:
+    if args.click is not None or args.move is not None or args.drag is not None or args.scroll is not None:
         verify_private_wayland_target(niri_env, config["runtime"])
         pointer_helper = build_private_virtual_pointer(output)
         probe = run_checked([str(pointer_helper), "probe"], env=niri_env)
@@ -1027,6 +1074,10 @@ def capture_workbench(
     )
     first_windows, mapped_ms = wait_for_app_window(niri_bin, niri_env, app, output)
     report["mapped_elapsed_ms"] = mapped_ms
+    if args.fake_node_machine:
+        run_checked(["wtype", "-k", "F1"], env=niri_env)
+        report["node_machine_route"] = "F1 sent through private Wayland keyboard input"
+        time.sleep(0.5)
     report["first_observed_windows"] = first_windows
     report["screenshots"]["first_observed"] = screenshot(
         niri_bin, niri_env, output / "first-observed.png"
@@ -1066,6 +1117,8 @@ def capture_workbench(
                 send_private_scroll()
         if args.scroll is not None and args.scroll_after_click is None:
             send_private_scroll()
+    elif args.scroll is not None:
+        send_private_scroll()
     if args.drag is not None and pointer_helper is not None:
         report["pointer_input"]["drags"] = []
         for start_x, start_y, end_x, end_y in args.drag:
@@ -1247,6 +1300,14 @@ def create_parser() -> argparse.ArgumentParser:
         "--fake-model3d", choices=("valid", "error", "loading"),
         help="serve a private STL fixture for 3D viewer acceptance",
     )
+    parser.add_argument(
+        "--fake-node-machine", action="store_true",
+        help="load a deterministic script-node recipe from this run's private config and open Node Machine",
+    )
+    parser.add_argument("--fake-binary-diff", action="store_true",
+                        help="serve private byte fixtures for binary-diff viewer acceptance")
+    parser.add_argument("--binary-diff-view", action="store_true",
+                        help="open binary diff directly (requires --fake-binary-diff)")
     parser.add_argument("--verify-return", action="store_true", help="send Escape and verify the popup closes while private Niri remains responsive")
     parser.add_argument("--binary", type=Path, help="workbench binary (default: target/debug/clip-workbench)")
     parser.add_argument("--settle-ms", type=int, default=500, help="settling delay before second capture (default: 500)")
@@ -1286,6 +1347,20 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         or args.fake_audio_transition or any((args.image, args.audio, args.pdf, args.midi))
     ):
         raise SystemExit("--fake-model3d cannot be combined with other fixture routes")
+    if args.fake_binary_diff and (
+        args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
+        or args.fake_model3d or args.fake_audio_transition
+        or any((args.image, args.audio, args.pdf, args.midi))
+    ):
+        raise SystemExit("--fake-binary-diff cannot be combined with other fixture routes")
+    if args.fake_node_machine and (
+        args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
+        or args.fake_model3d or args.fake_audio_transition or args.fake_binary_diff
+        or any((args.image, args.audio, args.pdf, args.midi))
+    ):
+        raise SystemExit("--fake-node-machine cannot be combined with other fixture routes")
+    if args.binary_diff_view and not args.fake_binary_diff:
+        raise SystemExit("--binary-diff-view requires --fake-binary-diff")
     if args.image_tool and not args.image:
         raise SystemExit("--image-tool requires --image")
     if args.click is not None and any(
@@ -1307,7 +1382,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         or args.scroll[2] == 0 or abs(args.scroll[2]) > 1000
     ):
         raise SystemExit("--scroll coordinates must be inside the requested output and DELTA must be 1..1000 in magnitude")
-    if args.scroll is not None and args.click is None:
+    if args.scroll is not None and args.click is None and not args.fake_node_machine:
         raise SystemExit("--scroll requires --click so the pointer action remains an explicit post-selection interaction")
     if args.scroll_after_click is not None and args.scroll is None:
         raise SystemExit("--scroll-after-click requires --scroll")
@@ -1333,6 +1408,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         raise SystemExit("--type-text requires a fake text preview route")
     if (
         args.verify_return or args.image_tool or args.key_action or args.type_text
+        or args.fake_node_machine
     ) and shutil.which("wtype") is None:
         raise SystemExit("keyboard input requires wtype")
     binary = (args.binary or (repo / "target/debug/clip-workbench")).resolve()
@@ -1380,6 +1456,9 @@ def main() -> int:
             "fake_csv_preview": args.fake_csv_preview,
             "fake_multisheet_xlsx": args.fake_multisheet_xlsx,
             "fake_model3d": args.fake_model3d,
+            "fake_binary_diff": args.fake_binary_diff,
+            "fake_node_machine": args.fake_node_machine,
+            "binary_diff_view": args.binary_diff_view,
             "verify_return": args.verify_return,
             "binary": str(binary),
             "settle_ms": args.settle_ms,
@@ -1422,13 +1501,14 @@ def main() -> int:
             )
         if (
             args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
-            or args.fake_model3d
+            or args.fake_model3d or args.fake_binary_diff
         ):
             fake_text_daemon = FakeTextPreviewDaemon(
                 config["runtime"], output / "fake-text-daemon-events.json",
                 csv_preview=args.fake_csv_preview,
                 xlsx_preview=args.fake_multisheet_xlsx,
                 model3d_variant=args.fake_model3d,
+                binary_diff_preview=args.fake_binary_diff,
             )
         capture_workbench(args, binary, output, config, niri_env, outputs, children, report)
     except Exception as exc:
@@ -1450,7 +1530,9 @@ def main() -> int:
                 report["failures"].append("workbench mapped after the fake preview was already ready")
         if fake_text_daemon is not None:
             text_route = fake_text_daemon.close()
-            if args.fake_model3d:
+            if args.fake_binary_diff:
+                report["fake_binary_diff"] = text_route
+            elif args.fake_model3d:
                 report["fake_model3d"] = text_route
             elif args.fake_multisheet_xlsx:
                 report["fake_multisheet_xlsx"] = text_route
