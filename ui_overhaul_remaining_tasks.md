@@ -219,7 +219,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s4 [Luna] Select Covariance color model.** Live 1280×720 capture shows Covariance selected and the analysis drawer reports `Matrix Covariance`; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s5 [Luna] Apply Decorrelation Stretch from the live UI.** Compact Dark capture shows the transformed canvas and `Applied decorrelation stretch to canvas`; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s6 [Luna] Undo a live Decorrelation Stretch application.** Compact Dark capture applies the stretch and sends Ctrl+Z; the original canvas and `Undone` status are visible. The isolated runner now records ordered private Ctrl+Z/Ctrl+Y shortcuts; see `ui_overhaul_acceptance.md`.
-      - [ ] **E2.1s7 [Luna] Redo a live Decorrelation Stretch application.**
+      - [x] **E2.1s7 [Luna] Redo a live Decorrelation Stretch application.** Compact Dark capture applies the stretch, sends Ctrl+Z then Ctrl+Y, and shows the `Redone` status; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s8 [Luna] Select the alternate Decorrelation Stretch preset.** Compact Dark capture shows Preserve selected, Preserve original band means/spread checked, and the comparison HUD; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s9 [Luna] Change the Decorrelation Stretch target mean.** Compact Dark capture shows Target mean changed from 127.5 to 255.0 by dragging the production slider; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s10 [Luna] Change the Decorrelation Stretch target spread.** Compact Dark capture shows Target spread changed from 50.0 to 200.0 with the live preview updated; see `ui_overhaul_acceptance.md`.
