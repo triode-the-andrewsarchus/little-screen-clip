@@ -1441,12 +1441,14 @@ impl eframe::App for WorkbenchApp {
                                 .selected_slots
                                 .iter()
                                 .filter_map(|s| self.state.get(*s))
+                                .filter(|it| !is_large_text_payload(it))
                                 .filter(|it| resolve_diff_target(it).map(|t| t.is_image()).unwrap_or(false))
                                 .count();
                             img_count >= 2
                                 || self.selected_slots.iter().any(|s| {
                                     self.state
                                         .get(*s)
+                                        .filter(|it| !is_large_text_payload(it))
                                         .and_then(|it| resolve_diff_pair(it))
                                         .map(|(t1, t2)| t1.is_image() && t2.is_image())
                                         .unwrap_or(false)
@@ -1454,6 +1456,7 @@ impl eframe::App for WorkbenchApp {
                         } else if self.selected_slots.len() == 1 {
                             self.state
                                 .get(self.selected_slots[0])
+                                .filter(|it| !is_large_text_payload(it))
                                 .and_then(|it| resolve_diff_pair(it))
                                 .map(|(t1, t2)| t1.is_image() && t2.is_image())
                                 .unwrap_or(false)
