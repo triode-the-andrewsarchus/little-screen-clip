@@ -48,6 +48,7 @@ IMAGE_ACTION_KEYS = {"enter": "Return"}
 KEY_ACTIONS = {
     "ctrl-z": ["-M", "ctrl", "-k", "z", "-m", "ctrl"],
     "ctrl-y": ["-M", "ctrl", "-k", "y", "-m", "ctrl"],
+    "enter": ["-k", "Return"],
 }
 
 

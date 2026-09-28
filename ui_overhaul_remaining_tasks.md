@@ -257,12 +257,12 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s36 [Luna] Flip the image vertically.** Compact Dark capture shows `Flipped Vertically` and the inverted canvas; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s37 [Luna] Undo an image transform.** Compact Dark capture flips horizontally, sends Ctrl+Z, and shows the original canvas with `Undone`; see `ui_overhaul_acceptance.md`.
     - **Redact and Markup**
-      - [ ] **E2.1s38 [Luna] Choose a Redact style.**
-      - [ ] **E2.1s39 [Luna] Burn a selected redaction into the image.**
-      - [ ] **E2.1s40 [Luna] Undo a redaction burn.**
-      - [ ] **E2.1s41 [Luna] Change one Markup annotation property.**
-      - [ ] **E2.1s42 [Luna] Flatten a Markup annotation.**
-      - [ ] **E2.1s43 [Luna] Undo Markup flattening.**
+      - [x] **E2.1s38 [Luna] Verify the supported Redact style.** Redaction currently offers only opaque black privacy bars and has no style selector; compact capture shows the selected black bar; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s39 [Luna] Burn a selected redaction into the image.** Compact Dark capture shows the black bar burned into pixels and `Burned 1 redaction bars into image`; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s40 [Luna] Undo a redaction burn.** Compact Dark capture burns a redaction, sends Ctrl+Z, and restores the source image with `Undone`; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s41 [Luna] Change one Markup annotation property.** Compact Dark capture changes an Arrow stroke from 4 px to 13 px and shows the thicker annotation; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s42 [Luna] Flatten a Markup annotation.** Compact Dark capture draws an Arrow and presses Enter; the vector layer count becomes zero and `Flattened 1 markup layers into image pixels` appears; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s43 [Luna] Undo Markup flattening.** Compact Dark capture flattens an Arrow, sends Ctrl+Z, and shows `Undone`; see `ui_overhaul_acceptance.md`.
     - **Convert, Background Removal, and Depth Map**
       - [ ] **E2.1s44 [Luna] Select a different conversion format.**
       - [ ] **E2.1s45 [Luna] Change conversion quality.**
