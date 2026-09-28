@@ -17,12 +17,14 @@ import shlex
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import threading
 import time
 import wave
 import zipfile
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -275,6 +277,7 @@ class FakeTextPreviewDaemon:
         model3d_variant: str | None = None,
         binary_diff_preview: bool = False,
         diff_preview: bool = False,
+        image_diff_preview: bool = False,
     ):
         self.socket_path = runtime / "little-screen-clip.sock"
         self.log_path = log_path
@@ -283,6 +286,7 @@ class FakeTextPreviewDaemon:
         self.model3d_variant = model3d_variant
         self.binary_diff_preview = binary_diff_preview
         self.diff_preview = diff_preview
+        self.image_diff_preview = image_diff_preview
         self.xlsx_path = log_path.parent / "acceptance-multisheet.xlsx"
         if xlsx_preview:
             self._write_xlsx_fixture()
@@ -293,6 +297,11 @@ class FakeTextPreviewDaemon:
             self._write_model3d_fixture()
         self.binary_left_path = log_path.parent / "acceptance-left.bin"
         self.binary_right_path = log_path.parent / "acceptance-right.bin"
+        self.image_left_path = log_path.parent / "acceptance-image-left.png"
+        self.image_right_path = log_path.parent / "acceptance-image-right.png"
+        if image_diff_preview:
+            self._write_png_fixture(self.image_left_path, (42, 128, 220), (220, 80, 52))
+            self._write_png_fixture(self.image_right_path, (220, 80, 52), (42, 128, 220))
         if binary_diff_preview:
             self.binary_left_path.write_bytes(b"little-screen-clip\x00\x01\x02\x03\x04\noriginal\n")
             self.binary_right_path.write_bytes(b"little-screen-clip\x00\x01\x09\x03\x04\nupdated\n")
@@ -311,6 +320,29 @@ class FakeTextPreviewDaemon:
         self.listener.settimeout(0.2)
         self.thread = threading.Thread(target=self._serve, name="fake-text-ipc", daemon=True)
         self.thread.start()
+
+    @staticmethod
+    def _write_png_fixture(path: Path, first: tuple[int, int, int], second: tuple[int, int, int]) -> None:
+        width, height = 96, 64
+
+        def chunk(kind: bytes, data: bytes) -> bytes:
+            body = kind + data
+            return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+        scanlines = bytearray()
+        for y in range(height):
+            scanlines.append(0)
+            color = first if y < height // 2 else second
+            for x in range(width):
+                pixel = color if x < width // 2 else tuple(255 - value for value in color)
+                scanlines.extend((*pixel, 255))
+        png = (
+            b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(bytes(scanlines), level=9))
+            + chunk(b"IEND", b"")
+        )
+        path.write_bytes(png)
 
     def _write_xlsx_fixture(self) -> None:
         content_types = (
@@ -390,6 +422,19 @@ class FakeTextPreviewDaemon:
             stl.write("endsolid acceptance_mesh\n")
 
     def _item(self) -> dict[str, Any]:
+        if self.image_diff_preview:
+            return {
+                "id": self.DIFF_LEFT_ITEM_ID,
+                "created_at": int(time.time()),
+                "payload": {"Image": {
+                    "path": str(self.image_left_path), "width": 96, "height": 64,
+                    "mime": "image/png", "thumbnail": None,
+                }},
+                "title": "acceptance-image-left.png",
+                "subtitle": "Image • Diff fixture",
+                "details": ["Image", "96×64"],
+                "handler_tag": "IMAGE (FILE)",
+            }
         if self.diff_preview:
             return {
                 "id": self.DIFF_LEFT_ITEM_ID,
@@ -448,7 +493,18 @@ class FakeTextPreviewDaemon:
                 "subtitle": "Text • Diff fixture",
                 "details": ["Text", "Right"],
                 "handler_tag": "TEXT",
-            } if self.diff_preview else None), "left_prior1": None,
+            } if self.diff_preview else ({
+                "id": self.DIFF_RIGHT_ITEM_ID,
+                "created_at": int(time.time()),
+                "payload": {"Image": {
+                    "path": str(self.image_right_path), "width": 96, "height": 64,
+                    "mime": "image/png", "thumbnail": None,
+                }},
+                "title": "acceptance-image-right.png",
+                "subtitle": "Image • Diff fixture",
+                "details": ["Image", "96×64"],
+                "handler_tag": "IMAGE (FILE)",
+            } if self.image_diff_preview else None)), "left_prior1": None,
             "left_prior2": None, "left_prior3": None, "right_prior2": None,
             "right_prior1": None, "cursor": "LeftHand",
             "selected": ["LeftHand"],
@@ -460,20 +516,20 @@ class FakeTextPreviewDaemon:
         if request == "GetStateSummary":
             cards = [{
                 "slot": "LeftHand",
-                "item_id": self.DIFF_LEFT_ITEM_ID if self.diff_preview else self.ITEM_ID,
-                "payload_kind": "Text" if self.csv_preview or self.xlsx_preview or self.model3d_variant or self.diff_preview else "Markdown",
+                "item_id": self.DIFF_LEFT_ITEM_ID if self.diff_preview or self.image_diff_preview else self.ITEM_ID,
+                "payload_kind": "Image" if self.image_diff_preview else "Text" if self.csv_preview or self.xlsx_preview or self.model3d_variant or self.diff_preview else "Markdown",
                 "preview_phase": "Ready",
             }]
-            if self.diff_preview:
+            if self.diff_preview or self.image_diff_preview:
                 cards.append({
                     "slot": "RightHand",
                     "item_id": self.DIFF_RIGHT_ITEM_ID,
-                    "payload_kind": "Text",
+                    "payload_kind": "Image" if self.image_diff_preview else "Text",
                     "preview_phase": "NotApplicable",
                 })
             return {"StateSummary": {"cards": cards, "cursor": "LeftHand", "selected": ["LeftHand"]}}, "summary"
         if request in ({"GetSlotItem": "LeftHand"}, {"GetSlotItem": "RightHand"}):
-            if request == {"GetSlotItem": "RightHand"} and not self.diff_preview:
+            if request == {"GetSlotItem": "RightHand"} and not (self.diff_preview or self.image_diff_preview):
                 return {"Error": {"error": "acceptance Right Hand fixture is unavailable"}}, "unsupported"
             if request == {"GetSlotItem": "RightHand"}:
                 return {"SlotItem": self._state()["right_hand"]}, "slot_item"
@@ -1371,6 +1427,8 @@ def create_parser() -> argparse.ArgumentParser:
                         help="serve private byte fixtures for binary-diff viewer acceptance")
     parser.add_argument("--fake-diff-preview", action="store_true",
                         help="serve two private text items for regular Diff route acceptance")
+    parser.add_argument("--fake-image-diff-preview", action="store_true",
+                        help="serve two deterministic private PNG items for image Diff route acceptance")
     parser.add_argument("--binary-diff-view", action="store_true",
                         help="open binary diff directly (requires --fake-binary-diff)")
     parser.add_argument("--verify-return", action="store_true", help="send Escape and verify the popup closes while private Niri remains responsive")
@@ -1426,6 +1484,12 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         or any((args.image, args.audio, args.pdf, args.midi))
     ):
         raise SystemExit("--fake-diff-preview cannot be combined with other fixture routes")
+    if args.fake_image_diff_preview and (
+        args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
+        or args.fake_model3d or args.fake_binary_diff or args.fake_diff_preview
+        or args.fake_audio_transition or any((args.image, args.audio, args.pdf, args.midi))
+    ):
+        raise SystemExit("--fake-image-diff-preview cannot be combined with other fixture routes")
     if args.fake_node_machine and (
         args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
         or args.fake_model3d or args.fake_audio_transition or args.fake_binary_diff
@@ -1436,11 +1500,11 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
     if args.binary_diff_view and not args.fake_binary_diff:
         raise SystemExit("--binary-diff-view requires --fake-binary-diff")
     if args.verify_viewer_return and not (
-        args.fake_diff_preview and args.type_text == "diff"
+        (args.fake_diff_preview or args.fake_image_diff_preview) and args.type_text == "diff"
         and args.key_action and "enter" in args.key_action
     ):
         raise SystemExit(
-            "--verify-viewer-return requires --fake-diff-preview --type-text diff --key-action enter"
+            "--verify-viewer-return requires a fake Diff fixture, --type-text diff, and --key-action enter"
         )
     if args.verify_viewer_return and args.verify_return:
         raise SystemExit("--verify-viewer-return cannot be combined with --verify-return")
@@ -1477,10 +1541,9 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         raise SystemExit("--image-action requires --image-tool")
     if args.key_action and not args.image and any(action != "f3" for action in args.key_action):
         if not (
-            args.fake_text_preview
-            and all(action in {"f3", "ctrl-f"} for action in args.key_action)
-            or args.fake_diff_preview
-            and all(action == "enter" for action in args.key_action)
+            (args.fake_text_preview and all(action in {"f3", "ctrl-f"} for action in args.key_action))
+            or ((args.fake_diff_preview or args.fake_image_diff_preview)
+                and all(action == "enter" for action in args.key_action))
         ):
             raise SystemExit(
                 "only --key-action f3 may be used without an image fixture, "
@@ -1488,7 +1551,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
             )
     if args.type_text and not (
         args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
-        or args.fake_diff_preview or args.fake_model3d
+        or args.fake_diff_preview or args.fake_image_diff_preview or args.fake_model3d
     ):
         raise SystemExit("--type-text requires a fake text preview route")
     if (
@@ -1543,6 +1606,7 @@ def main() -> int:
             "fake_model3d": args.fake_model3d,
             "fake_binary_diff": args.fake_binary_diff,
             "fake_diff_preview": args.fake_diff_preview,
+            "fake_image_diff_preview": args.fake_image_diff_preview,
             "fake_node_machine": args.fake_node_machine,
             "binary_diff_view": args.binary_diff_view,
             "verify_return": args.verify_return,
@@ -1589,6 +1653,7 @@ def main() -> int:
         if (
             args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
             or args.fake_model3d or args.fake_binary_diff or args.fake_diff_preview
+            or args.fake_image_diff_preview
         ):
             fake_text_daemon = FakeTextPreviewDaemon(
                 config["runtime"], output / "fake-text-daemon-events.json",
@@ -1597,6 +1662,7 @@ def main() -> int:
                 model3d_variant=args.fake_model3d,
                 binary_diff_preview=args.fake_binary_diff,
                 diff_preview=args.fake_diff_preview,
+                image_diff_preview=args.fake_image_diff_preview,
             )
         capture_workbench(args, binary, output, config, niri_env, outputs, children, report)
     except Exception as exc:
@@ -1622,6 +1688,8 @@ def main() -> int:
                 report["fake_binary_diff"] = text_route
             elif args.fake_diff_preview:
                 report["fake_diff_preview"] = text_route
+            elif args.fake_image_diff_preview:
+                report["fake_image_diff_preview"] = text_route
             elif args.fake_model3d:
                 report["fake_model3d"] = text_route
             elif args.fake_multisheet_xlsx:
