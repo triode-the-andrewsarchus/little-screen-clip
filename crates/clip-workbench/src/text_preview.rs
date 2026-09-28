@@ -84,6 +84,67 @@ static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 const MINIMAP_COLUMNS: usize = 96;
 const MINIMAP_WIDTH: f32 = 112.0;
+/// Maximum source bytes laid out in one editor fragment. Oversized logical
+/// lines are presented as continuation rows so no single egui layout job can
+/// shape megabytes of text synchronously.
+const MAX_CODE_FRAGMENT_BYTES: usize = 4 * 1024;
+
+#[derive(Debug, Clone, Copy)]
+struct CodeFragment {
+    start_byte: usize,
+    end_byte: usize,
+    source_line: usize,
+}
+
+fn code_fragments(text: &str, line_starts: &[usize]) -> (Vec<CodeFragment>, Vec<usize>) {
+    let mut fragments = Vec::new();
+    let mut line_first_fragment = Vec::with_capacity(line_starts.len());
+    for (source_line, &start) in line_starts.iter().enumerate() {
+        line_first_fragment.push(fragments.len());
+        let end = line_starts
+            .get(source_line + 1)
+            .copied()
+            .unwrap_or(text.len())
+            .min(text.len());
+        let end = if end > start && text.as_bytes()[end - 1] == b'\n' {
+            end - 1
+        } else {
+            end
+        };
+        if end <= start {
+            fragments.push(CodeFragment {
+                start_byte: start,
+                end_byte: end,
+                source_line,
+            });
+            continue;
+        }
+
+        let mut fragment_start = start;
+        while fragment_start < end {
+            let mut fragment_end = (fragment_start + MAX_CODE_FRAGMENT_BYTES).min(end);
+            while !text.is_char_boundary(fragment_end) {
+                fragment_end -= 1;
+            }
+            // UTF-8 characters are at most four bytes, so this only applies
+            // when a boundary falls inside one character.
+            if fragment_end == fragment_start {
+                fragment_end = text[fragment_start..end]
+                    .char_indices()
+                    .nth(1)
+                    .map(|(offset, _)| fragment_start + offset)
+                    .unwrap_or(end);
+            }
+            fragments.push(CodeFragment {
+                start_byte: fragment_start,
+                end_byte: fragment_end,
+                source_line,
+            });
+            fragment_start = fragment_end;
+        }
+    }
+    (fragments, line_first_fragment)
+}
 
 /// Cumulative row heights, updated in logarithmic time as wrapping is measured.
 /// Unmeasured rows start at one font row; the viewport retains its source anchor
@@ -212,6 +273,8 @@ pub struct TextPreviewState {
     /// Byte offsets for each line. This is built once when the preview opens so
     /// large files do not allocate/scan all lines every repaint.
     line_starts: Vec<usize>,
+    code_fragments: Vec<CodeFragment>,
+    line_first_fragment: Vec<usize>,
     code_rows: CodeRowHeights,
     code_scroll_offset: f32,
     pub minimap_fraction: f32,
@@ -235,6 +298,7 @@ impl TextPreviewState {
     pub fn from_text(text: String, title: Option<String>, config: &AppConfig) -> Self {
         let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
         let line_starts = line_start_offsets(&text);
+        let (code_fragments, line_first_fragment) = code_fragments(&text, &line_starts);
         let is_md = detect_markdown_text(&text);
         let lang = if is_md {
             "md"
@@ -279,6 +343,8 @@ impl TextPreviewState {
             scroll_to_line: None,
             scroll_to_offset: None,
             line_starts,
+            code_fragments,
+            line_first_fragment,
             code_rows: CodeRowHeights::default(),
             code_scroll_offset: 0.0,
             minimap_fraction: 0.0,
@@ -295,6 +361,7 @@ impl TextPreviewState {
         let path_ref = path.as_ref();
         let content = little_clip_ops::read_text_file_preview(path_ref, 2 * 1024 * 1024)?;
         let line_starts = line_start_offsets(&content);
+        let (code_fragments, line_first_fragment) = code_fragments(&content, &line_starts);
         let ext = path_ref.extension().and_then(|e| e.to_str());
         let lang = detect_language(&content, ext);
         // Only actual .md / .markdown files default to markdown preview
@@ -334,6 +401,8 @@ impl TextPreviewState {
             scroll_to_line: None,
             scroll_to_offset: None,
             line_starts,
+            code_fragments,
+            line_first_fragment,
             code_rows: CodeRowHeights::default(),
             code_scroll_offset: 0.0,
             minimap_fraction: 0.0,
@@ -386,7 +455,8 @@ impl TextPreviewState {
     pub fn next_match(&mut self) {
         if !self.matches.is_empty() {
             self.active_match_idx = (self.active_match_idx + 1) % self.matches.len();
-            self.scroll_to_line = Some(self.matches[self.active_match_idx].line);
+            self.scroll_to_line =
+                Some(self.display_row_for_byte(self.matches[self.active_match_idx].start_byte) + 1);
         }
     }
 
@@ -398,8 +468,16 @@ impl TextPreviewState {
             } else {
                 self.active_match_idx -= 1;
             }
-            self.scroll_to_line = Some(self.matches[self.active_match_idx].line);
+            self.scroll_to_line =
+                Some(self.display_row_for_byte(self.matches[self.active_match_idx].start_byte) + 1);
         }
+    }
+
+    fn display_row_for_byte(&self, byte: usize) -> usize {
+        self.code_fragments
+            .partition_point(|fragment| fragment.start_byte <= byte)
+            .saturating_sub(1)
+            .min(self.code_fragments.len().saturating_sub(1))
     }
 
     /// Triggers opening the text in the configured external editor (e.g. VS Code).
@@ -850,32 +928,26 @@ impl TextPreviewState {
             });
     }
 
-    fn source_line(&self, row: usize) -> &str {
-        let start = self.line_starts[row];
-        let end = self
-            .line_starts
-            .get(row + 1)
-            .copied()
-            .unwrap_or(self.content.len());
-        self.content[start..end].trim_end_matches('\n')
+    fn source_fragment(&self, row: usize) -> (CodeFragment, &str) {
+        let fragment = self.code_fragments[row];
+        (
+            fragment,
+            &self.content[fragment.start_byte..fragment.end_byte],
+        )
     }
 
-    /// Measure a small batch per frame; a single unusually long line can still
-    /// exceed the time budget and needs the broader large-document load audit.
+    /// Measure a small batch per frame. Long logical lines are split into
+    /// bounded UTF-8 fragments before they reach egui's text shaper.
     fn measure_code_rows(&mut self, ui: &egui::Ui, width: f32, minimum_height: f32, font: &FontId) {
         let started = std::time::Instant::now();
         for _ in 0..64 {
             let row = self.code_rows.next_measurement;
-            if row >= self.line_starts.len() {
+            if row >= self.code_fragments.len() {
                 break;
             }
+            let (_, source) = self.source_fragment(row);
             let galley = ui.fonts(|fonts| {
-                fonts.layout(
-                    self.source_line(row).to_owned(),
-                    font.clone(),
-                    Color32::WHITE,
-                    width,
-                )
+                fonts.layout(source.to_owned(), font.clone(), Color32::WHITE, width)
             });
             self.code_rows
                 .set_height(row, (galley.size().y + 4.0).max(minimum_height));
@@ -884,7 +956,7 @@ impl TextPreviewState {
                 break;
             }
         }
-        if self.code_rows.next_measurement < self.line_starts.len() {
+        if self.code_rows.next_measurement < self.code_fragments.len() {
             ui.ctx().request_repaint();
         }
     }
@@ -916,8 +988,8 @@ impl TextPreviewState {
             .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
             .inner_margin(egui::Margin::symmetric(10.0, 8.0))
             .show(ui, |ui| {
-                let total_lines = self.line_starts.len().max(1);
-                let digits = total_lines.to_string().len().max(2);
+                let total_rows = self.code_fragments.len().max(1);
+                let digits = self.line_starts.len().to_string().len().max(2);
                 // A horizontal layout shrink-wraps children by default.  That left the
                 // virtual ScrollArea with a one-row-high clip rect on some egui backends.
                 // Reserve the viewport explicitly before asking it to virtualize rows.
@@ -957,7 +1029,7 @@ impl TextPreviewState {
                                 - self.code_rows.offset(anchor_row))
                             .max(0.0);
                             self.code_rows.reset(
-                                total_lines,
+                                total_rows,
                                 wrap_width,
                                 line_height,
                                 ui.ctx().pixels_per_point(),
@@ -980,14 +1052,13 @@ impl TextPreviewState {
                                 // when virtualization changes the first visible row.
                                 ui.skip_ahead_auto_ids(row);
                                 let mut y = self.code_rows.offset(row);
-                                while row < total_lines && y <= viewport.bottom() {
-                                    let start = self.line_starts[row];
-                                    let line = self.source_line(row);
+                                while row < total_rows && y <= viewport.bottom() {
+                                    let (fragment, line) = self.source_fragment(row);
                                     let matches = line_highlight_ranges(
                                         &self.matches,
                                         self.active_match_idx,
-                                        start,
-                                        start + line.len(),
+                                        fragment.start_byte,
+                                        fragment.end_byte,
                                     );
                                     let mut job = build_highlighted_layout_job(
                                         line, syntax, palette, &matches,
@@ -1000,11 +1071,13 @@ impl TextPreviewState {
                                         origin + egui::vec2(gutter_width, y + 2.0),
                                         galley.size(),
                                     );
-                                    if show_gutter {
+                                    if show_gutter
+                                        && self.line_first_fragment[fragment.source_line] == row
+                                    {
                                         ui.painter().text(
                                             origin + egui::vec2(gutter_width - 10.0, y + 2.0),
                                             egui::Align2::RIGHT_TOP,
-                                            format!("{}", row + 1),
+                                            format!("{}", fragment.source_line + 1),
                                             code_font.clone(),
                                             hex_to_c32(&palette.colors.text_muted),
                                         );
@@ -1038,6 +1111,7 @@ impl TextPreviewState {
                         if let Some(fraction) = render_code_minimap(
                             ui,
                             self.minimap_lines.as_deref().unwrap_or_default(),
+                            &self.line_first_fragment,
                             &self.code_rows,
                             surface_size.y.max(1.0),
                             self.minimap_fraction,
@@ -1265,6 +1339,7 @@ fn build_minimap_lines(text: &str, syntax: &SyntaxReference) -> Vec<MinimapLine>
 fn render_code_minimap(
     ui: &mut egui::Ui,
     lines: &[MinimapLine],
+    line_first_fragment: &[usize],
     rows: &CodeRowHeights,
     height: f32,
     scroll_fraction: f32,
@@ -1289,11 +1364,16 @@ fn render_code_minimap(
     let stride =
         ((line_count as f32 / content_rect.height().ceil().max(1.0)).ceil() as usize).max(1);
     for line_index in (0..lines.len()).step_by(stride) {
+        let display_row = line_first_fragment.get(line_index).copied().unwrap_or(0);
         let row_top = content_rect.top()
-            + content_rect.height() * rows.offset(line_index) / rows.total_height().max(1.0);
+            + content_rect.height() * rows.offset(display_row) / rows.total_height().max(1.0);
+        let next_line = (line_index + stride).min(line_count);
+        let next_display_row = line_first_fragment
+            .get(next_line)
+            .copied()
+            .unwrap_or(rows.heights.len());
         let row_bottom = (content_rect.top()
-            + content_rect.height() * rows.offset((line_index + stride).min(line_count))
-                / rows.total_height().max(1.0))
+            + content_rect.height() * rows.offset(next_display_row) / rows.total_height().max(1.0))
         .max(row_top + 1.0)
         .min(content_rect.bottom());
         for segment in &lines[line_index].segments {
@@ -1929,6 +2009,80 @@ mod tests {
         rows.reset(0, 400.0, 20.0, 1.0);
         assert_eq!(rows.row_at(0.0), 0);
         assert_eq!(rows.total_height(), 0.0);
+    }
+
+    #[test]
+    fn huge_single_line_uses_bounded_utf8_fragments_and_keeps_full_search_source() {
+        let marker = "MATCH_AT_END";
+        let content = format!("{}{}", "界ab".repeat(40_000), marker);
+        let config = AppConfig::default();
+        let mut state = TextPreviewState::from_text(content.clone(), None, &config);
+
+        assert!(state.code_fragments.len() > 1);
+        assert!(
+            state
+                .code_fragments
+                .iter()
+                .all(|fragment| fragment.end_byte - fragment.start_byte <= MAX_CODE_FRAGMENT_BYTES)
+        );
+        assert!(state.code_fragments.iter().all(|fragment| {
+            content.is_char_boundary(fragment.start_byte)
+                && content.is_char_boundary(fragment.end_byte)
+        }));
+        assert_eq!(
+            state
+                .code_fragments
+                .iter()
+                .map(|fragment| &content[fragment.start_byte..fragment.end_byte])
+                .collect::<String>(),
+            content
+        );
+
+        state.find_query = marker.to_owned();
+        state.update_search_matches();
+        assert_eq!(state.matches.len(), 1);
+        let matched = state.matches[0];
+        assert_eq!(&state.content[matched.start_byte..matched.end_byte], marker);
+        state.next_match();
+        let row = state.scroll_to_line.unwrap() - 1;
+        let fragment = state.code_fragments[row];
+        assert!(fragment.start_byte <= matched.start_byte);
+        assert!(matched.start_byte < fragment.end_byte);
+    }
+
+    #[test]
+    fn huge_line_rendering_only_shapes_bounded_fragments() {
+        let ctx = egui::Context::default();
+        let content = "long text ".repeat(10_000);
+        let mut state = TextPreviewState::from_text(content, None, &AppConfig::default());
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(700.0, 240.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_raw_code_view(ui, &AppPalette::default());
+                });
+            },
+        );
+        let rendered_fragment_lengths: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text.galley.text().len()),
+                _ => None,
+            })
+            .collect();
+        assert!(!rendered_fragment_lengths.is_empty());
+        assert!(
+            rendered_fragment_lengths
+                .iter()
+                .all(|length| *length <= MAX_CODE_FRAGMENT_BYTES)
+        );
     }
 
     #[test]

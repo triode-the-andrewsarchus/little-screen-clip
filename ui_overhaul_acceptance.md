@@ -2,6 +2,10 @@
 
 Working evidence sheet for E1.4 and final acceptance. Record each run with date, commit, display mode, compositor/UI scale, action, result, and screenshot or log path. A blank result means **not tested**, not passed. Keep hardware USB tests separate from virtual/display-render checks.
 
+## Large single-line text previews, 2026-09-28
+
+H2.2c1 splits raw text lines into UTF-8-safe display fragments of at most 4 KiB before measurement or rendering. The source remains intact for regex/literal search and full-content copy; search navigation maps the exact match byte to the fragment containing it. Regression tests verify exact fragment reconstruction, Unicode boundaries, far-end search/navigation, and the maximum text size passed to rendered galleys. `cargo test -p clip-workbench --bin clip-workbench -- --test-threads=1` passes (416 passed, 1 ignored), and formatting plus `git diff --check` pass. Live pointer selection across forced continuation fragments and performance measurements remain unverified; these are tracked separately under H2.2e7 and H2.2c6. The architecture baseline service timed out after five minutes, so no metric comparison is claimed.
+
 ## Text preview Markdown and search/status live review, 2026-09-27
 
 The private capture runner's `--fake-text-preview` option serves a deterministic Markdown slot through the run-local IPC socket. The capture enters the existing Palette **Preview Markdown** action; no production CLI/API, user daemon, clipboard, or compositor is involved. For E2.3d1b, the 1280×720 Light capture is `/tmp/clip-e23d1b-text-compact-20260927/report.json` and `settled.png`; the 3440×1440 Dark capture is `/tmp/clip-e23d1b-text-wide-viewer-20260927/report.json` and `settled.png`. Both reports pass the popup geometry, centering, fixed-size hint, singleton, and fake-slot-fetch checks. The rendered heading, body, nested and ordered lists, quote, code block, toolbar, and footer are visible at both sizes; the full-size images are easiest to inspect at native scale.
