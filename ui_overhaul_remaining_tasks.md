@@ -210,8 +210,68 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **E2.1q [Luna] Verify Decorrelation Stretch live, including comparison HUD and matrix precision.** Compact 1280×720 Dark capture after scrolling the analysis drawer and wide 3440×1440 Dark capture show the comparison HUD/divider and complete correlation/covariance matrices; see `ui_overhaul_acceptance.md`.
     - [x] **E2.1q1 [Luna] Add a production-drawer render regression for matrix precision.** Synthetic correlation and covariance rows retain their formatted values inside compact and wide drawer viewports.
   - [x] **E2.1r [Luna] Complete the image-tool contrast audit.** Image chrome uses tested semantic text roles across canvas, raised, panel, and recessed surfaces; labels on generated fills/badges and transparent selections use the shared foreground resolver. Existing Light/Dark regressions cover every neutral text role, standard action/mode fills, and translucent accent compositing. This is source-and-render-test evidence, not a live visual check.
-  - [ ] **E2.1s [Luna] Verify image parameters and undo live.**
-    - [x] **E2.1s1 [Luna] Verify Decorrelation Stretch apply/undo/redo pixel restoration.** Deterministic RGB input changes under the stretch, returns exactly to the original after Undo, and returns to the applied result after Redo.
+  - **E2.1s Image-tool parameter, apply, and history actions**
+    - **Decorrelation Stretch automated algorithm/history regressions (not live UI evidence)**
+      - [x] **E2.1s1 [Luna] Verify the Decorrelation Stretch algorithm changes pixels.** Deterministic RGB input changes under the stretch.
+      - [x] **E2.1s2 [Luna] Verify DCS Undo restores the original pixels.** The automated history regression confirms an exact pixel match.
+      - [x] **E2.1s3 [Luna] Verify DCS Redo restores the applied pixels.** The automated history regression confirms an exact pixel match.
+    - **Decorrelation Stretch live UI actions**
+      - [x] **E2.1s4 [Luna] Select Covariance color model.** Live 1280×720 capture shows Covariance selected and the analysis drawer reports `Matrix Covariance`; see `ui_overhaul_acceptance.md`.
+      - [ ] **E2.1s5 [Luna] Apply Decorrelation Stretch from the live UI.**
+      - [ ] **E2.1s6 [Luna] Undo a live Decorrelation Stretch application.**
+      - [ ] **E2.1s7 [Luna] Redo a live Decorrelation Stretch application.**
+      - [ ] **E2.1s8 [Luna] Select the alternate Decorrelation Stretch preset.**
+      - [ ] **E2.1s9 [Luna] Change the Decorrelation Stretch target mean.**
+      - [ ] **E2.1s10 [Luna] Change the Decorrelation Stretch target spread.**
+      - [ ] **E2.1s11 [Luna] Change the Decorrelation Stretch clipping tolerance.**
+      - [ ] **E2.1s12 [Luna] Change the Decorrelation Stretch sampling stride.**
+    - **Film Look**
+      - [ ] **E2.1s13 [Luna] Select a different Film Look stock or preset.**
+      - [ ] **E2.1s14 [Luna] Change one Film Look adjustment and verify its preview updates.**
+      - [ ] **E2.1s15 [Luna] Apply a Film Look preview to the canvas.**
+      - [ ] **E2.1s16 [Luna] Undo a Film Look application.**
+      - [ ] **E2.1s17 [Luna] Redo a Film Look application.**
+    - **Creative FX**
+      - [ ] **E2.1s18 [Luna] Change one Creative FX parameter and verify its preview updates.**
+      - [ ] **E2.1s19 [Luna] Apply a Creative FX preview to the canvas.**
+      - [ ] **E2.1s20 [Luna] Undo a Creative FX application.**
+      - [ ] **E2.1s21 [Luna] Redo a Creative FX application.**
+    - **Resize**
+      - [ ] **E2.1s22 [Luna] Change pixel dimensions with aspect lock enabled.**
+      - [ ] **E2.1s23 [Luna] Select a different pixel-resize filter.**
+      - [ ] **E2.1s24 [Luna] Apply a pixel resize.**
+      - [ ] **E2.1s25 [Luna] Undo a pixel resize.**
+      - [ ] **E2.1s26 [Luna] Run target-size optimization.**
+    - **Crop and Deskew**
+      - [ ] **E2.1s27 [Luna] Select a Crop aspect-ratio preset.**
+      - [ ] **E2.1s28 [Luna] Apply a crop.**
+      - [ ] **E2.1s29 [Luna] Undo a crop.**
+      - [ ] **E2.1s30 [Luna] Adjust a Deskew corner.**
+      - [ ] **E2.1s31 [Luna] Apply Deskew.**
+      - [ ] **E2.1s32 [Luna] Undo Deskew.**
+    - **Transform**
+      - [ ] **E2.1s33 [Luna] Rotate the image clockwise.**
+      - [ ] **E2.1s34 [Luna] Rotate the image counter-clockwise.**
+      - [ ] **E2.1s35 [Luna] Flip the image horizontally.**
+      - [ ] **E2.1s36 [Luna] Flip the image vertically.**
+      - [ ] **E2.1s37 [Luna] Undo an image transform.**
+    - **Redact and Markup**
+      - [ ] **E2.1s38 [Luna] Choose a Redact style.**
+      - [ ] **E2.1s39 [Luna] Burn a selected redaction into the image.**
+      - [ ] **E2.1s40 [Luna] Undo a redaction burn.**
+      - [ ] **E2.1s41 [Luna] Change one Markup annotation property.**
+      - [ ] **E2.1s42 [Luna] Flatten a Markup annotation.**
+      - [ ] **E2.1s43 [Luna] Undo Markup flattening.**
+    - **Convert, Background Removal, and Depth Map**
+      - [ ] **E2.1s44 [Luna] Select a different conversion format.**
+      - [ ] **E2.1s45 [Luna] Change conversion quality.**
+      - [ ] **E2.1s46 [Luna] Apply a converted preview to the canvas.**
+      - [ ] **E2.1s47 [Luna] Undo a conversion applied to the canvas.**
+      - [ ] **E2.1s48 [Luna] Run Background Removal with a selected engine or prompt.**
+      - [ ] **E2.1s49 [Luna] Undo Background Removal.**
+      - [ ] **E2.1s50 [Luna] Select a Depth Map model or setting.**
+      - [ ] **E2.1s51 [Luna] Generate a Depth Map.**
+      - [ ] **E2.1s52 [Luna] Undo a Depth Map result.**
   - [ ] **E2.1t [Luna] Verify image save and copy live.**
   - [ ] **E2.1u [Luna] Verify external-app launch and fallback live.**
     - [x] **E2.1u1 [Luna] Test launcher success, fallback, and total failure without opening desktop apps.** Uses `/bin/true` and missing executable paths; production still defaults to `xdg-open`. The live editor-launch check remains open.
