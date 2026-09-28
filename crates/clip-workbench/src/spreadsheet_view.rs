@@ -931,6 +931,96 @@ mod tests {
     }
 
     #[test]
+    fn selecting_long_cell_shows_and_copies_full_value() {
+        let long_value = format!(
+            "Long clipboard cell value: {}",
+            "complete-value ".repeat(40)
+        );
+        let data = SpreadsheetData {
+            title: "Long cell".into(),
+            sheets: vec![SpreadsheetSheet::new(
+                "Data".into(),
+                vec![vec!["Header".into()], vec![long_value.clone()]],
+            )],
+        };
+        let mut state = SpreadsheetViewerState::new(data, None);
+        let palette = little_clip_core::palette::AppPalette::default();
+        let ctx = egui::Context::default();
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(760.0, 620.0));
+        let mut time = 0.0;
+        let mut render = |events: Vec<egui::Event>| {
+            time += 0.05;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen_rect),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                },
+            );
+            let column_width = state.column_width_cache[0]
+                .as_ref()
+                .map(|widths| widths[0].clamp(90.0, 420.0));
+            (output, column_width, state.selected_cell)
+        };
+
+        let (initial, measured_cell_width, _) = render(Vec::new());
+        let (cell_text, text_width) = initial
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == long_value => {
+                    Some((text.pos + Vec2::splat(1.0), text.galley.size().x))
+                }
+                _ => None,
+            })
+            .expect("long cell value should be rendered");
+        let measured_cell_width = measured_cell_width.unwrap();
+        assert!(
+            measured_cell_width < text_width,
+            "test value must exceed the grid column width ({measured_cell_width} < {text_width})"
+        );
+
+        let (pressed, _, _) = render(vec![
+            egui::Event::PointerMoved(cell_text),
+            egui::Event::PointerButton {
+                pos: cell_text,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let (copied, _, selected_cell) = render(vec![
+            egui::Event::PointerMoved(cell_text),
+            egui::Event::PointerButton {
+                pos: cell_text,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        assert_eq!(selected_cell, Some((1, 0)));
+        assert_eq!(copied.platform_output.copied_text, long_value);
+        assert!(pressed.shapes.iter().any(|clipped| {
+            matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == long_value)
+        }));
+
+        let (selected, _, _) = render(Vec::new());
+        let readout = format!("Selected R2 C1 [A]: {long_value}");
+        assert!(
+            selected.shapes.iter().any(|clipped| {
+                matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == readout)
+            }),
+            "selected-cell footer should expose the complete value"
+        );
+    }
+
+    #[test]
     fn spreadsheet_header_controls_fit_compact_and_wide_hosts() {
         let data = SpreadsheetData {
             title: "Sheet overview".into(),
