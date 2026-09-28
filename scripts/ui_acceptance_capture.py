@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 import wave
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -255,10 +256,28 @@ class FakeTextPreviewDaemon:
         "1. Ordered item one\n2. Ordered item two\n\n"
         "```rust\nfn preview() -> &'static str { \"ready\" }\n```\n"
     )
+    CSV = (
+        "Name,Category,Amount,Notes\n"
+        "Widget,Office,12.50,Standard item\n"
+        "Gadget,Tools,38.00,Includes small parts\n"
+        "Notebook,Office,4.25,Plain ruled pages\n"
+        "Cable,Electronics,9.99,Two meter braided cable\n"
+    )
 
-    def __init__(self, runtime: Path, log_path: Path):
+    def __init__(
+        self,
+        runtime: Path,
+        log_path: Path,
+        csv_preview: bool = False,
+        xlsx_preview: bool = False,
+    ):
         self.socket_path = runtime / "little-screen-clip.sock"
         self.log_path = log_path
+        self.csv_preview = csv_preview
+        self.xlsx_preview = xlsx_preview
+        self.xlsx_path = log_path.parent / "acceptance-multisheet.xlsx"
+        if xlsx_preview:
+            self._write_xlsx_fixture()
         self.rolling_audio_path = log_path.parent / "fake-rolling-audio.wav"
         with wave.open(str(self.rolling_audio_path), "wb") as wav:
             wav.setnchannels(1)
@@ -275,14 +294,84 @@ class FakeTextPreviewDaemon:
         self.thread = threading.Thread(target=self._serve, name="fake-text-ipc", daemon=True)
         self.thread.start()
 
+    def _write_xlsx_fixture(self) -> None:
+        content_types = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+            '</Types>'
+        )
+        package_rels = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+            '</Relationships>'
+        )
+        workbook = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+            'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            '<sheets><sheet name="Quarterly" sheetId="1" r:id="rId1"/>'
+            '<sheet name="Inventory" sheetId="2" r:id="rId2"/></sheets></workbook>'
+        )
+        workbook_rels = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+            '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>'
+            '</Relationships>'
+        )
+        quarter = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+            '<row r="1"><c r="A1" t="inlineStr"><is><t>Quarter</t></is></c>'
+            '<c r="B1" t="inlineStr"><is><t>Revenue</t></is></c></row>'
+            '<row r="2"><c r="A2" t="inlineStr"><is><t>Q1</t></is></c><c r="B2"><v>12500</v></c></row>'
+            '<row r="3"><c r="A3" t="inlineStr"><is><t>Q2</t></is></c><c r="B3"><v>14750</v></c></row>'
+            '</sheetData></worksheet>'
+        )
+        inventory = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
+            '<row r="1"><c r="A1" t="inlineStr"><is><t>Item</t></is></c>'
+            '<c r="B1" t="inlineStr"><is><t>Units</t></is></c></row>'
+            '<row r="2"><c r="A2" t="inlineStr"><is><t>Widgets</t></is></c><c r="B2"><v>34</v></c></row>'
+            '<row r="3"><c r="A3" t="inlineStr"><is><t>Gadgets</t></is></c><c r="B3"><v>18</v></c></row>'
+            '</sheetData></worksheet>'
+        )
+        with zipfile.ZipFile(self.xlsx_path, "w", compression=zipfile.ZIP_DEFLATED) as workbook_zip:
+            workbook_zip.writestr("[Content_Types].xml", content_types)
+            workbook_zip.writestr("_rels/.rels", package_rels)
+            workbook_zip.writestr("xl/workbook.xml", workbook)
+            workbook_zip.writestr("xl/_rels/workbook.xml.rels", workbook_rels)
+            workbook_zip.writestr("xl/worksheets/sheet1.xml", quarter)
+            workbook_zip.writestr("xl/worksheets/sheet2.xml", inventory)
+
     def _item(self) -> dict[str, Any]:
+        if self.xlsx_preview:
+            text = str(self.xlsx_path)
+            title = self.xlsx_path.name
+        else:
+            text = self.CSV if self.csv_preview else self.TEXT
+            title = "acceptance-table.csv" if self.csv_preview else "acceptance-markdown.md"
+        payload_kind = "Text" if self.csv_preview or self.xlsx_preview else "Markdown"
         return {
             "id": self.ITEM_ID,
             "created_at": int(time.time()),
-            "payload": {"Markdown": self.TEXT},
-            "title": "acceptance-markdown.md",
-            "subtitle": "Markdown • 15 lines",
-            "details": ["Markdown", "Text"],
+            "payload": {payload_kind: text},
+            "title": title,
+            "subtitle": (
+                "Excel • 2 sheets" if self.xlsx_preview
+                else "CSV • 5 rows × 4 columns" if self.csv_preview
+                else "Markdown • 15 lines"
+            ),
+            "details": (["XLSX", "2 sheets"] if self.xlsx_preview
+                        else ["CSV", "Text"] if self.csv_preview
+                        else ["Markdown", "Text"]),
             "handler_tag": "TEXT",
         }
 
@@ -300,7 +389,8 @@ class FakeTextPreviewDaemon:
         if request == "GetStateSummary":
             return {"StateSummary": {"cards": [{
                 "slot": "LeftHand", "item_id": self.ITEM_ID,
-                "payload_kind": "Markdown", "preview_phase": "Ready",
+                "payload_kind": "Text" if self.csv_preview or self.xlsx_preview else "Markdown",
+                "preview_phase": "Ready",
             }], "cursor": "LeftHand", "selected": ["LeftHand"]}}, "summary"
         if request == {"GetSlotItem": "LeftHand"}:
             return {"SlotItem": self._item()}, "slot_item"
@@ -1099,6 +1189,14 @@ def create_parser() -> argparse.ArgumentParser:
         "--fake-text-preview", action="store_true",
         help="serve a private Markdown clipboard item through IPC for isolated viewer acceptance",
     )
+    parser.add_argument(
+        "--fake-csv-preview", action="store_true",
+        help="serve private CSV clipboard text through IPC for spreadsheet viewer acceptance",
+    )
+    parser.add_argument(
+        "--fake-multisheet-xlsx", action="store_true",
+        help="serve a private text item pointing to a generated two-sheet XLSX for acceptance",
+    )
     parser.add_argument("--verify-return", action="store_true", help="send Escape and verify the popup closes while private Niri remains responsive")
     parser.add_argument("--binary", type=Path, help="workbench binary (default: target/debug/clip-workbench)")
     parser.add_argument("--settle-ms", type=int, default=500, help="settling delay before second capture (default: 500)")
@@ -1122,6 +1220,16 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         args.fake_audio_transition or any((args.image, args.audio, args.pdf, args.midi))
     ):
         raise SystemExit("--fake-text-preview cannot be combined with other fixture routes")
+    if args.fake_csv_preview and (
+        args.fake_text_preview or args.fake_audio_transition
+        or any((args.image, args.audio, args.pdf, args.midi))
+    ):
+        raise SystemExit("--fake-csv-preview cannot be combined with other fixture routes")
+    if args.fake_multisheet_xlsx and (
+        args.fake_text_preview or args.fake_csv_preview or args.fake_audio_transition
+        or any((args.image, args.audio, args.pdf, args.midi))
+    ):
+        raise SystemExit("--fake-multisheet-xlsx cannot be combined with other fixture routes")
     if args.image_tool and not args.image:
         raise SystemExit("--image-tool requires --image")
     if args.click is not None and any(
@@ -1162,8 +1270,10 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
                 "only --key-action f3 may be used without an image fixture, "
                 "except in a fake text preview run"
             )
-    if args.type_text and not args.fake_text_preview:
-        raise SystemExit("--type-text requires --fake-text-preview")
+    if args.type_text and not (
+        args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
+    ):
+        raise SystemExit("--type-text requires a fake text preview route")
     if (
         args.verify_return or args.image_tool or args.key_action or args.type_text
     ) and shutil.which("wtype") is None:
@@ -1208,6 +1318,8 @@ def main() -> int:
             "midi_fixture": str(args.midi.resolve()) if args.midi else None,
             "fake_audio_transition": args.fake_audio_transition,
             "fake_text_preview": args.fake_text_preview,
+            "fake_csv_preview": args.fake_csv_preview,
+            "fake_multisheet_xlsx": args.fake_multisheet_xlsx,
             "verify_return": args.verify_return,
             "binary": str(binary),
             "settle_ms": args.settle_ms,
@@ -1248,9 +1360,11 @@ def main() -> int:
             fake_audio_daemon = FakeAudioTransitionDaemon(
                 config["runtime"], output / "fake-daemon-events.json"
             )
-        if args.fake_text_preview:
+        if args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx:
             fake_text_daemon = FakeTextPreviewDaemon(
-                config["runtime"], output / "fake-text-daemon-events.json"
+                config["runtime"], output / "fake-text-daemon-events.json",
+                csv_preview=args.fake_csv_preview,
+                xlsx_preview=args.fake_multisheet_xlsx,
             )
         capture_workbench(args, binary, output, config, niri_env, outputs, children, report)
     except Exception as exc:
@@ -1272,7 +1386,12 @@ def main() -> int:
                 report["failures"].append("workbench mapped after the fake preview was already ready")
         if fake_text_daemon is not None:
             text_route = fake_text_daemon.close()
-            report["fake_text_preview"] = text_route
+            if args.fake_multisheet_xlsx:
+                report["fake_multisheet_xlsx"] = text_route
+            elif args.fake_csv_preview:
+                report["fake_csv_preview"] = text_route
+            else:
+                report["fake_text_preview"] = text_route
         if report["status"] == "running":
             report["status"] = "passed" if not report["failures"] else "failed"
         report["processes"] = children.exit_statuses()
