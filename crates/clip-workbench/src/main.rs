@@ -35,6 +35,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
+const MAX_INLINE_MARKDOWN_CLASSIFICATION_BYTES: usize = 64 * 1024;
+
 mod ansi;
 mod appearance_sync;
 mod audio_preview;
@@ -342,7 +344,7 @@ struct ImageLoadJob {
     receiver: Receiver<Result<Result<ImagePreviewState, String>, JobError>>,
 }
 
-struct TextFileLoadJob {
+struct TextPreviewLoadJob {
     ticket: JobTicket,
     receiver: Receiver<Result<Result<TextPreviewState, String>, JobError>>,
 }
@@ -400,8 +402,8 @@ impl Drop for ImageLoadJob {
     }
 }
 
-impl TextFileLoadJob {
-    fn new(path: PathBuf, config: AppConfig) -> Self {
+impl TextPreviewLoadJob {
+    fn from_file(path: PathBuf, config: AppConfig) -> Self {
         let (ticket, receiver) =
             BackgroundJobs::global().submit(Duration::from_secs(30), move || {
                 let failure_path = path.display().to_string();
@@ -410,9 +412,29 @@ impl TextFileLoadJob {
             });
         Self { ticket, receiver }
     }
+
+    fn from_text(content: String, title: Option<String>, config: AppConfig) -> Self {
+        let (ticket, receiver) = BackgroundJobs::global()
+            .submit(Duration::from_secs(30), move || {
+                Ok(TextPreviewState::from_text(content, title, &config))
+            });
+        Self { ticket, receiver }
+    }
+
+    fn from_shared_text(content: Arc<str>, title: String, config: AppConfig) -> Self {
+        let (ticket, receiver) =
+            BackgroundJobs::global().submit(Duration::from_secs(30), move || {
+                Ok(TextPreviewState::from_text(
+                    content.to_string(),
+                    Some(title),
+                    &config,
+                ))
+            });
+        Self { ticket, receiver }
+    }
 }
 
-impl Drop for TextFileLoadJob {
+impl Drop for TextPreviewLoadJob {
     fn drop(&mut self) {
         self.ticket.cancel();
     }
@@ -440,7 +462,7 @@ struct WorkbenchApp {
     startup_viewers: VecDeque<ViewerSession>,
     startup_midi: Option<PathBuf>,
     image_load_job: Option<ImageLoadJob>,
-    text_load_job: Option<TextFileLoadJob>,
+    text_load_job: Option<TextPreviewLoadJob>,
     spreadsheet_load_job: Option<(
         JobTicket,
         SpreadsheetLoadReceiver,
@@ -1635,13 +1657,11 @@ impl eframe::App for WorkbenchApp {
                                 txt_bg,
                                 &self.ui_palette,
                             );
-                            if ui.add(txt_btn).on_hover_text("Open big text preview (syntax highlighting, line wrapping, search, and editor export)").clicked() {
+                            if ui.add(txt_btn).on_hover_text("Open text or Markdown preview (syntax highlighting, line wrapping, search, and editor export)").clicked() {
                                 if let Some(p) = file_p {
-                                    if let Some(st) = TextPreviewState::from_file(p, &self.config) {
-                                        self.replace_viewer(Some(ViewerSession::Text(st)));
-                                    }
+                                    self.start_text_file_load(p);
                                 } else if let Some(txt) = self.state.get(slot).and_then(ClipItem::to_clipboard_text) {
-                                    self.replace_viewer(Some(ViewerSession::Text(TextPreviewState::from_text(txt, None, &self.config))));
+                                    self.start_text_preview_load(txt, None);
                                 }
                             }
                         }
@@ -2133,6 +2153,32 @@ impl WorkbenchApp {
     }
 
     fn start_text_file_load(&mut self, path: PathBuf) {
+        self.prepare_text_load();
+        self.text_load_job = Some(TextPreviewLoadJob::from_file(path, self.config.clone()));
+        self.clear_status_message();
+    }
+
+    fn start_text_preview_load(&mut self, content: String, title: Option<String>) {
+        self.prepare_text_load();
+        self.text_load_job = Some(TextPreviewLoadJob::from_text(
+            content,
+            title,
+            self.config.clone(),
+        ));
+        self.clear_status_message();
+    }
+
+    fn start_shared_text_preview_load(&mut self, content: Arc<str>, title: String) {
+        self.prepare_text_load();
+        self.text_load_job = Some(TextPreviewLoadJob::from_shared_text(
+            content,
+            title,
+            self.config.clone(),
+        ));
+        self.clear_status_message();
+    }
+
+    fn prepare_text_load(&mut self) {
         self.image_load_job = None;
         self.text_load_job = None;
         if matches!(self.viewer, Some(ViewerSession::ImageLoading(_))) {
@@ -2144,8 +2190,6 @@ impl WorkbenchApp {
         if let Some((ticket, _)) = self.midi_load_job.take() {
             ticket.cancel();
         }
-        self.text_load_job = Some(TextFileLoadJob::new(path, self.config.clone()));
-        self.clear_status_message();
     }
 
     fn poll_text_load(&mut self, ctx: &egui::Context) {
@@ -2221,11 +2265,7 @@ impl WorkbenchApp {
             }
             failure => {
                 if let Some((content, title)) = fallback {
-                    self.replace_viewer(Some(ViewerSession::Text(TextPreviewState::from_text(
-                        content.to_string(),
-                        Some(title),
-                        &self.config,
-                    ))));
+                    self.start_shared_text_preview_load(content, title);
                 } else {
                     self.status_msg = Some(match failure {
                         Ok(Err(error)) => format!("Spreadsheet: {error}"),
@@ -2469,23 +2509,19 @@ impl WorkbenchApp {
         }
     }
 
-    fn open_slot_text_preview(&mut self, text: &str, title: &str) {
+    fn open_slot_text_preview(&mut self, text: String, title: &str) {
         let p = std::path::Path::new(text.trim());
         if p.is_file() {
             self.open_slot_file_preview(p, false);
             return;
         }
-        if looks_like_csv_text(text) {
+        if looks_like_csv_text(&text) {
             self.start_spreadsheet_load(SpreadsheetLoadSource::Text {
                 content: Arc::from(text),
                 title: title.to_string(),
             });
         } else {
-            self.replace_viewer(Some(ViewerSession::Text(TextPreviewState::from_text(
-                text.to_string(),
-                Some(title.to_string()),
-                &self.config,
-            ))));
+            self.start_text_preview_load(text, Some(title.to_string()));
         }
     }
 
@@ -2510,7 +2546,7 @@ impl WorkbenchApp {
         } else if item.is_image() {
             self.start_image_item_load(ImageLoadSource::from_item(item));
         } else if let Some(text) = item.to_clipboard_text() {
-            self.open_slot_text_preview(&text, &item.title);
+            self.open_slot_text_preview(text, &item.title);
         }
     }
 
@@ -2557,9 +2593,15 @@ impl WorkbenchApp {
                 (Some(path), is_markdown)
             } else {
                 let is_markdown = match &item.payload {
-                    ClipPayload::Text(text) | ClipPayload::Markdown(text) => {
+                    ClipPayload::Markdown(_) => true,
+                    ClipPayload::Text(text)
+                        if text.len() <= MAX_INLINE_MARKDOWN_CLASSIFICATION_BYTES =>
+                    {
                         text_preview::detect_markdown_text(text)
                     }
+                    // Preview construction performs full classification on its
+                    // worker. This value only chooses the inspector's button label.
+                    ClipPayload::Text(_) => false,
                     _ => item
                         .to_clipboard_text()
                         .is_some_and(|text| text_preview::detect_markdown_text(&text)),
@@ -3184,6 +3226,34 @@ mod workbench_layout_tests {
                 .and_then(|cache| cache.selected_item_ids.first().copied().flatten()),
             Some(plain_text_id)
         );
+    }
+
+    #[test]
+    fn oversized_markdown_uses_bounded_inspector_hint_and_full_worker_classification() {
+        let content = format!("# Heading\n\n{}", "- a list item\n".repeat(20_000));
+        let expected = content.clone();
+        let mut item = ClipItem::from_text("placeholder");
+        item.payload = ClipPayload::Text(content);
+        let mut app = test_workbench_app(None, VecDeque::new());
+        *app.state.get_mut(SlotId::LeftHand).unwrap() = Some(item.clone());
+
+        let (_, path, quick_hint) = app.check_inspector_text_preview().unwrap();
+        assert!(path.is_none());
+        assert!(
+            !quick_hint,
+            "large Text payload should not be scanned inline"
+        );
+
+        app.open_slot_preview_modal(&item);
+        wait_for_text_load(&mut app);
+        let Some(ViewerSession::Text(state)) = &app.viewer else {
+            panic!("missing text viewer")
+        };
+        assert_eq!(
+            state.view_mode,
+            text_preview::TextViewMode::RenderedMarkdown
+        );
+        assert_eq!(state.content, expected);
     }
 
     #[test]
@@ -3888,6 +3958,33 @@ mod workbench_layout_tests {
         assert!(app.status_msg.as_deref().is_some_and(|message| {
             message.starts_with("Text preview failed: Could not read or prepare text file")
         }));
+    }
+
+    #[test]
+    fn clipboard_text_preview_prepares_on_worker_and_preserves_full_searchable_text() {
+        let text = format!("{}\nTARGET_AT_END", "clipboard row\n".repeat(80_000));
+        let expected = text.clone();
+        let mut app = test_workbench_app(None, VecDeque::new());
+        let mut item = ClipItem::from_text(text);
+        item.title = "large clipboard".to_owned();
+
+        app.open_slot_preview_modal(&item);
+        assert!(app.text_load_job.is_some());
+        wait_for_text_load(&mut app);
+
+        let Some(ViewerSession::Text(state)) = &mut app.viewer else {
+            panic!("missing text viewer")
+        };
+        assert_eq!(state.title, "large clipboard");
+        assert_eq!(state.content, expected);
+        state.find_query = "TARGET_AT_END".to_owned();
+        state.update_search_matches();
+        assert_eq!(state.matches.len(), 1);
+        let matched = state.matches[0];
+        assert_eq!(
+            &state.content[matched.start_byte..matched.end_byte],
+            "TARGET_AT_END"
+        );
     }
 
     #[test]

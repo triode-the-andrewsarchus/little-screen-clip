@@ -454,7 +454,10 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [ ] **H2.2b2 [Primary] Verify MIDI selection interaction live.**
   - **H2.2c Bound pathological text work and collect performance evidence**
     - [x] **H2.2c1 [Primary] Bound measurement and rendering work for multi-megabyte single lines.** Raw text now splits oversized logical lines into UTF-8-safe 4 KiB display fragments, so measurement and paint never shape an unbounded line. Search and full-content copy still use the original source; the wrap toggle only controls wrapping inside each fragment. Focused regressions and the workbench suite pass; see `ui_overhaul_acceptance.md`.
-    - [ ] **H2.2c2 [Primary] Bound processing of large clipboard text.** Preserve exact search/copy behavior.
+    - **H2.2c2 Bound processing of large clipboard text.** Preserve exact search/copy behavior.
+      - [x] **H2.2c2a [Luna] Avoid repeated clipboard text clones and Markdown/path checks in the inspector.** Text/Markdown payloads are borrowed; the cached hint is invalidated when selected slots or item IDs change.
+      - [x] **H2.2c2b [Primary] Prepare clipboard text previews on the cancellable background loader.** Full content, Markdown detection, line indexing, and fragment indexing stay intact; exact search and copy data remain available after loading.
+      - [ ] **H2.2c2c [Primary] Bound CSV and smart-preview routing checks for pathological clipboard payloads.** Preserve valid spreadsheet routing and text fallback without long frame work.
     - [ ] **H2.2c3 [Primary] Bound syntax preparation for pathological documents.**
     - [ ] **H2.2c4 [Primary] Bound minimap preparation for pathological documents.**
     - [ ] **H2.2c5 [Primary] Bound text layout/cache lifetime.**
