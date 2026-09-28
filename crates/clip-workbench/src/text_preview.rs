@@ -1940,6 +1940,17 @@ mod tests {
                 end_byte: 1
             }
         );
+        std::fs::create_dir(&spill_directory).unwrap();
+        spool.append(9, 9).unwrap();
+        assert!(spool.is_rolled());
+        assert_eq!(spool.len(), records_at_limit as u64 + 1);
+        assert_eq!(
+            spool.get(records_at_limit as u64).unwrap(),
+            SearchMatchRange {
+                start_byte: 9,
+                end_byte: 9,
+            }
+        );
     }
 
     #[test]
