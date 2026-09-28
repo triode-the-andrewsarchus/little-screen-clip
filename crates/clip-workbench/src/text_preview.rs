@@ -880,10 +880,10 @@ impl TextPreviewState {
             Ok(Ok(SearchBuildOutput::Matches(spool))) => {
                 self.match_count = spool.len();
                 self.matches = Some(spool);
-                self.active_match_idx = if self.match_count == 0 {
+                self.active_match_idx = if self.active_match_idx >= self.match_count {
                     0
                 } else {
-                    self.active_match_idx.min(self.match_count - 1)
+                    self.active_match_idx
                 };
                 self.search_pending = false;
                 self.search_retry_at = None;
@@ -912,6 +912,9 @@ impl TextPreviewState {
     }
 
     fn search_match_at(&mut self, index: u64) -> Option<SearchMatch> {
+        if index >= self.match_count {
+            return None;
+        }
         let range = match self.matches.as_mut()?.get(index) {
             Ok(range) => range,
             Err(error) => {
@@ -2333,17 +2336,38 @@ mod tests {
     }
 
     #[test]
-    fn recomputing_search_preserves_and_clamps_active_match_ordinal() {
+    fn out_of_range_search_lookup_preserves_valid_results() {
         let mut state =
-            TextPreviewState::from_text("one two two two".to_owned(), None, &AppConfig::default());
+            TextPreviewState::from_text("needle".to_owned(), None, &AppConfig::default());
+        let mut spool = SearchMatchSpool::new().unwrap();
+        spool.append(0, 6).unwrap();
+        state.matches = Some(spool);
+        state.match_count = 1;
+
+        assert!(state.search_match_at(1).is_none());
+        assert_eq!(state.match_count(), 1);
+        assert!(state.search_error.is_none());
+        assert!(state.matches.is_some());
+    }
+
+    #[test]
+    fn recomputing_search_preserves_or_resets_active_match_ordinal() {
+        let mut state = TextPreviewState::from_text(
+            "one two two two two".to_owned(),
+            None,
+            &AppConfig::default(),
+        );
+        state.is_regex = true;
+        state.find_query = "two|one".to_owned();
+        update_search_matches_and_wait(&mut state);
+        assert_eq!(state.match_count(), 5);
+        state.active_match_idx = 2;
         state.find_query = "two".to_owned();
         update_search_matches_and_wait(&mut state);
-        state.active_match_idx = 2;
-        state.find_query = "t".to_owned();
-        update_search_matches_and_wait(&mut state);
-        assert_eq!(state.match_count(), 3);
+        assert_eq!(state.match_count(), 4);
         assert_eq!(state.active_match_idx, 2);
 
+        state.active_match_idx = 4;
         state.find_query = "one".to_owned();
         update_search_matches_and_wait(&mut state);
         assert_eq!(state.match_count(), 1);
