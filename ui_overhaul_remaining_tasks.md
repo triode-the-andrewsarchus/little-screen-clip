@@ -319,10 +319,10 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - **E2.3d Text search/status and Markdown layout**
     - **E2.3d1 Markdown body/list/quote layout**
       - [x] **E2.3d1a [Luna] Add compact/wide production-render layout regression.** Checks body, list, and quote text wraps, stays within clip bounds, is not elided, and uses the shared body size at 390 and 1400 points; workbench suite passes.
-      - [ ] **E2.3d1b [Primary] Inspect Markdown in a live host at compact and wide sizes.** Renderer tests are not compositor-level evidence.
+      - [x] **E2.3d1b [Primary] Inspect Markdown in a live host at compact and wide sizes.** Isolated private Weston/Niri captures at 1280×720 Light and 3440×1440 Dark show the rendered body, lists, quote, code block, toolbar, and footer. Geometry, centering, fixed hints, singleton, and private IPC route checks pass; exact evidence is in `ui_overhaul_acceptance.md`.
     - **E2.3d2 Text search/status toolbar layout**
       - [x] **E2.3d2a [Luna] Wrap text search controls and status at compact widths.** Search field width is responsive and the status/options can continue on wrapped rows. Production-toolbar regression covers regex errors, no results, and match count plus Prev/Next/Match Case/Regex controls at 390, 760, and 1280 points; workbench suite passes (243 passed, one ignored).
-      - [ ] **E2.3d2b [Primary] Inspect text search/status in a live host at compact and wide sizes.** Renderer tests are not compositor-level evidence.
+      - [x] **E2.3d2b [Primary] Inspect text search/status in a live host at compact and wide sizes.** Isolated private Weston/Niri captures at 1280×720 Dark and 3440×1440 Light show the open Find row with a 1/1 match, navigation, match-case, and regex controls. Geometry, centering, fixed hints, singleton, and private IPC route checks pass; exact evidence is in `ui_overhaul_acceptance.md`.
   - **E2.3e Spreadsheet sheet/header chrome**
     - [x] **E2.3e1 [Luna] Add production-render check for compact and wide headers.** `SpreadsheetViewerState::render_ui` covers title, Copy Table, search, Calc, Close, and both sheet tabs at 900 and 1500 points; tests check host/clip bounds and header-label overlap. Workbench suite passes (243 passed, one ignored).
     - [ ] **E2.3e2 [Primary] Inspect spreadsheet sheet/header chrome in a live host.** Confirm search and tabs remain legible at compact and wide host sizes; renderer tests are not compositor-level evidence.
@@ -394,6 +394,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [ ] **H2.1h3 [Primary] Add revision checks to remaining preview/export paths.**
       - [x] **H2.1h3a [Sol; Luna review] Reject stale PDF decode results after page/view changes.** Decodes are canceled when their page is no longer selected or visible, and a new raster for the same page invalidates the old result.
       - [x] **H2.1h3b [Luna] Reject stale text preparation after a newer preview request.** A newer text-file request drops the prior receiver/ticket before it can publish; regression confirms the newer path wins and a later viewer replacement still cancels publication.
+      - [x] **H2.1h3c [Primary] Reject stale target-size optimization after output settings change.** Request identity now includes image inputs, target bytes, and format; stale completions are discarded, and completed results cannot display, apply, or copy after the selected output settings change.
     - [ ] **H2.1h4 [Primary] Add cancellation to remaining open/preview/export paths.**
       - [x] **H2.1h4a [Sol; Luna review] Cancel image loads on replacement, dismissal, or viewer close.** Dropping the job ticket cancels publication; tests cover superseded requests, startup placeholders, and Escape cancellation.
       - [x] **H2.1h4b [Sol; Luna review] Cancel pending PDF page decode work when pages leave the visible selection.** One running/result slot is retained until acknowledgment before another page is submitted.

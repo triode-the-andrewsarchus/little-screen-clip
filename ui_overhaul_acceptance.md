@@ -2,6 +2,16 @@
 
 Working evidence sheet for E1.4 and final acceptance. Record each run with date, commit, display mode, compositor/UI scale, action, result, and screenshot or log path. A blank result means **not tested**, not passed. Keep hardware USB tests separate from virtual/display-render checks.
 
+## Text preview Markdown and search/status live review, 2026-09-27
+
+The private capture runner's `--fake-text-preview` option serves a deterministic Markdown slot through the run-local IPC socket. The capture enters the existing Palette **Preview Markdown** action; no production CLI/API, user daemon, clipboard, or compositor is involved. For E2.3d1b, the 1280×720 Light capture is `/tmp/clip-e23d1b-text-compact-20260927/report.json` and `settled.png`; the 3440×1440 Dark capture is `/tmp/clip-e23d1b-text-wide-viewer-20260927/report.json` and `settled.png`. Both reports pass the popup geometry, centering, fixed-size hint, singleton, and fake-slot-fetch checks. The rendered heading, body, nested and ordered lists, quote, code block, toolbar, and footer are visible at both sizes; the full-size images are easiest to inspect at native scale.
+
+For E2.3d2b, the 1280×720 Dark search capture is `/tmp/clip-e23d2d-text-search-compact2-20260927/report.json` and `settled.png`; the 3440×1440 Light capture is `/tmp/clip-e23d2d-text-search-wide-20260927/report.json` and `settled.png`. Both use the existing Ctrl+F path and search for `Markdown`, showing the field, `1/1 matches`, previous/next, match-case, and regex controls together with the viewer content and footer. Geometry, centering, fixed-size hints, singleton, and fake-slot-fetch checks pass in both reports. These captures inspect visual layout and one successful query; regex errors and zero-result presentation remain covered by the production-render regression, not this live scenario.
+
+## Target-size optimizer request identity, 2026-09-27
+
+`OptimizerRequestStamp` now covers the current composed-image input, target byte count, and output format. A worker completion is rejected if any of these changed; an already-produced result is hidden and cannot be applied/copied after the settings change. Focused regressions cover stale in-flight output, stale completed output, and the current successful apply path. The architecture fitness baseline/reuse calls did not return during this turn; a direct before/after Lizard comparison on `resize.rs` found existing maximum CCN unchanged (optimizer 23, toolbar 32), with 57 additional NLOC including test coverage and no new CCN warning function.
+
 ## PDF viewer chrome captures, 2026-09-27
 
 Initial compact 1280×720 Light and wide 3440×1440 Dark captures at commit `10deb3dc9e968e51d399963ebd3d440c7b34f6a5` showed that selected-page content and the PDF thumbnail row could expand the panes beyond the compact host. Those observations are recorded in `/tmp/clip-e23a-pdf-compact-light-20260927/settled.png` and `/tmp/clip-e23a-pdf-wide-dark-20260927/settled.png`; ordinary chrome was readable, but compact page content was clipped.

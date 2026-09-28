@@ -50,6 +50,7 @@ KEY_ACTIONS = {
     "ctrl-y": ["-M", "ctrl", "-k", "y", "-m", "ctrl"],
     "enter": ["-k", "Return"],
     "f3": ["-k", "F3"],
+    "ctrl-f": ["-M", "ctrl", "-k", "f", "-m", "ctrl"],
 }
 
 
@@ -237,6 +238,111 @@ class FakeAudioTransitionDaemon:
             ),
         }
 
+
+
+
+class FakeTextPreviewDaemon:
+    """Serve one Markdown clipboard item from the private acceptance runtime."""
+
+    ITEM_ID = "9b1de26a-4101-4e08-93d0-2ab14dad415e"
+    TEXT = (
+        "# Markdown Preview\n\n"
+        "A body paragraph with **emphasis**, `inline code`, and a [link](https://example.invalid).\n\n"
+        "## Lists and quotes\n\n"
+        "- First item with enough words to demonstrate wrapping inside the text viewer.\n"
+        "- Second item with a nested detail:\n  - Nested item remains aligned under its parent.\n\n"
+        "> A block quote should have a clear boundary and readable line spacing at both host sizes.\n\n"
+        "1. Ordered item one\n2. Ordered item two\n\n"
+        "```rust\nfn preview() -> &'static str { \"ready\" }\n```\n"
+    )
+
+    def __init__(self, runtime: Path, log_path: Path):
+        self.socket_path = runtime / "little-screen-clip.sock"
+        self.log_path = log_path
+        self.rolling_audio_path = log_path.parent / "fake-rolling-audio.wav"
+        with wave.open(str(self.rolling_audio_path), "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)
+            wav.setframerate(48_000)
+            wav.writeframes(bytes(48_000 * 2))
+        self.events: list[dict[str, Any]] = []
+        self.stop_event = threading.Event()
+        self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.listener.bind(str(self.socket_path))
+        os.chmod(self.socket_path, 0o600)
+        self.listener.listen(8)
+        self.listener.settimeout(0.2)
+        self.thread = threading.Thread(target=self._serve, name="fake-text-ipc", daemon=True)
+        self.thread.start()
+
+    def _item(self) -> dict[str, Any]:
+        return {
+            "id": self.ITEM_ID,
+            "created_at": int(time.time()),
+            "payload": {"Markdown": self.TEXT},
+            "title": "acceptance-markdown.md",
+            "subtitle": "Markdown • 15 lines",
+            "details": ["Markdown", "Text"],
+            "handler_tag": "TEXT",
+        }
+
+    def _state(self) -> dict[str, Any]:
+        return {
+            "undo": None, "left_hand": self._item(), "left_prior1": None,
+            "left_prior2": None, "left_prior3": None, "right_prior2": None,
+            "right_prior1": None, "right_hand": None, "cursor": "LeftHand",
+            "selected": ["LeftHand"],
+        }
+
+    def _response(self, request: Any) -> tuple[Any, str]:
+        if request == "GetState":
+            return {"State": self._state()}, "state"
+        if request == "GetStateSummary":
+            return {"StateSummary": {"cards": [{
+                "slot": "LeftHand", "item_id": self.ITEM_ID,
+                "payload_kind": "Markdown", "preview_phase": "Ready",
+            }], "cursor": "LeftHand", "selected": ["LeftHand"]}}, "summary"
+        if request == {"GetSlotItem": "LeftHand"}:
+            return {"SlotItem": self._item()}, "slot_item"
+        if request == "GetRollingAudio":
+            return {"RollingAudio": {
+                "path": str(self.rolling_audio_path), "duration_secs": 1.0,
+                "sample_rate": 48_000, "channels": 1,
+            }}, "rolling_audio"
+        if request == "GetAutoActions":
+            return {"AutoActions": {}}, "auto_actions"
+        return {"Error": {"error": f"unsupported acceptance request: {request!r}"}}, "unsupported"
+
+    def _serve(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                connection, _ = self.listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                break
+            with connection:
+                try:
+                    request = json.loads(connection.makefile("rb").readline(1_048_577))
+                    response, kind = self._response(request)
+                    self.events.append({"kind": kind, "request": request})
+                    connection.sendall((json.dumps(response, separators=(",", ":")) + "\n").encode())
+                except (OSError, ValueError, TypeError) as exc:
+                    self.events.append({"kind": "protocol_error", "error": str(exc)})
+
+    def close(self) -> dict[str, Any]:
+        self.stop_event.set()
+        self.listener.close()
+        self.thread.join(timeout=1)
+        self.log_path.write_text(json.dumps(self.events, indent=2) + "\n", encoding="utf-8")
+        item_requested = any(event["kind"] == "slot_item" for event in self.events)
+        return {
+            "log": str(self.log_path),
+            "rolling_audio_fixture": str(self.rolling_audio_path),
+            "slot_item_requested": item_requested,
+            "pass": item_requested,
+            "events": len(self.events),
+        }
 
 def command_version(command: str) -> str | None:
     executable = shutil.which(command)
@@ -875,6 +981,9 @@ def capture_workbench(
             run_checked(["wtype", *KEY_ACTIONS[action]], env=niri_env)
             report["pointer_input"]["key_actions"].append(action)
             time.sleep(0.25)
+    if args.type_text:
+        run_checked(["wtype", args.type_text], env=niri_env)
+        report.setdefault("pointer_input", {})["typed_text"] = args.type_text
     time.sleep(args.settle_ms / 1000)
     final_windows = own_windows(niri_bin, niri_env, {app.pid})
     report["final_windows"] = final_windows
@@ -952,6 +1061,10 @@ def create_parser() -> argparse.ArgumentParser:
         "--key-action", choices=tuple(KEY_ACTIONS), action="append",
         help="send an ordered keyboard shortcut after pointer actions; repeat to send multiple shortcuts",
     )
+    parser.add_argument(
+        "--type-text",
+        help="type literal text into the focused control through private Wayland",
+    )
     parser.add_argument("--image", type=Path, help="optional existing image fixture")
     parser.add_argument(
         "--click", nargs=2, type=int, metavar=("X", "Y"), action="append",
@@ -982,6 +1095,10 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="serve a private pending-to-ready audio slot over IPC while the workbench stays open",
     )
+    parser.add_argument(
+        "--fake-text-preview", action="store_true",
+        help="serve a private Markdown clipboard item through IPC for isolated viewer acceptance",
+    )
     parser.add_argument("--verify-return", action="store_true", help="send Escape and verify the popup closes while private Niri remains responsive")
     parser.add_argument("--binary", type=Path, help="workbench binary (default: target/debug/clip-workbench)")
     parser.add_argument("--settle-ms", type=int, default=500, help="settling delay before second capture (default: 500)")
@@ -1001,6 +1118,10 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
             raise SystemExit(f"fixture does not exist: {fixture}")
     if args.fake_audio_transition and any((args.image, args.audio, args.pdf, args.midi)):
         raise SystemExit("--fake-audio-transition cannot be combined with file-entry fixtures")
+    if args.fake_text_preview and (
+        args.fake_audio_transition or any((args.image, args.audio, args.pdf, args.midi))
+    ):
+        raise SystemExit("--fake-text-preview cannot be combined with other fixture routes")
     if args.image_tool and not args.image:
         raise SystemExit("--image-tool requires --image")
     if args.click is not None and any(
@@ -1033,8 +1154,19 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
     if args.image_action and not args.image_tool:
         raise SystemExit("--image-action requires --image-tool")
     if args.key_action and not args.image and any(action != "f3" for action in args.key_action):
-        raise SystemExit("only --key-action f3 may be used without an image fixture")
-    if (args.verify_return or args.image_tool or args.key_action) and shutil.which("wtype") is None:
+        if not (
+            args.fake_text_preview
+            and all(action in {"f3", "ctrl-f"} for action in args.key_action)
+        ):
+            raise SystemExit(
+                "only --key-action f3 may be used without an image fixture, "
+                "except in a fake text preview run"
+            )
+    if args.type_text and not args.fake_text_preview:
+        raise SystemExit("--type-text requires --fake-text-preview")
+    if (
+        args.verify_return or args.image_tool or args.key_action or args.type_text
+    ) and shutil.which("wtype") is None:
         raise SystemExit("keyboard input requires wtype")
     binary = (args.binary or (repo / "target/debug/clip-workbench")).resolve()
     if not binary.is_file():
@@ -1075,6 +1207,7 @@ def main() -> int:
             "pdf_fixture": str(args.pdf.resolve()) if args.pdf else None,
             "midi_fixture": str(args.midi.resolve()) if args.midi else None,
             "fake_audio_transition": args.fake_audio_transition,
+            "fake_text_preview": args.fake_text_preview,
             "verify_return": args.verify_return,
             "binary": str(binary),
             "settle_ms": args.settle_ms,
@@ -1096,6 +1229,7 @@ def main() -> int:
     }
     children = ChildProcesses()
     fake_audio_daemon: FakeAudioTransitionDaemon | None = None
+    fake_text_daemon: FakeTextPreviewDaemon | None = None
     try:
         report["commit"] = run_checked(
             ["git", "-C", str(repo), "rev-parse", "HEAD"], env=os.environ.copy(), timeout=3
@@ -1113,6 +1247,10 @@ def main() -> int:
         if args.fake_audio_transition:
             fake_audio_daemon = FakeAudioTransitionDaemon(
                 config["runtime"], output / "fake-daemon-events.json"
+            )
+        if args.fake_text_preview:
+            fake_text_daemon = FakeTextPreviewDaemon(
+                config["runtime"], output / "fake-text-daemon-events.json"
             )
         capture_workbench(args, binary, output, config, niri_env, outputs, children, report)
     except Exception as exc:
@@ -1132,6 +1270,9 @@ def main() -> int:
             else:
                 transition["first_observed_before_ready_transition"] = False
                 report["failures"].append("workbench mapped after the fake preview was already ready")
+        if fake_text_daemon is not None:
+            text_route = fake_text_daemon.close()
+            report["fake_text_preview"] = text_route
         if report["status"] == "running":
             report["status"] = "passed" if not report["failures"] else "failed"
         report["processes"] = children.exit_statuses()
