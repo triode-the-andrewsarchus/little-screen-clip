@@ -217,7 +217,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s3 [Luna] Verify DCS Redo restores the applied pixels.** The automated history regression confirms an exact pixel match.
     - **Decorrelation Stretch live UI actions**
       - [x] **E2.1s4 [Luna] Select Covariance color model.** Live 1280×720 capture shows Covariance selected and the analysis drawer reports `Matrix Covariance`; see `ui_overhaul_acceptance.md`.
-      - [ ] **E2.1s5 [Luna] Apply Decorrelation Stretch from the live UI.**
+      - [x] **E2.1s5 [Luna] Apply Decorrelation Stretch from the live UI.** Compact Dark capture shows the transformed canvas and `Applied decorrelation stretch to canvas`; see `ui_overhaul_acceptance.md`.
       - [ ] **E2.1s6 [Luna] Undo a live Decorrelation Stretch application.**
       - [ ] **E2.1s7 [Luna] Redo a live Decorrelation Stretch application.**
       - [x] **E2.1s8 [Luna] Select the alternate Decorrelation Stretch preset.** Compact Dark capture shows Preserve selected, Preserve original band means/spread checked, and the comparison HUD; see `ui_overhaul_acceptance.md`.
