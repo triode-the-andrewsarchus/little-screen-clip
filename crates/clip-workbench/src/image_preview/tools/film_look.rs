@@ -1,7 +1,195 @@
 use super::super::*;
 use crate::shell::render_context_slider;
 
-const DEFAULT_WB_STRENGTH: f32 = 0.35;
+const DEFAULT_WB_STRENGTH: f32 = 0.75;
+
+/// Correct an Auto-WB cast only from pixels that are plausible neutral highlights.
+/// Whole-image gray-world averages mistake warm or colorful scenes for lighting casts.
+fn apply_auto_white_balance(image: &mut image::RgbImage, strength: f32) -> bool {
+    let strength = strength.clamp(0.0, 1.0);
+    if strength == 0.0 || image.is_empty() {
+        return false;
+    }
+
+    let mut sums = [0.0_f32; 3];
+    let mut count = 0.0_f32;
+    let mut luma_sum = 0.0_f32;
+    let mut luma_squared_sum = 0.0_f32;
+    for pixel in image.pixels() {
+        let channels = pixel.0.map(f32::from);
+        let max_channel = channels.iter().copied().fold(0.0_f32, f32::max);
+        let min_channel = channels.iter().copied().fold(255.0_f32, f32::min);
+        if max_channel < 128.0 || (max_channel - min_channel) / max_channel.max(1.0) > 0.30 {
+            continue;
+        }
+
+        let luma = channels.iter().sum::<f32>() / 3.0;
+        luma_sum += luma;
+        luma_squared_sum += luma * luma;
+        for (sum, channel) in sums.iter_mut().zip(channels) {
+            *sum += channel;
+        }
+        count += 1.0;
+    }
+
+    let required_samples = (image.width() * image.height() / 10_000).max(32) as f32;
+    if count < required_samples {
+        return false;
+    }
+    let mean_luma = luma_sum / count;
+    let luma_variance = (luma_squared_sum / count - mean_luma * mean_luma).max(0.0);
+    if luma_variance.sqrt() < 8.0 {
+        return false;
+    }
+
+    let means = sums.map(|sum| sum / count);
+    let target = means.iter().sum::<f32>() / 3.0;
+    let gains = means.map(|mean| (target / mean.max(1.0)).clamp(0.7, 1.4));
+    let min_gain = gains.iter().copied().fold(f32::INFINITY, f32::min);
+    let max_gain = gains.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    if max_gain / min_gain > 1.5 {
+        return false;
+    }
+
+    for pixel in image.pixels_mut() {
+        for (channel, gain) in pixel.0[..3].iter_mut().zip(gains) {
+            let adjusted_gain = 1.0 + (gain - 1.0) * strength;
+            *channel = (f32::from(*channel) * adjusted_gain)
+                .round()
+                .clamp(0.0, 255.0) as u8;
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod white_balance_tests {
+    use super::apply_auto_white_balance;
+
+    fn channel_means(image: &image::RgbImage) -> [f32; 3] {
+        let count = (image.width() * image.height()) as f32;
+        std::array::from_fn(|channel| {
+            image
+                .pixels()
+                .map(|pixel| f32::from(pixel[channel]))
+                .sum::<f32>()
+                / count
+        })
+    }
+
+    #[test]
+    fn auto_white_balance_leaves_warm_scene_without_neutral_highlights_unchanged() {
+        let mut image = image::RgbImage::from_pixel(64, 64, image::Rgb([220, 160, 100]));
+
+        assert!(!apply_auto_white_balance(&mut image, 1.0));
+        assert!(
+            image
+                .pixels()
+                .all(|pixel| *pixel == image::Rgb([220, 160, 100]))
+        );
+    }
+
+    #[test]
+    fn auto_white_balance_corrects_neutral_highlights_without_gray_world_scene_bias() {
+        let mut image = image::RgbImage::from_fn(64, 64, |x, y| {
+            if x >= 48 {
+                return image::Rgb([240, 40 + (y % 5) as u8, 30]);
+            }
+            let base = 145 + ((x + y) % 70) as u8;
+            image::Rgb([
+                ((f32::from(base) * 0.78).round()) as u8,
+                ((f32::from(base) * 0.92).round()) as u8,
+                base,
+            ])
+        });
+        let before = channel_means(&image::imageops::crop_imm(&image, 0, 0, 48, 64).to_image());
+
+        assert!(apply_auto_white_balance(&mut image, 1.0));
+        let after = channel_means(&image::imageops::crop_imm(&image, 0, 0, 48, 64).to_image());
+        let spread = |channels: [f32; 3]| {
+            channels.iter().copied().fold(f32::NEG_INFINITY, f32::max)
+                - channels.iter().copied().fold(f32::INFINITY, f32::min)
+        };
+        assert!(
+            spread(after) < 3.0,
+            "WB should neutralize the cast: {before:?} -> {after:?}"
+        );
+        let red_patch = image.get_pixel(56, 32);
+        let saturation =
+            (f32::from(red_patch[0]) - f32::from(red_patch[1])) / f32::from(red_patch[0]);
+        assert!(
+            saturation > 0.75,
+            "saturated scene color should remain vivid: {red_patch:?}"
+        );
+    }
+
+    #[test]
+    fn auto_white_balance_strength_scales_the_estimated_correction() {
+        let source = image::RgbImage::from_fn(64, 64, |x, y| {
+            let base = 145 + ((x + y) % 70) as u8;
+            image::Rgb([
+                ((f32::from(base) * 0.78).round()) as u8,
+                ((f32::from(base) * 0.92).round()) as u8,
+                base,
+            ])
+        });
+        let mut unchanged = source.clone();
+        let mut corrected = source;
+
+        assert!(!apply_auto_white_balance(&mut unchanged, 0.0));
+        assert!(apply_auto_white_balance(&mut corrected, 0.5));
+        assert_eq!(unchanged.get_pixel(32, 32), &image::Rgb([163, 192, 209]));
+        assert!(channel_means(&corrected)[0] > channel_means(&unchanged)[0]);
+        assert!(channel_means(&corrected)[2] < channel_means(&unchanged)[2]);
+    }
+
+    #[test]
+    fn auto_white_balance_does_not_gray_world_balance_a_warm_film_scene() {
+        let source = image::RgbImage::from_pixel(64, 64, image::Rgb([220, 160, 100]));
+        let stock = filmr::presets::kodak::KODAK_PORTRA_400();
+        let auto = super::process_film_image(
+            &source,
+            &stock,
+            &filmr::processor::SimulationConfig {
+                white_balance_mode: filmr::processor::WhiteBalanceMode::Auto,
+                white_balance_strength: 1.0,
+                enable_grain: false,
+                ..Default::default()
+            },
+        );
+        let off = filmr::processor::process_image(
+            &source,
+            &stock,
+            &filmr::processor::SimulationConfig {
+                white_balance_mode: filmr::processor::WhiteBalanceMode::Off,
+                enable_grain: false,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            auto, off,
+            "without a neutral highlight, Auto should preserve scene color"
+        );
+    }
+}
+
+fn process_film_image(
+    image: &image::RgbImage,
+    stock: &filmr::film::FilmStock,
+    config: &SimulationConfig,
+) -> image::RgbImage {
+    let mut source = image.clone();
+    let mut config = config.clone();
+    if config.white_balance_mode == WhiteBalanceMode::Auto {
+        apply_auto_white_balance(&mut source, config.white_balance_strength);
+        // Auto correction above is based on likely neutral highlights. Disable filmr's
+        // whole-image gray-world pass so scene colors are not mistaken for an illuminant.
+        config.white_balance_mode = WhiteBalanceMode::Off;
+        config.white_balance_strength = 0.0;
+    }
+    filmr::processor::process_image(&source, stock, &config)
+}
 
 /// Descriptor for one entry in the film stock picker list.
 #[derive(Clone)]
@@ -741,7 +929,7 @@ impl ImagePreviewState {
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
             let process_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                filmr::processor::process_image(&rgb_img, &stock, &config)
+                process_film_image(&rgb_img, &stock, &config)
             }));
             match process_result {
                 Ok(out_rgb) => {
@@ -831,7 +1019,7 @@ impl ImagePreviewState {
                     };
 
                     let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        filmr::processor::process_image(&thumb_rgb, &stock, &config)
+                        process_film_image(&thumb_rgb, &stock, &config)
                     }));
 
                     if let Ok(out_rgb) = res {

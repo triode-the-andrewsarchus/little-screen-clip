@@ -49,6 +49,7 @@ KEY_ACTIONS = {
     "ctrl-z": ["-M", "ctrl", "-k", "z", "-m", "ctrl"],
     "ctrl-y": ["-M", "ctrl", "-k", "y", "-m", "ctrl"],
     "enter": ["-k", "Return"],
+    "f3": ["-k", "F3"],
 }
 
 
@@ -868,6 +869,7 @@ def capture_workbench(
             raise RuntimeError(f"timed out waiting for private hover pointer at ({x}, {y})")
         report["pointer_input"]["move"] = {"x": x, "y": y, "button": "none", "held_until_cleanup": True}
     if args.key_action:
+        report.setdefault("pointer_input", {})
         report["pointer_input"]["key_actions"] = []
         for action in args.key_action:
             run_checked(["wtype", *KEY_ACTIONS[action]], env=niri_env)
@@ -1030,8 +1032,8 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         raise SystemExit("--scroll-after-click must identify an existing one-based --click")
     if args.image_action and not args.image_tool:
         raise SystemExit("--image-action requires --image-tool")
-    if args.key_action and not args.image:
-        raise SystemExit("--key-action requires an image fixture")
+    if args.key_action and not args.image and any(action != "f3" for action in args.key_action):
+        raise SystemExit("only --key-action f3 may be used without an image fixture")
     if (args.verify_return or args.image_tool or args.key_action) and shutil.which("wtype") is None:
         raise SystemExit("keyboard input requires wtype")
     binary = (args.binary or (repo / "target/debug/clip-workbench")).resolve()
