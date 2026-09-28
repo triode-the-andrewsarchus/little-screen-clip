@@ -45,6 +45,10 @@ IMAGE_TOOL_KEYS = {
     "film-look": "l",
 }
 IMAGE_ACTION_KEYS = {"enter": "Return"}
+KEY_ACTIONS = {
+    "ctrl-z": ["-M", "ctrl", "-k", "z", "-m", "ctrl"],
+    "ctrl-y": ["-M", "ctrl", "-k", "y", "-m", "ctrl"],
+}
 
 
 class FakeAudioTransitionDaemon:
@@ -858,6 +862,12 @@ def capture_workbench(
         else:
             raise RuntimeError(f"timed out waiting for private hover pointer at ({x}, {y})")
         report["pointer_input"]["move"] = {"x": x, "y": y, "button": "none", "held_until_cleanup": True}
+    if args.key_action:
+        report["pointer_input"]["key_actions"] = []
+        for action in args.key_action:
+            run_checked(["wtype", *KEY_ACTIONS[action]], env=niri_env)
+            report["pointer_input"]["key_actions"].append(action)
+            time.sleep(0.25)
     time.sleep(args.settle_ms / 1000)
     final_windows = own_windows(niri_bin, niri_env, {app.pid})
     report["final_windows"] = final_windows
@@ -926,6 +936,10 @@ def create_parser() -> argparse.ArgumentParser:
         "--image-action",
         choices=tuple(IMAGE_ACTION_KEYS),
         help="send one supported key action after selecting the image tool",
+    )
+    parser.add_argument(
+        "--key-action", choices=tuple(KEY_ACTIONS), action="append",
+        help="send an ordered keyboard shortcut after pointer actions; repeat to send multiple shortcuts",
     )
     parser.add_argument("--image", type=Path, help="optional existing image fixture")
     parser.add_argument(
@@ -1002,10 +1016,10 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         raise SystemExit("--scroll-after-click must identify an existing one-based --click")
     if args.image_action and not args.image_tool:
         raise SystemExit("--image-action requires --image-tool")
-    if args.verify_return and shutil.which("wtype") is None:
-        raise SystemExit("--verify-return requires wtype")
-    if args.image_tool and shutil.which("wtype") is None:
-        raise SystemExit("--image-tool requires wtype")
+    if args.key_action and not args.image:
+        raise SystemExit("--key-action requires an image fixture")
+    if (args.verify_return or args.image_tool or args.key_action) and shutil.which("wtype") is None:
+        raise SystemExit("keyboard input requires wtype")
     binary = (args.binary or (repo / "target/debug/clip-workbench")).resolve()
     if not binary.is_file():
         raise SystemExit(f"workbench binary does not exist: {binary}")
@@ -1033,6 +1047,7 @@ def main() -> int:
             "appearance": args.appearance,
             "image_tool": args.image_tool,
             "image_action": args.image_action,
+            "key_action": args.key_action,
             "image_fixture": str(args.image.resolve()) if args.image else None,
             "click": args.click,
             "move": args.move,
