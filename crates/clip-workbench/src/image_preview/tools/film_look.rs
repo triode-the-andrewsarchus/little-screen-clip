@@ -15,7 +15,11 @@ fn apply_auto_white_balance(image: &mut image::RgbImage, strength: f32) -> bool 
     let mut count = 0.0_f32;
     let mut luma_sum = 0.0_f32;
     let mut luma_squared_sum = 0.0_f32;
-    for pixel in image.pixels() {
+    let sample_stride = ((image.width() as usize * image.height() as usize) / 100_000).max(1);
+    for (index, pixel) in image.pixels().enumerate() {
+        if index % sample_stride != 0 {
+            continue;
+        }
         let channels = pixel.0.map(f32::from);
         let max_channel = channels.iter().copied().fold(0.0_f32, f32::max);
         let min_channel = channels.iter().copied().fold(255.0_f32, f32::min);
@@ -32,7 +36,7 @@ fn apply_auto_white_balance(image: &mut image::RgbImage, strength: f32) -> bool 
         count += 1.0;
     }
 
-    let required_samples = (image.width() * image.height() / 10_000).max(32) as f32;
+    let required_samples = 32.0;
     if count < required_samples {
         return false;
     }
@@ -52,7 +56,7 @@ fn apply_auto_white_balance(image: &mut image::RgbImage, strength: f32) -> bool 
     }
 
     for pixel in image.pixels_mut() {
-        for (channel, gain) in pixel.0[..3].iter_mut().zip(gains) {
+        for (channel, gain) in pixel.0.iter_mut().zip(gains) {
             let adjusted_gain = 1.0 + (gain - 1.0) * strength;
             *channel = (f32::from(*channel) * adjusted_gain)
                 .round()
