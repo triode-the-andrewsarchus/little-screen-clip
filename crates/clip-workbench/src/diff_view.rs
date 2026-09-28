@@ -119,8 +119,17 @@ pub struct DiffViewerState {
     pub textures_loaded: bool,
     pub decode_error: Option<String>,
     pub status_toast: Option<(String, f64)>, // (text, timestamp)
-    pub image_receiver: Option<std::sync::mpsc::Receiver<Result<ImageDiffResult, String>>>,
-    pub text_receiver: Option<std::sync::mpsc::Receiver<(DiffResult, egui::text::LayoutJob)>>,
+    pub image_receiver: Option<
+        std::sync::mpsc::Receiver<
+            Result<Result<ImageDiffResult, String>, little_clip_core::JobError>,
+        >,
+    >,
+    pub text_receiver: Option<
+        std::sync::mpsc::Receiver<
+            Result<(DiffResult, egui::text::LayoutJob), little_clip_core::JobError>,
+        >,
+    >,
+    compute_ticket: Option<JobTicket>,
     pub is_computing: bool,
     pub compute_start_time: std::time::Instant,
     handoff: Option<(
@@ -130,12 +139,26 @@ pub struct DiffViewerState {
     handoff_cancel: Option<HandoffCancelGuard>,
 }
 
+impl Drop for DiffViewerState {
+    fn drop(&mut self) {
+        if let Some(ticket) = &self.compute_ticket {
+            ticket.cancel();
+        }
+    }
+}
+
 fn spawn_image_diff_worker(
     lhs: &DiffTarget,
     rhs: &DiffTarget,
     options: ImageDiffOptions,
+    jobs: &BackgroundJobs,
 ) -> (
-    Option<std::sync::mpsc::Receiver<Result<ImageDiffResult, String>>>,
+    Option<JobTicket>,
+    Option<
+        std::sync::mpsc::Receiver<
+            Result<Result<ImageDiffResult, String>, little_clip_core::JobError>,
+        >,
+    >,
     Option<String>,
 ) {
     if let (Some(b1), Some(b2)) = (lhs.image_bytes(), rhs.image_bytes()) {
@@ -151,22 +174,20 @@ fn spawn_image_diff_worker(
                 "Image data could not be loaded for {}. Please check that the file exists.",
                 missing.join(" and ")
             );
-            return (None, Some(err));
+            return (None, None, Some(err));
         }
 
         let b1_vec = b1.to_vec();
         let b2_vec = b2.to_vec();
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        std::thread::spawn(move || {
-            let res = little_clip_ops::image_diff::compare_image_bytes(&b1_vec, &b2_vec, &options)
-                .map_err(|e| e.to_string());
-            let _ = tx.send(res);
+        let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
+            little_clip_ops::image_diff::compare_image_bytes(&b1_vec, &b2_vec, &options)
+                .map_err(|e| e.to_string())
         });
 
-        (Some(rx), None)
+        (Some(ticket), Some(rx), None)
     } else {
         (
+            None,
             None,
             Some("Failed to obtain image bytes from comparison targets".to_string()),
         )
@@ -178,36 +199,51 @@ fn spawn_text_diff_worker(
     rhs: &DiffTarget,
     mode: DiffDisplayMode,
     width: usize,
-) -> std::sync::mpsc::Receiver<(DiffResult, egui::text::LayoutJob)> {
-    let (tx, rx) = std::sync::mpsc::channel();
+    jobs: &BackgroundJobs,
+) -> (
+    JobTicket,
+    std::sync::mpsc::Receiver<
+        Result<(DiffResult, egui::text::LayoutJob), little_clip_core::JobError>,
+    >,
+) {
     let lhs = lhs.clone();
     let rhs = rhs.clone();
-    std::thread::spawn(move || {
+    jobs.submit(std::time::Duration::MAX, move || {
         let r = compute_diff(&lhs, &rhs, mode, width);
         let job = ansi_to_layout_job(&r.raw_ansi, crate::ui_ext::MONO_FONT_SIZE);
-        let _ = tx.send((r, job));
-    });
-    rx
+        (r, job)
+    })
 }
 
 impl DiffViewerState {
     /// Initializes text or image diff calculation between two comparison targets.
     pub fn new(lhs: DiffTarget, rhs: DiffTarget, mode: DiffDisplayMode) -> Self {
+        Self::new_with_jobs(lhs, rhs, mode, BackgroundJobs::global())
+    }
+
+    fn new_with_jobs(
+        lhs: DiffTarget,
+        rhs: DiffTarget,
+        mode: DiffDisplayMode,
+        jobs: &BackgroundJobs,
+    ) -> Self {
         let is_img = lhs.is_image() && rhs.is_image();
         let image_options = ImageDiffOptions::default();
 
-        let (image_receiver, text_receiver, is_computing, decode_error) = if is_img {
-            let (rx, err) = spawn_image_diff_worker(&lhs, &rhs, image_options.clone());
+        let (compute_ticket, image_receiver, text_receiver, is_computing, decode_error) = if is_img
+        {
+            let (ticket, rx, err) =
+                spawn_image_diff_worker(&lhs, &rhs, image_options.clone(), jobs);
             let computing = rx.is_some();
-            (rx, None, computing, err)
+            (ticket, rx, None, computing, err)
         } else {
             let width = if mode == DiffDisplayMode::SideBySide {
                 150
             } else {
                 120
             };
-            let rx = spawn_text_diff_worker(&lhs, &rhs, mode, width);
-            (None, Some(rx), true, None)
+            let (ticket, rx) = spawn_text_diff_worker(&lhs, &rhs, mode, width, jobs);
+            (Some(ticket), None, Some(rx), true, None)
         };
 
         let result = DiffResult {
@@ -236,6 +272,7 @@ impl DiffViewerState {
             status_toast: None,
             image_receiver,
             text_receiver,
+            compute_ticket,
             is_computing,
             compute_start_time: std::time::Instant::now(),
             handoff: None,
@@ -248,24 +285,39 @@ impl DiffViewerState {
         if let Some(rx) = self.image_receiver.take() {
             if let Ok(res) = rx.recv() {
                 match res {
-                    Ok(r) => {
+                    Ok(Ok(r)) => {
                         self.image_result = Some(r);
                         self.decode_error = None;
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         self.decode_error = Some(e);
+                        self.image_result = None;
+                    }
+                    Err(e) => {
+                        self.decode_error = Some(format!("Diff computation failed: {e}"));
                         self.image_result = None;
                     }
                 }
             }
             self.is_computing = false;
+            self.compute_ticket = None;
         }
         if let Some(rx) = self.text_receiver.take() {
-            if let Ok((res, job)) = rx.recv() {
-                self.result = res;
-                self.layout_job = job;
+            match rx.recv() {
+                Ok(Ok((res, job))) => {
+                    self.result = res;
+                    self.layout_job = job;
+                    self.decode_error = None;
+                }
+                Ok(Err(error)) => {
+                    self.decode_error = Some(format!("Diff computation failed: {error}"));
+                }
+                Err(_) => {
+                    self.decode_error = Some("Diff worker disconnected".to_string());
+                }
             }
             self.is_computing = false;
+            self.compute_ticket = None;
         }
     }
 
@@ -275,8 +327,16 @@ impl DiffViewerState {
 
     pub fn recompute(&mut self) {
         if self.is_image() {
-            let (rx, err) =
-                spawn_image_diff_worker(&self.lhs, &self.rhs, self.image_options.clone());
+            if let Some(ticket) = self.compute_ticket.take() {
+                ticket.cancel();
+            }
+            let (ticket, rx, err) = spawn_image_diff_worker(
+                &self.lhs,
+                &self.rhs,
+                self.image_options.clone(),
+                BackgroundJobs::global(),
+            );
+            self.compute_ticket = ticket;
             self.is_computing = rx.is_some();
             self.image_receiver = rx;
             self.compute_start_time = std::time::Instant::now();
@@ -288,7 +348,17 @@ impl DiffViewerState {
             } else {
                 120
             };
-            let rx = spawn_text_diff_worker(&self.lhs, &self.rhs, self.mode, width);
+            if let Some(ticket) = self.compute_ticket.take() {
+                ticket.cancel();
+            }
+            let (ticket, rx) = spawn_text_diff_worker(
+                &self.lhs,
+                &self.rhs,
+                self.mode,
+                width,
+                BackgroundJobs::global(),
+            );
+            self.compute_ticket = Some(ticket);
             self.is_computing = true;
             self.text_receiver = Some(rx);
             self.compute_start_time = std::time::Instant::now();
@@ -487,18 +557,27 @@ impl DiffViewerState {
                 ctx.request_repaint();
                 if let Some(ref rx) = self.image_receiver {
                     match rx.try_recv() {
-                        Ok(Ok(res)) => {
+                        Ok(Ok(Ok(res))) => {
                             self.image_result = Some(res);
                             self.decode_error = None;
                             self.is_computing = false;
                             self.textures_loaded = false;
                             self.image_receiver = None;
+                            self.compute_ticket = None;
                         }
-                        Ok(Err(err)) => {
+                        Ok(Ok(Err(err))) => {
                             self.decode_error = Some(err);
                             self.image_result = None;
                             self.is_computing = false;
                             self.image_receiver = None;
+                            self.compute_ticket = None;
+                        }
+                        Ok(Err(err)) => {
+                            self.decode_error = Some(format!("Diff computation failed: {err}"));
+                            self.image_result = None;
+                            self.is_computing = false;
+                            self.image_receiver = None;
+                            self.compute_ticket = None;
                         }
                         Err(std::sync::mpsc::TryRecvError::Empty) => {}
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
@@ -506,6 +585,7 @@ impl DiffViewerState {
                             self.image_result = None;
                             self.is_computing = false;
                             self.image_receiver = None;
+                            self.compute_ticket = None;
                         }
                     }
                 }
@@ -516,16 +596,26 @@ impl DiffViewerState {
             ctx.request_repaint();
             if let Some(ref rx) = self.text_receiver {
                 match rx.try_recv() {
-                    Ok((res, job)) => {
+                    Ok(Ok((res, job))) => {
                         self.result = res;
                         self.layout_job = job;
                         self.is_computing = false;
                         self.text_receiver = None;
+                        self.decode_error = None;
+                        self.compute_ticket = None;
+                    }
+                    Ok(Err(err)) => {
+                        self.is_computing = false;
+                        self.text_receiver = None;
+                        self.decode_error = Some(format!("Diff computation failed: {err}"));
+                        self.compute_ticket = None;
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {}
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                         self.is_computing = false;
                         self.text_receiver = None;
+                        self.decode_error = Some("Diff worker disconnected".to_string());
+                        self.compute_ticket = None;
                     }
                 }
             }
@@ -983,6 +1073,14 @@ impl DiffViewerState {
             return;
         }
 
+        if let Some(error) = &self.decode_error {
+            ui.label(
+                egui::RichText::new(format!("Diff unavailable: {error}"))
+                    .color(crate::hex_to_c32(&palette.colors.text_primary))
+                    .size(BODY_FONT_SIZE),
+            );
+        }
+
         let b_low = crate::hex_to_c32(&palette.colors.console_surface);
         let b_med = crate::hex_to_c32(&palette.chrome_border);
 
@@ -1327,7 +1425,7 @@ mod tests {
         let mut state = DiffViewerState::new(left, right, DiffDisplayMode::SideBySide);
         state.wait_for_completion();
 
-        let result = state.image_result.unwrap();
+        let result = state.image_result.as_ref().unwrap();
         assert_eq!((result.width, result.height), (3, 2));
         assert_eq!(result.diff_count, 1);
     }
@@ -1369,6 +1467,103 @@ mod tests {
                 matches!(&clipped.shape, egui::Shape::Rect(rect) if rect.fill == console)
             }));
         }
+    }
+
+    #[test]
+    fn saturated_diff_executor_reports_recoverable_error() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let _blocker = jobs.submit(Duration::MAX, move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let _queued = jobs.submit(Duration::MAX, || ());
+
+        let left = DiffTarget::ClipboardText {
+            label: "Left".to_string(),
+            content: "left".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+        let right = DiffTarget::ClipboardText {
+            label: "Right".to_string(),
+            content: "right".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+        let mut state = DiffViewerState::new_with_jobs(left, right, DiffDisplayMode::Inline, &jobs);
+        assert!(state.is_computing);
+        state.wait_for_completion();
+
+        assert!(!state.is_computing);
+        assert!(state.text_receiver.is_none());
+        assert_eq!(
+            state.decode_error.as_deref(),
+            Some("Diff computation failed: background job queue is full")
+        );
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let error_text = "Diff unavailable: Diff computation failed: background job queue is full";
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 500.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                });
+            },
+        );
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text() == error_text)
+        }));
+
+        let _ = release_tx.send(());
+    }
+
+    #[test]
+    fn dropping_diff_viewer_cancels_queued_compute() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let _blocker = jobs.submit(Duration::MAX, move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let left = DiffTarget::ClipboardText {
+            label: "Left".to_string(),
+            content: "left".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+        let right = DiffTarget::ClipboardText {
+            label: "Right".to_string(),
+            content: "right".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+        let mut state = DiffViewerState::new_with_jobs(left, right, DiffDisplayMode::Inline, &jobs);
+        let result_rx = state.text_receiver.take().unwrap();
+        drop(state);
+
+        let _ = release_tx.send(());
+        assert!(matches!(
+            result_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Err(little_clip_core::JobError::Cancelled)
+        ));
     }
 
     #[test]
