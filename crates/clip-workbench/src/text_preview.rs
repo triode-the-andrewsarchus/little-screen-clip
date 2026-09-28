@@ -88,6 +88,8 @@ const MINIMAP_WIDTH: f32 = 112.0;
 /// lines are presented as continuation rows so no single egui layout job can
 /// shape megabytes of text synchronously.
 const MAX_CODE_FRAGMENT_BYTES: usize = 4 * 1024;
+const MINIMAP_PREP_LINES_PER_FRAME: usize = 128;
+const MINIMAP_RETAINED_LINES: usize = 4096;
 
 #[derive(Debug, Clone, Copy)]
 struct CodeFragment {
@@ -224,6 +226,48 @@ struct MinimapLine {
     segments: Vec<MinimapSegment>,
 }
 
+#[derive(Default)]
+struct MinimapCache {
+    lines: Vec<(usize, MinimapLine)>,
+    next_source_line: usize,
+    stride: usize,
+    highlighter: Option<HighlightLines<'static>>,
+}
+
+impl MinimapCache {
+    fn prepare(&mut self, text: &str, line_starts: &[usize], syntax: &'static SyntaxReference) {
+        if self.highlighter.is_none() {
+            self.stride = line_starts.len().div_ceil(MINIMAP_RETAINED_LINES).max(1);
+            self.highlighter = Some(HighlightLines::new(
+                syntax,
+                &THEME_SET.themes["base16-eighties.dark"],
+            ));
+        }
+        let end_line =
+            (self.next_source_line + MINIMAP_PREP_LINES_PER_FRAME).min(line_starts.len());
+        let highlighter = self.highlighter.as_mut().expect("initialized above");
+        while self.next_source_line < end_line {
+            let source_line = self.next_source_line;
+            let start = line_starts[source_line];
+            let end = line_starts
+                .get(source_line + 1)
+                .copied()
+                .unwrap_or(text.len());
+            let line = text[start..end]
+                .strip_suffix('\n')
+                .unwrap_or(&text[start..end]);
+            let minimap_line = build_minimap_line(line, highlighter);
+            if source_line % self.stride == 0 {
+                self.lines.push((source_line, minimap_line));
+            }
+            self.next_source_line += 1;
+        }
+        if self.next_source_line == line_starts.len() {
+            self.highlighter = None;
+        }
+    }
+}
+
 /// View mode for markdown vs raw code inspection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextViewMode {
@@ -281,7 +325,7 @@ pub struct TextPreviewState {
     minimap_view_fraction: f32,
     minimap_content_height: f32,
     minimap_viewport_height: f32,
-    minimap_lines: Option<Vec<MinimapLine>>,
+    minimap_lines: MinimapCache,
     minimap_overflows: bool,
 }
 
@@ -355,7 +399,7 @@ impl TextPreviewState {
             minimap_view_fraction: 1.0,
             minimap_content_height: 1.0,
             minimap_viewport_height: 1.0,
-            minimap_lines: None,
+            minimap_lines: MinimapCache::default(),
             minimap_overflows: false,
         }
     }
@@ -413,7 +457,7 @@ impl TextPreviewState {
             minimap_view_fraction: 1.0,
             minimap_content_height: 1.0,
             minimap_viewport_height: 1.0,
-            minimap_lines: None,
+            minimap_lines: MinimapCache::default(),
             minimap_overflows: false,
         })
     }
@@ -1105,16 +1149,19 @@ impl TextPreviewState {
                             self.minimap_viewport_height = output.inner_rect.height();
                             self.minimap_overflows =
                                 output.content_size.y > output.inner_rect.height();
-                            if self.minimap_overflows && self.minimap_lines.is_none() {
-                                self.minimap_lines =
-                                    Some(build_minimap_lines(&self.content, syntax));
+                            if self.minimap_overflows {
+                                self.minimap_lines.prepare(
+                                    &self.content,
+                                    &self.line_starts,
+                                    syntax,
+                                );
                             }
                         },
                     );
                     if show_minimap {
                         if let Some(fraction) = render_code_minimap(
                             ui,
-                            self.minimap_lines.as_deref().unwrap_or_default(),
+                            &self.minimap_lines.lines,
                             &self.line_first_fragment,
                             &self.code_rows,
                             surface_size.y.max(1.0),
@@ -1307,42 +1354,35 @@ fn find_syntax(lang: &str) -> &'static SyntaxReference {
 }
 
 /// Precomputes compact syntax spans once, avoiding text layout and per-frame parsing.
-fn build_minimap_lines(text: &str, syntax: &SyntaxReference) -> Vec<MinimapLine> {
-    let syn_theme = &THEME_SET.themes["base16-eighties.dark"];
-    let mut highlighter = HighlightLines::new(syntax, syn_theme);
-
-    text.split('\n')
-        .map(|line| {
-            let mut column = 0;
-            let mut segments = Vec::new();
-            for (style, token) in highlighter
-                .highlight_line(line, &SYNTAX_SET)
-                .unwrap_or_default()
-            {
-                let token_width = token.chars().count();
-                let leading_space = token.len() - token.trim_start().len();
-                let trailing_space = token.len() - token.trim_end().len();
-                let visible_start = column + token[..leading_space].chars().count();
-                let visible_end =
-                    column + token_width.saturating_sub(token[..trailing_space].chars().count());
-                if visible_start < visible_end && visible_start < MINIMAP_COLUMNS {
-                    segments.push(MinimapSegment {
-                        start_column: visible_start,
-                        end_column: visible_end.min(MINIMAP_COLUMNS),
-                        color: style.foreground,
-                    });
-                }
-                column += token_width;
-            }
-            MinimapLine { segments }
-        })
-        .collect()
+fn build_minimap_line(line: &str, highlighter: &mut HighlightLines<'static>) -> MinimapLine {
+    let mut column = 0;
+    let mut segments = Vec::new();
+    for (style, token) in highlighter
+        .highlight_line(line, &SYNTAX_SET)
+        .unwrap_or_default()
+    {
+        let token_width = token.chars().count();
+        let leading_space = token.len() - token.trim_start().len();
+        let trailing_space = token.len() - token.trim_end().len();
+        let visible_start = column + token[..leading_space].chars().count();
+        let visible_end =
+            column + token_width.saturating_sub(token[..trailing_space].chars().count());
+        if visible_start < visible_end && visible_start < MINIMAP_COLUMNS {
+            segments.push(MinimapSegment {
+                start_column: visible_start,
+                end_column: visible_end.min(MINIMAP_COLUMNS),
+                color: style.foreground,
+            });
+        }
+        column += token_width;
+    }
+    MinimapLine { segments }
 }
 
 /// Draws a VS Code-style overview from syntax-colored rectangles, not glyphs.
 fn render_code_minimap(
     ui: &mut egui::Ui,
-    lines: &[MinimapLine],
+    lines: &[(usize, MinimapLine)],
     line_first_fragment: &[usize],
     rows: &CodeRowHeights,
     height: f32,
@@ -1362,16 +1402,19 @@ fn render_code_minimap(
     );
 
     let content_rect = map_rect.shrink2(Vec2::new(4.0, 3.0));
-    let line_count = lines.len().max(1);
+    let line_count = line_first_fragment.len().max(1);
     // Do not emit thousands of tiny shapes for large sources. Each sampled row
     // still represents its source position, retaining the document's color rhythm.
     let stride =
-        ((line_count as f32 / content_rect.height().ceil().max(1.0)).ceil() as usize).max(1);
-    for line_index in (0..lines.len()).step_by(stride) {
-        let display_row = line_first_fragment.get(line_index).copied().unwrap_or(0);
+        ((lines.len() as f32 / content_rect.height().ceil().max(1.0)).ceil() as usize).max(1);
+    for (sample_index, (line_index, line)) in lines.iter().enumerate().step_by(stride) {
+        let display_row = line_first_fragment.get(*line_index).copied().unwrap_or(0);
         let row_top = content_rect.top()
             + content_rect.height() * rows.offset(display_row) / rows.total_height().max(1.0);
-        let next_line = (line_index + stride).min(line_count);
+        let next_line = lines
+            .get(sample_index + stride)
+            .map(|(line, _)| *line)
+            .unwrap_or(line_count);
         let next_display_row = line_first_fragment
             .get(next_line)
             .copied()
@@ -1380,7 +1423,7 @@ fn render_code_minimap(
             + content_rect.height() * rows.offset(next_display_row) / rows.total_height().max(1.0))
         .max(row_top + 1.0)
         .min(content_rect.bottom());
-        for segment in &lines[line_index].segments {
+        for segment in &line.segments {
             let x_start = content_rect.left()
                 + content_rect.width() * segment.start_column as f32 / MINIMAP_COLUMNS as f32;
             let x_end = content_rect.left()
@@ -2465,14 +2508,54 @@ mod tests {
 
     #[test]
     fn test_minimap_cache_uses_syntax_colored_blocks() {
-        let lines =
-            build_minimap_lines("fn main() {\n    let answer = 42;\n}\n", find_syntax("rs"));
+        let text = "fn main() {\n    let answer = 42;\n}\n";
+        let starts = line_start_offsets(text);
+        let mut cache = MinimapCache::default();
+        cache.prepare(text, &starts, find_syntax("rs"));
 
-        assert_eq!(lines.len(), 4, "one minimap row per source line");
-        assert!(lines.iter().take(3).all(|line| !line.segments.is_empty()));
-        assert!(lines.iter().flat_map(|line| &line.segments).all(|segment| {
-            segment.start_column < segment.end_column && segment.end_column <= MINIMAP_COLUMNS
-        }));
+        assert_eq!(cache.lines.len(), 4, "one minimap row per source line");
+        assert!(
+            cache
+                .lines
+                .iter()
+                .take(3)
+                .all(|(_, line)| !line.segments.is_empty())
+        );
+        assert!(
+            cache
+                .lines
+                .iter()
+                .flat_map(|(_, line)| &line.segments)
+                .all(|segment| {
+                    segment.start_column < segment.end_column
+                        && segment.end_column <= MINIMAP_COLUMNS
+                })
+        );
+    }
+
+    #[test]
+    fn test_minimap_preparation_is_incremental_and_retained_lines_are_bounded() {
+        let text = "let x = 1;\n".repeat(MINIMAP_PREP_LINES_PER_FRAME * 2 + 1);
+        let starts = line_start_offsets(&text);
+        let mut cache = MinimapCache::default();
+        cache.prepare(&text, &starts, find_syntax("rs"));
+        assert_eq!(cache.next_source_line, MINIMAP_PREP_LINES_PER_FRAME);
+        assert_eq!(cache.lines.len(), MINIMAP_PREP_LINES_PER_FRAME);
+
+        let large_text = "let x = 1;\n".repeat(MINIMAP_RETAINED_LINES * 2 + 1);
+        let large_starts = line_start_offsets(&large_text);
+        let mut large_cache = MinimapCache::default();
+        while large_cache.next_source_line < large_starts.len() {
+            large_cache.prepare(&large_text, &large_starts, find_syntax("rs"));
+        }
+        assert!(large_cache.lines.len() <= MINIMAP_RETAINED_LINES);
+        assert_eq!(large_cache.lines.first().map(|(line, _)| *line), Some(0));
+        assert!(
+            large_cache
+                .lines
+                .windows(2)
+                .all(|pair| pair[0].0 < pair[1].0)
+        );
     }
 
     #[test]
