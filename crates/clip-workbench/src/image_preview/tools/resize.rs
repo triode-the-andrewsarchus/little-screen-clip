@@ -434,6 +434,12 @@ impl Drop for ImagePreviewState {
         self.cancel_optimizer();
         self.cancel_ocr();
         self.cancel_image_tool_process();
+        if let Some(control) = self.creative_fx_state.depth_process_control.take() {
+            control.cancel();
+        }
+        if let Some(control) = self.creative_fx_state.alpha_process_control.take() {
+            control.cancel();
+        }
     }
 }
 

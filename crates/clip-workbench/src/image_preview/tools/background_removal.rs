@@ -10,28 +10,7 @@ pub enum BgRemovalMsg {
     Error(String),
 }
 
-pub(super) fn remove_background_rgba(
-    png_bytes: &[u8],
-    configured_cmd: Option<&str>,
-    prompt: Option<&str>,
-) -> Result<RgbaImage, String> {
-    let (cmd_bin, cmd_args) = background_removal_command(configured_cmd);
-
-    let mut cmd = Command::new(&cmd_bin);
-    cmd.args(&cmd_args);
-    let output = run_image_tool_subprocess(
-        cmd,
-        png_bytes,
-        prompt,
-        None,
-        None,
-        BgRemovalOperation::BackgroundRemoval,
-        &cmd_bin,
-    )?;
-    decode_image_tool_output(output)
-}
-
-fn background_removal_command(configured_cmd: Option<&str>) -> (String, Vec<String>) {
+pub(super) fn background_removal_command(configured_cmd: Option<&str>) -> (String, Vec<String>) {
     if let Some(cmd) = configured_cmd {
         let parts: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
         if parts.is_empty() {
@@ -173,6 +152,27 @@ pub(super) fn terminate_image_tool_process(pid: u32) {
     }
     #[cfg(not(unix))]
     let _ = pid;
+}
+
+#[derive(Debug)]
+pub struct ImageToolProcessControl {
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub child_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
+}
+
+impl ImageToolProcessControl {
+    pub fn new() -> Self {
+        Self {
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            child_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+        }
+    }
+
+    pub fn cancel(&self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+        let pid = self.child_pid.swap(0, std::sync::atomic::Ordering::SeqCst);
+        terminate_image_tool_process(pid);
+    }
 }
 
 fn clear_image_tool_pid_if_owned(child_pid: &std::sync::atomic::AtomicU32, pid: u32) -> bool {

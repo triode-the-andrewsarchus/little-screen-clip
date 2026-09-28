@@ -72,6 +72,123 @@ mod ownership_tests {
         state
     }
 
+    #[cfg(unix)]
+    fn sleeping_command(label: &str) -> (String, Vec<String>, std::path::PathBuf) {
+        let script = std::env::temp_dir().join(format!(
+            "clip-creative-fx-{label}-{}.py",
+            std::process::id()
+        ));
+        std::fs::write(
+            &script,
+            "import sys,time\nsys.stdin.buffer.read()\ntime.sleep(30)\n",
+        )
+        .unwrap();
+        ("python3".into(), vec![script.display().to_string()], script)
+    }
+
+    #[cfg(unix)]
+    fn wait_for_process(state: &ImagePreviewState, alpha: bool) -> u32 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let control = if alpha {
+                state.creative_fx_state.alpha_process_control.as_ref()
+            } else {
+                state.creative_fx_state.depth_process_control.as_ref()
+            }
+            .expect("Creative FX process control should be installed");
+            let pid = control.child_pid.load(std::sync::atomic::Ordering::SeqCst);
+            if pid != 0 {
+                return pid;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child PID was not published"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[cfg(unix)]
+    fn assert_process_exited(pid: u32) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            let result = unsafe { libc::kill(pid as i32, 0) };
+            if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("Creative FX child {pid} remained alive after cancellation");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn creative_fx_depth_and_alpha_processes_stop_on_stale_source_and_viewer_drop() {
+        let mut depth_stale = state();
+        let (bin, args, script) = sleeping_command("depth-stale");
+        depth_stale.run_depth_estimation_for_fx_with_command(bin, args);
+        let pid = wait_for_process(&depth_stale, false);
+        let control = depth_stale
+            .creative_fx_state
+            .depth_process_control
+            .as_ref()
+            .unwrap()
+            .clone();
+        depth_stale.mark_pixels_changed();
+        depth_stale.poll_creative_fx();
+        assert!(control.cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_process_exited(pid);
+        let _ = std::fs::remove_file(script);
+
+        let mut alpha_stale = state();
+        let (bin, args, script) = sleeping_command("alpha-stale");
+        alpha_stale.bg_removal_cmd = Some(format!("{bin} {}", args[0]));
+        alpha_stale.run_alpha_mask_for_fx();
+        let pid = wait_for_process(&alpha_stale, true);
+        let control = alpha_stale
+            .creative_fx_state
+            .alpha_process_control
+            .as_ref()
+            .unwrap()
+            .clone();
+        alpha_stale.mark_pixels_changed();
+        alpha_stale.poll_creative_fx();
+        assert!(control.cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_process_exited(pid);
+        let _ = std::fs::remove_file(script);
+
+        let mut depth_drop = state();
+        let (bin, args, script) = sleeping_command("depth-drop");
+        depth_drop.run_depth_estimation_for_fx_with_command(bin, args);
+        let pid = wait_for_process(&depth_drop, false);
+        let control = depth_drop
+            .creative_fx_state
+            .depth_process_control
+            .as_ref()
+            .unwrap()
+            .clone();
+        drop(depth_drop);
+        assert!(control.cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_process_exited(pid);
+        let _ = std::fs::remove_file(script);
+
+        let mut alpha_drop = state();
+        let (bin, args, script) = sleeping_command("alpha-drop");
+        alpha_drop.bg_removal_cmd = Some(format!("{bin} {}", args[0]));
+        alpha_drop.run_alpha_mask_for_fx();
+        let pid = wait_for_process(&alpha_drop, true);
+        let control = alpha_drop
+            .creative_fx_state
+            .alpha_process_control
+            .as_ref()
+            .unwrap()
+            .clone();
+        drop(alpha_drop);
+        assert!(control.cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_process_exited(pid);
+        let _ = std::fs::remove_file(script);
+    }
+
     fn install_render_message(state: &mut ImagePreviewState, message: CreativeFxMsg) {
         let stamp = match &message {
             CreativeFxMsg::Done { stamp, .. } | CreativeFxMsg::Error { stamp, .. } => stamp.clone(),
@@ -591,6 +708,7 @@ pub struct CreativeFxState {
     pub depth_estimation_in_progress: bool,
     pub depth_estimation_rx: Option<std::sync::mpsc::Receiver<CreativeFxMaskMsg>>,
     depth_estimation_stamp: Option<CreativeFxMaskStamp>,
+    pub(super) depth_process_control: Option<std::sync::Arc<ImageToolProcessControl>>,
     pub depth_estimation_error: Option<String>,
 
     // Background-removal alpha mask state
@@ -599,6 +717,7 @@ pub struct CreativeFxState {
     pub alpha_mask_in_progress: bool,
     pub alpha_mask_rx: Option<std::sync::mpsc::Receiver<CreativeFxMaskMsg>>,
     alpha_mask_stamp: Option<CreativeFxMaskStamp>,
+    pub(super) alpha_process_control: Option<std::sync::Arc<ImageToolProcessControl>>,
     pub alpha_mask_error: Option<String>,
 }
 
@@ -641,12 +760,14 @@ impl Default for CreativeFxState {
             depth_estimation_in_progress: false,
             depth_estimation_rx: None,
             depth_estimation_stamp: None,
+            depth_process_control: None,
             depth_estimation_error: None,
             cached_background_removal: None,
             background_removal_input_stamp: None,
             alpha_mask_in_progress: false,
             alpha_mask_rx: None,
             alpha_mask_stamp: None,
+            alpha_process_control: None,
             alpha_mask_error: None,
         }
     }
@@ -935,6 +1056,16 @@ impl ImagePreviewState {
 
     /// Spawn background thread to estimate AI depth map using Depth-Anything V2.
     pub fn run_depth_estimation_for_fx(&mut self) {
+        let depth_script = "scripts/depth_estimation.py";
+        let (cmd_bin, cmd_args) = if std::path::Path::new(depth_script).exists() {
+            (depth_script.to_string(), Vec::new())
+        } else {
+            ("python3".to_string(), vec![depth_script.to_string()])
+        };
+        self.run_depth_estimation_for_fx_with_command(cmd_bin, cmd_args);
+    }
+
+    fn run_depth_estimation_for_fx_with_command(&mut self, cmd_bin: String, cmd_args: Vec<String>) {
         if self.creative_fx_state.depth_estimation_in_progress || self.current_rgba.is_empty() {
             return;
         }
@@ -954,90 +1085,32 @@ impl ImagePreviewState {
             return;
         }
 
-        let depth_script = "scripts/depth_estimation.py";
-        let (cmd_bin, cmd_args) = if std::path::Path::new(depth_script).exists() {
-            (depth_script.to_string(), Vec::new())
-        } else {
-            ("python3".to_string(), vec![depth_script.to_string()])
-        };
-
         let stamp = self.current_creative_fx_mask_stamp();
         let (tx, rx) = std::sync::mpsc::channel::<CreativeFxMaskMsg>();
         self.creative_fx_state.depth_estimation_rx = Some(rx);
         self.creative_fx_state.depth_estimation_stamp = Some(stamp.clone());
         self.creative_fx_state.depth_estimation_in_progress = true;
         self.creative_fx_state.depth_estimation_error = None;
+        let control = std::sync::Arc::new(ImageToolProcessControl::new());
+        self.creative_fx_state.depth_process_control = Some(control.clone());
 
         std::thread::spawn(move || {
             let mut cmd = Command::new(&cmd_bin);
-            cmd.args(&cmd_args).arg("-").arg("-");
-
-            let mut child = match cmd
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    send_creative_fx_mask_result(
-                        &tx,
-                        &stamp,
-                        Err(format!(
-                            "Failed to launch depth estimation '{}': {}. Ensure Python environment is setup.",
-                            cmd_bin, e
-                        )),
-                    );
-                    return;
-                }
-            };
-
-            if let Some(mut stdin) = child.stdin.take() {
-                use std::io::Write;
-                if let Err(e) = stdin.write_all(&png_bytes) {
-                    send_creative_fx_mask_result(
-                        &tx,
-                        &stamp,
-                        Err(format!("Failed to write image data to worker: {}", e)),
-                    );
-                    return;
-                }
-            }
-
-            let output = match child.wait_with_output() {
-                Ok(o) => o,
-                Err(e) => {
-                    send_creative_fx_mask_result(
-                        &tx,
-                        &stamp,
-                        Err(format!("Depth estimation process failed: {}", e)),
-                    );
-                    return;
-                }
-            };
-
-            if !output.status.success() {
-                let err_str = String::from_utf8_lossy(&output.stderr);
-                send_creative_fx_mask_result(
-                    &tx,
-                    &stamp,
-                    Err(format!("Depth estimation failed:\n{}", err_str.trim())),
-                );
+            cmd.args(&cmd_args);
+            let result = super::background_removal::run_image_tool_subprocess(
+                cmd,
+                &png_bytes,
+                None,
+                Some(&control.cancel),
+                Some(&control.child_pid),
+                BgRemovalOperation::DepthMap,
+                &cmd_bin,
+            )
+            .and_then(super::background_removal::decode_image_tool_output);
+            if result.is_err() && control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
             }
-
-            match image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png) {
-                Ok(dyn_img) => {
-                    send_creative_fx_mask_result(&tx, &stamp, Ok(dyn_img.to_rgba8()));
-                }
-                Err(e) => {
-                    send_creative_fx_mask_result(
-                        &tx,
-                        &stamp,
-                        Err(format!("Failed to decode output PNG: {}", e)),
-                    );
-                }
-            }
+            send_creative_fx_mask_result(&tx, &stamp, result);
         });
     }
 
@@ -1069,13 +1142,27 @@ impl ImagePreviewState {
         self.creative_fx_state.alpha_mask_stamp = Some(stamp.clone());
         self.creative_fx_state.alpha_mask_in_progress = true;
         self.creative_fx_state.alpha_mask_error = None;
+        let control = std::sync::Arc::new(ImageToolProcessControl::new());
+        self.creative_fx_state.alpha_process_control = Some(control.clone());
 
         std::thread::spawn(move || {
-            let result = super::background_removal::remove_background_rgba(
+            let (cmd_bin, cmd_args) =
+                super::background_removal::background_removal_command(configured_cmd.as_deref());
+            let mut cmd = Command::new(&cmd_bin);
+            cmd.args(&cmd_args);
+            let result = super::background_removal::run_image_tool_subprocess(
+                cmd,
                 &png_bytes,
-                configured_cmd.as_deref(),
                 None,
-            );
+                Some(&control.cancel),
+                Some(&control.child_pid),
+                BgRemovalOperation::BackgroundRemoval,
+                &cmd_bin,
+            )
+            .and_then(super::background_removal::decode_image_tool_output);
+            if result.is_err() && control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
             send_creative_fx_mask_result(&tx, &stamp, result);
         });
     }
@@ -1191,6 +1278,9 @@ impl ImagePreviewState {
                 .map(|stamp| &stamp.input)
                 != Some(&self.input_stamp())
         {
+            if let Some(control) = self.creative_fx_state.depth_process_control.take() {
+                control.cancel();
+            }
             self.creative_fx_state.depth_estimation_rx = None;
             self.creative_fx_state.depth_estimation_stamp = None;
             self.creative_fx_state.depth_estimation_in_progress = false;
@@ -1223,6 +1313,7 @@ impl ImagePreviewState {
                 }
                 self.creative_fx_state.depth_estimation_in_progress = false;
                 self.creative_fx_state.depth_estimation_stamp = None;
+                self.creative_fx_state.depth_process_control = None;
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 self.creative_fx_state.depth_estimation_rx = Some(rx);
@@ -1230,6 +1321,7 @@ impl ImagePreviewState {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.creative_fx_state.depth_estimation_in_progress = false;
                 self.creative_fx_state.depth_estimation_stamp = None;
+                self.creative_fx_state.depth_process_control = None;
             }
         }
     }
@@ -1243,6 +1335,9 @@ impl ImagePreviewState {
                 .map(|stamp| &stamp.input)
                 != Some(&self.input_stamp())
         {
+            if let Some(control) = self.creative_fx_state.alpha_process_control.take() {
+                control.cancel();
+            }
             self.creative_fx_state.alpha_mask_rx = None;
             self.creative_fx_state.alpha_mask_stamp = None;
             self.creative_fx_state.alpha_mask_in_progress = false;
@@ -1275,6 +1370,7 @@ impl ImagePreviewState {
                 }
                 self.creative_fx_state.alpha_mask_in_progress = false;
                 self.creative_fx_state.alpha_mask_stamp = None;
+                self.creative_fx_state.alpha_process_control = None;
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 self.creative_fx_state.alpha_mask_rx = Some(rx);
@@ -1282,6 +1378,7 @@ impl ImagePreviewState {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.creative_fx_state.alpha_mask_in_progress = false;
                 self.creative_fx_state.alpha_mask_stamp = None;
+                self.creative_fx_state.alpha_process_control = None;
             }
         }
     }
