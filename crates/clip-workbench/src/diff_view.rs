@@ -996,7 +996,9 @@ impl DiffViewerState {
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
                         ui.add(
-                            egui::Label::new(self.layout_job.clone()).sense(egui::Sense::click()),
+                            egui::Label::new(self.layout_job.clone())
+                                .wrap(false)
+                                .sense(egui::Sense::click()),
                         );
                     });
             });
@@ -1366,6 +1368,156 @@ mod tests {
             assert!(output.shapes.iter().any(|clipped| {
                 matches!(&clipped.shape, egui::Shape::Rect(rect) if rect.fill == console)
             }));
+        }
+    }
+
+    #[test]
+    fn ansi_long_line_scrolls_to_full_tail_with_readable_colors_in_both_appearances() {
+        use little_clip_core::config::WorkbenchAppearance;
+        use little_clip_core::palette::contrast_ratio;
+
+        let prefix = "x".repeat(5_000);
+        let ansi = format!(
+            "{prefix}\x1b[31mSTANDARD_END\x1b[0m \x1b[38;2;14;43;61mTRUECOLOR_END\x1b[0m \x1b[38;5;196m256COLOR_END\x1b[0m"
+        );
+        let layout_job = ansi_to_layout_job(&ansi, crate::ui_ext::MONO_FONT_SIZE);
+        let plain = layout_job.text.clone();
+        let marker = "256COLOR_END";
+        let marker_start = plain.find(marker).expect("plain ANSI tail marker");
+
+        for appearance in [WorkbenchAppearance::Light, WorkbenchAppearance::Dark] {
+            let palette = crate::ui_appearance::palette(appearance);
+            let console = crate::hex_to_c32(&palette.colors.console_surface);
+            for token in ["STANDARD_END", "TRUECOLOR_END", "256COLOR_END"] {
+                let section = layout_job
+                    .sections
+                    .iter()
+                    .find(|section| layout_job.text[section.byte_range.clone()].contains(token))
+                    .unwrap_or_else(|| panic!("missing ANSI section for {token}"));
+                let foreground = section.format.color;
+                assert!(
+                    contrast_ratio(
+                        (console.r(), console.g(), console.b()),
+                        (foreground.r(), foreground.g(), foreground.b()),
+                    ) >= 4.5,
+                    "{appearance:?}: {token} foreground lacks contrast against console surface"
+                );
+            }
+
+            let lhs = DiffTarget::ClipboardText {
+                label: "Left".to_string(),
+                content: "left placeholder".to_string(),
+                ext_hint: Some("txt".to_string()),
+            };
+            let rhs = DiffTarget::ClipboardText {
+                label: "Right".to_string(),
+                content: "right placeholder".to_string(),
+                ext_hint: Some("txt".to_string()),
+            };
+            let mut state = DiffViewerState::new(lhs, rhs, DiffDisplayMode::Inline);
+            state.result = DiffResult {
+                engine_name: "ANSI fixture".to_string(),
+                raw_ansi: ansi.clone(),
+                is_identical: false,
+                mode: DiffDisplayMode::Inline,
+            };
+            state.layout_job = layout_job.clone();
+            state.is_computing = false;
+            state.text_receiver = None;
+
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 620.0));
+            let mut time = 0.0;
+            let mut render = |events: Vec<egui::Event>| {
+                time += 0.05;
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(screen_rect),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            state.render_ui(ui, ctx, &palette, &mut false);
+                        });
+                    },
+                )
+            };
+
+            let initial = render(Vec::new());
+            let find_line = |output: &egui::FullOutput| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|clipped| match &clipped.shape {
+                        egui::Shape::Text(text) if text.galley.text() == plain => {
+                            Some((text.pos, text.galley.size(), clipped.clip_rect))
+                        }
+                        _ => None,
+                    })
+            };
+            let find_console_rect = |output: &egui::FullOutput| {
+                output
+                    .shapes
+                    .iter()
+                    .filter_map(|clipped| match &clipped.shape {
+                        egui::Shape::Rect(rect) if rect.fill == console => Some(rect.rect),
+                        _ => None,
+                    })
+                    .max_by(|a, b| (a.width() * a.height()).total_cmp(&(b.width() * b.height())))
+            };
+            let (initial_pos, initial_size, viewport) =
+                find_line(&initial).expect("full ANSI line should render without elision");
+            assert!(
+                initial_size.x > viewport.width() * 10.0,
+                "long-line size {} should greatly exceed viewport width {}",
+                initial_size.x,
+                viewport.width()
+            );
+            assert!(plain.ends_with(marker));
+
+            let console_rect = find_console_rect(&initial).expect("console surface should render");
+            let content_viewport = console_rect.shrink(crate::ui_ext::SPACE_SM);
+            let scroll_point = content_viewport.center();
+            let _ = render(vec![
+                egui::Event::PointerMoved(scroll_point),
+                egui::Event::Scroll(egui::vec2(-100_000.0, 0.0)),
+            ]);
+            let mut scrolled = None;
+            for _ in 0..24 {
+                scrolled = Some(render(Vec::new()));
+            }
+            let scrolled = scrolled.unwrap();
+            let (scrolled_pos, scrolled_size, scrolled_viewport) =
+                find_line(&scrolled).expect("scrolled ANSI line should retain its complete galley");
+            let scrolled_console_rect =
+                find_console_rect(&scrolled).expect("scrolled console surface should render");
+            let scrolled_content_viewport = scrolled_console_rect.shrink(crate::ui_ext::SPACE_SM);
+            assert_eq!(scrolled_size, initial_size);
+            assert!(
+                scrolled_pos.x < initial_pos.x - viewport.width(),
+                "horizontal pan should advance across the long line: {initial_pos:?} -> {scrolled_pos:?}"
+            );
+            let glyph_width = scrolled_size.x / plain.chars().count() as f32;
+            let marker_rect = egui::Rect::from_min_size(
+                egui::pos2(
+                    scrolled_pos.x + marker_start as f32 * glyph_width,
+                    scrolled_pos.y,
+                ),
+                egui::vec2(marker.chars().count() as f32 * glyph_width, scrolled_size.y),
+            );
+            assert!(
+                scrolled_viewport.contains_rect(marker_rect)
+                    && scrolled_content_viewport.contains_rect(marker_rect),
+                "{appearance:?}: far ANSI marker should be brought fully into the console viewport: {marker_rect:?} in {scrolled_content_viewport:?}"
+            );
+            assert_eq!(
+                find_line(&scrolled).unwrap().1.x,
+                initial_size.x,
+                "long ANSI line must not be elided after scrolling"
+            );
         }
     }
 
