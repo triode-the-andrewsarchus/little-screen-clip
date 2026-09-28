@@ -159,12 +159,13 @@ fn encode_conversion(
         return Err("cancelled".to_string());
     }
     let bytes = match format {
-        ConvertTargetFormat::Png => encode_png(&base_img).map_err(|error| error.to_string()),
+        ConvertTargetFormat::Png => encode_png_conversion(&base_img, cancel),
         ConvertTargetFormat::Jpeg => encode_jpeg_conversion(&base_img, quality, cancel),
         ConvertTargetFormat::Webp => encode_webp(&base_img, lossless, quality),
     }?;
-    // PNG/WebP encoding and output decoding expose no cancellation hooks, so
-    // check between those opaque stages when each call returns.
+    // PNG checks cancellation per source row and through its output sink.
+    // WebP encoding and output decoding remain opaque, so check again when
+    // each call returns.
     if cancelled() {
         return Err("cancelled".to_string());
     }
@@ -175,6 +176,84 @@ fn encode_conversion(
         return Err("cancelled".to_string());
     }
     Ok((bytes, decoded))
+}
+
+fn encode_png_conversion(
+    img: &RgbaImage,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<Vec<u8>, String> {
+    let writer = CancellableVecWriter::new(cancel);
+    let output = writer.output.clone();
+    write_png_stream(img, writer, cancel)?;
+    let mut output = output.lock().expect("conversion output lock poisoned");
+    Ok(std::mem::take(&mut *output))
+}
+
+fn write_png_stream<W: std::io::Write>(
+    img: &RgbaImage,
+    writer: W,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<(), String> {
+    use std::io::Write;
+
+    if img.width() == 0 || img.height() == 0 {
+        return Err("PNG dimensions must be nonzero".to_string());
+    }
+    let mut encoder = png::Encoder::new(writer, img.width(), img.height());
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.set_deflate_compression(png::DeflateCompression::FdeflateUltraFast);
+    encoder.set_filter(png::Filter::Adaptive);
+    let mut png_writer = encoder.write_header().map_err(|error| {
+        if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+            "cancelled".to_string()
+        } else {
+            error.to_string()
+        }
+    })?;
+    let mut stream = png_writer
+        .stream_writer_with_size(CONVERSION_OUTPUT_CHUNK_SIZE)
+        .map_err(|error| {
+            if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+                "cancelled".to_string()
+            } else {
+                error.to_string()
+            }
+        })?;
+    let row_bytes = img.width() as usize * 4;
+    for row in img.as_raw().chunks_exact(row_bytes) {
+        if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+            return Err("cancelled".to_string());
+        }
+        stream.write_all(row).map_err(|error| {
+            if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+                "cancelled".to_string()
+            } else {
+                error.to_string()
+            }
+        })?;
+    }
+    stream.finish().map_err(|error| {
+        if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+            "cancelled".to_string()
+        } else {
+            error.to_string()
+        }
+    })?;
+    if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+        return Err("cancelled".to_string());
+    }
+    png_writer.finish().map_err(|error| {
+        if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+            "cancelled".to_string()
+        } else {
+            error.to_string()
+        }
+    })?;
+    if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+        return Err("cancelled".to_string());
+    }
+    Ok(())
 }
 
 struct CancellableVecWriter<'a> {
@@ -1378,6 +1457,157 @@ mod input_stamp_tests {
             encode_jpeg_conversion(&image, 73, None).unwrap(),
             encode_jpeg_with_quality(&image, 73).unwrap()
         );
+    }
+
+    #[test]
+    fn streaming_png_matches_existing_encoder_bytes_and_rgba() {
+        let image = RgbaImage::from_fn(37, 19, |x, y| {
+            image::Rgba([
+                (x * 17 + y * 3) as u8,
+                (y * 13 + x * 5) as u8,
+                (x * 7 + y * 11) as u8,
+                ((x * 19 + y * 23) % 256) as u8,
+            ])
+        });
+        let streamed = encode_png_conversion(&image, None).unwrap();
+        let existing = encode_png(&image).unwrap();
+
+        assert_eq!(streamed, existing);
+        let decoded = image::load_from_memory(&streamed).unwrap().to_rgba8();
+        assert_eq!(decoded.dimensions(), image.dimensions());
+        assert_eq!(decoded, image);
+    }
+
+    #[test]
+    fn streaming_png_preserves_pixels_for_buffered_encoder_fallback_inputs() {
+        let image = RgbaImage::from_fn(4, 4, |x, y| {
+            image::Rgba([
+                (x * 31 + y * 7) as u8,
+                (y * 23 + x * 5) as u8,
+                (x * 11 + y * 17) as u8,
+                (x * 29 + y * 13) as u8,
+            ])
+        });
+        let streamed = encode_png_conversion(&image, None).unwrap();
+        let buffered = encode_png(&image).unwrap();
+
+        assert_ne!(streamed, buffered);
+        for encoded in [streamed, buffered] {
+            let decoded = image::load_from_memory(&encoded).unwrap().to_rgba8();
+            assert_eq!(decoded.dimensions(), (4, 4));
+            assert_eq!(decoded, image);
+        }
+    }
+
+    #[test]
+    fn streaming_png_rejects_zero_dimensions() {
+        for image in [
+            RgbaImage::new(0, 2),
+            RgbaImage::new(2, 0),
+            RgbaImage::new(0, 0),
+        ] {
+            assert_eq!(
+                encode_png_conversion(&image, None).unwrap_err(),
+                "PNG dimensions must be nonzero"
+            );
+        }
+    }
+
+    struct CancelAfterPngOutput<'a> {
+        inner: CancellableVecWriter<'a>,
+        cancel: &'a std::sync::atomic::AtomicBool,
+        bytes_written: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        threshold: usize,
+    }
+
+    impl std::io::Write for CancelAfterPngOutput<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let written = std::io::Write::write(&mut self.inner, bytes)?;
+            let total = self
+                .bytes_written
+                .fetch_add(written, std::sync::atomic::Ordering::AcqRel)
+                + written;
+            if total >= self.threshold {
+                self.cancel
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            std::io::Write::flush(&mut self.inner)
+        }
+    }
+
+    #[test]
+    fn png_stream_cancellation_after_idat_output_discards_partial_result() {
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let inner = CancellableVecWriter::new(Some(&cancel));
+        let output = inner.output.clone();
+        let bytes_written = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut sink = CancelAfterPngOutput {
+            inner,
+            cancel: &cancel,
+            bytes_written: bytes_written.clone(),
+            threshold: 1024,
+        };
+        let image = RgbaImage::from_fn(512, 128, |x, y| {
+            let seed = x
+                .wrapping_mul(1_664_525)
+                .wrapping_add(y.wrapping_mul(1_013_904_223));
+            image::Rgba([
+                seed as u8,
+                (seed >> 8) as u8,
+                (seed >> 16) as u8,
+                (seed >> 24) as u8,
+            ])
+        });
+
+        assert_eq!(
+            write_png_stream(&image, &mut sink, Some(&cancel)).unwrap_err(),
+            "cancelled"
+        );
+        drop(sink);
+        assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
+        assert!(bytes_written.load(std::sync::atomic::Ordering::Acquire) >= 1024);
+        let partial_png = output.lock().unwrap();
+        assert!(partial_png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert!(partial_png.windows(4).any(|chunk| chunk == b"IDAT"));
+    }
+
+    #[test]
+    fn png_stream_cancellation_at_final_output_does_not_publish_completed_bytes() {
+        let image = RgbaImage::from_fn(4, 4, |x, y| {
+            image::Rgba([
+                (x * 31 + y * 7) as u8,
+                (y * 23 + x * 5) as u8,
+                (x * 11 + y * 17) as u8,
+                (x * 29 + y * 13) as u8,
+            ])
+        });
+        let expected = encode_png_conversion(&image, None).unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let inner = CancellableVecWriter::new(Some(&cancel));
+        let output = inner.output.clone();
+        let bytes_written = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut sink = CancelAfterPngOutput {
+            inner,
+            cancel: &cancel,
+            bytes_written: bytes_written.clone(),
+            threshold: expected.len(),
+        };
+
+        assert_eq!(
+            write_png_stream(&image, &mut sink, Some(&cancel)).unwrap_err(),
+            "cancelled"
+        );
+        drop(sink);
+        assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
+        assert_eq!(
+            bytes_written.load(std::sync::atomic::Ordering::Acquire),
+            expected.len()
+        );
+        assert_eq!(*output.lock().unwrap(), expected);
     }
 
     #[test]
