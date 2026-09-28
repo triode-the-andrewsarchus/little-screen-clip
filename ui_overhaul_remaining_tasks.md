@@ -238,11 +238,11 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s20 [Luna] Undo a Creative FX application.** Compact Dark capture applies Lens Aberration, sends Ctrl+Z, and shows the original image with `Undone`; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s21 [Luna] Redo a Creative FX application.** Compact Dark capture applies Lens Aberration, sends Ctrl+Z then Ctrl+Y, and shows the restored effect with `Redone`; see `ui_overhaul_acceptance.md`.
     - **Resize**
-      - [ ] **E2.1s22 [Luna] Change pixel dimensions with aspect lock enabled.**
-      - [ ] **E2.1s23 [Luna] Select a different pixel-resize filter.**
-      - [ ] **E2.1s24 [Luna] Apply a pixel resize.**
-      - [ ] **E2.1s25 [Luna] Undo a pixel resize.**
-      - [ ] **E2.1s26 [Luna] Run target-size optimization.**
+      - [x] **E2.1s22 [Luna] Change pixel dimensions with aspect lock enabled.** Compact Dark capture selects the 75% preset and changes 1600×1000 to 1200×750 while aspect lock remains active; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s23 [Luna] Select a different pixel-resize filter.** Compact Dark capture changes resampling from Lanczos3 to Triangle (Smooth); see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s24 [Luna] Apply a pixel resize.** Compact Dark capture applies 1200×750 Lanczos3 and shows the committed dimensions and resize status; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s25 [Luna] Undo a pixel resize.** Compact Dark capture resizes, sends Ctrl+Z after returning focus to the tool bar, and shows restored 1600×1000 dimensions with `Undone`; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s26 [Luna] Run target-size optimization.** Compact Dark capture shows an optimized 1600×1000 JPEG at quality 95, 751.2 KB within the 2 MB target; see `ui_overhaul_acceptance.md`.
     - **Crop and Deskew**
       - [ ] **E2.1s27 [Luna] Select a Crop aspect-ratio preset.**
       - [ ] **E2.1s28 [Luna] Apply a crop.**
