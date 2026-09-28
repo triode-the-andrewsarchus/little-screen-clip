@@ -780,6 +780,91 @@ mod tests {
     }
 
     #[test]
+    fn spreadsheet_grid_scrolls_horizontally_and_vertically() {
+        let rows = (0..160)
+            .map(|row| {
+                (0..80)
+                    .map(|column| format!("r{row}c{column}"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let data = SpreadsheetData {
+            title: "Two-axis scroll".into(),
+            sheets: vec![SpreadsheetSheet::new("Data".into(), rows)],
+        };
+        let mut state = SpreadsheetViewerState::new(data, None);
+        let palette = little_clip_core::palette::AppPalette::default();
+        let ctx = egui::Context::default();
+        let mut time = 0.0;
+        let mut render = |events: Vec<egui::Event>| {
+            time += 0.05;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(860.0, 620.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                },
+            );
+            (output, state.scroll_offset)
+        };
+
+        let (first, first_offset) = render(Vec::new());
+        let grid_clip = first
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "r0c0" => Some(clipped.clip_rect),
+                _ => None,
+            })
+            .expect("initial grid cell should render");
+        assert_eq!(first_offset, Vec2::ZERO);
+
+        let _ = render(vec![
+            egui::Event::PointerMoved(grid_clip.center()),
+            // Spreadsheet code normalizes horizontal wheel direction before the
+            // grid ScrollArea consumes it.
+            egui::Event::Scroll(Vec2::new(800.0, -800.0)),
+        ]);
+        let mut settled = None;
+        for _ in 0..8 {
+            settled = Some(render(Vec::new()));
+        }
+
+        let (output, offset) = settled.unwrap();
+        assert!(offset.x > 20.0, "x offset: {offset:?}");
+        assert!(offset.y > 20.0, "y offset: {offset:?}");
+        assert!(
+            output.shapes.iter().any(|clipped| {
+                let egui::Shape::Text(text) = &clipped.shape else {
+                    return false;
+                };
+                let Some((row, column)) = text
+                    .galley
+                    .text()
+                    .strip_prefix('r')
+                    .and_then(|cell| cell.split_once('c'))
+                else {
+                    return false;
+                };
+                row.parse::<usize>().is_ok_and(|row| row > 0)
+                    && column.parse::<usize>().is_ok_and(|column| column > 0)
+                    && text.pos.x < grid_clip.right()
+                    && text.pos.y < grid_clip.bottom()
+            }),
+            "scrolled grid should continue rendering visible cells"
+        );
+    }
+
+    #[test]
     fn spreadsheet_header_controls_fit_compact_and_wide_hosts() {
         let data = SpreadsheetData {
             title: "Sheet overview".into(),
