@@ -244,10 +244,10 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s25 [Luna] Undo a pixel resize.** Compact Dark capture resizes, sends Ctrl+Z after returning focus to the tool bar, and shows restored 1600×1000 dimensions with `Undone`; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s26 [Luna] Run target-size optimization.** Compact Dark capture shows an optimized 1600×1000 JPEG at quality 95, 751.2 KB within the 2 MB target; see `ui_overhaul_acceptance.md`.
     - **Crop and Deskew**
-      - [ ] **E2.1s27 [Luna] Select a Crop aspect-ratio preset.**
-      - [ ] **E2.1s28 [Luna] Apply a crop.**
-      - [ ] **E2.1s29 [Luna] Undo a crop.**
-      - [ ] **E2.1s30 [Luna] Adjust a Deskew corner.**
+      - [x] **E2.1s27 [Luna] Select a Crop aspect-ratio preset.** Compact Dark capture selects 16:9 and shows the crop area updating to 1600×900; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s28 [Luna] Apply a crop.** Compact Dark capture applies the 16:9 selection and shows committed 1600×900 dimensions; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s29 [Luna] Undo a crop.** Compact Dark capture applies the crop, clicks Undo, and restores the original 1600×1000 image with `Undone`; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s30 [Luna] Adjust a Deskew corner.** Compact Dark capture drags the bottom-right corner inward and shows the updated quadrilateral and estimated output; see `ui_overhaul_acceptance.md`.
       - [ ] **E2.1s31 [Luna] Apply Deskew.**
       - [ ] **E2.1s32 [Luna] Undo Deskew.**
     - **Transform**
