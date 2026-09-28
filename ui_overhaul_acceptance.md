@@ -12,6 +12,10 @@ For E2.3d2b, the 1280×720 Dark search capture is `/tmp/clip-e23d2d-text-search-
 
 `OptimizerRequestStamp` now covers the current composed-image input, target byte count, and output format. A worker completion is rejected if any of these changed; an already-produced result is hidden and cannot be applied/copied after the settings change. Focused regressions cover stale in-flight output, stale completed output, and the current successful apply path. The architecture fitness baseline/reuse calls did not return during this turn; a direct before/after Lizard comparison on `resize.rs` found existing maximum CCN unchanged (optimizer 23, toolbar 32), with 57 additional NLOC including test coverage and no new CCN warning function.
 
+## Film Look render request identity, 2026-09-27
+
+Film Look render completions now carry the captured image-input and parameter revisions. Polling rejects stale success and failure messages, re-entry schedules a render when the displayed preview stamp is stale, and Apply is disabled/rejected for any preview produced from older inputs. Render-identity regressions cover current success, stale parameter success, stale source failure, and stale Apply without an undo entry. The architecture-fitness service did not return; a direct before/after Lizard comparison shows the existing large Film Look renderer unchanged at CCN 69, no new CCN warning function, and 144 additional NLOC across tests and identity checks.
+
 ## PDF viewer chrome captures, 2026-09-27
 
 Initial compact 1280×720 Light and wide 3440×1440 Dark captures at commit `10deb3dc9e968e51d399963ebd3d440c7b34f6a5` showed that selected-page content and the PDF thumbnail row could expand the panes beyond the compact host. Those observations are recorded in `/tmp/clip-e23a-pdf-compact-light-20260927/settled.png` and `/tmp/clip-e23a-pdf-wide-dark-20260927/settled.png`; ordinary chrome was readable, but compact page content was clipped.

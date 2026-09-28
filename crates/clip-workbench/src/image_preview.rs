@@ -1252,8 +1252,8 @@ impl ImagePreviewState {
             }
             ImageToolMode::FilmSim => {
                 self.film_sim_state.auto_fitted = false;
-                // Trigger initial render if no preview yet.
-                if self.film_sim_state.preview_rgba.is_none() && !self.film_sim_state.is_rendering {
+                // Rerender when either the image or Film Look parameters changed.
+                if !self.film_sim_preview_is_current() && !self.film_sim_state.is_rendering {
                     self.run_film_sim_render();
                 }
                 // Trigger thumbnail batch if not generated yet.

@@ -300,6 +300,103 @@ mod white_balance_tests {
     }
 }
 
+#[cfg(test)]
+mod render_identity_tests {
+    use super::{FilmSimMsg, ImagePreviewState};
+    use crate::{AppConfig, image_preview::ImageToolMode};
+
+    fn state() -> ImagePreviewState {
+        let image = image::RgbaImage::from_pixel(4, 4, image::Rgba([64, 96, 128, 255]));
+        let mut bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        ImagePreviewState::from_bytes_with_meta(
+            bytes,
+            "image/png".to_owned(),
+            None,
+            "film-look-test.png".to_owned(),
+            &AppConfig::default(),
+        )
+        .unwrap()
+    }
+
+    fn install_message(state: &mut ImagePreviewState, message: FilmSimMsg) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(message).unwrap();
+        state.film_sim_state.render_rx = Some(rx);
+        state.film_sim_state.is_rendering = true;
+        state.film_sim_state.render_stamp = Some(state.current_film_sim_render_stamp());
+    }
+
+    #[test]
+    fn film_sim_accepts_current_result_and_rejects_stale_success_and_failure() {
+        let mut current = state();
+        current.active_mode = ImageToolMode::FilmSim;
+        let current_stamp = current.current_film_sim_render_stamp();
+        install_message(
+            &mut current,
+            FilmSimMsg::Done {
+                stamp: current_stamp,
+                rgba: image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255])),
+                duration_ms: 12,
+            },
+        );
+        current.poll_film_sim();
+        assert!(current.film_sim_preview_is_current());
+
+        let mut stale_success = state();
+        let stale_stamp = stale_success.current_film_sim_render_stamp();
+        install_message(
+            &mut stale_success,
+            FilmSimMsg::Done {
+                stamp: stale_stamp,
+                rgba: image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255])),
+                duration_ms: 12,
+            },
+        );
+        stale_success.film_sim_state.mark_dirty();
+        stale_success.poll_film_sim();
+        assert!(stale_success.film_sim_state.preview_rgba.is_none());
+        assert!(!stale_success.film_sim_preview_is_current());
+
+        let mut stale_failure = state();
+        let stale_stamp = stale_failure.current_film_sim_render_stamp();
+        install_message(
+            &mut stale_failure,
+            FilmSimMsg::Error {
+                stamp: stale_stamp,
+                message: "stale render error".to_owned(),
+            },
+        );
+        stale_failure.mark_pixels_changed();
+        stale_failure.poll_film_sim();
+        assert!(stale_failure.film_sim_state.render_error.is_none());
+        assert!(!stale_failure.film_sim_state.is_rendering);
+    }
+
+    #[test]
+    fn film_sim_cannot_apply_a_preview_after_its_inputs_change() {
+        let mut state = state();
+        let original = state.current_rgba.get_pixel(0, 0).to_owned();
+        state.film_sim_state.preview_rgba = Some(image::RgbaImage::from_pixel(
+            4,
+            4,
+            image::Rgba([1, 2, 3, 255]),
+        ));
+        state.film_sim_state.preview_stamp = Some(state.current_film_sim_render_stamp());
+
+        state.film_sim_state.mark_dirty();
+        state.apply_film_sim();
+
+        assert_eq!(state.current_rgba.get_pixel(0, 0), &original);
+        assert_eq!(state.undo_stack.len(), 0);
+    }
+}
+
 fn process_film_image(
     image: &image::RgbImage,
     stock: &filmr::film::FilmStock,
@@ -822,8 +919,21 @@ pub fn apply_film_sim_post_adjustments(
 /// Messages sent from the film sim background render thread.
 #[derive(Debug)]
 pub enum FilmSimMsg {
-    Done { rgba: RgbaImage, duration_ms: u128 },
-    Error(String),
+    Done {
+        stamp: FilmSimRenderStamp,
+        rgba: RgbaImage,
+        duration_ms: u128,
+    },
+    Error {
+        stamp: FilmSimRenderStamp,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FilmSimRenderStamp {
+    image: ImageInputStamp,
+    parameter_revision: u64,
 }
 
 /// Message streamed from the asynchronous film simulation thumbnail worker.
@@ -954,6 +1064,9 @@ pub struct FilmSimState {
     pub is_rendering: bool,
     pub render_rx: Option<std::sync::mpsc::Receiver<FilmSimMsg>>,
     pub render_error: Option<String>,
+    pub(crate) render_stamp: Option<FilmSimRenderStamp>,
+    pub(crate) preview_stamp: Option<FilmSimRenderStamp>,
+    parameter_revision: u64,
 
     // ── Async thumbnail worker (Sidebar 42x28 mini-photos) ──
     pub stock_thumbnails: std::collections::HashMap<usize, egui::TextureHandle>,
@@ -997,6 +1110,9 @@ impl Default for FilmSimState {
             is_rendering: false,
             render_rx: None,
             render_error: None,
+            render_stamp: None,
+            preview_stamp: None,
+            parameter_revision: 0,
             stock_thumbnails: std::collections::HashMap::new(),
             pending_thumbnails: Vec::new(),
             thumbnail_rx: None,
@@ -1013,6 +1129,7 @@ impl Default for FilmSimState {
 impl FilmSimState {
     /// Mark parameters as dirty (triggers debounced re-render for both main preview and thumbnails).
     pub fn mark_dirty(&mut self) {
+        self.parameter_revision = self.parameter_revision.wrapping_add(1);
         let now = std::time::Instant::now();
         self.params_dirty_at = Some(now);
         self.thumbnail_dirty_at = Some(now + std::time::Duration::from_millis(250));
@@ -1020,6 +1137,19 @@ impl FilmSimState {
 }
 
 impl ImagePreviewState {
+    fn current_film_sim_render_stamp(&self) -> FilmSimRenderStamp {
+        FilmSimRenderStamp {
+            image: self.input_stamp(),
+            parameter_revision: self.film_sim_state.parameter_revision,
+        }
+    }
+
+    pub(crate) fn film_sim_preview_is_current(&self) -> bool {
+        self.film_sim_state.preview_rgba.is_some()
+            && self.film_sim_state.preview_stamp.as_ref()
+                == Some(&self.current_film_sim_render_stamp())
+    }
+
     pub fn run_film_sim_render(&mut self) {
         if self.film_sim_state.is_rendering || self.current_rgba.is_empty() {
             return;
@@ -1059,6 +1189,8 @@ impl ImagePreviewState {
         let tint = self.film_sim_state.tint;
 
         let (tx, rx) = std::sync::mpsc::channel::<FilmSimMsg>();
+        let stamp = self.current_film_sim_render_stamp();
+        self.film_sim_state.render_stamp = Some(stamp.clone());
         self.film_sim_state.render_rx = Some(rx);
         self.film_sim_state.is_rendering = true;
         self.film_sim_state.render_error = None;
@@ -1073,6 +1205,7 @@ impl ImagePreviewState {
                     let out_rgba = apply_film_sim_post_adjustments(&out_rgb, contrast, tint);
                     let duration_ms = start.elapsed().as_millis();
                     let _ = tx.send(FilmSimMsg::Done {
+                        stamp,
                         rgba: out_rgba,
                         duration_ms,
                     });
@@ -1085,7 +1218,10 @@ impl ImagePreviewState {
                     } else {
                         "Film simulation panicked".to_string()
                     };
-                    let _ = tx.send(FilmSimMsg::Error(err_msg));
+                    let _ = tx.send(FilmSimMsg::Error {
+                        stamp,
+                        message: err_msg,
+                    });
                 }
             }
         });
@@ -1181,24 +1317,41 @@ impl ImagePreviewState {
     /// Drain any messages from the film sim background thread and thumbnail worker.
 
     pub fn poll_film_sim(&mut self) {
+        let current_stamp = self.current_film_sim_render_stamp();
         if let Some(rx) = self.film_sim_state.render_rx.take() {
             match rx.try_recv() {
-                Ok(FilmSimMsg::Done { rgba, duration_ms }) => {
-                    self.film_sim_state.preview_rgba = Some(rgba);
-                    self.film_sim_state.dirty_preview_texture = true;
-                    self.film_sim_state.last_render_duration_ms = duration_ms;
+                Ok(FilmSimMsg::Done {
+                    stamp,
+                    rgba,
+                    duration_ms,
+                }) => {
+                    if stamp == current_stamp
+                        && self.film_sim_state.render_stamp.as_ref() == Some(&stamp)
+                    {
+                        self.film_sim_state.preview_rgba = Some(rgba);
+                        self.film_sim_state.preview_stamp = Some(stamp);
+                        self.film_sim_state.dirty_preview_texture = true;
+                        self.film_sim_state.last_render_duration_ms = duration_ms;
+                        self.film_sim_state.render_error = None;
+                    }
                     self.film_sim_state.is_rendering = false;
-                    self.film_sim_state.render_error = None;
+                    self.film_sim_state.render_stamp = None;
                 }
-                Ok(FilmSimMsg::Error(e)) => {
-                    self.film_sim_state.render_error = Some(e);
+                Ok(FilmSimMsg::Error { stamp, message }) => {
+                    if stamp == current_stamp
+                        && self.film_sim_state.render_stamp.as_ref() == Some(&stamp)
+                    {
+                        self.film_sim_state.render_error = Some(message);
+                    }
                     self.film_sim_state.is_rendering = false;
+                    self.film_sim_state.render_stamp = None;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     self.film_sim_state.render_rx = Some(rx);
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.film_sim_state.is_rendering = false;
+                    self.film_sim_state.render_stamp = None;
                 }
             }
         }
@@ -1238,6 +1391,9 @@ impl ImagePreviewState {
     /// Commit the film sim preview into current_rgba and push to undo stack.
 
     pub fn apply_film_sim(&mut self) {
+        if !self.film_sim_preview_is_current() {
+            return;
+        }
         let preview = match self.film_sim_state.preview_rgba.take() {
             Some(p) => p,
             None => return,
@@ -1251,6 +1407,7 @@ impl ImagePreviewState {
         self.palette_state.is_extracted = false;
         // Reset sim state so re-entering the tab renders fresh.
         self.film_sim_state.preview_rgba = None;
+        self.film_sim_state.preview_stamp = None;
         self.film_sim_state.preview_texture = None;
         self.film_sim_state.dirty_preview_texture = false;
         // Invalidate and regenerate thumbnails for updated image
@@ -2103,8 +2260,7 @@ impl ImagePreviewState {
                                                 diff_add,
                                                 palette,
                                             );
-                                            let apply_enabled =
-                                                self.film_sim_state.preview_rgba.is_some();
+                                            let apply_enabled = self.film_sim_preview_is_current();
                                             if ui
                                 .add_enabled(apply_enabled, apply_btn)
                                 .on_hover_text(
