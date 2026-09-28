@@ -541,3 +541,7 @@ An isolated 1280×720 logical / 100% / Dark run starts the popup against a fake 
 ## Raw text selection across virtual rows, 2026-09-28
 
 The raw text preview now stores selection endpoints as absolute UTF-8 source-byte offsets. Visible galleys map pointer positions to those offsets and paint only their selected spans; copy uses the exact source slice. `raw_selection_copies_exact_source_across_fragments_and_virtual_scroll` drives forward and reverse pointer drags across wrapped 4 KiB fragments, checks Unicode and source newline fidelity, verifies copy-all with no selection, and copies again after the anchor row scrolls out of the rendered viewport. The 48 text-preview tests pass. Drag autoscroll past the viewport was not verified.
+
+## Wrapped-row minimap geometry, 2026-09-28
+
+`minimap_wrapped_line_marker_and_click_use_virtual_row_geometry` injects ready minimap samples for an 80-line fixture with one logical line split across eight virtual rows. The painted source-line marker matches the measured first-fragment-to-next-line height span, and clicking its center yields a normalized scroll target whose centered viewport overlaps that span. H2.2e7 separately verifies source-byte pointer mapping after scrolling. This test does not assert egui scroll animation or the applied post-click viewport offset. All 49 `text_preview::tests` pass.

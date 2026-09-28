@@ -3548,6 +3548,145 @@ mod tests {
     }
 
     #[test]
+    fn minimap_wrapped_line_marker_and_click_use_virtual_row_geometry() {
+        let target_line = 24;
+        let mut first_fragment = Vec::new();
+        let mut rows = CodeRowHeights::default();
+        let heights: Vec<f32> = (0..80)
+            .flat_map(|line| {
+                first_fragment.push(if line == 0 {
+                    0
+                } else {
+                    first_fragment[line - 1] + if line - 1 == target_line { 8 } else { 1 }
+                });
+                std::iter::repeat_n(20.0, if line == target_line { 8 } else { 1 })
+            })
+            .collect();
+        rows.reset(heights.len(), 500.0, 20.0, 1.0);
+        for (index, height) in heights.iter().enumerate() {
+            rows.set_height(index, *height);
+        }
+        let lines: Vec<_> = (0..80)
+            .map(|line| {
+                let color = if line == target_line {
+                    syntect::highlighting::Color {
+                        r: 255,
+                        g: 0,
+                        b: 0,
+                        a: 255,
+                    }
+                } else {
+                    syntect::highlighting::Color {
+                        r: 0,
+                        g: 0,
+                        b: 255,
+                        a: 255,
+                    }
+                };
+                (
+                    line,
+                    MinimapLine {
+                        segments: vec![MinimapSegment {
+                            start_column: 0,
+                            end_column: MINIMAP_COLUMNS,
+                            color,
+                        }],
+                    },
+                )
+            })
+            .collect();
+        let palette = AppPalette::default();
+        let ctx = egui::Context::default();
+        let mut time = 0.0;
+        let mut clicked_fraction = None;
+        let mut render = |events: Vec<egui::Event>| {
+            time += 0.05;
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(500.0, 700.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        clicked_fraction = render_code_minimap(
+                            ui,
+                            &lines,
+                            &first_fragment,
+                            &rows,
+                            640.0,
+                            0.0,
+                            0.2,
+                            &palette,
+                        );
+                    });
+                },
+            )
+        };
+        let frame = render(Vec::new());
+        let marker_color =
+            map_syntect_color_to_theme(lines[target_line].1.segments[0].color, &palette);
+        let marker = frame
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect) if rect.fill == marker_color => Some(rect.rect),
+                _ => None,
+            })
+            .expect("wrapped source line marker should be painted");
+        let map_rect = frame
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect)
+                    if rect.fill == hex_to_c32(&palette.colors.surface_panel)
+                        && (rect.rect.width() - MINIMAP_WIDTH).abs() < 0.1 =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("minimap panel should be painted");
+        let content = map_rect.shrink2(Vec2::new(4.0, 3.0));
+        let expected_top = content.top()
+            + content.height() * rows.offset(first_fragment[target_line]) / rows.total_height();
+        let expected_bottom = content.top()
+            + content.height() * rows.offset(first_fragment[target_line + 1]) / rows.total_height();
+        assert!(
+            (marker.top() - expected_top).abs() < 1.0
+                && (marker.bottom() - expected_bottom).abs() < 1.0
+        );
+        let click = marker.center();
+        render(vec![
+            egui::Event::PointerMoved(click),
+            egui::Event::PointerButton {
+                pos: click,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        render(vec![egui::Event::PointerButton {
+            pos: click,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        let fraction =
+            clicked_fraction.expect("marker click should yield a normalized scroll target");
+        let requested =
+            (fraction * rows.total_height() - 140.0).clamp(0.0, rows.total_height() - 280.0);
+        assert!(
+            requested < rows.offset(first_fragment[target_line + 1])
+                && requested + 280.0 > rows.offset(first_fragment[target_line])
+        );
+    }
+
+    #[test]
     fn unwrapped_raw_line_scrolls_horizontally_without_eliding_its_end() {
         let ctx = egui::Context::default();
         let content = format!("LEFT_EDGE{}RIGHT_EDGE", "M".repeat(600));
