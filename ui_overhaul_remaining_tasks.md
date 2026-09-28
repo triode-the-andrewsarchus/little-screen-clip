@@ -268,11 +268,11 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s45 [Luna] Change conversion quality.** Compact Dark capture changes JPEG quality from 80% to 43% and updates the size preview; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s46 [Luna] Apply a converted preview to the canvas.** Compact Dark capture applies WebP and shows `Applied converted image to canvas`; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s47 [Luna] Undo a conversion applied to the canvas.** Compact Dark capture applies WebP, sends Ctrl+Z, and shows `Undone` with the original image dimensions; see `ui_overhaul_acceptance.md`.
-      - [ ] **E2.1s48 [Luna] Run Background Removal with a selected engine or prompt.**
-      - [ ] **E2.1s49 [Luna] Undo Background Removal.**
-      - [ ] **E2.1s50 [Luna] Select a Depth Map model or setting.**
-      - [ ] **E2.1s51 [Luna] Generate a Depth Map.**
-      - [ ] **E2.1s52 [Luna] Undo a Depth Map result.**
+      - [ ] **E2.1s48 [Luna] Run Background Removal with a selected engine or prompt.** The isolated UI reaches FeyNoBg, but inference exits with CUDA OOM: only ~330 MB was free while the worker needed another 784 MB. Keep open and retry when GPU memory is available; capture and stderr evidence are in `ui_overhaul_acceptance.md`.
+      - [ ] **E2.1s49 [Luna] Undo Background Removal.** Depends on successful E2.1s48 inference; remains open while that GPU memory blocker persists.
+      - [x] **E2.1s50 [Luna] Verify visible Depth Map model and output controls.** Compact Dark capture shows the fixed Depth-Anything V2 metric monocular model and Left/Right Hand destinations; no model picker or parameter controls are exposed; see `ui_overhaul_acceptance.md`.
+      - [ ] **E2.1s51 [Luna] Generate a Depth Map.** Defer inference until GPU memory is available; current shared GPU pressure already caused the adjacent FeyNoBg model to OOM.
+      - [ ] **E2.1s52 [Luna] Undo a Depth Map result.** Depends on successful generation and remains open with E2.1s51.
   - [ ] **E2.1t [Luna] Verify image save and copy live.**
   - [ ] **E2.1u [Luna] Verify external-app launch and fallback live.**
     - [x] **E2.1u1 [Luna] Test launcher success, fallback, and total failure without opening desktop apps.** Uses `/bin/true` and missing executable paths; production still defaults to `xdg-open`. The live editor-launch check remains open.

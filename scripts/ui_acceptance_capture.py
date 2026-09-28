@@ -585,6 +585,8 @@ def prepare_configuration(args: argparse.Namespace, output: Path) -> dict[str, A
     for directory in (runtime, config_home, scratch):
         directory.mkdir(mode=0o700)
         os.chmod(directory, 0o700)
+    repo_scripts = Path(__file__).resolve().parent.parent / "scripts"
+    (scratch / "scripts").symlink_to(repo_scripts, target_is_directory=True)
     config = f'[workbench]\nappearance = "{args.appearance}"\n'
     (scratch / "config.toml").write_text(config, encoding="utf-8")
     user_config = config_home / "little-screen-clip" / "config.toml"
