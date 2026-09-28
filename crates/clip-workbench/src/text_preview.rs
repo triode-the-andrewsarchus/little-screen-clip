@@ -296,7 +296,11 @@ pub use little_clip_core::syntax::detect_markdown_text;
 impl TextPreviewState {
     /// Creates a new text preview from in-memory text.
     pub fn from_text(text: String, title: Option<String>, config: &AppConfig) -> Self {
-        let text = text.strip_prefix('\u{feff}').unwrap_or(&text).to_string();
+        let text = if text.starts_with('\u{feff}') {
+            text[char::len_utf8('\u{feff}')..].to_owned()
+        } else {
+            text
+        };
         let line_starts = line_start_offsets(&text);
         let (code_fragments, line_first_fragment) = code_fragments(&text, &line_starts);
         let is_md = detect_markdown_text(&text);
@@ -2202,6 +2206,18 @@ mod tests {
 
         state.prev_match();
         assert_eq!(state.active_match_idx, 1);
+    }
+
+    #[test]
+    fn text_preview_strips_only_a_leading_bom() {
+        let config = AppConfig::default();
+        let plain = "clipboard content".to_owned();
+        let state = TextPreviewState::from_text(plain.clone(), None, &config);
+        assert_eq!(state.content, plain);
+
+        let bom_prefixed = format!("\u{feff}{}", plain);
+        let state = TextPreviewState::from_text(bom_prefixed, None, &config);
+        assert_eq!(state.content, plain);
     }
 
     #[test]
