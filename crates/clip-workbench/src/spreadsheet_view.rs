@@ -1096,6 +1096,134 @@ mod tests {
     }
 
     #[test]
+    fn spreadsheet_scrolled_cell_selection_copies_exact_value_across_host_sizes_and_zoom() {
+        let rows = (0..320)
+            .map(|row| {
+                (0..72)
+                    .map(|column| format!("r{row}c{column}"))
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let data = SpreadsheetData {
+            title: "Zoomed cell selection".into(),
+            sheets: vec![SpreadsheetSheet::new("Data".into(), rows)],
+        };
+        let palette = little_clip_core::palette::AppPalette::default();
+
+        for (size, zoom) in [
+            (Vec2::new(640.0, 520.0), 1.0),
+            (Vec2::new(640.0, 520.0), 1.5),
+            (Vec2::new(1180.0, 720.0), 1.0),
+            (Vec2::new(1180.0, 720.0), 1.5),
+        ] {
+            let mut state = SpreadsheetViewerState::new(data.clone(), None);
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            ctx.set_zoom_factor(zoom);
+            let mut time = 0.0;
+            let mut render = |events: Vec<egui::Event>| {
+                time += 0.05;
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            state.render_ui(ui, ctx, &palette, &mut false);
+                        });
+                    },
+                );
+                (output, state.scroll_offset, state.selected_cell)
+            };
+
+            let (initial, _, _) = render(Vec::new());
+            let first_cell_center = initial
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) if text.galley.text() == "r0c0" => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("initial cell missing at host={size:?}, zoom={zoom}"));
+            let _ = render(vec![
+                egui::Event::PointerMoved(first_cell_center),
+                egui::Event::Scroll(Vec2::new(800.0, -800.0)),
+            ]);
+            let mut settled = None;
+            for _ in 0..10 {
+                settled = Some(render(Vec::new()));
+            }
+            let (scrolled, offset, _) = settled.expect("scroll settling frames ran");
+            assert!(
+                offset.x > 10.0 && offset.y > 10.0,
+                "two-axis scroll should move at host={size:?}, zoom={zoom}: {offset:?}"
+            );
+
+            let (row, column, target_center, target_clip) = scrolled
+                .shapes
+                .iter()
+                .find_map(|clipped| {
+                    let egui::Shape::Text(text) = &clipped.shape else {
+                        return None;
+                    };
+                    let (row, column) = text.galley.text().strip_prefix('r')?.split_once('c')?;
+                    let row = row.parse::<usize>().ok()?;
+                    let column = column.parse::<usize>().ok()?;
+                    let center = text.pos + text.galley.size() * 0.5;
+                    (row > 0 && column > 0 && clipped.clip_rect.contains(center)).then_some((
+                        row,
+                        column,
+                        center,
+                        clipped.clip_rect,
+                    ))
+                })
+                .unwrap_or_else(|| {
+                    panic!("no later target cell at host={size:?}, zoom={zoom}, offset={offset:?}")
+                });
+            assert!(
+                target_clip.contains(target_center),
+                "target center {target_center:?} outside clip {target_clip:?} at host={size:?}, zoom={zoom}"
+            );
+            let expected_value = format!("r{row}c{column}");
+            let (pressed, _, _) = render(vec![
+                egui::Event::PointerMoved(target_center),
+                egui::Event::PointerButton {
+                    pos: target_center,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+            let (released, _, selected_cell) = render(vec![
+                egui::Event::PointerMoved(target_center),
+                egui::Event::PointerButton {
+                    pos: target_center,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+            assert_eq!(
+                selected_cell,
+                Some((row, column)),
+                "selection mismatch for {expected_value} at host={size:?}, zoom={zoom}"
+            );
+            assert_eq!(
+                released.platform_output.copied_text, expected_value,
+                "copied value mismatch at host={size:?}, zoom={zoom}"
+            );
+            assert!(pressed.shapes.iter().any(|clipped| {
+                matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text() == expected_value)
+            }));
+        }
+    }
+
+    #[test]
     fn selecting_long_cell_shows_and_copies_full_value() {
         let long_value = format!(
             "Long clipboard cell value: {}",
