@@ -1,6 +1,7 @@
 //! Pitch detection (YIN), transient detection, harmonic chord analysis, and colormaps.
 
 use super::types::SingleNoteInfo;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 pub fn inferno_colormap(t: f32) -> [u8; 4] {
     let t = t.clamp(0.0, 1.0);
@@ -168,14 +169,25 @@ pub fn detect_transients_with_sensitivity(
     sample_rate: f32,
     sensitivity: f32,
 ) -> Vec<f32> {
+    detect_transients_with_sensitivity_cancellable(samples, sample_rate, sensitivity, None)
+        .unwrap_or_default()
+}
+
+pub(crate) fn detect_transients_with_sensitivity_cancellable(
+    samples: &[f32],
+    sample_rate: f32,
+    sensitivity: f32,
+    cancelled: Option<&AtomicBool>,
+) -> Option<Vec<f32>> {
+    let is_cancelled = || cancelled.is_some_and(|flag| flag.load(Ordering::Acquire));
     if samples.is_empty() || sample_rate <= 0.0 {
-        return Vec::new();
+        return Some(Vec::new());
     }
 
     let hop_size = 256;
     let num_hops = samples.len() / hop_size;
     if num_hops < 4 {
-        return Vec::new();
+        return Some(Vec::new());
     }
 
     let mut odf = Vec::with_capacity(num_hops);
@@ -183,6 +195,9 @@ pub fn detect_transients_with_sensitivity(
     let mut prev_l_tot = 0.0f32;
 
     for k in 0..num_hops {
+        if k.is_multiple_of(256) && is_cancelled() {
+            return None;
+        }
         let start = k * hop_size;
         let end = (start + hop_size).min(samples.len());
         let chunk = &samples[start..end];
@@ -217,6 +232,9 @@ pub fn detect_transients_with_sensitivity(
     let sens = sensitivity.clamp(0.05, 5.0);
 
     for k in 1..num_hops.saturating_sub(1) {
+        if k.is_multiple_of(256) && is_cancelled() {
+            return None;
+        }
         let w_start = k.saturating_sub(window_radius);
         let w_end = (k + window_radius + 1).min(num_hops);
         let mut local_vals = odf[w_start..w_end].to_vec();
@@ -247,7 +265,7 @@ pub fn detect_transients_with_sensitivity(
         }
     }
 
-    transients
+    Some(transients)
 }
 
 /// Extracts all active notes (chords and single notes) from STFT frequency bins

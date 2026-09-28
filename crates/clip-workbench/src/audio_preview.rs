@@ -9,9 +9,9 @@ use eframe::egui::{self, Color32, Pos2, Rect, Rounding, Stroke, Vec2};
 use little_clip_core::audio::{
     AudioAnalysisProgress, AudioFilterChain, AudioMetadata, AudioRegionEdit,
     DEFAULT_TRANSIENT_SENSITIVITY, FullAudioAnalysis, MAX_TRANSIENT_SENSITIVITY,
-    MIN_TRANSIENT_SENSITIVITY, apply_audio_gain, compute_audio_analysis_progressive,
-    compute_audio_analysis_progressive_with_gain_and_edits,
-    compute_audio_spectral_preview_with_gain_and_edits, read_audio_metadata,
+    MIN_TRANSIENT_SENSITIVITY, apply_audio_gain, compute_audio_analysis_progressive_cancellable,
+    compute_audio_analysis_progressive_with_gain_and_edits_cancellable,
+    compute_audio_spectral_preview_with_gain_and_edits_cancellable, read_audio_metadata,
 };
 use little_clip_core::ipc::IpcRequest;
 use little_clip_core::palette::AppPalette;
@@ -479,10 +479,18 @@ pub struct AudioPreviewState {
     pub analysis: Option<FullAudioAnalysis>,
     edited_waveform: Option<FullAudioAnalysis>,
     pub analysis_rx: Option<Receiver<AudioAnalysisProgress>>,
+    analysis_job_rx: Option<Receiver<Result<(), JobError>>>,
+    analysis_ticket: Option<JobTicket>,
+    analysis_cancel: Option<Arc<AtomicBool>>,
+    analysis_retry_at: Option<Instant>,
     pub is_loading_analysis: bool,
     pub loading_start_time: Instant,
     pub duration_sec: f32,
     edit_analysis_rx: Option<Receiver<AudioAnalysisProgress>>,
+    edit_analysis_job_rx: Option<Receiver<Result<(), JobError>>>,
+    edit_analysis_ticket: Option<JobTicket>,
+    edit_analysis_cancel: Option<Arc<AtomicBool>>,
+    edit_analysis_retry_at: Option<Instant>,
     edit_analysis_observed: SessionAudioEdits,
     edit_analysis_inflight: SessionAudioEdits,
     edit_analysis_displayed: SessionAudioEdits,
@@ -613,6 +621,26 @@ struct AudioSliceCopyPlan {
     start: f32,
     end: f32,
     filter: Option<String>,
+}
+
+fn submit_session_analysis(
+    path: PathBuf,
+    jobs: &BackgroundJobs,
+) -> (
+    Arc<AtomicBool>,
+    JobTicket,
+    Receiver<AudioAnalysisProgress>,
+    Receiver<Result<(), JobError>>,
+) {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let job_cancelled = Arc::clone(&cancelled);
+    let (progress_tx, progress_rx) = channel();
+    let (ticket, job_rx) = jobs.submit(Duration::MAX, move || {
+        compute_audio_analysis_progressive_cancellable(&path, 1200, &job_cancelled, |progress| {
+            let _ = progress_tx.send(progress);
+        });
+    });
+    (cancelled, ticket, progress_rx, job_rx)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1096,6 +1124,23 @@ impl AudioPreviewState {
     }
 
     fn restart_session_analysis(&mut self) {
+        self.restart_session_analysis_on(BackgroundJobs::global());
+    }
+
+    fn cancel_session_analysis(&mut self) {
+        if let Some(ticket) = self.analysis_ticket.take() {
+            ticket.cancel();
+        }
+        if let Some(cancelled) = self.analysis_cancel.take() {
+            cancelled.store(true, Ordering::Release);
+        }
+        self.analysis_rx = None;
+        self.analysis_job_rx = None;
+    }
+
+    fn restart_session_analysis_on(&mut self, jobs: &BackgroundJobs) {
+        self.cancel_session_analysis();
+        self.cancel_edit_analysis();
         self.analysis = None;
         self.edited_waveform = None;
         self.spectrogram_texture = None;
@@ -1104,6 +1149,7 @@ impl AudioPreviewState {
         self.inspect_viewport_cache.clear();
         self.is_loading_analysis = true;
         self.edit_analysis_rx = None;
+        self.edit_analysis_retry_at = None;
         self.edit_analysis_observed = SessionAudioEdits::default();
         self.edit_analysis_inflight = SessionAudioEdits::default();
         self.edit_analysis_displayed = SessionAudioEdits::default();
@@ -1113,14 +1159,24 @@ impl AudioPreviewState {
                 .generation
                 .fetch_add(1, Ordering::Release);
         }
-        let (tx, rx) = channel();
-        let path = self.path.clone();
-        std::thread::spawn(move || {
-            compute_audio_analysis_progressive(&path, 1200, |p| {
-                let _ = tx.send(p);
-            })
-        });
-        self.analysis_rx = Some(rx);
+        let (cancelled, ticket, progress_rx, job_rx) =
+            submit_session_analysis(self.path.clone(), jobs);
+        self.analysis_cancel = Some(cancelled);
+        self.analysis_ticket = Some(ticket);
+        self.analysis_rx = Some(progress_rx);
+        self.analysis_job_rx = Some(job_rx);
+        self.analysis_retry_at = None;
+    }
+
+    fn cancel_edit_analysis(&mut self) {
+        if let Some(ticket) = self.edit_analysis_ticket.take() {
+            ticket.cancel();
+        }
+        if let Some(cancelled) = self.edit_analysis_cancel.take() {
+            cancelled.store(true, Ordering::Release);
+        }
+        self.edit_analysis_rx = None;
+        self.edit_analysis_job_rx = None;
     }
 
     fn step_gain_db(current: f32, delta_db: f32) -> f32 {
@@ -1822,6 +1878,15 @@ impl AudioPreviewState {
         title: String,
         metadata: Option<AudioMetadata>,
     ) -> Self {
+        Self::new_with_metadata_on_jobs(path, title, metadata, BackgroundJobs::global())
+    }
+
+    fn new_with_metadata_on_jobs(
+        path: PathBuf,
+        title: String,
+        metadata: Option<AudioMetadata>,
+        jobs: &BackgroundJobs,
+    ) -> Self {
         let default_save_dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
@@ -1832,15 +1897,8 @@ impl AudioPreviewState {
             .map(|m| m.duration_ms as f32 / 1000.0)
             .unwrap_or(0.0);
 
-        // Spawn background worker for progressive audio analysis (Waveform -> Transients -> Spectrogram/ColorChord)
-        let (tx, rx) = channel();
-        let path_clone = path.clone();
-        std::thread::spawn(move || {
-            let num_cols = 1200;
-            compute_audio_analysis_progressive(&path_clone, num_cols, |progress| {
-                let _ = tx.send(progress);
-            });
-        });
+        let (analysis_cancel, analysis_ticket, analysis_rx, analysis_job_rx) =
+            submit_session_analysis(path.clone(), jobs);
 
         // Initialize rodio playback engine using shared application sink
         let player = crate::ui_ext::new_shared_audio_player();
@@ -1857,11 +1915,19 @@ impl AudioPreviewState {
             metadata,
             analysis: None,
             edited_waveform: None,
-            analysis_rx: Some(rx),
+            analysis_rx: Some(analysis_rx),
+            analysis_job_rx: Some(analysis_job_rx),
+            analysis_ticket: Some(analysis_ticket),
+            analysis_cancel: Some(analysis_cancel),
+            analysis_retry_at: None,
             is_loading_analysis: true,
             loading_start_time: Instant::now(),
             duration_sec,
             edit_analysis_rx: None,
+            edit_analysis_job_rx: None,
+            edit_analysis_ticket: None,
+            edit_analysis_cancel: None,
+            edit_analysis_retry_at: None,
             edit_analysis_observed: SessionAudioEdits::default(),
             edit_analysis_inflight: SessionAudioEdits::default(),
             edit_analysis_displayed: SessionAudioEdits::default(),
@@ -3229,6 +3295,17 @@ impl AudioPreviewState {
     }
 
     fn poll_audio_analysis(&mut self, ctx: &egui::Context, now: f64) {
+        self.poll_audio_analysis_on(ctx, now, BackgroundJobs::global());
+    }
+
+    fn poll_audio_analysis_on(&mut self, ctx: &egui::Context, now: f64, jobs: &BackgroundJobs) {
+        if let Some(retry_at) = self.analysis_retry_at {
+            if Instant::now() >= retry_at && self.analysis_rx.is_none() {
+                self.start_session_analysis_job(jobs);
+            } else {
+                ctx.request_repaint_after(retry_at.saturating_duration_since(Instant::now()));
+            }
+        }
         if let Some(rx) = self.analysis_rx.take() {
             ctx.request_repaint_after(Duration::from_millis(50));
             let mut finished = false;
@@ -3277,7 +3354,52 @@ impl AudioPreviewState {
                 self.analysis_rx = Some(rx);
             }
         }
-        self.poll_edit_analysis(ctx, now);
+        if let Some(rx) = self.analysis_job_rx.take() {
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.analysis_ticket = None;
+                    self.analysis_cancel = None;
+                }
+                Ok(Err(JobError::QueueFull)) => {
+                    self.analysis_rx = None;
+                    self.analysis_ticket = None;
+                    self.analysis_cancel = None;
+                    self.is_loading_analysis = true;
+                    self.analysis_retry_at = Some(Instant::now() + Duration::from_millis(500));
+                    self.status_toast = Some((
+                        "Audio analysis is waiting for background workers; retrying shortly"
+                            .to_owned(),
+                        now,
+                    ));
+                    ctx.request_repaint_after(Duration::from_millis(500));
+                }
+                Ok(Err(error)) => {
+                    self.analysis_ticket = None;
+                    self.analysis_cancel = None;
+                    self.analysis_rx = None;
+                    self.is_loading_analysis = false;
+                    self.status_toast = Some((format!("Audio analysis failed: {error}"), now));
+                }
+                Err(TryRecvError::Empty) => self.analysis_job_rx = Some(rx),
+                Err(TryRecvError::Disconnected) => {
+                    self.analysis_ticket = None;
+                    self.analysis_cancel = None;
+                    self.analysis_rx = None;
+                    self.is_loading_analysis = false;
+                }
+            }
+        }
+        self.poll_edit_analysis(ctx, now, jobs);
+    }
+
+    fn start_session_analysis_job(&mut self, jobs: &BackgroundJobs) {
+        let (cancelled, ticket, progress_rx, job_rx) =
+            submit_session_analysis(self.path.clone(), jobs);
+        self.analysis_cancel = Some(cancelled);
+        self.analysis_ticket = Some(ticket);
+        self.analysis_rx = Some(progress_rx);
+        self.analysis_job_rx = Some(job_rx);
+        self.analysis_retry_at = None;
     }
 
     fn install_spectral_analysis(&mut self, ctx: &egui::Context, progress: AudioAnalysisProgress) {
@@ -3343,9 +3465,10 @@ impl AudioPreviewState {
                     || b.high_pass_hz.is_some()))
     }
 
-    fn poll_edit_analysis(&mut self, ctx: &egui::Context, now: f64) {
+    fn poll_edit_analysis(&mut self, ctx: &egui::Context, now: f64, jobs: &BackgroundJobs) {
         let edits = self.session_audio_edits();
         if edits != self.edit_analysis_observed {
+            self.cancel_edit_analysis();
             self.edited_waveform = None;
             let old = &self.edit_analysis_observed;
             let filter_changed = old.regions.len() != edits.regions.len()
@@ -3372,6 +3495,7 @@ impl AudioPreviewState {
             }
             self.edit_analysis_observed = edits;
             self.edit_change_at = Instant::now();
+            self.edit_analysis_retry_at = None;
         }
         if let Some(rx) = self.edit_analysis_rx.take() {
             let mut finished = false;
@@ -3382,7 +3506,6 @@ impl AudioPreviewState {
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         finished = true;
-                        self.edit_analysis_displayed = self.edit_analysis_inflight.clone();
                         break;
                     }
                 };
@@ -3415,57 +3538,111 @@ impl AudioPreviewState {
                 self.edit_analysis_rx = Some(rx);
             }
         }
+        if let Some(rx) = self.edit_analysis_job_rx.take() {
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.edit_analysis_ticket = None;
+                    self.edit_analysis_cancel = None;
+                }
+                Ok(Err(JobError::QueueFull)) => {
+                    self.edit_analysis_rx = None;
+                    self.edit_analysis_ticket = None;
+                    self.edit_analysis_cancel = None;
+                    self.edit_analysis_retry_at = Some(Instant::now() + Duration::from_millis(500));
+                    self.status_toast = Some((
+                        "Edited audio analysis is waiting for background workers; retrying shortly"
+                            .to_owned(),
+                        now,
+                    ));
+                    ctx.request_repaint_after(Duration::from_millis(500));
+                }
+                Ok(Err(error)) => {
+                    self.edit_analysis_ticket = None;
+                    self.edit_analysis_cancel = None;
+                    self.edit_analysis_rx = None;
+                    self.edit_analysis_displayed = self.edit_analysis_inflight.clone();
+                    self.status_toast = Some((format!("Edited analysis failed: {error}"), now));
+                }
+                Err(TryRecvError::Empty) => self.edit_analysis_job_rx = Some(rx),
+                Err(TryRecvError::Disconnected) => {
+                    self.edit_analysis_ticket = None;
+                    self.edit_analysis_cancel = None;
+                    self.edit_analysis_rx = None;
+                }
+            }
+        }
         if self.edit_analysis_rx.is_none()
+            && self.edit_analysis_job_rx.is_none()
             && self.analysis_rx.is_none()
             && self.analysis.is_some()
             && self.edit_analysis_observed != self.edit_analysis_displayed
         {
             let debounce = self.edit_analysis_debounce;
+            if let Some(retry_at) = self.edit_analysis_retry_at {
+                if Instant::now() < retry_at {
+                    ctx.request_repaint_after(retry_at.saturating_duration_since(Instant::now()));
+                    return;
+                }
+                self.edit_analysis_retry_at = None;
+            }
             if self.edit_change_at.elapsed() < debounce {
                 ctx.request_repaint_after(debounce - self.edit_change_at.elapsed());
             } else {
-                let path = self.path.clone();
-                let edits = self.edit_analysis_observed.clone();
-                let has_filter = edits
-                    .regions
-                    .iter()
-                    .any(|region| region.low_pass_hz.is_some() || region.high_pass_hz.is_some());
-                self.edit_analysis_inflight = edits.clone();
-                let (tx, rx) = channel();
-                std::thread::spawn(move || {
-                    let send_progress = |progress| {
-                        if matches!(
-                            progress,
-                            AudioAnalysisProgress::WaveformReady(_)
-                                | AudioAnalysisProgress::SpectrogramAndNotesReady { .. }
-                                | AudioAnalysisProgress::Complete
-                                | AudioAnalysisProgress::Failed(_)
-                        ) {
-                            let _ = tx.send(progress);
-                        }
-                    };
-                    if has_filter {
-                        compute_audio_spectral_preview_with_gain_and_edits(
-                            &path,
-                            1200,
-                            edits.track_gain_db,
-                            &edits.regions,
-                            send_progress,
-                        );
-                    } else {
-                        compute_audio_analysis_progressive_with_gain_and_edits(
-                            &path,
-                            1200,
-                            edits.track_gain_db,
-                            &edits.regions,
-                            send_progress,
-                        );
-                    }
-                });
-                self.edit_analysis_rx = Some(rx);
+                self.start_edit_analysis_job(jobs);
                 ctx.request_repaint_after(Duration::from_millis(50));
             }
         }
+    }
+
+    fn start_edit_analysis_job(&mut self, jobs: &BackgroundJobs) {
+        let path = self.path.clone();
+        let edits = self.edit_analysis_observed.clone();
+        let job_edits = edits.clone();
+        let has_filter = edits
+            .regions
+            .iter()
+            .any(|region| region.low_pass_hz.is_some() || region.high_pass_hz.is_some());
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let job_cancelled = Arc::clone(&cancelled);
+        let (tx, rx) = channel();
+        let (ticket, job_rx) = jobs.submit(Duration::MAX, move || {
+            let send_progress = |progress| {
+                if matches!(
+                    progress,
+                    AudioAnalysisProgress::WaveformReady(_)
+                        | AudioAnalysisProgress::SpectrogramAndNotesReady { .. }
+                        | AudioAnalysisProgress::Complete
+                        | AudioAnalysisProgress::Failed(_)
+                ) {
+                    let _ = tx.send(progress);
+                }
+            };
+            if has_filter {
+                compute_audio_spectral_preview_with_gain_and_edits_cancellable(
+                    &path,
+                    1200,
+                    job_edits.track_gain_db,
+                    &job_edits.regions,
+                    &job_cancelled,
+                    send_progress,
+                );
+            } else {
+                compute_audio_analysis_progressive_with_gain_and_edits_cancellable(
+                    &path,
+                    1200,
+                    job_edits.track_gain_db,
+                    &job_edits.regions,
+                    &job_cancelled,
+                    send_progress,
+                );
+            }
+        });
+        self.edit_analysis_inflight = edits;
+        self.edit_analysis_cancel = Some(cancelled);
+        self.edit_analysis_ticket = Some(ticket);
+        self.edit_analysis_rx = Some(rx);
+        self.edit_analysis_job_rx = Some(job_rx);
+        self.edit_analysis_retry_at = None;
     }
 
     fn handle_studio_shortcuts(&mut self, ctx: &egui::Context, close_requested: &mut bool) -> bool {
@@ -3544,6 +3721,13 @@ impl AudioPreviewState {
                 }
             }
         });
+    }
+}
+
+impl Drop for AudioPreviewState {
+    fn drop(&mut self) {
+        self.cancel_session_analysis();
+        self.cancel_edit_analysis();
     }
 }
 
@@ -4972,6 +5156,228 @@ Separated track
         (temp_dir, path)
     }
 
+    fn empty_audio_analysis() -> FullAudioAnalysis {
+        FullAudioAnalysis {
+            channels: 2,
+            sample_rate: 44100,
+            duration_ms: 0,
+            total_frames: 0,
+            ch1_samples: Vec::new(),
+            ch2_samples: Some(Vec::new()),
+            overview_peaks1: Vec::new(),
+            overview_peaks2: Some(Vec::new()),
+            peaks_lvl0_ch1: Vec::new(),
+            peaks_lvl0_ch2: Some(Vec::new()),
+            peaks_lvl1_ch1: Vec::new(),
+            peaks_lvl1_ch2: Some(Vec::new()),
+            peaks_lvl2_ch1: Vec::new(),
+            peaks_lvl2_ch2: Some(Vec::new()),
+            spectrogram_width: 0,
+            spectrogram_height: 0,
+            spectrogram_rgba: Vec::new(),
+            note_strip_width: 0,
+            note_strip_height: 0,
+            note_strip_rgba: Vec::new(),
+            note_strip_info: Vec::new(),
+            spectral_colors: Vec::new(),
+            transients: Vec::new(),
+            is_transients_ready: false,
+            is_spectrogram_ready: false,
+            ultrasonic_roi: Vec::new(),
+            ultrasonic_peak_times: Vec::new(),
+            is_truncated: false,
+            truncation_warning: None,
+        }
+    }
+
+    #[test]
+    fn progressive_analysis_queue_saturation_retries_without_losing_loading_state() {
+        let (_dir, path) = generate_fixture_wav("queue_retry", 0.1);
+        let metadata = read_audio_metadata(&path);
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let (_, blocker_rx) = jobs.submit(Duration::from_secs(5), move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (_, queued_rx) = jobs.submit(Duration::from_secs(5), || ());
+
+        let mut state = AudioPreviewState::new_with_metadata_on_jobs(
+            path,
+            "queue_retry.wav".into(),
+            metadata,
+            &jobs,
+        );
+        let ctx = egui::Context::default();
+        state.poll_audio_analysis_on(&ctx, 1.0, &jobs);
+        assert!(state.is_loading_analysis);
+        assert!(state.analysis_retry_at.is_some());
+        assert!(
+            state
+                .status_toast
+                .as_ref()
+                .is_some_and(|(message, _)| { message.contains("waiting for background workers") })
+        );
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        queued_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        state.analysis_retry_at = Some(Instant::now() - Duration::from_millis(1));
+        state.poll_audio_analysis_on(&ctx, 2.0, &jobs);
+        assert!(state.analysis_retry_at.is_none());
+        assert!(state.analysis_ticket.is_some() || state.analysis.is_some());
+    }
+
+    #[test]
+    fn source_restart_cancels_old_analysis_and_drops_its_progress_receiver() {
+        let (_dir, path) = generate_fixture_wav("source_restart", 0.1);
+        let jobs = BackgroundJobs::new(1, 2);
+        let mut state = AudioPreviewState::new_with_metadata_on_jobs(
+            path,
+            "source_restart.wav".into(),
+            None,
+            &jobs,
+        );
+        let old_cancel = state.analysis_cancel.as_ref().unwrap().clone();
+        state.restart_session_analysis_on(&jobs);
+        assert!(old_cancel.load(Ordering::Acquire));
+        assert!(state.analysis_rx.is_some());
+        assert!(state.analysis_ticket.is_some());
+    }
+
+    #[test]
+    fn stale_edit_progress_does_not_replace_the_current_edited_waveform() {
+        let (_dir, path) = generate_fixture_wav("stale_edit", 0.1);
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = AudioPreviewState::new_with_metadata_on_jobs(
+            path,
+            "stale_edit.wav".into(),
+            None,
+            &jobs,
+        );
+        state.analysis = Some(empty_audio_analysis());
+        state.edit_analysis_observed = state.session_audio_edits();
+        state.edit_analysis_inflight = SessionAudioEdits {
+            track_gain_db: 1.0,
+            regions: Vec::new(),
+        };
+        let (tx, rx) = channel();
+        tx.send(AudioAnalysisProgress::WaveformReady(Box::new(
+            empty_audio_analysis(),
+        )))
+        .unwrap();
+        state.edit_analysis_rx = Some(rx);
+        state.poll_edit_analysis(&egui::Context::default(), 1.0, &jobs);
+        assert!(state.edited_waveform.is_none());
+        assert_ne!(state.edit_analysis_inflight, state.edit_analysis_observed);
+    }
+
+    #[test]
+    fn edited_analysis_queue_saturation_keeps_existing_waveform_and_retries() {
+        let (_dir, path) = generate_fixture_wav("edit_queue_retry", 0.1);
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let (_, blocker_rx) = jobs.submit(Duration::from_secs(5), move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (_, queued_rx) = jobs.submit(Duration::from_secs(5), || ());
+
+        let mut state = AudioPreviewState::new_with_metadata_on_jobs(
+            path,
+            "edit_queue_retry.wav".into(),
+            None,
+            &jobs,
+        );
+        state.analysis_rx = None;
+        state.analysis_job_rx = None;
+        state.analysis_cancel = None;
+        state.analysis_ticket = None;
+        state.analysis = Some(empty_audio_analysis());
+        state.edited_waveform = Some(empty_audio_analysis());
+        state.edit_analysis_observed = state.session_audio_edits();
+        state.edit_analysis_displayed = SessionAudioEdits {
+            track_gain_db: 1.0,
+            regions: Vec::new(),
+        };
+        state.edit_change_at = Instant::now() - Duration::from_secs(1);
+        state.start_edit_analysis_job(&jobs);
+
+        state.poll_edit_analysis(&egui::Context::default(), 1.0, &jobs);
+        assert!(state.edit_analysis_retry_at.is_some());
+        assert!(state.analysis.is_some());
+        assert!(state.edited_waveform.is_some());
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        queued_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        state.edit_analysis_retry_at = Some(Instant::now() - Duration::from_millis(1));
+        state.poll_edit_analysis(&egui::Context::default(), 2.0, &jobs);
+        assert!(state.edit_analysis_retry_at.is_none());
+        assert!(
+            state.edit_analysis_ticket.is_some()
+                || state.edit_analysis_displayed == state.edit_analysis_observed
+        );
+        assert!(state.analysis.is_some());
+    }
+
+    #[test]
+    fn cancelled_core_progressive_analysis_publishes_no_progress() {
+        let (_dir, path) = generate_fixture_wav("analysis_cancel", 0.1);
+        let cancelled = AtomicBool::new(true);
+        let mut messages = Vec::new();
+        let analysis =
+            compute_audio_analysis_progressive_cancellable(&path, 1200, &cancelled, |progress| {
+                messages.push(progress)
+            });
+        assert!(analysis.is_none());
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn dropping_audio_viewer_signals_cancellation_for_queued_analysis() {
+        let (_dir, path) = generate_fixture_wav("drop_cancel", 0.1);
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let (_, blocker_rx) = jobs.submit(Duration::from_secs(5), move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let state = AudioPreviewState::new_with_metadata_on_jobs(
+            path,
+            "drop_cancel.wav".into(),
+            None,
+            &jobs,
+        );
+        let cancelled = state.analysis_cancel.as_ref().unwrap().clone();
+        drop(state);
+        assert!(cancelled.load(Ordering::Acquire));
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+    }
+
     #[test]
     fn test_audio_preview_state_creation_and_seek() {
         let (_dir, p) = generate_fixture_wav("fixture", 5.0);
@@ -4991,7 +5397,7 @@ Separated track
         state.copy_selected_segment(1.0, ChannelCopyMode::Native);
         wait_for_slice_copy(&mut state);
         assert!(state.status_toast.is_some());
-        let (toast, _) = state.status_toast.unwrap();
+        let (toast, _) = state.status_toast.clone().unwrap();
         assert!(toast.contains("slice"));
     }
 
@@ -5046,7 +5452,7 @@ Separated track
         state.copy_selected_segment(1.0, ChannelCopyMode::Native);
         wait_for_slice_copy(&mut state);
         assert!(state.status_toast.is_some());
-        let (toast, _) = state.status_toast.unwrap();
+        let (toast, _) = state.status_toast.clone().unwrap();
         assert!(toast.contains("slice"));
         assert!(toast.contains("0.020s"));
     }

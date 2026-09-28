@@ -5,6 +5,7 @@ use super::decode::*;
 use super::types::*;
 use crate::config::{AudioConfig, AudioSamplePosition};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
@@ -666,8 +667,25 @@ pub fn build_peak_pyramid(
     samples: &[f32],
     sample_rate: f32,
 ) -> (Vec<PeakBlock>, Vec<PeakBlock>, Vec<PeakBlock>) {
+    build_peak_pyramid_inner(samples, sample_rate, None).unwrap_or_default()
+}
+
+pub(crate) fn build_peak_pyramid_cancellable(
+    samples: &[f32],
+    sample_rate: f32,
+    cancelled: &AtomicBool,
+) -> Option<(Vec<PeakBlock>, Vec<PeakBlock>, Vec<PeakBlock>)> {
+    build_peak_pyramid_inner(samples, sample_rate, Some(cancelled))
+}
+
+fn build_peak_pyramid_inner(
+    samples: &[f32],
+    sample_rate: f32,
+    cancelled: Option<&AtomicBool>,
+) -> Option<(Vec<PeakBlock>, Vec<PeakBlock>, Vec<PeakBlock>)> {
+    let is_cancelled = || cancelled.is_some_and(|flag| flag.load(Ordering::Acquire));
     if samples.is_empty() {
-        return (Vec::new(), Vec::new(), Vec::new());
+        return Some((Vec::new(), Vec::new(), Vec::new()));
     }
 
     // 3-Band Serato DJ Crossover Filter:
@@ -684,7 +702,10 @@ pub fn build_peak_pyramid(
     // Level 0: 64 samples per block (~1.4ms resolution at 44.1kHz)
     let lvl0_len = (samples.len() + 63) / 64;
     let mut lvl0 = Vec::with_capacity(lvl0_len);
-    for chunk in samples.chunks(64) {
+    for (chunk_index, chunk) in samples.chunks(64).enumerate() {
+        if chunk_index.is_multiple_of(1024) && is_cancelled() {
+            return None;
+        }
         let mut mn = 0.0f32;
         let mut mx = 0.0f32;
         let mut e_bass = 0.0f32;
@@ -736,7 +757,10 @@ pub fn build_peak_pyramid(
     // Level 1: 1024 samples per block (16 lvl0 blocks)
     let lvl1_len = (lvl0.len() + 15) / 16;
     let mut lvl1 = Vec::with_capacity(lvl1_len);
-    for chunk in lvl0.chunks(16) {
+    for (chunk_index, chunk) in lvl0.chunks(16).enumerate() {
+        if chunk_index.is_multiple_of(1024) && is_cancelled() {
+            return None;
+        }
         let mut mn = 0.0f32;
         let mut mx = 0.0f32;
         let mut r_sum = 0u32;
@@ -773,7 +797,10 @@ pub fn build_peak_pyramid(
     // Level 2: 16384 samples per block (16 lvl1 blocks)
     let lvl2_len = (lvl1.len() + 15) / 16;
     let mut lvl2 = Vec::with_capacity(lvl2_len);
-    for chunk in lvl1.chunks(16) {
+    for (chunk_index, chunk) in lvl1.chunks(16).enumerate() {
+        if chunk_index.is_multiple_of(1024) && is_cancelled() {
+            return None;
+        }
         let mut mn = 0.0f32;
         let mut mx = 0.0f32;
         let mut r_sum = 0u32;
@@ -807,7 +834,7 @@ pub fn build_peak_pyramid(
         });
     }
 
-    (lvl0, lvl1, lvl2)
+    Some((lvl0, lvl1, lvl2))
 }
 
 fn resample_peaks(source: &[f32], target_len: usize) -> Vec<f32> {

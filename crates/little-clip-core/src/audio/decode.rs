@@ -8,6 +8,7 @@ use rayon::prelude::*;
 use realfft::RealFftPlanner;
 use rustchord::cc_to_rgb;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
@@ -101,6 +102,27 @@ where
     compute_audio_analysis_progressive_with_gain_and_edits(path, num_cols, 0.0, &[], on_progress)
 }
 
+/// Cancellable progressive analysis for bounded background jobs.
+pub fn compute_audio_analysis_progressive_cancellable<F>(
+    path: &Path,
+    num_cols: usize,
+    cancelled: &AtomicBool,
+    on_progress: F,
+) -> Option<FullAudioAnalysis>
+where
+    F: FnMut(AudioAnalysisProgress),
+{
+    compute_audio_analysis_inner(
+        path,
+        num_cols,
+        0.0,
+        &[],
+        false,
+        Some(cancelled),
+        on_progress,
+    )
+}
+
 /// Rebuilds analysis from the original file with session edits applied to decoded PCM.
 /// The file itself is never modified.
 pub fn compute_audio_analysis_progressive_with_edits<F>(
@@ -138,6 +160,30 @@ where
         track_gain_db,
         region_edits,
         false,
+        None,
+        on_progress,
+    )
+}
+
+/// Cancellable variant of progressive analysis with track gain and region edits.
+pub fn compute_audio_analysis_progressive_with_gain_and_edits_cancellable<F>(
+    path: &Path,
+    num_cols: usize,
+    track_gain_db: f32,
+    region_edits: &[AudioRegionEdit],
+    cancelled: &AtomicBool,
+    on_progress: F,
+) -> Option<FullAudioAnalysis>
+where
+    F: FnMut(AudioAnalysisProgress),
+{
+    compute_audio_analysis_inner(
+        path,
+        num_cols,
+        track_gain_db,
+        region_edits,
+        false,
+        Some(cancelled),
         on_progress,
     )
 }
@@ -169,7 +215,38 @@ pub fn compute_audio_spectral_preview_with_gain_and_edits<F>(
 where
     F: FnMut(AudioAnalysisProgress),
 {
-    compute_audio_analysis_inner(path, num_cols, track_gain_db, regions, true, on_progress)
+    compute_audio_analysis_inner(
+        path,
+        num_cols,
+        track_gain_db,
+        regions,
+        true,
+        None,
+        on_progress,
+    )
+}
+
+/// Cancellable spectrum-first preview with track gain and region edits.
+pub fn compute_audio_spectral_preview_with_gain_and_edits_cancellable<F>(
+    path: &Path,
+    num_cols: usize,
+    track_gain_db: f32,
+    regions: &[AudioRegionEdit],
+    cancelled: &AtomicBool,
+    on_progress: F,
+) -> Option<FullAudioAnalysis>
+where
+    F: FnMut(AudioAnalysisProgress),
+{
+    compute_audio_analysis_inner(
+        path,
+        num_cols,
+        track_gain_db,
+        regions,
+        true,
+        Some(cancelled),
+        on_progress,
+    )
 }
 
 fn compute_audio_analysis_inner<F>(
@@ -178,11 +255,18 @@ fn compute_audio_analysis_inner<F>(
     track_gain_db: f32,
     region_edits: &[AudioRegionEdit],
     spectral_only: bool,
+    cancelled: Option<&AtomicBool>,
     mut on_progress: F,
 ) -> Option<FullAudioAnalysis>
 where
     F: FnMut(AudioAnalysisProgress),
 {
+    let fallback_cancel = AtomicBool::new(false);
+    let cancelled = cancelled.unwrap_or(&fallback_cancel);
+    let is_cancelled = || cancelled.load(Ordering::Acquire);
+    if is_cancelled() {
+        return None;
+    }
     let meta = match read_audio_metadata(path) {
         Some(m) => m,
         None => {
@@ -275,7 +359,12 @@ where
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
 
     let t_decode_start = std::time::Instant::now();
+    let mut decoded_packets = 0usize;
     while let Ok(packet) = format.next_packet() {
+        decoded_packets += 1;
+        if decoded_packets.is_multiple_of(16) && is_cancelled() {
+            return None;
+        }
         if packet.track_id() != track.id {
             continue;
         }
@@ -297,6 +386,9 @@ where
                 let frames = samples.len() / n_ch;
 
                 for f in 0..frames {
+                    if f.is_multiple_of(4096) && is_cancelled() {
+                        return None;
+                    }
                     if ch1_samples.len() >= max_frames {
                         break;
                     }
@@ -323,6 +415,9 @@ where
     let t_decode_elapsed = t_decode_start.elapsed();
 
     let total_frames = ch1_samples.len();
+    if is_cancelled() {
+        return None;
+    }
     if total_frames == 0 {
         on_progress(AudioAnalysisProgress::Failed(
             "Decoded 0 audio frames".to_string(),
@@ -339,6 +434,9 @@ where
     };
 
     apply_track_gain(&mut ch1_samples, ch2_samples.as_deref_mut(), track_gain_db);
+    if is_cancelled() {
+        return None;
+    }
 
     if !region_edits.is_empty() {
         // Earlier selections take precedence when regions overlap, matching the editor view.
@@ -350,6 +448,9 @@ where
             let mut ch1_filter = AudioFilterChain::new(sample_rate as f32, region);
             let mut ch2_filter = AudioFilterChain::new(sample_rate as f32, region);
             for frame in start..end {
+                if frame.is_multiple_of(4096) && is_cancelled() {
+                    return None;
+                }
                 let mix = region.effect_mix(frame as f32 / sample_rate as f32, duration_sec as f32);
                 if !claimed[frame] {
                     claimed[frame] = mix > 0.0;
@@ -374,29 +475,41 @@ where
         }
     }
 
+    if is_cancelled() {
+        return None;
+    }
+
     let duration_ms = (total_frames as f64 / sample_rate as f64 * 1000.0) as u64;
 
     // Concurrently build multi-scale min/max peak pyramids with Serato DJ 3-band crossover colors
     let t_pyramid_start = std::time::Instant::now();
-    let (
-        (peaks_lvl0_ch1, peaks_lvl1_ch1, peaks_lvl2_ch1),
-        (peaks_lvl0_ch2, peaks_lvl1_ch2, peaks_lvl2_ch2),
-    ) = if spectral_only {
-        ((Vec::new(), Vec::new(), Vec::new()), (None, None, None))
+    let (ch1_pyramid, ch2_pyramid) = if spectral_only {
+        (Some((Vec::new(), Vec::new(), Vec::new())), Some(None))
     } else {
         rayon::join(
-            || build_peak_pyramid(&ch1_samples, sample_rate as f32),
+            || build_peak_pyramid_cancellable(&ch1_samples, sample_rate as f32, cancelled),
             || {
                 if let Some(ref ch2) = ch2_samples {
-                    let (l0, l1, l2) = build_peak_pyramid(ch2, sample_rate as f32);
-                    (Some(l0), Some(l1), Some(l2))
+                    build_peak_pyramid_cancellable(ch2, sample_rate as f32, cancelled).map(Some)
                 } else {
-                    (None, None, None)
+                    Some(None)
                 }
             },
         )
     };
+    let (peaks_lvl0_ch1, peaks_lvl1_ch1, peaks_lvl2_ch1) = match ch1_pyramid {
+        Some(pyramid) => pyramid,
+        None => return None,
+    };
+    let (peaks_lvl0_ch2, peaks_lvl1_ch2, peaks_lvl2_ch2) = match ch2_pyramid {
+        Some(Some((l0, l1, l2))) => (Some(l0), Some(l1), Some(l2)),
+        Some(None) => (None, None, None),
+        None => return None,
+    };
     let t_pyramid_elapsed = t_pyramid_start.elapsed();
+    if is_cancelled() {
+        return None;
+    }
 
     // 1. Overview Peaks
     let num_cols = if sample_rate > 196_000 && num_cols == 1200 {
@@ -413,6 +526,9 @@ where
     };
 
     for c in 0..if spectral_only { 0 } else { num_cols } {
+        if c.is_multiple_of(64) && is_cancelled() {
+            return None;
+        }
         let f_start = (c * total_frames) / num_cols;
         let f_end = (((c + 1) * total_frames) / num_cols).min(total_frames);
         let span = f_end.saturating_sub(f_start);
@@ -478,6 +594,9 @@ where
         ch1_samples.clone()
     };
     let t_mix_elapsed = t_mix_start.elapsed();
+    if is_cancelled() {
+        return None;
+    }
 
     // Emit Stage 1: Waveform is fully ready for immediate interactive rendering!
     let mut analysis = FullAudioAnalysis {
@@ -530,13 +649,21 @@ where
     let transients = if spectral_only {
         Vec::new()
     } else {
-        detect_transients(&mixed_samples, sample_rate as f32)
+        detect_transients_with_sensitivity_cancellable(
+            &mixed_samples,
+            sample_rate as f32,
+            DEFAULT_TRANSIENT_SENSITIVITY,
+            Some(cancelled),
+        )?
     };
     let t_transients_elapsed = t_transients_start.elapsed();
     analysis.transients = transients.clone();
     analysis.is_transients_ready = true;
     if !spectral_only {
         on_progress(AudioAnalysisProgress::TransientsReady(transients));
+    }
+    if is_cancelled() {
+        return None;
     }
 
     // Emit Stage 3: Rayon parallel STFT Spectrogram & ColorChord 2-D note strip
@@ -566,6 +693,9 @@ where
     let col_results: Vec<ColumnAnalysisResult> = (0..num_cols)
         .into_par_iter()
         .map(|c| {
+            if is_cancelled() {
+                return None;
+            }
             let mut in_data = r2c.make_input_vec();
             let mut out_data = r2c.make_output_vec();
 
@@ -764,15 +894,15 @@ where
                 }
             };
 
-            ColumnAnalysisResult {
+            Some(ColumnAnalysisResult {
                 spec_col_rgba,
                 spectral_color,
                 note_strip_col_rgba,
                 note_info,
                 ultrasonic_energy: e_ultrasonic.sqrt(),
-            }
+            })
         })
-        .collect();
+        .collect::<Option<Vec<_>>>()?;
 
     let mut spectrogram_rgba = vec![0u8; spectrogram_width * spectrogram_height * 4];
     let mut note_strip_rgba = vec![0u8; note_strip_width * note_strip_height * 4];
@@ -864,6 +994,9 @@ where
         ultrasonic_roi: ultrasonic_roi.clone(),
         ultrasonic_peak_times: ultrasonic_peak_times.clone(),
     });
+    if is_cancelled() {
+        return None;
+    }
     analysis.spectrogram_width = spectrogram_width;
     analysis.spectrogram_height = spectrogram_height;
     analysis.spectrogram_rgba = spectrogram_rgba;
@@ -877,19 +1010,27 @@ where
     analysis.is_spectrogram_ready = true;
 
     if spectral_only {
-        let ((l0, l1, l2), right) = rayon::join(
-            || build_peak_pyramid(&analysis.ch1_samples, sample_rate as f32),
+        let (ch1_pyramid, right) = rayon::join(
+            || build_peak_pyramid_cancellable(&analysis.ch1_samples, sample_rate as f32, cancelled),
             || {
                 analysis
                     .ch2_samples
                     .as_ref()
-                    .map(|ch2| build_peak_pyramid(ch2, sample_rate as f32))
+                    .map(|ch2| build_peak_pyramid_cancellable(ch2, sample_rate as f32, cancelled))
             },
         );
+        let (l0, l1, l2) = match ch1_pyramid {
+            Some(pyramid) => pyramid,
+            None => return None,
+        };
         analysis.peaks_lvl0_ch1 = l0;
         analysis.peaks_lvl1_ch1 = l1;
         analysis.peaks_lvl2_ch1 = l2;
-        if let Some((l0, l1, l2)) = right {
+        if let Some(pyramid) = right {
+            let (l0, l1, l2) = match pyramid {
+                Some(pyramid) => pyramid,
+                None => return None,
+            };
             analysis.peaks_lvl0_ch2 = Some(l0);
             analysis.peaks_lvl1_ch2 = Some(l1);
             analysis.peaks_lvl2_ch2 = Some(l2);
