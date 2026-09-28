@@ -224,7 +224,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s9 [Luna] Change the Decorrelation Stretch target mean.** Compact Dark capture shows Target mean changed from 127.5 to 255.0 by dragging the production slider; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s10 [Luna] Change the Decorrelation Stretch target spread.** Compact Dark capture shows Target spread changed from 50.0 to 200.0 with the live preview updated; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s11 [Luna] Change the Decorrelation Stretch clipping tolerance.** Compact Dark capture shows `1.0% per tail` selected and the recomputed preview; see `ui_overhaul_acceptance.md`.
-      - [ ] **E2.1s12 [Luna] Change the Decorrelation Stretch sampling stride.**
+      - [x] **E2.1s12 [Luna] Change the Decorrelation Stretch sampling stride.** Compact Dark capture shows `Every 2 pixels` selected, with updated sample count and preview; see `ui_overhaul_acceptance.md`.
     - **Film Look**
       - [ ] **E2.1s13 [Luna] Select a different Film Look stock or preset.**
       - [ ] **E2.1s14 [Luna] Change one Film Look adjustment and verify its preview updates.**
