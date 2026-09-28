@@ -229,8 +229,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s13 [Luna] Select a different Film Look stock or preset.** Compact Dark capture selects Portra 160 from the initially selected Portra 400 stock and shows the updated comparison; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s14 [Luna] Change one Film Look adjustment and verify its preview updates.** Compact Dark capture changes Brightness from 1.00× to 2.20× and keeps the Film Look comparison visible; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s15 [Luna] Apply a Film Look preview to the canvas.** Compact Dark capture shows `Film simulation applied` and the Undo action after applying; see `ui_overhaul_acceptance.md`.
-      - [ ] **E2.1s16 [Luna] Undo a Film Look application.**
-      - [ ] **E2.1s17 [Luna] Redo a Film Look application.**
+      - [x] **E2.1s16 [Luna] Undo a Film Look application.** Compact Dark capture applies Film Look, sends Ctrl+Z, and shows the original image with `Undone`; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s17 [Luna] Redo a Film Look application.** Compact Dark capture applies Film Look, sends Ctrl+Z then Ctrl+Y, and shows the restored simulation with Undo/Redo history controls; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s53 [Luna] Correct the aggressive default Film Look white balance.** Auto WB defaults to 35% strength rather than full gray-world correction; reset and slider default agree. A warm-scene regression confirms the default preserves substantially more scene color, and a compact capture shows 35%; see `ui_overhaul_acceptance.md`.
     - **Creative FX**
       - [ ] **E2.1s18 [Luna] Change one Creative FX parameter and verify its preview updates.**
