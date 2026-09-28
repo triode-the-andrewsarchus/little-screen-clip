@@ -469,7 +469,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
         - [x] **H2.2c5b2 [Luna/Primary; Sol review] Add bounded visible-fragment range lookup.** Binary-search the first overlapping record, then stream ranges with constant iterator memory; preserve crossing matches, half-open edges, interior zero-width hits, and ordered append semantics.
         - [x] **H2.2c5b3 [Luna/Primary; Sol review] Build search indexes asynchronously with query revisions and cooperative cancellation.** Coalesces rapid query changes, retries queue saturation, shows pending state, and publishes only current results. A separate shared cancellation flag cooperates with running scans; `JobTicket.cancel()` suppresses stale publication.
         - [x] **H2.2c5b4a [Luna/Primary; Sol review] Surface search-spool I/O failures without presenting partial results as complete.** Highlight and navigation failures clear the spool/count/selection and expose an error; invalid out-of-range lookups remain harmless.
-        - [ ] **H2.2c5b4b [Primary] Verify spool/job cleanup on replacement, cancellation, error, and viewer close.** Search spools use RAII cleanup, but lifecycle cleanup under cancellation and viewer replacement still needs direct coverage.
+        - [x] **H2.2c5b4b [Primary] Verify spool/job cleanup on replacement, cancellation, error, and viewer close.** Tests observe Linux open descriptors for spilled spools and verify they close when completed previews are dropped/replaced, read errors invalidate results, and closing a preview cancels a running search and releases its in-flight spool.
         - **H2.2c5b5 [Primary] Complete focused search-index regression coverage.**
           - [x] Verify exact match counts and next/previous wraparound.
           - [x] Verify Unicode byte offsets and regex/literal query semantics.
@@ -485,7 +485,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - **H2.2e Text and spreadsheet scale checks**
     - [x] **H2.2e1 [Primary] Audit long-line horizontal scrolling.** Raw code uses shared 15-point monospace; `unwrapped_raw_line_scrolls_horizontally_without_eliding_its_end` sends a horizontal wheel event through egui, waits for the scroll animation, and verifies the right edge can be brought into the viewport without elision.
     - [x] **H2.2e2 [Primary] Validate spreadsheet two-axis scrolling.** `spreadsheet_grid_scrolls_horizontally_and_vertically` drives an egui horizontal+vertical scroll event and verifies both persistent offsets advance while later cells remain rendered.
-    - [ ] **H2.2e3 [Primary] Validate spreadsheet sticky headers.**
+    - [x] **H2.2e3 [Luna/Primary] Validate spreadsheet sticky headers.** The scroll test confirms a visible column header stays at its initial top position and the selected row number stays in the left gutter aligned with its visible cell.
     - [ ] **H2.2e4 [Primary] Validate spreadsheet full-cell inspection.**
     - [ ] **H2.2e5 [Primary] Validate spreadsheet large-data bounds.**
     - [ ] **H2.2e6 [Primary] Validate scroll/search/copy targets across UI and DPI scales with large fixtures.**

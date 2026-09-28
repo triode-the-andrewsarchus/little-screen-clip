@@ -24,6 +24,10 @@ H2.2e1 adds `unwrapped_raw_line_scrolls_horizontally_without_eliding_its_end`, w
 
 H2.2e2 adds `spreadsheet_grid_scrolls_horizontally_and_vertically`, which sends one diagonal scroll event over a large fixture, waits for scrolling to settle, and verifies both offsets advance while later grid cells continue rendering. The serial workbench suite passes (445 passed, 1 ignored).
 
+H2.2e3 is covered by the same large-grid egui interaction: after scrolling, the visible column header remains at its initial y position, the row-number gutter keeps its initial left edge, and the visible cell remains vertically aligned with its row label. Luna's spreadsheet-view suite passes (9 tests).
+
+H2.2c5b4b adds lifecycle checks for spilled search files. Linux `/proc/self/fd` inspection verifies that replacing or dropping a completed preview releases its rolled spool, a spool read error clears and closes its backing file, and closing a preview cancels a running search and releases the worker's spilled spool. The serial workbench suite passes (448 passed, 1 ignored); format and diff checks pass.
+
 ## Text preview Markdown and search/status live review, 2026-09-27
 
 The private capture runner's `--fake-text-preview` option serves a deterministic Markdown slot through the run-local IPC socket. The capture enters the existing Palette **Preview Markdown** action; no production CLI/API, user daemon, clipboard, or compositor is involved. For E2.3d1b, the 1280×720 Light capture is `/tmp/clip-e23d1b-text-compact-20260927/report.json` and `settled.png`; the 3440×1440 Dark capture is `/tmp/clip-e23d1b-text-wide-viewer-20260927/report.json` and `settled.png`. Both reports pass the popup geometry, centering, fixed-size hint, singleton, and fake-slot-fetch checks. The rendered heading, body, nested and ordered lists, quote, code block, toolbar, and footer are visible at both sizes; the full-size images are easiest to inspect at native scale.

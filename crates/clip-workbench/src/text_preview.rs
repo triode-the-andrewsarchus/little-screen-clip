@@ -2207,6 +2207,16 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
 mod tests {
     use super::*;
 
+    #[cfg(target_os = "linux")]
+    fn open_spool_files_in(directory: &Path) -> usize {
+        std::fs::read_dir("/proc/self/fd")
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter_map(|entry| std::fs::read_link(entry.path()).ok())
+            .filter(|target| target.starts_with(directory))
+            .count()
+    }
+
     #[test]
     fn async_search_coalesces_queries_and_publishes_only_latest_revision() {
         let mut state = TextPreviewState::from_text(
@@ -2313,11 +2323,17 @@ mod tests {
 
     #[test]
     fn spool_read_failure_clears_completed_search_results() {
+        let directory = tempfile::tempdir().unwrap();
         let mut state =
             TextPreviewState::from_text("needle".to_owned(), None, &AppConfig::default());
-        let mut spool = SearchMatchSpool::new().unwrap();
-        spool.append(0, 6).unwrap();
-        spool.file.roll().unwrap();
+        let mut spool = SearchMatchSpool::new_in(directory.path()).unwrap();
+        let records_at_limit = SEARCH_MATCH_MEMORY_LIMIT_BYTES / SEARCH_MATCH_RECORD_BYTES;
+        for index in 0..=records_at_limit as u64 {
+            spool.append(index * 2, index * 2 + 1).unwrap();
+        }
+        assert!(spool.is_rolled());
+        #[cfg(target_os = "linux")]
+        assert_eq!(open_spool_files_in(directory.path()), 1);
         spool.file.set_len(0).unwrap();
         state.matches = Some(spool);
         state.match_count = 1;
@@ -2333,6 +2349,99 @@ mod tests {
         assert_eq!(state.match_count(), 0);
         assert_eq!(state.active_match_idx, 0);
         assert!(state.matches.is_none());
+        #[cfg(target_os = "linux")]
+        assert_eq!(open_spool_files_in(directory.path()), 0);
+    }
+
+    #[test]
+    fn dropping_preview_releases_completed_search_spool() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut state =
+            TextPreviewState::from_text("target".to_owned(), None, &AppConfig::default());
+        let mut spool = SearchMatchSpool::new_in(directory.path()).unwrap();
+        let records_at_limit = SEARCH_MATCH_MEMORY_LIMIT_BYTES / SEARCH_MATCH_RECORD_BYTES;
+        for index in 0..=records_at_limit as u64 {
+            spool.append(index * 2, index * 2 + 1).unwrap();
+        }
+        assert!(spool.is_rolled());
+        state.match_count = spool.len();
+        state.matches = Some(spool);
+
+        #[cfg(target_os = "linux")]
+        assert_eq!(open_spool_files_in(directory.path()), 1);
+        drop(state);
+        #[cfg(target_os = "linux")]
+        assert_eq!(open_spool_files_in(directory.path()), 0);
+    }
+
+    #[test]
+    fn replacing_preview_releases_previous_search_spool() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut previous =
+            TextPreviewState::from_text("target".to_owned(), None, &AppConfig::default());
+        let mut spool = SearchMatchSpool::new_in(directory.path()).unwrap();
+        let records_at_limit = SEARCH_MATCH_MEMORY_LIMIT_BYTES / SEARCH_MATCH_RECORD_BYTES;
+        for index in 0..=records_at_limit as u64 {
+            spool.append(index * 2, index * 2 + 1).unwrap();
+        }
+        previous.match_count = spool.len();
+        previous.matches = Some(spool);
+
+        let mut active_preview = Some(previous);
+        #[cfg(target_os = "linux")]
+        assert_eq!(open_spool_files_in(directory.path()), 1);
+        let replaced = active_preview.replace(TextPreviewState::from_text(
+            "new preview".to_owned(),
+            None,
+            &AppConfig::default(),
+        ));
+        drop(replaced);
+        #[cfg(target_os = "linux")]
+        assert_eq!(open_spool_files_in(directory.path()), 0);
+    }
+
+    #[test]
+    fn closing_preview_cancels_running_search_and_releases_spilled_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let jobs = BackgroundJobs::new(1, 1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::clone(&cancelled);
+        let worker_directory = directory.path().to_path_buf();
+        let (spooled_tx, spooled_rx) = std::sync::mpsc::channel();
+        let (dropped_tx, dropped_rx) = std::sync::mpsc::channel();
+        let (ticket, receiver) = jobs.submit(Duration::MAX, move || {
+            let mut spool = SearchMatchSpool::new_in(&worker_directory).unwrap();
+            let records_at_limit = SEARCH_MATCH_MEMORY_LIMIT_BYTES / SEARCH_MATCH_RECORD_BYTES;
+            for index in 0..=records_at_limit as u64 {
+                spool.append(index * 2, index * 2 + 1).unwrap();
+            }
+            assert!(spool.is_rolled());
+            spooled_tx.send(()).unwrap();
+            while !worker_cancelled.load(Ordering::Acquire) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            drop(spool);
+            dropped_tx.send(()).unwrap();
+            Ok::<_, String>(SearchBuildOutput::Cancelled)
+        });
+        let mut state =
+            TextPreviewState::from_text("target".to_owned(), None, &AppConfig::default());
+        state.search_job = Some(SearchMatchJob {
+            revision: state.search_revision,
+            ticket,
+            cancelled: Arc::clone(&cancelled),
+            receiver,
+        });
+
+        spooled_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        #[cfg(target_os = "linux")]
+        assert_eq!(open_spool_files_in(directory.path()), 1);
+        drop(state);
+
+        assert!(cancelled.load(Ordering::Acquire));
+        dropped_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        #[cfg(target_os = "linux")]
+        assert_eq!(open_spool_files_in(directory.path()), 0);
     }
 
     #[test]
