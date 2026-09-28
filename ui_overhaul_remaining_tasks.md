@@ -95,7 +95,9 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [x] **H1.3a2 [Primary] Verify image navigation and cleanup live.** Isolated 1280×720 Dark capture opens Image Studio directly from a PNG fixture; Escape closes the viewer and returns to the Palette while the popup remains alive and centered. See `ui_overhaul_acceptance.md`. Pending-load cancellation and bounded worker/cache cleanup remain under H2.1.
   - [ ] **H1.3a3 [Primary] Verify audio navigation and cleanup live.** Closing audio/MIDI stops playback.
   - [ ] **H1.3a4 [Primary] Verify text navigation and cleanup live.**
-  - [ ] **H1.3a5 [Primary] Verify PDF navigation and cleanup live.** Closing dirty PDF refreshes mirror.
+  - **H1.3a5 Verify PDF navigation and cleanup live.** Closing dirty PDF refreshes mirror.
+    - [x] **H1.3a5a [Primary] Close a dirty PDF and return to the live Palette.** A compact isolated run rotated page 1, then Escape returned to the still-running workbench; see `ui_overhaul_acceptance.md`.
+    - [ ] **H1.3a5b [Primary] Verify closing a dirty PDF refreshes the daemon mirror.** Requires a private daemon-backed PDF item and before/after mirror evidence.
   - [ ] **H1.3a6 [Primary] Verify diff navigation and cleanup live.**
   - [x] **H1.3b1 [Primary] Specify remaining Escape precedence.** `ui_overhaul_viewer_route_contract.md` documents modal prompt/viewer key ownership before workbench Escape; nested viewer Escape behavior then closes the active session/advances startup queue. With no modal route, Node Machine cancels catalog/save/cable drag, active rolling audio stops, secondary views return to Palette, and Palette closes the popup. Workbench global shortcuts now yield while a viewer/prompt is active.
   - [x] **H1.3b2 [Primary] Specify remaining Enter precedence.** `ui_overhaul_enter_key_contract.md` records modal ownership and explicit Quick Palette/form-submit semantics, focused text submission/navigation, and image processing Enter modifiers. Runtime ordering and submit-path regressions remain tracked separately.
