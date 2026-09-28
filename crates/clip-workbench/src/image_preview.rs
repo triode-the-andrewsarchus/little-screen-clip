@@ -135,6 +135,7 @@ pub struct ImagePreviewState {
     rendering_frame: bool,
     pub show_fallback_save_modal: bool,
     fallback_save_needs_focus: bool,
+    fallback_save_confirm_overwrite: bool,
     pub fallback_save_path: String,
 
     // File Size Optimizer Async Worker
@@ -351,6 +352,7 @@ impl ImagePreviewState {
             rendering_frame: false,
             show_fallback_save_modal: false,
             fallback_save_needs_focus: false,
+            fallback_save_confirm_overwrite: false,
             fallback_save_path: String::new(),
             optimizer_rx: None,
             optimizer_status: None,
@@ -471,6 +473,7 @@ impl ImagePreviewState {
         self.fallback_save_path = default_target.to_string_lossy().to_string();
         self.show_fallback_save_modal = true;
         self.fallback_save_needs_focus = true;
+        self.fallback_save_confirm_overwrite = false;
     }
 
     /// Opens a save dialog targeting a specific extension (e.g. "png", "jpg", "webp").
@@ -492,6 +495,7 @@ impl ImagePreviewState {
         self.fallback_save_path = default_target.to_string_lossy().to_string();
         self.show_fallback_save_modal = true;
         self.fallback_save_needs_focus = true;
+        self.fallback_save_confirm_overwrite = false;
     }
 
     // --- Transform & Crop Actions ---
@@ -669,25 +673,54 @@ impl ImagePreviewState {
                         path_field.request_focus();
                         self.fallback_save_needs_focus = false;
                     }
+                    if self.fallback_save_confirm_overwrite {
+                        ui.label(
+                            egui::RichText::new("A file at this path already exists. Replace it?")
+                                .color(hex_to_c32(&palette.harmonies.warm_attention)),
+                        );
+                    }
                     ui.add_space(crate::ui_ext::SPACE_SM);
                     ui.horizontal(|ui| {
+                        let save_label = if self.fallback_save_confirm_overwrite {
+                            "Replace"
+                        } else {
+                            "Save"
+                        };
+                        let save_color = if self.fallback_save_confirm_overwrite {
+                            hex_to_c32(&palette.harmonies.warm_attention)
+                        } else {
+                            hex_to_c32(&palette.diff_add)
+                        };
                         if ui
                             .add(crate::ui_ext::action_button_icon(
                                 Some(Icon::Save),
-                                "Save",
-                                hex_to_c32(&palette.diff_add),
+                                save_label,
+                                save_color,
                                 palette,
                             ))
                             .clicked()
                         {
                             let p = PathBuf::from(&self.fallback_save_path);
-                            self.save_image_to_path(&p);
-                            self.show_fallback_save_modal = false;
-                            self.fallback_save_needs_focus = false;
+                            if self.fallback_save_confirm_overwrite {
+                                self.save_image_to_path(&p);
+                                self.show_fallback_save_modal = false;
+                                self.fallback_save_needs_focus = false;
+                                self.fallback_save_confirm_overwrite = false;
+                            } else if p.exists() {
+                                self.fallback_save_confirm_overwrite = true;
+                            } else {
+                                self.save_image_to_path(&p);
+                                self.show_fallback_save_modal = false;
+                                self.fallback_save_needs_focus = false;
+                            }
                         }
                         if ui.button("Cancel").clicked() {
-                            self.show_fallback_save_modal = false;
-                            self.fallback_save_needs_focus = false;
+                            if self.fallback_save_confirm_overwrite {
+                                self.fallback_save_confirm_overwrite = false;
+                            } else {
+                                self.show_fallback_save_modal = false;
+                                self.fallback_save_needs_focus = false;
+                            }
                         }
                     });
                 });

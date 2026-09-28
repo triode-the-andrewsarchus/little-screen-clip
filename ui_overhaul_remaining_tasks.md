@@ -274,7 +274,9 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s50 [Luna] Verify visible Depth Map model and output controls.** Compact Dark capture shows the fixed Depth-Anything V2 metric monocular model and Left/Right Hand destinations; no model picker or parameter controls are exposed; see `ui_overhaul_acceptance.md`.
       - [ ] **E2.1s51 [Luna] Generate a Depth Map.** Defer inference until GPU memory is available; current shared GPU pressure already caused the adjacent FeyNoBg model to OOM.
       - [ ] **E2.1s52 [Luna] Undo a Depth Map result.** Depends on successful generation and remains open with E2.1s51.
-  - [ ] **E2.1t [Luna] Verify image save and copy live.** Save As now uses the existing in-workbench modal because unparented Zenity appeared behind the popup. Save completion remains unverified, and the private Copy capture stays on “Preparing image for clipboard…” after seven seconds; diagnose the worker stall and finish both live checks.
+  - **E2.1t Image save and copy live checks**
+    - [x] **E2.1t1 [Luna] Verify Image Studio Save As and save completion.** Save As uses the centered in-workbench modal; a compact Dark capture completed the save and showed its success toast. The modal also restores overwrite confirmation before replacing an existing path.
+    - [ ] **E2.1t2 [Luna] Diagnose and verify image Copy live.** The private capture remains at “Preparing image for clipboard…” seven seconds after activation; investigate the worker stall, then verify completion.
   - [ ] **E2.1u [Luna] Verify external-app launch and fallback live.**
     - [x] **E2.1u1 [Luna] Test launcher success, fallback, and total failure without opening desktop apps.** Uses `/bin/true` and missing executable paths; production still defaults to `xdg-open`. The live editor-launch check remains open.
 - **E2.2 Audio ordinary control rows**
