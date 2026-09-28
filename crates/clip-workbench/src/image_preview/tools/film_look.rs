@@ -725,6 +725,74 @@ mod render_identity_tests {
     }
 
     #[test]
+    fn full_resolution_render_matches_direct_film_processing_and_adjustments() {
+        use std::time::{Duration, Instant};
+
+        let jobs = little_clip_core::BackgroundJobs::new(1, 1);
+        let mut state = state();
+        state.active_mode = ImageToolMode::FilmSim;
+        state.film_sim_state.selected_stock_idx = 0;
+        state.film_sim_state.brightness = 1.13;
+        state.film_sim_state.contrast = 0.31;
+        state.film_sim_state.warmth = -0.17;
+        state.film_sim_state.tint = 0.22;
+        state.film_sim_state.intensity = 0.87;
+        state.film_sim_state.wb_mode = filmr::processor::WhiteBalanceMode::Off;
+        state.film_sim_state.wb_strength = 0.0;
+        state.film_sim_state.halation = 0.18;
+        state.film_sim_state.vignette = 0.12;
+        state.film_sim_state.enable_grain = false;
+
+        let stocks = super::all_film_stocks();
+        let entry = &stocks[state.film_sim_state.selected_stock_idx];
+        let mut stock = (entry.build)().with_style(state.film_sim_state.style);
+        stock.halation_strength = state.film_sim_state.halation;
+        stock.vignette_strength = state.film_sim_state.vignette;
+        let config = filmr::processor::SimulationConfig {
+            exposure_time: state.film_sim_state.brightness,
+            warmth: state.film_sim_state.warmth,
+            saturation: state.film_sim_state.intensity,
+            auto_levels: false,
+            white_balance_mode: state.film_sim_state.wb_mode,
+            white_balance_strength: state.film_sim_state.wb_strength,
+            output_mode: filmr::processor::OutputMode::Positive,
+            enable_grain: false,
+            light_leak: state.film_sim_state.light_leak.to_config(),
+            ..filmr::processor::SimulationConfig::default()
+        };
+        let source_rgb = image::RgbImage::from_fn(
+            state.current_rgba.width(),
+            state.current_rgba.height(),
+            |x, y| {
+                let pixel = state.current_rgba.get_pixel(x, y);
+                image::Rgb([pixel[0], pixel[1], pixel[2]])
+            },
+        );
+        let expected = super::apply_film_sim_post_adjustments(
+            &super::process_film_image(&source_rgb, &stock, &config),
+            state.film_sim_state.contrast,
+            state.film_sim_state.tint,
+        );
+
+        state.run_film_sim_render_on(&jobs);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while state.film_sim_state.is_rendering && Instant::now() < deadline {
+            state.poll_film_sim();
+            if state.film_sim_state.is_rendering {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        state.poll_film_sim();
+
+        let Some(actual) = state.film_sim_state.preview_rgba.as_ref() else {
+            state.film_sim_state.cancel_render();
+            panic!("full-resolution Film Look render did not produce an accepted preview");
+        };
+        assert!(state.film_sim_preview_is_current());
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
     fn film_sim_cannot_apply_a_preview_after_its_inputs_change() {
         let mut state = state();
         let original = state.current_rgba.get_pixel(0, 0).to_owned();
