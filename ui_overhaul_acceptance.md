@@ -372,13 +372,15 @@ After rebuilding `target/debug/clip-workbench`, the compact Light capture `/tmp/
 
 The production Barcode toolbar render regression `barcode_copy_actions_emit_exact_payloads` clicks Copy All and the individual payload button through synthetic egui pointer events. It verifies exact Unicode clipboard output for a URL plus a Japanese/check-mark payload, then for the selected URL alone. External Open Link launch remains untested.
 
-## PDF texture residency and re-selection, 2026-09-27
+## PDF texture and raster-cache residency, 2026-09-28
 
 PDF textures now load only for the selected page and thumbnails intersecting the scroll clip. The local LRU keeps at most 32 live handles / 32 MiB RGBA; selected-page and current-frame paint references remain pinned. Admission refuses additional textures when the current frame has consumed the budget, leaving a selectable placeholder; a newly selected page is admitted first on the next frame. egui’s backend applies frees after drawing, so turnover can temporarily hold the previous frame's textures plus the new uploads (at most 64 PDF handles / 64 MiB, excluding driver overhead and unrelated egui textures).
 
-Four production-cache regressions pass: 64-page traversal at both 16px and 1200px proves the handle/byte limits and selected-page retention; evicted-page re-selection verifies a fresh upload with the exact original pixels; saturated current-frame references are retained and new selection is admitted on the following frame; the actual 100-page `render_ui` uploads visible thumbnails and an offscreen selected page while middle offscreen pages remain unloaded. These are synthetic egui/storage checks, not a live PDF page-navigation session. The workbench suite currently passes (311 passed, 1 ignored); formatting and diff checks pass.
+Texture regressions cover 64-page traversal at both 16px and 1200px, selected-page retention, exact-pixel re-upload after eviction, current-frame pinning, and the actual 100-page `render_ui` path. A compact isolated Niri capture `/tmp/clip-h21p-pdf-disk-cache-compact-dark-20260928/settled.png` selected page 2 and showed its decoded raster in the preview; geometry and singleton checks pass.
 
-Compressed PNG rasters remain in RAM for re-upload, so CPU storage still grows with document length; H2.1p tracks bounding it. The all-page sequential raster worker and three-message queue remain unchanged. PNG decoding/re-upload occurs on the UI thread for selected/visible cache misses; moving that work off-frame remains under H2.1h1–h5. Initial selected-page quality remains 1200px and other pages retain the existing 360px raster quality; this change adds no new resolution downgrade.
+H2.1p now writes each rendered PNG to a per-viewer `TempDir` from the preview worker and publishes only its path and dimensions through the bounded three-message queue. `PdfPageItem` retains paths rather than compressed bytes; the bounded decode worker reads one raster at a time, while the existing LRU caps resident textures at 32 handles / 32 MiB. Evicted pages can be reselected from disk, and dropping the viewer releases the cache after any in-flight preview worker exits. The existing 1200px selected-page / 360px thumbnail rendering is unchanged. PDF tests pass; full serial workbench suite passes (377 passed, 1 ignored), and formatting/diff checks pass.
+
+The architecture-fitness baseline request timed out after 300 seconds. A focused Lizard comparison of `pdf_view.rs` at pre-change `49a3eb0` and the working tree reports NLOC 1634→1688 (+54), average CCN unchanged at 4.5, the same three existing warnings, and no new function above CCN 15. This focused measurement does not close branch-wide H3.2k.
 
 ## PDF preview worker lifetime, 2026-09-27
 

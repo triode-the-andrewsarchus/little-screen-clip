@@ -29,7 +29,7 @@ const STAGED_PDF_FILENAME: &str = "edited.pdf";
 
 struct PdfPreviewMsg {
     page_num: usize,
-    result: Result<(Vec<u8>, u32, u32), String>,
+    result: Result<(PathBuf, u32, u32), String>,
 }
 
 // One running/queued decode or completed ColorImage per editor (at most
@@ -84,7 +84,7 @@ struct PdfEditMsg {
 /// Rendered raster thumbnail and metadata for a single PDF page.
 pub struct PdfPageItem {
     pub page_num: usize,
-    pub png_bytes: Vec<u8>,
+    pub raster_path: Option<PathBuf>,
     pub texture: Option<egui::TextureHandle>,
     texture_last_used: u64,
     pub error: Option<String>,
@@ -111,6 +111,7 @@ pub struct PdfEditorState {
     previews_loading: bool,
     edit_rx: Option<Receiver<PdfEditMsg>>,
     edit_in_progress: bool,
+    raster_cache: Option<std::sync::Arc<tempfile::TempDir>>,
     texture_frame: u64,
     decode_job: Option<PdfDecodeJob>,
     decode_requests: Vec<usize>,
@@ -149,6 +150,7 @@ impl PdfEditorState {
             previews_loading: false,
             edit_rx: None,
             edit_in_progress: false,
+            raster_cache: None,
             texture_frame: 0,
             decode_job: None,
             decode_requests: Vec::new(),
@@ -163,6 +165,7 @@ impl PdfEditorState {
         }
         self.preview_rx = None;
         self.previews_loading = false;
+        self.raster_cache = None;
         if let Some(job) = &mut self.decode_job {
             job.cancel();
         }
@@ -210,7 +213,7 @@ impl PdfEditorState {
         self.pages = (1..=self.page_count)
             .map(|page_num| PdfPageItem {
                 page_num,
-                png_bytes: Vec::new(),
+                raster_path: None,
                 texture: None,
                 texture_last_used: 0,
                 error: None,
@@ -226,6 +229,17 @@ impl PdfEditorState {
     }
 
     fn start_preview_worker(&mut self) {
+        let raster_cache = match tempfile::tempdir() {
+            Ok(cache) => std::sync::Arc::new(cache),
+            Err(error) => {
+                self.previews_loading = false;
+                for page in &mut self.pages {
+                    page.error = Some(format!("PDF preview cache unavailable: {error}"));
+                }
+                return;
+            }
+        };
+        self.raster_cache = Some(std::sync::Arc::clone(&raster_cache));
         let path = self.path.clone();
         let page_count = self.page_count;
         let selected_page = self.selected_page.unwrap_or(1).min(page_count.max(1));
@@ -239,6 +253,7 @@ impl PdfEditorState {
             path,
             page_count,
             selected_page,
+            raster_cache,
             tx,
             render_pdf_page_preview,
         ));
@@ -257,9 +272,9 @@ impl PdfEditorState {
                         }
                         if let Some(page) = self.pages.get_mut(message.page_num.saturating_sub(1)) {
                             match message.result {
-                                Ok((png_bytes, width, height)) => {
+                                Ok((raster_path, width, height)) => {
                                     page.texture = None;
-                                    page.png_bytes = png_bytes;
+                                    page.raster_path = Some(raster_path);
                                     page.width = width;
                                     page.height = height;
                                     page.error = None;
@@ -298,7 +313,7 @@ impl PdfEditorState {
             page.texture_last_used = self.texture_frame;
             return Some(texture.id());
         }
-        if page.png_bytes.is_empty() || page.error.is_some() {
+        if page.raster_path.is_none() || page.error.is_some() {
             return None;
         }
         if !self.decode_requests.contains(&page_num) {
@@ -378,7 +393,7 @@ impl PdfEditorState {
                 selected != job.page_num
                     && self.decode_requests.contains(&selected)
                     && self.pages.get(selected - 1).is_some_and(|page| {
-                        page.texture.is_none() && page.error.is_none() && !page.png_bytes.is_empty()
+                        page.texture.is_none() && page.error.is_none() && page.raster_path.is_some()
                     })
             });
             if !self.decode_requests.contains(&job.page_num) || selected_waiting {
@@ -399,15 +414,21 @@ impl PdfEditorState {
                         && self.pages.get(page_num - 1).is_some_and(|page| {
                             page.texture.is_none()
                                 && page.error.is_none()
-                                && !page.png_bytes.is_empty()
+                                && page.raster_path.is_some()
                         })
                 });
             if let Some(page_num) = candidate {
-                let png = self.pages[page_num - 1].png_bytes.clone();
+                let raster_path = self.pages[page_num - 1]
+                    .raster_path
+                    .as_ref()
+                    .expect("decode candidates have cached rasters")
+                    .clone();
                 let repaint = ctx.clone();
                 let (ticket, rx) =
                     BackgroundJobs::global().submit(Duration::from_secs(10), move || {
-                        let result = decode_page_png(png);
+                        let result = std::fs::read(raster_path)
+                            .map_err(|error| format!("Could not read cached PDF raster: {error}"))
+                            .and_then(decode_page_png);
                         repaint.request_repaint();
                         result
                     });
@@ -1024,6 +1045,7 @@ fn spawn_preview_worker<F>(
     path: PathBuf,
     page_count: usize,
     selected_page: usize,
+    raster_cache: std::sync::Arc<tempfile::TempDir>,
     tx: std::sync::mpsc::SyncSender<PdfPreviewMsg>,
     render_page: F,
 ) -> std::thread::JoinHandle<()>
@@ -1044,7 +1066,13 @@ where
             } else {
                 360
             };
-            let result = render_page(&path, page_num, max_dim);
+            let result =
+                render_page(&path, page_num, max_dim).and_then(|(png_bytes, width, height)| {
+                    let raster_path = raster_cache.path().join(format!("page-{page_num}.png"));
+                    std::fs::write(&raster_path, png_bytes)
+                        .map(|()| (raster_path, width, height))
+                        .map_err(|error| format!("Could not cache PDF page {page_num}: {error}"))
+                });
             if tx.send(PdfPreviewMsg { page_num, result }).is_err() {
                 break;
             }
@@ -1075,6 +1103,7 @@ mod tests {
         ));
         let mut png = std::io::Cursor::new(Vec::new());
         image.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let raster_cache = std::sync::Arc::new(tempfile::tempdir().unwrap());
         PdfEditorState {
             path: PathBuf::from("fixture.pdf"),
             title: "fixture.pdf".to_owned(),
@@ -1082,7 +1111,11 @@ mod tests {
             pages: (1..=page_count)
                 .map(|page_num| PdfPageItem {
                     page_num,
-                    png_bytes: png.get_ref().clone(),
+                    raster_path: {
+                        let path = raster_cache.path().join(format!("page-{page_num}.png"));
+                        std::fs::write(&path, png.get_ref()).unwrap();
+                        Some(path)
+                    },
                     texture: None,
                     texture_last_used: 0,
                     error: None,
@@ -1099,6 +1132,7 @@ mod tests {
             previews_loading: false,
             edit_rx: None,
             edit_in_progress: false,
+            raster_cache: Some(raster_cache),
             texture_frame: 0,
             decode_job: None,
             decode_requests: Vec::new(),
@@ -1148,6 +1182,17 @@ mod tests {
     }
 
     #[test]
+    fn dropping_editor_releases_temporary_raster_cache() {
+        let state = raster_state(2, 16);
+        let cache_path = state.raster_cache.as_ref().unwrap().path().to_owned();
+        assert!(cache_path.exists());
+
+        drop(state);
+
+        assert!(!cache_path.exists());
+    }
+
+    #[test]
     fn decode_requests_are_bounded_deduplicated_and_selected_first() {
         let ctx = egui::Context::default();
         let mut state = raster_state(100, 16);
@@ -1184,7 +1229,8 @@ mod tests {
         let ctx = egui::Context::default();
         let mut state = raster_state(1, 16);
         let malformed = b"not a PNG".to_vec();
-        state.pages[0].png_bytes = malformed.clone();
+        let raster_path = state.pages[0].raster_path.as_ref().unwrap().clone();
+        std::fs::write(&raster_path, &malformed).unwrap();
         wait_for_decode(&mut state, 1, &ctx);
         assert!(
             state.pages[0]
@@ -1193,7 +1239,7 @@ mod tests {
                 .unwrap()
                 .contains("PDF preview decode failed")
         );
-        assert_eq!(state.pages[0].png_bytes, malformed);
+        assert_eq!(std::fs::read(raster_path).unwrap(), malformed);
         state.decode_requests.clear();
         for _ in 0..3 {
             assert!(state.ensure_page_texture(1, &ctx).is_none());
@@ -1263,8 +1309,9 @@ mod tests {
 
     #[test]
     fn oversized_raster_decode_bounds_published_pixel_memory() {
-        let mut state = raster_state(1, PAGE_RASTER_MAX_DIM + 1);
-        let image = decode_page_png(std::mem::take(&mut state.pages[0].png_bytes)).unwrap();
+        let state = raster_state(1, PAGE_RASTER_MAX_DIM + 1);
+        let raster_path = state.pages[0].raster_path.as_ref().unwrap();
+        let image = decode_page_png(std::fs::read(raster_path).unwrap()).unwrap();
         assert_eq!(image.size, [PAGE_RASTER_MAX_DIM as usize; 2]);
         assert_eq!(
             image.pixels.len() * 4,
@@ -1279,10 +1326,20 @@ mod tests {
         let (release, _) = blocked_decode(&mut state);
         let (tx, rx) = channel();
         state.preview_rx = Some(rx);
-        let replacement = state.pages[0].png_bytes.clone();
+        let replacement_path = state
+            .raster_cache
+            .as_ref()
+            .unwrap()
+            .path()
+            .join("replacement.png");
+        std::fs::copy(
+            state.pages[0].raster_path.as_ref().unwrap(),
+            &replacement_path,
+        )
+        .unwrap();
         tx.send(PdfPreviewMsg {
             page_num: 1,
-            result: Ok((replacement.clone(), 16, 16)),
+            result: Ok((replacement_path.clone(), 16, 16)),
         })
         .unwrap();
         state.poll_preview_worker(&ctx);
@@ -1291,7 +1348,7 @@ mod tests {
         wait_for_decode(&mut state, 1, &ctx);
         assert!(state.ensure_page_texture(1, &ctx).is_some());
         assert!(state.pages[0].error.is_none());
-        assert_eq!(state.pages[0].png_bytes, replacement);
+        assert_eq!(state.pages[0].raster_path.as_ref(), Some(&replacement_path));
     }
 
     #[test]
@@ -1302,11 +1359,17 @@ mod tests {
         let rendered = Arc::new(AtomicUsize::new(0));
         let render_count = Arc::clone(&rendered);
         let (tx, rx) = sync_channel(PREVIEW_QUEUE_CAPACITY);
-        let worker =
-            spawn_preview_worker(PathBuf::from("fixture.pdf"), 100, 1, tx, move |_, _, _| {
+        let worker = spawn_preview_worker(
+            PathBuf::from("fixture.pdf"),
+            100,
+            1,
+            Arc::new(tempfile::tempdir().unwrap()),
+            tx,
+            move |_, _, _| {
                 render_count.fetch_add(1, Ordering::SeqCst);
                 Ok((Vec::new(), 1, 1))
-            });
+            },
+        );
 
         let deadline = std::time::Instant::now() + Duration::from_secs(2);
         while rendered.load(Ordering::SeqCst) < PREVIEW_QUEUE_CAPACITY + 1
@@ -1353,7 +1416,8 @@ mod tests {
         let mut state = raster_state(PAGE_TEXTURE_LIMIT + 2, 16);
         state.texture_frame += 1;
         let original_id = upload_page(&mut state, 2, &ctx);
-        let source = state.pages[1].png_bytes.clone();
+        let source_path = state.pages[1].raster_path.as_ref().unwrap().clone();
+        let source = std::fs::read(&source_path).unwrap();
         for page_num in 3..=state.page_count {
             state.texture_frame += 1;
             upload_page(&mut state, page_num, &ctx);
@@ -1365,7 +1429,7 @@ mod tests {
             let reloaded = upload_page(&mut state, 2, ctx);
             assert_ne!(reloaded, original_id);
         });
-        assert_eq!(state.pages[1].png_bytes, source);
+        assert_eq!(std::fs::read(source_path).unwrap(), source);
         let texture = state.pages[1].texture.as_ref().unwrap();
         assert_eq!(texture.size(), [16, 16]);
         let upload = output
@@ -1455,7 +1519,7 @@ mod tests {
         assert!(bytes <= PAGE_TEXTURE_BYTE_LIMIT);
         assert!(state.pages[99].texture.is_some());
         assert!(state.pages[50].texture.is_none());
-        assert!(state.pages.iter().all(|page| !page.png_bytes.is_empty()));
+        assert!(state.pages.iter().all(|page| page.raster_path.is_some()));
     }
 
     #[test]
@@ -1508,6 +1572,7 @@ mod tests {
                 previews_loading: false,
                 edit_rx: None,
                 edit_in_progress: false,
+                raster_cache: None,
                 texture_frame: 0,
                 decode_job: None,
                 decode_requests: Vec::new(),
@@ -1663,7 +1728,7 @@ mod tests {
         state.previews_loading = true;
         state.pages.push(PdfPageItem {
             page_num: 1,
-            png_bytes: Vec::new(),
+            raster_path: None,
             texture: None,
             texture_last_used: 0,
             error: None,
