@@ -13,6 +13,7 @@ use little_clip_core::palette::AppPalette;
 use little_clip_core::syntax::detect_language;
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use regex::RegexBuilder;
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, mpsc::Receiver};
 use syntect::easy::HighlightLines;
@@ -304,6 +305,111 @@ pub struct SearchMatch {
     pub start_byte: usize,
     pub end_byte: usize,
     pub line: usize,
+}
+
+const SEARCH_MATCH_RECORD_BYTES: usize = 16;
+const SEARCH_MATCH_MEMORY_LIMIT_BYTES: usize = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SearchMatchRange {
+    start_byte: u64,
+    end_byte: u64,
+}
+
+/// Stores fixed-size match ranges in memory until the bounded threshold, then spills to cache.
+#[allow(dead_code)] // This private storage layer is staged for search-model integration.
+struct SearchMatchSpool {
+    file: tempfile::SpooledTempFile,
+    record_count: u64,
+    cursor_at_end: bool,
+}
+
+#[allow(dead_code)] // Keep the standalone abstraction warning-free before UI integration.
+impl SearchMatchSpool {
+    fn new() -> io::Result<Self> {
+        let directory =
+            little_clip_core::staging::get_staging_dir().map_err(|error| match error {
+                little_clip_core::staging::StagingError::Io(error) => error,
+            })?;
+        Self::new_in(&directory)
+    }
+
+    fn new_in(directory: &Path) -> io::Result<Self> {
+        std::fs::create_dir_all(directory)?;
+        Ok(Self {
+            file: tempfile::spooled_tempfile_in(SEARCH_MATCH_MEMORY_LIMIT_BYTES, directory),
+            record_count: 0,
+            cursor_at_end: true,
+        })
+    }
+
+    fn len(&self) -> u64 {
+        self.record_count
+    }
+
+    fn append(&mut self, start_byte: u64, end_byte: u64) -> io::Result<()> {
+        let record_count = self
+            .record_count
+            .checked_add(1)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "match count overflow"))?;
+        let byte_len = record_count
+            .checked_mul(SEARCH_MATCH_RECORD_BYTES as u64)
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "match spool size overflow")
+            })?;
+        let record = encode_search_match_range(start_byte, end_byte);
+
+        if byte_len > SEARCH_MATCH_MEMORY_LIMIT_BYTES as u64 && !self.file.is_rolled() {
+            self.file.roll()?;
+        }
+        if !self.cursor_at_end {
+            let offset = self.record_count * SEARCH_MATCH_RECORD_BYTES as u64;
+            self.file.seek(SeekFrom::Start(offset))?;
+        }
+        self.cursor_at_end = false;
+        self.file.write_all(&record)?;
+        self.cursor_at_end = true;
+        self.record_count = record_count;
+        Ok(())
+    }
+
+    fn get(&mut self, index: u64) -> io::Result<SearchMatchRange> {
+        if index >= self.record_count {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "match index is out of bounds",
+            ));
+        }
+        let offset = index * SEARCH_MATCH_RECORD_BYTES as u64;
+        let mut record = [0; SEARCH_MATCH_RECORD_BYTES];
+        self.cursor_at_end = false;
+        self.file.seek(SeekFrom::Start(offset))?;
+        self.file.read_exact(&mut record)?;
+        self.cursor_at_end = index + 1 == self.record_count;
+        Ok(decode_search_match_range(record))
+    }
+
+    fn is_rolled(&self) -> bool {
+        self.file.is_rolled()
+    }
+}
+
+fn encode_search_match_range(start_byte: u64, end_byte: u64) -> [u8; SEARCH_MATCH_RECORD_BYTES] {
+    let mut record = [0; SEARCH_MATCH_RECORD_BYTES];
+    record[..8].copy_from_slice(&start_byte.to_le_bytes());
+    record[8..].copy_from_slice(&end_byte.to_le_bytes());
+    record
+}
+
+fn decode_search_match_range(record: [u8; SEARCH_MATCH_RECORD_BYTES]) -> SearchMatchRange {
+    let mut start = [0; 8];
+    let mut end = [0; 8];
+    start.copy_from_slice(&record[..8]);
+    end.copy_from_slice(&record[8..]);
+    SearchMatchRange {
+        start_byte: u64::from_le_bytes(start),
+        end_byte: u64::from_le_bytes(end),
+    }
 }
 
 /// Interactive UI state for the Big Text Preview modal.
@@ -1711,6 +1817,130 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_match_spool_uses_the_application_staging_directory() {
+        let mut spool = SearchMatchSpool::new().unwrap();
+        spool.append(10, 20).unwrap();
+        assert_eq!(
+            spool.get(0).unwrap(),
+            SearchMatchRange {
+                start_byte: 10,
+                end_byte: 20
+            }
+        );
+    }
+
+    #[test]
+    fn search_match_spool_round_trips_records_by_index_after_reads() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut spool = SearchMatchSpool::new_in(directory.path()).unwrap();
+        spool.append(3, 8).unwrap();
+        assert_eq!(
+            spool.get(0).unwrap(),
+            SearchMatchRange {
+                start_byte: 3,
+                end_byte: 8
+            }
+        );
+
+        spool
+            .append(u32::MAX as u64 + 9, u32::MAX as u64 + 19)
+            .unwrap();
+        assert_eq!(spool.len(), 2);
+        assert_eq!(
+            spool.get(1).unwrap(),
+            SearchMatchRange {
+                start_byte: u32::MAX as u64 + 9,
+                end_byte: u32::MAX as u64 + 19,
+            }
+        );
+        assert_eq!(
+            spool.get(0).unwrap(),
+            SearchMatchRange {
+                start_byte: 3,
+                end_byte: 8
+            }
+        );
+        assert_eq!(
+            spool.get(2).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn search_match_spool_preserves_zero_width_records() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut spool = SearchMatchSpool::new_in(directory.path()).unwrap();
+        spool.append(42, 42).unwrap();
+
+        assert_eq!(
+            spool.get(0).unwrap(),
+            SearchMatchRange {
+                start_byte: 42,
+                end_byte: 42,
+            }
+        );
+    }
+
+    #[test]
+    fn search_match_spool_rolls_over_only_after_the_memory_threshold_and_cleans_up() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut spool = SearchMatchSpool::new_in(directory.path()).unwrap();
+        let records_at_limit = SEARCH_MATCH_MEMORY_LIMIT_BYTES / SEARCH_MATCH_RECORD_BYTES;
+        for index in 0..records_at_limit as u64 {
+            spool.append(index * 2, index * 2 + 1).unwrap();
+        }
+        assert!(!spool.is_rolled());
+        assert_eq!(spool.len(), records_at_limit as u64);
+
+        spool.append(100_000, 100_001).unwrap();
+        assert!(spool.is_rolled());
+        assert_eq!(
+            spool.get(0).unwrap(),
+            SearchMatchRange {
+                start_byte: 0,
+                end_byte: 1
+            }
+        );
+        assert_eq!(
+            spool.get(records_at_limit as u64).unwrap(),
+            SearchMatchRange {
+                start_byte: 100_000,
+                end_byte: 100_001,
+            }
+        );
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+
+        drop(spool);
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn search_match_spool_reports_directory_and_rollover_io_errors() {
+        let parent = tempfile::tempdir().unwrap();
+        let not_a_directory = parent.path().join("regular-file");
+        std::fs::write(&not_a_directory, b"file").unwrap();
+        assert!(SearchMatchSpool::new_in(&not_a_directory).is_err());
+
+        let spill_directory = parent.path().join("spill");
+        let mut spool = SearchMatchSpool::new_in(&spill_directory).unwrap();
+        let records_at_limit = SEARCH_MATCH_MEMORY_LIMIT_BYTES / SEARCH_MATCH_RECORD_BYTES;
+        for index in 0..records_at_limit as u64 {
+            spool.append(index, index + 1).unwrap();
+        }
+        std::fs::remove_dir(&spill_directory).unwrap();
+        assert!(spool.append(9, 9).is_err());
+        assert!(!spool.is_rolled());
+        assert_eq!(spool.len(), records_at_limit as u64);
+        assert_eq!(
+            spool.get(0).unwrap(),
+            SearchMatchRange {
+                start_byte: 0,
+                end_byte: 1
+            }
+        );
+    }
 
     #[test]
     fn find_shortcut_yields_to_focused_text_control() {
