@@ -855,6 +855,17 @@ impl WorkbenchApp {
                     &mut self.dragging_slot,
                     &self.selected_slots,
                 )
+                // Node properties need a usable canvas alongside the always-visible mirror.
+                // Keep the same fitted aspect/width logic, with a smaller height cap only here.
+                .with_height_scale(
+                    if self.view == WorkbenchView::NodeMachine
+                        && ctx.screen_rect().height() <= 800.0
+                    {
+                        0.5
+                    } else {
+                        1.0
+                    },
+                )
                 .show(ui, &self.ui_palette);
 
                 self.handle_mirror_action(mirror_action);

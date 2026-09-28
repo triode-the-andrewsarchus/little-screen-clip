@@ -783,23 +783,26 @@ impl NodeCanvasState {
                         }
                     }
                 }
-
-                // Status Message badge
-                if let Some((ref msg, is_err)) = self.status_message {
-                    let col = if is_err {
-                        hex_to_c32(&palette.diff_del)
-                    } else {
-                        hex_to_c32(&palette.diff_add)
-                    };
-                    ui.label(
-                        egui::RichText::new(msg)
-                            .color(col)
-                            .size(BODY_FONT_SIZE)
-                            .strong(),
-                    );
-                }
             });
         });
+
+        // Keep status feedback in its own row so a long message never displaces
+        // or paints over the Undo, Redo, and Clear controls at compact widths.
+        if let Some((ref msg, is_err)) = self.status_message {
+            let col = if is_err {
+                hex_to_c32(&palette.diff_del)
+            } else {
+                hex_to_c32(&palette.diff_add)
+            };
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(msg)
+                        .color(col)
+                        .size(BODY_FONT_SIZE)
+                        .strong(),
+                );
+            });
+        }
     }
 
     fn render_catalog_window(
@@ -1675,7 +1678,7 @@ fn estimate_node_height(node: &NodeInstance) -> f32 {
     };
     let is_script = matches!(node.kind, NodeKind::PythonScript | NodeKind::BashCommand);
     let props_h = if is_script {
-        56.0
+        72.0
     } else if !node.props.is_empty() {
         node.props.len() as f32 * 30.0 + 8.0
     } else {
@@ -1808,6 +1811,7 @@ mod tests {
             let required_labels = [
                 "Add Node",
                 "New Recipe",
+                "Save",
                 "Save As...",
                 "Undo",
                 "Redo",
@@ -1815,6 +1819,7 @@ mod tests {
                 "RUN PIPELINE",
                 "Pipeline complete",
             ];
+            let mut label_bounds = HashMap::new();
             for required in required_labels {
                 let shape = output.shapes.iter().find_map(|clipped| {
                     let egui::epaint::Shape::Text(text) = &clipped.shape else {
@@ -1836,7 +1841,105 @@ mod tests {
                         && bounds.right() <= clip_rect.right() + 0.5,
                     "{required:?} exceeds {width}-point toolbar: {bounds:?} clipped to {clip_rect:?}"
                 );
+                assert!(
+                    bounds.top() >= clip_rect.top() - 0.5
+                        && bounds.bottom() <= clip_rect.bottom() + 0.5,
+                    "{required:?} is vertically clipped at {width} points: {bounds:?} clipped to {clip_rect:?}"
+                );
+                label_bounds.insert(required, bounds);
             }
+            let status = label_bounds["Pipeline complete"];
+            for action in [
+                "Add Node",
+                "New Recipe",
+                "Save",
+                "Save As...",
+                "Undo",
+                "Redo",
+                "Clear",
+                "RUN PIPELINE",
+            ] {
+                let action_bounds = label_bounds[action];
+                assert!(
+                    status.top() >= action_bounds.bottom() - 0.5
+                        || status.bottom() <= action_bounds.top() + 0.5,
+                    "status overlaps {action} at {width} points: {status:?} vs {action_bounds:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compact_canvas_keeps_complete_python_script_controls_inside_its_viewport() {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut canvas = NodeCanvasState::with_config(AppConfig::default());
+        let mut script = canvas.graph.nodes[0].clone();
+        script.kind = NodeKind::PythonScript;
+        script.title = "Python Transform".to_owned();
+        script.pos = [0.0, 0.0];
+        script.props.clear();
+        script
+            .props
+            .insert("script_file".to_owned(), "transform.py".to_owned());
+        let script_id = script.id;
+        canvas.graph.nodes = vec![script];
+        canvas.graph.connections.clear();
+        canvas.graph.pan = [4.0, 4.0];
+        canvas.graph.zoom = 1.24;
+        canvas.selected_node = Some(script_id);
+        canvas.status_message = Some(("Saved recipe 'Pad and Caption'".to_owned(), false));
+        let slots = SlotManager::default();
+        let mut canvas_bounds = None;
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1177.0, 662.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    // Compact host after a reduced, still-interactive mirror and shared footer.
+                    // The production canvas receives this remaining vertical budget.
+                    let allocated = ui.allocate_ui(Vec2::new(ui.available_width(), 270.0), |ui| {
+                        canvas.ui(ui, &slots, &palette);
+                    });
+                    canvas_bounds = Some(allocated.response.rect);
+                });
+            },
+        );
+        let footer_top = canvas_bounds.expect("compact canvas allocation").bottom();
+
+        let required = ["Python Transform", "transform.py", "Open in Editor"];
+        let texts: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| {
+                let egui::epaint::Shape::Text(text) = &clipped.shape else {
+                    return None;
+                };
+                Some((clipped.clip_rect, text))
+            })
+            .collect();
+        for label in required {
+            let (clip, text) = texts
+                .iter()
+                .find(|(_, text)| text.galley.job.text.contains(label))
+                .unwrap_or_else(|| panic!("missing script property {label:?}"));
+            let bounds = text.galley.rect.translate(text.pos.to_vec2());
+            assert!(!text.galley.elided, "{label:?} was elided");
+            assert!(
+                bounds.left() >= clip.left() - 0.5
+                    && bounds.right() <= clip.right() + 0.5
+                    && bounds.top() >= clip.top() - 0.5
+                    && bounds.bottom() <= clip.bottom() + 0.5,
+                "{label:?} is clipped in compact canvas: {bounds:?} within {clip:?}"
+            );
+            assert!(
+                bounds.bottom() <= footer_top + 0.5,
+                "{label:?} overlaps the fixed footer beginning at {footer_top}: {bounds:?}"
+            );
         }
     }
 

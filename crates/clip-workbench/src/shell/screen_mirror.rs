@@ -62,6 +62,7 @@ pub struct ScreenMirrorWidget<'a> {
     pub left_priors: usize,
     pub dragging_slot: &'a mut Option<SlotId>,
     pub selected_slots: &'a [SlotId],
+    height_scale: f32,
 }
 
 impl<'a> ScreenMirrorWidget<'a> {
@@ -76,14 +77,24 @@ impl<'a> ScreenMirrorWidget<'a> {
             left_priors,
             dragging_slot,
             selected_slots,
+            height_scale: 1.0,
         }
+    }
+
+    /// Caps the mirror height relative to the normal screen-adaptive size.
+    pub fn with_height_scale(mut self, scale: f32) -> Self {
+        self.height_scale = scale.clamp(0.1, 1.0);
+        self
     }
 
     pub fn show(mut self, ui: &mut egui::Ui, palette: &AppPalette) -> Option<MirrorAction> {
         // A top panel computes its own height from its children, so its reported
         // available height can be zero before this widget has allocated space.
         let width = ui.available_width();
-        let size = fitted_mirror_size(Vec2::new(width, ui.ctx().screen_rect().height()));
+        let size = fitted_mirror_size(Vec2::new(
+            width,
+            ui.ctx().screen_rect().height() * self.height_scale,
+        ));
         let (space, _) = ui.allocate_exact_size(Vec2::new(width, size.y), egui::Sense::hover());
         let rect = Rect::from_center_size(space.center(), size);
         let response = ui.interact(
