@@ -1381,9 +1381,13 @@ pub struct FilmSimState {
     pub stock_thumbnails: std::collections::HashMap<usize, egui::TextureHandle>,
     pub pending_thumbnails: Vec<(usize, image::RgbaImage)>,
     pub thumbnail_rx: Option<std::sync::mpsc::Receiver<FilmSimThumbnailMsg>>,
+    pub(crate) thumbnail_job_rx:
+        Option<std::sync::mpsc::Receiver<Result<(), little_clip_core::JobError>>>,
     pub thumbnail_epoch: u64,
     pub(crate) thumbnail_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub(crate) thumbnail_job_ticket: Option<little_clip_core::JobTicket>,
     pub thumbnail_dirty_at: Option<std::time::Instant>,
+    pub(crate) thumbnail_retry_at: Option<std::time::Instant>,
     pub is_generating_thumbnails: bool,
 
     // ── Debounce timer ──
@@ -1427,9 +1431,12 @@ impl Default for FilmSimState {
             stock_thumbnails: std::collections::HashMap::new(),
             pending_thumbnails: Vec::new(),
             thumbnail_rx: None,
+            thumbnail_job_rx: None,
             thumbnail_epoch: 0,
             thumbnail_cancel: None,
+            thumbnail_job_ticket: None,
             thumbnail_dirty_at: None,
+            thumbnail_retry_at: None,
             is_generating_thumbnails: false,
             params_dirty_at: None,
             search_query: String::new(),
@@ -1464,9 +1471,36 @@ impl FilmSimState {
         if let Some(cancel) = self.thumbnail_cancel.take() {
             cancel.store(true, std::sync::atomic::Ordering::Release);
         }
+        if let Some(ticket) = self.thumbnail_job_ticket.take() {
+            ticket.cancel();
+        }
         self.thumbnail_epoch = self.thumbnail_epoch.wrapping_add(1);
         self.thumbnail_rx = None;
+        self.thumbnail_job_rx = None;
         self.is_generating_thumbnails = false;
+        self.thumbnail_retry_at = None;
+    }
+
+    fn poll_thumbnail_job_queue(&mut self) {
+        let Some(rx) = self.thumbnail_job_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Err(little_clip_core::JobError::QueueFull)) => {
+                self.cancel_thumbnail_batch();
+                self.thumbnail_retry_at =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+            }
+            Ok(_) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.thumbnail_job_ticket = None;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => self.thumbnail_job_rx = Some(rx),
+        }
+    }
+
+    fn thumbnail_retry_ready(&self, now: std::time::Instant) -> bool {
+        self.thumbnail_retry_at
+            .is_none_or(|retry_at| now >= retry_at)
     }
 }
 
@@ -1583,6 +1617,10 @@ impl ImagePreviewState {
     /// Spawn low-priority background thread to generate 42x28 thumbnail previews for all film stocks.
 
     pub fn run_thumbnail_batch(&mut self) {
+        self.run_thumbnail_batch_on(little_clip_core::BackgroundJobs::global());
+    }
+
+    fn run_thumbnail_batch_on(&mut self, jobs: &little_clip_core::BackgroundJobs) {
         if self.current_rgba.is_empty() {
             return;
         }
@@ -1645,52 +1683,67 @@ impl ImagePreviewState {
         self.film_sim_state.thumbnail_rx = Some(rx);
         self.film_sim_state.is_generating_thumbnails = true;
 
-        let spawn_result = std::thread::Builder::new()
-            .name("film_sim_thumbnails".to_string())
-            .spawn(move || {
-                super::run_thumbnail_items(
-                    todo,
-                    || cancelled.load(std::sync::atomic::Ordering::Acquire),
-                    |(idx, entry)| {
-                        let mut stock = (entry.build)().with_style(style);
-                        stock.halation_strength = halation;
-                        stock.vignette_strength = vignette;
+        let (ticket, job_rx) = jobs.submit(std::time::Duration::from_secs(60), move || {
+            super::run_thumbnail_items(
+                todo,
+                || cancelled.load(std::sync::atomic::Ordering::Acquire),
+                |(idx, entry)| {
+                    let mut stock = (entry.build)().with_style(style);
+                    stock.halation_strength = halation;
+                    stock.vignette_strength = vignette;
 
-                        let config = SimulationConfig {
-                            exposure_time: brightness,
-                            warmth,
-                            saturation: intensity,
-                            auto_levels: false,
-                            white_balance_mode: wb_mode,
-                            white_balance_strength: wb_strength,
-                            output_mode: OutputMode::Positive,
-                            enable_grain,
-                            light_leak: light_leak.to_config(),
-                            ..SimulationConfig::default()
-                        };
+                    let config = SimulationConfig {
+                        exposure_time: brightness,
+                        warmth,
+                        saturation: intensity,
+                        auto_levels: false,
+                        white_balance_mode: wb_mode,
+                        white_balance_strength: wb_strength,
+                        output_mode: OutputMode::Positive,
+                        enable_grain,
+                        light_leak: light_leak.to_config(),
+                        ..SimulationConfig::default()
+                    };
 
-                        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            process_film_image(&thumb_rgb, &stock, &config)
-                        }));
+                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        process_film_image(&thumb_rgb, &stock, &config)
+                    }));
 
-                        if let Ok(out_rgb) = res {
-                            let out_rgba =
-                                apply_film_sim_post_adjustments(&out_rgb, contrast, tint);
-                            tx.send(FilmSimThumbnailMsg {
-                                epoch,
-                                stock_idx: idx,
-                                rgba: out_rgba,
-                            })
-                            .is_ok()
-                        } else {
-                            true
-                        }
-                    },
-                );
-            });
-        if spawn_result.is_err() {
-            self.film_sim_state.cancel_thumbnail_batch();
+                    if let Ok(out_rgb) = res {
+                        let out_rgba = apply_film_sim_post_adjustments(&out_rgb, contrast, tint);
+                        tx.send(FilmSimThumbnailMsg {
+                            epoch,
+                            stock_idx: idx,
+                            rgba: out_rgba,
+                        })
+                        .is_ok()
+                    } else {
+                        true
+                    }
+                },
+            );
+        });
+        self.film_sim_state.thumbnail_job_ticket = Some(ticket);
+        self.film_sim_state.thumbnail_job_rx = Some(job_rx);
+    }
+
+    pub(in crate::image_preview) fn retry_thumbnail_batch_if_due(
+        &mut self,
+        jobs: &little_clip_core::BackgroundJobs,
+    ) -> bool {
+        if self.film_sim_state.stock_thumbnails.len() + self.film_sim_state.pending_thumbnails.len()
+            >= all_film_stocks().len()
+            || self.film_sim_state.is_generating_thumbnails
+            || self.current_rgba.is_empty()
+            || self.film_sim_state.thumbnail_retry_at.is_none()
+            || !self
+                .film_sim_state
+                .thumbnail_retry_ready(std::time::Instant::now())
+        {
+            return false;
         }
+        self.run_thumbnail_batch_on(jobs);
+        true
     }
 
     /// Drain any messages from the film sim background thread and thumbnail worker.
@@ -1746,6 +1799,10 @@ impl ImagePreviewState {
                 }
             }
         }
+
+        // A full shared queue rejects submission immediately. Clear that run so the
+        // normal incomplete-thumbnail check can retry it on the next UI frame.
+        self.film_sim_state.poll_thumbnail_job_queue();
 
         // Drain pending thumbnail messages
         let mut thumbs_done = false;
@@ -1841,14 +1898,6 @@ impl ImagePreviewState {
         }
 
         // Fill thumbnails that were still outstanding when the mode was left.
-        if self.film_sim_state.stock_thumbnails.len() + self.film_sim_state.pending_thumbnails.len()
-            < all_film_stocks().len()
-            && !self.film_sim_state.is_generating_thumbnails
-            && !self.current_rgba.is_empty()
-        {
-            self.run_thumbnail_batch();
-        }
-
         let panel_layout = ImageToolMode::FilmSim
             .panel_layout()
             .expect("Film Look has a panel layout")
@@ -2822,5 +2871,74 @@ impl ImagePreviewState {
             badge_font,
             base_c,
         );
+    }
+}
+
+#[cfg(test)]
+mod thumbnail_executor_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    fn preview_state() -> ImagePreviewState {
+        let image = image::RgbaImage::from_pixel(42, 28, image::Rgba([40, 80, 120, 255]));
+        let mut bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let item = little_clip_core::ClipItem::from_image(bytes, 42, 28, "image/png");
+        ImagePreviewState::from_item(&item, &little_clip_core::AppConfig::default()).unwrap()
+    }
+
+    #[test]
+    fn saturated_shared_queue_can_retry_film_thumbnails_and_cancel_the_retry() {
+        let jobs = little_clip_core::BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(Duration::from_secs(5), move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (_, queued_rx) = jobs.submit(Duration::from_secs(5), || ());
+
+        let mut state = preview_state();
+        state.run_thumbnail_batch_on(&jobs);
+        state.film_sim_state.poll_thumbnail_job_queue();
+        assert!(!state.film_sim_state.is_generating_thumbnails);
+        assert!(state.film_sim_state.thumbnail_rx.is_none());
+        assert!(
+            !state
+                .film_sim_state
+                .thumbnail_retry_ready(std::time::Instant::now())
+        );
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        queued_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert!(!state.retry_thumbnail_batch_if_due(&jobs));
+        state.film_sim_state.thumbnail_retry_at =
+            Some(std::time::Instant::now() - Duration::from_millis(1));
+        assert!(state.retry_thumbnail_batch_if_due(&jobs));
+        assert!(state.film_sim_state.is_generating_thumbnails);
+        let cancelled = state
+            .film_sim_state
+            .thumbnail_cancel
+            .as_ref()
+            .unwrap()
+            .clone();
+        state.film_sim_state.cancel_thumbnail_batch();
+        assert!(cancelled.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!state.film_sim_state.is_generating_thumbnails);
+        assert!(state.film_sim_state.thumbnail_job_rx.is_none());
     }
 }

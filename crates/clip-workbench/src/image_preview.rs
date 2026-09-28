@@ -1045,6 +1045,12 @@ impl ImagePreviewState {
                     self.run_thumbnail_batch();
                 }
             }
+            self.retry_thumbnail_batch_if_due(BackgroundJobs::global());
+            if let Some(retry_at) = self.film_sim_state.thumbnail_retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            }
             if self.film_sim_state.is_rendering || self.film_sim_state.is_generating_thumbnails {
                 ctx.request_repaint();
             }
