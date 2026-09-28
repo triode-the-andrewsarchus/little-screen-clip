@@ -251,11 +251,11 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s31 [Luna] Apply Deskew.** Compact Dark capture applies the adjusted quadrilateral and shows the 1345×841 result with `Deskewed perspective`; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s32 [Luna] Undo Deskew.** Compact Dark capture applies Deskew, returns focus to its toolbar, sends Ctrl+Z, and restores 1600×1000 with `Undone`; see `ui_overhaul_acceptance.md`.
     - **Transform**
-      - [ ] **E2.1s33 [Luna] Rotate the image clockwise.**
-      - [ ] **E2.1s34 [Luna] Rotate the image counter-clockwise.**
-      - [ ] **E2.1s35 [Luna] Flip the image horizontally.**
-      - [ ] **E2.1s36 [Luna] Flip the image vertically.**
-      - [ ] **E2.1s37 [Luna] Undo an image transform.**
+      - [x] **E2.1s33 [Luna] Rotate the image clockwise.** Compact Dark capture shows 1000×1600 and `Rotated 90° Clockwise`; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s34 [Luna] Rotate the image counter-clockwise.** Compact Dark capture shows 1000×1600 and `Rotated 90° Counter-clockwise`; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s35 [Luna] Flip the image horizontally.** Compact Dark capture shows `Flipped Horizontally` and the mirrored canvas; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s36 [Luna] Flip the image vertically.** Compact Dark capture shows `Flipped Vertically` and the inverted canvas; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s37 [Luna] Undo an image transform.** Compact Dark capture flips horizontally, sends Ctrl+Z, and shows the original canvas with `Undone`; see `ui_overhaul_acceptance.md`.
     - **Redact and Markup**
       - [ ] **E2.1s38 [Luna] Choose a Redact style.**
       - [ ] **E2.1s39 [Luna] Burn a selected redaction into the image.**
