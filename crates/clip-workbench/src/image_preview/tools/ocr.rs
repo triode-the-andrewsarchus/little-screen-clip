@@ -61,6 +61,29 @@ impl Default for OcrState {
 
 impl ImagePreviewState {
     pub fn run_ocr(&mut self) {
+        let script_path = ["scripts/ocr.py", "./scripts/ocr.py"]
+            .iter()
+            .find(|path| std::path::Path::new(path).exists())
+            .copied()
+            .unwrap_or("scripts/ocr.py")
+            .to_string();
+        let venv_python = std::env::var("HOME")
+            .map(|home| {
+                format!(
+                    "{}/.local/share/little-screen-clip/nobg-venv/bin/python",
+                    home
+                )
+            })
+            .unwrap_or_default();
+        let python_bin = if std::path::Path::new(&venv_python).exists() {
+            venv_python
+        } else {
+            "python3".to_string()
+        };
+        self.run_ocr_with_command(python_bin, script_path);
+    }
+
+    fn run_ocr_with_command(&mut self, python_bin: String, script_path: String) {
         if self.ocr_state.in_progress {
             return;
         }
@@ -88,7 +111,8 @@ impl ImagePreviewState {
         self.ocr_state.in_progress = true;
         self.ocr_state.error = None;
         self.ocr_state.status_text = Some(format!("Starting {}...", engine.label()));
-        let child_pid_arc = self.ocr_child_pid.clone();
+        let control = std::sync::Arc::new(ImageToolProcessControl::new());
+        self.ocr_process_control = Some(control.clone());
 
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
@@ -97,30 +121,7 @@ impl ImagePreviewState {
                 engine_arg
             )));
 
-            let script_candidates = ["scripts/ocr.py", "./scripts/ocr.py"];
-            let mut script_path = "scripts/ocr.py".to_string();
-            for p in &script_candidates {
-                if std::path::Path::new(p).exists() {
-                    script_path = p.to_string();
-                    break;
-                }
-            }
-
-            let venv_python = std::env::var("HOME")
-                .map(|h| format!("{}/.local/share/little-screen-clip/nobg-venv/bin/python", h))
-                .unwrap_or_default();
-            let python_bin = if std::path::Path::new(&venv_python).exists() {
-                venv_python
-            } else {
-                "python3".to_string()
-            };
-
             let mut cmd = Command::new(python_bin);
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                cmd.process_group(0);
-            }
             cmd.arg(&script_path);
             cmd.arg("-").arg("-");
             cmd.arg("--engine").arg(&engine_arg);
@@ -128,33 +129,39 @@ impl ImagePreviewState {
                 cmd.arg("--prompt").arg(p);
             }
 
-            let mut child = match cmd
-                .stdin(std::process::Stdio::piped())
+            cmd.stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-            {
+                .stderr(std::process::Stdio::piped());
+            let mut child = match super::background_removal::spawn_image_tool_child(cmd, &control) {
                 Ok(c) => c,
                 Err(e) => {
-                    let _ = tx.send(OcrMsg::Error(format!(
-                        "Failed to spawn python3 {}: {}",
-                        script_path, e
-                    )));
+                    if !control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        let _ = tx.send(OcrMsg::Error(format!(
+                            "Failed to spawn python3 {}: {}",
+                            script_path, e
+                        )));
+                    }
                     return;
                 }
             };
 
             let pid = child.id();
-            child_pid_arc.store(pid, std::sync::atomic::Ordering::SeqCst);
 
             if let Some(mut stdin) = child.stdin.take() {
                 use std::io::Write;
                 if let Err(e) = stdin.write_all(&png_bytes) {
-                    child_pid_arc.store(0, std::sync::atomic::Ordering::SeqCst);
-                    let _ = tx.send(OcrMsg::Error(format!(
-                        "Failed to pipe image to OCR worker: {}",
-                        e
-                    )));
+                    super::background_removal::terminate_image_tool_process(pid);
+                    let _ = child.wait();
+                    super::background_removal::clear_image_tool_pid_if_owned(
+                        &control.child_pid,
+                        pid,
+                    );
+                    if !control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        let _ = tx.send(OcrMsg::Error(format!(
+                            "Failed to pipe image to OCR worker: {}",
+                            e
+                        )));
+                    }
                     return;
                 }
             }
@@ -192,19 +199,27 @@ impl ImagePreviewState {
             }
 
             let status = match child.wait() {
-                Ok(s) => {
-                    child_pid_arc.store(0, std::sync::atomic::Ordering::SeqCst);
-                    s
-                }
+                Ok(status) => status,
                 Err(e) => {
-                    child_pid_arc.store(0, std::sync::atomic::Ordering::SeqCst);
-                    let _ = tx.send(OcrMsg::Error(format!(
-                        "Error waiting for OCR worker: {}",
-                        e
-                    )));
+                    if super::background_removal::clear_image_tool_pid_if_owned(
+                        &control.child_pid,
+                        pid,
+                    ) {
+                        super::background_removal::terminate_image_tool_process(pid);
+                    }
+                    if !control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        let _ = tx.send(OcrMsg::Error(format!(
+                            "Error waiting for OCR worker: {}",
+                            e
+                        )));
+                    }
                     return;
                 }
             };
+            super::background_removal::clear_image_tool_pid_if_owned(&control.child_pid, pid);
+            if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
 
             let stdout_bytes = stdout_rx.recv().unwrap_or_default();
             let stderr_text = stderr_rx.recv().unwrap_or_default();
@@ -245,22 +260,8 @@ impl ImagePreviewState {
 
     pub fn poll_ocr(&mut self) {
         if self.ocr_rx.is_some() && self.ocr_input_stamp.as_ref() != Some(&self.input_stamp()) {
-            loop {
-                match self.ocr_rx.as_ref().map(|rx| rx.try_recv()) {
-                    Some(Ok(OcrMsg::Progress(_))) => {}
-                    Some(Ok(OcrMsg::Success { .. } | OcrMsg::Error(_)))
-                    | Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
-                        self.ocr_rx = None;
-                        self.ocr_input_stamp = None;
-                        self.ocr_state.in_progress = false;
-                        self.ocr_state.status_text = None;
-                        self.ocr_child_pid
-                            .store(0, std::sync::atomic::Ordering::SeqCst);
-                        return;
-                    }
-                    Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => return,
-                }
-            }
+            self.cancel_ocr_with_feedback(false);
+            return;
         }
         if let Some(ref rx) = self.ocr_rx {
             while let Ok(msg) = rx.try_recv() {
@@ -279,8 +280,7 @@ impl ImagePreviewState {
                         self.ocr_state.in_progress = false;
                         self.ocr_state.status_text = None;
                         self.ocr_rx = None;
-                        self.ocr_child_pid
-                            .store(0, std::sync::atomic::Ordering::SeqCst);
+                        self.ocr_process_control = None;
                         self.show_toast(format!(
                             "✔ OCR complete with {} in {:.2}s",
                             engine,
@@ -294,8 +294,7 @@ impl ImagePreviewState {
                         self.ocr_state.status_text = None;
                         self.ocr_rx = None;
                         self.ocr_input_stamp = None;
-                        self.ocr_child_pid
-                            .store(0, std::sync::atomic::Ordering::SeqCst);
+                        self.ocr_process_control = None;
                         break;
                     }
                 }
@@ -304,16 +303,21 @@ impl ImagePreviewState {
     }
 
     pub fn cancel_ocr(&mut self) {
-        let pid = self
-            .ocr_child_pid
-            .swap(0, std::sync::atomic::Ordering::SeqCst);
-        terminate_ocr_process(pid);
+        self.cancel_ocr_with_feedback(true);
+    }
+
+    fn cancel_ocr_with_feedback(&mut self, show_toast: bool) {
+        if let Some(control) = self.ocr_process_control.take() {
+            control.cancel();
+        }
         if self.ocr_state.in_progress {
             self.ocr_state.in_progress = false;
             self.ocr_state.status_text = None;
             self.ocr_rx = None;
             self.ocr_input_stamp = None;
-            self.show_toast("⏹ OCR process cancelled");
+            if show_toast {
+                self.show_toast("⏹ OCR process cancelled");
+            }
         }
     }
 
@@ -757,18 +761,6 @@ impl ImagePreviewState {
     }
 }
 
-fn terminate_ocr_process(pid: u32) {
-    if pid != 0 {
-        #[cfg(unix)]
-        unsafe {
-            libc::kill(-(pid as i32), libc::SIGTERM);
-            libc::kill(-(pid as i32), libc::SIGKILL);
-            libc::kill(pid as i32, libc::SIGTERM);
-            libc::kill(pid as i32, libc::SIGKILL);
-        }
-    }
-}
-
 #[cfg(test)]
 mod input_stamp_tests {
     use super::*;
@@ -791,15 +783,199 @@ mod input_stamp_tests {
         .unwrap()
     }
 
+    #[cfg(unix)]
+    fn wait_for_ocr_pid(state: &ImagePreviewState) -> u32 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let pid = state
+                .ocr_process_control
+                .as_ref()
+                .unwrap()
+                .child_pid
+                .load(std::sync::atomic::Ordering::SeqCst);
+            if pid != 0 {
+                return pid;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "OCR child PID was not published"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[cfg(unix)]
+    fn assert_ocr_child_exited(pid: u32) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            let result = unsafe { libc::kill(pid as i32, 0) };
+            if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("OCR child {pid} remained alive after cancellation");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stale_ocr_input_terminates_child_without_manual_cancel_toast() {
+        let script = std::env::temp_dir().join(format!("clip-ocr-stale-{}.py", std::process::id()));
+        std::fs::write(
+            &script,
+            "import sys,time\nsys.stdin.buffer.read()\ntime.sleep(30)\n",
+        )
+        .unwrap();
+        let mut state = state();
+        state.run_ocr_with_command("python3".into(), script.display().to_string());
+        let pid = wait_for_ocr_pid(&state);
+        let control = state.ocr_process_control.as_ref().unwrap().clone();
+        state.markup_state.items.push(MarkupShape::Text {
+            pos: Pos2::ZERO,
+            text: "changed OCR source".into(),
+            font_size: 10.0,
+        });
+
+        state.poll_ocr();
+
+        assert!(control.cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_ocr_child_exited(pid);
+        assert!(!state.ocr_state.in_progress);
+        assert!(state.ocr_state.status_text.is_none());
+        assert!(state.ocr_state.error.is_none());
+        assert!(state.status_toast.is_none());
+        let _ = std::fs::remove_file(script);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_cancel_before_pid_publication_terminates_spawned_child() {
+        let script = std::env::temp_dir().join(format!("clip-ocr-race-{}.py", std::process::id()));
+        let pid_file =
+            std::env::temp_dir().join(format!("clip-ocr-race-{}.pid", std::process::id()));
+        std::fs::write(
+            &script,
+            "import sys,time\nsys.stdin.buffer.read()\ntime.sleep(30)\n",
+        )
+        .unwrap();
+        let mut command = Command::new("python3");
+        command
+            .arg(&script)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let pid_file_c =
+            std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(pid_file.as_os_str()))
+                .unwrap();
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            command.pre_exec(move || {
+                let fd = libc::open(
+                    pid_file_c.as_ptr(),
+                    libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC,
+                    0o600,
+                );
+                if fd < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                let pid = libc::getpid() as u32;
+                let wrote =
+                    libc::write(fd, (&pid as *const u32).cast(), std::mem::size_of::<u32>());
+                libc::close(fd);
+                if wrote != std::mem::size_of::<u32>() as isize {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let control = ImageToolProcessControl::new();
+        control
+            .cancel
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let start = std::time::Instant::now();
+
+        let result = super::super::background_removal::spawn_image_tool_child(command, &control);
+
+        assert_eq!(result.unwrap_err(), "Image tool process cancelled");
+        assert!(start.elapsed() < std::time::Duration::from_secs(2));
+        assert_eq!(
+            control.child_pid.load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
+        let pid_bytes: [u8; 4] = std::fs::read(&pid_file).unwrap().try_into().unwrap();
+        assert_ocr_child_exited(u32::from_ne_bytes(pid_bytes));
+        let _ = std::fs::remove_file(script);
+        let _ = std::fs::remove_file(pid_file);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn current_ocr_process_success_keeps_text_and_progress_handling() {
+        let script =
+            std::env::temp_dir().join(format!("clip-ocr-success-{}.py", std::process::id()));
+        std::fs::write(
+            &script,
+            "import sys,time\nsys.stdin.buffer.read()\nprint('[ocr:progress] fake stage', file=sys.stderr, flush=True)\ntime.sleep(0.05)\nsys.stdout.write('recognized text')\n",
+        )
+        .unwrap();
+        let mut state = state();
+        state.run_ocr_with_command("python3".into(), script.display().to_string());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while state.ocr_state.status_text.as_deref() != Some("fake stage")
+            && state.ocr_state.in_progress
+            && std::time::Instant::now() < deadline
+        {
+            state.poll_ocr();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(state.ocr_state.status_text.as_deref(), Some("fake stage"));
+        while state.ocr_state.in_progress && std::time::Instant::now() < deadline {
+            state.poll_ocr();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        state.poll_ocr();
+        assert_eq!(state.ocr_state.extracted_text, "recognized text");
+        assert!(state.ocr_output_is_current());
+        assert!(state.ocr_state.error.is_none());
+        let _ = std::fs::remove_file(script);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn current_ocr_process_failure_preserves_diagnostics() {
+        let script =
+            std::env::temp_dir().join(format!("clip-ocr-failure-{}.py", std::process::id()));
+        std::fs::write(
+            &script,
+            "import sys\nsys.stdin.buffer.read()\nprint('fake OCR diagnostic', file=sys.stderr)\nsys.exit(5)\n",
+        )
+        .unwrap();
+        let mut state = state();
+        state.run_ocr_with_command("python3".into(), script.display().to_string());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while state.ocr_state.in_progress && std::time::Instant::now() < deadline {
+            state.poll_ocr();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        state.poll_ocr();
+        assert!(
+            state
+                .ocr_state
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("OCR worker failed: fake OCR diagnostic")
+        );
+        let _ = std::fs::remove_file(script);
+    }
+
     #[test]
     fn stale_ocr_success_keeps_existing_text_and_clears_loading() {
         let mut state = state();
         state.ocr_state.extracted_text = "previous text".into();
         state.ocr_state.in_progress = true;
         state.ocr_state.status_text = Some("working".into());
-        state
-            .ocr_child_pid
-            .store(123, std::sync::atomic::Ordering::SeqCst);
+        state.ocr_process_control = Some(std::sync::Arc::new(ImageToolProcessControl::new()));
         state.ocr_input_stamp = Some(state.input_stamp());
         let (tx, rx) = std::sync::mpsc::channel();
         state.ocr_rx = Some(rx);
@@ -822,12 +998,7 @@ mod input_stamp_tests {
         assert!(state.ocr_state.status_text.is_none());
         assert!(state.ocr_rx.is_none());
         assert!(state.ocr_state.error.is_none());
-        assert_eq!(
-            state
-                .ocr_child_pid
-                .load(std::sync::atomic::Ordering::SeqCst),
-            0
-        );
+        assert!(state.ocr_process_control.is_none());
     }
 
     #[test]

@@ -161,9 +161,31 @@ pub struct ImageToolProcessControl {
 }
 
 pub(super) fn run_image_tool_status_command(
-    mut cmd: Command,
+    cmd: Command,
     control: &ImageToolProcessControl,
 ) -> Result<std::process::ExitStatus, String> {
+    let mut child = spawn_image_tool_child(cmd, control)?;
+    let pid = child.id();
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            if clear_image_tool_pid_if_owned(&control.child_pid, pid) {
+                terminate_image_tool_process(pid);
+            }
+            return Err(error.to_string());
+        }
+    };
+    clear_image_tool_pid_if_owned(&control.child_pid, pid);
+    if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("Image tool process cancelled".to_string());
+    }
+    Ok(status)
+}
+
+pub(super) fn spawn_image_tool_child(
+    mut cmd: Command,
+    control: &ImageToolProcessControl,
+) -> Result<std::process::Child, String> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -180,20 +202,7 @@ pub(super) fn run_image_tool_status_command(
         clear_image_tool_pid_if_owned(&control.child_pid, pid);
         return Err("Image tool process cancelled".to_string());
     }
-    let status = match child.wait() {
-        Ok(status) => status,
-        Err(error) => {
-            if clear_image_tool_pid_if_owned(&control.child_pid, pid) {
-                terminate_image_tool_process(pid);
-            }
-            return Err(error.to_string());
-        }
-    };
-    clear_image_tool_pid_if_owned(&control.child_pid, pid);
-    if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err("Image tool process cancelled".to_string());
-    }
-    Ok(status)
+    Ok(child)
 }
 
 impl ImageToolProcessControl {
@@ -211,7 +220,10 @@ impl ImageToolProcessControl {
     }
 }
 
-fn clear_image_tool_pid_if_owned(child_pid: &std::sync::atomic::AtomicU32, pid: u32) -> bool {
+pub(super) fn clear_image_tool_pid_if_owned(
+    child_pid: &std::sync::atomic::AtomicU32,
+    pid: u32,
+) -> bool {
     child_pid
         .compare_exchange(
             pid,

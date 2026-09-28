@@ -163,7 +163,7 @@ pub struct ImagePreviewState {
     pub ocr_rx: Option<std::sync::mpsc::Receiver<OcrMsg>>,
     pub(crate) ocr_input_stamp: Option<ImageInputStamp>,
     pub(crate) ocr_results_stamp: Option<ImageInputStamp>,
-    pub ocr_child_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    pub(crate) ocr_process_control: Option<std::sync::Arc<ImageToolProcessControl>>,
 
     // Barcode / QR / DataMatrix Decoder
     pub barcode_state: BarcodeScanState,
@@ -376,7 +376,7 @@ impl ImagePreviewState {
             ocr_rx: None,
             ocr_input_stamp: None,
             ocr_results_stamp: None,
-            ocr_child_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            ocr_process_control: None,
             barcode_state: BarcodeScanState::default(),
             barcode_rx: None,
             barcode_input_stamp: None,
@@ -3361,9 +3361,11 @@ mod tests {
 
         state.ocr_state.in_progress = true;
         state.ocr_state.status_text = Some("Processing image with GLM-OCR...".into());
-        state
-            .ocr_child_pid
+        let control = std::sync::Arc::new(ImageToolProcessControl::new());
+        control
+            .child_pid
             .store(999999, std::sync::atomic::Ordering::SeqCst);
+        state.ocr_process_control = Some(control);
 
         // Cancel OCR
         state.cancel_ocr();
@@ -3371,11 +3373,10 @@ mod tests {
         assert!(!state.ocr_state.in_progress);
         assert!(state.ocr_state.status_text.is_none());
         assert_eq!(
-            state
-                .ocr_child_pid
-                .load(std::sync::atomic::Ordering::SeqCst),
-            0
+            state.status_toast.as_ref().map(|toast| toast.0.as_str()),
+            Some("⏹ OCR process cancelled")
         );
+        assert!(state.ocr_process_control.is_none());
         assert!(state.ocr_rx.is_none());
 
         // Drop state test - ensuring drop executes cancel_ocr without panic
@@ -3445,18 +3446,11 @@ mod tests {
         state.set_tool_mode(ImageToolMode::Ocr);
         assert_eq!(state.active_mode, ImageToolMode::Ocr);
         state.ocr_state.in_progress = true;
-        state
-            .ocr_child_pid
-            .store(12345, std::sync::atomic::Ordering::SeqCst);
+        state.ocr_process_control = Some(std::sync::Arc::new(ImageToolProcessControl::new()));
         state.set_tool_mode(ImageToolMode::View);
         assert_eq!(state.active_mode, ImageToolMode::View);
         assert!(!state.ocr_state.in_progress);
-        assert_eq!(
-            state
-                .ocr_child_pid
-                .load(std::sync::atomic::Ordering::SeqCst),
-            0
-        );
+        assert!(state.ocr_process_control.is_none());
     }
 
     #[test]
