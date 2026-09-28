@@ -487,7 +487,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H2.2e2 [Primary] Validate spreadsheet two-axis scrolling.** `spreadsheet_grid_scrolls_horizontally_and_vertically` drives an egui horizontal+vertical scroll event and verifies both persistent offsets advance while later cells remain rendered.
     - [x] **H2.2e3 [Luna/Primary] Validate spreadsheet sticky headers.** The scroll test confirms a visible column header stays at its initial top position and the selected row number stays in the left gutter aligned with its visible cell.
     - [x] **H2.2e4 [Luna/Primary] Validate spreadsheet full-cell inspection.** A headless egui interaction selects a long value whose rendered text exceeds the grid column, then verifies the full footer readout and exact copied text; no production defect was found.
-    - [ ] **H2.2e5 [Primary] Validate spreadsheet large-data bounds.**
+    - [x] **H2.2e5 [Luna/Primary] Validate spreadsheet large-data bounds.** A headless regression renders a 3,001 × 512 fixture with 180 visible cell text shapes initially and 162 at the far corner, below a 400-shape ceiling; it reaches `r2999c511` at scroll offset `[45779, 80550]`.
     - [ ] **H2.2e6 [Primary] Validate scroll/search/copy targets across UI and DPI scales with large fixtures.**
     - [ ] **H2.2e7 [Primary] Verify live selection and copy targets across wrapped virtual rows.**
     - [ ] **H2.2e8 [Primary] Verify pointer and minimap geometry across wrapped virtual rows.**
