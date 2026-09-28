@@ -98,7 +98,6 @@ const MINIMAP_RETAINED_LINES: usize = 4096;
 struct CodeFragment {
     start_byte: usize,
     end_byte: usize,
-    source_line: usize,
 }
 
 fn code_fragments(text: &str, line_starts: &[usize]) -> (Vec<CodeFragment>, Vec<usize>) {
@@ -120,7 +119,6 @@ fn code_fragments(text: &str, line_starts: &[usize]) -> (Vec<CodeFragment>, Vec<
             fragments.push(CodeFragment {
                 start_byte: start,
                 end_byte: end,
-                source_line,
             });
             continue;
         }
@@ -143,7 +141,6 @@ fn code_fragments(text: &str, line_starts: &[usize]) -> (Vec<CodeFragment>, Vec<
             fragments.push(CodeFragment {
                 start_byte: fragment_start,
                 end_byte: fragment_end,
-                source_line,
             });
             fragment_start = fragment_end;
         }
@@ -1600,6 +1597,10 @@ impl TextPreviewState {
                                 let mut y = self.code_rows.offset(row);
                                 while row < total_rows && y <= viewport.bottom() {
                                     let fragment = self.code_fragments[row];
+                                    let source_line = self
+                                        .line_first_fragment
+                                        .partition_point(|first_fragment| *first_fragment <= row)
+                                        .saturating_sub(1);
                                     let highlight_result = self.matches.as_mut().map(|spool| {
                                         line_highlight_ranges_from_spool(
                                             spool,
@@ -1635,13 +1636,11 @@ impl TextPreviewState {
                                         origin + egui::vec2(gutter_width, y + 2.0),
                                         galley.size(),
                                     );
-                                    if show_gutter
-                                        && self.line_first_fragment[fragment.source_line] == row
-                                    {
+                                    if show_gutter && self.line_first_fragment[source_line] == row {
                                         ui.painter().text(
                                             origin + egui::vec2(gutter_width - 10.0, y + 2.0),
                                             egui::Align2::RIGHT_TOP,
-                                            format!("{}", fragment.source_line + 1),
+                                            format!("{}", source_line + 1),
                                             code_font.clone(),
                                             hex_to_c32(&palette.colors.text_muted),
                                         );
@@ -3362,6 +3361,56 @@ mod tests {
                 .iter()
                 .all(|length| *length <= MAX_CODE_FRAGMENT_BYTES)
         );
+    }
+
+    #[test]
+    fn gutter_labels_wrapped_source_line_once_on_its_first_fragment() {
+        let ctx = egui::Context::default();
+        let long_line = "x".repeat(MAX_CODE_FRAGMENT_BYTES + 900);
+        let content = format!("fn first() {{}}\n{long_line}\nfn last() {{}}\n");
+        let mut state = TextPreviewState::from_text(content, None, &AppConfig::default());
+        state.show_line_numbers = true;
+        state.wrap_lines = false;
+        let target_first_row = state.line_first_fragment[1];
+        let target_fragment = state.code_fragments[target_first_row];
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(700.0, 280.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_raw_code_view(ui, &AppPalette::default());
+                });
+            },
+        );
+        let label_shapes: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "2" => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            label_shapes.len(),
+            1,
+            "logical line label should be painted once"
+        );
+        let first_fragment_text =
+            &state.content[target_fragment.start_byte..target_fragment.end_byte];
+        let first_fragment_shape = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == first_fragment_text => Some(text),
+                _ => None,
+            })
+            .expect("first wrapped fragment should be visible");
+        assert_eq!(label_shapes[0].pos.y, first_fragment_shape.pos.y);
     }
 
     #[test]

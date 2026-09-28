@@ -477,8 +477,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
           - [x] Verify query coalescing, stale revision suppression, cancellation, hidden-toolbar completion, and queue saturation retry.
           - [x] Verify rollover threshold, append/read failures, visible read failure handling, and spilled-file cleanup.
       - **H2.2c5c [Primary] Bound text row-index and measured-height storage.** Preserve arbitrary scrolling, source-line labels, selection mapping, wrap geometry, and scroll anchoring while reducing per-row retained vectors for very high row counts.
-        - [x] **H2.2c5c1 [Primary] Remove duplicate retained line-start offsets.** Derive source-line count and search line numbers from each source line's first fragment; cover empty and trailing-newline inputs.
-        - [ ] **H2.2c5c2 [Primary] Reduce per-fragment metadata.** Derive source-line ownership from the first-fragment index while preserving fragment byte ranges and source-line labels.
+        - [x] **H2.2c5c1 [Luna implementation; primary review] Remove duplicate retained line-start offsets.** Derive source-line count and search line numbers from each source line's first fragment; cover empty and trailing-newline inputs.
+        - [x] **H2.2c5c2 [Luna implementation; primary review] Reduce per-fragment metadata.** Derive visible source-line ownership from the first-fragment index while preserving fragment byte ranges and source-line labels.
         - [ ] **H2.2c5c3 [Primary] Reduce measured-height and Fenwick storage.** Preserve wrap-width invalidation, arbitrary scrolling, measured geometry, and scroll anchoring.
       - [ ] **H2.2c5d [Primary] Bound preview-source retention after viewer replacement.** Ensure close/replacement does not keep very large text alive beyond necessary worker completion, or document and enforce an acceptable worker/time/memory policy.
     - [ ] **H2.2c6 [Primary] Measure large-document performance across width and DPI changes in both appearances.** Keep 60 Hz interaction target; geometry tests are not performance evidence.
