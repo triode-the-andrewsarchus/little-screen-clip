@@ -1487,13 +1487,14 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
     if args.fake_image_diff_preview and (
         args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
         or args.fake_model3d or args.fake_binary_diff or args.fake_diff_preview
-        or args.fake_audio_transition or any((args.image, args.audio, args.pdf, args.midi))
+        or args.fake_audio_transition or args.fake_node_machine
+        or any((args.image, args.audio, args.pdf, args.midi))
     ):
         raise SystemExit("--fake-image-diff-preview cannot be combined with other fixture routes")
     if args.fake_node_machine and (
         args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
         or args.fake_model3d or args.fake_audio_transition or args.fake_binary_diff
-        or args.fake_diff_preview
+        or args.fake_diff_preview or args.fake_image_diff_preview
         or any((args.image, args.audio, args.pdf, args.midi))
     ):
         raise SystemExit("--fake-node-machine cannot be combined with other fixture routes")
