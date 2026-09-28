@@ -486,12 +486,15 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H2.2e1 [Primary] Audit long-line horizontal scrolling.** Raw code uses shared 15-point monospace; `unwrapped_raw_line_scrolls_horizontally_without_eliding_its_end` sends a horizontal wheel event through egui, waits for the scroll animation, and verifies the right edge can be brought into the viewport without elision.
     - [x] **H2.2e2 [Primary] Validate spreadsheet two-axis scrolling.** `spreadsheet_grid_scrolls_horizontally_and_vertically` drives an egui horizontal+vertical scroll event and verifies both persistent offsets advance while later cells remain rendered.
     - [x] **H2.2e3 [Luna/Primary] Validate spreadsheet sticky headers.** The scroll test confirms a visible column header stays at its initial top position and the selected row number stays in the left gutter aligned with its visible cell.
-    - [ ] **H2.2e4 [Primary] Validate spreadsheet full-cell inspection.**
+    - [x] **H2.2e4 [Luna/Primary] Validate spreadsheet full-cell inspection.** A headless egui interaction selects a long value whose rendered text exceeds the grid column, then verifies the full footer readout and exact copied text; no production defect was found.
     - [ ] **H2.2e5 [Primary] Validate spreadsheet large-data bounds.**
     - [ ] **H2.2e6 [Primary] Validate scroll/search/copy targets across UI and DPI scales with large fixtures.**
     - [ ] **H2.2e7 [Primary] Verify live selection and copy targets across wrapped virtual rows.**
     - [ ] **H2.2e8 [Primary] Verify pointer and minimap geometry across wrapped virtual rows.**
   - [ ] **H2.2f [Primary] Validate binary diff horizontal scrolling at long lines.** Hex/ASCII cells, offsets and column headers use 15-point monospace across 8/16/32-byte densities with matching row/hit targets and tests.
+    - [x] Verify 8/16/32-byte density keeps readable monospace text and matching cell hit targets.
+    - [x] Verify horizontal hex panning keeps a later byte, header, row offset, and hover inspection aligned.
+    - [ ] Verify ASCII panning keeps its header and byte hit targets aligned after horizontal scrolling.
   - [ ] **H2.2g [Primary] Validate comparison ANSI long-line scrolling.** Shared monospace size on central dark console surface in both modes; standard/truecolor/256-color foreground contrast tests pass.
 - **H2.3 Complex workspace semantics**
   - [ ] **H2.3a [Primary] Migrate node editor semantics to session/action/overlay contracts.**

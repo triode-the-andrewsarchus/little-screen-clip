@@ -26,6 +26,10 @@ H2.2e2 adds `spreadsheet_grid_scrolls_horizontally_and_vertically`, which sends 
 
 H2.2e3 is covered by the same large-grid egui interaction: after scrolling, the visible column header remains at its initial y position, the row-number gutter keeps its initial left edge, and the visible cell remains vertically aligned with its row label. Luna's spreadsheet-view suite passes (9 tests).
 
+H2.2e4 adds `selecting_long_cell_shows_and_copies_full_value`, a headless pointer press/release over a long spreadsheet cell. The test confirms the selected-cell footer retains the complete value even when the column is narrower than the text and that clipboard output matches the full value exactly. The focused test passes; no production change was needed.
+
+H2.2f is partially verified: `horizontal_pan_keeps_hex_header_offset_and_hover_targets_aligned` sends a horizontal wheel event to a 32-byte row, waits for the animation, and confirms the hex header, row offset, and later byte move by the reported scroll amount. Hovering that byte still selects byte 20 and reports offset `0x14`. Existing `byte_density_does_not_shrink_text_or_hit_targets` checks 8/16/32-byte densities. All 16 binary-diff viewer tests pass. ASCII header/data panning remains unverified; a second-stage lookup was clipped at the maximum scroll position and did not establish a production defect.
+
 H2.2c5b4b adds lifecycle checks for spilled search files. Linux `/proc/self/fd` inspection verifies that replacing or dropping a completed preview releases its rolled spool, a spool read error clears and closes its backing file, and closing a preview cancels a running search and releases the worker's spilled spool. The serial workbench suite passes (448 passed, 1 ignored); format and diff checks pass.
 
 ## Text preview Markdown and search/status live review, 2026-09-27
