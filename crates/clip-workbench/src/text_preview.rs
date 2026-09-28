@@ -15,7 +15,9 @@ use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use regex::RegexBuilder;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, mpsc::Receiver};
+use std::time::{Duration, Instant};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
@@ -309,6 +311,8 @@ pub struct SearchMatch {
 
 const SEARCH_MATCH_RECORD_BYTES: usize = 16;
 const SEARCH_MATCH_MEMORY_LIMIT_BYTES: usize = 64 * 1024;
+const SEARCH_DEBOUNCE: Duration = Duration::from_millis(80);
+const SEARCH_RETRY_DELAY: Duration = Duration::from_millis(60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SearchMatchRange {
@@ -317,7 +321,6 @@ struct SearchMatchRange {
 }
 
 /// Stores fixed-size match ranges in memory until the bounded threshold, then spills to cache.
-#[allow(dead_code)] // This private storage layer is staged for search-model integration.
 struct SearchMatchSpool {
     file: tempfile::SpooledTempFile,
     record_count: u64,
@@ -325,7 +328,69 @@ struct SearchMatchSpool {
     last_range: Option<SearchMatchRange>,
 }
 
-#[allow(dead_code)] // Keep the standalone abstraction warning-free before UI integration.
+struct SearchMatchJob {
+    revision: u64,
+    ticket: JobTicket,
+    cancelled: Arc<AtomicBool>,
+    receiver: Receiver<Result<Result<SearchBuildOutput, String>, JobError>>,
+}
+
+impl Drop for SearchMatchJob {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+enum SearchBuildOutput {
+    Matches(SearchMatchSpool),
+    InvalidRegex(String),
+    Cancelled,
+}
+
+impl SearchMatchJob {
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+        self.ticket.cancel();
+    }
+}
+
+fn build_search_matches(
+    content: Arc<String>,
+    query: String,
+    is_regex: bool,
+    case_sensitive: bool,
+    cancelled: &AtomicBool,
+) -> Result<SearchBuildOutput, String> {
+    if cancelled.load(Ordering::Acquire) {
+        return Ok(SearchBuildOutput::Cancelled);
+    }
+    let pattern = if is_regex {
+        query
+    } else {
+        regex::escape(&query)
+    };
+    let regex = match RegexBuilder::new(&pattern)
+        .case_insensitive(!case_sensitive)
+        .build()
+    {
+        Ok(regex) => regex,
+        Err(error) => return Ok(SearchBuildOutput::InvalidRegex(error.to_string())),
+    };
+    let mut spool = SearchMatchSpool::new().map_err(|error| error.to_string())?;
+    for (index, matched) in regex.find_iter(content.as_str()).enumerate() {
+        if index % 256 == 0 && cancelled.load(Ordering::Acquire) {
+            return Ok(SearchBuildOutput::Cancelled);
+        }
+        spool
+            .append(matched.start() as u64, matched.end() as u64)
+            .map_err(|error| error.to_string())?;
+    }
+    if cancelled.load(Ordering::Acquire) {
+        return Ok(SearchBuildOutput::Cancelled);
+    }
+    Ok(SearchBuildOutput::Matches(spool))
+}
+
 impl SearchMatchSpool {
     fn new() -> io::Result<Self> {
         let directory =
@@ -435,6 +500,7 @@ impl SearchMatchSpool {
         })
     }
 
+    #[cfg(test)]
     fn is_rolled(&self) -> bool {
         self.file.is_rolled()
     }
@@ -451,7 +517,7 @@ struct SearchMatchRangeIter<'a> {
 }
 
 impl Iterator for SearchMatchRangeIter<'_> {
-    type Item = io::Result<SearchMatchRange>;
+    type Item = io::Result<(u64, SearchMatchRange)>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.finished {
@@ -488,7 +554,7 @@ impl Iterator for SearchMatchRangeIter<'_> {
             }
             // Existing projection hides matches on either edge but keeps interior zero-width hits.
             if range.end_byte > self.fragment_start && range.start_byte < self.fragment_end {
-                return Some(Ok(range));
+                return Some(Ok((index, range)));
             }
         }
         self.finished = true;
@@ -531,9 +597,16 @@ pub struct TextPreviewState {
     pub find_query: String,
     pub is_regex: bool,
     pub case_sensitive: bool,
-    pub matches: Vec<SearchMatch>,
-    pub active_match_idx: usize,
+    matches: Option<SearchMatchSpool>,
+    match_count: u64,
+    pub active_match_idx: u64,
     pub regex_error: Option<String>,
+    search_error: Option<String>,
+    search_revision: u64,
+    search_pending: bool,
+    search_debounce_until: Option<Instant>,
+    search_retry_at: Option<Instant>,
+    search_job: Option<SearchMatchJob>,
     pub focus_find_input: bool,
 
     // Status / Toast notification
@@ -565,6 +638,22 @@ fn line_start_offsets(text: &str) -> Vec<usize> {
 }
 
 pub use little_clip_core::syntax::detect_markdown_text;
+
+#[cfg(test)]
+pub(super) fn update_search_matches_and_wait(state: &mut TextPreviewState) {
+    state.update_search_matches();
+    state.search_debounce_until = Some(Instant::now());
+    let context = egui::Context::default();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while state.search_pending && Instant::now() < deadline {
+        state.service_search_jobs(&context, BackgroundJobs::global(), Instant::now());
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        !state.search_pending,
+        "search job did not finish before timeout"
+    );
+}
 
 impl TextPreviewState {
     /// Creates a new text preview from in-memory text.
@@ -612,9 +701,16 @@ impl TextPreviewState {
             find_query: String::new(),
             is_regex: false,
             case_sensitive: false,
-            matches: Vec::new(),
+            matches: None,
+            match_count: 0,
             active_match_idx: 0,
             regex_error: None,
+            search_error: None,
+            search_revision: 0,
+            search_pending: false,
+            search_debounce_until: None,
+            search_retry_at: None,
+            search_job: None,
             focus_find_input: false,
             status_toast: crate::ui_ext::StatusToast::new(),
             scroll_to_line: None,
@@ -670,9 +766,16 @@ impl TextPreviewState {
             find_query: String::new(),
             is_regex: false,
             case_sensitive: false,
-            matches: Vec::new(),
+            matches: None,
+            match_count: 0,
             active_match_idx: 0,
             regex_error: None,
+            search_error: None,
+            search_revision: 0,
+            search_pending: false,
+            search_debounce_until: None,
+            search_retry_at: None,
+            search_job: None,
             focus_find_input: false,
             status_toast: crate::ui_ext::StatusToast::new(),
             scroll_to_line: None,
@@ -693,60 +796,159 @@ impl TextPreviewState {
 
     /// Recalculates search matches based on query, regex, and case sensitivity.
     pub fn update_search_matches(&mut self) {
-        self.matches.clear();
+        if let Some(job) = self.search_job.take() {
+            job.cancel();
+        }
+        self.search_revision = self.search_revision.wrapping_add(1);
+        self.matches = None;
+        self.match_count = 0;
+        self.active_match_idx = 0;
         self.regex_error = None;
+        self.search_error = None;
+        self.search_retry_at = None;
         if self.find_query.is_empty() {
-            self.active_match_idx = 0;
+            self.search_pending = false;
+            self.search_debounce_until = None;
+            return;
+        }
+        self.search_pending = true;
+        self.search_debounce_until = Some(Instant::now() + SEARCH_DEBOUNCE);
+    }
+
+    fn service_search_jobs(&mut self, ctx: &egui::Context, jobs: &BackgroundJobs, now: Instant) {
+        self.poll_search_job(now);
+        if !self.search_pending {
+            return;
+        }
+        if self.search_job.is_some() {
+            ctx.request_repaint_after(SEARCH_RETRY_DELAY);
+            return;
+        }
+        if let Some(until) = self
+            .search_debounce_until
+            .take()
+            .filter(|until| *until > now)
+        {
+            ctx.request_repaint_after(until.saturating_duration_since(now));
+            self.search_debounce_until = Some(until);
+            return;
+        }
+        if let Some(until) = self.search_retry_at.take().filter(|until| *until > now) {
+            ctx.request_repaint_after(until.saturating_duration_since(now));
+            self.search_retry_at = Some(until);
             return;
         }
 
-        let pattern = if self.is_regex {
-            self.find_query.clone()
-        } else {
-            regex::escape(&self.find_query)
-        };
-        match RegexBuilder::new(&pattern)
-            .case_insensitive(!self.case_sensitive)
-            .build()
-        {
-            Ok(regex) => {
-                self.matches = regex
-                    .find_iter(&self.content)
-                    .map(|matched| SearchMatch {
-                        start_byte: matched.start(),
-                        end_byte: matched.end(),
-                        line: self
-                            .line_starts
-                            .partition_point(|start| *start <= matched.start()),
-                    })
-                    .collect();
+        let revision = self.search_revision;
+        let content = Arc::clone(&self.content);
+        let query = self.find_query.clone();
+        let is_regex = self.is_regex;
+        let case_sensitive = self.case_sensitive;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::clone(&cancelled);
+        let (ticket, receiver) = jobs.submit(Duration::MAX, move || {
+            build_search_matches(content, query, is_regex, case_sensitive, &worker_cancelled)
+        });
+        self.search_job = Some(SearchMatchJob {
+            revision,
+            ticket,
+            cancelled,
+            receiver,
+        });
+        ctx.request_repaint_after(SEARCH_RETRY_DELAY);
+    }
+
+    fn poll_search_job(&mut self, now: Instant) {
+        let result = self.search_job.as_ref().map(|job| job.receiver.try_recv());
+        let result = match result {
+            Some(Ok(result)) => result,
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) | None => return,
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                let job = self.search_job.take().expect("polled search job");
+                if job.revision == self.search_revision {
+                    self.search_pending = false;
+                    self.search_error =
+                        Some("search worker stopped before returning results".into());
+                }
+                return;
             }
-            Err(error) => self.regex_error = Some(error.to_string()),
+        };
+        let job = self.search_job.take().expect("completed search job");
+        if job.revision != self.search_revision {
+            return;
         }
-        if self.active_match_idx >= self.matches.len() {
-            self.active_match_idx = 0;
+        match result {
+            Ok(Ok(SearchBuildOutput::Matches(spool))) => {
+                self.match_count = spool.len();
+                self.matches = Some(spool);
+                self.search_pending = false;
+                self.search_retry_at = None;
+            }
+            Ok(Ok(SearchBuildOutput::InvalidRegex(error))) => {
+                self.regex_error = Some(error);
+                self.search_pending = false;
+            }
+            Ok(Ok(SearchBuildOutput::Cancelled)) | Err(JobError::QueueFull) => {
+                self.search_pending = true;
+                self.search_retry_at = Some(now + SEARCH_RETRY_DELAY);
+            }
+            Ok(Err(error)) => {
+                self.search_error = Some(error);
+                self.search_pending = false;
+            }
+            Err(JobError::Cancelled) => {
+                self.search_pending = false;
+            }
+            Err(error) => {
+                self.search_error = Some(error.to_string());
+                self.search_pending = false;
+            }
         }
+    }
+
+    fn search_match_at(&mut self, index: u64) -> Option<SearchMatch> {
+        let range = self.matches.as_mut()?.get(index).ok()?;
+        let start_byte = usize::try_from(range.start_byte).ok()?;
+        let end_byte = usize::try_from(range.end_byte).ok()?;
+        let line = self
+            .line_starts
+            .partition_point(|start| *start <= start_byte);
+        Some(SearchMatch {
+            start_byte,
+            end_byte,
+            line,
+        })
+    }
+
+    pub fn match_count(&self) -> u64 {
+        self.match_count
+    }
+
+    pub fn search_match(&mut self, index: u64) -> Option<SearchMatch> {
+        self.search_match_at(index)
     }
 
     /// Advances to the next search match.
     pub fn next_match(&mut self) {
-        if !self.matches.is_empty() {
-            self.active_match_idx = (self.active_match_idx + 1) % self.matches.len();
-            self.scroll_to_line =
-                Some(self.display_row_for_byte(self.matches[self.active_match_idx].start_byte) + 1);
+        if self.match_count > 0 {
+            self.active_match_idx = (self.active_match_idx + 1) % self.match_count;
+            if let Some(matched) = self.search_match_at(self.active_match_idx) {
+                self.scroll_to_line = Some(self.display_row_for_byte(matched.start_byte) + 1);
+            }
         }
     }
 
     /// Moves to the previous search match.
     pub fn prev_match(&mut self) {
-        if !self.matches.is_empty() {
+        if self.match_count > 0 {
             if self.active_match_idx == 0 {
-                self.active_match_idx = self.matches.len() - 1;
+                self.active_match_idx = self.match_count - 1;
             } else {
                 self.active_match_idx -= 1;
             }
-            self.scroll_to_line =
-                Some(self.display_row_for_byte(self.matches[self.active_match_idx].start_byte) + 1);
+            if let Some(matched) = self.search_match_at(self.active_match_idx) {
+                self.scroll_to_line = Some(self.display_row_for_byte(matched.start_byte) + 1);
+            }
         }
     }
 
@@ -1055,18 +1257,26 @@ impl TextPreviewState {
                         .color(error_color),
                 );
             });
-        } else if self.matches.is_empty() {
+        } else if let Some(ref err) = self.search_error {
+            ui.label(
+                egui::RichText::new(format!("Search failed: {err}"))
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(hex_to_c32(&palette.diff_del)),
+            );
+        } else if self.search_pending {
+            ui.label(
+                egui::RichText::new("Searching…")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(hex_to_c32(&palette.colors.text_muted)),
+            );
+        } else if self.match_count == 0 {
             ui.label(
                 egui::RichText::new("No matches")
                     .size(crate::ui_ext::BODY_FONT_SIZE)
                     .color(hex_to_c32(&palette.colors.text_muted)),
             );
         } else {
-            let count_text = format!(
-                "{}/{} matches",
-                self.active_match_idx + 1,
-                self.matches.len()
-            );
+            let count_text = format!("{}/{} matches", self.active_match_idx + 1, self.match_count);
             ui.label(
                 egui::RichText::new(count_text)
                     .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -1104,6 +1314,7 @@ impl TextPreviewState {
     }
 
     fn render_search_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        self.service_search_jobs(ui.ctx(), BackgroundJobs::global(), Instant::now());
         ui.add_space(crate::ui_ext::SPACE_SM);
         egui::Frame::none()
             .fill(hex_to_c32(&palette.colors.surface_recessed))
@@ -1169,6 +1380,7 @@ impl TextPreviewState {
                     self.render_search_options(ui, palette);
                 });
             });
+        self.service_search_jobs(ui.ctx(), BackgroundJobs::global(), Instant::now());
     }
 
     /// Renders styled markdown view.
@@ -1330,13 +1542,19 @@ impl TextPreviewState {
                                 ui.skip_ahead_auto_ids(row);
                                 let mut y = self.code_rows.offset(row);
                                 while row < total_rows && y <= viewport.bottom() {
-                                    let (fragment, line) = self.source_fragment(row);
-                                    let matches = line_highlight_ranges(
-                                        &self.matches,
-                                        self.active_match_idx,
-                                        fragment.start_byte,
-                                        fragment.end_byte,
-                                    );
+                                    let fragment = self.code_fragments[row];
+                                    let line =
+                                        &self.content[fragment.start_byte..fragment.end_byte];
+                                    let matches =
+                                        self.matches.as_mut().map_or_else(Vec::new, |spool| {
+                                            line_highlight_ranges_from_spool(
+                                                spool,
+                                                self.active_match_idx,
+                                                fragment.start_byte,
+                                                fragment.end_byte,
+                                            )
+                                            .unwrap_or_default()
+                                        });
                                     let mut job = build_highlighted_layout_job(
                                         line, syntax, palette, &matches,
                                     );
@@ -1716,6 +1934,7 @@ fn render_code_minimap(
 }
 
 /// Projects document search ranges into one source line.
+#[cfg(test)]
 fn line_highlight_ranges(
     matches: &[SearchMatch],
     active_index: usize,
@@ -1733,6 +1952,37 @@ fn line_highlight_ranges(
                 matched.end_byte.min(line_end) - line_start,
                 first + offset == active_index,
             )
+        })
+        .collect()
+}
+
+fn line_highlight_ranges_from_spool(
+    spool: &mut SearchMatchSpool,
+    active_index: u64,
+    line_start: usize,
+    line_end: usize,
+) -> io::Result<Vec<(usize, usize, bool)>> {
+    spool
+        .ranges_for_fragment(line_start as u64, line_end as u64)?
+        .map(|matched| {
+            let (index, matched) = matched?;
+            let start = usize::try_from(matched.start_byte).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "match start exceeds platform size",
+                )
+            })?;
+            let end = usize::try_from(matched.end_byte).map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "match end exceeds platform size",
+                )
+            })?;
+            Ok((
+                start.max(line_start) - line_start,
+                end.min(line_end) - line_start,
+                index == active_index,
+            ))
         })
         .collect()
 }
@@ -1921,6 +2171,143 @@ mod tests {
     use super::*;
 
     #[test]
+    fn async_search_coalesces_queries_and_publishes_only_latest_revision() {
+        let mut state = TextPreviewState::from_text(
+            "old target; newest target; newest target".to_owned(),
+            None,
+            &AppConfig::default(),
+        );
+        state.find_query = "old".to_owned();
+        state.update_search_matches();
+        let first_revision = state.search_revision;
+        state.find_query = "newest".to_owned();
+        state.update_search_matches();
+        assert!(state.search_revision > first_revision);
+        assert!(state.search_pending);
+        assert_eq!(state.match_count(), 0);
+
+        update_search_matches_and_wait(&mut state);
+        assert_eq!(state.match_count(), 2);
+        for index in 0..state.match_count() {
+            let matched = state.search_match(index).unwrap();
+            assert_eq!(
+                &state.content[matched.start_byte..matched.end_byte],
+                "newest"
+            );
+        }
+    }
+
+    #[test]
+    fn changing_search_query_cooperatively_cancels_previous_job() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (ticket, receiver) = jobs.submit(Duration::MAX, || {
+            Ok::<_, String>(SearchBuildOutput::Cancelled)
+        });
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut state =
+            TextPreviewState::from_text("target".to_owned(), None, &AppConfig::default());
+        state.search_job = Some(SearchMatchJob {
+            revision: state.search_revision,
+            ticket,
+            cancelled: Arc::clone(&cancelled),
+            receiver,
+        });
+
+        state.find_query = "updated".to_owned();
+        state.update_search_matches();
+
+        assert!(cancelled.load(Ordering::Acquire));
+        assert!(state.search_pending);
+        assert!(state.search_job.is_none());
+    }
+
+    #[test]
+    fn completed_stale_search_revision_is_never_published() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (ticket, _ticket_receiver) = jobs.submit(Duration::MAX, || ());
+        let mut spool = SearchMatchSpool::new().unwrap();
+        spool.append(0, 6).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender
+            .send(Ok(Ok(SearchBuildOutput::Matches(spool))))
+            .unwrap();
+
+        let mut state =
+            TextPreviewState::from_text("target".to_owned(), None, &AppConfig::default());
+        state.search_revision = 2;
+        state.search_pending = true;
+        state.search_job = Some(SearchMatchJob {
+            revision: 1,
+            ticket,
+            cancelled: Arc::new(AtomicBool::new(false)),
+            receiver,
+        });
+        state.poll_search_job(Instant::now());
+
+        assert!(state.search_pending);
+        assert_eq!(state.match_count(), 0);
+        assert!(state.matches.is_none());
+    }
+
+    #[test]
+    fn async_search_retries_after_background_queue_saturation() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_blocker_ticket, _blocker_rx) = jobs.submit(Duration::MAX, move || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (_queued_ticket, queued_receiver) = jobs.submit(Duration::MAX, || ());
+
+        let mut state =
+            TextPreviewState::from_text("target target".to_owned(), None, &AppConfig::default());
+        state.find_query = "target".to_owned();
+        state.update_search_matches();
+        let now = Instant::now();
+        state.search_debounce_until = Some(now);
+        let context = egui::Context::default();
+        state.service_search_jobs(&context, &jobs, now);
+        state.service_search_jobs(&context, &jobs, now);
+        assert!(state.search_pending);
+        assert_eq!(state.match_count(), 0);
+        let retry_at = state
+            .search_retry_at
+            .expect("saturated queue schedules retry");
+
+        release_tx.send(()).unwrap();
+        queued_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        state.service_search_jobs(&context, &jobs, retry_at + SEARCH_RETRY_DELAY);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while state.search_pending && Instant::now() < deadline {
+            state.service_search_jobs(&context, &jobs, Instant::now());
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            !state.search_pending,
+            "retry should publish completed results"
+        );
+        assert_eq!(state.match_count(), 2);
+    }
+
+    fn collect_fragment_ranges(
+        spool: &mut SearchMatchSpool,
+        start: u64,
+        end: u64,
+    ) -> Vec<SearchMatchRange> {
+        spool
+            .ranges_for_fragment(start, end)
+            .unwrap()
+            .map(|result| result.map(|(_, range)| range))
+            .collect::<io::Result<Vec<_>>>()
+            .unwrap()
+    }
+
+    #[test]
     fn search_match_spool_uses_the_application_staging_directory() {
         let mut spool = SearchMatchSpool::new().unwrap();
         spool.append(10, 20).unwrap();
@@ -1993,11 +2380,7 @@ mod tests {
             spool.append(range.0, range.1).unwrap();
         }
 
-        let ranges = spool
-            .ranges_for_fragment(4, 7)
-            .unwrap()
-            .collect::<io::Result<Vec<_>>>()
-            .unwrap();
+        let ranges = collect_fragment_ranges(&mut spool, 4, 7);
         assert_eq!(
             ranges,
             vec![
@@ -2021,11 +2404,7 @@ mod tests {
             spool.append(range.0, range.1).unwrap();
         }
 
-        let ranges = spool
-            .ranges_for_fragment(4, 9)
-            .unwrap()
-            .collect::<io::Result<Vec<_>>>()
-            .unwrap();
+        let ranges = collect_fragment_ranges(&mut spool, 4, 9);
         assert_eq!(
             ranges,
             vec![
@@ -2043,6 +2422,7 @@ mod tests {
             spool
                 .ranges_for_fragment(9, 10)
                 .unwrap()
+                .map(|result| result.map(|(_, range)| range))
                 .collect::<io::Result<Vec<_>>>()
                 .unwrap()
                 .is_empty()
@@ -2062,6 +2442,7 @@ mod tests {
                 spool
                     .ranges_for_fragment(start, end)
                     .unwrap()
+                    .map(|result| result.map(|(_, range)| range))
                     .collect::<io::Result<Vec<_>>>()
                     .unwrap()
                     .is_empty()
@@ -2080,7 +2461,7 @@ mod tests {
         assert!(spool.append(6, 6).is_err(), "ends must be ordered");
 
         let mut ranges = spool.ranges_for_fragment(0, 10).unwrap();
-        assert_eq!(ranges.next().unwrap().unwrap().start_byte, 2);
+        assert_eq!(ranges.next().unwrap().unwrap().1.start_byte, 2);
         drop(ranges);
 
         spool.append(9, 10).unwrap();
@@ -2341,7 +2722,16 @@ mod tests {
                 );
                 state.find_query = query;
                 state.regex_error = regex_error;
-                state.matches = matches;
+                if !matches.is_empty() {
+                    let mut spool = SearchMatchSpool::new().unwrap();
+                    for matched in matches {
+                        spool
+                            .append(matched.start_byte as u64, matched.end_byte as u64)
+                            .unwrap();
+                    }
+                    state.match_count = spool.len();
+                    state.matches = Some(spool);
+                }
                 let output = ctx.run(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(
@@ -2573,9 +2963,9 @@ mod tests {
         );
 
         state.find_query = marker.to_owned();
-        state.update_search_matches();
-        assert_eq!(state.matches.len(), 1);
-        let matched = state.matches[0];
+        update_search_matches_and_wait(&mut state);
+        assert_eq!(state.match_count(), 1);
+        let matched = state.search_match(0).unwrap();
         assert_eq!(&state.content[matched.start_byte..matched.end_byte], marker);
         state.next_match();
         let row = state.scroll_to_line.unwrap() - 1;
@@ -2724,8 +3114,8 @@ mod tests {
 
         // Test Find query
         state.find_query = "answer".to_string();
-        state.update_search_matches();
-        assert_eq!(state.matches.len(), 2);
+        update_search_matches_and_wait(&mut state);
+        assert_eq!(state.match_count(), 2);
         assert_eq!(state.active_match_idx, 0);
 
         state.next_match();
@@ -2760,7 +3150,7 @@ mod tests {
         );
         state.show_find = true;
         state.find_query = "match".to_owned();
-        state.update_search_matches();
+        update_search_matches_and_wait(&mut state);
         state.active_match_idx = 0;
 
         let render = |ctx: &egui::Context, state: &mut TextPreviewState, events| {
@@ -2819,7 +3209,7 @@ mod tests {
         );
         state.show_find = true;
         state.find_query = "match".to_owned();
-        state.update_search_matches();
+        update_search_matches_and_wait(&mut state);
         state.active_match_idx = 1;
         state.focus_find_input = true;
 
@@ -2871,16 +3261,16 @@ mod tests {
 
         state.find_query = r"VALUE_[A-Z]".to_string();
         state.is_regex = true;
-        state.update_search_matches();
+        update_search_matches_and_wait(&mut state);
 
         assert!(state.regex_error.is_none());
-        assert_eq!(state.matches.len(), 2);
+        assert_eq!(state.match_count(), 2);
 
         // Invalid regex
         state.find_query = r"[invalid".to_string();
-        state.update_search_matches();
+        update_search_matches_and_wait(&mut state);
         assert!(state.regex_error.is_some());
-        assert_eq!(state.matches.len(), 0);
+        assert_eq!(state.match_count(), 0);
     }
 
     #[test]
@@ -2888,27 +3278,24 @@ mod tests {
         let mut state =
             TextPreviewState::from_text("İX\nCAFÉ café [x]".into(), None, &AppConfig::default());
         state.find_query = "x".into();
-        state.update_search_matches();
-        assert_eq!(
-            &state.content[state.matches[0].start_byte..state.matches[0].end_byte],
-            "X"
-        );
-        assert_eq!(state.matches[0].start_byte, "İ".len());
+        update_search_matches_and_wait(&mut state);
+        let matched = state.search_match(0).unwrap();
+        assert_eq!(&state.content[matched.start_byte..matched.end_byte], "X");
+        assert_eq!(matched.start_byte, "İ".len());
         state.find_query = "CAFÉ".into();
-        state.update_search_matches();
-        assert_eq!(state.matches.len(), 2);
-        for matched in &state.matches {
+        update_search_matches_and_wait(&mut state);
+        assert_eq!(state.match_count(), 2);
+        for index in 0..state.match_count() {
+            let matched = state.search_match(index).unwrap();
             assert!(state.content.is_char_boundary(matched.start_byte));
             assert!(state.content.is_char_boundary(matched.end_byte));
             assert_eq!(matched.line, 2);
         }
         state.find_query = "[x]".into();
-        state.update_search_matches();
-        assert_eq!(state.matches.len(), 1);
-        assert_eq!(
-            &state.content[state.matches[0].start_byte..state.matches[0].end_byte],
-            "[x]"
-        );
+        update_search_matches_and_wait(&mut state);
+        assert_eq!(state.match_count(), 1);
+        let matched = state.search_match(0).unwrap();
+        assert_eq!(&state.content[matched.start_byte..matched.end_byte], "[x]");
     }
 
     #[test]

@@ -4044,9 +4044,9 @@ mod workbench_layout_tests {
         assert_eq!(state.title, "large clipboard");
         assert_eq!(state.content.as_str(), expected);
         state.find_query = "TARGET_AT_END".to_owned();
-        state.update_search_matches();
-        assert_eq!(state.matches.len(), 1);
-        let matched = state.matches[0];
+        text_preview::update_search_matches_and_wait(state);
+        assert_eq!(state.match_count(), 1);
+        let matched = state.search_match(0).unwrap();
         assert_eq!(
             &state.content[matched.start_byte..matched.end_byte],
             "TARGET_AT_END"
