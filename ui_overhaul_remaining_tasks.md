@@ -81,7 +81,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [ ] **H1.2b2a [Primary] Verify mirror colors in runtime.**
   - [ ] **H1.2b2b [Primary] Verify USB renderer colors in runtime.**
   - [ ] **H1.2b2c [Primary] Verify virtual mode behavior in runtime.**
-  - [ ] **H1.2b2d [Primary] Verify persistent appearance change in runtime.**
+  - [x] **H1.2b2d [Primary] Verify persistent appearance change in runtime.** Isolated 1280×800 software-rendered run starts Dark, sends F6, visibly switches to Light, and writes `appearance = "light"` to the run-local config. Before/after captures and singleton/geometry checks pass; no personal config or USB display was used. See `ui_overhaul_acceptance.md`.
   - [ ] **H1.2b2e [Primary] Verify dismissible failure feedback in runtime.** SVG parsing/loading, theme assets, override save helpers, and theme tests are removed (`2b087a2`); legacy `[colors]` is ignored migration input and personal config untouched. Async daemon reload reports rejected/unavailable response in dismissible workbench notice; old `Theme` adapter/raw field aliases removed (`6719f33`).
   - [x] **H1.2c1 [Luna + primary review] Audit remaining hard-coded UI colors.** Fixed chrome colors resolve through `BaseColors`/`WorkbenchColors`; remaining local colors are intentional data or image-editing affordances: ANSI escape colors, markup swatches and contrast overlays on arbitrary images, HF chart markers, and waveform visualization. Color-clip hex text now uses semantic `text_primary` instead of hard-coded white. A source audit found no other production chrome literals requiring migration.
   - [ ] **H1.2c2 [Primary] Verify foreground/background contrast on all surfaces.**

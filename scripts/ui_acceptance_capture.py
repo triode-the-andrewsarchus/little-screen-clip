@@ -53,6 +53,7 @@ KEY_ACTIONS = {
     "ctrl-y": ["-M", "ctrl", "-k", "y", "-m", "ctrl"],
     "enter": ["-k", "Return"],
     "f3": ["-k", "F3"],
+    "f6": ["-k", "F6"],
     "ctrl-f": ["-M", "ctrl", "-k", "f", "-m", "ctrl"],
 }
 
@@ -1542,7 +1543,8 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         raise SystemExit("--image-action requires --image-tool")
     if args.key_action and not args.image and any(action != "f3" for action in args.key_action):
         if not (
-            (args.fake_text_preview and all(action in {"f3", "ctrl-f"} for action in args.key_action))
+            (all(action in {"f3", "f6"} for action in args.key_action))
+            or (args.fake_text_preview and all(action in {"f3", "ctrl-f"} for action in args.key_action))
             or ((args.fake_diff_preview or args.fake_image_diff_preview)
                 and all(action == "enter" for action in args.key_action))
         ):

@@ -597,3 +597,7 @@ The raw text preview now stores selection endpoints as absolute UTF-8 source-byt
 ## Wrapped-row minimap geometry, 2026-09-28
 
 `minimap_wrapped_line_marker_and_click_use_virtual_row_geometry` injects ready minimap samples for an 80-line fixture with one logical line split across eight virtual rows. The painted source-line marker matches the measured first-fragment-to-next-line height span, and clicking its center returns the corresponding normalized fraction. Using a synthetic viewport height equal to 20% of document height, the derived centered viewport overlaps the wrapped span. H2.2e7 separately verifies source-byte pointer mapping after scrolling. This test does not render the viewer's applied scroll request. All 49 `text_preview::tests` pass.
+
+## Persistent appearance toggle, 2026-09-28
+
+The isolated runner now permits F6 as a generic keyboard action. In `/tmp/clip-h12b2d-appearance-20260928`, the initial 1280×800 / 100% / Dark screenshot shows the Light mode action; after F6, `after-actions.png` visibly uses the Light palette and offers Dark mode. The private `scratch/config.toml` is updated to `appearance = "light"`, and popup fixed-size, centering, and singleton checks pass. The no-daemon IPC notice is expected in this isolated session. The user's config and USB display were not accessed; this verifies the workbench write path, not a hardware display reload.
