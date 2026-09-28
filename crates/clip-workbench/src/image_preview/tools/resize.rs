@@ -15,357 +15,423 @@ pub fn optimize_to_target_size_with_progress(
     format: TargetFormat,
     progress: Option<&dyn Fn(String)>,
 ) -> FileSizeOptimizationResult {
-    let orig_w = base_img.width();
-    let orig_h = base_img.height();
-    let target_str = format_bytes_size(target_bytes);
+    optimize_to_target_size_cancellable(base_img, target_bytes, format, progress, &|| false)
+        .expect("synchronous optimization cannot be cancelled")
+}
 
-    let notify = |msg: String| {
-        if let Some(cb) = progress {
-            cb(msg);
-        }
+fn optimize_to_target_size_cancellable(
+    base_img: &RgbaImage,
+    target_bytes: usize,
+    format: TargetFormat,
+    progress: Option<&dyn Fn(String)>,
+    cancelled: &dyn Fn() -> bool,
+) -> Option<FileSizeOptimizationResult> {
+    let search = TargetSizeSearch {
+        image: base_img,
+        target_bytes,
+        target_str: format_bytes_size(target_bytes),
+        progress,
+        cancelled,
     };
-
+    search.check().ok()?;
     match format {
-        TargetFormat::Jpeg => {
-            notify(format!(
-                "Testing full resolution ({}×{}) at JPEG quality 95%...",
-                orig_w, orig_h
-            ));
-            // 1. Try quality 95 at 100% scale
-            if let Ok(bytes) = encode_jpeg_with_quality(base_img, 95) {
-                if bytes.len() <= target_bytes {
-                    notify(format!(
-                        "Full resolution fits budget: {} <= {}",
-                        format_bytes_size(bytes.len()),
-                        target_str
-                    ));
-                    return FileSizeOptimizationResult {
-                        target_bytes,
-                        achieved_bytes: bytes.len(),
-                        width: orig_w,
-                        height: orig_h,
-                        scale: 1.0,
-                        quality: 95,
-                        format,
-                        encoded_data: bytes,
-                        result_rgba: base_img.clone(),
-                    };
-                } else {
-                    notify(format!(
-                        "Quality 95% is {} (budget: {}). Searching JPEG quality [60..95]...",
-                        format_bytes_size(bytes.len()),
-                        target_str
-                    ));
-                }
-            }
+        TargetFormat::Jpeg => search.optimize_jpeg().ok(),
+        TargetFormat::Png => search.optimize_png().ok(),
+    }
+}
 
-            // 2. Binary search quality in [60, 95] at scale 1.0
-            let mut best_qual_at_100 = None;
-            let mut low_q = 60u8;
-            let mut high_q = 95u8;
+struct OptimizationCancelled;
 
-            while low_q <= high_q {
-                let mid_q = low_q + (high_q - low_q) / 2;
-                notify(format!(
-                    "Trying quality {}% at 100% resolution ({}×{})...",
-                    mid_q, orig_w, orig_h
+type SearchResult<T> = Result<T, OptimizationCancelled>;
+
+struct TargetSizeSearch<'a> {
+    image: &'a RgbaImage,
+    target_bytes: usize,
+    target_str: String,
+    progress: Option<&'a dyn Fn(String)>,
+    cancelled: &'a dyn Fn() -> bool,
+}
+
+struct OptimizedCandidate {
+    image: RgbaImage,
+    bytes: Vec<u8>,
+    scale: f32,
+    quality: u8,
+}
+
+impl TargetSizeSearch<'_> {
+    fn check(&self) -> SearchResult<()> {
+        if (self.cancelled)() {
+            Err(OptimizationCancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn notify(&self, message: String) {
+        if let Some(progress) = self.progress {
+            progress(message);
+        }
+    }
+
+    fn finish(
+        &self,
+        candidate: OptimizedCandidate,
+        format: TargetFormat,
+    ) -> FileSizeOptimizationResult {
+        FileSizeOptimizationResult {
+            target_bytes: self.target_bytes,
+            achieved_bytes: candidate.bytes.len(),
+            width: candidate.image.width(),
+            height: candidate.image.height(),
+            scale: candidate.scale,
+            quality: candidate.quality,
+            format,
+            encoded_data: candidate.bytes,
+            result_rgba: candidate.image,
+        }
+    }
+
+    fn optimize_jpeg(&self) -> SearchResult<FileSizeOptimizationResult> {
+        self.notify(format!(
+            "Testing full resolution ({}×{}) at JPEG quality 95%...",
+            self.image.width(),
+            self.image.height()
+        ));
+        if let Some(candidate) = self.jpeg_full_resolution()? {
+            return Ok(self.finish(candidate, TargetFormat::Jpeg));
+        }
+
+        self.notify(
+            "Exceeds budget at 100% resolution. Scaling down with Lanczos3 filter...".into(),
+        );
+        let mut best = self.jpeg_scale_search()?;
+        if best.bytes.is_empty() {
+            self.jpeg_minimal_fallback(&mut best)?;
+        } else {
+            self.jpeg_tune_quality(&mut best)?;
+        }
+        self.check()?;
+        self.notify(format!(
+            "Complete: {} achieved at {}×{} (Quality {}%)",
+            format_bytes_size(best.bytes.len()),
+            best.image.width(),
+            best.image.height(),
+            best.quality
+        ));
+        Ok(self.finish(best, TargetFormat::Jpeg))
+    }
+
+    fn jpeg_full_resolution(&self) -> SearchResult<Option<OptimizedCandidate>> {
+        if let Ok(bytes) = encode_jpeg_with_quality(self.image, 95) {
+            self.check()?;
+            if bytes.len() <= self.target_bytes {
+                self.notify(format!(
+                    "Full resolution fits budget: {} <= {}",
+                    format_bytes_size(bytes.len()),
+                    self.target_str
                 ));
-                if let Ok(bytes) = encode_jpeg_with_quality(base_img, mid_q) {
-                    let len = bytes.len();
-                    if len <= target_bytes {
-                        notify(format!(
-                            "Quality {}% fits budget: {} <= {}",
-                            mid_q,
-                            format_bytes_size(len),
-                            target_str
-                        ));
-                        best_qual_at_100 = Some((mid_q, bytes));
-                        low_q = mid_q + 1; // Try higher quality
-                    } else {
-                        notify(format!(
-                            "Quality {}% exceeds budget: {} > {}",
-                            mid_q,
-                            format_bytes_size(len),
-                            target_str
-                        ));
-                        if mid_q == 0 {
-                            break;
-                        }
-                        high_q = mid_q - 1; // Try lower quality
-                    }
-                } else {
-                    break;
-                }
-            }
-
-            if let Some((q, bytes)) = best_qual_at_100 {
-                notify(format!(
-                    "Found optimal quality {}% at 100% resolution ({})",
-                    q,
-                    format_bytes_size(bytes.len())
-                ));
-                return FileSizeOptimizationResult {
-                    target_bytes,
-                    achieved_bytes: bytes.len(),
-                    width: orig_w,
-                    height: orig_h,
+                return Ok(Some(OptimizedCandidate {
+                    image: self.image.clone(),
+                    bytes,
                     scale: 1.0,
-                    quality: q,
-                    format,
-                    encoded_data: bytes,
-                    result_rgba: base_img.clone(),
-                };
+                    quality: 95,
+                }));
             }
-
-            // 3. At scale 1.0, even quality 60 exceeds target_bytes!
-            notify(format!(
-                "Exceeds budget at 100% resolution. Scaling down with Lanczos3 filter..."
+            self.notify(format!(
+                "Quality 95% is {} (budget: {}). Searching JPEG quality [60..95]...",
+                format_bytes_size(bytes.len()),
+                self.target_str
             ));
-            let mut best_scale = 0.5f32;
-            let mut best_scaled_img = base_img.clone();
-            let mut best_bytes = Vec::new();
-            let mut best_w = orig_w;
-            let mut best_h = orig_h;
-            let mut best_q = 80u8;
+        }
 
-            let mut low_s = 0.05f32;
-            let mut high_s = 1.0f32;
+        let Some((quality, bytes)) = self.jpeg_quality_search()? else {
+            return Ok(None);
+        };
+        self.check()?;
+        self.notify(format!(
+            "Found optimal quality {}% at 100% resolution ({})",
+            quality,
+            format_bytes_size(bytes.len())
+        ));
+        Ok(Some(OptimizedCandidate {
+            image: self.image.clone(),
+            bytes,
+            scale: 1.0,
+            quality,
+        }))
+    }
 
-            for iter in 1..=10 {
-                let mid_s = (low_s + high_s) / 2.0;
-                let candidate_w = ((orig_w as f32) * mid_s).round().max(16.0) as u32;
-                let candidate_h = ((orig_h as f32) * mid_s).round().max(16.0) as u32;
-
-                notify(format!(
-                    "[Step {}/10] Resampling to {:.1}% ({}×{}) with Lanczos3...",
-                    iter,
-                    mid_s * 100.0,
-                    candidate_w,
-                    candidate_h
+    fn jpeg_quality_search(&self) -> SearchResult<Option<(u8, Vec<u8>)>> {
+        let mut best = None;
+        let mut low_q = 60u8;
+        let mut high_q = 95u8;
+        while low_q <= high_q {
+            self.check()?;
+            let mid_q = low_q + (high_q - low_q) / 2;
+            self.notify(format!(
+                "Trying quality {}% at 100% resolution ({}×{})...",
+                mid_q,
+                self.image.width(),
+                self.image.height()
+            ));
+            let Ok(bytes) = encode_jpeg_with_quality(self.image, mid_q) else {
+                break;
+            };
+            self.check()?;
+            let len = bytes.len();
+            if len <= self.target_bytes {
+                self.notify(format!(
+                    "Quality {}% fits budget: {} <= {}",
+                    mid_q,
+                    format_bytes_size(len),
+                    self.target_str
                 ));
-
-                let scaled = image::imageops::resize(
-                    base_img,
-                    candidate_w,
-                    candidate_h,
-                    image::imageops::FilterType::Lanczos3,
-                );
-
-                if let Ok(bytes) = encode_jpeg_with_quality(&scaled, 80) {
-                    let len = bytes.len();
-                    if len <= target_bytes {
-                        notify(format!(
-                            "Scale {:.1}% ({}×{}) fits: {} <= {}",
-                            mid_s * 100.0,
-                            candidate_w,
-                            candidate_h,
-                            format_bytes_size(len),
-                            target_str
-                        ));
-                        best_scale = mid_s;
-                        best_w = candidate_w;
-                        best_h = candidate_h;
-                        best_bytes = bytes;
-                        best_scaled_img = scaled;
-                        best_q = 80;
-                        low_s = mid_s;
-                    } else {
-                        notify(format!(
-                            "Scale {:.1}% ({}×{}) exceeds: {} > {}",
-                            mid_s * 100.0,
-                            candidate_w,
-                            candidate_h,
-                            format_bytes_size(len),
-                            target_str
-                        ));
-                        high_s = mid_s;
-                    }
-                } else {
+                best = Some((mid_q, bytes));
+                low_q = mid_q + 1;
+            } else {
+                self.notify(format!(
+                    "Quality {}% exceeds budget: {} > {}",
+                    mid_q,
+                    format_bytes_size(len),
+                    self.target_str
+                ));
+                if mid_q == 0 {
                     break;
                 }
-            }
-
-            if !best_bytes.is_empty() {
-                notify(format!(
-                    "Fine-tuning JPEG quality on {}×{}...",
-                    best_w, best_h
-                ));
-                for test_q in (81..=95).step_by(2) {
-                    if let Ok(b) = encode_jpeg_with_quality(&best_scaled_img, test_q) {
-                        let len = b.len();
-                        if len <= target_bytes {
-                            notify(format!(
-                                "Tuned quality to {}%: {} <= {}",
-                                test_q,
-                                format_bytes_size(len),
-                                target_str
-                            ));
-                            best_q = test_q;
-                            best_bytes = b;
-                        } else {
-                            break;
-                        }
-                    }
-                }
-            } else {
-                notify(format!("Applying minimal scale fallback..."));
-                let min_w = ((orig_w as f32) * 0.1).round().max(16.0) as u32;
-                let min_h = ((orig_h as f32) * 0.1).round().max(16.0) as u32;
-                best_scaled_img = image::imageops::resize(
-                    base_img,
-                    min_w,
-                    min_h,
-                    image::imageops::FilterType::Triangle,
-                );
-                best_w = min_w;
-                best_h = min_h;
-                best_scale = 0.1;
-                best_q = 40;
-                if let Ok(b) = encode_jpeg_with_quality(&best_scaled_img, 40) {
-                    best_bytes = b;
-                }
-            }
-
-            notify(format!(
-                "Complete: {} achieved at {}×{} (Quality {}%)",
-                format_bytes_size(best_bytes.len()),
-                best_w,
-                best_h,
-                best_q
-            ));
-
-            FileSizeOptimizationResult {
-                target_bytes,
-                achieved_bytes: best_bytes.len(),
-                width: best_w,
-                height: best_h,
-                scale: best_scale,
-                quality: best_q,
-                format,
-                encoded_data: best_bytes,
-                result_rgba: best_scaled_img,
+                high_q = mid_q - 1;
             }
         }
-        TargetFormat::Png => {
-            notify(format!(
-                "Testing full resolution ({}×{}) as lossless PNG...",
-                orig_w, orig_h
-            ));
-            let mut best_scale = 1.0f32;
-            let mut best_scaled_img = base_img.clone();
-            let mut best_bytes = Vec::new();
-            let mut best_w = orig_w;
-            let mut best_h = orig_h;
+        Ok(best)
+    }
 
-            // Check 100% first
+    fn jpeg_scale_search(&self) -> SearchResult<OptimizedCandidate> {
+        let mut best = OptimizedCandidate {
+            image: self.image.clone(),
+            bytes: Vec::new(),
+            scale: 0.5,
+            quality: 80,
+        };
+        let mut low_s = 0.05f32;
+        let mut high_s = 1.0f32;
+        for iter in 1..=10 {
+            self.check()?;
+            let mid_s = (low_s + high_s) / 2.0;
+            let width = ((self.image.width() as f32) * mid_s).round().max(16.0) as u32;
+            let height = ((self.image.height() as f32) * mid_s).round().max(16.0) as u32;
+            self.notify(format!(
+                "[Step {}/10] Resampling to {:.1}% ({}×{}) with Lanczos3...",
+                iter,
+                mid_s * 100.0,
+                width,
+                height
+            ));
+            let scaled = image::imageops::resize(
+                self.image,
+                width,
+                height,
+                image::imageops::FilterType::Lanczos3,
+            );
+            self.check()?;
+            let Ok(bytes) = encode_jpeg_with_quality(&scaled, 80) else {
+                break;
+            };
+            self.check()?;
+            let len = bytes.len();
+            if len <= self.target_bytes {
+                self.notify(format!(
+                    "Scale {:.1}% ({}×{}) fits: {} <= {}",
+                    mid_s * 100.0,
+                    width,
+                    height,
+                    format_bytes_size(len),
+                    self.target_str
+                ));
+                best = OptimizedCandidate {
+                    image: scaled,
+                    bytes,
+                    scale: mid_s,
+                    quality: 80,
+                };
+                low_s = mid_s;
+            } else {
+                self.notify(format!(
+                    "Scale {:.1}% ({}×{}) exceeds: {} > {}",
+                    mid_s * 100.0,
+                    width,
+                    height,
+                    format_bytes_size(len),
+                    self.target_str
+                ));
+                high_s = mid_s;
+            }
+        }
+        Ok(best)
+    }
+
+    fn jpeg_tune_quality(&self, best: &mut OptimizedCandidate) -> SearchResult<()> {
+        self.notify(format!(
+            "Fine-tuning JPEG quality on {}×{}...",
+            best.image.width(),
+            best.image.height()
+        ));
+        for quality in (81..=95).step_by(2) {
+            self.check()?;
+            if let Ok(bytes) = encode_jpeg_with_quality(&best.image, quality) {
+                if bytes.len() > self.target_bytes {
+                    break;
+                }
+                self.notify(format!(
+                    "Tuned quality to {}%: {} <= {}",
+                    quality,
+                    format_bytes_size(bytes.len()),
+                    self.target_str
+                ));
+                best.quality = quality;
+                best.bytes = bytes;
+            }
+        }
+        Ok(())
+    }
+
+    fn jpeg_minimal_fallback(&self, best: &mut OptimizedCandidate) -> SearchResult<()> {
+        self.notify("Applying minimal scale fallback...".into());
+        let width = ((self.image.width() as f32) * 0.1).round().max(16.0) as u32;
+        let height = ((self.image.height() as f32) * 0.1).round().max(16.0) as u32;
+        best.image = image::imageops::resize(
+            self.image,
+            width,
+            height,
+            image::imageops::FilterType::Triangle,
+        );
+        self.check()?;
+        best.scale = 0.1;
+        best.quality = 40;
+        if let Ok(bytes) = encode_jpeg_with_quality(&best.image, 40) {
+            best.bytes = bytes;
+        }
+        Ok(())
+    }
+
+    fn optimize_png(&self) -> SearchResult<FileSizeOptimizationResult> {
+        self.notify(format!(
+            "Testing full resolution ({}×{}) as lossless PNG...",
+            self.image.width(),
+            self.image.height()
+        ));
+        if let Some(candidate) = self.png_full_resolution()? {
+            return Ok(self.finish(candidate, TargetFormat::Png));
+        }
+        let best = self.png_scale_search()?;
+        self.check()?;
+        self.notify(format!(
+            "Complete: {} achieved at {}×{}",
+            format_bytes_size(best.bytes.len()),
+            best.image.width(),
+            best.image.height()
+        ));
+        Ok(self.finish(best, TargetFormat::Png))
+    }
+
+    fn png_full_resolution(&self) -> SearchResult<Option<OptimizedCandidate>> {
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        if self
+            .image
+            .write_to(&mut cursor, image::ImageFormat::Png)
+            .is_ok()
+        {
+            self.check()?;
+            let bytes = cursor.into_inner();
+            if bytes.len() <= self.target_bytes {
+                self.notify(format!(
+                    "Full resolution PNG fits budget: {} <= {}",
+                    format_bytes_size(bytes.len()),
+                    self.target_str
+                ));
+                return Ok(Some(OptimizedCandidate {
+                    image: self.image.clone(),
+                    bytes,
+                    scale: 1.0,
+                    quality: 100,
+                }));
+            }
+            self.notify(format!(
+                "PNG at 100% is {} > {}. Searching resolution scale...",
+                format_bytes_size(bytes.len()),
+                self.target_str
+            ));
+        }
+        Ok(None)
+    }
+
+    fn png_scale_search(&self) -> SearchResult<OptimizedCandidate> {
+        let mut best = OptimizedCandidate {
+            image: self.image.clone(),
+            bytes: Vec::new(),
+            scale: 1.0,
+            quality: 100,
+        };
+        let mut low_s = 0.05f32;
+        let mut high_s = 1.0f32;
+        for iter in 1..=10 {
+            self.check()?;
+            let mid_s = (low_s + high_s) / 2.0;
+            let width = ((self.image.width() as f32) * mid_s).round().max(16.0) as u32;
+            let height = ((self.image.height() as f32) * mid_s).round().max(16.0) as u32;
+            self.notify(format!(
+                "[Step {}/10] Resampling to {:.1}% ({}×{})...",
+                iter,
+                mid_s * 100.0,
+                width,
+                height
+            ));
+            let scaled = image::imageops::resize(
+                self.image,
+                width,
+                height,
+                image::imageops::FilterType::Lanczos3,
+            );
+            self.check()?;
             let mut cursor = std::io::Cursor::new(Vec::new());
-            if base_img
+            if scaled
                 .write_to(&mut cursor, image::ImageFormat::Png)
                 .is_ok()
             {
+                self.check()?;
                 let bytes = cursor.into_inner();
-                if bytes.len() <= target_bytes {
-                    notify(format!(
-                        "Full resolution PNG fits budget: {} <= {}",
-                        format_bytes_size(bytes.len()),
-                        target_str
+                let len = bytes.len();
+                if len <= self.target_bytes {
+                    self.notify(format!(
+                        "Scale {:.1}% fits: {} <= {}",
+                        mid_s * 100.0,
+                        format_bytes_size(len),
+                        self.target_str
                     ));
-                    return FileSizeOptimizationResult {
-                        target_bytes,
-                        achieved_bytes: bytes.len(),
-                        width: orig_w,
-                        height: orig_h,
-                        scale: 1.0,
+                    best = OptimizedCandidate {
+                        image: scaled,
+                        bytes,
+                        scale: mid_s,
                         quality: 100,
-                        format,
-                        encoded_data: bytes,
-                        result_rgba: base_img.clone(),
                     };
+                    low_s = mid_s;
                 } else {
-                    notify(format!(
-                        "PNG at 100% is {} > {}. Searching resolution scale...",
-                        format_bytes_size(bytes.len()),
-                        target_str
+                    self.notify(format!(
+                        "Scale {:.1}% exceeds: {} > {}",
+                        mid_s * 100.0,
+                        format_bytes_size(len),
+                        self.target_str
                     ));
+                    high_s = mid_s;
                 }
-            }
-
-            let mut low_s = 0.05f32;
-            let mut high_s = 1.0f32;
-
-            for iter in 1..=10 {
-                let mid_s = (low_s + high_s) / 2.0;
-                let candidate_w = ((orig_w as f32) * mid_s).round().max(16.0) as u32;
-                let candidate_h = ((orig_h as f32) * mid_s).round().max(16.0) as u32;
-
-                notify(format!(
-                    "[Step {}/10] Resampling to {:.1}% ({}×{})...",
-                    iter,
-                    mid_s * 100.0,
-                    candidate_w,
-                    candidate_h
-                ));
-
-                let scaled = image::imageops::resize(
-                    base_img,
-                    candidate_w,
-                    candidate_h,
-                    image::imageops::FilterType::Lanczos3,
-                );
-
-                let mut cur = std::io::Cursor::new(Vec::new());
-                if scaled.write_to(&mut cur, image::ImageFormat::Png).is_ok() {
-                    let bytes = cur.into_inner();
-                    let len = bytes.len();
-                    if len <= target_bytes {
-                        notify(format!(
-                            "Scale {:.1}% fits: {} <= {}",
-                            mid_s * 100.0,
-                            format_bytes_size(len),
-                            target_str
-                        ));
-                        best_scale = mid_s;
-                        best_w = candidate_w;
-                        best_h = candidate_h;
-                        best_bytes = bytes;
-                        best_scaled_img = scaled;
-                        low_s = mid_s;
-                    } else {
-                        notify(format!(
-                            "Scale {:.1}% exceeds: {} > {}",
-                            mid_s * 100.0,
-                            format_bytes_size(len),
-                            target_str
-                        ));
-                        high_s = mid_s;
-                    }
-                }
-            }
-
-            notify(format!(
-                "Complete: {} achieved at {}×{}",
-                format_bytes_size(best_bytes.len()),
-                best_w,
-                best_h
-            ));
-
-            FileSizeOptimizationResult {
-                target_bytes,
-                achieved_bytes: best_bytes.len(),
-                width: best_w,
-                height: best_h,
-                scale: best_scale,
-                quality: 100,
-                format,
-                encoded_data: best_bytes,
-                result_rgba: best_scaled_img,
             }
         }
+        Ok(best)
     }
 }
 
 impl Drop for ImagePreviewState {
     fn drop(&mut self) {
+        self.cancel_optimizer();
         self.cancel_ocr();
     }
 }
@@ -548,6 +614,8 @@ impl ResizeState {
 #[cfg(test)]
 mod input_stamp_tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn state() -> ImagePreviewState {
         let mut bytes = Vec::new();
@@ -590,6 +658,8 @@ mod input_stamp_tests {
         stale.resize_state.optimizer_request_stamp = Some(stale.current_optimizer_request_stamp());
         stale.resize_state.is_optimizing = true;
         stale.optimizer_status = Some("working".into());
+        let cancelled = Arc::new(AtomicBool::new(false));
+        stale.optimizer_cancel = Some(cancelled.clone());
         let (tx, rx) = std::sync::mpsc::channel();
         stale.optimizer_rx = Some(rx);
         tx.send(OptimizerMsg::Done(result([1, 2, 3, 255]))).unwrap();
@@ -601,6 +671,7 @@ mod input_stamp_tests {
         assert!(!stale.resize_state.is_optimizing);
         assert!(stale.optimizer_status.is_none());
         assert!(stale.optimizer_rx.is_none());
+        assert!(cancelled.load(Ordering::Acquire));
 
         let mut current = state();
         current.resize_state.target_size_unit_mb = false;
@@ -646,6 +717,8 @@ mod input_stamp_tests {
                 Some(state.current_optimizer_request_stamp());
             state.resize_state.is_optimizing = true;
             state.optimizer_status = Some("working".into());
+            let cancelled = Arc::new(AtomicBool::new(false));
+            state.optimizer_cancel = Some(cancelled.clone());
             let (tx, rx) = std::sync::mpsc::channel();
             state.optimizer_rx = Some(rx);
             tx.send(OptimizerMsg::Done(result([1, 2, 3, 255]))).unwrap();
@@ -661,11 +734,79 @@ mod input_stamp_tests {
             assert!(!state.resize_state.is_optimizing);
             assert!(state.optimizer_status.is_none());
             assert!(state.optimizer_rx.is_none());
+            assert!(cancelled.load(Ordering::Acquire));
         }
+    }
+
+    #[test]
+    fn dropping_image_preview_cancels_optimizer() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut state = state();
+        state.optimizer_cancel = Some(cancelled.clone());
+        drop(state);
+        assert!(cancelled.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn optimizer_stops_between_resample_and_encode() {
+        let img = RgbaImage::from_fn(64, 64, |x, y| {
+            image::Rgba([(x * 17) as u8, (y * 31) as u8, (x ^ y) as u8, 255])
+        });
+        let cancelled = AtomicBool::new(false);
+        let progress = |status: String| {
+            if status.contains("Resampling") {
+                cancelled.store(true, Ordering::Release);
+            }
+        };
+
+        let result = optimize_to_target_size_cancellable(
+            &img,
+            1,
+            TargetFormat::Png,
+            Some(&progress),
+            &|| cancelled.load(Ordering::Acquire),
+        );
+
+        assert!(cancelled.load(Ordering::Acquire));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn optimizer_stops_after_jpeg_quality_search_is_cancelled() {
+        let img = RgbaImage::from_fn(64, 64, |x, y| {
+            image::Rgba([(x * 17) as u8, (y * 31) as u8, (x ^ y) as u8, 255])
+        });
+        let cancelled = AtomicBool::new(false);
+        let progress = |status: String| {
+            if status.contains("Trying quality") {
+                cancelled.store(true, Ordering::Release);
+            }
+        };
+
+        let result = optimize_to_target_size_cancellable(
+            &img,
+            1,
+            TargetFormat::Jpeg,
+            Some(&progress),
+            &|| cancelled.load(Ordering::Acquire),
+        );
+
+        assert!(cancelled.load(Ordering::Acquire));
+        assert!(result.is_none());
     }
 }
 
 impl ImagePreviewState {
+    pub(crate) fn cancel_optimizer(&mut self) {
+        if let Some(cancelled) = self.optimizer_cancel.take() {
+            cancelled.store(true, std::sync::atomic::Ordering::Release);
+        }
+        self.optimizer_rx = None;
+        self.resize_state.optimizer_request_stamp = None;
+        self.resize_state.is_optimizing = false;
+        self.optimizer_status = None;
+    }
+
     pub fn apply_pixel_resize(&mut self, target_w: u32, target_h: u32, filter: ResizeFilter) {
         let (w, h) = (target_w.clamp(1, 16384), target_h.clamp(1, 16384));
         if w == self.current_rgba.width() && h == self.current_rgba.height() {
@@ -717,6 +858,9 @@ impl ImagePreviewState {
         self.resize_state.optimizer_request_stamp = Some(request_stamp);
 
         let (tx, rx) = std::sync::mpsc::channel::<OptimizerMsg>();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_cancelled = cancelled.clone();
+        self.optimizer_cancel = Some(cancelled);
         self.optimizer_rx = Some(rx);
         self.resize_state.is_optimizing = true;
         self.optimizer_status = Some("Starting optimizer...".to_string());
@@ -727,14 +871,19 @@ impl ImagePreviewState {
                 let _ = tx_prog.send(OptimizerMsg::Progress(msg));
             };
 
-            let result = optimize_to_target_size_with_progress(
+            let result = optimize_to_target_size_cancellable(
                 &base_img,
                 target_bytes,
                 format,
                 Some(&progress_cb),
+                &|| worker_cancelled.load(std::sync::atomic::Ordering::Acquire),
             );
 
-            let _ = tx.send(OptimizerMsg::Done(result));
+            if let Some(result) = result
+                && !worker_cancelled.load(std::sync::atomic::Ordering::Acquire)
+            {
+                let _ = tx.send(OptimizerMsg::Done(result));
+            }
         });
     }
 
@@ -746,10 +895,7 @@ impl ImagePreviewState {
             && self.resize_state.optimizer_request_stamp.as_ref()
                 != Some(&self.current_optimizer_request_stamp())
         {
-            self.optimizer_rx = None;
-            self.resize_state.optimizer_request_stamp = None;
-            self.resize_state.is_optimizing = false;
-            self.optimizer_status = None;
+            self.cancel_optimizer();
             return;
         }
         let mut done_res = None;
@@ -781,11 +927,13 @@ impl ImagePreviewState {
             self.resize_state.is_optimizing = false;
             self.optimizer_status = None;
             self.optimizer_rx = None;
+            self.optimizer_cancel = None;
             self.resize_state.optimizer_request_stamp = None;
         } else if disconnected {
             self.resize_state.is_optimizing = false;
             self.optimizer_status = None;
             self.optimizer_rx = None;
+            self.optimizer_cancel = None;
             self.resize_state.optimizer_request_stamp = None;
         }
     }
@@ -1187,6 +1335,9 @@ impl ImagePreviewState {
                             "PNG — lossless resolution",
                         );
                     });
+
+                // Settings can change during this frame, after the top-level poll.
+                self.poll_optimizer();
 
                 ui.add_space(14.0);
                 if self.resize_state.is_optimizing {

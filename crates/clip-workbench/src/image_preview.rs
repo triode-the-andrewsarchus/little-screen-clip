@@ -141,6 +141,7 @@ pub struct ImagePreviewState {
     // File Size Optimizer Async Worker
     pub optimizer_rx: Option<std::sync::mpsc::Receiver<OptimizerMsg>>,
     pub optimizer_status: Option<String>,
+    optimizer_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 
     // Background Removal Async Worker & State
     pub bg_removal_in_progress: bool,
@@ -357,6 +358,7 @@ impl ImagePreviewState {
             fallback_save_path: String::new(),
             optimizer_rx: None,
             optimizer_status: None,
+            optimizer_cancel: None,
             bg_removal_in_progress: false,
             bg_removal_rx: None,
             bg_removal_input_stamp: None,
@@ -405,6 +407,7 @@ impl ImagePreviewState {
     }
 
     pub(crate) fn mark_pixels_changed(&mut self) {
+        self.cancel_optimizer();
         self.pixel_revision = self.pixel_revision.wrapping_add(1);
     }
 
