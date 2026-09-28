@@ -96,6 +96,14 @@ impl ImageToolMode {
 
 mod background_removal;
 pub(super) use background_removal::BgRemovalMsg;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum BgRemovalOperation {
+    #[default]
+    BackgroundRemoval,
+    DepthMap,
+}
+
 mod barcode;
 pub(super) use barcode::{BarcodeScanMsg, BarcodeScanState};
 mod convert;

@@ -30,6 +30,7 @@ impl ImagePreviewState {
         let (tx, rx) = std::sync::mpsc::channel::<BgRemovalMsg>();
         self.bg_removal_rx = Some(rx);
         self.bg_removal_input_stamp = Some(self.input_stamp());
+        self.bg_removal_operation = BgRemovalOperation::DepthMap;
         self.bg_removal_in_progress = true;
         self.bg_removal_status = Some("Estimating depth map with Depth-Anything...".to_string());
         self.bg_removal_error = None;

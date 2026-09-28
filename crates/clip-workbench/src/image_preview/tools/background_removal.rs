@@ -108,6 +108,7 @@ impl ImagePreviewState {
         let (tx, rx) = std::sync::mpsc::channel::<BgRemovalMsg>();
         self.bg_removal_rx = Some(rx);
         self.bg_removal_input_stamp = Some(self.input_stamp());
+        self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
         self.bg_removal_in_progress = true;
         self.bg_removal_status = Some(status_desc);
         self.bg_removal_error = None;
@@ -150,6 +151,7 @@ impl ImagePreviewState {
         {
             self.bg_removal_rx = None;
             self.bg_removal_input_stamp = None;
+            self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
             return;
@@ -186,6 +188,7 @@ impl ImagePreviewState {
         }
 
         if let Some((result_rgba, duration_ms)) = success_data {
+            let operation = self.bg_removal_operation;
             let included_crop = self
                 .bg_removal_input_stamp
                 .as_ref()
@@ -209,25 +212,33 @@ impl ImagePreviewState {
             self.bg_removal_status = None;
             self.bg_removal_rx = None;
             self.bg_removal_input_stamp = None;
+            self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
             self.bg_removal_error = None;
             self.resize_state.sync_from_image(&self.current_rgba);
             self.palette_state.is_extracted = false;
 
-            self.show_toast(format!(
-                "✨ Background removed in {:.2}s!",
-                duration_ms as f64 / 1000.0
-            ));
+            let elapsed = duration_ms as f64 / 1000.0;
+            self.show_toast(match operation {
+                BgRemovalOperation::BackgroundRemoval => {
+                    format!("✨ Background removed in {elapsed:.2}s!")
+                }
+                BgRemovalOperation::DepthMap => {
+                    format!("🌊 Depth map generated in {elapsed:.2}s!")
+                }
+            });
         } else if let Some(err) = error_msg {
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
             self.bg_removal_rx = None;
             self.bg_removal_input_stamp = None;
+            self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
             self.bg_removal_error = Some(err);
         } else if disconnected {
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
             self.bg_removal_rx = None;
             self.bg_removal_input_stamp = None;
+            self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
         }
     }
 

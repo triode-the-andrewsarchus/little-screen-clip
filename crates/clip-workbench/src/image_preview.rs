@@ -146,6 +146,7 @@ pub struct ImagePreviewState {
     pub bg_removal_in_progress: bool,
     pub bg_removal_rx: Option<std::sync::mpsc::Receiver<BgRemovalMsg>>,
     pub(crate) bg_removal_input_stamp: Option<ImageInputStamp>,
+    bg_removal_operation: BgRemovalOperation,
     pub bg_removal_status: Option<String>,
     pub bg_removal_error: Option<String>,
     pub bg_removal_cmd: Option<String>,
@@ -359,6 +360,7 @@ impl ImagePreviewState {
             bg_removal_in_progress: false,
             bg_removal_rx: None,
             bg_removal_input_stamp: None,
+            bg_removal_operation: BgRemovalOperation::BackgroundRemoval,
             bg_removal_status: None,
             bg_removal_error: None,
             bg_removal_cmd: config.image.bg_removal_cmd.clone(),
@@ -1886,8 +1888,36 @@ mod tests {
             state.creative_fx_state.cached_background_removal,
             Some(output)
         );
+        assert_eq!(
+            state.status_toast.as_ref().unwrap().0,
+            "✨ Background removed in 0.01s!"
+        );
         assert!(!state.bg_removal_in_progress);
         assert!(state.bg_removal_rx.is_none());
+    }
+
+    #[test]
+    fn depth_map_completion_uses_a_depth_specific_toast() {
+        let mut state = image_state_from_png((8, 8), "depth map result");
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.bg_removal_input_stamp = Some(state.input_stamp());
+        state.bg_removal_operation = BgRemovalOperation::DepthMap;
+        state.bg_removal_rx = Some(rx);
+        state.bg_removal_in_progress = true;
+        tx.send(BgRemovalMsg::Success {
+            result_rgba: RgbaImage::from_pixel(8, 8, image::Rgba([24, 24, 24, 255])),
+            duration_ms: 1250,
+        })
+        .unwrap();
+
+        state.poll_bg_removal();
+
+        let toast = state.status_toast.as_ref().unwrap();
+        assert_eq!(toast.0, "🌊 Depth map generated in 1.25s!");
+        assert_eq!(
+            state.bg_removal_operation,
+            BgRemovalOperation::BackgroundRemoval
+        );
     }
 
     #[test]
