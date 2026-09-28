@@ -15,17 +15,24 @@ pub(super) fn remove_background_rgba(
     configured_cmd: Option<&str>,
     prompt: Option<&str>,
 ) -> Result<RgbaImage, String> {
-    remove_background_rgba_cancellable(png_bytes, configured_cmd, prompt, None, None)
+    let (cmd_bin, cmd_args) = background_removal_command(configured_cmd);
+
+    let mut cmd = Command::new(&cmd_bin);
+    cmd.args(&cmd_args);
+    let output = run_image_tool_subprocess(
+        cmd,
+        png_bytes,
+        prompt,
+        None,
+        None,
+        BgRemovalOperation::BackgroundRemoval,
+        &cmd_bin,
+    )?;
+    decode_image_tool_output(output)
 }
 
-fn remove_background_rgba_cancellable(
-    png_bytes: &[u8],
-    configured_cmd: Option<&str>,
-    prompt: Option<&str>,
-    cancel: Option<&std::sync::atomic::AtomicBool>,
-    child_pid: Option<&std::sync::atomic::AtomicU32>,
-) -> Result<RgbaImage, String> {
-    let (cmd_bin, cmd_args) = if let Some(cmd) = configured_cmd {
+fn background_removal_command(configured_cmd: Option<&str>) -> (String, Vec<String>) {
+    if let Some(cmd) = configured_cmd {
         let parts: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
         if parts.is_empty() {
             ("scripts/remove_bg.py".to_string(), Vec::new())
@@ -39,15 +46,23 @@ fn remove_background_rgba_cancellable(
             "python3".to_string(),
             vec!["scripts/remove_bg.py".to_string()],
         )
-    };
+    }
+}
 
-    let mut cmd = Command::new(&cmd_bin);
+pub(super) fn run_image_tool_subprocess(
+    mut cmd: Command,
+    png_bytes: &[u8],
+    prompt: Option<&str>,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+    child_pid: Option<&std::sync::atomic::AtomicU32>,
+    operation: BgRemovalOperation,
+    command_name: &str,
+) -> Result<std::process::Output, String> {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
-    cmd.args(&cmd_args);
     if let Some(prompt) = prompt {
         cmd.arg("--prompt").arg(prompt);
     }
@@ -58,11 +73,15 @@ fn remove_background_rgba_cancellable(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| {
-            format!(
+        .map_err(|error| match operation {
+            BgRemovalOperation::BackgroundRemoval => format!(
                 "Failed to launch background removal process '{}': {}. Ensure Python with nobg is installed.",
-                cmd_bin, e
-            )
+                command_name, error
+            ),
+            BgRemovalOperation::DepthMap => format!(
+                "Failed to launch depth estimation '{}': {}. Ensure Python environment is setup.",
+                command_name, error
+            ),
         })?;
 
     let pid = child.id();
@@ -70,21 +89,21 @@ fn remove_background_rgba_cancellable(
         child_pid.store(pid, std::sync::atomic::Ordering::SeqCst);
     }
     if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) {
-        terminate_bg_removal_process(pid);
+        terminate_image_tool_process(pid);
         let _ = child.wait();
         if let Some(child_pid) = child_pid {
-            clear_bg_removal_pid_if_owned(child_pid, pid);
+            clear_image_tool_pid_if_owned(child_pid, pid);
         }
-        return Err("Background removal cancelled".to_string());
+        return Err(image_tool_cancelled_message(operation).to_string());
     }
 
     if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write;
         if let Err(error) = stdin.write_all(png_bytes) {
-            terminate_bg_removal_process(pid);
+            terminate_image_tool_process(pid);
             let _ = child.wait();
             if let Some(child_pid) = child_pid {
-                clear_bg_removal_pid_if_owned(child_pid, pid);
+                clear_image_tool_pid_if_owned(child_pid, pid);
             }
             return Err(format!("Failed to write image data to worker: {}", error));
         }
@@ -94,37 +113,54 @@ fn remove_background_rgba_cancellable(
         Ok(output) => output,
         Err(error) => {
             if let Some(child_pid) = child_pid {
-                let owns_pid = clear_bg_removal_pid_if_owned(child_pid, pid);
+                let owns_pid = clear_image_tool_pid_if_owned(child_pid, pid);
                 if owns_pid {
-                    terminate_bg_removal_process(pid);
+                    terminate_image_tool_process(pid);
                 }
             } else {
-                terminate_bg_removal_process(pid);
+                terminate_image_tool_process(pid);
             }
-            return Err(format!("Worker process failed: {}", error));
+            let message = match operation {
+                BgRemovalOperation::BackgroundRemoval => format!("Worker process failed: {error}"),
+                BgRemovalOperation::DepthMap => format!("Depth estimation process failed: {error}"),
+            };
+            return Err(message);
         }
     };
     if let Some(child_pid) = child_pid {
-        clear_bg_removal_pid_if_owned(child_pid, pid);
+        clear_image_tool_pid_if_owned(child_pid, pid);
     }
     if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst)) {
-        return Err("Background removal cancelled".to_string());
+        return Err(image_tool_cancelled_message(operation).to_string());
     }
     if !output.status.success() {
         let err_str = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "Background removal failed (exit code {:?}):\n{}",
-            output.status.code(),
-            err_str.trim()
-        ));
+        return Err(match operation {
+            BgRemovalOperation::BackgroundRemoval => format!(
+                "Background removal failed (exit code {:?}):\n{}",
+                output.status.code(),
+                err_str.trim()
+            ),
+            BgRemovalOperation::DepthMap => format!("Depth estimation failed:\n{}", err_str.trim()),
+        });
     }
+    Ok(output)
+}
 
+fn image_tool_cancelled_message(operation: BgRemovalOperation) -> &'static str {
+    match operation {
+        BgRemovalOperation::BackgroundRemoval => "Background removal cancelled",
+        BgRemovalOperation::DepthMap => "Depth estimation cancelled",
+    }
+}
+
+pub(super) fn decode_image_tool_output(output: std::process::Output) -> Result<RgbaImage, String> {
     image::load_from_memory_with_format(&output.stdout, image::ImageFormat::Png)
         .map(|image| image.to_rgba8())
         .map_err(|e| format!("Failed to decode output PNG: {}", e))
 }
 
-pub(super) fn terminate_bg_removal_process(pid: u32) {
+pub(super) fn terminate_image_tool_process(pid: u32) {
     if pid == 0 {
         return;
     }
@@ -139,7 +175,7 @@ pub(super) fn terminate_bg_removal_process(pid: u32) {
     let _ = pid;
 }
 
-fn clear_bg_removal_pid_if_owned(child_pid: &std::sync::atomic::AtomicU32, pid: u32) -> bool {
+fn clear_image_tool_pid_if_owned(child_pid: &std::sync::atomic::AtomicU32, pid: u32) -> bool {
     child_pid
         .compare_exchange(
             pid,
@@ -158,7 +194,7 @@ mod cancellation_tests {
     fn old_worker_cannot_clear_a_new_process_pid() {
         let published_pid = std::sync::atomic::AtomicU32::new(202);
 
-        assert!(!clear_bg_removal_pid_if_owned(&published_pid, 101));
+        assert!(!clear_image_tool_pid_if_owned(&published_pid, 101));
         assert_eq!(published_pid.load(std::sync::atomic::Ordering::SeqCst), 202);
     }
 
@@ -171,15 +207,18 @@ mod cancellation_tests {
             "import sys,time\nsys.stdin.buffer.read()\ntime.sleep(30)\n",
         )
         .unwrap();
-        let configured = format!("python3 {}", script.display());
         let cancelled = std::sync::atomic::AtomicBool::new(true);
         let pid = std::sync::atomic::AtomicU32::new(0);
-        let result = remove_background_rgba_cancellable(
+        let mut cmd = Command::new("python3");
+        cmd.arg(&script);
+        let result = run_image_tool_subprocess(
+            cmd,
             b"input",
-            Some(&configured),
             None,
             Some(&cancelled),
             Some(&pid),
+            BgRemovalOperation::BackgroundRemoval,
+            "python3",
         );
         assert_eq!(result.unwrap_err(), "Background removal cancelled");
         let child_pid = pid.load(std::sync::atomic::Ordering::SeqCst);
@@ -227,9 +266,9 @@ impl ImagePreviewState {
         self.bg_removal_status = Some(status_desc);
         self.bg_removal_error = None;
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        self.bg_removal_cancel = Some(cancel.clone());
-        self.bg_removal_child_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let child_pid = self.bg_removal_child_pid.clone();
+        self.image_tool_cancel = Some(cancel.clone());
+        self.image_tool_child_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let child_pid = self.image_tool_child_pid.clone();
 
         let configured_cmd = self.bg_removal_cmd.clone();
         let thread_prompt = prompt_opt.clone();
@@ -243,13 +282,20 @@ impl ImagePreviewState {
             };
             let _ = tx_prog.send(BgRemovalMsg::Progress(init_msg));
 
-            match remove_background_rgba_cancellable(
+            let (cmd_bin, cmd_args) = background_removal_command(configured_cmd.as_deref());
+            let mut cmd = Command::new(&cmd_bin);
+            cmd.args(&cmd_args);
+            let result = run_image_tool_subprocess(
+                cmd,
                 &png_bytes,
-                configured_cmd.as_deref(),
                 thread_prompt.as_deref(),
                 Some(&cancel),
                 Some(&child_pid),
-            ) {
+                BgRemovalOperation::BackgroundRemoval,
+                &cmd_bin,
+            )
+            .and_then(decode_image_tool_output);
+            match result {
                 Ok(result_rgba) => {
                     let _ = tx.send(BgRemovalMsg::Success {
                         result_rgba,
@@ -271,7 +317,7 @@ impl ImagePreviewState {
         if self.bg_removal_rx.is_some()
             && self.bg_removal_input_stamp.as_ref() != Some(&self.input_stamp())
         {
-            self.cancel_background_removal();
+            self.cancel_image_tool_process();
             self.bg_removal_rx = None;
             self.bg_removal_input_stamp = None;
             self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
@@ -365,14 +411,14 @@ impl ImagePreviewState {
         }
     }
 
-    pub(crate) fn cancel_background_removal(&mut self) {
-        if let Some(cancel) = self.bg_removal_cancel.take() {
+    pub(crate) fn cancel_image_tool_process(&mut self) {
+        if let Some(cancel) = self.image_tool_cancel.take() {
             cancel.store(true, std::sync::atomic::Ordering::SeqCst);
         }
         let pid = self
-            .bg_removal_child_pid
+            .image_tool_child_pid
             .swap(0, std::sync::atomic::Ordering::SeqCst);
-        terminate_bg_removal_process(pid);
+        terminate_image_tool_process(pid);
         self.bg_removal_rx = None;
         self.bg_removal_input_stamp = None;
         self.bg_removal_in_progress = false;

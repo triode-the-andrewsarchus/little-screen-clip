@@ -151,8 +151,8 @@ pub struct ImagePreviewState {
     pub bg_removal_status: Option<String>,
     pub bg_removal_error: Option<String>,
     pub bg_removal_cmd: Option<String>,
-    pub(crate) bg_removal_child_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
-    pub(crate) bg_removal_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub(crate) image_tool_child_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    pub(crate) image_tool_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub multimatte_prompt: String,
 
     // Format Conversion (Squoosh-style)
@@ -368,8 +368,8 @@ impl ImagePreviewState {
             bg_removal_status: None,
             bg_removal_error: None,
             bg_removal_cmd: config.image.bg_removal_cmd.clone(),
-            bg_removal_child_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
-            bg_removal_cancel: None,
+            image_tool_child_pid: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            image_tool_cancel: None,
             multimatte_prompt: String::new(),
             convert_state: ConvertState::default(),
             ocr_state: OcrState::default(),
@@ -1220,12 +1220,15 @@ impl ImagePreviewState {
         {
             self.cancel_ocr();
         }
-        if prev_mode == ImageToolMode::RemoveBg
-            && target_mode != ImageToolMode::RemoveBg
-            && self.bg_removal_in_progress
-            && self.bg_removal_operation == BgRemovalOperation::BackgroundRemoval
-        {
-            self.cancel_background_removal();
+        let leaving_active_image_tool = matches!(
+            (prev_mode, self.bg_removal_operation),
+            (
+                ImageToolMode::RemoveBg,
+                BgRemovalOperation::BackgroundRemoval
+            ) | (ImageToolMode::DepthMap, BgRemovalOperation::DepthMap)
+        );
+        if leaving_active_image_tool && target_mode != prev_mode && self.bg_removal_in_progress {
+            self.cancel_image_tool_process();
         }
         match target_mode {
             ImageToolMode::View
@@ -2953,10 +2956,10 @@ mod tests {
             state.bg_removal_cmd = Some(format!("python3 {}", script.display()));
             state.set_tool_mode(ImageToolMode::RemoveBg);
             state.run_background_removal();
-            let cancel = state.bg_removal_cancel.as_ref().unwrap().clone();
+            let cancel = state.image_tool_cancel.as_ref().unwrap().clone();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
             while state
-                .bg_removal_child_pid
+                .image_tool_child_pid
                 .load(std::sync::atomic::Ordering::SeqCst)
                 == 0
                 && std::time::Instant::now() < deadline
@@ -2965,12 +2968,12 @@ mod tests {
             }
             assert_ne!(
                 state
-                    .bg_removal_child_pid
+                    .image_tool_child_pid
                     .load(std::sync::atomic::Ordering::SeqCst),
                 0
             );
             let pid = state
-                .bg_removal_child_pid
+                .image_tool_child_pid
                 .load(std::sync::atomic::Ordering::SeqCst);
             (cancel, pid, script)
         }
@@ -3001,7 +3004,7 @@ mod tests {
         assert_process_exited(stale_pid);
         assert_eq!(
             stale
-                .bg_removal_child_pid
+                .image_tool_child_pid
                 .load(std::sync::atomic::Ordering::SeqCst),
             0
         );

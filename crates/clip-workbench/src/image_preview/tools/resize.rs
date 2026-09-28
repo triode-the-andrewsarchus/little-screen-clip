@@ -433,7 +433,7 @@ impl Drop for ImagePreviewState {
     fn drop(&mut self) {
         self.cancel_optimizer();
         self.cancel_ocr();
-        self.cancel_background_removal();
+        self.cancel_image_tool_process();
     }
 }
 

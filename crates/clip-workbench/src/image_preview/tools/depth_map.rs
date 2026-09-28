@@ -1,7 +1,198 @@
 use super::super::*;
 
+#[cfg(all(test, unix))]
+mod cancellation_tests {
+    use super::*;
+
+    fn state() -> ImagePreviewState {
+        let image = RgbaImage::from_pixel(4, 4, image::Rgba([20, 30, 40, 255]));
+        let mut bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        ImagePreviewState::from_bytes_with_meta(
+            bytes,
+            "image/png".into(),
+            None,
+            "depth cancellation".into(),
+            &AppConfig::default(),
+        )
+        .unwrap()
+    }
+
+    fn start_sleeping_job(
+        state: &mut ImagePreviewState,
+        label: &str,
+    ) -> (
+        u32,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+        std::path::PathBuf,
+    ) {
+        let script =
+            std::env::temp_dir().join(format!("clip-depth-{label}-{}.py", std::process::id()));
+        std::fs::write(
+            &script,
+            "import sys,time\nsys.stdin.buffer.read()\ntime.sleep(30)\n",
+        )
+        .unwrap();
+        state.set_tool_mode(ImageToolMode::DepthMap);
+        state.run_depth_estimation_with_command(
+            "python3".into(),
+            vec![script.display().to_string()],
+        );
+        let cancel = state.image_tool_cancel.as_ref().unwrap().clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while state
+            .image_tool_child_pid
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 0
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let pid = state
+            .image_tool_child_pid
+            .load(std::sync::atomic::Ordering::SeqCst);
+        assert_ne!(pid, 0, "depth child PID was not published");
+        (pid, cancel, script)
+    }
+
+    fn assert_exited(pid: u32) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            let result = unsafe { libc::kill(pid as i32, 0) };
+            if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("depth child {pid} remained alive after cancellation");
+    }
+
+    #[test]
+    fn depth_cancel_before_pid_publication_stops_spawned_child() {
+        let script =
+            std::env::temp_dir().join(format!("clip-depth-start-race-{}.py", std::process::id()));
+        std::fs::write(
+            &script,
+            "import sys,time\nsys.stdin.buffer.read()\ntime.sleep(30)\n",
+        )
+        .unwrap();
+        let mut cmd = Command::new("python3");
+        cmd.arg(&script);
+        let cancelled = std::sync::atomic::AtomicBool::new(true);
+        let pid = std::sync::atomic::AtomicU32::new(0);
+        let result = super::super::background_removal::run_image_tool_subprocess(
+            cmd,
+            b"input",
+            None,
+            Some(&cancelled),
+            Some(&pid),
+            BgRemovalOperation::DepthMap,
+            "python3",
+        );
+        assert_eq!(result.unwrap_err(), "Depth estimation cancelled");
+        assert_eq!(pid.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let _ = std::fs::remove_file(script);
+    }
+
+    #[test]
+    fn depth_subprocess_stops_on_stale_input_mode_exit_and_viewer_drop() {
+        let mut stale = state();
+        let (pid, cancel, script) = start_sleeping_job(&mut stale, "stale");
+        stale.markup_state.items.push(MarkupShape::Text {
+            pos: Pos2::ZERO,
+            text: "changed".into(),
+            font_size: 10.0,
+        });
+        stale.poll_bg_removal();
+        assert!(cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_exited(pid);
+        let _ = std::fs::remove_file(script);
+
+        let mut mode = state();
+        let (pid, cancel, script) = start_sleeping_job(&mut mode, "mode");
+        mode.set_tool_mode(ImageToolMode::View);
+        assert!(cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_exited(pid);
+        let _ = std::fs::remove_file(script);
+
+        let mut dropped = state();
+        let (pid, cancel, script) = start_sleeping_job(&mut dropped, "drop");
+        drop(dropped);
+        assert!(cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_exited(pid);
+        let _ = std::fs::remove_file(script);
+    }
+
+    #[test]
+    fn depth_success_and_process_failure_keep_operation_specific_results() {
+        let mut success = state();
+        success.set_tool_mode(ImageToolMode::DepthMap);
+        success.run_depth_estimation_with_command(
+            "python3".into(),
+            vec![
+                "-c".into(),
+                "import sys; d=sys.stdin.buffer.read(); sys.stdout.buffer.write(d)".into(),
+            ],
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while success.bg_removal_in_progress && std::time::Instant::now() < deadline {
+            success.poll_bg_removal();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        success.poll_bg_removal();
+        assert!(success.bg_removal_error.is_none());
+        assert!(
+            success
+                .status_toast
+                .as_ref()
+                .unwrap()
+                .0
+                .starts_with("🌊 Depth map generated")
+        );
+
+        let mut failure = state();
+        failure.set_tool_mode(ImageToolMode::DepthMap);
+        failure.run_depth_estimation_with_command(
+            "python3".into(),
+            vec!["-c".into(), "import sys; sys.stdin.buffer.read(); print('expected depth failure', file=sys.stderr); sys.exit(7)".into()],
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while failure.bg_removal_in_progress && std::time::Instant::now() < deadline {
+            failure.poll_bg_removal();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        failure.poll_bg_removal();
+        assert!(
+            failure
+                .bg_removal_error
+                .as_deref()
+                .unwrap()
+                .contains("Depth estimation failed:\nexpected depth failure")
+        );
+    }
+}
+
 impl ImagePreviewState {
     pub fn run_depth_estimation(&mut self) {
+        let depth_script = "scripts/depth_estimation.py";
+        let (cmd_bin, cmd_args) = if std::path::Path::new(depth_script).exists() {
+            (depth_script.to_string(), Vec::new())
+        } else {
+            ("python3".to_string(), vec![depth_script.to_string()])
+        };
+        self.run_depth_estimation_with_command(cmd_bin, cmd_args);
+    }
+
+    pub(crate) fn run_depth_estimation_with_command(
+        &mut self,
+        cmd_bin: String,
+        cmd_args: Vec<String>,
+    ) {
         if self.bg_removal_in_progress {
             return;
         }
@@ -20,13 +211,6 @@ impl ImagePreviewState {
             return;
         }
 
-        let depth_script = "scripts/depth_estimation.py";
-        let (cmd_bin, cmd_args) = if std::path::Path::new(depth_script).exists() {
-            (depth_script.to_string(), Vec::new())
-        } else {
-            ("python3".to_string(), vec![depth_script.to_string()])
-        };
-
         let (tx, rx) = std::sync::mpsc::channel::<BgRemovalMsg>();
         self.bg_removal_rx = Some(rx);
         self.bg_removal_input_stamp = Some(self.input_stamp());
@@ -34,6 +218,10 @@ impl ImagePreviewState {
         self.bg_removal_in_progress = true;
         self.bg_removal_status = Some("Estimating depth map with Depth-Anything...".to_string());
         self.bg_removal_error = None;
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.image_tool_cancel = Some(cancel.clone());
+        self.image_tool_child_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let child_pid = self.image_tool_child_pid.clone();
 
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
@@ -43,65 +231,23 @@ impl ImagePreviewState {
             ));
 
             let mut cmd = Command::new(&cmd_bin);
-            cmd.args(&cmd_args).arg("-").arg("-");
-
-            let mut child = match cmd
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped())
-                .spawn()
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    let _ = tx.send(BgRemovalMsg::Error(format!(
-                        "Failed to launch depth estimation '{}': {}. Ensure Python environment is setup.",
-                        cmd_bin, e
-                    )));
-                    return;
-                }
-            };
-
-            if let Some(mut stdin) = child.stdin.take() {
-                use std::io::Write;
-                if let Err(e) = stdin.write_all(&png_bytes) {
-                    let _ = tx.send(BgRemovalMsg::Error(format!(
-                        "Failed to write image data to worker: {}",
-                        e
-                    )));
-                    return;
-                }
-            }
-
-            let output = match child.wait_with_output() {
-                Ok(o) => o,
-                Err(e) => {
-                    let _ = tx.send(BgRemovalMsg::Error(format!(
-                        "Depth estimation process failed: {}",
-                        e
-                    )));
-                    return;
-                }
-            };
-
-            if !output.status.success() {
-                let err_str = String::from_utf8_lossy(&output.stderr);
-                let _ = tx.send(BgRemovalMsg::Error(format!(
-                    "Depth estimation failed:\n{}",
-                    err_str.trim()
-                )));
-                return;
-            }
-
-            let res_img = match image::load_from_memory_with_format(
-                &output.stdout,
-                image::ImageFormat::Png,
-            ) {
-                Ok(dyn_img) => dyn_img.to_rgba8(),
-                Err(e) => {
-                    let _ = tx.send(BgRemovalMsg::Error(format!(
-                        "Failed to decode output PNG: {}",
-                        e
-                    )));
+            cmd.args(&cmd_args);
+            let result = super::background_removal::run_image_tool_subprocess(
+                cmd,
+                &png_bytes,
+                None,
+                Some(&cancel),
+                Some(&child_pid),
+                BgRemovalOperation::DepthMap,
+                &cmd_bin,
+            )
+            .and_then(super::background_removal::decode_image_tool_output);
+            let res_img = match result {
+                Ok(image) => image,
+                Err(error) => {
+                    if !cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        let _ = tx.send(BgRemovalMsg::Error(error));
+                    }
                     return;
                 }
             };
