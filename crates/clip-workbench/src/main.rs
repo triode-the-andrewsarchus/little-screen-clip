@@ -428,6 +428,7 @@ struct WorkbenchApp {
     palette_search_needs_focus: bool,
     selected_action_index: usize,
     selected_slots: Vec<SlotId>,
+    inspector_text_preview_cache: Option<InspectorTextPreviewCache>,
     status_msg: Option<String>,
     appearance_sync: AppearanceSync,
     renderer: ScreenRenderer,
@@ -451,6 +452,15 @@ struct WorkbenchApp {
     dragging_slot: Option<SlotId>,
     config: AppConfig,
     appearance_applied: bool,
+}
+
+#[derive(Debug, Clone)]
+struct InspectorTextPreviewCache {
+    selected_slots: Vec<SlotId>,
+    selected_item_ids: Vec<Option<uuid::Uuid>>,
+    slot: SlotId,
+    file_path: Option<PathBuf>,
+    is_markdown: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -689,6 +699,7 @@ impl WorkbenchApp {
             palette_search_needs_focus: true,
             selected_action_index: 0,
             selected_slots: vec![SlotId::LeftHand],
+            inspector_text_preview_cache: None,
             status_msg: None,
             appearance_sync: AppearanceSync::default(),
             renderer,
@@ -1551,7 +1562,13 @@ impl eframe::App for WorkbenchApp {
 
                         // Smart text previews: Unit conversions, Network (IP/MAC), and Timestamps
                         let first_text_item = self.selected_slots.iter().find_map(|s| {
-                            self.state.get(*s).and_then(|it| it.to_clipboard_text())
+                            let item = self.state.get(*s)?;
+                            match &item.payload {
+                                ClipPayload::Text(text) | ClipPayload::Markdown(text) => {
+                                    Some(std::borrow::Cow::Borrowed(text.as_str()))
+                                }
+                                _ => item.to_clipboard_text().map(std::borrow::Cow::Owned),
+                            }
                         });
                         if let Some(ref text) = first_text_item {
                             let trimmed = text.trim();
@@ -1604,7 +1621,7 @@ impl eframe::App for WorkbenchApp {
                             }
                         }
 
-                        if let Some((raw_txt, file_p, is_md)) = Self::check_inspector_text_preview(&self.selected_slots, &self.state) {
+                        if let Some((slot, file_p, is_md)) = self.check_inspector_text_preview() {
                             ui.add_space(crate::ui_ext::SPACE_SM);
                             let (label, txt_icon) = if is_md {
                                 ("Preview Markdown", Icon::Book)
@@ -1623,7 +1640,7 @@ impl eframe::App for WorkbenchApp {
                                     if let Some(st) = TextPreviewState::from_file(p, &self.config) {
                                         self.replace_viewer(Some(ViewerSession::Text(st)));
                                     }
-                                } else if let Some(txt) = raw_txt {
+                                } else if let Some(txt) = self.state.get(slot).and_then(ClipItem::to_clipboard_text) {
                                     self.replace_viewer(Some(ViewerSession::Text(TextPreviewState::from_text(txt, None, &self.config))));
                                 }
                             }
@@ -2497,38 +2514,69 @@ impl WorkbenchApp {
         }
     }
 
-    fn check_inspector_text_preview(
-        selected_slots: &[SlotId],
-        state: &SlotManager,
-    ) -> Option<(Option<String>, Option<PathBuf>, bool)> {
-        let (raw_txt, file_p): (Option<String>, Option<PathBuf>) =
-            selected_slots.iter().find_map(|s| {
-                let it = state.get(*s)?;
-                if let Some(p) = it.file_path().filter(|p| little_clip_ops::is_text_file(p)) {
-                    Some((None, Some(p)))
-                } else if let Some(txt) = it.to_clipboard_text() {
-                    let p = std::path::Path::new(txt.trim());
-                    if p.is_file() && little_clip_ops::is_text_file(p) {
-                        Some((None, Some(p.to_path_buf())))
-                    } else {
-                        Some((Some(txt), None))
+    fn check_inspector_text_preview(&mut self) -> Option<(SlotId, Option<PathBuf>, bool)> {
+        let selected_item_ids = self
+            .selected_slots
+            .iter()
+            .map(|slot| self.state.get(*slot).map(|item| item.id))
+            .collect::<Vec<_>>();
+        if let Some(cache) = &self.inspector_text_preview_cache
+            && cache.selected_slots == self.selected_slots
+            && cache.selected_item_ids == selected_item_ids
+        {
+            return Some((cache.slot, cache.file_path.clone(), cache.is_markdown));
+        }
+
+        self.inspector_text_preview_cache = None;
+        let (slot, file_path, is_markdown) = self.selected_slots.iter().find_map(|slot| {
+            let item = self.state.get(*slot)?;
+            let file_path = if let Some(path) = item
+                .file_path()
+                .filter(|p| little_clip_ops::is_text_file(p))
+            {
+                Some(path)
+            } else {
+                let text = match &item.payload {
+                    // Borrow text and Markdown payloads so a large clipboard value is
+                    // not copied just to decide which inspector button to show.
+                    ClipPayload::Text(text) | ClipPayload::Markdown(text) => {
+                        Some(std::borrow::Cow::Borrowed(text.as_str()))
                     }
-                } else {
-                    None
-                }
-            })?;
+                    _ => item.to_clipboard_text().map(std::borrow::Cow::Owned),
+                };
+                text.as_deref().and_then(|text| {
+                    let path = std::path::Path::new(text.trim());
+                    (path.is_file() && little_clip_ops::is_text_file(path))
+                        .then(|| path.to_path_buf())
+                })
+            };
+            let (file_path, is_markdown) = if let Some(path) = file_path {
+                let is_markdown = path.extension().is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown")
+                });
+                (Some(path), is_markdown)
+            } else {
+                let is_markdown = match &item.payload {
+                    ClipPayload::Text(text) | ClipPayload::Markdown(text) => {
+                        text_preview::detect_markdown_text(text)
+                    }
+                    _ => item
+                        .to_clipboard_text()
+                        .is_some_and(|text| text_preview::detect_markdown_text(&text)),
+                };
+                (None, is_markdown)
+            };
+            Some((*slot, file_path, is_markdown))
+        })?;
 
-        let is_md = if let Some(p) = &file_p {
-            p.extension()
-                .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
-                .unwrap_or(false)
-        } else if let Some(txt) = &raw_txt {
-            text_preview::detect_markdown_text(txt)
-        } else {
-            false
-        };
-
-        Some((raw_txt, file_p, is_md))
+        self.inspector_text_preview_cache = Some(InspectorTextPreviewCache {
+            selected_slots: self.selected_slots.clone(),
+            selected_item_ids,
+            slot,
+            file_path: file_path.clone(),
+            is_markdown,
+        });
+        Some((slot, file_path, is_markdown))
     }
 
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
@@ -3083,6 +3131,7 @@ mod workbench_layout_tests {
             palette_search_needs_focus: false,
             selected_action_index: 0,
             selected_slots: vec![SlotId::LeftHand],
+            inspector_text_preview_cache: None,
             status_msg: None,
             appearance_sync: AppearanceSync::default(),
             renderer: ScreenRenderer::fallback(config.clone()),
@@ -3103,6 +3152,38 @@ mod workbench_layout_tests {
             config,
             appearance_applied: true,
         }
+    }
+
+    #[test]
+    fn inspector_markdown_classification_tracks_clipboard_item_identity() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        let slot = SlotId::LeftHand;
+        let markdown = ClipItem::from_text("# A heading\n\n- One item");
+        let markdown_id = markdown.id;
+        *app.state.get_mut(slot).expect("left hand slot") = Some(markdown);
+
+        assert_eq!(app.check_inspector_text_preview(), Some((slot, None, true)));
+        assert_eq!(
+            app.inspector_text_preview_cache
+                .as_ref()
+                .and_then(|cache| cache.selected_item_ids.first().copied().flatten()),
+            Some(markdown_id)
+        );
+
+        let plain_text = ClipItem::from_text("ordinary clipboard text");
+        let plain_text_id = plain_text.id;
+        *app.state.get_mut(slot).expect("left hand slot") = Some(plain_text);
+
+        assert_eq!(
+            app.check_inspector_text_preview(),
+            Some((slot, None, false))
+        );
+        assert_eq!(
+            app.inspector_text_preview_cache
+                .as_ref()
+                .and_then(|cache| cache.selected_item_ids.first().copied().flatten()),
+            Some(plain_text_id)
+        );
     }
 
     #[test]
