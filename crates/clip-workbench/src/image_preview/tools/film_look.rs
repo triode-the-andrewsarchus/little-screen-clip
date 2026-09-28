@@ -55,6 +55,58 @@ fn apply_auto_white_balance(image: &mut image::RgbImage, strength: f32) -> bool 
         return false;
     }
 
+    apply_white_balance_gains(image, gains, strength)
+}
+
+fn gray_world_gains(image: &image::RgbImage) -> Option<[f32; 3]> {
+    let mut sums = [0.0_f32; 3];
+    let count = image.width() as f32 * image.height() as f32;
+    if count == 0.0 {
+        return None;
+    }
+    for pixel in image.pixels() {
+        for (sum, channel) in sums.iter_mut().zip(pixel.0) {
+            *sum += f32::from(channel);
+        }
+    }
+    let means = sums.map(|sum| sum / count);
+    let target = means.iter().sum::<f32>() / 3.0;
+    Some(means.map(|mean| (target / mean.max(1.0)).clamp(0.7, 1.4)))
+}
+
+fn white_patch_gains(image: &image::RgbImage) -> Option<[f32; 3]> {
+    let pixel_count = image.width() as usize * image.height() as usize;
+    if pixel_count == 0 {
+        return None;
+    }
+    let mut histograms = [[0_usize; 256]; 3];
+    for pixel in image.pixels() {
+        for (histogram, channel) in histograms.iter_mut().zip(pixel.0) {
+            histogram[usize::from(channel)] += 1;
+        }
+    }
+
+    let percentile_index = pixel_count * 99 / 100;
+    let white_points = histograms.map(|histogram| {
+        let mut remaining = percentile_index;
+        for level in 0..=255 {
+            let count = histogram[level];
+            if remaining < count {
+                return level as f32;
+            }
+            remaining -= count;
+        }
+        255.0
+    });
+    let target = white_points.iter().sum::<f32>() / 3.0;
+    Some(white_points.map(|white_point| (target / white_point.max(1.0)).clamp(0.7, 1.4)))
+}
+
+fn apply_white_balance_gains(image: &mut image::RgbImage, gains: [f32; 3], strength: f32) -> bool {
+    let strength = strength.clamp(0.0, 1.0);
+    if strength == 0.0 {
+        return false;
+    }
     for pixel in image.pixels_mut() {
         for (channel, gain) in pixel.0.iter_mut().zip(gains) {
             let adjusted_gain = 1.0 + (gain - 1.0) * strength;
@@ -68,7 +120,9 @@ fn apply_auto_white_balance(image: &mut image::RgbImage, strength: f32) -> bool 
 
 #[cfg(test)]
 mod white_balance_tests {
-    use super::apply_auto_white_balance;
+    use super::{
+        apply_auto_white_balance, apply_white_balance_gains, gray_world_gains, white_patch_gains,
+    };
 
     fn channel_means(image: &image::RgbImage) -> [f32; 3] {
         let count = (image.width() * image.height()) as f32;
@@ -176,6 +230,33 @@ mod white_balance_tests {
             "without a neutral highlight, Auto should preserve scene color"
         );
     }
+
+    #[test]
+    fn gray_and_white_modes_use_distinct_white_balance_references() {
+        let source = image::RgbImage::from_fn(100, 100, |x, _| {
+            if x < 10 {
+                image::Rgb([180, 190, 210])
+            } else {
+                image::Rgb([80, 50, 30])
+            }
+        });
+        let gray_gains = gray_world_gains(&source).expect("non-empty image has gray-world gains");
+        let white_gains =
+            white_patch_gains(&source).expect("non-empty image has white-patch gains");
+        assert_ne!(gray_gains, white_gains);
+
+        let mut corrected_white = source.clone();
+        assert!(apply_white_balance_gains(
+            &mut corrected_white,
+            white_gains,
+            1.0
+        ));
+        let white_patch = corrected_white.get_pixel(5, 50);
+        assert!(
+            (i16::from(white_patch[0]) - i16::from(white_patch[2])).abs() <= 1,
+            "White mode should neutralize the bright reference patch: {white_patch:?}"
+        );
+    }
 }
 
 fn process_film_image(
@@ -185,10 +266,21 @@ fn process_film_image(
 ) -> image::RgbImage {
     let mut source = image.clone();
     let mut config = config.clone();
-    if config.white_balance_mode == WhiteBalanceMode::Auto {
-        apply_auto_white_balance(&mut source, config.white_balance_strength);
-        // Auto correction above is based on likely neutral highlights. Disable filmr's
-        // whole-image gray-world pass so scene colors are not mistaken for an illuminant.
+    let gains = match config.white_balance_mode {
+        WhiteBalanceMode::Auto => {
+            apply_auto_white_balance(&mut source, config.white_balance_strength);
+            None
+        }
+        WhiteBalanceMode::Gray => gray_world_gains(&source),
+        WhiteBalanceMode::White => white_patch_gains(&source),
+        WhiteBalanceMode::Off => None,
+    };
+    if let Some(gains) = gains {
+        apply_white_balance_gains(&mut source, gains, config.white_balance_strength);
+    }
+    if config.white_balance_mode != WhiteBalanceMode::Off {
+        // Apply these modes before film simulation. The pinned filmr release currently
+        // treats Gray and White like Off and uses scene-wide gray-world for Auto.
         config.white_balance_mode = WhiteBalanceMode::Off;
         config.white_balance_strength = 0.0;
     }
@@ -1889,7 +1981,19 @@ impl ImagePreviewState {
                                             crate::ui_ext::BADGE_CORNER_RADIUS,
                                         ))
                                         .min_size(Vec2::new(36.0, crate::ui_ext::CONTROL_HEIGHT));
-                                        if ui.add(b).clicked() && !sel {
+                                        let description = match mode {
+                                            WhiteBalanceMode::Auto => {
+                                                "Balance from plausible neutral highlights; skips images without reliable neutral samples"
+                                            }
+                                            WhiteBalanceMode::Gray => {
+                                                "Balance the scene-wide average toward neutral gray"
+                                            }
+                                            WhiteBalanceMode::White => {
+                                                "Balance each channel from its brightest 1% white-patch reference"
+                                            }
+                                            WhiteBalanceMode::Off => "Do not apply white-balance correction",
+                                        };
+                                        if ui.add(b).on_hover_text(description).clicked() && !sel {
                                             self.film_sim_state.wb_mode = mode;
                                             self.film_sim_state.mark_dirty();
                                         }
