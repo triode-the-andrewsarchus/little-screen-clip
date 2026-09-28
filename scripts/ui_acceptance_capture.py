@@ -279,6 +279,7 @@ class FakeTextPreviewDaemon:
         binary_diff_preview: bool = False,
         diff_preview: bool = False,
         image_diff_preview: bool = False,
+        reload_config_error: bool = False,
     ):
         self.socket_path = runtime / "little-screen-clip.sock"
         self.log_path = log_path
@@ -288,6 +289,7 @@ class FakeTextPreviewDaemon:
         self.binary_diff_preview = binary_diff_preview
         self.diff_preview = diff_preview
         self.image_diff_preview = image_diff_preview
+        self.reload_config_error = reload_config_error
         self.xlsx_path = log_path.parent / "acceptance-multisheet.xlsx"
         if xlsx_preview:
             self._write_xlsx_fixture()
@@ -512,6 +514,8 @@ class FakeTextPreviewDaemon:
         }
 
     def _response(self, request: Any) -> tuple[Any, str]:
+        if request == "ReloadConfig" and self.reload_config_error:
+            return {"Error": {"error": "acceptance reload rejected"}}, "reload_config_error"
         if request == "GetState":
             return {"State": self._state()}, "state"
         if request == "GetStateSummary":
@@ -1146,7 +1150,8 @@ def capture_workbench(
     report["actual_logical_size"] = list(logical_size)
     app_env = niri_env | {"WAYLAND_DEBUG": "client"}
     pointer_helper: Path | None = None
-    if args.click is not None or args.move is not None or args.drag is not None or args.scroll is not None:
+    if (args.click is not None or args.click_after_key_action is not None
+            or args.move is not None or args.drag is not None or args.scroll is not None):
         verify_private_wayland_target(niri_env, config["runtime"])
         pointer_helper = build_private_virtual_pointer(output)
         probe = run_checked([str(pointer_helper), "probe"], env=niri_env)
@@ -1257,6 +1262,25 @@ def capture_workbench(
     if args.type_text and not args.verify_viewer_return:
         run_checked(["wtype", args.type_text], env=niri_env)
         report.setdefault("pointer_input", {})["typed_text"] = args.type_text
+    if args.click_after_key_action or args.capture_after_key_actions:
+        if args.post_key_delay_ms:
+            time.sleep(args.post_key_delay_ms / 1000)
+        if args.capture_after_key_actions:
+            report["screenshots"]["after_key_actions"] = screenshot(
+                niri_bin, niri_env, output / "after-key-actions.png"
+            )
+        if args.click_after_key_action:
+            assert pointer_helper is not None
+            report.setdefault("pointer_input", {})["clicks_after_key_actions"] = []
+            for x, y in args.click_after_key_action:
+                run_checked(
+                    [str(pointer_helper), "click", str(logical_size[0]), str(logical_size[1]), str(x), str(y)],
+                    env=niri_env,
+                )
+                report["pointer_input"]["clicks_after_key_actions"].append(
+                    {"x": x, "y": y, "button": "left"}
+                )
+                time.sleep(args.click_delay_ms / 1000)
     if args.capture_after_actions:
         report["screenshots"]["after_actions"] = screenshot(
             niri_bin, niri_env, output / "after-actions.png"
@@ -1380,6 +1404,18 @@ def create_parser() -> argparse.ArgumentParser:
         help="capture immediately after injected actions and before the settling delay",
     )
     parser.add_argument(
+        "--capture-after-key-actions", action="store_true",
+        help="capture after keyboard actions and before any --click-after-key-action clicks",
+    )
+    parser.add_argument(
+        "--click-after-key-action", nargs=2, type=int, metavar=("X", "Y"), action="append",
+        help="send a private left click after keyboard actions; repeat for ordered clicks",
+    )
+    parser.add_argument(
+        "--post-key-delay-ms", type=int, default=0,
+        help="wait after keyboard actions before capture/clicks (default: 0)",
+    )
+    parser.add_argument(
         "--move", nargs=2, type=int, metavar=("X", "Y"),
         help="move and hold a virtual pointer at logical screen coordinates in private Niri without clicking",
     )
@@ -1430,6 +1466,8 @@ def create_parser() -> argparse.ArgumentParser:
                         help="serve two private text items for regular Diff route acceptance")
     parser.add_argument("--fake-image-diff-preview", action="store_true",
                         help="serve two deterministic private PNG items for image Diff route acceptance")
+    parser.add_argument("--fake-reload-error", action="store_true",
+                        help="return a deterministic error to ReloadConfig over private IPC")
     parser.add_argument("--binary-diff-view", action="store_true",
                         help="open binary diff directly (requires --fake-binary-diff)")
     parser.add_argument("--verify-return", action="store_true", help="send Escape and verify the popup closes while private Niri remains responsive")
@@ -1447,6 +1485,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         or args.settle_ms < 0
         or args.post_tool_delay_ms < 0
         or args.click_delay_ms < 0
+        or args.post_key_delay_ms < 0
     ):
         raise SystemExit("width, height, and scale must be positive; delay values cannot be negative")
     for fixture in (args.image, args.audio, args.pdf, args.midi):
@@ -1492,6 +1531,16 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         or any((args.image, args.audio, args.pdf, args.midi))
     ):
         raise SystemExit("--fake-image-diff-preview cannot be combined with other fixture routes")
+    fake_fixture_flags = (
+        args.fake_audio_transition, args.fake_text_preview, args.fake_csv_preview,
+        args.fake_multisheet_xlsx, bool(args.fake_model3d), args.fake_binary_diff,
+        args.fake_diff_preview, args.fake_image_diff_preview, args.fake_node_machine,
+    )
+    if args.fake_reload_error and (
+        any(fake_fixture_flags) or any((args.image, args.audio, args.pdf, args.midi))
+        or not args.key_action or any(action != "f6" for action in args.key_action)
+    ):
+        raise SystemExit("--fake-reload-error requires only --key-action f6 and no other fixture route")
     if args.fake_node_machine and (
         args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
         or args.fake_model3d or args.fake_audio_transition or args.fake_binary_diff
@@ -1516,6 +1565,15 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         not (0 <= x < args.width) or not (0 <= y < args.height) for x, y in args.click
     ):
         raise SystemExit("--click coordinates must be inside the requested logical output")
+    if args.click_after_key_action is not None and any(
+        not (0 <= x < args.width) or not (0 <= y < args.height)
+        for x, y in args.click_after_key_action
+    ):
+        raise SystemExit("--click-after-key-action coordinates must be inside the requested logical output")
+    if args.click_after_key_action and not args.key_action:
+        raise SystemExit("--click-after-key-action requires --key-action")
+    if args.capture_after_key_actions and not args.key_action:
+        raise SystemExit("--capture-after-key-actions requires --key-action")
     if args.move is not None and (
         not (0 <= args.move[0] < args.width) or not (0 <= args.move[1] < args.height)
     ):
@@ -1595,6 +1653,9 @@ def main() -> int:
             "click": args.click,
             "click_delay_ms": args.click_delay_ms,
             "capture_after_actions": args.capture_after_actions,
+            "capture_after_key_actions": args.capture_after_key_actions,
+            "click_after_key_action": args.click_after_key_action,
+            "post_key_delay_ms": args.post_key_delay_ms,
             "move": args.move,
             "drag": args.drag,
             "scroll": args.scroll,
@@ -1610,6 +1671,7 @@ def main() -> int:
             "fake_binary_diff": args.fake_binary_diff,
             "fake_diff_preview": args.fake_diff_preview,
             "fake_image_diff_preview": args.fake_image_diff_preview,
+            "fake_reload_error": args.fake_reload_error,
             "fake_node_machine": args.fake_node_machine,
             "binary_diff_view": args.binary_diff_view,
             "verify_return": args.verify_return,
@@ -1656,7 +1718,7 @@ def main() -> int:
         if (
             args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
             or args.fake_model3d or args.fake_binary_diff or args.fake_diff_preview
-            or args.fake_image_diff_preview
+            or args.fake_image_diff_preview or args.fake_reload_error
         ):
             fake_text_daemon = FakeTextPreviewDaemon(
                 config["runtime"], output / "fake-text-daemon-events.json",
@@ -1666,6 +1728,7 @@ def main() -> int:
                 binary_diff_preview=args.fake_binary_diff,
                 diff_preview=args.fake_diff_preview,
                 image_diff_preview=args.fake_image_diff_preview,
+                reload_config_error=args.fake_reload_error,
             )
         capture_workbench(args, binary, output, config, niri_env, outputs, children, report)
     except Exception as exc:
@@ -1693,6 +1756,10 @@ def main() -> int:
                 report["fake_diff_preview"] = text_route
             elif args.fake_image_diff_preview:
                 report["fake_image_diff_preview"] = text_route
+            elif args.fake_reload_error:
+                report["fake_reload_error"] = text_route
+                if not any(event.get("kind") == "reload_config_error" for event in fake_text_daemon.events):
+                    report["failures"].append("workbench did not send ReloadConfig to fake error daemon")
             elif args.fake_model3d:
                 report["fake_model3d"] = text_route
             elif args.fake_multisheet_xlsx:
