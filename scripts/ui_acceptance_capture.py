@@ -270,14 +270,21 @@ class FakeTextPreviewDaemon:
         log_path: Path,
         csv_preview: bool = False,
         xlsx_preview: bool = False,
+        model3d_variant: str | None = None,
     ):
         self.socket_path = runtime / "little-screen-clip.sock"
         self.log_path = log_path
         self.csv_preview = csv_preview
         self.xlsx_preview = xlsx_preview
+        self.model3d_variant = model3d_variant
         self.xlsx_path = log_path.parent / "acceptance-multisheet.xlsx"
         if xlsx_preview:
             self._write_xlsx_fixture()
+        self.model3d_path = log_path.parent / (
+            f"acceptance-{model3d_variant}.stl" if model3d_variant else ""
+        )
+        if model3d_variant:
+            self._write_model3d_fixture()
         self.rolling_audio_path = log_path.parent / "fake-rolling-audio.wav"
         with wave.open(str(self.rolling_audio_path), "wb") as wav:
             wav.setnchannels(1)
@@ -351,25 +358,52 @@ class FakeTextPreviewDaemon:
             workbook_zip.writestr("xl/worksheets/sheet1.xml", quarter)
             workbook_zip.writestr("xl/worksheets/sheet2.xml", inventory)
 
+    def _write_model3d_fixture(self) -> None:
+        if self.model3d_variant == "error":
+            self.model3d_path.write_text(
+                "solid invalid_fixture\nthis is not valid STL facet data\nendsolid invalid_fixture\n",
+                encoding="ascii",
+            )
+            return
+        facet_count = 1 if self.model3d_variant == "valid" else 100_000
+        with self.model3d_path.open("w", encoding="ascii") as stl:
+            stl.write("solid acceptance_mesh\n")
+            for index in range(facet_count):
+                x = index % 200
+                y = index // 200
+                stl.write(
+                    "facet normal 0 0 1\n outer loop\n"
+                    f"vertex {x} {y} 0\nvertex {x + 1} {y} 0\nvertex {x} {y + 1} 0\n"
+                    "endloop\nendfacet\n"
+                )
+            stl.write("endsolid acceptance_mesh\n")
+
     def _item(self) -> dict[str, Any]:
-        if self.xlsx_preview:
+        if self.model3d_variant:
+            text = str(self.model3d_path)
+            title = self.model3d_path.name
+        elif self.xlsx_preview:
             text = str(self.xlsx_path)
             title = self.xlsx_path.name
         else:
             text = self.CSV if self.csv_preview else self.TEXT
             title = "acceptance-table.csv" if self.csv_preview else "acceptance-markdown.md"
-        payload_kind = "Text" if self.csv_preview or self.xlsx_preview else "Markdown"
+        payload_kind = (
+            "Text" if self.csv_preview or self.xlsx_preview or self.model3d_variant else "Markdown"
+        )
         return {
             "id": self.ITEM_ID,
             "created_at": int(time.time()),
             "payload": {payload_kind: text},
             "title": title,
             "subtitle": (
-                "Excel • 2 sheets" if self.xlsx_preview
+                "STL • acceptance mesh" if self.model3d_variant
+                else "Excel • 2 sheets" if self.xlsx_preview
                 else "CSV • 5 rows × 4 columns" if self.csv_preview
                 else "Markdown • 15 lines"
             ),
-            "details": (["XLSX", "2 sheets"] if self.xlsx_preview
+            "details": (["3D", "STL"] if self.model3d_variant
+                        else ["XLSX", "2 sheets"] if self.xlsx_preview
                         else ["CSV", "Text"] if self.csv_preview
                         else ["Markdown", "Text"]),
             "handler_tag": "TEXT",
@@ -389,7 +423,7 @@ class FakeTextPreviewDaemon:
         if request == "GetStateSummary":
             return {"StateSummary": {"cards": [{
                 "slot": "LeftHand", "item_id": self.ITEM_ID,
-                "payload_kind": "Text" if self.csv_preview or self.xlsx_preview else "Markdown",
+                "payload_kind": "Text" if self.csv_preview or self.xlsx_preview or self.model3d_variant else "Markdown",
                 "preview_phase": "Ready",
             }], "cursor": "LeftHand", "selected": ["LeftHand"]}}, "summary"
         if request == {"GetSlotItem": "LeftHand"}:
@@ -1027,7 +1061,7 @@ def capture_workbench(
                 env=niri_env,
             )
             report["pointer_input"]["clicks"].append({"x": x, "y": y, "button": "left"})
-            time.sleep(0.5)
+            time.sleep(args.click_delay_ms / 1000)
             if args.scroll_after_click == click_index:
                 send_private_scroll()
         if args.scroll is not None and args.scroll_after_click is None:
@@ -1074,6 +1108,10 @@ def capture_workbench(
     if args.type_text:
         run_checked(["wtype", args.type_text], env=niri_env)
         report.setdefault("pointer_input", {})["typed_text"] = args.type_text
+    if args.capture_after_actions:
+        report["screenshots"]["after_actions"] = screenshot(
+            niri_bin, niri_env, output / "after-actions.png"
+        )
     time.sleep(args.settle_ms / 1000)
     final_windows = own_windows(niri_bin, niri_env, {app.pid})
     report["final_windows"] = final_windows
@@ -1161,6 +1199,14 @@ def create_parser() -> argparse.ArgumentParser:
         help="send a left click at logical screen coordinates through private Niri; repeat to perform ordered UI interactions",
     )
     parser.add_argument(
+        "--click-delay-ms", type=int, default=500,
+        help="wait after each private pointer click before continuing (default: 500)",
+    )
+    parser.add_argument(
+        "--capture-after-actions", action="store_true",
+        help="capture immediately after injected actions and before the settling delay",
+    )
+    parser.add_argument(
         "--move", nargs=2, type=int, metavar=("X", "Y"),
         help="move and hold a virtual pointer at logical screen coordinates in private Niri without clicking",
     )
@@ -1197,6 +1243,10 @@ def create_parser() -> argparse.ArgumentParser:
         "--fake-multisheet-xlsx", action="store_true",
         help="serve a private text item pointing to a generated two-sheet XLSX for acceptance",
     )
+    parser.add_argument(
+        "--fake-model3d", choices=("valid", "error", "loading"),
+        help="serve a private STL fixture for 3D viewer acceptance",
+    )
     parser.add_argument("--verify-return", action="store_true", help="send Escape and verify the popup closes while private Niri remains responsive")
     parser.add_argument("--binary", type=Path, help="workbench binary (default: target/debug/clip-workbench)")
     parser.add_argument("--settle-ms", type=int, default=500, help="settling delay before second capture (default: 500)")
@@ -1209,6 +1259,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         or not math.isfinite(args.scale)
         or args.settle_ms < 0
         or args.post_tool_delay_ms < 0
+        or args.click_delay_ms < 0
     ):
         raise SystemExit("width, height, and scale must be positive; delay values cannot be negative")
     for fixture in (args.image, args.audio, args.pdf, args.midi):
@@ -1230,6 +1281,11 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         or any((args.image, args.audio, args.pdf, args.midi))
     ):
         raise SystemExit("--fake-multisheet-xlsx cannot be combined with other fixture routes")
+    if args.fake_model3d and (
+        args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
+        or args.fake_audio_transition or any((args.image, args.audio, args.pdf, args.midi))
+    ):
+        raise SystemExit("--fake-model3d cannot be combined with other fixture routes")
     if args.image_tool and not args.image:
         raise SystemExit("--image-tool requires --image")
     if args.click is not None and any(
@@ -1272,6 +1328,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
             )
     if args.type_text and not (
         args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
+        or args.fake_model3d
     ):
         raise SystemExit("--type-text requires a fake text preview route")
     if (
@@ -1309,6 +1366,8 @@ def main() -> int:
             "key_action": args.key_action,
             "image_fixture": str(args.image.resolve()) if args.image else None,
             "click": args.click,
+            "click_delay_ms": args.click_delay_ms,
+            "capture_after_actions": args.capture_after_actions,
             "move": args.move,
             "drag": args.drag,
             "scroll": args.scroll,
@@ -1320,6 +1379,7 @@ def main() -> int:
             "fake_text_preview": args.fake_text_preview,
             "fake_csv_preview": args.fake_csv_preview,
             "fake_multisheet_xlsx": args.fake_multisheet_xlsx,
+            "fake_model3d": args.fake_model3d,
             "verify_return": args.verify_return,
             "binary": str(binary),
             "settle_ms": args.settle_ms,
@@ -1360,11 +1420,15 @@ def main() -> int:
             fake_audio_daemon = FakeAudioTransitionDaemon(
                 config["runtime"], output / "fake-daemon-events.json"
             )
-        if args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx:
+        if (
+            args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
+            or args.fake_model3d
+        ):
             fake_text_daemon = FakeTextPreviewDaemon(
                 config["runtime"], output / "fake-text-daemon-events.json",
                 csv_preview=args.fake_csv_preview,
                 xlsx_preview=args.fake_multisheet_xlsx,
+                model3d_variant=args.fake_model3d,
             )
         capture_workbench(args, binary, output, config, niri_env, outputs, children, report)
     except Exception as exc:
@@ -1386,7 +1450,9 @@ def main() -> int:
                 report["failures"].append("workbench mapped after the fake preview was already ready")
         if fake_text_daemon is not None:
             text_route = fake_text_daemon.close()
-            if args.fake_multisheet_xlsx:
+            if args.fake_model3d:
+                report["fake_model3d"] = text_route
+            elif args.fake_multisheet_xlsx:
                 report["fake_multisheet_xlsx"] = text_route
             elif args.fake_csv_preview:
                 report["fake_csv_preview"] = text_route
