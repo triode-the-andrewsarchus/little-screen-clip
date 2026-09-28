@@ -560,7 +560,7 @@ mod render_identity_tests {
 
     fn install_message(state: &mut ImagePreviewState, message: FilmSimMsg) {
         let (tx, rx) = std::sync::mpsc::channel();
-        tx.send(message).unwrap();
+        tx.send(Ok(Some(message))).unwrap();
         state.film_sim_state.render_rx = Some(rx);
         state.film_sim_state.is_rendering = true;
         state.film_sim_state.render_stamp = Some(state.current_film_sim_render_stamp());
@@ -568,22 +568,23 @@ mod render_identity_tests {
 
     #[test]
     fn film_render_tokens_cancel_on_edits_exit_and_drop_then_reentry_renders() {
+        let jobs = little_clip_core::BackgroundJobs::new(1, 4);
         let mut state = state();
         state.active_mode = ImageToolMode::FilmSim;
-        state.run_film_sim_render();
+        state.run_film_sim_render_on(&jobs);
         let parameter_job = state.film_sim_state.render_cancel.as_ref().unwrap().clone();
         state.film_sim_state.mark_dirty();
         assert!(parameter_job.load(std::sync::atomic::Ordering::Acquire));
         assert!(!state.film_sim_state.is_rendering);
         assert!(state.film_sim_state.render_rx.is_none());
 
-        state.run_film_sim_render();
+        state.run_film_sim_render_on(&jobs);
         let pixel_job = state.film_sim_state.render_cancel.as_ref().unwrap().clone();
         state.mark_pixels_changed();
         assert!(pixel_job.load(std::sync::atomic::Ordering::Acquire));
         assert!(!state.film_sim_state.is_rendering);
 
-        state.run_film_sim_render();
+        state.run_film_sim_render_on(&jobs);
         let exit_job = state.film_sim_state.render_cancel.as_ref().unwrap().clone();
         state.set_tool_mode(ImageToolMode::View);
         assert!(exit_job.load(std::sync::atomic::Ordering::Acquire));
@@ -592,6 +593,89 @@ mod render_identity_tests {
         let drop_job = state.film_sim_state.render_cancel.as_ref().unwrap().clone();
         drop(state);
         assert!(drop_job.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[test]
+    fn full_resolution_render_queue_retries_after_saturation_and_cancels_queued_work() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let jobs = little_clip_core::BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(Duration::from_secs(5), move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (_, queued_rx) = jobs.submit(Duration::from_secs(5), || ());
+
+        let mut state = state();
+        state.active_mode = ImageToolMode::FilmSim;
+        state.run_film_sim_render_on(&jobs);
+        state.poll_film_sim();
+        assert!(!state.film_sim_state.is_rendering);
+        assert!(state.film_sim_state.render_retry_at.is_some());
+        assert!(state.film_sim_state.render_error.is_some());
+        assert!(state.film_sim_state.preview_rgba.is_none());
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        queued_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        state.run_film_sim_render_on(&jobs);
+        assert!(state.film_sim_state.is_rendering);
+        let ticket = state
+            .film_sim_state
+            .render_job_ticket
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert!(ticket.revision() > 0);
+        state.film_sim_state.cancel_render();
+        assert!(!state.film_sim_state.is_rendering);
+        assert!(state.film_sim_state.render_rx.is_none());
+        ticket.cancel();
+    }
+
+    #[test]
+    fn queued_full_resolution_render_is_cancelled_before_worker_start() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let jobs = little_clip_core::BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(Duration::from_secs(5), move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let mut state = state();
+        state.active_mode = ImageToolMode::FilmSim;
+        state.run_film_sim_render_on(&jobs);
+        let ticket = state
+            .film_sim_state
+            .render_job_ticket
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert!(ticket.revision() > 0);
+        state.film_sim_state.cancel_render();
+        assert!(!state.film_sim_state.is_rendering);
+        assert!(state.film_sim_state.render_rx.is_none());
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
     }
 
     #[test]
@@ -1370,11 +1454,14 @@ pub struct FilmSimState {
 
     // ── Async render worker (Main image) ──
     pub is_rendering: bool,
-    pub render_rx: Option<std::sync::mpsc::Receiver<FilmSimMsg>>,
+    pub render_rx:
+        Option<std::sync::mpsc::Receiver<Result<Option<FilmSimMsg>, little_clip_core::JobError>>>,
     pub render_error: Option<String>,
     pub(crate) render_stamp: Option<FilmSimRenderStamp>,
     pub(crate) preview_stamp: Option<FilmSimRenderStamp>,
     render_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    render_job_ticket: Option<little_clip_core::JobTicket>,
+    pub(crate) render_retry_at: Option<std::time::Instant>,
     parameter_revision: u64,
 
     // ── Async thumbnail worker (Sidebar 42x28 mini-photos) ──
@@ -1427,6 +1514,8 @@ impl Default for FilmSimState {
             render_stamp: None,
             preview_stamp: None,
             render_cancel: None,
+            render_job_ticket: None,
+            render_retry_at: None,
             parameter_revision: 0,
             stock_thumbnails: std::collections::HashMap::new(),
             pending_thumbnails: Vec::new(),
@@ -1459,12 +1548,16 @@ impl FilmSimState {
     }
 
     pub(crate) fn cancel_render(&mut self) {
+        if let Some(ticket) = self.render_job_ticket.take() {
+            ticket.cancel();
+        }
         if let Some(cancel) = self.render_cancel.take() {
             cancel.store(true, std::sync::atomic::Ordering::Release);
         }
         self.render_rx = None;
         self.render_stamp = None;
         self.is_rendering = false;
+        self.render_retry_at = None;
     }
 
     pub(crate) fn cancel_thumbnail_batch(&mut self) {
@@ -1519,6 +1612,10 @@ impl ImagePreviewState {
     }
 
     pub fn run_film_sim_render(&mut self) {
+        self.run_film_sim_render_on(little_clip_core::BackgroundJobs::global());
+    }
+
+    fn run_film_sim_render_on(&mut self, jobs: &little_clip_core::BackgroundJobs) {
         if self.film_sim_state.is_rendering || self.current_rgba.is_empty() {
             return;
         }
@@ -1556,25 +1653,24 @@ impl ImagePreviewState {
         let contrast = self.film_sim_state.contrast;
         let tint = self.film_sim_state.tint;
 
-        let (tx, rx) = std::sync::mpsc::channel::<FilmSimMsg>();
         let stamp = self.current_film_sim_render_stamp();
         self.film_sim_state.render_stamp = Some(stamp.clone());
-        self.film_sim_state.render_rx = Some(rx);
         self.film_sim_state.is_rendering = true;
         self.film_sim_state.render_error = None;
+        self.film_sim_state.render_retry_at = None;
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.film_sim_state.render_cancel = Some(cancelled.clone());
 
-        std::thread::spawn(move || {
+        let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
             if cancelled.load(std::sync::atomic::Ordering::Acquire) {
-                return;
+                return None;
             }
             let start = std::time::Instant::now();
             let process_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 process_film_image_inner(&rgb_img, &stock, &config, Some(&cancelled))
             }));
             if cancelled.load(std::sync::atomic::Ordering::Acquire) {
-                return;
+                return None;
             }
             match process_result {
                 Ok(Some(out_rgb)) => {
@@ -1584,19 +1680,19 @@ impl ImagePreviewState {
                         tint,
                         Some(&cancelled),
                     ) else {
-                        return;
+                        return None;
                     };
                     if cancelled.load(std::sync::atomic::Ordering::Acquire) {
-                        return;
+                        return None;
                     }
                     let duration_ms = start.elapsed().as_millis();
-                    let _ = tx.send(FilmSimMsg::Done {
+                    Some(FilmSimMsg::Done {
                         stamp,
                         rgba: out_rgba,
                         duration_ms,
-                    });
+                    })
                 }
-                Ok(None) => {}
+                Ok(None) => None,
                 Err(e) => {
                     let err_msg = if let Some(s) = e.downcast_ref::<&str>() {
                         s.to_string()
@@ -1605,13 +1701,15 @@ impl ImagePreviewState {
                     } else {
                         "Film simulation panicked".to_string()
                     };
-                    let _ = tx.send(FilmSimMsg::Error {
+                    Some(FilmSimMsg::Error {
                         stamp,
                         message: err_msg,
-                    });
+                    })
                 }
             }
         });
+        self.film_sim_state.render_job_ticket = Some(ticket);
+        self.film_sim_state.render_rx = Some(job_rx);
     }
 
     /// Spawn low-priority background thread to generate 42x28 thumbnail previews for all film stocks.
@@ -1761,11 +1859,11 @@ impl ImagePreviewState {
         }
         if let Some(rx) = self.film_sim_state.render_rx.take() {
             match rx.try_recv() {
-                Ok(FilmSimMsg::Done {
+                Ok(Ok(Some(FilmSimMsg::Done {
                     stamp,
                     rgba,
                     duration_ms,
-                }) => {
+                }))) => {
                     if stamp == current_stamp
                         && self.film_sim_state.render_stamp.as_ref() == Some(&stamp)
                     {
@@ -1778,8 +1876,9 @@ impl ImagePreviewState {
                     self.film_sim_state.is_rendering = false;
                     self.film_sim_state.render_stamp = None;
                     self.film_sim_state.render_cancel = None;
+                    self.film_sim_state.render_job_ticket = None;
                 }
-                Ok(FilmSimMsg::Error { stamp, message }) => {
+                Ok(Ok(Some(FilmSimMsg::Error { stamp, message }))) => {
                     if stamp == current_stamp
                         && self.film_sim_state.render_stamp.as_ref() == Some(&stamp)
                     {
@@ -1788,6 +1887,31 @@ impl ImagePreviewState {
                     self.film_sim_state.is_rendering = false;
                     self.film_sim_state.render_stamp = None;
                     self.film_sim_state.render_cancel = None;
+                    self.film_sim_state.render_job_ticket = None;
+                }
+                Ok(Ok(None)) | Ok(Err(little_clip_core::JobError::Cancelled)) => {
+                    self.film_sim_state.is_rendering = false;
+                    self.film_sim_state.render_stamp = None;
+                    self.film_sim_state.render_cancel = None;
+                    self.film_sim_state.render_job_ticket = None;
+                }
+                Ok(Err(little_clip_core::JobError::QueueFull)) => {
+                    self.film_sim_state.render_error = Some(
+                        "Film Look is waiting for background workers; retrying shortly".to_owned(),
+                    );
+                    self.film_sim_state.is_rendering = false;
+                    self.film_sim_state.render_stamp = None;
+                    self.film_sim_state.render_cancel = None;
+                    self.film_sim_state.render_job_ticket = None;
+                    self.film_sim_state.render_retry_at =
+                        Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+                }
+                Ok(Err(little_clip_core::JobError::TimedOut)) => {
+                    self.film_sim_state.render_error = Some("Film simulation timed out".to_owned());
+                    self.film_sim_state.is_rendering = false;
+                    self.film_sim_state.render_stamp = None;
+                    self.film_sim_state.render_cancel = None;
+                    self.film_sim_state.render_job_ticket = None;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     self.film_sim_state.render_rx = Some(rx);
@@ -1796,6 +1920,7 @@ impl ImagePreviewState {
                     self.film_sim_state.is_rendering = false;
                     self.film_sim_state.render_stamp = None;
                     self.film_sim_state.render_cancel = None;
+                    self.film_sim_state.render_job_ticket = None;
                 }
             }
         }

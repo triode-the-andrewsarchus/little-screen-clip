@@ -1027,6 +1027,20 @@ impl ImagePreviewState {
         // Poll film sim background render + debounce
         self.poll_film_sim();
         if self.active_mode == ImageToolMode::FilmSim {
+            if self
+                .film_sim_state
+                .render_retry_at
+                .is_some_and(|retry_at| std::time::Instant::now() >= retry_at)
+                && !self.film_sim_state.is_rendering
+            {
+                self.film_sim_state.render_retry_at = None;
+                self.run_film_sim_render();
+            }
+            if let Some(retry_at) = self.film_sim_state.render_retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            }
             // Debounce: fire render 400ms after last parameter change
             if let Some(dirty_at) = self.film_sim_state.params_dirty_at {
                 if dirty_at.elapsed() >= std::time::Duration::from_millis(400)

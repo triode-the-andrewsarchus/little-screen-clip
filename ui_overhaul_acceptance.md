@@ -534,6 +534,8 @@ Film Look and Creative FX thumbnail workers now share an ordered per-item loop w
 
 Film Look thumbnail batches now run through the shared bounded `BackgroundJobs` executor instead of a dedicated thread. Per-stock results still stream incrementally to the view, and queue saturation sets a 500 ms retry deadline with a repaint scheduled while Film Look is active. The regression blocks the one-worker test executor, forces saturation, verifies the retry stays delayed, then admits and cancels a retry. This migration does not move the separate full-resolution Film Look render or its RGBA-to-RGB snapshot off the UI thread; those remain H1.3c2a2b2 and H1.3c2a2b4.
 
+Film Look's full-resolution simulation also uses `BackgroundJobs`; its existing per-run atomic flag continues to interrupt the film processor and post-adjustment loops, while `JobTicket` cancels queued work. Source/parameter changes, mode exit, and viewer drop invalidate the job; stale image/parameter stamps still reject old output. Queue saturation shows a retry status and schedules another attempt after 500 ms. A one-worker fixture verifies queue saturation, retry recovery, and queued cancellation; existing dispatch and stale-result tests pass. The synchronous full-resolution RGBA clone and conversion to RGB remain a UI-thread cost tracked separately as H1.3c2a2b4.
+
 The architecture-fitness baseline request timed out after 300 seconds. A focused Lizard comparison of `pdf_view.rs` at pre-change `49a3eb0` and the working tree reports NLOC 1634→1688 (+54), average CCN unchanged at 4.5, the same three existing warnings, and no new function above CCN 15. This focused measurement does not close branch-wide H3.2k.
 
 ## PDF preview worker lifetime, 2026-09-27
