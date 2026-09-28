@@ -69,6 +69,7 @@ pub struct ConvertState {
     pub params_dirty_at: Option<std::time::Instant>,
     pub request_generation: u64,
     pub completed_generation: u64,
+    render_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub(crate) completed_input_stamp: Option<ImageInputStamp>,
     optipng_request: Option<OptipngRequestStamp>,
     optipng_process_control: Option<std::sync::Arc<ImageToolProcessControl>>,
@@ -119,6 +120,7 @@ impl Default for ConvertState {
             params_dirty_at: None,
             request_generation: 0,
             completed_generation: 0,
+            render_cancel: None,
             completed_input_stamp: None,
             optipng_request: None,
             optipng_process_control: None,
@@ -150,18 +152,148 @@ fn encode_conversion(
     format: ConvertTargetFormat,
     quality: u8,
     lossless: bool,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
 ) -> Result<(Vec<u8>, RgbaImage), String> {
+    let cancelled = || cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire));
+    if cancelled() {
+        return Err("cancelled".to_string());
+    }
     let bytes = match format {
-        ConvertTargetFormat::Png => encode_png(&base_img).map_err(|e| e.to_string()),
-        ConvertTargetFormat::Jpeg => {
-            encode_jpeg_with_quality(&base_img, quality).map_err(|e| e.to_string())
-        }
+        ConvertTargetFormat::Png => encode_png(&base_img).map_err(|error| error.to_string()),
+        ConvertTargetFormat::Jpeg => encode_jpeg_conversion(&base_img, quality, cancel),
         ConvertTargetFormat::Webp => encode_webp(&base_img, lossless, quality),
     }?;
+    // PNG/WebP encoding and output decoding expose no cancellation hooks, so
+    // check between those opaque stages when each call returns.
+    if cancelled() {
+        return Err("cancelled".to_string());
+    }
     let decoded = image::load_from_memory(&bytes)
         .map(|image| image.to_rgba8())
         .unwrap_or(base_img);
+    if cancelled() {
+        return Err("cancelled".to_string());
+    }
     Ok((bytes, decoded))
+}
+
+struct CancellableVecWriter<'a> {
+    bytes: Vec<u8>,
+    output: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    cancel: Option<&'a std::sync::atomic::AtomicBool>,
+    bytes_since_cancel_check: usize,
+}
+
+const CONVERSION_OUTPUT_CHUNK_SIZE: usize = 64 * 1024;
+const CONVERSION_CANCEL_CHECK_INTERVAL: usize = 4 * 1024;
+
+impl CancellableVecWriter<'_> {
+    fn new(cancel: Option<&std::sync::atomic::AtomicBool>) -> CancellableVecWriter<'_> {
+        CancellableVecWriter {
+            bytes: Vec::with_capacity(CONVERSION_OUTPUT_CHUNK_SIZE),
+            output: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            cancel,
+            bytes_since_cancel_check: 0,
+        }
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancel
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    fn flush_chunk(&mut self) {
+        if self.bytes.is_empty() {
+            return;
+        }
+        self.output
+            .lock()
+            .expect("conversion output lock poisoned")
+            .extend_from_slice(&self.bytes);
+        self.bytes.clear();
+    }
+}
+
+impl std::io::Write for CancellableVecWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.bytes_since_cancel_check == 0 && self.is_cancelled() {
+            return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+        }
+        let mut written = 0;
+        while written < bytes.len() {
+            let check_after = CONVERSION_CANCEL_CHECK_INTERVAL - self.bytes_since_cancel_check;
+            let count = check_after.min(bytes.len() - written);
+            self.bytes
+                .extend_from_slice(&bytes[written..written + count]);
+            written += count;
+            self.bytes_since_cancel_check += count;
+
+            if self.bytes_since_cancel_check == CONVERSION_CANCEL_CHECK_INTERVAL {
+                self.bytes_since_cancel_check = 0;
+                if self.is_cancelled() {
+                    return Ok(written);
+                }
+            }
+            if self.bytes.len() >= CONVERSION_OUTPUT_CHUNK_SIZE {
+                self.flush_chunk();
+            }
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if self.is_cancelled() {
+            Err(std::io::Error::from(std::io::ErrorKind::Interrupted))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for CancellableVecWriter<'_> {
+    fn drop(&mut self) {
+        self.flush_chunk();
+    }
+}
+
+fn encode_jpeg_conversion(
+    img: &RgbaImage,
+    quality: u8,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<Vec<u8>, String> {
+    let mut rgb = image::RgbImage::new(img.width(), img.height());
+    for (x, y, pixel) in img.enumerate_pixels() {
+        if x == 0 && cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire)) {
+            return Err("cancelled".to_string());
+        }
+        let alpha = pixel[3] as f32 / 255.0;
+        let r = ((pixel[0] as f32 * alpha) + (255.0 * (1.0 - alpha))).round() as u8;
+        let g = ((pixel[1] as f32 * alpha) + (255.0 * (1.0 - alpha))).round() as u8;
+        let b = ((pixel[2] as f32 * alpha) + (255.0 * (1.0 - alpha))).round() as u8;
+        rgb.put_pixel(x, y, image::Rgb([r, g, b]));
+    }
+    let writer = CancellableVecWriter::new(cancel);
+    let bytes = writer.output.clone();
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(writer, quality);
+    encoder
+        .encode(
+            rgb.as_raw(),
+            rgb.width(),
+            rgb.height(),
+            image::ExtendedColorType::Rgb8,
+        )
+        .map_err(|error| error.to_string())?;
+    drop(encoder);
+    let mut output = bytes.lock().expect("conversion output lock poisoned");
+    Ok(std::mem::take(&mut *output))
+}
+
+impl Drop for ConvertState {
+    fn drop(&mut self) {
+        if let Some(cancel) = self.render_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
 }
 
 impl ImagePreviewState {
@@ -179,7 +311,7 @@ impl ImagePreviewState {
         self.convert_state.is_encoding = false;
         self.convert_state.render_input_stamp = None;
 
-        match encode_conversion(base_img, fmt, quality, lossless) {
+        match encode_conversion(base_img, fmt, quality, lossless, None) {
             Ok((bytes, decoded_rgba)) => {
                 self.convert_state.encoded_bytes = bytes;
                 self.convert_state.converted_rgba = Some(decoded_rgba);
@@ -200,6 +332,7 @@ impl ImagePreviewState {
 
     pub fn schedule_conversion(&mut self) {
         self.cancel_optipng_process();
+        self.cancel_conversion_worker();
         self.convert_state.request_generation =
             self.convert_state.request_generation.wrapping_add(1);
         self.convert_state.params_dirty_at = Some(std::time::Instant::now());
@@ -219,6 +352,8 @@ impl ImagePreviewState {
         let quality = self.convert_state.quality;
         let lossless = self.convert_state.lossless;
         let generation = self.convert_state.request_generation;
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.convert_state.render_cancel = Some(cancel.clone());
         let (tx, rx) = std::sync::mpsc::channel();
 
         self.convert_state.render_rx = Some(rx);
@@ -229,7 +364,10 @@ impl ImagePreviewState {
         let _ = std::thread::Builder::new()
             .name("image_conversion".to_string())
             .spawn(move || {
-                let result = encode_conversion(image, format, quality, lossless);
+                let result = encode_conversion(image, format, quality, lossless, Some(&cancel));
+                if cancel.load(std::sync::atomic::Ordering::Acquire) {
+                    return;
+                }
                 let _ = tx.send(ConvertWorkerMsg {
                     generation,
                     input_stamp,
@@ -243,6 +381,7 @@ impl ImagePreviewState {
         if self.convert_state.is_encoding
             && self.convert_state.render_input_stamp.as_ref() != Some(&self.input_stamp())
         {
+            self.cancel_conversion_worker();
             self.convert_state.render_rx = None;
             self.convert_state.render_input_stamp = None;
             self.convert_state.is_encoding = false;
@@ -258,6 +397,7 @@ impl ImagePreviewState {
         match rx.try_recv() {
             Ok(message) => {
                 self.convert_state.is_encoding = false;
+                self.convert_state.render_cancel = None;
                 self.convert_state.render_input_stamp = None;
                 if message.generation != self.convert_state.request_generation
                     || message.input_stamp != self.input_stamp()
@@ -290,11 +430,29 @@ impl ImagePreviewState {
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.convert_state.is_encoding = false;
-                self.convert_state.render_error_input_stamp =
-                    self.convert_state.render_input_stamp.take();
-                self.convert_state.render_error = Some("Conversion worker stopped".to_string());
+                let was_cancelled = self
+                    .convert_state
+                    .render_cancel
+                    .take()
+                    .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire));
+                if was_cancelled {
+                    self.convert_state.render_input_stamp = None;
+                } else {
+                    self.convert_state.render_error_input_stamp =
+                        self.convert_state.render_input_stamp.take();
+                    self.convert_state.render_error = Some("Conversion worker stopped".to_string());
+                }
             }
         }
+    }
+
+    fn cancel_conversion_worker(&mut self) {
+        if let Some(cancel) = self.convert_state.render_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        self.convert_state.render_rx = None;
+        self.convert_state.render_input_stamp = None;
+        self.convert_state.is_encoding = false;
     }
 
     pub fn apply_converted_to_canvas(&mut self) {
@@ -1154,6 +1312,107 @@ mod input_stamp_tests {
             assert!(state.convert_state.converted_rgba.is_none());
             assert!(state.status_toast.is_none());
         }
+    }
+
+    #[test]
+    fn conversion_worker_is_cancelled_when_settings_or_input_go_stale() {
+        let mut settings = state();
+        settings.run_conversion_worker();
+        let cancel = settings
+            .convert_state
+            .render_cancel
+            .as_ref()
+            .unwrap()
+            .clone();
+        settings.schedule_conversion();
+        assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!settings.convert_state.is_encoding);
+        assert!(settings.convert_state.render_rx.is_none());
+
+        let mut input = state();
+        input.run_conversion_worker();
+        let cancel = input.convert_state.render_cancel.as_ref().unwrap().clone();
+        input.mark_pixels_changed();
+        input.poll_conversion();
+        assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!input.convert_state.is_encoding);
+        assert!(input.convert_state.render_rx.is_none());
+    }
+
+    #[test]
+    fn conversion_worker_cancellation_is_checked_before_encoding() {
+        let image = RgbaImage::new(4, 4);
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        assert_eq!(
+            encode_conversion(image, ConvertTargetFormat::Png, 80, false, Some(&cancel))
+                .unwrap_err(),
+            "cancelled"
+        );
+    }
+
+    #[test]
+    fn disconnected_cancelled_conversion_does_not_report_failure() {
+        let mut state = state();
+        state.convert_state.is_encoding = true;
+        state.convert_state.render_input_stamp = Some(state.input_stamp());
+        let (tx, rx) = std::sync::mpsc::channel();
+        drop(tx);
+        state.convert_state.render_rx = Some(rx);
+        state.convert_state.render_cancel = Some(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(true),
+        ));
+
+        state.poll_conversion();
+
+        assert!(!state.convert_state.is_encoding);
+        assert!(state.convert_state.render_error.is_none());
+        assert!(state.convert_state.render_error_input_stamp.is_none());
+    }
+
+    #[test]
+    fn cancellable_jpeg_path_preserves_the_existing_encoded_output() {
+        let image = RgbaImage::from_fn(3, 2, |x, y| {
+            image::Rgba([x as u8 * 30, y as u8 * 50, 90, (x + y) as u8 * 40])
+        });
+        assert_eq!(
+            encode_jpeg_conversion(&image, 73, None).unwrap(),
+            encode_jpeg_with_quality(&image, 73).unwrap()
+        );
+    }
+
+    #[test]
+    fn cancellation_aware_encoder_sink_interrupts_writes() {
+        use std::io::Write;
+
+        let writer = CancellableVecWriter::new(None);
+        let output = writer.output.clone();
+        let mut writer = writer;
+        writer.write_all(b"partial").unwrap();
+        drop(writer);
+        assert_eq!(*output.lock().unwrap(), b"partial".to_vec());
+
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let mut writer = CancellableVecWriter::new(Some(&cancel));
+        assert_eq!(
+            writer.write(b"discarded").unwrap_err().kind(),
+            std::io::ErrorKind::Interrupted
+        );
+        drop(writer);
+    }
+
+    #[test]
+    fn cancellation_aware_sink_checks_within_its_output_interval() {
+        use std::io::Write;
+
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let mut writer = CancellableVecWriter::new(Some(&cancel));
+        writer.bytes_since_cancel_check = CONVERSION_CANCEL_CHECK_INTERVAL - 1;
+
+        assert_eq!(writer.write(&[1, 2, 3, 4]).unwrap(), 1);
+        assert_eq!(
+            writer.write(&[5]).unwrap_err().kind(),
+            std::io::ErrorKind::Interrupted
+        );
     }
 
     #[test]
