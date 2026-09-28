@@ -265,6 +265,13 @@ fn show_viewer_panel(ctx: &egui::Context, contents: impl FnOnce(&mut egui::Ui)) 
         .show(ctx, contents);
 }
 
+fn is_image_preview_action_item(item: &ClipItem) -> bool {
+    item.is_image()
+        && !item
+            .file_path()
+            .is_some_and(|path| little_clip_core::pdf::is_pdf_path(&path))
+}
+
 type SpreadsheetLoadReceiver =
     Receiver<Result<Result<(SpreadsheetData, Option<PathBuf>), String>, JobError>>;
 type MidiLoadReceiver = Receiver<Result<Result<(MidiData, PathBuf), String>, JobError>>;
@@ -1315,7 +1322,9 @@ impl eframe::App for WorkbenchApp {
                         self.state.get(*s).and_then(|it| it.audio_path().map(|p| (p, it.title.clone())))
                     });
                     let first_image_slot = self.selected_slots.iter().copied().find(|slot| {
-                        self.state.get(*slot).is_some_and(|item| item.is_image())
+                        self.state
+                            .get(*slot)
+                            .is_some_and(is_image_preview_action_item)
                     });
 
                     let mut open_diff_requested = false;
@@ -3666,6 +3675,10 @@ mod workbench_layout_tests {
             handler_tag: "PDF (DOCUMENT)".to_owned(),
         };
         assert!(item.is_image(), "PDF slot previews are image-backed");
+        assert!(
+            !is_image_preview_action_item(&item),
+            "PDFs should use the PDF editor instead of the generic image preview action"
+        );
 
         let mut app = test_workbench_app(None, VecDeque::new());
         app.state.push_left(item);
