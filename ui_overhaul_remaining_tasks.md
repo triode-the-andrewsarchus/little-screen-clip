@@ -495,7 +495,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] Verify 8/16/32-byte density keeps readable monospace text and matching cell hit targets.
     - [x] Verify horizontal hex panning keeps a later byte, header, row offset, and hover inspection aligned.
     - [ ] Verify ASCII panning keeps its header and byte hit targets aligned after horizontal scrolling.
-  - [ ] **H2.2g [Primary] Validate comparison ANSI long-line scrolling.** Shared monospace size on central dark console surface in both modes; standard/truecolor/256-color foreground contrast tests pass.
+  - [x] **H2.2g [Luna/Primary] Validate comparison ANSI long-line scrolling.** ANSI rows explicitly disable label wrapping so horizontal panning can reach the tail; a production-render regression verifies a 5,039-character ANSI line scrolls to its final marker in Light and Dark. Standard, truecolor, and 256-color foreground contrast passes against the console surface in both appearances. Diff-view and ANSI suites pass.
 - **H2.3 Complex workspace semantics**
   - [ ] **H2.3a [Primary] Migrate node editor semantics to session/action/overlay contracts.**
   - [ ] **H2.3b [Primary] Migrate diff/comparison modes to session/action/overlay contracts.**
