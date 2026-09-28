@@ -412,6 +412,7 @@ impl ImagePreviewState {
 
     pub(crate) fn mark_pixels_changed(&mut self) {
         self.cancel_optimizer();
+        self.cancel_optipng_process();
         self.pixel_revision = self.pixel_revision.wrapping_add(1);
     }
 

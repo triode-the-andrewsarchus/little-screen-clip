@@ -432,6 +432,7 @@ impl TargetSizeSearch<'_> {
 impl Drop for ImagePreviewState {
     fn drop(&mut self) {
         self.cancel_optimizer();
+        self.cancel_optipng_process();
         self.cancel_ocr();
         self.cancel_image_tool_process();
         if let Some(control) = self.creative_fx_state.depth_process_control.take() {

@@ -160,6 +160,42 @@ pub struct ImageToolProcessControl {
     pub child_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
+pub(super) fn run_image_tool_status_command(
+    mut cmd: Command,
+    control: &ImageToolProcessControl,
+) -> Result<std::process::ExitStatus, String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd.spawn().map_err(|error| error.to_string())?;
+    let pid = child.id();
+    control
+        .child_pid
+        .store(pid, std::sync::atomic::Ordering::SeqCst);
+    if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+        terminate_image_tool_process(pid);
+        let _ = child.wait();
+        clear_image_tool_pid_if_owned(&control.child_pid, pid);
+        return Err("Image tool process cancelled".to_string());
+    }
+    let status = match child.wait() {
+        Ok(status) => status,
+        Err(error) => {
+            if clear_image_tool_pid_if_owned(&control.child_pid, pid) {
+                terminate_image_tool_process(pid);
+            }
+            return Err(error.to_string());
+        }
+    };
+    clear_image_tool_pid_if_owned(&control.child_pid, pid);
+    if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err("Image tool process cancelled".to_string());
+    }
+    Ok(status)
+}
+
 impl ImageToolProcessControl {
     pub fn new() -> Self {
         Self {

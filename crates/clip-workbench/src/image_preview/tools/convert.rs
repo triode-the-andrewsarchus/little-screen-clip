@@ -1,6 +1,9 @@
 use super::super::*;
 
-fn run_optipng_optimization(png_bytes: &[u8]) -> Result<Vec<u8>, String> {
+fn run_optipng_optimization(
+    png_bytes: &[u8],
+    control: &ImageToolProcessControl,
+) -> Result<Vec<u8>, String> {
     use std::io::Write;
     let mut temp_file = tempfile::Builder::new()
         .suffix(".png")
@@ -11,12 +14,15 @@ fn run_optipng_optimization(png_bytes: &[u8]) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("Tempfile write failed: {}", e))?;
     let temp_path = temp_file.path().to_path_buf();
 
-    let status = Command::new("optipng")
-        .arg("-o2")
-        .arg("-quiet")
-        .arg(&temp_path)
-        .status()
-        .map_err(|e| format!("Failed to run optipng: {}. Ensure optipng is installed.", e))?;
+    let mut command = Command::new("optipng");
+    command.arg("-o2").arg("-quiet").arg(&temp_path);
+    let status = super::background_removal::run_image_tool_status_command(command, control)
+        .map_err(|error| {
+            format!(
+                "Failed to run optipng: {}. Ensure optipng is installed.",
+                error
+            )
+        })?;
 
     if !status.success() {
         return Err(format!(
@@ -64,6 +70,8 @@ pub struct ConvertState {
     pub request_generation: u64,
     pub completed_generation: u64,
     pub(crate) completed_input_stamp: Option<ImageInputStamp>,
+    optipng_request: Option<OptipngRequestStamp>,
+    optipng_process_control: Option<std::sync::Arc<ImageToolProcessControl>>,
     render_input_stamp: Option<ImageInputStamp>,
     pub(crate) render_error_input_stamp: Option<ImageInputStamp>,
     pub render_error: Option<String>,
@@ -82,6 +90,15 @@ struct OptipngWorkerMsg {
     input_stamp: ImageInputStamp,
     original_len: usize,
     result: Result<Vec<u8>, String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct OptipngRequestStamp {
+    generation: u64,
+    input_stamp: ImageInputStamp,
+    target_format: ConvertTargetFormat,
+    quality: u8,
+    lossless: bool,
 }
 
 impl Default for ConvertState {
@@ -103,6 +120,8 @@ impl Default for ConvertState {
             request_generation: 0,
             completed_generation: 0,
             completed_input_stamp: None,
+            optipng_request: None,
+            optipng_process_control: None,
             render_input_stamp: None,
             render_error_input_stamp: None,
             render_error: None,
@@ -180,6 +199,7 @@ impl ImagePreviewState {
     }
 
     pub fn schedule_conversion(&mut self) {
+        self.cancel_optipng_process();
         self.convert_state.request_generation =
             self.convert_state.request_generation.wrapping_add(1);
         self.convert_state.params_dirty_at = Some(std::time::Instant::now());
@@ -303,7 +323,7 @@ impl ImagePreviewState {
 
     fn run_optipng_conversion_with<F>(&mut self, optimizer: F)
     where
-        F: FnOnce(&[u8]) -> Result<Vec<u8>, String> + Send + 'static,
+        F: FnOnce(&[u8], &ImageToolProcessControl) -> Result<Vec<u8>, String> + Send + 'static,
     {
         if self.convert_state.is_running_optipng {
             return;
@@ -327,13 +347,25 @@ impl ImagePreviewState {
         let orig_len = original_bytes.len();
         let input_stamp = self.input_stamp();
         let generation = self.convert_state.request_generation;
+        let control = std::sync::Arc::new(ImageToolProcessControl::new());
+        self.convert_state.optipng_request = Some(OptipngRequestStamp {
+            generation,
+            input_stamp: input_stamp.clone(),
+            target_format: self.convert_state.target_format,
+            quality: self.convert_state.quality,
+            lossless: self.convert_state.lossless,
+        });
+        self.convert_state.optipng_process_control = Some(control.clone());
         let (tx, rx) = std::sync::mpsc::channel();
         self.convert_state.optipng_rx = Some(rx);
         self.convert_state.is_running_optipng = true;
         let spawn = std::thread::Builder::new()
             .name("image_optipng".to_string())
             .spawn(move || {
-                let result = optimizer(&original_bytes);
+                let result = optimizer(&original_bytes, &control);
+                if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
                 let _ = tx.send(OptipngWorkerMsg {
                     generation,
                     input_stamp,
@@ -344,18 +376,47 @@ impl ImagePreviewState {
         if let Err(error) = spawn {
             self.convert_state.optipng_rx = None;
             self.convert_state.is_running_optipng = false;
+            self.convert_state.optipng_request = None;
+            self.convert_state.optipng_process_control = None;
             self.show_toast(format!("❌ OptiPNG error: failed to start worker: {error}"));
         }
     }
 
+    pub(crate) fn cancel_optipng_process(&mut self) {
+        if let Some(control) = self.convert_state.optipng_process_control.take() {
+            control.cancel();
+        }
+        self.convert_state.optipng_rx = None;
+        self.convert_state.optipng_request = None;
+        self.convert_state.is_running_optipng = false;
+    }
+
     fn poll_optipng(&mut self) {
         let current_stamp = self.input_stamp();
+        let request_is_stale = self
+            .convert_state
+            .optipng_request
+            .as_ref()
+            .is_some_and(|request| {
+                request.generation != self.convert_state.request_generation
+                    || request.input_stamp != current_stamp
+                    || request.target_format != self.convert_state.target_format
+                    || request.quality != self.convert_state.quality
+                    || request.lossless != self.convert_state.lossless
+                    || !self.convert_state.output_matches(&current_stamp)
+            });
+        if request_is_stale {
+            self.cancel_optipng_process();
+            return;
+        }
         let Some(rx) = self.convert_state.optipng_rx.take() else {
             return;
         };
         match rx.try_recv() {
             Ok(message) => {
                 self.convert_state.is_running_optipng = false;
+                self.convert_state.optipng_request = None;
+                self.convert_state.optipng_process_control = None;
                 if message.generation != self.convert_state.request_generation
                     || message.input_stamp != current_stamp
                     || self.convert_state.target_format != ConvertTargetFormat::Png
@@ -387,6 +448,8 @@ impl ImagePreviewState {
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.convert_state.is_running_optipng = false;
+                self.convert_state.optipng_request = None;
+                self.convert_state.optipng_process_control = None;
                 if self.convert_state.target_format == ConvertTargetFormat::Png
                     && self.convert_state.output_matches(&current_stamp)
                 {
@@ -949,6 +1012,97 @@ impl ImagePreviewState {
 mod input_stamp_tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn start_sleeping_optipng(
+        state: &mut ImagePreviewState,
+        label: &str,
+    ) -> (
+        u32,
+        std::sync::Arc<ImageToolProcessControl>,
+        std::path::PathBuf,
+    ) {
+        let script =
+            std::env::temp_dir().join(format!("clip-optipng-{label}-{}.py", std::process::id()));
+        std::fs::write(&script, "import time\ntime.sleep(30)\n").unwrap();
+        let command_script = script.clone();
+        state.run_optipng_conversion_with(move |_, control| {
+            let mut command = Command::new("python3");
+            command
+                .arg(command_script)
+                .arg("-o2")
+                .arg("-quiet")
+                .arg("fixture.png");
+            let status =
+                super::super::background_removal::run_image_tool_status_command(command, control)?;
+            if !status.success() {
+                return Err(format!("fake optipng exited with {:?}", status.code()));
+            }
+            Ok(Vec::new())
+        });
+        let control = state
+            .convert_state
+            .optipng_process_control
+            .as_ref()
+            .unwrap()
+            .clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while control.child_pid.load(std::sync::atomic::Ordering::SeqCst) == 0
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let pid = control.child_pid.load(std::sync::atomic::Ordering::SeqCst);
+        assert_ne!(pid, 0, "OptiPNG child PID was not published");
+        (pid, control, script)
+    }
+
+    #[cfg(unix)]
+    fn assert_optipng_exited(pid: u32) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            let result = unsafe { libc::kill(pid as i32, 0) };
+            if result == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("OptiPNG child {pid} remained alive after cancellation");
+    }
+
+    #[cfg(unix)]
+    fn state_with_png_conversion() -> ImagePreviewState {
+        let mut state = state();
+        state.active_mode = ImageToolMode::Convert;
+        state.convert_state.target_format = ConvertTargetFormat::Png;
+        state.update_conversion();
+        state
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn optipng_process_stops_on_settings_input_change_and_viewer_drop() {
+        let mut settings = state_with_png_conversion();
+        let (pid, control, script) = start_sleeping_optipng(&mut settings, "settings");
+        settings.schedule_conversion();
+        assert!(control.cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_optipng_exited(pid);
+        let _ = std::fs::remove_file(script);
+
+        let mut input = state_with_png_conversion();
+        let (pid, control, script) = start_sleeping_optipng(&mut input, "input");
+        input.mark_pixels_changed();
+        assert!(control.cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_optipng_exited(pid);
+        let _ = std::fs::remove_file(script);
+
+        let mut dropped = state_with_png_conversion();
+        let (pid, control, script) = start_sleeping_optipng(&mut dropped, "drop");
+        drop(dropped);
+        assert!(control.cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_optipng_exited(pid);
+        let _ = std::fs::remove_file(script);
+    }
+
     fn state() -> ImagePreviewState {
         let mut bytes = Vec::new();
         RgbaImage::new(4, 4)
@@ -1056,7 +1210,7 @@ mod input_stamp_tests {
         let original_len = original.len();
         let optimized = b"smaller encoded PNG".to_vec();
         let expected_optimized = optimized.clone();
-        state.run_optipng_conversion_with(move |bytes| {
+        state.run_optipng_conversion_with(move |bytes, _control| {
             assert_eq!(bytes, original);
             Ok(optimized)
         });
@@ -1070,7 +1224,8 @@ mod input_stamp_tests {
 
         state.update_conversion();
         let original = state.convert_state.encoded_bytes.clone();
-        state.run_optipng_conversion_with(|_| Err("fixture optimizer failure".to_owned()));
+        state
+            .run_optipng_conversion_with(|_, _control| Err("fixture optimizer failure".to_owned()));
         wait_for_optipng(&mut state);
         assert_eq!(state.convert_state.encoded_bytes, original);
         assert_eq!(state.convert_state.optipng_savings, None);
@@ -1085,7 +1240,7 @@ mod input_stamp_tests {
         let original = state.convert_state.encoded_bytes.clone();
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
-        state.run_optipng_conversion_with(move |_| {
+        state.run_optipng_conversion_with(move |_, _control| {
             started_tx.send(()).unwrap();
             release_rx.recv().unwrap();
             Ok(b"stale optimized PNG".to_vec())
