@@ -220,7 +220,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **E2.1s5 [Luna] Apply Decorrelation Stretch from the live UI.**
       - [ ] **E2.1s6 [Luna] Undo a live Decorrelation Stretch application.**
       - [ ] **E2.1s7 [Luna] Redo a live Decorrelation Stretch application.**
-      - [ ] **E2.1s8 [Luna] Select the alternate Decorrelation Stretch preset.**
+      - [x] **E2.1s8 [Luna] Select the alternate Decorrelation Stretch preset.** Compact Dark capture shows Preserve selected, Preserve original band means/spread checked, and the comparison HUD; see `ui_overhaul_acceptance.md`.
       - [ ] **E2.1s9 [Luna] Change the Decorrelation Stretch target mean.**
       - [ ] **E2.1s10 [Luna] Change the Decorrelation Stretch target spread.**
       - [ ] **E2.1s11 [Luna] Change the Decorrelation Stretch clipping tolerance.**
