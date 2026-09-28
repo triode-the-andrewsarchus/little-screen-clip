@@ -175,6 +175,10 @@ Panelized-tool live check: the isolated 1280×720 Light capture `/tmp/clip-image
 
 To isolate E3.1a/b from later feature work, `architecture_measure(profile="fast")` measured only `crates/clip-workbench/src/image_preview.rs` at `a566131` (immediately before the E3.1a adapter removal) and `f90f1d0` (after the E3.1b duplicate-footer removal). Both used Lizard 1.24.0 and jscpd 5.2.0. The file changed from 3,569 to 3,523 lines, 363 to 357 duplicated lines, and 44 to 43 clone groups; function count (89) and cyclomatic complexity (484 total, 145 maximum, 3 high-complexity functions) stayed unchanged. This supports a small, real consolidation improvement without relocating complexity. Valknut cannot analyze a single-file target, so no structural-metric claim is made. The full-repository `architecture_compare` and paired full-repository measurements stalled; final whole-repository metrics remain open under H3.2k.
 
+## Image Studio route return, 2026-09-28
+
+Isolated 1280×720 Dark capture `/tmp/clip-image-return-live-compact-dark-20260928/` opens the synthetic PNG in Image Studio (`first-observed.png`). Sending Escape through the private Niri Wayland session closes Image Studio and returns to the Palette (`settled.png`) while the popup remains open; the capture report passes geometry and singleton checks. This verifies the close/return route, not cancellation of an in-flight image load or explicit GPU/texture reclamation; those remain under H2.1.
+
 Further source findings for the next footer work: Inspect subtracts guessed 36/34-point footer allowances before rendering a bottom-up horizontal wrapped caption row, whose initial height is the 36-point interaction token plus its spacing. This can overlap even when timeline partition minima fit. At very short heights, timeline minimum clamps can also exceed the canvas rectangle. Quick Palette's `(available_height - 40).max(120)` action-list height can force overflow into the rolling strip; the same allocation formula exists at baseline `4edf785`. These are source mechanisms, not complete visual before/after provenance proof.
 
 ## Audio Studio footer repair, 2026-09-26
