@@ -3318,7 +3318,7 @@ mod workbench_layout_tests {
             state.view_mode,
             text_preview::TextViewMode::RenderedMarkdown
         );
-        assert_eq!(state.content, expected);
+        assert_eq!(state.content.as_str(), expected);
     }
 
     #[test]
@@ -4042,7 +4042,7 @@ mod workbench_layout_tests {
             panic!("missing text viewer")
         };
         assert_eq!(state.title, "large clipboard");
-        assert_eq!(state.content, expected);
+        assert_eq!(state.content.as_str(), expected);
         state.find_query = "TARGET_AT_END".to_owned();
         state.update_search_matches();
         assert_eq!(state.matches.len(), 1);
@@ -4108,7 +4108,7 @@ mod workbench_layout_tests {
         let Some(ViewerSession::Text(state)) = &app.viewer else {
             panic!("malformed CSV should open the text viewer")
         };
-        assert_eq!(state.content, content);
+        assert_eq!(state.content.as_str(), content);
     }
 
     #[test]

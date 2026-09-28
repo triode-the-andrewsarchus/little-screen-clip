@@ -11,9 +11,10 @@ use eframe::egui::{self, Color32, FontId, Rounding, Stroke, Vec2};
 use little_clip_core::config::AppConfig;
 use little_clip_core::palette::AppPalette;
 use little_clip_core::syntax::detect_language;
+use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use regex::RegexBuilder;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, mpsc::Receiver};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
@@ -88,7 +89,6 @@ const MINIMAP_WIDTH: f32 = 112.0;
 /// lines are presented as continuation rows so no single egui layout job can
 /// shape megabytes of text synchronously.
 const MAX_CODE_FRAGMENT_BYTES: usize = 4 * 1024;
-const MINIMAP_PREP_LINES_PER_FRAME: usize = 128;
 const MINIMAP_RETAINED_LINES: usize = 4096;
 
 #[derive(Debug, Clone, Copy)]
@@ -226,45 +226,66 @@ struct MinimapLine {
     segments: Vec<MinimapSegment>,
 }
 
+type MinimapResult = Result<Vec<(usize, MinimapLine)>, JobError>;
+
 #[derive(Default)]
 struct MinimapCache {
     lines: Vec<(usize, MinimapLine)>,
-    next_source_line: usize,
-    stride: usize,
-    highlighter: Option<HighlightLines<'static>>,
+    job: Option<(JobTicket, Receiver<MinimapResult>)>,
+    started: bool,
+    ready: bool,
+    failed: bool,
 }
 
 impl MinimapCache {
-    fn prepare(&mut self, text: &str, line_starts: &[usize], syntax: &'static SyntaxReference) {
-        if self.highlighter.is_none() {
-            self.stride = line_starts.len().div_ceil(MINIMAP_RETAINED_LINES).max(1);
-            self.highlighter = Some(HighlightLines::new(
-                syntax,
-                &THEME_SET.themes["base16-eighties.dark"],
-            ));
+    fn start(&mut self, text: Arc<String>, syntax_name: String, jobs: &BackgroundJobs) {
+        if self.started {
+            return;
         }
-        let end_line =
-            (self.next_source_line + MINIMAP_PREP_LINES_PER_FRAME).min(line_starts.len());
-        let highlighter = self.highlighter.as_mut().expect("initialized above");
-        while self.next_source_line < end_line {
-            let source_line = self.next_source_line;
-            let start = line_starts[source_line];
-            let end = line_starts
-                .get(source_line + 1)
-                .copied()
-                .unwrap_or(text.len());
-            let line = text[start..end]
-                .strip_suffix('\n')
-                .unwrap_or(&text[start..end]);
-            let minimap_line = build_minimap_line(line, highlighter);
-            if source_line % self.stride == 0 {
-                self.lines.push((source_line, minimap_line));
+        self.started = true;
+        let (ticket, receiver) = jobs.submit(std::time::Duration::MAX, move || {
+            build_minimap_lines(text.as_str(), find_syntax(&syntax_name))
+        });
+        self.job = Some((ticket, receiver));
+    }
+
+    fn poll(&mut self) -> bool {
+        let Some((_, receiver)) = &self.job else {
+            return false;
+        };
+        match receiver.try_recv() {
+            Ok(Ok(lines)) => {
+                self.lines = lines;
+                self.job = None;
+                self.ready = true;
+                true
             }
-            self.next_source_line += 1;
+            Ok(Err(JobError::QueueFull)) => {
+                self.job = None;
+                self.started = false;
+                false
+            }
+            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.job = None;
+                self.failed = true;
+                true
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => false,
         }
-        if self.next_source_line == line_starts.len() {
-            self.highlighter = None;
+    }
+
+    fn cancel(&self) {
+        if let Some((ticket, _)) = &self.job {
+            ticket.cancel();
         }
+    }
+}
+
+impl Drop for MinimapCache {
+    fn drop(&mut self) {
+        // BackgroundJobs suppresses queued/stale results; it cannot interrupt
+        // a syntect operation that has already started.
+        self.cancel();
     }
 }
 
@@ -288,7 +309,7 @@ pub struct SearchMatch {
 /// Interactive UI state for the Big Text Preview modal.
 pub struct TextPreviewState {
     pub title: String,
-    pub content: String,
+    pub content: Arc<String>,
     pub path: Option<PathBuf>,
     pub language: &'static str,
     pub is_markdown: bool,
@@ -371,7 +392,7 @@ impl TextPreviewState {
 
         Self {
             title,
-            content: text,
+            content: Arc::new(text),
             path: None,
             language: lang,
             is_markdown: is_md,
@@ -429,7 +450,7 @@ impl TextPreviewState {
 
         Some(Self {
             title,
-            content,
+            content: Arc::new(content),
             path: Some(path_ref.to_path_buf()),
             language: lang,
             is_markdown: is_md,
@@ -558,7 +579,7 @@ impl TextPreviewState {
                 ext
             );
             let temp_path = std::env::temp_dir().join(temp_name);
-            if let Err(e) = std::fs::write(&temp_path, &self.content) {
+            if let Err(e) = std::fs::write(&temp_path, self.content.as_bytes()) {
                 let now = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs_f64())
@@ -580,7 +601,7 @@ impl TextPreviewState {
 
     /// Copies the full text content to the system clipboard.
     pub fn copy_all_to_clipboard(&mut self, ctx: &egui::Context) {
-        ctx.output_mut(|o| o.copied_text = self.content.clone());
+        ctx.output_mut(|o| o.copied_text = self.content.as_str().to_owned());
         if let Err(error) = little_clip_core::copy_text_to_system_clipboard(&self.content) {
             tracing::debug!(%error, "failed to copy text preview to system clipboard");
         }
@@ -1150,13 +1171,17 @@ impl TextPreviewState {
                             self.minimap_overflows =
                                 output.content_size.y > output.inner_rect.height();
                             if self.minimap_overflows {
-                                self.minimap_lines.prepare(
-                                    &self.content,
-                                    &self.line_starts,
-                                    syntax,
+                                self.minimap_lines.start(
+                                    Arc::clone(&self.content),
+                                    self.language.to_owned(),
+                                    BackgroundJobs::global(),
                                 );
-                                if self.minimap_lines.next_source_line < self.line_starts.len() {
+                                if self.minimap_lines.poll() {
                                     ui.ctx().request_repaint();
+                                } else if !self.minimap_lines.ready && !self.minimap_lines.failed {
+                                    ui.ctx().request_repaint_after(
+                                        std::time::Duration::from_millis(40),
+                                    );
                                 }
                             }
                         },
@@ -1380,6 +1405,19 @@ fn build_minimap_line(line: &str, highlighter: &mut HighlightLines<'static>) -> 
         column += token_width;
     }
     MinimapLine { segments }
+}
+
+fn build_minimap_lines(text: &str, syntax: &'static SyntaxReference) -> Vec<(usize, MinimapLine)> {
+    let line_count = text.split('\n').count();
+    let stride = line_count.div_ceil(MINIMAP_RETAINED_LINES).max(1);
+    let mut highlighter = HighlightLines::new(syntax, &THEME_SET.themes["base16-eighties.dark"]);
+    text.split('\n')
+        .enumerate()
+        .filter_map(|(source_line, line)| {
+            let minimap_line = build_minimap_line(line, &mut highlighter);
+            (source_line % stride == 0).then_some((source_line, minimap_line))
+        })
+        .collect()
 }
 
 /// Draws a VS Code-style overview from syntax-colored rectangles, not glyphs.
@@ -2259,11 +2297,11 @@ mod tests {
         let config = AppConfig::default();
         let plain = "clipboard content".to_owned();
         let state = TextPreviewState::from_text(plain.clone(), None, &config);
-        assert_eq!(state.content, plain);
+        assert_eq!(state.content.as_str(), plain);
 
         let bom_prefixed = format!("\u{feff}{}", plain);
         let state = TextPreviewState::from_text(bom_prefixed, None, &config);
-        assert_eq!(state.content, plain);
+        assert_eq!(state.content.as_str(), plain);
     }
 
     #[test]
@@ -2512,21 +2550,17 @@ mod tests {
     #[test]
     fn test_minimap_cache_uses_syntax_colored_blocks() {
         let text = "fn main() {\n    let answer = 42;\n}\n";
-        let starts = line_start_offsets(text);
-        let mut cache = MinimapCache::default();
-        cache.prepare(text, &starts, find_syntax("rs"));
+        let lines = build_minimap_lines(text, find_syntax("rs"));
 
-        assert_eq!(cache.lines.len(), 4, "one minimap row per source line");
+        assert_eq!(lines.len(), 4, "one minimap row per source line");
         assert!(
-            cache
-                .lines
+            lines
                 .iter()
                 .take(3)
                 .all(|(_, line)| !line.segments.is_empty())
         );
         assert!(
-            cache
-                .lines
+            lines
                 .iter()
                 .flat_map(|(_, line)| &line.segments)
                 .all(|segment| {
@@ -2537,28 +2571,47 @@ mod tests {
     }
 
     #[test]
-    fn test_minimap_preparation_is_incremental_and_retained_lines_are_bounded() {
-        let text = "let x = 1;\n".repeat(MINIMAP_PREP_LINES_PER_FRAME * 2 + 1);
-        let starts = line_start_offsets(&text);
+    fn test_minimap_worker_publishes_bounded_samples_without_changing_navigation() {
+        let text = "let x = 1;\n".repeat(MINIMAP_RETAINED_LINES * 2 + 1);
+        let mut state = TextPreviewState::from_text(text, None, &AppConfig::default());
+        let byte = state.content.len() / 2;
+        let expected_row = state.display_row_for_byte(byte);
         let mut cache = MinimapCache::default();
-        cache.prepare(&text, &starts, find_syntax("rs"));
-        assert_eq!(cache.next_source_line, MINIMAP_PREP_LINES_PER_FRAME);
-        assert_eq!(cache.lines.len(), MINIMAP_PREP_LINES_PER_FRAME);
-
-        let large_text = "let x = 1;\n".repeat(MINIMAP_RETAINED_LINES * 2 + 1);
-        let large_starts = line_start_offsets(&large_text);
-        let mut large_cache = MinimapCache::default();
-        while large_cache.next_source_line < large_starts.len() {
-            large_cache.prepare(&large_text, &large_starts, find_syntax("rs"));
+        let jobs = BackgroundJobs::new(1, 1);
+        cache.start(Arc::clone(&state.content), "rs".to_owned(), &jobs);
+        while !cache.poll() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        assert!(large_cache.lines.len() <= MINIMAP_RETAINED_LINES);
-        assert_eq!(large_cache.lines.first().map(|(line, _)| *line), Some(0));
-        assert!(
-            large_cache
-                .lines
-                .windows(2)
-                .all(|pair| pair[0].0 < pair[1].0)
-        );
+        assert!(!cache.failed);
+        assert!(cache.lines.len() <= MINIMAP_RETAINED_LINES);
+        assert_eq!(cache.lines.first().map(|(line, _)| *line), Some(0));
+        assert!(cache.lines.windows(2).all(|pair| pair[0].0 < pair[1].0));
+        state.minimap_lines = cache;
+        assert_eq!(state.display_row_for_byte(byte), expected_row);
+    }
+
+    #[test]
+    fn test_minimap_job_cancellation_prevents_stale_result_publication() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_blocker_ticket, _blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+
+        let mut cache = MinimapCache::default();
+        cache.start(Arc::new("fn main() {}".to_owned()), "rs".to_owned(), &jobs);
+        cache.cancel();
+        release_tx.send(()).unwrap();
+        while !cache.poll() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(cache.failed);
+        assert!(cache.lines.is_empty());
     }
 
     #[test]
