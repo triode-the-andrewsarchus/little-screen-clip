@@ -234,9 +234,9 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s53 [Luna] Correct the aggressive default Film Look white balance.** Auto WB defaults to 35% strength rather than full gray-world correction; reset and slider default agree. A warm-scene regression confirms the default preserves substantially more scene color, and a compact capture shows 35%; see `ui_overhaul_acceptance.md`.
     - **Creative FX**
       - [x] **E2.1s18 [Luna] Change one Creative FX parameter and verify its preview updates.** Compact Dark capture changes Lens Aberration strength from 25 to 100 and shows the updated comparison preview; see `ui_overhaul_acceptance.md`.
-      - [ ] **E2.1s19 [Luna] Apply a Creative FX preview to the canvas.**
-      - [ ] **E2.1s20 [Luna] Undo a Creative FX application.**
-      - [ ] **E2.1s21 [Luna] Redo a Creative FX application.**
+      - [x] **E2.1s19 [Luna] Apply a Creative FX preview to the canvas.** Compact Dark capture shows the committed Lens Aberration result and `Lens Aberration applied`; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s20 [Luna] Undo a Creative FX application.** Compact Dark capture applies Lens Aberration, sends Ctrl+Z, and shows the original image with `Undone`; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s21 [Luna] Redo a Creative FX application.** Compact Dark capture applies Lens Aberration, sends Ctrl+Z then Ctrl+Y, and shows the restored effect with `Redone`; see `ui_overhaul_acceptance.md`.
     - **Resize**
       - [ ] **E2.1s22 [Luna] Change pixel dimensions with aspect lock enabled.**
       - [ ] **E2.1s23 [Luna] Select a different pixel-resize filter.**
