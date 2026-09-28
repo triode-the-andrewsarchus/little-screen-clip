@@ -248,8 +248,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s28 [Luna] Apply a crop.** Compact Dark capture applies the 16:9 selection and shows committed 1600×900 dimensions; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s29 [Luna] Undo a crop.** Compact Dark capture applies the crop, clicks Undo, and restores the original 1600×1000 image with `Undone`; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s30 [Luna] Adjust a Deskew corner.** Compact Dark capture drags the bottom-right corner inward and shows the updated quadrilateral and estimated output; see `ui_overhaul_acceptance.md`.
-      - [ ] **E2.1s31 [Luna] Apply Deskew.**
-      - [ ] **E2.1s32 [Luna] Undo Deskew.**
+      - [x] **E2.1s31 [Luna] Apply Deskew.** Compact Dark capture applies the adjusted quadrilateral and shows the 1345×841 result with `Deskewed perspective`; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s32 [Luna] Undo Deskew.** Compact Dark capture applies Deskew, returns focus to its toolbar, sends Ctrl+Z, and restores 1600×1000 with `Undone`; see `ui_overhaul_acceptance.md`.
     - **Transform**
       - [ ] **E2.1s33 [Luna] Rotate the image clockwise.**
       - [ ] **E2.1s34 [Luna] Rotate the image counter-clockwise.**
