@@ -322,6 +322,7 @@ struct SearchMatchSpool {
     file: tempfile::SpooledTempFile,
     record_count: u64,
     cursor_at_end: bool,
+    last_range: Option<SearchMatchRange>,
 }
 
 #[allow(dead_code)] // Keep the standalone abstraction warning-free before UI integration.
@@ -340,6 +341,7 @@ impl SearchMatchSpool {
             file: tempfile::spooled_tempfile_in(SEARCH_MATCH_MEMORY_LIMIT_BYTES, directory),
             record_count: 0,
             cursor_at_end: true,
+            last_range: None,
         })
     }
 
@@ -348,6 +350,16 @@ impl SearchMatchSpool {
     }
 
     fn append(&mut self, start_byte: u64, end_byte: u64) -> io::Result<()> {
+        if start_byte > end_byte
+            || self
+                .last_range
+                .is_some_and(|last| start_byte < last.start_byte || end_byte < last.end_byte)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "match ranges must be ordered and non-reversed",
+            ));
+        }
         let record_count = self
             .record_count
             .checked_add(1)
@@ -370,6 +382,10 @@ impl SearchMatchSpool {
         self.file.write_all(&record)?;
         self.cursor_at_end = true;
         self.record_count = record_count;
+        self.last_range = Some(SearchMatchRange {
+            start_byte,
+            end_byte,
+        });
         Ok(())
     }
 
@@ -389,8 +405,94 @@ impl SearchMatchSpool {
         Ok(decode_search_match_range(record))
     }
 
+    /// Finds matches intersecting one half-open source fragment using constant iterator storage.
+    fn ranges_for_fragment(
+        &mut self,
+        fragment_start: u64,
+        fragment_end: u64,
+    ) -> io::Result<SearchMatchRangeIter<'_>> {
+        let mut low = 0;
+        let mut high = self.record_count;
+        if fragment_start >= fragment_end {
+            low = high;
+        } else {
+            while low < high {
+                let middle = low + (high - low) / 2;
+                if self.get(middle)?.end_byte <= fragment_start {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+        }
+        Ok(SearchMatchRangeIter {
+            spool: self,
+            next_index: low,
+            fragment_start,
+            fragment_end,
+            finished: false,
+            needs_seek: true,
+        })
+    }
+
     fn is_rolled(&self) -> bool {
         self.file.is_rolled()
+    }
+}
+
+/// Streams intersecting ranges without allocating a fragment-sized match vector.
+struct SearchMatchRangeIter<'a> {
+    spool: &'a mut SearchMatchSpool,
+    next_index: u64,
+    fragment_start: u64,
+    fragment_end: u64,
+    finished: bool,
+    needs_seek: bool,
+}
+
+impl Iterator for SearchMatchRangeIter<'_> {
+    type Item = io::Result<SearchMatchRange>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+        while self.next_index < self.spool.len() {
+            let index = self.next_index;
+            self.next_index += 1;
+            if self.needs_seek {
+                let offset = index * SEARCH_MATCH_RECORD_BYTES as u64;
+                self.spool.cursor_at_end = false;
+                if let Err(error) = self.spool.file.seek(SeekFrom::Start(offset)) {
+                    self.finished = true;
+                    return Some(Err(error));
+                }
+                self.needs_seek = false;
+            }
+            let mut record = [0; SEARCH_MATCH_RECORD_BYTES];
+            self.spool.cursor_at_end = false;
+            let range = match self.spool.file.read_exact(&mut record) {
+                Ok(()) => {
+                    let range = decode_search_match_range(record);
+                    self.spool.cursor_at_end = index + 1 == self.spool.len();
+                    range
+                }
+                Err(error) => {
+                    self.finished = true;
+                    return Some(Err(error));
+                }
+            };
+            if range.start_byte >= self.fragment_end {
+                self.finished = true;
+                return None;
+            }
+            // Existing projection hides matches on either edge but keeps interior zero-width hits.
+            if range.end_byte > self.fragment_start && range.start_byte < self.fragment_end {
+                return Some(Ok(range));
+            }
+        }
+        self.finished = true;
+        None
     }
 }
 
@@ -1884,6 +1986,90 @@ mod tests {
     }
 
     #[test]
+    fn search_match_spool_fragment_lookup_includes_crossing_ranges() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut spool = SearchMatchSpool::new_in(directory.path()).unwrap();
+        for range in [(0, 2), (3, 6), (6, 8), (10, 10), (13, 15)] {
+            spool.append(range.0, range.1).unwrap();
+        }
+
+        let ranges = spool
+            .ranges_for_fragment(4, 7)
+            .unwrap()
+            .collect::<io::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            ranges,
+            vec![
+                SearchMatchRange {
+                    start_byte: 3,
+                    end_byte: 6,
+                },
+                SearchMatchRange {
+                    start_byte: 6,
+                    end_byte: 8,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn search_match_spool_fragment_lookup_observes_half_open_and_zero_width_edges() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut spool = SearchMatchSpool::new_in(directory.path()).unwrap();
+        for range in [(2, 4), (4, 4), (5, 5), (6, 9), (9, 9)] {
+            spool.append(range.0, range.1).unwrap();
+        }
+
+        let ranges = spool
+            .ranges_for_fragment(4, 9)
+            .unwrap()
+            .collect::<io::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(
+            ranges,
+            vec![
+                SearchMatchRange {
+                    start_byte: 5,
+                    end_byte: 5,
+                },
+                SearchMatchRange {
+                    start_byte: 6,
+                    end_byte: 9,
+                },
+            ]
+        );
+        assert!(
+            spool
+                .ranges_for_fragment(9, 10)
+                .unwrap()
+                .collect::<io::Result<Vec<_>>>()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(spool.ranges_for_fragment(5, 5).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn search_match_spool_fragment_lookup_handles_empty_and_outside_bounds() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut spool = SearchMatchSpool::new_in(directory.path()).unwrap();
+        spool.append(5, 7).unwrap();
+        spool.append(10, 12).unwrap();
+
+        for (start, end) in [(0, 5), (12, 20), (8, 8)] {
+            assert!(
+                spool
+                    .ranges_for_fragment(start, end)
+                    .unwrap()
+                    .collect::<io::Result<Vec<_>>>()
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
     fn search_match_spool_rolls_over_only_after_the_memory_threshold_and_cleans_up() {
         let directory = tempfile::tempdir().unwrap();
         let mut spool = SearchMatchSpool::new_in(directory.path()).unwrap();
@@ -1930,7 +2116,7 @@ mod tests {
             spool.append(index, index + 1).unwrap();
         }
         std::fs::remove_dir(&spill_directory).unwrap();
-        assert!(spool.append(9, 9).is_err());
+        assert!(spool.append(10_000, 10_000).is_err());
         assert!(!spool.is_rolled());
         assert_eq!(spool.len(), records_at_limit as u64);
         assert_eq!(
@@ -1941,14 +2127,14 @@ mod tests {
             }
         );
         std::fs::create_dir(&spill_directory).unwrap();
-        spool.append(9, 9).unwrap();
+        spool.append(10_000, 10_000).unwrap();
         assert!(spool.is_rolled());
         assert_eq!(spool.len(), records_at_limit as u64 + 1);
         assert_eq!(
             spool.get(records_at_limit as u64).unwrap(),
             SearchMatchRange {
-                start_byte: 9,
-                end_byte: 9,
+                start_byte: 10_000,
+                end_byte: 10_000,
             }
         );
     }
