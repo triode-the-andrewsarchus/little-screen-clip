@@ -826,6 +826,24 @@ mod tests {
                 _ => None,
             })
             .expect("initial grid cell should render");
+        let initial_header = first
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "A (1)" => Some(text.pos),
+                _ => None,
+            })
+            .expect("initial column header should render");
+        let initial_gutter_clip_left = first
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "1" => {
+                    Some(clipped.clip_rect.left())
+                }
+                _ => None,
+            })
+            .expect("initial row number should render");
         assert_eq!(first_offset, Vec2::ZERO);
 
         let _ = render(vec![
@@ -842,6 +860,54 @@ mod tests {
         let (output, offset) = settled.unwrap();
         assert!(offset.x > 20.0, "x offset: {offset:?}");
         assert!(offset.y > 20.0, "y offset: {offset:?}");
+        let (scrolled_row, scrolled_column, scrolled_cell) = output
+            .shapes
+            .iter()
+            .find_map(|clipped| {
+                let egui::Shape::Text(text) = &clipped.shape else {
+                    return None;
+                };
+                let (row, column) = text.galley.text().strip_prefix('r')?.split_once('c')?;
+                let row = row.parse::<usize>().ok()?;
+                let column = column.parse::<usize>().ok()?;
+                (row > 0 && column > 0).then_some((row, column, text.pos))
+            })
+            .expect("scrolled visible cell should have nonzero row and column");
+        let header_label = format!("{} ({})", col_label(scrolled_column), scrolled_column + 1);
+        let scrolled_header = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == header_label => Some(text.pos),
+                _ => None,
+            })
+            .expect("visible scrolled column header should stay rendered");
+        assert!(
+            (scrolled_header.y - initial_header.y).abs() <= 1.0,
+            "column header moved vertically: {initial_header:?} -> {scrolled_header:?}"
+        );
+        let gutter_label = (scrolled_row + 1).to_string();
+        let scrolled_gutter = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == gutter_label => {
+                    Some((text.pos, clipped.clip_rect))
+                }
+                _ => None,
+            })
+            .expect("row number for scrolled visible row should render");
+        assert_eq!(
+            scrolled_gutter.1.left(),
+            initial_gutter_clip_left,
+            "row-number gutter should remain pinned to the left"
+        );
+        assert!(
+            (scrolled_gutter.0.y - scrolled_cell.y).abs() <= 12.0,
+            "row number and visible cell are not aligned: {:?} vs {:?}",
+            scrolled_gutter.0,
+            scrolled_cell
+        );
         assert!(
             output.shapes.iter().any(|clipped| {
                 let egui::Shape::Text(text) = &clipped.shape else {
