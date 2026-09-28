@@ -804,6 +804,8 @@ def capture_workbench(
             run_checked(["wtype", "-k", IMAGE_ACTION_KEYS[args.image_action]], env=niri_env)
         if args.drag is not None:
             time.sleep(0.25)
+    if args.post_tool_delay_ms:
+        time.sleep(args.post_tool_delay_ms / 1000)
     def send_private_scroll() -> None:
         assert pointer_helper is not None and args.scroll is not None
         x, y, delta = args.scroll
@@ -938,6 +940,10 @@ def create_parser() -> argparse.ArgumentParser:
         help="send one supported key action after selecting the image tool",
     )
     parser.add_argument(
+        "--post-tool-delay-ms", type=int, default=0,
+        help="wait after selecting an image tool and before pointer actions (default: 0)",
+    )
+    parser.add_argument(
         "--key-action", choices=tuple(KEY_ACTIONS), action="append",
         help="send an ordered keyboard shortcut after pointer actions; repeat to send multiple shortcuts",
     )
@@ -978,8 +984,13 @@ def create_parser() -> argparse.ArgumentParser:
 
 
 def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
-    if min(args.width, args.height, args.scale) <= 0 or not math.isfinite(args.scale) or args.settle_ms < 0:
-        raise SystemExit("width, height, and scale must be positive; settle-ms cannot be negative")
+    if (
+        min(args.width, args.height, args.scale) <= 0
+        or not math.isfinite(args.scale)
+        or args.settle_ms < 0
+        or args.post_tool_delay_ms < 0
+    ):
+        raise SystemExit("width, height, and scale must be positive; delay values cannot be negative")
     for fixture in (args.image, args.audio, args.pdf, args.midi):
         if fixture is not None and not fixture.is_file():
             raise SystemExit(f"fixture does not exist: {fixture}")
@@ -1047,6 +1058,7 @@ def main() -> int:
             "appearance": args.appearance,
             "image_tool": args.image_tool,
             "image_action": args.image_action,
+            "post_tool_delay_ms": args.post_tool_delay_ms,
             "key_action": args.key_action,
             "image_fixture": str(args.image.resolve()) if args.image else None,
             "click": args.click,
