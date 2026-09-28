@@ -38,6 +38,7 @@ use little_clip_ops::metadata::{ImageMetadataSummary, extract_image_metadata, st
 use little_clip_ops::perspective::{DeskewCropMode, QuadCorners, rectify_perspective_with_mode};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 
 // filmr physics-based film simulation engine
 use filmr::film::FilmStyle;
@@ -86,18 +87,18 @@ pub struct ImagePreviewState {
     pub is_svg: bool,
     pub raw_bytes: Vec<u8>,
 
-    // Images
+    // Committed revisions are shared until an in-place edit calls Arc::make_mut.
     #[allow(dead_code)]
-    pub original_rgba: RgbaImage,
-    pub current_rgba: RgbaImage,
+    pub original_rgba: Arc<RgbaImage>,
+    pub current_rgba: Arc<RgbaImage>,
     /// Increases whenever the committed pixel buffer changes.
     pub(crate) pixel_revision: u64,
     texture: Option<egui::TextureHandle>,
     dirty_texture: bool,
 
     // Undo / Redo Stack
-    pub undo_stack: Vec<RgbaImage>,
-    pub redo_stack: Vec<RgbaImage>,
+    pub undo_stack: Vec<Arc<RgbaImage>>,
+    pub redo_stack: Vec<Arc<RgbaImage>>,
 
     // Cropping
     pub crop_state: CropState,
@@ -331,6 +332,7 @@ impl ImagePreviewState {
             None
         };
 
+        let rgba = Arc::new(rgba);
         let preview = Self {
             path,
             title,
@@ -456,7 +458,7 @@ impl ImagePreviewState {
     /// Returns the image as currently displayed/composed, taking into account any active crop selection if in Crop mode,
     /// and burning any placed redaction bars so exports/copies never leak private information.
     pub fn current_display_image(&self) -> RgbaImage {
-        compose_display_image(self.current_rgba.clone(), &self.input_stamp())
+        compose_display_image(self.current_rgba.as_ref().clone(), &self.input_stamp())
     }
 
     /// Burns all pending redaction black bars permanently into current_rgba and records an undo point.
@@ -1967,7 +1969,7 @@ mod tests {
 
         state.poll_bg_removal();
 
-        assert_eq!(state.current_rgba, output);
+        assert_eq!(state.current_rgba.as_ref(), &output);
         assert_eq!(state.pixel_revision, 1);
         assert!(state.redaction_state.boxes.is_empty());
         assert!(state.markup_state.items.is_empty());
@@ -2615,11 +2617,11 @@ mod tests {
             AppPalette::for_appearance(little_clip_core::config::WorkbenchAppearance::Light);
         for viewport_size in [Vec2::new(400.0, 300.0), Vec2::new(1200.0, 800.0)] {
             let mut state = image_state_from_png((8, 8), "color picker interaction");
-            state.current_rgba = RgbaImage::from_pixel(
+            state.current_rgba = Arc::new(RgbaImage::from_pixel(
                 8,
                 8,
                 image::Rgba([expected.r(), expected.g(), expected.b(), 255]),
-            );
+            ));
             let ctx = egui::Context::default();
             let render = |state: &mut ImagePreviewState, time, events| {
                 let mut canvas_bounds = None;
@@ -3627,13 +3629,13 @@ mod tests {
             .clone()
             .expect("analysis creates a stretched result");
         assert_ne!(
-            stretched, original,
+            stretched, *original,
             "stretch result changes the fixture pixels"
         );
 
         state.apply_decorrelation_stretch();
         let applied = state.current_rgba.clone();
-        assert_eq!(applied, stretched);
+        assert_eq!(*applied, stretched);
         assert_ne!(applied, original);
 
         state.undo();

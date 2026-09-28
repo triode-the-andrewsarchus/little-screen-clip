@@ -10,7 +10,7 @@ const CANCELLABLE: u8 = 0;
 const CANCELLED: u8 = 1;
 const WRITING: u8 = 2;
 
-type SaveCanvas = (RgbaImage, Vec<u8>);
+type SaveCanvas = (Arc<RgbaImage>, Vec<u8>);
 
 enum SaveSnapshot {
     Pixels(RgbaImage),
@@ -31,7 +31,7 @@ pub(super) struct ImageCopyJob {
     ticket: JobTicket,
     phase: Arc<AtomicU8>,
     snapshot_ready: Arc<AtomicBool>,
-    canvas: Arc<Mutex<Option<RgbaImage>>>,
+    canvas: Arc<Mutex<Option<Arc<RgbaImage>>>>,
     receiver: mpsc::Receiver<Result<Result<String, String>, JobError>>,
     stamp: ImageInputStamp,
     restored: bool,
@@ -105,7 +105,7 @@ impl ImageSaveJob {
                     if options.converted {
                         SaveSnapshot::Converted(original.1.clone())
                     } else {
-                        SaveSnapshot::Pixels(original.0.clone())
+                        SaveSnapshot::Pixels(original.0.as_ref().clone())
                     }
                 };
                 worker_ready.store(true, Ordering::Release);
@@ -127,7 +127,7 @@ impl ImageSaveJob {
 
 impl ImageCopyJob {
     fn start(
-        canvas: RgbaImage,
+        canvas: Arc<RgbaImage>,
         stamp: ImageInputStamp,
         hand: HandSide,
         jobs: &BackgroundJobs,
@@ -145,7 +145,10 @@ impl ImageCopyJob {
                 check_copy_cancelled(&worker_phase, started)?;
                 let snapshot = {
                     let slot = worker_canvas.lock().unwrap_or_else(|e| e.into_inner());
-                    slot.as_ref().ok_or("Copy image unavailable")?.clone()
+                    slot.as_ref()
+                        .ok_or("Copy image unavailable")?
+                        .as_ref()
+                        .clone()
                 };
                 worker_ready.store(true, Ordering::Release);
                 check_copy_cancelled(&worker_phase, started)?;
@@ -956,9 +959,7 @@ mod tests {
         state.poll_save_job();
         assert!(!state.save_snapshot_pending());
         assert!(state.save_job.is_some());
-        state
-            .current_rgba
-            .put_pixel(0, 0, image::Rgba([1, 2, 3, 255]));
+        Arc::make_mut(&mut state.current_rgba).put_pixel(0, 0, image::Rgba([1, 2, 3, 255]));
         state.mark_pixels_changed();
         tx.send(Ok(Ok(SaveResult {
             path: PathBuf::from("old_snapshot.png"),

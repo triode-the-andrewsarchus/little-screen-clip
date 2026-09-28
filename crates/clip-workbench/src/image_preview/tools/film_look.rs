@@ -3,6 +3,28 @@ use crate::shell::render_context_slider;
 
 const DEFAULT_WB_STRENGTH: f32 = 0.75;
 
+fn film_rgb_from_rgba(
+    rgba: &RgbaImage,
+    mut is_cancelled: impl FnMut() -> bool,
+) -> Option<image::RgbImage> {
+    if rgba.is_empty() {
+        return None;
+    }
+    let mut pixels = Vec::with_capacity(rgba.as_raw().len() / 4 * 3);
+    for row in rgba.as_raw().chunks_exact(rgba.width() as usize * 4) {
+        if is_cancelled() {
+            return None;
+        }
+        for pixel in row.chunks_exact(4) {
+            pixels.extend_from_slice(&pixel[..3]);
+        }
+    }
+    if is_cancelled() {
+        return None;
+    }
+    image::RgbImage::from_raw(rgba.width(), rgba.height(), pixels)
+}
+
 /// Correct an Auto-WB cast only from pixels that are plausible neutral highlights.
 /// Whole-image gray-world averages mistake warm or colorful scenes for lighting casts.
 #[cfg(test)]
@@ -504,8 +526,78 @@ mod white_balance_tests {
 
 #[cfg(test)]
 mod render_identity_tests {
-    use super::{FilmSimMsg, ImagePreviewState};
+    use super::{FilmSimMsg, ImagePreviewState, film_rgb_from_rgba};
     use crate::{AppConfig, image_preview::ImageToolMode};
+
+    #[test]
+    fn film_rgb_snapshot_preserves_channels_and_cancels_between_rows() {
+        let rgba = image::RgbaImage::from_fn(2, 3, |x, y| {
+            image::Rgba([x as u8, y as u8, (x + y) as u8, (x * 127 + y) as u8])
+        });
+        let rgb = film_rgb_from_rgba(&rgba, || false).unwrap();
+        for (input, output) in rgba.pixels().zip(rgb.pixels()) {
+            assert_eq!(output.0, [input[0], input[1], input[2]]);
+        }
+
+        let mut rows_checked = 0;
+        assert!(
+            film_rgb_from_rgba(&rgba, || {
+                rows_checked += 1;
+                rows_checked == 2
+            })
+            .is_none()
+        );
+        assert_eq!(rows_checked, 2);
+    }
+
+    #[test]
+    fn queued_render_keeps_no_owned_source_snapshot() {
+        use std::sync::{Arc, mpsc};
+        use std::time::Duration;
+
+        let jobs = little_clip_core::BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(Duration::from_secs(5), move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let mut state = state();
+        state.active_mode = ImageToolMode::FilmSim;
+        let source = Arc::downgrade(&state.current_rgba);
+        let owners_before = Arc::strong_count(&state.current_rgba);
+        state.run_film_sim_render_on(&jobs);
+        assert_eq!(Arc::strong_count(&state.current_rgba), owners_before);
+        assert!(state.film_sim_state.is_rendering);
+        drop(state);
+        assert!(source.upgrade().is_none());
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn editing_shared_pixels_preserves_history_and_undo_redo() {
+        use std::sync::Arc;
+
+        let mut state = state();
+        let old_pixels = state.current_rgba.clone();
+        state.undo_stack.push(state.current_rgba.clone());
+        Arc::make_mut(&mut state.current_rgba).put_pixel(0, 0, image::Rgba([7, 11, 13, 17]));
+        state.mark_pixels_changed();
+        assert_eq!(old_pixels.get_pixel(0, 0).0, [64, 96, 128, 255]);
+        assert_eq!(state.current_rgba.get_pixel(0, 0).0, [7, 11, 13, 17]);
+
+        state.undo();
+        assert_eq!(state.current_rgba.get_pixel(0, 0).0, [64, 96, 128, 255]);
+        state.redo();
+        assert_eq!(state.current_rgba.get_pixel(0, 0).0, [7, 11, 13, 17]);
+    }
 
     #[test]
     fn cancellable_filmr_preserves_pinned_pixels_and_honors_pre_cancel() {
@@ -1710,13 +1802,8 @@ impl ImagePreviewState {
             ..SimulationConfig::default()
         };
 
-        // Convert RgbaImage → RgbImage for filmr
-        let rgba = self.current_rgba.clone();
-        let w = rgba.width();
-        let h = rgba.height();
-        let rgb_pixels: Vec<u8> = rgba.pixels().flat_map(|p| [p[0], p[1], p[2]]).collect();
-        let rgb_img =
-            image::RgbImage::from_raw(w, h, rgb_pixels).expect("pixel buffer size mismatch");
+        // Queued work must not keep an obsolete full-size source alive.
+        let source = Arc::downgrade(&self.current_rgba);
 
         let contrast = self.film_sim_state.contrast;
         let tint = self.film_sim_state.tint;
@@ -1733,8 +1820,15 @@ impl ImagePreviewState {
             if cancelled.load(std::sync::atomic::Ordering::Acquire) {
                 return None;
             }
+            let source = source.upgrade()?;
             let start = std::time::Instant::now();
             let process_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let rgb_img = film_rgb_from_rgba(&source, || {
+                    cancelled.load(std::sync::atomic::Ordering::Acquire)
+                })?;
+                if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                    return None;
+                }
                 process_film_image_inner(&rgb_img, &stock, &config, Some(&cancelled))
             }));
             if cancelled.load(std::sync::atomic::Ordering::Acquire) {
@@ -1796,7 +1890,7 @@ impl ImagePreviewState {
 
         // Downscale base image to 42x28 (sub-3ms per stock)
         let thumb_base = image::imageops::resize(
-            &self.current_rgba,
+            self.current_rgba.as_ref(),
             42,
             28,
             image::imageops::FilterType::Nearest,
@@ -2042,7 +2136,7 @@ impl ImagePreviewState {
         };
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
-        self.current_rgba = preview;
+        self.current_rgba = Arc::new(preview);
         self.mark_pixels_changed();
         self.dirty_texture = true;
         self.resize_state.sync_from_image(&self.current_rgba);

@@ -412,7 +412,7 @@ impl ImagePreviewState {
                 .is_some_and(|stamp| stamp.crop.is_some());
             self.undo_stack.push(self.current_rgba.clone());
             self.redo_stack.clear();
-            self.current_rgba = result_rgba;
+            self.current_rgba = Arc::new(result_rgba);
             self.mark_pixels_changed();
             self.redaction_state.boxes.clear();
             self.markup_state.items.clear();
@@ -420,7 +420,8 @@ impl ImagePreviewState {
                 self.crop_state.normalized_rect =
                     Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
             }
-            self.creative_fx_state.cached_background_removal = Some(self.current_rgba.clone());
+            self.creative_fx_state.cached_background_removal =
+                Some(self.current_rgba.as_ref().clone());
             self.creative_fx_state.background_removal_input_stamp = Some(self.input_stamp());
             self.creative_fx_state.mask_cache_revision =
                 self.creative_fx_state.mask_cache_revision.wrapping_add(1);

@@ -356,8 +356,9 @@ impl ImagePreviewState {
             self.redo_stack.clear();
 
             let cropped =
-                image::imageops::crop_imm(&self.current_rgba, px_x, px_y, px_w, px_h).to_image();
-            self.current_rgba = cropped;
+                image::imageops::crop_imm(self.current_rgba.as_ref(), px_x, px_y, px_w, px_h)
+                    .to_image();
+            self.current_rgba = Arc::new(cropped);
             self.mark_pixels_changed();
             self.dirty_texture = true;
             self.crop_state.normalized_rect =

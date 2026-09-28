@@ -4,7 +4,7 @@ impl ImagePreviewState {
     pub fn rotate_cw(&mut self) {
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
-        self.current_rgba = image::imageops::rotate90(&self.current_rgba);
+        self.current_rgba = Arc::new(image::imageops::rotate90(self.current_rgba.as_ref()));
         self.mark_pixels_changed();
         self.dirty_texture = true;
         self.crop_state.normalized_rect =
@@ -15,7 +15,7 @@ impl ImagePreviewState {
     pub fn rotate_ccw(&mut self) {
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
-        self.current_rgba = image::imageops::rotate270(&self.current_rgba);
+        self.current_rgba = Arc::new(image::imageops::rotate270(self.current_rgba.as_ref()));
         self.mark_pixels_changed();
         self.dirty_texture = true;
         self.crop_state.normalized_rect =
@@ -26,7 +26,7 @@ impl ImagePreviewState {
     pub fn rotate_180(&mut self) {
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
-        self.current_rgba = image::imageops::rotate180(&self.current_rgba);
+        self.current_rgba = Arc::new(image::imageops::rotate180(self.current_rgba.as_ref()));
         self.mark_pixels_changed();
         self.dirty_texture = true;
         self.crop_state.normalized_rect =
@@ -37,7 +37,7 @@ impl ImagePreviewState {
     pub fn flip_horizontal(&mut self) {
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
-        self.current_rgba = image::imageops::flip_horizontal(&self.current_rgba);
+        self.current_rgba = Arc::new(image::imageops::flip_horizontal(self.current_rgba.as_ref()));
         self.mark_pixels_changed();
         self.dirty_texture = true;
         self.show_toast("⇆ Flipped Horizontally");
@@ -46,7 +46,7 @@ impl ImagePreviewState {
     pub fn flip_vertical(&mut self) {
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
-        self.current_rgba = image::imageops::flip_vertical(&self.current_rgba);
+        self.current_rgba = Arc::new(image::imageops::flip_vertical(self.current_rgba.as_ref()));
         self.mark_pixels_changed();
         self.dirty_texture = true;
         self.show_toast("⇅ Flipped Vertically");

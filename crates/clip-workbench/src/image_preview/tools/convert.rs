@@ -541,7 +541,7 @@ impl ImagePreviewState {
         if let Some(converted) = self.convert_state.converted_rgba.clone() {
             self.undo_stack.push(self.current_rgba.clone());
             self.redo_stack.clear();
-            self.current_rgba = converted;
+            self.current_rgba = Arc::new(converted);
             self.mark_pixels_changed();
             self.redaction_state.boxes.clear();
             self.markup_state.items.clear();
@@ -1670,7 +1670,7 @@ mod input_stamp_tests {
         assert_eq!(state.convert_state.encoded_bytes, vec![4, 5, 6]);
 
         state.apply_converted_to_canvas();
-        assert_eq!(state.current_rgba, output);
+        assert_eq!(state.current_rgba.as_ref(), &output);
         assert_eq!(state.pixel_revision, 1);
         assert!(state.redaction_state.boxes.is_empty());
         assert!(!state.convert_state.output_matches(&state.input_stamp()));

@@ -32,6 +32,7 @@ impl ImagePreviewState {
         let img_w = self.current_rgba.width() as f32;
         let img_h = self.current_rgba.height() as f32;
         let count = self.redaction_state.boxes.len();
+        let canvas = Arc::make_mut(&mut self.current_rgba);
 
         for b in &self.redaction_state.boxes {
             let px_min_x = (b.normalized_rect.min.x * img_w).round().clamp(0.0, img_w) as u32;
@@ -41,8 +42,7 @@ impl ImagePreviewState {
 
             for y in px_min_y..px_max_y {
                 for x in px_min_x..px_max_x {
-                    self.current_rgba
-                        .put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+                    canvas.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
                 }
             }
         }

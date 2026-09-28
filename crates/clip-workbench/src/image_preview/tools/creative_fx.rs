@@ -1311,7 +1311,7 @@ impl ImagePreviewState {
 
         // Downscale base image to 42x28 (sub-millisecond)
         let thumb_base = image::imageops::resize(
-            &self.current_rgba,
+            self.current_rgba.as_ref(),
             42,
             28,
             image::imageops::FilterType::Nearest,
@@ -1655,7 +1655,7 @@ impl ImagePreviewState {
         let fx_name = self.creative_fx_state.selected_fx.name();
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
-        self.current_rgba = preview;
+        self.current_rgba = Arc::new(preview);
         self.mark_pixels_changed();
         self.invalidate_stale_creative_fx_masks();
         self.dirty_texture = true;

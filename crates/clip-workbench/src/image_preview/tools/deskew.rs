@@ -122,7 +122,7 @@ impl ImagePreviewState {
                 let out_h = rectified.height();
                 self.undo_stack.push(self.current_rgba.clone());
                 self.redo_stack.clear();
-                self.current_rgba = rectified;
+                self.current_rgba = Arc::new(rectified);
                 self.mark_pixels_changed();
                 self.dirty_texture = true;
                 self.resize_state.sync_from_image(&self.current_rgba);

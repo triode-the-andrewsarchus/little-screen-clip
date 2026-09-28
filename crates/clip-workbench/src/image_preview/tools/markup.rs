@@ -886,7 +886,10 @@ impl ImagePreviewState {
         self.redo_stack.clear();
 
         let count = self.markup_state.items.len();
-        self.current_rgba = rasterize_markup(&self.current_rgba, &self.markup_state.items);
+        self.current_rgba = Arc::new(rasterize_markup(
+            &self.current_rgba,
+            &self.markup_state.items,
+        ));
         self.mark_pixels_changed();
         self.markup_state.items.clear();
         self.markup_state.selected_idx = None;

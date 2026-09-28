@@ -83,7 +83,7 @@ impl ImagePreviewState {
         if let Some(stretched) = self.dcs_state.stretched_rgba.clone() {
             self.undo_stack.push(self.current_rgba.clone());
             self.redo_stack.clear();
-            self.current_rgba = stretched;
+            self.current_rgba = Arc::new(stretched);
             self.mark_pixels_changed();
             self.dirty_texture = true;
             self.resize_state.sync_from_image(&self.current_rgba);

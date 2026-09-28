@@ -838,8 +838,9 @@ impl ImagePreviewState {
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
 
-        let resized = image::imageops::resize(&self.current_rgba, w, h, filter.to_image_filter());
-        self.current_rgba = resized;
+        let resized =
+            image::imageops::resize(self.current_rgba.as_ref(), w, h, filter.to_image_filter());
+        self.current_rgba = Arc::new(resized);
         self.mark_pixels_changed();
         self.dirty_texture = true;
         self.resize_state.sync_from_image(&self.current_rgba);
@@ -973,7 +974,7 @@ impl ImagePreviewState {
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
 
-        self.current_rgba = res.result_rgba;
+        self.current_rgba = Arc::new(res.result_rgba);
         self.mark_pixels_changed();
         self.redaction_state.boxes.clear();
         self.markup_state.items.clear();
