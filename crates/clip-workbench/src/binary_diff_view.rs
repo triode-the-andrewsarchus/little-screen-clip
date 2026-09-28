@@ -2455,6 +2455,152 @@ mod tests {
     }
 
     #[test]
+    fn horizontal_pan_keeps_hex_header_offset_and_hover_targets_aligned() {
+        let left: Vec<u8> = (0x41..0x61).collect();
+        let mut right = left.clone();
+        right[0] = b'Z';
+        right[20] ^= 0x20;
+        let mut state = BinaryDiffViewState::new(
+            "lhs.bin".into(),
+            left.clone(),
+            "rhs.bin".into(),
+            right.clone(),
+        );
+        state.result = Some(compute_binary_diff(
+            "lhs.bin",
+            &left,
+            "rhs.bin",
+            &right,
+            BinaryDiffMode::Aligned,
+            32,
+        ));
+        state.is_computing = false;
+        state.receiver = None;
+        state.panel_state.right_collapsed = true;
+
+        let palette = AppPalette::default();
+        let ctx = egui::Context::default();
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1100.0, 760.0));
+        let mut time = 0.0;
+        let mut render = |events: Vec<egui::Event>| {
+            time += 0.05;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen_rect),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                },
+            );
+            (output, state.current_scroll_offset_x, state.hovered_cell)
+        };
+
+        let (initial, initial_scroll_x, _) = render(Vec::new());
+        let find_text_pos = |output: &egui::FullOutput, text: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(galley) if galley.galley.text() == text => {
+                        Some(galley.pos + galley.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+        };
+        let find_header_pos = |output: &egui::FullOutput, text: &str| {
+            output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(galley) if galley.galley.text() == text => Some(galley.pos),
+                    _ => None,
+                })
+                .min_by(|a, b| a.x.total_cmp(&b.x))
+        };
+        let initial_viewport = initial
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "41" => Some(clipped.clip_rect),
+                _ => None,
+            })
+            .expect("first hex byte should render in the table viewport");
+        let initial_hex_header = find_header_pos(&initial, "Hex Bytes (lhs.bin)")
+            .expect("left hex column header should render");
+        let initial_offset = initial
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text().trim() == "00000000" => {
+                    Some(text.pos)
+                }
+                _ => None,
+            })
+            .expect("left row offset should render");
+        assert_eq!(initial_scroll_x, 0.0);
+
+        let pointer = initial_viewport.center();
+        let _ = render(vec![
+            egui::Event::PointerMoved(pointer),
+            egui::Event::Scroll(Vec2::new(-40.0, 0.0)),
+        ]);
+        let mut settled = None;
+        for _ in 0..10 {
+            settled = Some(render(Vec::new()));
+        }
+        let (hex_scrolled, hex_scroll_x, _) = settled.unwrap();
+        assert!(
+            hex_scroll_x > 10.0,
+            "horizontal scroll offset: {hex_scroll_x}"
+        );
+
+        let scrolled_hex_header = find_header_pos(&hex_scrolled, "Hex Bytes (lhs.bin)")
+            .expect("hex header should track the horizontal viewport");
+        let scrolled_offset = hex_scrolled
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text().trim() == "00000000" => {
+                    Some(text.pos)
+                }
+                _ => None,
+            })
+            .expect("row offset text should pan with its byte row");
+        let scrolled_hex_cell = find_text_pos(&hex_scrolled, "55")
+            .expect("a later hex byte should remain visible during horizontal scrolling");
+        for (label, before, after) in [
+            ("hex header", initial_hex_header.x, scrolled_hex_header.x),
+            (
+                "later hex byte",
+                find_text_pos(&initial, "55").unwrap().x,
+                scrolled_hex_cell.x,
+            ),
+            ("row offset", initial_offset.x, scrolled_offset.x),
+        ] {
+            assert!(
+                ((after - before) + hex_scroll_x).abs() <= 3.0,
+                "{label} should move with the horizontal content: {before} -> {after}, offset {hex_scroll_x}"
+            );
+        }
+
+        let (hex_hovered_output, _, hex_hovered) =
+            render(vec![egui::Event::PointerMoved(scrolled_hex_cell)]);
+        assert_eq!(
+            hex_hovered,
+            Some((0, 20)),
+            "later hex hit target should map to byte 20"
+        );
+        assert!(hex_hovered_output.shapes.iter().any(|clipped| {
+            matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text().contains("LEFT: 0x55") && text.galley.text().contains("Off: 0x00000014"))
+        }), "inspection footer should report the hovered later hex byte and offset");
+    }
+
+    #[test]
     fn byte_density_does_not_shrink_text_or_hit_targets() {
         let mut state =
             BinaryDiffViewState::new("left".to_owned(), vec![0], "right".to_owned(), vec![1]);
