@@ -480,9 +480,8 @@ struct WorkbenchApp {
 struct InspectorTextPreviewCache {
     selected_slots: Vec<SlotId>,
     selected_item_ids: Vec<Option<uuid::Uuid>>,
-    slot: SlotId,
-    file_path: Option<PathBuf>,
-    is_markdown: bool,
+    text_preview: Option<(SlotId, Option<PathBuf>, bool)>,
+    spreadsheet_slot: Option<SlotId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1367,6 +1366,7 @@ impl eframe::App for WorkbenchApp {
             match self.view {
                 WorkbenchView::Palette => {
                     let filtered = self.filtered_actions();
+                    let text_preview_action = self.check_inspector_text_preview();
 
                     // Selected slots banner & shortcuts
                     let slot_labels: Vec<&str> = self.selected_slots.iter().map(|s| s.label()).collect();
@@ -1468,16 +1468,10 @@ impl eframe::App for WorkbenchApp {
                                 .filter(|item| is_pdf_clip_item(item))
                                 .and_then(ClipItem::file_path)
                         });
-                        let first_spreadsheet_slot = self.selected_slots.iter().copied().find(|slot| {
-                            let Some(item) = self.state.get(*slot) else { return false; };
-                            if item.file_path().is_some_and(|p| is_spreadsheet_file(&p)) {
-                                return true;
-                            }
-                            match &item.payload {
-                                ClipPayload::Text(text) | ClipPayload::Markdown(text) => looks_like_csv_text(text),
-                                _ => false,
-                            }
-                        });
+                        let first_spreadsheet_slot = self
+                            .inspector_text_preview_cache
+                            .as_ref()
+                            .and_then(|cache| cache.spreadsheet_slot);
                         let first_midi_item = self.selected_slots.iter().find_map(|s| {
                             let it = self.state.get(*s)?;
                             if let Some(p) = it.file_path().filter(|p| {
@@ -1643,7 +1637,7 @@ impl eframe::App for WorkbenchApp {
                             }
                         }
 
-                        if let Some((slot, file_p, is_md)) = self.check_inspector_text_preview() {
+                        if let Some((slot, file_p, is_md)) = text_preview_action.clone() {
                             ui.add_space(crate::ui_ext::SPACE_SM);
                             let (label, txt_icon) = if is_md {
                                 ("Preview Markdown", Icon::Book)
@@ -2560,11 +2554,25 @@ impl WorkbenchApp {
             && cache.selected_slots == self.selected_slots
             && cache.selected_item_ids == selected_item_ids
         {
-            return Some((cache.slot, cache.file_path.clone(), cache.is_markdown));
+            return cache.text_preview.clone();
         }
 
-        self.inspector_text_preview_cache = None;
-        let (slot, file_path, is_markdown) = self.selected_slots.iter().find_map(|slot| {
+        let spreadsheet_slot = self.selected_slots.iter().copied().find(|slot| {
+            let Some(item) = self.state.get(*slot) else {
+                return false;
+            };
+            if item
+                .file_path()
+                .is_some_and(|path| is_spreadsheet_file(&path))
+            {
+                return true;
+            }
+            match &item.payload {
+                ClipPayload::Text(text) | ClipPayload::Markdown(text) => looks_like_csv_text(text),
+                _ => false,
+            }
+        });
+        let text_preview = self.selected_slots.iter().find_map(|slot| {
             let item = self.state.get(*slot)?;
             let file_path = if let Some(path) = item
                 .file_path()
@@ -2609,16 +2617,15 @@ impl WorkbenchApp {
                 (None, is_markdown)
             };
             Some((*slot, file_path, is_markdown))
-        })?;
+        });
 
         self.inspector_text_preview_cache = Some(InspectorTextPreviewCache {
             selected_slots: self.selected_slots.clone(),
             selected_item_ids,
-            slot,
-            file_path: file_path.clone(),
-            is_markdown,
+            text_preview: text_preview.clone(),
+            spreadsheet_slot,
         });
-        Some((slot, file_path, is_markdown))
+        text_preview
     }
 
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context) {
@@ -3225,6 +3232,40 @@ mod workbench_layout_tests {
                 .as_ref()
                 .and_then(|cache| cache.selected_item_ids.first().copied().flatten()),
             Some(plain_text_id)
+        );
+    }
+
+    #[test]
+    fn inspector_caches_clipboard_spreadsheet_detection_until_item_changes() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        let slot = SlotId::LeftHand;
+        *app.state.get_mut(slot).unwrap() = Some(ClipItem::from_text("name,count\nalpha,1"));
+
+        assert_eq!(
+            app.check_inspector_text_preview(),
+            Some((slot, None, false))
+        );
+        assert_eq!(
+            app.inspector_text_preview_cache
+                .as_ref()
+                .and_then(|cache| cache.spreadsheet_slot),
+            Some(slot)
+        );
+        assert_eq!(
+            app.check_inspector_text_preview(),
+            Some((slot, None, false))
+        );
+
+        *app.state.get_mut(slot).unwrap() = Some(ClipItem::from_text("plain text"));
+        assert_eq!(
+            app.check_inspector_text_preview(),
+            Some((slot, None, false))
+        );
+        assert_eq!(
+            app.inspector_text_preview_cache
+                .as_ref()
+                .and_then(|cache| cache.spreadsheet_slot),
+            None
         );
     }
 
