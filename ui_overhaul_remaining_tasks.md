@@ -152,7 +152,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **H1.4k3b [Primary] Check that compact headers keep short filenames visible beside actions.** StudioShell render test checks compact filename at 1177 points, full title on wider hosts, badges and actions in one row.
     - **H1.4k4 Live header and footer checks**
       - [x] **H1.4k4a Verify the Image View footer live at compact widths in both appearances.** Primary reviewed isolated Niri captures showing complete footer text and a separate canvas. Fourteen captures across all seven logical resolutions passed popup geometry/singleton checks; representative footer visuals were reviewed.
-      - [ ] **H1.4k4b [Primary] Verify panelized image-tool footers live.**
+      - [x] **H1.4k4b [Primary] Verify panelized image-tool footers live.** Isolated 1280×720 Light Niri capture selects Markup and shows the tool panels, canvas, and bottom hint footer all inside the host; popup geometry and singleton report pass. See `ui_overhaul_acceptance.md`.
       - [x] **H1.4k4c [Primary] Verify compact header filename visibility live.** Isolated 1280×720 logical / 150% Light capture displays `image-exif.tiff` alongside badges and right actions.
   - **H1.4l Audio Studio footer defect (1920×1080 Dark)**
     - [x] **H1.4l1 [Primary; Luna implementation] Reserve a nonoverlapping Audio Studio footer clear of the bottom timeline and scrollbar.** Measured caption panel precedes canvas allocation; finite embedded workspace preserves a scrollable minimum. Timeline painting and hit regions stay bounded for short canvases.
