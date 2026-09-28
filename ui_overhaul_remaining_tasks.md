@@ -490,7 +490,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H2.2e5 [Luna/Primary] Validate spreadsheet large-data bounds.** A headless regression renders a 3,001 × 512 fixture with 180 visible cell text shapes initially and 162 at the far corner, below a 400-shape ceiling; it reaches `r2999c511` at scroll offset `[45779, 80550]`.
     - **H2.2e6 [Primary] Validate scroll/search/copy targets across UI and DPI scales with large fixtures.**
       - [x] **H2.2e6a [Luna/Primary] Verify spreadsheet scroll targets across compact/wide viewports and display scales.** A headless 320 × 72 fixture is scrolled at 640 × 520 and 1180 × 720 hosts, each at zoom 1.0 and 1.5; visible cell/header, cell/row-label, and pinned-gutter alignment hold in all four cases.
-      - [ ] **H2.2e6b [Luna] Verify spreadsheet selection and exact copy targets across compact/wide viewports and display scales.**
+      - [x] **H2.2e6b [Luna/Primary] Verify spreadsheet selection and exact copy targets across compact/wide viewports and display scales.** A headless 320 × 72 fixture is scrolled and clicked at 640 × 520 and 1180 × 720 hosts, each at zoom 1.0 and 1.5; selected coordinates and copied cell values match in every case.
       - [ ] **H2.2e6c [Luna] Verify spreadsheet search highlighting and navigation targets across compact/wide viewports and display scales.**
     - [ ] **H2.2e7 [Primary] Verify live selection and copy targets across wrapped virtual rows.**
     - [ ] **H2.2e8 [Primary] Verify pointer and minimap geometry across wrapped virtual rows.**
