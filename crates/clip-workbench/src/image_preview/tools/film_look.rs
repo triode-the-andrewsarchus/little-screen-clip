@@ -1,7 +1,7 @@
 use super::super::*;
 use crate::shell::render_context_slider;
 
-const DEFAULT_WB_STRENGTH: f32 = 0.75;
+const DEFAULT_WB_STRENGTH: f32 = 0.35;
 
 /// Correct an Auto-WB cast only from pixels that are plausible neutral highlights.
 /// Whole-image gray-world averages mistake warm or colorful scenes for lighting casts.
@@ -121,7 +121,8 @@ fn apply_white_balance_gains(image: &mut image::RgbImage, gains: [f32; 3], stren
 #[cfg(test)]
 mod white_balance_tests {
     use super::{
-        apply_auto_white_balance, apply_white_balance_gains, gray_world_gains, white_patch_gains,
+        DEFAULT_WB_STRENGTH, apply_auto_white_balance, apply_white_balance_gains, gray_world_gains,
+        white_patch_gains,
     };
 
     fn channel_means(image: &image::RgbImage) -> [f32; 3] {
@@ -199,6 +200,46 @@ mod white_balance_tests {
         assert_eq!(unchanged.get_pixel(32, 32), &image::Rgb([163, 192, 209]));
         assert!(channel_means(&corrected)[0] > channel_means(&unchanged)[0]);
         assert!(channel_means(&corrected)[2] < channel_means(&unchanged)[2]);
+    }
+
+    #[test]
+    fn default_auto_white_balance_strength_is_gentler_than_full_slider_value() {
+        assert_eq!(DEFAULT_WB_STRENGTH, 0.35);
+        let source = image::RgbImage::from_fn(64, 64, |x, y| {
+            let base = 145 + ((x + y) % 70) as u8;
+            image::Rgb([
+                ((f32::from(base) * 0.78).round()) as u8,
+                ((f32::from(base) * 0.92).round()) as u8,
+                base,
+            ])
+        });
+        let mut default_strength = source.clone();
+        let mut full_strength = source.clone();
+
+        assert!(apply_auto_white_balance(
+            &mut default_strength,
+            DEFAULT_WB_STRENGTH
+        ));
+        assert!(apply_auto_white_balance(&mut full_strength, 1.0));
+
+        let total_channel_change = |image: &image::RgbImage| {
+            image
+                .pixels()
+                .zip(source.pixels())
+                .map(|(after, before)| {
+                    after
+                        .0
+                        .iter()
+                        .zip(before.0)
+                        .map(|(after, before)| i32::from(*after).abs_diff(i32::from(before)))
+                        .sum::<u32>()
+                })
+                .sum::<u32>()
+        };
+        assert!(
+            total_channel_change(&default_strength) < total_channel_change(&full_strength),
+            "the default should apply a smaller channel correction"
+        );
     }
 
     #[test]

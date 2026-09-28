@@ -2462,6 +2462,14 @@ impl WorkbenchApp {
     }
 
     fn open_slot_preview_modal(&mut self, item: &ClipItem) {
+        if is_pdf_clip_item(item) {
+            if let Some(fp) = item.file_path() {
+                self.replace_viewer(Some(ViewerSession::Pdf(PdfEditorState::new(fp))));
+            } else {
+                self.status_msg = Some("PDF preview requires a local file path".to_owned());
+            }
+            return;
+        }
         if let Some(audio_path) = item.audio_path() {
             self.replace_viewer(Some(ViewerSession::Audio(
                 AudioPreviewState::new(audio_path, item.title.clone())
@@ -2470,11 +2478,7 @@ impl WorkbenchApp {
             return;
         }
         if let Some(fp) = item.file_path() {
-            if is_pdf_clip_item(item) {
-                self.replace_viewer(Some(ViewerSession::Pdf(PdfEditorState::new(fp))));
-            } else {
-                self.open_slot_file_preview(&fp, item.is_image());
-            }
+            self.open_slot_file_preview(&fp, item.is_image());
         } else if item.is_image() {
             self.start_image_item_load(ImageLoadSource::from_item(item));
         } else if let Some(text) = item.to_clipboard_text() {
@@ -3701,6 +3705,37 @@ mod workbench_layout_tests {
 
         assert!(matches!(app.viewer, Some(ViewerSession::Pdf(_))));
         assert!(app.image_load_job.is_none());
+    }
+
+    #[test]
+    fn mirror_context_preview_never_sends_pathless_pdf_bytes_to_image_decoder() {
+        let item = ClipItem {
+            id: uuid::Uuid::new_v4(),
+            created_at: 0,
+            payload: ClipPayload::Image {
+                bytes: b"%PDF-1.4".to_vec(),
+                path: None,
+                width: 800,
+                height: 600,
+                mime: "application/pdf".to_owned(),
+                thumbnail: None,
+            },
+            title: "document.pdf".to_owned(),
+            subtitle: "PDF".to_owned(),
+            details: vec!["PDF".to_owned()],
+            handler_tag: "PDF (DOCUMENT)".to_owned(),
+        };
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.state.push_left(item);
+
+        app.handle_mirror_action(Some(MirrorAction::Context(SlotId::LeftHand)));
+
+        assert!(app.viewer.is_none());
+        assert!(app.image_load_job.is_none());
+        assert_eq!(
+            app.status_msg.as_deref(),
+            Some("PDF preview requires a local file path")
+        );
     }
 
     #[test]
