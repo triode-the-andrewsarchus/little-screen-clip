@@ -1,7 +1,7 @@
 use super::super::*;
 use crate::shell::render_context_slider;
 
-const DEFAULT_WB_STRENGTH: f32 = 0.35;
+const DEFAULT_WB_STRENGTH: f32 = 0.75;
 
 /// Correct an Auto-WB cast only from pixels that are plausible neutral highlights.
 /// Whole-image gray-world averages mistake warm or colorful scenes for lighting casts.
@@ -37,7 +37,15 @@ fn apply_auto_white_balance_inner(
         let channels = pixel.0.map(f32::from);
         let max_channel = channels.iter().copied().fold(0.0_f32, f32::max);
         let min_channel = channels.iter().copied().fold(255.0_f32, f32::min);
-        if max_channel < 128.0 || (max_channel - min_channel) / max_channel.max(1.0) > 0.30 {
+        let relative_chroma = (max_channel - min_channel) / max_channel.max(1.0);
+        // Permit a wider blue-dominant cast while keeping the more conservative warm-scene
+        // cutoff; saturated blue objects still exceed this bound and are not references.
+        let chroma_limit = if channels[2] >= channels[1] && channels[2] > channels[0] {
+            0.40
+        } else {
+            0.30
+        };
+        if max_channel < 128.0 || relative_chroma > chroma_limit {
             continue;
         }
 
@@ -65,7 +73,9 @@ fn apply_auto_white_balance_inner(
     let gains = means.map(|mean| (target / mean.max(1.0)).clamp(0.7, 1.4));
     let min_gain = gains.iter().copied().fold(f32::INFINITY, f32::min);
     let max_gain = gains.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-    if max_gain / min_gain > 1.5 {
+    // Reject extreme estimates, but permit bounded gains needed by reliable references
+    // whose blue cast exceeds the per-pixel chroma cutoff above.
+    if max_gain / min_gain > 1.60 {
         return false;
     }
 
@@ -259,7 +269,7 @@ mod white_balance_tests {
 
     #[test]
     fn default_auto_white_balance_strength_is_gentler_than_full_slider_value() {
-        assert_eq!(DEFAULT_WB_STRENGTH, 0.35);
+        assert_eq!(DEFAULT_WB_STRENGTH, 0.75);
         let source = image::RgbImage::from_fn(64, 64, |x, y| {
             let base = 145 + ((x + y) % 70) as u8;
             image::Rgb([
@@ -325,6 +335,143 @@ mod white_balance_tests {
             auto, off,
             "without a neutral highlight, Auto should preserve scene color"
         );
+    }
+
+    #[test]
+    fn auto_white_balance_leaves_a_near_threshold_warm_gradient_unchanged() {
+        let source = image::RgbImage::from_fn(64, 64, |x, y| {
+            let base = 165 + ((x + y) % 85) as u8;
+            image::Rgb([
+                base,
+                (f32::from(base) * 0.82).round() as u8,
+                (f32::from(base) * 0.68).round() as u8,
+            ])
+        });
+        let stock = filmr::presets::kodak::KODAK_PORTRA_400();
+        let config = |mode| filmr::processor::SimulationConfig {
+            white_balance_mode: mode,
+            white_balance_strength: 1.0,
+            enable_grain: false,
+            ..Default::default()
+        };
+        let auto = super::process_film_image(
+            &source,
+            &stock,
+            &config(filmr::processor::WhiteBalanceMode::Auto),
+        );
+        let off = super::process_film_image(
+            &source,
+            &stock,
+            &config(filmr::processor::WhiteBalanceMode::Off),
+        );
+        assert_eq!(
+            auto, off,
+            "a warm scene gradient near the Auto chroma cutoff has no neutral reference"
+        );
+    }
+
+    #[test]
+    fn auto_white_balance_keeps_near_threshold_green_dominant_scene_unchanged() {
+        let source = image::RgbImage::from_fn(64, 64, |x, y| {
+            let base = 165 + ((x + y) % 85) as u8;
+            image::Rgb([
+                (f32::from(base) * 0.68).round() as u8,
+                base,
+                (f32::from(base) * 0.82).round() as u8,
+            ])
+        });
+        let stock = filmr::presets::kodak::KODAK_PORTRA_400();
+        let config = |mode| filmr::processor::SimulationConfig {
+            white_balance_mode: mode,
+            white_balance_strength: 1.0,
+            enable_grain: false,
+            ..Default::default()
+        };
+        let auto = super::process_film_image(
+            &source,
+            &stock,
+            &config(filmr::processor::WhiteBalanceMode::Auto),
+        );
+        let off = super::process_film_image(
+            &source,
+            &stock,
+            &config(filmr::processor::WhiteBalanceMode::Off),
+        );
+        assert_eq!(
+            auto, off,
+            "a green-dominant scene must retain the conservative chroma cutoff"
+        );
+    }
+
+    #[test]
+    fn film_pipeline_corrects_strong_blue_reference_without_flattening_vivid_colors() {
+        let source = image::RgbImage::from_fn(128, 64, |x, y| {
+            if x < 96 {
+                let base = 150 + ((x + y) % 61) as u8;
+                image::Rgb([
+                    (f32::from(base) * 0.65).round() as u8,
+                    (f32::from(base) * 0.78).round() as u8,
+                    base,
+                ])
+            } else {
+                let color = match y / 22 {
+                    0 => [230, 25, 20],
+                    1 => [20, 230, 25],
+                    _ => [25, 30, 230],
+                };
+                image::Rgb(color)
+            }
+        });
+        let stock = filmr::presets::kodak::KODAK_PORTRA_400();
+        let config = |mode, strength| filmr::processor::SimulationConfig {
+            white_balance_mode: mode,
+            white_balance_strength: strength,
+            enable_grain: false,
+            ..Default::default()
+        };
+        let off = super::process_film_image(
+            &source,
+            &stock,
+            &config(filmr::processor::WhiteBalanceMode::Off, 1.0),
+        );
+        let default_strength = super::process_film_image(
+            &source,
+            &stock,
+            &config(
+                filmr::processor::WhiteBalanceMode::Auto,
+                DEFAULT_WB_STRENGTH,
+            ),
+        );
+        let full_strength = super::process_film_image(
+            &source,
+            &stock,
+            &config(filmr::processor::WhiteBalanceMode::Auto, 1.0),
+        );
+        let channel_spread = |pixel: &image::Rgb<u8>| {
+            let max = *pixel.0.iter().max().unwrap();
+            let min = *pixel.0.iter().min().unwrap();
+            u16::from(max - min)
+        };
+        let off_neutral = off.get_pixel(40, 30);
+        let default_neutral = default_strength.get_pixel(40, 30);
+        let off_neutral_spread = channel_spread(off_neutral);
+        let default_neutral_spread = channel_spread(default_neutral);
+        assert!(
+            default_neutral_spread * 2 < off_neutral_spread,
+            "the default should substantially neutralize a reliable blue-cast reference: off={off_neutral:?}, default={default_neutral:?}"
+        );
+
+        let colorfulness = |pixel: &image::Rgb<u8>| {
+            channel_spread(pixel) as f32 / f32::from(*pixel.0.iter().max().unwrap())
+        };
+        for (name, x, y) in [("red", 110, 10), ("green", 110, 30), ("blue", 110, 55)] {
+            let off_pixel = off.get_pixel(x, y);
+            let full_pixel = full_strength.get_pixel(x, y);
+            assert!(
+                colorfulness(full_pixel) >= colorfulness(off_pixel) * 0.85,
+                "100% WB should retain vivid {name} scene colors: off={off_pixel:?}, full={full_pixel:?}"
+            );
+        }
     }
 
     #[test]
@@ -1200,7 +1347,7 @@ pub struct FilmSimState {
     pub intensity: f32,
     /// White balance correction mode
     pub wb_mode: WhiteBalanceMode,
-    /// White balance correction strength: 0.0 .. 1.0, default 0.35 to preserve scene color.
+    /// White balance correction strength: 0.0 .. 1.0, default 0.75.
     pub wb_strength: f32,
 
     // ── Optical & Creative Effects ──

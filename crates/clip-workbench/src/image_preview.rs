@@ -3940,7 +3940,7 @@ mod tests {
         // Defaults for expanded controls
         assert_eq!(state.film_sim_state.tint, 0.0);
         assert_eq!(state.film_sim_state.wb_mode, WhiteBalanceMode::Auto);
-        assert_eq!(state.film_sim_state.wb_strength, 0.35);
+        assert_eq!(state.film_sim_state.wb_strength, 0.75);
         assert_eq!(state.film_sim_state.halation, 0.25);
         assert_eq!(state.film_sim_state.vignette, 0.35);
         assert_eq!(state.film_sim_state.light_leak, LightLeakPreset::None);
