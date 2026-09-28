@@ -2615,6 +2615,41 @@ mod tests {
     }
 
     #[test]
+    fn test_minimap_job_retries_after_background_queue_saturation() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_blocker_ticket, _blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let (_queued_ticket, queued_receiver) = jobs.submit(std::time::Duration::MAX, || ());
+
+        let mut cache = MinimapCache::default();
+        let text = Arc::new("fn main() {}".to_owned());
+        cache.start(Arc::clone(&text), "rs".to_owned(), &jobs);
+        assert!(!cache.poll(), "a full queue should remain retryable");
+        assert!(!cache.started);
+
+        release_tx.send(()).unwrap();
+        queued_receiver
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        cache.start(text, "rs".to_owned(), &jobs);
+        while !cache.poll() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(cache.ready);
+        assert!(!cache.failed);
+        assert!(!cache.lines.is_empty());
+    }
+
+    #[test]
     fn test_gutter_text_alignment() {
         let ctx = egui::Context::default();
         let output = ctx.run(Default::default(), |ctx| {

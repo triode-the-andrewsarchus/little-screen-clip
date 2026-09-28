@@ -14,7 +14,7 @@ H2.2c2c (`d9c3a5a`) routes clipboard text through exact CSV validation on the ex
 
 H2.2c3 is covered by the H2.2c1 fragment bound: each syntect call receives at most one 4 KiB UTF-8-safe fragment, and the renderer highlights virtualized visible rows only. This bounds work per call and limits it to the viewport, but does not establish a strict elapsed-time budget for pathological fragments or unusually tall viewports. Any stricter per-frame budget belongs with H2.2c5's cache/staged-work design; the open 4 KiB single-line case remains under H2.2c4b.
 
-H2.2c4b review confirmed syntect 5.3's parser requires each complete logical line as one contiguous input; splitting lines can add false regex boundaries and corrupt highlighting state for later lines. No lossy truncation was applied. The open implementation is to move minimap parsing to a cancellable bounded worker with ordered publication, which protects UI responsiveness but cannot guarantee bounded CPU time for a pathological line.
+H2.2c4b (`7810e1f`) moves complete-line minimap syntax parsing to the bounded `BackgroundJobs` executor, preserving syntect state and keeping source-positioned samples capped at 4096. The source is Arc-shared from preview creation, avoiding a full UI-thread document clone at dispatch. Results publish only into the owning preview state; queue saturation retries after repaint. Dropping the preview cancels queued work and suppresses stale publication, but a syntect call already in progress cannot be interrupted. The queue retry regression and full workbench suite pass (426 passed, 1 ignored); formatting and diff checks pass. A pathological logical line can still consume unbounded worker time.
 
 ## Text preview Markdown and search/status live review, 2026-09-27
 
