@@ -1156,6 +1156,121 @@ mod tests {
     }
 
     #[test]
+    fn large_virtual_sheet_bounds_rendered_cells_and_reaches_far_corner() {
+        let column_count = 512;
+        let rows = std::iter::once(
+            (0..column_count)
+                .map(|column| format!("Column {column}"))
+                .collect(),
+        )
+        .chain((0..3000).map(|row| {
+            (0..column_count)
+                .map(|column| format!("r{row}c{column}"))
+                .collect::<Vec<_>>()
+        }))
+        .collect();
+        let data = SpreadsheetData {
+            title: "Large virtual sheet".into(),
+            sheets: vec![SpreadsheetSheet::new("Data".into(), rows)],
+        };
+        let mut state = SpreadsheetViewerState::new(data, None);
+        let palette = little_clip_core::palette::AppPalette::default();
+        let ctx = egui::Context::default();
+        let mut time = 0.0;
+        let mut render = |events: Vec<egui::Event>| {
+            time += 0.05;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(900.0, 620.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                },
+            );
+            (output, state.scroll_offset)
+        };
+        let is_grid_cell = |text: &str| {
+            text.strip_prefix('r')
+                .and_then(|cell| cell.split_once('c'))
+                .and_then(|(row, column)| {
+                    Some((row.parse::<usize>().ok()?, column.parse::<usize>().ok()?))
+                })
+                .is_some()
+        };
+        let grid_cells = |output: &egui::FullOutput| {
+            output
+                .shapes
+                .iter()
+                .filter(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) => is_grid_cell(text.galley.text()),
+                    _ => false,
+                })
+                .count()
+        };
+
+        let (initial, initial_offset) = render(Vec::new());
+        assert_eq!(initial_offset, Vec2::ZERO);
+        let initial_count = grid_cells(&initial);
+        assert!(initial_count > 0);
+        assert!(
+            initial_count <= 400,
+            "rendered {initial_count} grid cells initially for a 3,001 × {column_count} sheet"
+        );
+        let first_cell_clip = initial
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "r0c0" => Some(clipped.clip_rect),
+                _ => None,
+            })
+            .expect("top-left grid cell should be visible initially");
+
+        let _ = render(vec![
+            egui::Event::PointerMoved(first_cell_clip.center()),
+            // Spreadsheet code normalizes horizontal wheel direction before the
+            // grid ScrollArea consumes it.
+            egui::Event::Scroll(Vec2::new(100_000.0, -100_000.0)),
+        ]);
+        let mut settled = None;
+        for _ in 0..16 {
+            settled = Some(render(Vec::new()));
+        }
+        let (scrolled, offset) = settled.expect("scroll settling frames ran");
+        let scrolled_count = grid_cells(&scrolled);
+        assert!(scrolled_count > 0);
+        assert!(
+            scrolled_count <= 400,
+            "rendered {scrolled_count} grid cells after scrolling for a 3,001 × {column_count} sheet"
+        );
+        assert!(
+            offset.x > 10_000.0,
+            "horizontal offset did not reach later columns: {offset:?}"
+        );
+        assert!(
+            offset.y > 50_000.0,
+            "vertical offset did not reach later rows: {offset:?}"
+        );
+        assert!(
+            scrolled.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => text.galley.text() == "r2999c511",
+                _ => false,
+            }),
+            "far-corner cell should render after scrolling; offset={offset:?}"
+        );
+        println!(
+            "large sheet rendered {initial_count} initial and {scrolled_count} scrolled cells; offset={offset:?}"
+        );
+    }
+
+    #[test]
     fn column_widths_follow_rendered_text_width() {
         let data = SpreadsheetData {
             title: "Widths".into(),
