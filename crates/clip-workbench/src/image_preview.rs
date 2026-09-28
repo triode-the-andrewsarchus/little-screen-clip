@@ -133,7 +133,6 @@ pub struct ImagePreviewState {
     copy_job: Option<save::ImageCopyJob>,
     copy_requested: Option<HandSide>,
     rendering_frame: bool,
-    pub save_dialog_rx: Option<std::sync::mpsc::Receiver<PathBuf>>,
     pub show_fallback_save_modal: bool,
     fallback_save_needs_focus: bool,
     pub fallback_save_path: String,
@@ -350,7 +349,6 @@ impl ImagePreviewState {
             copy_job: None,
             copy_requested: None,
             rendering_frame: false,
-            save_dialog_rx: None,
             show_fallback_save_modal: false,
             fallback_save_needs_focus: false,
             fallback_save_path: String::new(),
@@ -470,36 +468,9 @@ impl ImagePreviewState {
             }
         };
 
-        let target_str = default_target.to_string_lossy().to_string();
-
-        let zenity_available = crate::ui_ext::is_zenity_available();
-
-        if zenity_available {
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.save_dialog_rx = Some(rx);
-
-            std::thread::spawn(move || {
-                let mut cmd = Command::new("zenity");
-                cmd.arg("--file-selection")
-                    .arg("--save")
-                    .arg("--confirm-overwrite")
-                    .arg(format!("--filename={}", target_str))
-                    .arg("--file-filter=Images (*.png, *.jpg, *.webp, *.bmp) | *.png *.jpg *.jpeg *.webp *.bmp *.gif")
-                    .arg("--file-filter=All files | *");
-                if let Ok(output) = cmd.output() {
-                    if output.status.success() {
-                        let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                        if !path_str.is_empty() {
-                            let _ = tx.send(PathBuf::from(path_str));
-                        }
-                    }
-                }
-            });
-        } else {
-            self.fallback_save_path = target_str;
-            self.show_fallback_save_modal = true;
-            self.fallback_save_needs_focus = true;
-        }
+        self.fallback_save_path = default_target.to_string_lossy().to_string();
+        self.show_fallback_save_modal = true;
+        self.fallback_save_needs_focus = true;
     }
 
     /// Opens a save dialog targeting a specific extension (e.g. "png", "jpg", "webp").
@@ -518,37 +489,9 @@ impl ImagePreviewState {
             }
         };
 
-        let target_str = default_target.to_string_lossy().to_string();
-
-        let zenity_available = crate::ui_ext::is_zenity_available();
-
-        if zenity_available {
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.save_dialog_rx = Some(rx);
-
-            let filter_arg = format!("Target (*.{}) | *.{}", target_ext, target_ext);
-            std::thread::spawn(move || {
-                let mut cmd = Command::new("zenity");
-                cmd.arg("--file-selection")
-                    .arg("--save")
-                    .arg("--confirm-overwrite")
-                    .arg(format!("--filename={}", target_str))
-                    .arg(format!("--file-filter={}", filter_arg))
-                    .arg("--file-filter=All files | *");
-                if let Ok(output) = cmd.output() {
-                    if output.status.success() {
-                        let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                        if !path_str.is_empty() {
-                            let _ = tx.send(PathBuf::from(path_str));
-                        }
-                    }
-                }
-            });
-        } else {
-            self.fallback_save_path = target_str;
-            self.show_fallback_save_modal = true;
-            self.fallback_save_needs_focus = true;
-        }
+        self.fallback_save_path = default_target.to_string_lossy().to_string();
+        self.show_fallback_save_modal = true;
+        self.fallback_save_needs_focus = true;
     }
 
     // --- Transform & Crop Actions ---
@@ -689,22 +632,6 @@ impl ImagePreviewState {
                 egui::TextureOptions::LINEAR,
             ));
             self.dirty_texture = false;
-        }
-
-        // Check asynchronous save dialog result from zenity
-        if let Some(rx) = &self.save_dialog_rx {
-            match rx.try_recv() {
-                Ok(chosen_path) => {
-                    self.save_image_to_path(&chosen_path);
-                    self.save_dialog_rx = None;
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.save_dialog_rx = None;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(100));
-                }
-            }
         }
 
         // Keep ownership for this whole frame, even if Save or Cancel closes the dialog.
@@ -2144,6 +2071,20 @@ mod tests {
             egui::Modifiers::NONE
         ));
         assert_eq!(state.active_mode, ImageToolMode::View);
+    }
+
+    #[test]
+    fn save_dialogs_use_the_in_workbench_modal_and_keep_default_extensions() {
+        let mut state = image_state_from_png((100, 100), "Test image");
+        state.path = Some(PathBuf::from("/tmp/source.png"));
+
+        state.open_save_dialog();
+        assert!(state.show_fallback_save_modal);
+        assert_eq!(state.fallback_save_path, "/tmp/source.png");
+
+        state.open_save_dialog_with_ext("webp");
+        assert!(state.show_fallback_save_modal);
+        assert_eq!(state.fallback_save_path, "/tmp/source_converted.webp");
     }
 
     #[test]
