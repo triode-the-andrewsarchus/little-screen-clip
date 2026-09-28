@@ -264,10 +264,10 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **E2.1s42 [Luna] Flatten a Markup annotation.** Compact Dark capture draws an Arrow and presses Enter; the vector layer count becomes zero and `Flattened 1 markup layers into image pixels` appears; see `ui_overhaul_acceptance.md`.
       - [x] **E2.1s43 [Luna] Undo Markup flattening.** Compact Dark capture flattens an Arrow, sends Ctrl+Z, and shows `Undone`; see `ui_overhaul_acceptance.md`.
     - **Convert, Background Removal, and Depth Map**
-      - [ ] **E2.1s44 [Luna] Select a different conversion format.**
-      - [ ] **E2.1s45 [Luna] Change conversion quality.**
-      - [ ] **E2.1s46 [Luna] Apply a converted preview to the canvas.**
-      - [ ] **E2.1s47 [Luna] Undo a conversion applied to the canvas.**
+      - [x] **E2.1s44 [Luna] Select a different conversion format.** Compact Dark capture selects JPEG and updates the encoded-size comparison; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s45 [Luna] Change conversion quality.** Compact Dark capture changes JPEG quality from 80% to 43% and updates the size preview; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s46 [Luna] Apply a converted preview to the canvas.** Compact Dark capture applies WebP and shows `Applied converted image to canvas`; see `ui_overhaul_acceptance.md`.
+      - [x] **E2.1s47 [Luna] Undo a conversion applied to the canvas.** Compact Dark capture applies WebP, sends Ctrl+Z, and shows `Undone` with the original image dimensions; see `ui_overhaul_acceptance.md`.
       - [ ] **E2.1s48 [Luna] Run Background Removal with a selected engine or prompt.**
       - [ ] **E2.1s49 [Luna] Undo Background Removal.**
       - [ ] **E2.1s50 [Luna] Select a Depth Map model or setting.**
