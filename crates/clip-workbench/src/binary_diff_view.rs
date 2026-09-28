@@ -13,8 +13,7 @@ use little_clip_ops::binary_diff::{
     AlignedCell, BinaryDiffMode, BinaryDiffResult, DiffKind, byte_to_ascii_char,
     compute_binary_diff, search_rows,
 };
-use std::sync::mpsc::{Receiver, channel};
-use std::thread;
+use std::sync::mpsc::Receiver;
 
 struct HandoffCancelGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
@@ -136,7 +135,8 @@ pub struct BinaryDiffViewState {
     pub result: Option<BinaryDiffResult>,
     pub is_computing: bool,
     pub current_generation: u64,
-    pub receiver: Option<Receiver<(u64, BinaryDiffResult)>>,
+    pub receiver: Option<Receiver<Result<(u64, BinaryDiffResult), little_clip_core::JobError>>>,
+    compute_ticket: Option<JobTicket>,
     // Navigation & search state
     pub search_query: String,
     pub search_matches: Vec<usize>,
@@ -158,6 +158,40 @@ pub struct BinaryDiffViewState {
     handoff_cancel: Option<HandoffCancelGuard>,
 }
 
+impl Drop for BinaryDiffViewState {
+    fn drop(&mut self) {
+        if let Some(ticket) = &self.compute_ticket {
+            ticket.cancel();
+        }
+    }
+}
+
+fn submit_binary_diff(
+    generation: u64,
+    left_label: String,
+    left_bytes: std::sync::Arc<Vec<u8>>,
+    right_label: String,
+    right_bytes: std::sync::Arc<Vec<u8>>,
+    mode: BinaryDiffMode,
+    bytes_per_row: usize,
+    jobs: &BackgroundJobs,
+) -> (
+    JobTicket,
+    Receiver<Result<(u64, BinaryDiffResult), little_clip_core::JobError>>,
+) {
+    jobs.submit(std::time::Duration::MAX, move || {
+        let result = compute_binary_diff(
+            &left_label,
+            left_bytes.as_ref(),
+            &right_label,
+            right_bytes.as_ref(),
+            mode,
+            bytes_per_row,
+        );
+        (generation, result)
+    })
+}
+
 impl BinaryDiffViewState {
     /// Creates a new binary diff viewer state and spawns background diff computation.
     pub fn new(
@@ -166,27 +200,44 @@ impl BinaryDiffViewState {
         right_label: String,
         right_bytes: Vec<u8>,
     ) -> Self {
+        Self::new_with_jobs(
+            left_label,
+            left_bytes,
+            right_label,
+            right_bytes,
+            BackgroundJobs::global(),
+        )
+    }
+
+    fn new_with_jobs(
+        left_label: String,
+        left_bytes: Vec<u8>,
+        right_label: String,
+        right_bytes: Vec<u8>,
+        jobs: &BackgroundJobs,
+    ) -> Self {
         let mode = BinaryDiffMode::Aligned;
         let bytes_per_row = 32;
-
-        let (tx, rx) = channel();
-        let l_lbl = left_label.clone();
-        let l_b = left_bytes.clone();
-        let r_lbl = right_label.clone();
-        let r_b = right_bytes.clone();
         let generation = 1;
-
-        thread::spawn(move || {
-            let res = compute_binary_diff(&l_lbl, &l_b, &r_lbl, &r_b, mode, bytes_per_row);
-            let _ = tx.send((generation, res));
-        });
+        let left_bytes = std::sync::Arc::new(left_bytes);
+        let right_bytes = std::sync::Arc::new(right_bytes);
+        let (ticket, rx) = submit_binary_diff(
+            generation,
+            left_label.clone(),
+            left_bytes.clone(),
+            right_label.clone(),
+            right_bytes.clone(),
+            mode,
+            bytes_per_row,
+            jobs,
+        );
 
         Self {
             nav: BinaryDiffNavigation::default(),
             left_label,
-            left_bytes: std::sync::Arc::new(left_bytes),
+            left_bytes,
             right_label,
-            right_bytes: std::sync::Arc::new(right_bytes),
+            right_bytes,
             mode,
             color_mode: ByteColorMode::Digits,
             bytes_per_row,
@@ -194,6 +245,7 @@ impl BinaryDiffViewState {
             is_computing: true,
             current_generation: generation,
             receiver: Some(rx),
+            compute_ticket: Some(ticket),
             search_query: String::new(),
             search_matches: Vec::new(),
             current_search_idx: 0,
@@ -213,22 +265,23 @@ impl BinaryDiffViewState {
     }
 
     pub fn recompute(&mut self) {
+        if let Some(ticket) = self.compute_ticket.take() {
+            ticket.cancel();
+        }
         self.is_computing = true;
         self.current_generation = self.current_generation.wrapping_add(1);
         let generation = self.current_generation;
-        let (tx, rx) = channel();
-        let l_lbl = self.left_label.clone();
-        let l_b = self.left_bytes.clone();
-        let r_lbl = self.right_label.clone();
-        let r_b = self.right_bytes.clone();
-        let mode = self.mode;
-        let bpr = self.bytes_per_row;
-
-        thread::spawn(move || {
-            let res = compute_binary_diff(&l_lbl, &l_b, &r_lbl, &r_b, mode, bpr);
-            let _ = tx.send((generation, res));
-        });
-
+        let (ticket, rx) = submit_binary_diff(
+            generation,
+            self.left_label.clone(),
+            self.left_bytes.clone(),
+            self.right_label.clone(),
+            self.right_bytes.clone(),
+            self.mode,
+            self.bytes_per_row,
+            BackgroundJobs::global(),
+        );
+        self.compute_ticket = Some(ticket);
         self.receiver = Some(rx);
     }
 
@@ -436,14 +489,31 @@ impl BinaryDiffViewState {
         if self.is_computing {
             ctx.request_repaint();
             if let Some(ref rx) = self.receiver {
-                if let Ok((req_gen, res)) = rx.try_recv() {
-                    if req_gen == self.current_generation {
+                match rx.try_recv() {
+                    Ok(Ok((req_gen, res))) if req_gen == self.current_generation => {
                         self.result = Some(res);
                         self.is_computing = false;
                         self.receiver = None;
+                        self.compute_ticket = None;
                         if !self.search_query.is_empty() {
                             self.update_search();
                         }
+                    }
+                    Ok(Ok(_)) => {}
+                    Ok(Err(error)) => {
+                        self.status_toast
+                            .set(format!("❌ Binary diff failed: {error}"), now);
+                        self.is_computing = false;
+                        self.receiver = None;
+                        self.compute_ticket = None;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        self.status_toast
+                            .set("❌ Binary diff worker disconnected", now);
+                        self.is_computing = false;
+                        self.receiver = None;
+                        self.compute_ticket = None;
                     }
                 }
             }
@@ -2260,9 +2330,10 @@ mod tests {
 
         // Wait for worker thread result
         if let Some(rx) = state.receiver.take() {
-            let (_gen, res) = rx.recv().expect("computed result");
+            let (_gen, res) = rx.recv().expect("job result").expect("computed result");
             state.result = Some(res);
             state.is_computing = false;
+            state.compute_ticket = None;
         }
 
         assert!(state.result.is_some());
@@ -2289,9 +2360,10 @@ mod tests {
 
         // Drain recomputed worker thread
         if let Some(rx) = state.receiver.take() {
-            let (_gen, res) = rx.recv().expect("swapped result");
+            let (_gen, res) = rx.recv().expect("job result").expect("swapped result");
             state.result = Some(res);
             state.is_computing = false;
+            state.compute_ticket = None;
         }
         let res = state.result.as_ref().unwrap();
         assert_eq!(res.left_label, "file_b.bin");
@@ -2301,6 +2373,92 @@ mod tests {
         assert_eq!(state.mode, BinaryDiffMode::Aligned);
         state.toggle_mode();
         assert_eq!(state.mode, BinaryDiffMode::Raw);
+    }
+
+    #[test]
+    fn binary_diff_queue_saturation_is_visible_and_recovers() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let _blocker = jobs.submit(Duration::MAX, move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let _queued = jobs.submit(Duration::MAX, || ());
+
+        let mut state = BinaryDiffViewState::new_with_jobs(
+            "left.bin".into(),
+            b"left".to_vec(),
+            "right.bin".into(),
+            b"right".to_vec(),
+            &jobs,
+        );
+        assert!(state.is_computing);
+
+        let ctx = egui::Context::default();
+        let palette = AppPalette::default();
+        let expected = "Binary diff failed: background job queue is full";
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(1000.0, 700.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                });
+            },
+        );
+
+        assert!(!state.is_computing);
+        assert!(state.receiver.is_none());
+        assert!(output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains(expected))
+        }));
+        assert_eq!(
+            state.status_toast.message(0.0),
+            Some(&format!("❌ {expected}")[..])
+        );
+
+        let _ = release_tx.send(());
+    }
+
+    #[test]
+    fn dropping_binary_diff_viewer_cancels_queued_compute() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let _blocker = jobs.submit(Duration::MAX, move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let mut state = BinaryDiffViewState::new_with_jobs(
+            "left.bin".into(),
+            b"left".to_vec(),
+            "right.bin".into(),
+            b"right".to_vec(),
+            &jobs,
+        );
+        let result_rx = state.receiver.take().unwrap();
+        drop(state);
+
+        let _ = release_tx.send(());
+        assert!(matches!(
+            result_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Err(little_clip_core::JobError::Cancelled)
+        ));
     }
 
     #[test]
@@ -2844,14 +3002,16 @@ mod tests {
         assert_eq!(state.current_generation, 2);
 
         // Inject an artificial stale message from generation 1
-        let (tx, rx) = channel();
+        let (tx, rx) = std::sync::mpsc::channel::<
+            Result<(u64, BinaryDiffResult), little_clip_core::JobError>,
+        >();
         let dummy_res = compute_binary_diff("stale", b"A", "stale", b"B", BinaryDiffMode::Raw, 16);
-        tx.send((1, dummy_res)).unwrap();
+        tx.send(Ok((1, dummy_res))).unwrap();
         state.receiver = Some(rx);
 
         // Poll receiver with generation 2 active
         if let Some(ref rx) = state.receiver {
-            if let Ok((req_gen, res)) = rx.try_recv() {
+            if let Ok(Ok((req_gen, res))) = rx.try_recv() {
                 if req_gen == state.current_generation {
                     state.result = Some(res);
                 }
