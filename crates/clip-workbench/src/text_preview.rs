@@ -93,6 +93,8 @@ const MINIMAP_WIDTH: f32 = 112.0;
 /// shape megabytes of text synchronously.
 const MAX_CODE_FRAGMENT_BYTES: usize = 4 * 1024;
 const MINIMAP_RETAINED_LINES: usize = 4096;
+const MINIMAP_CANCELLATION_CHECK_BYTES: usize = 64 * 1024;
+const MINIMAP_SCRATCH_REUSE_LIMIT: usize = 64 * 1024;
 const CODE_ROW_HEIGHT_BLOCK_SIZE: usize = 32;
 
 #[derive(Debug, Clone, Copy)]
@@ -242,7 +244,7 @@ impl CodeRowHeights {
 }
 
 /// A syntax-colored, character-free slice of one source line for the minimap.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct MinimapSegment {
     start_column: usize,
     end_column: usize,
@@ -254,12 +256,16 @@ struct MinimapLine {
     segments: Vec<MinimapSegment>,
 }
 
-type MinimapResult = Result<Vec<(usize, MinimapLine)>, JobError>;
+enum MinimapResult {
+    Lines(Vec<(usize, MinimapLine)>),
+    Cancelled,
+}
 
 #[derive(Default)]
 struct MinimapCache {
     lines: Vec<(usize, MinimapLine)>,
-    job: Option<(JobTicket, Receiver<MinimapResult>)>,
+    job: Option<(JobTicket, Receiver<Result<MinimapResult, JobError>>)>,
+    cancelled: Option<Arc<AtomicBool>>,
     started: bool,
     ready: bool,
     failed: bool,
@@ -271,10 +277,14 @@ impl MinimapCache {
             return;
         }
         self.started = true;
+        let weak_text = Arc::downgrade(&text);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_cancelled = Arc::clone(&cancelled);
         let (ticket, receiver) = jobs.submit(std::time::Duration::MAX, move || {
-            build_minimap_lines(text.as_str(), find_syntax(&syntax_name))
+            build_minimap_lines(&weak_text, find_syntax(&syntax_name), &worker_cancelled)
         });
         self.job = Some((ticket, receiver));
+        self.cancelled = Some(cancelled);
     }
 
     fn poll(&mut self) -> bool {
@@ -282,19 +292,24 @@ impl MinimapCache {
             return false;
         };
         match receiver.try_recv() {
-            Ok(Ok(lines)) => {
+            Ok(Ok(MinimapResult::Lines(lines))) => {
                 self.lines = lines;
                 self.job = None;
+                self.cancelled = None;
                 self.ready = true;
                 true
             }
             Ok(Err(JobError::QueueFull)) => {
                 self.job = None;
+                self.cancelled = None;
                 self.started = false;
                 false
             }
-            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            Ok(Ok(MinimapResult::Cancelled))
+            | Ok(Err(_))
+            | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.job = None;
+                self.cancelled = None;
                 self.failed = true;
                 true
             }
@@ -303,6 +318,9 @@ impl MinimapCache {
     }
 
     fn cancel(&self) {
+        if let Some(cancelled) = &self.cancelled {
+            cancelled.store(true, Ordering::Release);
+        }
         if let Some((ticket, _)) = &self.job {
             ticket.cancel();
         }
@@ -311,8 +329,9 @@ impl MinimapCache {
 
 impl Drop for MinimapCache {
     fn drop(&mut self) {
-        // BackgroundJobs suppresses queued/stale results; it cannot interrupt
-        // a syntect operation that has already started.
+        // Queued jobs hold only a Weak source reference. Running work checks
+        // cancellation between lines and owns only its current logical-line
+        // scratch buffer while syntect processes that line.
         self.cancel();
     }
 }
@@ -1979,17 +1998,98 @@ fn build_minimap_line(line: &str, highlighter: &mut HighlightLines<'static>) -> 
     MinimapLine { segments }
 }
 
-fn build_minimap_lines(text: &str, syntax: &'static SyntaxReference) -> Vec<(usize, MinimapLine)> {
-    let line_count = text.split('\n').count();
+fn build_minimap_lines(
+    text: &std::sync::Weak<String>,
+    syntax: &'static SyntaxReference,
+    cancelled: &AtomicBool,
+) -> MinimapResult {
+    let Some(source) = text.upgrade() else {
+        return MinimapResult::Cancelled;
+    };
+    let mut line_count: usize = 1;
+    let mut bytes_until_cancel_check = 0;
+    for byte in source.as_bytes() {
+        if bytes_until_cancel_check == 0 && cancelled.load(Ordering::Acquire) {
+            return MinimapResult::Cancelled;
+        }
+        bytes_until_cancel_check += 1;
+        if bytes_until_cancel_check == MINIMAP_CANCELLATION_CHECK_BYTES {
+            bytes_until_cancel_check = 0;
+        }
+        if *byte == b'\n' {
+            line_count += 1;
+        }
+    }
+    drop(source);
+    if cancelled.load(Ordering::Acquire) {
+        return MinimapResult::Cancelled;
+    }
     let stride = line_count.div_ceil(MINIMAP_RETAINED_LINES).max(1);
     let mut highlighter = HighlightLines::new(syntax, &THEME_SET.themes["base16-eighties.dark"]);
-    text.split('\n')
-        .enumerate()
-        .filter_map(|(source_line, line)| {
-            let minimap_line = build_minimap_line(line, &mut highlighter);
-            (source_line % stride == 0).then_some((source_line, minimap_line))
-        })
-        .collect()
+    let mut lines = Vec::with_capacity(line_count.div_ceil(stride));
+    let mut line_buffer = String::new();
+    let mut cursor = 0;
+    for source_line in 0..line_count {
+        if cancelled.load(Ordering::Acquire) {
+            return MinimapResult::Cancelled;
+        }
+        let Some(source) = text.upgrade() else {
+            return MinimapResult::Cancelled;
+        };
+        let mut line_end = cursor;
+        while line_end < source.len() {
+            if cancelled.load(Ordering::Acquire) {
+                return MinimapResult::Cancelled;
+            }
+            let chunk_end = (line_end + MINIMAP_CANCELLATION_CHECK_BYTES).min(source.len());
+            if let Some(offset) = source.as_bytes()[line_end..chunk_end]
+                .iter()
+                .position(|byte| *byte == b'\n')
+            {
+                line_end += offset;
+                break;
+            }
+            line_end = chunk_end;
+        }
+        let next_cursor = (line_end + usize::from(line_end < source.len())).min(source.len());
+        line_buffer.clear();
+        let mut copy_cursor = cursor;
+        while copy_cursor < line_end {
+            if cancelled.load(Ordering::Acquire) {
+                return MinimapResult::Cancelled;
+            }
+            let mut copy_end = (copy_cursor + MINIMAP_CANCELLATION_CHECK_BYTES).min(line_end);
+            while !source.is_char_boundary(copy_end) {
+                copy_end -= 1;
+            }
+            if copy_end == copy_cursor {
+                copy_end = (copy_cursor + 4).min(line_end);
+                while !source.is_char_boundary(copy_end) {
+                    copy_end += 1;
+                }
+            }
+            line_buffer.push_str(&source[copy_cursor..copy_end]);
+            copy_cursor = copy_end;
+        }
+        cursor = next_cursor;
+        // Syntect needs a complete logical line to preserve grammar state. Do
+        // not keep the full document Arc alive while that line is highlighted.
+        drop(source);
+        if cancelled.load(Ordering::Acquire) {
+            return MinimapResult::Cancelled;
+        }
+        let minimap_line = build_minimap_line(&line_buffer, &mut highlighter);
+        if cancelled.load(Ordering::Acquire) {
+            return MinimapResult::Cancelled;
+        }
+        if source_line % stride == 0 {
+            lines.push((source_line, minimap_line));
+        }
+        if line_buffer.capacity() > MINIMAP_SCRATCH_REUSE_LIMIT {
+            line_buffer = String::new();
+        }
+    }
+    MinimapResult::Lines(lines)
 }
 
 /// Draws a VS Code-style overview from syntax-colored rectangles, not glyphs.
@@ -4325,8 +4425,15 @@ mod tests {
 
     #[test]
     fn test_minimap_cache_uses_syntax_colored_blocks() {
-        let text = "fn main() {\n    let answer = 42;\n}\n";
-        let lines = build_minimap_lines(text, find_syntax("rs"));
+        let text = Arc::new("fn main() {\n    let answer = 42;\n}\n".to_owned());
+        let lines = build_minimap_lines(
+            &Arc::downgrade(&text),
+            find_syntax("rs"),
+            &AtomicBool::new(false),
+        );
+        let MinimapResult::Lines(lines) = lines else {
+            panic!("small source should build minimap lines")
+        };
 
         assert_eq!(lines.len(), 4, "one minimap row per source line");
         assert!(
@@ -4344,6 +4451,93 @@ mod tests {
                         && segment.end_column <= MINIMAP_COLUMNS
                 })
         );
+    }
+
+    #[test]
+    fn test_minimap_builder_cancellation_returns_no_partial_samples() {
+        let text = Arc::new("fn main() {}\n".repeat(10_000));
+        let cancelled = AtomicBool::new(true);
+        assert!(matches!(
+            build_minimap_lines(&Arc::downgrade(&text), find_syntax("rs"), &cancelled),
+            MinimapResult::Cancelled
+        ));
+    }
+
+    #[test]
+    fn test_minimap_builder_preserves_complete_long_lines() {
+        let text = Arc::new(format!("{}\nlet after = 1;", "x".repeat(300_000)));
+        let MinimapResult::Lines(lines) = build_minimap_lines(
+            &Arc::downgrade(&text),
+            find_syntax("rs"),
+            &AtomicBool::new(false),
+        ) else {
+            panic!("long logical lines remain supported")
+        };
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].0, 0);
+        assert_eq!(lines[1].0, 1);
+    }
+
+    #[test]
+    fn test_minimap_parses_unsampled_lines_to_preserve_syntax_state() {
+        let mut text = String::from("let first = 1;\n/*\ncomment body\n*/\n");
+        text.push_str(&"let filler = 0;\n".repeat(MINIMAP_RETAINED_LINES));
+        let text = Arc::new(text);
+        let MinimapResult::Lines(lines) = build_minimap_lines(
+            &Arc::downgrade(&text),
+            find_syntax("rs"),
+            &AtomicBool::new(false),
+        ) else {
+            panic!("fixture should complete")
+        };
+        assert_eq!(
+            lines[1].0, 2,
+            "line 2 should be sampled while line 1 is not"
+        );
+
+        let mut expected_highlighter =
+            HighlightLines::new(find_syntax("rs"), &THEME_SET.themes["base16-eighties.dark"]);
+        let _ = expected_highlighter.highlight_line("let first = 1;", &SYNTAX_SET);
+        let _ = expected_highlighter.highlight_line("/*", &SYNTAX_SET);
+        let expected = build_minimap_line("comment body", &mut expected_highlighter);
+        assert_eq!(
+            lines[1].1.segments, expected.segments,
+            "the unsampled block-comment opener must update syntect state"
+        );
+    }
+
+    #[test]
+    fn test_dropping_queued_minimap_releases_source_before_worker_runs() {
+        let jobs = BackgroundJobs::new(1, 2);
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_blocker_ticket, _blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+
+        let source = Arc::new("let queued = true;\n".repeat(100));
+        let weak_source = Arc::downgrade(&source);
+        let mut cache = MinimapCache::default();
+        cache.start(Arc::clone(&source), "rs".to_owned(), &jobs);
+        drop(source);
+        drop(cache);
+        assert!(
+            weak_source.upgrade().is_none(),
+            "queued closure must retain only Weak"
+        );
+
+        release_tx.send(()).unwrap();
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let (_ticket, _receiver) = jobs.submit(std::time::Duration::MAX, move || {
+            finished_tx.send(()).unwrap();
+        });
+        finished_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
     }
 
     #[test]
@@ -4415,7 +4609,7 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(1))
             .unwrap()
             .unwrap();
-        cache.start(text, "rs".to_owned(), &jobs);
+        cache.start(Arc::clone(&text), "rs".to_owned(), &jobs);
         while !cache.poll() {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
