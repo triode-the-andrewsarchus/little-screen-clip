@@ -93,6 +93,7 @@ const MINIMAP_WIDTH: f32 = 112.0;
 /// shape megabytes of text synchronously.
 const MAX_CODE_FRAGMENT_BYTES: usize = 4 * 1024;
 const MINIMAP_RETAINED_LINES: usize = 4096;
+const CODE_ROW_HEIGHT_BLOCK_SIZE: usize = 32;
 
 #[derive(Debug, Clone, Copy)]
 struct CodeFragment {
@@ -148,13 +149,13 @@ fn code_fragments(text: &str, line_starts: &[usize]) -> (Vec<CodeFragment>, Vec<
     (fragments, line_first_fragment)
 }
 
-/// Cumulative row heights, updated in logarithmic time as wrapping is measured.
-/// Unmeasured rows start at one font row; the viewport retains its source anchor
-/// while those estimates settle. Only heights are retained, not document galleys.
+/// Cumulative row heights, updated through a block Fenwick tree as wrapping is
+/// measured. Unmeasured rows start at one font row; only heights are retained.
 #[derive(Default)]
 struct CodeRowHeights {
     key: Option<(f32, f32, f32)>,
     heights: Vec<f32>,
+    /// Fenwick sums over fixed-size blocks, not individual rows.
     sums: Vec<f64>,
     next_measurement: usize,
 }
@@ -167,16 +168,26 @@ impl CodeRowHeights {
         }
         self.key = Some(key);
         self.heights = vec![height; count];
-        self.sums = (0..=count)
-            .map(|index| (index & index.wrapping_neg()) as f64 * height as f64)
-            .collect();
+        let block_count = count.div_ceil(CODE_ROW_HEIGHT_BLOCK_SIZE);
+        self.sums = vec![0.0; block_count + 1];
+        for block in 0..block_count {
+            let start = block * CODE_ROW_HEIGHT_BLOCK_SIZE;
+            let end = (start + CODE_ROW_HEIGHT_BLOCK_SIZE).min(count);
+            self.sums[block + 1] = (end - start) as f64 * height as f64;
+        }
+        for index in 1..=block_count {
+            let parent = index + (index & index.wrapping_neg());
+            if parent <= block_count {
+                self.sums[parent] += self.sums[index];
+            }
+        }
         self.next_measurement = 0;
     }
 
     fn set_height(&mut self, row: usize, height: f32) {
         let delta = height as f64 - self.heights[row] as f64;
         self.heights[row] = height;
-        let mut index = row + 1;
+        let mut index = row / CODE_ROW_HEIGHT_BLOCK_SIZE + 1;
         while index < self.sums.len() {
             self.sums[index] += delta;
             index += index & index.wrapping_neg();
@@ -184,11 +195,16 @@ impl CodeRowHeights {
     }
 
     fn offset(&self, row: usize) -> f32 {
-        let mut index = row.min(self.heights.len());
-        let mut sum = 0.0;
-        while index > 0 {
-            sum += self.sums[index];
-            index &= index - 1;
+        let row = row.min(self.heights.len());
+        let mut block = row / CODE_ROW_HEIGHT_BLOCK_SIZE;
+        let mut sum = 0.0_f64;
+        while block > 0 {
+            sum += self.sums[block];
+            block &= block - 1;
+        }
+        let block_start = (row / CODE_ROW_HEIGHT_BLOCK_SIZE) * CODE_ROW_HEIGHT_BLOCK_SIZE;
+        for height in &self.heights[block_start..row] {
+            sum += *height as f64;
         }
         sum as f32
     }
@@ -198,18 +214,30 @@ impl CodeRowHeights {
     }
 
     fn row_at(&self, offset: f32) -> usize {
-        let mut row = 0;
+        let block_count = self.heights.len().div_ceil(CODE_ROW_HEIGHT_BLOCK_SIZE);
+        if block_count == 0 {
+            return 0;
+        }
+        let mut block = 0;
         let mut sum = 0.0;
-        let mut step = self.heights.len().checked_next_power_of_two().unwrap_or(0);
+        let mut step = block_count.checked_next_power_of_two().unwrap_or(0);
         while step > 0 {
-            let next = row + step;
-            if next < self.sums.len() && sum + self.sums[next] <= offset as f64 {
-                row = next;
+            let next = block + step;
+            if next <= block_count && sum + self.sums[next] <= offset as f64 {
+                block = next;
                 sum += self.sums[next];
             }
             step >>= 1;
         }
-        row.min(self.heights.len().saturating_sub(1))
+        let start = (block * CODE_ROW_HEIGHT_BLOCK_SIZE).min(self.heights.len());
+        let end = (start + CODE_ROW_HEIGHT_BLOCK_SIZE).min(self.heights.len());
+        for row in start..end {
+            if sum + self.heights[row] as f64 > offset as f64 {
+                return row;
+            }
+            sum += self.heights[row] as f64;
+        }
+        self.heights.len().saturating_sub(1)
     }
 }
 
@@ -3287,6 +3315,99 @@ mod tests {
         rows.reset(0, 400.0, 20.0, 1.0);
         assert_eq!(rows.row_at(0.0), 0);
         assert_eq!(rows.total_height(), 0.0);
+    }
+
+    #[test]
+    fn block_height_index_handles_boundaries_updates_and_partial_final_block() {
+        let mut rows = CodeRowHeights::default();
+        rows.reset(70, 200.0, 10.0, 1.0);
+        assert_eq!(
+            rows.sums.len(),
+            4,
+            "three blocks need three Fenwick entries plus zero"
+        );
+        assert_eq!(rows.total_height(), 700.0);
+        assert_eq!(rows.offset(CODE_ROW_HEIGHT_BLOCK_SIZE), 320.0);
+        assert_eq!(rows.row_at(319.0), 31);
+        assert_eq!(
+            rows.row_at(320.0),
+            32,
+            "exact block edge begins the next row"
+        );
+
+        rows.set_height(0, 20.0);
+        rows.set_height(31, 15.0);
+        rows.set_height(32, 7.0);
+        rows.set_height(69, 30.0);
+        assert_eq!(rows.offset(32), 335.0);
+        assert_eq!(rows.offset(33), 342.0);
+        assert_eq!(rows.row_at(334.0), 31);
+        assert_eq!(rows.row_at(335.0), 32);
+        assert_eq!(rows.row_at(342.0), 33);
+        assert_eq!(rows.total_height(), 732.0);
+        assert_eq!(rows.offset(usize::MAX), 732.0);
+        assert_eq!(rows.row_at(732.0), 69);
+        assert_eq!(rows.row_at(10_000.0), 69);
+
+        rows.set_height(32, 6.0);
+        rows.set_height(32, 7.0);
+        assert_eq!(
+            rows.offset(33),
+            342.0,
+            "repeated updates apply only the latest delta"
+        );
+
+        let mut empty = CodeRowHeights::default();
+        empty.reset(0, 200.0, 10.0, 1.0);
+        assert!(empty.heights.is_empty());
+        assert_eq!(empty.sums, vec![0.0]);
+        assert_eq!(empty.offset(0), 0.0);
+        assert_eq!(empty.row_at(0.0), 0);
+    }
+
+    #[test]
+    fn block_height_index_resets_all_measurements_when_geometry_key_changes() {
+        let mut rows = CodeRowHeights::default();
+        rows.reset(70, 200.0, 10.0, 1.0);
+        rows.set_height(34, 28.0);
+        rows.next_measurement = 19;
+        rows.reset(70, 400.0, 10.0, 1.0);
+        assert_eq!(
+            rows.total_height(),
+            700.0,
+            "width change restores estimates"
+        );
+        assert_eq!(rows.next_measurement, 0);
+
+        rows.set_height(34, 28.0);
+        rows.next_measurement = 19;
+        rows.reset(70, 400.0, 12.0, 1.0);
+        assert_eq!(
+            rows.total_height(),
+            840.0,
+            "line-height change restores estimates"
+        );
+        assert_eq!(rows.next_measurement, 0);
+
+        rows.set_height(34, 28.0);
+        rows.next_measurement = 19;
+        rows.reset(70, 400.0, 12.0, 1.5);
+        assert_eq!(
+            rows.total_height(),
+            840.0,
+            "scale change restores estimates"
+        );
+        assert_eq!(rows.next_measurement, 0);
+
+        rows.set_height(34, 28.0);
+        rows.next_measurement = 19;
+        rows.reset(70, 400.0, 12.0, 1.5);
+        assert_eq!(
+            rows.total_height(),
+            856.0,
+            "an unchanged key preserves measurements"
+        );
+        assert_eq!(rows.next_measurement, 19);
     }
 
     #[test]
