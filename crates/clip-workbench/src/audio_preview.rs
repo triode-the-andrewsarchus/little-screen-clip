@@ -483,6 +483,7 @@ pub struct AudioPreviewState {
     analysis_ticket: Option<JobTicket>,
     analysis_cancel: Option<Arc<AtomicBool>>,
     analysis_retry_at: Option<Instant>,
+    analysis_progress_disconnected: bool,
     pub is_loading_analysis: bool,
     pub loading_start_time: Instant,
     pub duration_sec: f32,
@@ -491,6 +492,7 @@ pub struct AudioPreviewState {
     edit_analysis_ticket: Option<JobTicket>,
     edit_analysis_cancel: Option<Arc<AtomicBool>>,
     edit_analysis_retry_at: Option<Instant>,
+    edit_analysis_progress_disconnected: bool,
     edit_analysis_observed: SessionAudioEdits,
     edit_analysis_inflight: SessionAudioEdits,
     edit_analysis_displayed: SessionAudioEdits,
@@ -1136,6 +1138,7 @@ impl AudioPreviewState {
         }
         self.analysis_rx = None;
         self.analysis_job_rx = None;
+        self.analysis_progress_disconnected = false;
     }
 
     fn restart_session_analysis_on(&mut self, jobs: &BackgroundJobs) {
@@ -1177,6 +1180,7 @@ impl AudioPreviewState {
         }
         self.edit_analysis_rx = None;
         self.edit_analysis_job_rx = None;
+        self.edit_analysis_progress_disconnected = false;
     }
 
     fn step_gain_db(current: f32, delta_db: f32) -> f32 {
@@ -1920,6 +1924,7 @@ impl AudioPreviewState {
             analysis_ticket: Some(analysis_ticket),
             analysis_cancel: Some(analysis_cancel),
             analysis_retry_at: None,
+            analysis_progress_disconnected: false,
             is_loading_analysis: true,
             loading_start_time: Instant::now(),
             duration_sec,
@@ -1928,6 +1933,7 @@ impl AudioPreviewState {
             edit_analysis_ticket: None,
             edit_analysis_cancel: None,
             edit_analysis_retry_at: None,
+            edit_analysis_progress_disconnected: false,
             edit_analysis_observed: SessionAudioEdits::default(),
             edit_analysis_inflight: SessionAudioEdits::default(),
             edit_analysis_displayed: SessionAudioEdits::default(),
@@ -3315,7 +3321,7 @@ impl AudioPreviewState {
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         finished = true;
-                        self.is_loading_analysis = false;
+                        self.analysis_progress_disconnected = true;
                         break;
                     }
                 };
@@ -3359,12 +3365,21 @@ impl AudioPreviewState {
                 Ok(Ok(())) => {
                     self.analysis_ticket = None;
                     self.analysis_cancel = None;
+                    if self.analysis_progress_disconnected {
+                        self.is_loading_analysis = false;
+                        self.status_toast = Some((
+                            "Audio analysis worker stopped before completing".to_owned(),
+                            now,
+                        ));
+                    }
+                    self.analysis_progress_disconnected = false;
                 }
                 Ok(Err(JobError::QueueFull)) => {
                     self.analysis_rx = None;
                     self.analysis_ticket = None;
                     self.analysis_cancel = None;
                     self.is_loading_analysis = true;
+                    self.analysis_progress_disconnected = false;
                     self.analysis_retry_at = Some(Instant::now() + Duration::from_millis(500));
                     self.status_toast = Some((
                         "Audio analysis is waiting for background workers; retrying shortly"
@@ -3378,6 +3393,7 @@ impl AudioPreviewState {
                     self.analysis_cancel = None;
                     self.analysis_rx = None;
                     self.is_loading_analysis = false;
+                    self.analysis_progress_disconnected = false;
                     self.status_toast = Some((format!("Audio analysis failed: {error}"), now));
                 }
                 Err(TryRecvError::Empty) => self.analysis_job_rx = Some(rx),
@@ -3386,6 +3402,11 @@ impl AudioPreviewState {
                     self.analysis_cancel = None;
                     self.analysis_rx = None;
                     self.is_loading_analysis = false;
+                    self.analysis_progress_disconnected = false;
+                    self.status_toast = Some((
+                        "Audio analysis worker disconnected unexpectedly".to_owned(),
+                        now,
+                    ));
                 }
             }
         }
@@ -3400,6 +3421,7 @@ impl AudioPreviewState {
         self.analysis_rx = Some(progress_rx);
         self.analysis_job_rx = Some(job_rx);
         self.analysis_retry_at = None;
+        self.analysis_progress_disconnected = false;
     }
 
     fn install_spectral_analysis(&mut self, ctx: &egui::Context, progress: AudioAnalysisProgress) {
@@ -3506,6 +3528,7 @@ impl AudioPreviewState {
                     Err(TryRecvError::Empty) => break,
                     Err(TryRecvError::Disconnected) => {
                         finished = true;
+                        self.edit_analysis_progress_disconnected = true;
                         break;
                     }
                 };
@@ -3543,11 +3566,22 @@ impl AudioPreviewState {
                 Ok(Ok(())) => {
                     self.edit_analysis_ticket = None;
                     self.edit_analysis_cancel = None;
+                    if self.edit_analysis_progress_disconnected
+                        && self.edit_analysis_inflight == self.edit_analysis_observed
+                    {
+                        self.edit_analysis_displayed = self.edit_analysis_inflight.clone();
+                        self.status_toast = Some((
+                            "Edited audio analysis worker stopped before completing".to_owned(),
+                            now,
+                        ));
+                    }
+                    self.edit_analysis_progress_disconnected = false;
                 }
                 Ok(Err(JobError::QueueFull)) => {
                     self.edit_analysis_rx = None;
                     self.edit_analysis_ticket = None;
                     self.edit_analysis_cancel = None;
+                    self.edit_analysis_progress_disconnected = false;
                     self.edit_analysis_retry_at = Some(Instant::now() + Duration::from_millis(500));
                     self.status_toast = Some((
                         "Edited audio analysis is waiting for background workers; retrying shortly"
@@ -3562,12 +3596,21 @@ impl AudioPreviewState {
                     self.edit_analysis_rx = None;
                     self.edit_analysis_displayed = self.edit_analysis_inflight.clone();
                     self.status_toast = Some((format!("Edited analysis failed: {error}"), now));
+                    self.edit_analysis_progress_disconnected = false;
                 }
                 Err(TryRecvError::Empty) => self.edit_analysis_job_rx = Some(rx),
                 Err(TryRecvError::Disconnected) => {
                     self.edit_analysis_ticket = None;
                     self.edit_analysis_cancel = None;
                     self.edit_analysis_rx = None;
+                    if self.edit_analysis_inflight == self.edit_analysis_observed {
+                        self.edit_analysis_displayed = self.edit_analysis_inflight.clone();
+                        self.status_toast = Some((
+                            "Edited audio analysis worker disconnected unexpectedly".to_owned(),
+                            now,
+                        ));
+                    }
+                    self.edit_analysis_progress_disconnected = false;
                 }
             }
         }
@@ -3643,6 +3686,7 @@ impl AudioPreviewState {
         self.edit_analysis_rx = Some(rx);
         self.edit_analysis_job_rx = Some(job_rx);
         self.edit_analysis_retry_at = None;
+        self.edit_analysis_progress_disconnected = false;
     }
 
     fn handle_studio_shortcuts(&mut self, ctx: &egui::Context, close_requested: &mut bool) -> bool {
@@ -5278,6 +5322,70 @@ Separated track
         state.poll_edit_analysis(&egui::Context::default(), 1.0, &jobs);
         assert!(state.edited_waveform.is_none());
         assert_ne!(state.edit_analysis_inflight, state.edit_analysis_observed);
+    }
+
+    #[test]
+    fn disconnected_current_edit_worker_reports_error_without_resubmitting() {
+        let (_dir, path) = generate_fixture_wav("edit_disconnect", 0.1);
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = AudioPreviewState::new_with_metadata_on_jobs(
+            path,
+            "edit_disconnect.wav".into(),
+            None,
+            &jobs,
+        );
+        state.cancel_session_analysis();
+        state.analysis = Some(empty_audio_analysis());
+        state.edit_analysis_observed = state.session_audio_edits();
+        state.edit_analysis_inflight = state.edit_analysis_observed.clone();
+        state.edit_analysis_displayed = SessionAudioEdits {
+            track_gain_db: 1.0,
+            regions: Vec::new(),
+        };
+        let (tx, rx) = channel::<AudioAnalysisProgress>();
+        drop(tx);
+        state.edit_analysis_rx = Some(rx);
+        let (job_tx, job_rx) = channel::<Result<(), JobError>>();
+        drop(job_tx);
+        state.edit_analysis_job_rx = Some(job_rx);
+
+        state.poll_edit_analysis(&egui::Context::default(), 1.0, &jobs);
+
+        assert_eq!(state.edit_analysis_displayed, state.edit_analysis_observed);
+        assert!(state.edit_analysis_rx.is_none());
+        assert!(state.edit_analysis_ticket.is_none());
+        assert!(state.status_toast.as_ref().is_some_and(|(message, _)| {
+            message.contains("stopped before completing")
+                || message.contains("disconnected unexpectedly")
+        }));
+    }
+
+    #[test]
+    fn disconnected_initial_analysis_progress_reports_visible_error() {
+        let (_dir, path) = generate_fixture_wav("analysis_disconnect", 0.1);
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = AudioPreviewState::new_with_metadata_on_jobs(
+            path,
+            "analysis_disconnect.wav".into(),
+            None,
+            &jobs,
+        );
+        state.cancel_session_analysis();
+        state.is_loading_analysis = true;
+        let (tx, rx) = channel::<AudioAnalysisProgress>();
+        drop(tx);
+        state.analysis_rx = Some(rx);
+        let (job_tx, job_rx) = channel::<Result<(), JobError>>();
+        drop(job_tx);
+        state.analysis_job_rx = Some(job_rx);
+
+        state.poll_audio_analysis_on(&egui::Context::default(), 1.0, &jobs);
+
+        assert!(!state.is_loading_analysis);
+        assert!(state.status_toast.as_ref().is_some_and(|(message, _)| {
+            message.contains("stopped before completing")
+                || message.contains("disconnected unexpectedly")
+        }));
     }
 
     #[test]
