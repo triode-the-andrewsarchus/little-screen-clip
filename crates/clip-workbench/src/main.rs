@@ -1151,6 +1151,16 @@ impl WorkbenchApp {
     }
 
     fn execute_current_action(&mut self, ctx: &egui::Context) {
+        self.execute_current_action_with(ctx, |request| {
+            send_ipc_request(request).map_err(|error| error.to_string())
+        });
+    }
+
+    fn execute_current_action_with(
+        &mut self,
+        ctx: &egui::Context,
+        mut send: impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
+    ) {
         let actions = self.filtered_actions();
         if let Some(act) = actions.get(self.selected_action_index) {
             match act {
@@ -1170,19 +1180,7 @@ impl WorkbenchApp {
                         selected_slots: Some(self.selected_slots.clone()),
                         separator: None,
                     };
-                    if let Ok(resp) = send_ipc_request(&req) {
-                        match resp {
-                            IpcResponse::OpResult { .. } => {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                            }
-                            IpcResponse::Error { error } => {
-                                self.status_msg = Some(format!("Error: {}", error));
-                            }
-                            _ => {
-                                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                            }
-                        }
-                    }
+                    self.execute_action_request_with(ctx, &req, true, &mut send);
                 }
                 PaletteAction::Recipe(r) => {
                     if let Some((msg, def)) = recipe_needs_prompt(r, &self.state) {
@@ -1196,22 +1194,31 @@ impl WorkbenchApp {
                         let req = IpcRequest::ExecuteRecipe {
                             recipe_name: r.name.clone(),
                         };
-                        if let Ok(resp) = send_ipc_request(&req) {
-                            match resp {
-                                IpcResponse::OpResult { .. } | IpcResponse::Success { .. } => {
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                                }
-                                IpcResponse::Error { error } => {
-                                    self.status_msg = Some(format!("Error: {}", error));
-                                }
-                                _ => {
-                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                                }
-                            }
-                        }
+                        self.execute_action_request_with(ctx, &req, true, &mut send);
                     }
                 }
             }
+        }
+    }
+
+    fn execute_action_request_with(
+        &mut self,
+        ctx: &egui::Context,
+        request: &IpcRequest,
+        close_on_success: bool,
+        send: &mut impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
+    ) {
+        match send(request) {
+            Ok(IpcResponse::OpResult { .. } | IpcResponse::Success { .. }) => {
+                if close_on_success {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            }
+            Ok(IpcResponse::Error { error }) => {
+                self.set_status_message(format!("Error: {error}"));
+            }
+            Ok(_) => self.set_status_message("Error: unexpected response from daemon"),
+            Err(error) => self.set_status_message(format!("Error: {error}")),
         }
     }
 
@@ -1806,9 +1813,12 @@ impl eframe::App for WorkbenchApp {
                 }
                 WorkbenchView::AutoActions => {
                     if let Some(enabled) = render_auto_actions(ui, &mut self.config, &self.ui_palette).0 {
-                        let _ = send_ipc_request(&IpcRequest::SetAutoAction {
+                        let request = IpcRequest::SetAutoAction {
                             key: "trim_link_tracking".to_string(),
                             enabled,
+                        };
+                        self.execute_action_request_with(ctx, &request, false, &mut |request| {
+                            send_ipc_request(request).map_err(|error| error.to_string())
                         });
                     }
                 }
@@ -3309,6 +3319,20 @@ mod workbench_layout_tests {
         }
     }
 
+    fn viewport_close_command_count(output: &egui::FullOutput) -> usize {
+        output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|output| {
+                output
+                    .commands
+                    .iter()
+                    .filter(|command| matches!(command, egui::ViewportCommand::Close))
+                    .count()
+            })
+            .unwrap_or_default()
+    }
+
     #[test]
     fn inspector_markdown_classification_tracks_clipboard_item_identity() {
         let mut app = test_workbench_app(None, VecDeque::new());
@@ -3666,6 +3690,132 @@ mod workbench_layout_tests {
         );
 
         assert!(app.viewer.is_none());
+        assert_eq!(app.view, WorkbenchView::Palette);
+    }
+
+    #[test]
+    fn quick_palette_operation_uses_injected_request_sender() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        *app.state.get_mut(SlotId::LeftHand).expect("left slot") =
+            Some(ClipItem::from_text(" input text "));
+        app.selected_slots = vec![SlotId::LeftHand];
+        app.search_query = "uppercase".to_owned();
+        app.selected_action_index = app
+            .filtered_actions()
+            .iter()
+            .position(|action| matches!(action, PaletteAction::Op(op) if op.name == "uppercase"))
+            .expect("uppercase operation is available for text");
+
+        let sent = std::cell::RefCell::new(None);
+        app.execute_current_action_with(&egui::Context::default(), |request| {
+            *sent.borrow_mut() = Some(request.clone());
+            Err("controlled transport failure".to_owned())
+        });
+
+        assert!(matches!(
+            sent.into_inner(),
+            Some(IpcRequest::ExecuteOp {
+                op_name,
+                selected_slots: Some(slots),
+                ..
+            }) if op_name == "uppercase" && slots == vec![SlotId::LeftHand]
+        ));
+        assert_eq!(
+            app.status_msg.as_deref(),
+            Some("Error: controlled transport failure")
+        );
+    }
+
+    #[test]
+    fn quick_palette_operation_success_closes_popup_once() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        *app.state.get_mut(SlotId::LeftHand).expect("left slot") =
+            Some(ClipItem::from_text("fixture text"));
+        app.selected_slots = vec![SlotId::LeftHand];
+        app.search_query = "uppercase".to_owned();
+        app.selected_action_index = app
+            .filtered_actions()
+            .iter()
+            .position(|action| matches!(action, PaletteAction::Op(op) if op.name == "uppercase"))
+            .expect("uppercase operation is available for text");
+
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            app.execute_current_action_with(ctx, |_| {
+                Ok(IpcResponse::OpResult {
+                    item: ClipItem::from_text("FIXTURE TEXT"),
+                })
+            });
+        });
+
+        assert_eq!(viewport_close_command_count(&output), 1);
+        assert_eq!(app.view, WorkbenchView::Palette);
+    }
+
+    #[test]
+    fn quick_palette_operation_error_keeps_popup_open_with_feedback() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        *app.state.get_mut(SlotId::LeftHand).expect("left slot") =
+            Some(ClipItem::from_text("fixture text"));
+        app.selected_slots = vec![SlotId::LeftHand];
+        app.search_query = "uppercase".to_owned();
+        app.selected_action_index = app
+            .filtered_actions()
+            .iter()
+            .position(|action| matches!(action, PaletteAction::Op(op) if op.name == "uppercase"))
+            .expect("uppercase operation is available for text");
+
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            app.execute_current_action_with(ctx, |_| {
+                Ok(IpcResponse::Error {
+                    error: "fixture operation failure".to_owned(),
+                })
+            });
+        });
+
+        assert_eq!(viewport_close_command_count(&output), 0);
+        assert_eq!(app.view, WorkbenchView::Palette);
+        assert_eq!(
+            app.status_msg.as_deref(),
+            Some("Error: fixture operation failure")
+        );
+    }
+
+    #[test]
+    fn quick_palette_recipe_success_closes_popup_once() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        let recipe_name = "No Prompt Success Fixture";
+        app.recipes.push(Recipe {
+            name: recipe_name.to_owned(),
+            description: String::new(),
+            input_type: little_clip_ops::pipeline::types::RecipeInputType::None,
+            tags: Vec::new(),
+            graph: little_clip_ops::pipeline::types::NodeGraph::default(),
+        });
+        app.search_query = recipe_name.to_owned();
+        app.selected_action_index = app
+            .filtered_actions()
+            .iter()
+            .position(|action| matches!(action, PaletteAction::Recipe(recipe) if recipe.name == recipe_name))
+            .expect("recipe is available");
+
+        let sent = std::cell::RefCell::new(None);
+        let ctx = egui::Context::default();
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            app.execute_current_action_with(ctx, |request| {
+                *sent.borrow_mut() = Some(request.clone());
+                Ok(IpcResponse::Success {
+                    message: "fixture completed".to_owned(),
+                })
+            });
+        });
+
+        assert!(matches!(
+            sent.into_inner(),
+            Some(IpcRequest::ExecuteRecipe { recipe_name: sent_name }) if sent_name == recipe_name
+        ));
+        assert_eq!(viewport_close_command_count(&output), 1);
         assert_eq!(app.view, WorkbenchView::Palette);
     }
 
