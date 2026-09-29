@@ -313,7 +313,14 @@ impl BinaryDiffViewState {
         if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
             self.toggle_mode();
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::S)) {
+        if ctx.input(|i| {
+            i.key_pressed(egui::Key::S)
+                && !i.modifiers.command
+                && !i.modifiers.ctrl
+                && !i.modifiers.mac_cmd
+                && !i.modifiers.shift
+                && !i.modifiers.alt
+        }) {
             self.swap_operands();
         }
         if ctx.input(|i| {
@@ -2546,6 +2553,70 @@ mod tests {
         state.result = Some(result);
         state.is_computing = false;
         state.compute_ticket = None;
+    }
+
+    #[test]
+    fn modified_s_does_not_swap_binary_diff_operands() {
+        let left_bytes = vec![0xA1, 0xA2, 0xA3];
+        let right_bytes = vec![0xB1, 0xB2, 0xB3];
+        let mut state = BinaryDiffViewState::new(
+            "left.bin".to_string(),
+            left_bytes.clone(),
+            "right.bin".to_string(),
+            right_bytes.clone(),
+        );
+        let initial_rx = state.receiver.take().expect("initial compute receiver");
+        let (generation, result) = initial_rx
+            .recv()
+            .expect("initial job result")
+            .expect("initial diff result");
+        assert_eq!(generation, state.current_generation);
+        state.result = Some(result);
+        state.is_computing = false;
+        state.compute_ticket = None;
+
+        let baseline_generation = state.current_generation;
+        let baseline_result = state.result.as_ref().unwrap();
+        let baseline_left_label = baseline_result.left_label.clone();
+        let baseline_right_label = baseline_result.right_label.clone();
+        for modifiers in [
+            egui::Modifiers::CTRL,
+            egui::Modifiers::COMMAND,
+            egui::Modifiers::MAC_CMD,
+            egui::Modifiers {
+                shift: true,
+                ..egui::Modifiers::NONE
+            },
+            egui::Modifiers::ALT,
+        ] {
+            let ctx = egui::Context::default();
+            let mut close = false;
+            let _ = ctx.run(
+                egui::RawInput {
+                    modifiers,
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::S,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| state.handle_global_shortcuts(ctx, &mut close),
+            );
+
+            assert!(!close);
+            assert_eq!(state.left_label, "left.bin");
+            assert_eq!(state.right_label, "right.bin");
+            assert_eq!(&*state.left_bytes, &left_bytes);
+            assert_eq!(&*state.right_bytes, &right_bytes);
+            assert_eq!(state.current_generation, baseline_generation);
+            assert!(!state.is_computing);
+            let result = state.result.as_ref().unwrap();
+            assert_eq!(result.left_label, baseline_left_label);
+            assert_eq!(result.right_label, baseline_right_label);
+        }
     }
 
     #[test]
