@@ -558,7 +558,31 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - **H2.3a4 Node Machine keyboard ownership checks.**
       - [x] **H2.3a4a [Luna implementation; primary review] Verify Undo/Redo/Delete yield to focused text input.** A production-path egui regression exercises all three shortcuts with Node Machine catalog search focused and without a text owner; broader editor-field coverage is not claimed.
       - [x] **H2.3a4b [Luna implementation; primary review] Verify F1–F3 view shortcuts yield to Node Machine overlays.** `node_machine_catalog_and_save_overlays_hold_f1_f3_view_switches` exercises the production workbench shortcut router: each F-key leaves the active view and graph unchanged with either catalog or save dialog open; after dismissal, the same app completes an F2→F1→F3 route cycle with graph unchanged.
-  - [ ] **H2.3b [Primary] Migrate diff/comparison modes to session/action/overlay contracts.**
+  - **H2.3b Diff/comparison ownership and parity.** Text/image Diff and Binary Diff already use separate `ViewerSession` variants and shared `StudioShell` chrome; keep operands, navigation, computation, and controls in their viewer states, with `WorkbenchApp` owning modal routing and close/return. Extend the existing parity contracts and tests rather than adding a generic comparison session or moving viewer state into the shell. `EscapeHatch` is the existing external-tool affordance.
+    - **H2.3b1 Diff route and return checks.**
+      - [ ] **H2.3b1a [Luna implementation; primary review] Verify text Diff opens from the Palette and returns to the invoking workbench view on Escape.**
+      - [ ] **H2.3b1b [Luna implementation; primary review] Verify image Diff opens from the Palette and returns to the invoking workbench view on Escape.**
+    - **H2.3b2 Diff input ownership checks.**
+      - [ ] **H2.3b2a [Luna implementation; primary review] Verify text Diff Tab/C mode changes recompute text results and yield to focused text input.**
+      - [ ] **H2.3b2b [Luna implementation; primary review] Verify image Diff Tab/C cycles presentation modes without recomputing the image result.**
+      - [ ] **H2.3b2c [Luna implementation; primary review] Verify the Diff S operand-swap shortcut respects its documented modifiers and text-input focus.**
+      - [ ] **H2.3b2d [Luna implementation; primary review] Verify Diff copy uses the intended operand and exact result bytes.**
+    - **H2.3b3 Binary Diff route and input checks.**
+      - [ ] **H2.3b3a [Luna implementation; primary review] Verify Binary Diff opens from the Palette and returns to the invoking workbench view on Escape.**
+      - [ ] **H2.3b3b [Luna implementation; primary review] Verify aligned/raw mode shortcuts update Binary Diff and yield to focused text input.**
+      - [ ] **H2.3b3c [Luna implementation; primary review] Verify byte-width shortcuts update Binary Diff and yield to focused text input.**
+      - [ ] **H2.3b3d [Luna implementation; primary review] Verify Binary Diff operand swap preserves the intended left/right targets.**
+      - [ ] **H2.3b3e [Luna implementation; primary review] Verify previous/next-difference navigation selects and scrolls to the expected block.**
+      - [ ] **H2.3b3f [Luna implementation; primary review] Verify Binary Diff search owns text entry and result navigation while focused.**
+    - **H2.3b4 External comparison handoff checks.**
+      - [ ] **H2.3b4a [Luna implementation; primary review] Verify Diff chooses Meld/KDiff3 using the documented executable priority.**
+      - [ ] **H2.3b4b [Luna implementation; primary review] Verify Diff stages exact operand bytes with the expected file extensions.**
+      - [ ] **H2.3b4c [Luna implementation; primary review] Verify Diff reports external launch and staging failures.**
+      - [ ] **H2.3b4d [Luna implementation; primary review] Verify replacing or closing a Diff viewer suppresses stale handoff results and releases staged resources.**
+      - [ ] **H2.3b4e [Luna implementation; primary review] Verify Binary Diff chooses ImHex or the documented system-opener fallback.**
+      - [ ] **H2.3b4f [Luna implementation; primary review] Verify Binary Diff stages the exact left/right bytes.**
+      - [ ] **H2.3b4g [Luna implementation; primary review] Verify Binary Diff reports staging failures.**
+      - [ ] **H2.3b4h [Luna implementation; primary review] Verify replacing or closing a Binary Diff viewer suppresses stale handoff results and releases staged resources.**
   - [ ] **H2.3c [Primary] Migrate PDF page/edit flow to session/action/overlay contracts.**
   - [ ] **H2.3d [Primary] Migrate 3D interaction to session/action/overlay contracts.**
   - [ ] **H2.3e [Primary] Migrate audio gesture-only controls to session/action/overlay contracts.**
