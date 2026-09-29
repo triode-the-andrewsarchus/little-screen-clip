@@ -2482,6 +2482,72 @@ mod tests {
     }
 
     #[test]
+    fn binary_diff_s_shortcut_swaps_operands_and_recomputes_result() {
+        let left_bytes = vec![0xA1, 0xA2, 0xA3];
+        let right_bytes = vec![0xB1, 0xB2, 0xB3];
+        let mut state = BinaryDiffViewState::new(
+            "left.bin".to_string(),
+            left_bytes.clone(),
+            "right.bin".to_string(),
+            right_bytes.clone(),
+        );
+        let initial_rx = state.receiver.take().expect("initial compute receiver");
+        let (initial_generation, initial_result) = initial_rx
+            .recv()
+            .expect("initial job result")
+            .expect("initial diff result");
+        assert_eq!(initial_generation, state.current_generation);
+        state.result = Some(initial_result);
+        state.is_computing = false;
+        state.compute_ticket = None;
+
+        let previous_generation = state.current_generation;
+        trigger_global_shortcut(&mut state, egui::Key::S);
+        assert_eq!(state.left_label, "right.bin");
+        assert_eq!(state.right_label, "left.bin");
+        assert_eq!(&*state.left_bytes, &right_bytes);
+        assert_eq!(&*state.right_bytes, &left_bytes);
+        assert_eq!(state.current_generation, previous_generation + 1);
+        assert!(state.is_computing);
+        assert_eq!(state.result.as_ref().unwrap().left_label, "left.bin");
+
+        let recompute_rx = state.receiver.take().expect("swapped compute receiver");
+        let (generation, result) = recompute_rx
+            .recv()
+            .expect("recompute job result")
+            .expect("swapped diff result");
+        assert_eq!(generation, state.current_generation);
+        assert_eq!(result.left_label, "right.bin");
+        assert_eq!(result.right_label, "left.bin");
+        assert_eq!(result.bytes_per_row, state.bytes_per_row);
+        assert_eq!(
+            result
+                .rows
+                .first()
+                .unwrap()
+                .left_cells
+                .first()
+                .unwrap()
+                .byte_val,
+            Some(right_bytes[0])
+        );
+        assert_eq!(
+            result
+                .rows
+                .first()
+                .unwrap()
+                .right_cells
+                .first()
+                .unwrap()
+                .byte_val,
+            Some(left_bytes[0])
+        );
+        state.result = Some(result);
+        state.is_computing = false;
+        state.compute_ticket = None;
+    }
+
+    #[test]
     fn binary_diff_queue_saturation_is_visible_and_recovers() {
         use std::sync::mpsc;
         use std::time::Duration;
