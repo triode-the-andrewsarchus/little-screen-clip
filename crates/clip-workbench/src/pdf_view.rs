@@ -1799,6 +1799,102 @@ mod tests {
     }
 
     #[test]
+    fn pdf_keyboard_page_actions_reach_the_guarded_selected_page_methods() {
+        let temp = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut state = action_guard_state(temp.path().join("fixture.pdf"), 1, Some(1));
+
+        for key in [egui::Key::Delete, egui::Key::Backspace] {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64();
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(900.0, 600.0),
+                    )),
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::default(),
+                    }],
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                },
+            );
+
+            assert_eq!(
+                state.status_toast.message(now),
+                Some("Cannot delete only page from PDF"),
+                "{key:?} should reach delete for selected page 1"
+            );
+            assert!(!state.edit_in_progress);
+            assert!(state.edit_rx.is_none());
+        }
+
+        // An active edit is a safe guard for Rotate: the keyboard route reaches
+        // the selected-page action but cannot start another PDF operation.
+        let (_sender, receiver) = channel();
+        state.page_count = 2;
+        state.pages.push(PdfPageItem {
+            page_num: 2,
+            raster_path: state.pages[0].raster_path.clone(),
+            texture: None,
+            texture_last_used: 0,
+            error: None,
+            width: 1,
+            height: 1,
+            rotation: 0,
+        });
+        state.selected_page = Some(2);
+        state.edit_rx = Some(receiver);
+        state.edit_in_progress = true;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(900.0, 600.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::R,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                });
+            },
+        );
+        assert_eq!(
+            state.status_toast.message(now),
+            Some("A PDF edit is already in progress"),
+            "R should reach rotate for the selected page"
+        );
+        assert!(state.edit_in_progress);
+        assert!(state.edit_rx.is_some());
+    }
+
+    #[test]
     fn missing_pdf_metadata_completes_after_initial_view_creation() {
         let temp = tempfile::tempdir().unwrap();
         let mut state = PdfEditorState::new(temp.path().join("missing.pdf"));
