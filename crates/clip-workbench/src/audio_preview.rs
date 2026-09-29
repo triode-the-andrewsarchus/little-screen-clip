@@ -3740,6 +3740,7 @@ impl AudioPreviewState {
         palette: &AppPalette,
         close_requested: &mut bool,
     ) {
+        let mode_before_frame = self.active_mode;
         self.poll_slice_copy_job(ctx, ctx.input(|input| input.time));
         self.poll_save_job(ctx, ctx.input(|input| input.time));
         if self.handle_studio_shortcuts(ctx, close_requested) {
@@ -3749,6 +3750,11 @@ impl AudioPreviewState {
             self.render_audio_header(ui, ctx, palette, close_requested);
             ui.add_space(crate::ui_ext::SPACE_XS);
             self.render_audio_tool_bar(ui, palette);
+            if mode_before_frame == AudioToolMode::StemSeparation
+                && self.active_mode != AudioToolMode::StemSeparation
+            {
+                self.cancel_stem_separation();
+            }
             ui.add_space(crate::ui_ext::SPACE_SM);
             match self.active_mode {
                 AudioToolMode::Inspect => {
@@ -3773,6 +3779,7 @@ impl Drop for AudioPreviewState {
         self.cancel_session_analysis();
         self.cancel_edit_analysis();
         self.cancel_digital_decode();
+        self.cancel_stem_separation();
     }
 }
 

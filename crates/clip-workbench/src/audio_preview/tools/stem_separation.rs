@@ -118,10 +118,41 @@ pub(crate) fn prepare_isolated_audacity_command(
     Ok(())
 }
 
-#[derive(Debug)]
-pub(crate) enum StemSeparationMsg {
-    Success(Vec<(String, PathBuf)>),
-    Error(String),
+fn run_stem_worker(
+    worker: StemWorkerCommand,
+    source: &Path,
+    workspace: &Path,
+    control: &crate::image_preview::ImageToolProcessControl,
+) -> Result<Vec<(String, PathBuf)>, String> {
+    let mut command = worker.command(source, workspace);
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let child = crate::image_preview::spawn_image_tool_child(command, control)
+        .map_err(|error| format!("Could not launch Python stem worker: {error}"))?;
+    let pid = child.id();
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("Could not wait for Python stem worker: {error}"));
+    crate::image_preview::clear_image_tool_pid_if_owned(&control.child_pid, pid);
+    if control.cancel.load(Ordering::Acquire) {
+        return Err("Stem separation cancelled.".to_string());
+    }
+    let output = output?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if message.is_empty() {
+            "HTDemucs separation failed.".to_string()
+        } else {
+            message
+        });
+    }
+    parse_stem_manifest(&output.stdout).map_err(|error| {
+        format!(
+            "Could not read stem worker output: {error}\n{}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+    })
 }
 
 pub(crate) struct SeparatedStem {
@@ -136,7 +167,11 @@ pub(crate) struct StemSeparationState {
     pub(crate) in_progress: bool,
     pub(crate) status: Option<String>,
     pub(crate) error: Option<String>,
-    pub(crate) result_rx: Option<Receiver<StemSeparationMsg>>,
+    result_rx: Option<Receiver<Result<Result<Vec<(String, PathBuf)>, String>, JobError>>>,
+    job_ticket: Option<JobTicket>,
+    process_control: Option<Arc<crate::image_preview::ImageToolProcessControl>>,
+    retry_at: Option<Instant>,
+    worker_command: Option<StemWorkerCommand>,
     pub(crate) stems: Vec<SeparatedStem>,
     pub(crate) selected_stem: usize,
     pub(crate) solo_stem: Option<usize>,
@@ -150,85 +185,123 @@ pub(crate) struct StemSeparationState {
     pub(crate) group_playback_offset_sec: f32,
 }
 
+#[derive(Clone)]
+struct StemWorkerCommand {
+    program: PathBuf,
+    prefix_args: Vec<std::ffi::OsString>,
+}
+
+impl StemWorkerCommand {
+    fn configured() -> Self {
+        let worker =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/separate_stems.py");
+        let venv_python = std::env::var("HOME")
+            .map(|home| {
+                PathBuf::from(home).join(".local/share/little-screen-clip/nobg-venv/bin/python")
+            })
+            .ok()
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| PathBuf::from("python3"));
+        Self {
+            program: venv_python,
+            prefix_args: vec![worker.into_os_string()],
+        }
+    }
+
+    fn command(&self, source: &Path, workspace: &Path) -> std::process::Command {
+        let mut command = std::process::Command::new(&self.program);
+        command.args(&self.prefix_args).arg(source).arg(workspace);
+        command
+    }
+}
+
 impl AudioPreviewState {
     pub(crate) fn start_stem_separation(&mut self) {
+        self.start_stem_separation_on(BackgroundJobs::global(), StemWorkerCommand::configured());
+    }
+
+    fn start_stem_separation_on(&mut self, jobs: &BackgroundJobs, worker: StemWorkerCommand) {
         if self.stem_separation.in_progress {
             return;
         }
         let source = self.path.clone();
-        let workspace = little_clip_core::ArtifactStore::new()
-            .and_then(|store| store.create_workspace("stems", "separation"))
-            .map(|workspace| workspace.retain())
-            .unwrap_or_else(|_| {
-                std::env::temp_dir()
-                    .join(format!("little-screen-clip-stems-{}", uuid::Uuid::new_v4()))
-            });
-        let (tx, rx) = channel();
+        let workspace = self.stem_separation.workspace.clone().unwrap_or_else(|| {
+            little_clip_core::ArtifactStore::new()
+                .and_then(|store| store.create_workspace("stems", "separation"))
+                .map(|workspace| workspace.retain())
+                .unwrap_or_else(|_| {
+                    std::env::temp_dir()
+                        .join(format!("little-screen-clip-stems-{}", uuid::Uuid::new_v4()))
+                })
+        });
+        let process_control = Arc::new(crate::image_preview::ImageToolProcessControl::new());
+        let worker_control = Arc::clone(&process_control);
+        let command = worker.clone();
+        let worker_workspace = workspace.clone();
+        let (ticket, rx) = jobs.submit(Duration::MAX, move || {
+            run_stem_worker(command, &source, &worker_workspace, &worker_control)
+        });
         self.stem_separation.in_progress = true;
         self.stem_separation.status = Some("Starting local HTDemucs v4 separation…".to_string());
         self.stem_separation.error = None;
         self.stem_separation.workspace = Some(workspace.clone());
         self.stem_separation.result_rx = Some(rx);
-        std::thread::spawn(move || {
-            let worker =
-                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../scripts/separate_stems.py");
-            let venv_python = std::env::var("HOME")
-                .map(|home| {
-                    PathBuf::from(home).join(".local/share/little-screen-clip/nobg-venv/bin/python")
-                })
-                .ok()
-                .filter(|path| path.is_file())
-                .unwrap_or_else(|| PathBuf::from("python3"));
-            let output = std::process::Command::new(&venv_python)
-                .arg(&worker)
-                .arg(&source)
-                .arg(&workspace)
-                .output();
-            match output {
-                Ok(result) if result.status.success() => {
-                    match parse_stem_manifest(&result.stdout) {
-                        Ok(stems) => {
-                            let _ = tx.send(StemSeparationMsg::Success(stems));
-                        }
-                        Err(error) => {
-                            let stderr = String::from_utf8_lossy(&result.stderr);
-                            let _ = tx.send(StemSeparationMsg::Error(format!(
-                                "Could not read stem worker output: {error}\n{}",
-                                stderr.trim()
-                            )));
-                        }
-                    }
-                }
-                Ok(result) => {
-                    let message = String::from_utf8_lossy(&result.stderr).trim().to_string();
-                    let _ = tx.send(StemSeparationMsg::Error(if message.is_empty() {
-                        "HTDemucs separation failed.".to_string()
-                    } else {
-                        message
-                    }));
-                }
-                Err(error) => {
-                    let _ = tx.send(StemSeparationMsg::Error(format!(
-                        "Could not launch Python stem worker: {error}"
-                    )));
-                }
-            }
-        });
+        self.stem_separation.job_ticket = Some(ticket);
+        self.stem_separation.process_control = Some(process_control);
+        self.stem_separation.worker_command = Some(worker);
+        self.stem_separation.retry_at = None;
+    }
+
+    pub(crate) fn cancel_stem_separation(&mut self) {
+        let was_active = self.stem_separation.in_progress;
+        if let Some(ticket) = self.stem_separation.job_ticket.take() {
+            ticket.cancel();
+        }
+        if let Some(control) = self.stem_separation.process_control.take() {
+            control.cancel();
+        }
+        self.stem_separation.result_rx = None;
+        self.stem_separation.retry_at = None;
+        self.stem_separation.in_progress = false;
+        if was_active {
+            self.stem_separation.status = Some("Stem separation cancelled.".to_string());
+        }
     }
 
     pub(crate) fn poll_stem_separation(&mut self, ctx: &egui::Context) {
+        self.poll_stem_separation_on(ctx, BackgroundJobs::global());
+    }
+
+    fn poll_stem_separation_on(&mut self, ctx: &egui::Context, jobs: &BackgroundJobs) {
+        if let Some(retry_at) = self.stem_separation.retry_at {
+            if Instant::now() >= retry_at && !self.stem_separation.in_progress {
+                if let Some(worker) = self.stem_separation.worker_command.clone() {
+                    self.start_stem_separation_on(jobs, worker);
+                }
+            } else {
+                ctx.request_repaint_after(retry_at.saturating_duration_since(Instant::now()));
+            }
+        }
         let mut message = None;
         if let Some(rx) = &self.stem_separation.result_rx {
-            ctx.request_repaint();
-            if let Ok(result) = rx.try_recv() {
-                message = Some(result);
+            if self.stem_separation.in_progress {
+                ctx.request_repaint();
+            }
+            match rx.try_recv() {
+                Ok(Ok(stems)) => message = Some(Ok(stems)),
+                Ok(Err(error)) => message = Some(Err(error)),
+                Err(TryRecvError::Disconnected) => message = Some(Err(JobError::Cancelled)),
+                Err(TryRecvError::Empty) => {}
             }
         }
         if let Some(message) = message {
             self.stem_separation.in_progress = false;
             self.stem_separation.result_rx = None;
+            self.stem_separation.job_ticket = None;
+            self.stem_separation.process_control = None;
+            self.stem_separation.retry_at = None;
             match message {
-                StemSeparationMsg::Success(stems) => {
+                Ok(Ok(stems)) => {
                     let editor = self.audio_editor.clone();
                     let volume = self.volume;
                     self.stem_separation.stems = stems
@@ -259,7 +332,22 @@ impl AudioPreviewState {
                     self.stem_separation.status =
                         Some("HTDemucs created four temporary stereo stems.".to_string());
                 }
-                StemSeparationMsg::Error(error) => self.stem_separation.error = Some(error),
+                Ok(Err(error)) => self.stem_separation.error = Some(error),
+                Err(JobError::QueueFull) => {
+                    self.stem_separation.retry_at =
+                        Some(Instant::now() + Duration::from_millis(500));
+                    self.stem_separation.status = Some(
+                        "Stem separation is waiting for background workers; retrying shortly"
+                            .to_string(),
+                    );
+                    ctx.request_repaint_after(Duration::from_millis(500));
+                }
+                Err(JobError::Cancelled) => {
+                    self.stem_separation.status = Some("Stem separation cancelled.".to_string())
+                }
+                Err(error) => {
+                    self.stem_separation.error = Some(format!("HTDemucs worker failed: {error}"))
+                }
             }
         }
     }
@@ -897,5 +985,213 @@ impl AudioPreviewState {
                 self.stem_separation.save_dialog_open = false;
             }
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn test_dir(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("stems-{name}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    fn fake_worker(directory: &Path, body: &str) -> StemWorkerCommand {
+        let path = directory.join("fake-stem-worker.sh");
+        std::fs::write(&path, format!("#!/bin/sh\nset -eu\n{body}\n")).unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        StemWorkerCommand {
+            program: path,
+            prefix_args: Vec::new(),
+        }
+    }
+
+    fn manifest_worker(directory: &Path) -> StemWorkerCommand {
+        fake_worker(
+            directory,
+            r#"mkdir -p "$2"
+for stem in vocals drums bass other; do : > "$2/$stem.wav"; done
+printf '{"vocals":"%s/vocals.wav","drums":"%s/drums.wav","bass":"%s/bass.wav","other":"%s/other.wav"}\n' "$2" "$2" "$2" "$2""#,
+        )
+    }
+
+    fn test_state(path: &Path) -> AudioPreviewState {
+        let mut state = AudioPreviewState::new(path.to_path_buf(), "stem-test.wav".into());
+        state.cancel_session_analysis();
+        let workspace = path.parent().unwrap().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+        state.stem_separation.workspace = Some(workspace);
+        state
+    }
+
+    fn wait_for_process_exit(pid: u32) {
+        for _ in 0..200 {
+            let running = unsafe { libc::kill(pid as i32, 0) == 0 };
+            if !running {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("stem worker process {pid} was not reaped");
+    }
+
+    fn wait_for_stem_terminal(state: &mut AudioPreviewState, jobs: &BackgroundJobs) {
+        let ctx = egui::Context::default();
+        for _ in 0..500 {
+            state.poll_stem_separation_on(&ctx, jobs);
+            if !state.stem_separation.in_progress {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("stem worker did not finish within five seconds");
+    }
+
+    #[test]
+    fn stem_job_queue_saturation_retries_and_imports_fake_manifest() {
+        let directory = test_dir("queue");
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let (_, blocker_rx) = jobs.submit(Duration::from_secs(5), move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (_, queued_rx) = jobs.submit(Duration::from_secs(5), || ());
+        let mut state = test_state(&directory.join("input.wav"));
+        state.start_stem_separation_on(&jobs, manifest_worker(&directory));
+        let ctx = egui::Context::default();
+        for _ in 0..100 {
+            state.poll_stem_separation_on(&ctx, &jobs);
+            if state.stem_separation.retry_at.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(state.stem_separation.retry_at.is_some());
+        assert!(state.stem_separation.error.is_none());
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        queued_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        state.stem_separation.retry_at = Some(Instant::now());
+        state.poll_stem_separation_on(&ctx, &jobs);
+        wait_for_stem_terminal(&mut state, &jobs);
+        assert_eq!(state.stem_separation.stems.len(), 4);
+        assert_eq!(state.stem_separation.stems[0].name, "vocals");
+        assert!(state.stem_separation.retry_at.is_none());
+        drop(state);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn stem_worker_failure_is_reported() {
+        let directory = test_dir("failure");
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = test_state(&directory.join("input.wav"));
+        state.start_stem_separation_on(
+            &jobs,
+            fake_worker(&directory, "echo fake failure >&2\nexit 7"),
+        );
+        wait_for_stem_terminal(&mut state, &jobs);
+        assert!(
+            state
+                .stem_separation
+                .error
+                .as_deref()
+                .unwrap()
+                .contains("fake failure")
+        );
+        drop(state);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn explicit_cancellation_kills_fake_worker_process_group() {
+        let directory = test_dir("cancel");
+        let jobs = BackgroundJobs::new(1, 1);
+        let script = format!(
+            "(sleep 1; touch \"$2/descendant-finished\") &\necho $! > \"$2/descendant.pid\"\nwait"
+        );
+        let mut state = test_state(&directory.join("input.wav"));
+        state.start_stem_separation_on(&jobs, fake_worker(&directory, &script));
+        let control = state
+            .stem_separation
+            .process_control
+            .as_ref()
+            .unwrap()
+            .clone();
+        let descendant_pid_path = state
+            .stem_separation
+            .workspace
+            .as_ref()
+            .unwrap()
+            .join("descendant.pid");
+        for _ in 0..200 {
+            if descendant_pid_path.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(descendant_pid_path.exists());
+        let direct_pid = control.child_pid.load(Ordering::Acquire);
+        assert_ne!(direct_pid, 0);
+        state.cancel_stem_separation();
+        assert!(control.cancel.load(Ordering::Acquire));
+        wait_for_process_exit(direct_pid);
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(
+            !state
+                .stem_separation
+                .workspace
+                .as_ref()
+                .unwrap()
+                .join("descendant-finished")
+                .exists()
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn dropping_audio_viewer_cancels_stem_worker_and_descendants() {
+        let directory = test_dir("drop");
+        let jobs = BackgroundJobs::new(1, 1);
+        let script =
+            "(sleep 1; touch \"$2/descendant-finished\") &\necho $! > \"$2/descendant.pid\"\nwait";
+        let mut state = test_state(&directory.join("input.wav"));
+        state.start_stem_separation_on(&jobs, fake_worker(&directory, script));
+        let control = state
+            .stem_separation
+            .process_control
+            .as_ref()
+            .unwrap()
+            .clone();
+        let workspace = state.stem_separation.workspace.as_ref().unwrap().clone();
+        for _ in 0..200 {
+            if workspace.join("descendant.pid").exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(workspace.join("descendant.pid").exists());
+        let direct_pid = control.child_pid.load(Ordering::Acquire);
+        assert_ne!(direct_pid, 0);
+        drop(state);
+        assert!(control.cancel.load(Ordering::Acquire));
+        wait_for_process_exit(direct_pid);
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(!workspace.join("descendant-finished").exists());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }
