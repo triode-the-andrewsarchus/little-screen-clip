@@ -31,9 +31,9 @@ pub(super) struct ImageCopyJob {
     ticket: JobTicket,
     phase: Arc<AtomicU8>,
     snapshot_ready: Arc<AtomicBool>,
-    canvas: Arc<Mutex<Option<Arc<RgbaImage>>>>,
+    canvas: Option<Arc<Mutex<Option<Arc<RgbaImage>>>>>,
     receiver: mpsc::Receiver<Result<Result<String, String>, JobError>>,
-    stamp: ImageInputStamp,
+    stamp: Option<ImageInputStamp>,
     restored: bool,
 }
 
@@ -126,6 +126,84 @@ impl ImageSaveJob {
 }
 
 impl ImageCopyJob {
+    fn start_encoded(
+        bytes: Arc<Vec<u8>>,
+        mime: String,
+        success_message: String,
+        fallback_message: String,
+        jobs: &BackgroundJobs,
+    ) -> Self {
+        Self::start_encoded_with(
+            bytes,
+            mime,
+            success_message,
+            fallback_message,
+            jobs,
+            |bytes, mime, success_message, fallback_message, phase| {
+                let started = Instant::now();
+                phase_for_delivery(phase, started)?;
+                deliver_optimized_image_copy(
+                    bytes,
+                    mime,
+                    success_message,
+                    fallback_message,
+                    || phase.load(Ordering::Acquire) == CANCELLED,
+                    |request| {
+                        crate::send_ipc_request_with_timeout(request, Some(Duration::from_secs(2)))
+                            .map_err(|error| error.to_string())
+                            .and_then(|response| match response {
+                                little_clip_core::ipc::IpcResponse::Success { .. } => Ok(()),
+                                little_clip_core::ipc::IpcResponse::Error { error } => Err(error),
+                                other => Err(format!("Unexpected clipboard response: {other:?}")),
+                            })
+                    },
+                    |bytes, mime| {
+                        little_clip_core::copy_bytes_to_system_clipboard(bytes, mime)
+                            .map_err(|error| error.to_string())
+                    },
+                )
+            },
+        )
+    }
+
+    fn start_encoded_with<F>(
+        bytes: Arc<Vec<u8>>,
+        mime: String,
+        success_message: String,
+        fallback_message: String,
+        jobs: &BackgroundJobs,
+        deliver: F,
+    ) -> Self
+    where
+        F: FnOnce(&[u8], &str, &str, &str, &AtomicU8) -> Result<String, String> + Send + 'static,
+    {
+        let phase = Arc::new(AtomicU8::new(CANCELLABLE));
+        let worker_phase = Arc::clone(&phase);
+        let (ticket, receiver) = jobs.submit(Duration::MAX, move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                deliver(
+                    &bytes,
+                    &mime,
+                    &success_message,
+                    &fallback_message,
+                    &worker_phase,
+                )
+            }))
+            .unwrap_or_else(|_| Err("Image clipboard worker panicked".into()))
+        });
+        Self {
+            ticket,
+            phase,
+            snapshot_ready: Arc::new(AtomicBool::new(true)),
+            canvas: None,
+            receiver,
+            stamp: None,
+            restored: true,
+        }
+    }
+}
+
+impl ImageCopyJob {
     fn start(
         canvas: Arc<RgbaImage>,
         stamp: ImageInputStamp,
@@ -182,9 +260,9 @@ impl ImageCopyJob {
             ticket,
             phase,
             snapshot_ready,
-            canvas,
+            canvas: Some(canvas),
             receiver,
-            stamp,
+            stamp: Some(stamp),
             restored: false,
         }
     }
@@ -232,19 +310,14 @@ where
     I: FnMut(&IpcRequest) -> Result<(), String>,
     C: FnMut(&[u8], &str) -> Result<(), String>,
 {
-    if cancelled() {
-        return Err("Image clipboard copy cancelled".into());
-    }
-    let request = IpcRequest::PushImage {
-        bytes: bytes.to_vec(),
-        mime: "image/png".into(),
+    let (ipc_result, clipboard_result) = deliver_copy_to_targets(
+        bytes,
+        "image/png",
         hand,
-    };
-    let ipc_result = push_to_daemon(&request);
-    if cancelled() {
-        return Err("Image clipboard copy cancelled".into());
-    }
-    let clipboard_result = copy_to_system_clipboard(bytes, "image/png");
+        cancelled,
+        &mut push_to_daemon,
+        &mut copy_to_system_clipboard,
+    )?;
     match (ipc_result, clipboard_result) {
         (Ok(()), Ok(())) => Ok(format!(
             "📋 Copied image to {} Hand slot & OS Clipboard",
@@ -255,6 +328,65 @@ where
             hand_slot_label(hand)
         )),
         (Err(_), Ok(())) => Ok("📋 Copied image to OS Clipboard (daemon unavailable)".into()),
+        (Err(ipc), Err(clipboard)) => Err(format!(
+            "Could not copy image to clipboard: daemon: {ipc}; OS clipboard: {clipboard}"
+        )),
+    }
+}
+
+fn deliver_copy_to_targets<I, C>(
+    bytes: &[u8],
+    mime: &str,
+    hand: HandSide,
+    cancelled: impl Fn() -> bool,
+    push_to_daemon: &mut I,
+    copy_to_system_clipboard: &mut C,
+) -> Result<(Result<(), String>, Result<(), String>), String>
+where
+    I: FnMut(&IpcRequest) -> Result<(), String>,
+    C: FnMut(&[u8], &str) -> Result<(), String>,
+{
+    if cancelled() {
+        return Err("Image clipboard copy cancelled".into());
+    }
+    let request = IpcRequest::PushImage {
+        bytes: bytes.to_vec(),
+        mime: mime.to_owned(),
+        hand,
+    };
+    let ipc_result = push_to_daemon(&request);
+    if cancelled() {
+        return Err("Image clipboard copy cancelled".into());
+    }
+    let clipboard_result = copy_to_system_clipboard(bytes, mime);
+    Ok((ipc_result, clipboard_result))
+}
+
+fn deliver_optimized_image_copy<I, C>(
+    bytes: &[u8],
+    mime: &str,
+    success_message: &str,
+    fallback_message: &str,
+    cancelled: impl Fn() -> bool,
+    mut push_to_daemon: I,
+    mut copy_to_system_clipboard: C,
+) -> Result<String, String>
+where
+    I: FnMut(&IpcRequest) -> Result<(), String>,
+    C: FnMut(&[u8], &str) -> Result<(), String>,
+{
+    let (ipc_result, clipboard_result) = deliver_copy_to_targets(
+        bytes,
+        mime,
+        HandSide::Left,
+        cancelled,
+        &mut push_to_daemon,
+        &mut copy_to_system_clipboard,
+    )?;
+    match (ipc_result, clipboard_result) {
+        (Ok(()), Ok(())) => Ok(success_message.to_owned()),
+        (Ok(()), Err(error)) => Ok(format!("{success_message}; OS clipboard failed: {error}")),
+        (Err(_), Ok(())) => Ok(fallback_message.to_owned()),
         (Err(ipc), Err(clipboard)) => Err(format!(
             "Could not copy image to clipboard: daemon: {ipc}; OS clipboard: {clipboard}"
         )),
@@ -365,8 +497,37 @@ impl ImagePreviewState {
         self.show_toast("Preparing image for clipboard…");
     }
 
+    pub(super) fn start_optimized_copy_to_slot(
+        &mut self,
+        bytes: Arc<Vec<u8>>,
+        mime: &str,
+        achieved_bytes: usize,
+        format_label: &str,
+        jobs: &BackgroundJobs,
+    ) {
+        if self.copy_job.is_some() {
+            self.show_toast("Image clipboard delivery is already in progress");
+            return;
+        }
+        let description = format!("{} ({})", format_bytes_size(achieved_bytes), format_label);
+        self.copy_job = Some(ImageCopyJob::start_encoded(
+            bytes,
+            mime.to_owned(),
+            format!("📋 Copied optimized {description} to Clipboard Slot (LH)"),
+            format!("📋 Copied optimized {description} to OS Clipboard"),
+            jobs,
+        ));
+        self.show_toast("Copying optimized image to clipboard…");
+    }
+
     pub(super) fn copy_snapshot_pending(&self) -> bool {
-        self.copy_job.as_ref().is_some_and(|job| !job.restored)
+        self.copy_job
+            .as_ref()
+            .is_some_and(|job| job.canvas.is_some() && !job.restored)
+    }
+
+    pub(super) fn copy_delivery_pending(&self) -> bool {
+        self.copy_job.is_some()
     }
 
     pub(super) fn poll_copy_job(&mut self) {
@@ -385,8 +546,11 @@ impl ImagePreviewState {
                 Some(Err("Image clipboard worker disconnected".into()))
             }
         };
-        if !job.restored && (job.snapshot_ready.load(Ordering::Acquire) || completion.is_some()) {
-            let mut slot = match job.canvas.try_lock() {
+        if job.canvas.is_some()
+            && !job.restored
+            && (job.snapshot_ready.load(Ordering::Acquire) || completion.is_some())
+        {
+            let mut slot = match job.canvas.as_ref().unwrap().try_lock() {
                 Ok(slot) => slot,
                 Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
                 Err(std::sync::TryLockError::WouldBlock) => return,
@@ -453,7 +617,7 @@ impl ImagePreviewState {
                 ui.centered_and_justified(|ui| {
                     let response = ui.image((texture.id(), size * scale));
                     let image_rect = Rect::from_center_size(response.rect.center(), size * scale);
-                    for redaction in &job.stamp.redactions {
+                    for redaction in &job.stamp.as_ref().unwrap().redactions {
                         let norm = redaction.normalized_rect;
                         let to_screen = |point: Pos2| {
                             image_rect.min
@@ -734,6 +898,150 @@ mod tests {
         .unwrap();
         assert!(copied);
         assert!(status.contains("OS Clipboard"));
+    }
+
+    #[test]
+    fn optimized_copy_preserves_captured_bytes_mime_and_left_slot() {
+        let bytes = vec![0xff, 0xd8, 0x31, 0x32, 0xff, 0xd9];
+        let mut pushed = None;
+        let mut clipboard = None;
+        let status = deliver_optimized_image_copy(
+            &bytes,
+            "image/jpeg",
+            "optimized success",
+            "optimized fallback",
+            || false,
+            |request| {
+                pushed = Some(request.clone());
+                Ok(())
+            },
+            |payload, mime| {
+                clipboard = Some((payload.to_vec(), mime.to_owned()));
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(status, "optimized success");
+        assert!(
+            matches!(pushed, Some(IpcRequest::PushImage { bytes: pushed, mime, hand: HandSide::Left }) if pushed == bytes && mime == "image/jpeg")
+        );
+        assert_eq!(clipboard, Some((bytes, "image/jpeg".into())));
+    }
+
+    #[test]
+    fn optimized_copy_falls_back_to_os_and_reports_total_failure() {
+        let fallback = deliver_optimized_image_copy(
+            b"optimized bytes",
+            "image/png",
+            "success",
+            "optimized OS fallback",
+            || false,
+            |_| Err("daemon unavailable".into()),
+            |bytes, mime| {
+                assert_eq!(bytes, b"optimized bytes");
+                assert_eq!(mime, "image/png");
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(fallback, "optimized OS fallback");
+
+        let failed = deliver_optimized_image_copy(
+            b"optimized bytes",
+            "image/png",
+            "success",
+            "fallback",
+            || false,
+            |_| Err("daemon unavailable".into()),
+            |_, _| Err("clipboard unavailable".into()),
+        )
+        .unwrap_err();
+        assert!(failed.contains("daemon unavailable"));
+        assert!(failed.contains("clipboard unavailable"));
+    }
+
+    #[test]
+    fn optimized_copy_rejects_duplicates_and_queue_full_is_visible() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_blocker_ticket, _blocker_rx) = jobs.submit(SAVE_TIMEOUT, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv().unwrap();
+        let (_queued_ticket, _queued_rx) = jobs.submit(SAVE_TIMEOUT, || ());
+        let mut state = state();
+        state.start_optimized_copy_to_slot(
+            Arc::new(b"captured".to_vec()),
+            "image/png",
+            8,
+            "PNG",
+            &jobs,
+        );
+        let revision = state.copy_job.as_ref().unwrap().ticket.revision();
+        state.start_optimized_copy_to_slot(
+            Arc::new(b"replacement".to_vec()),
+            "image/jpeg",
+            11,
+            "JPEG",
+            &jobs,
+        );
+        assert_eq!(state.copy_job.as_ref().unwrap().ticket.revision(), revision);
+        assert!(
+            state
+                .status_toast
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("already in progress")
+        );
+
+        state.poll_copy_job();
+        assert!(state.copy_job.is_none());
+        assert!(
+            state
+                .status_toast
+                .as_ref()
+                .unwrap()
+                .0
+                .contains("queue is full")
+        );
+        release_tx.send(()).unwrap();
+    }
+
+    #[test]
+    fn dropping_viewer_cancels_queued_optimized_delivery() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_blocker_ticket, _blocker_rx) = jobs.submit(SAVE_TIMEOUT, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv().unwrap();
+
+        let invoked = Arc::new(AtomicBool::new(false));
+        let worker_invoked = Arc::clone(&invoked);
+        let mut state = state();
+        state.copy_job = Some(ImageCopyJob::start_encoded_with(
+            Arc::new(b"captured".to_vec()),
+            "image/png".into(),
+            "success".into(),
+            "fallback".into(),
+            &jobs,
+            move |_, _, _, _, _| {
+                worker_invoked.store(true, Ordering::Release);
+                Ok("copied".into())
+            },
+        ));
+        drop(state);
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !invoked.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(!invoked.load(Ordering::Acquire));
     }
 
     #[test]

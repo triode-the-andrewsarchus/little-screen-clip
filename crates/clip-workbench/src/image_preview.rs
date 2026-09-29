@@ -682,6 +682,9 @@ impl ImagePreviewState {
             self.render_copy_progress(ui, ctx, close);
             return;
         }
+        if self.copy_delivery_pending() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
         self.rendering_frame = true;
 
         // Upload GPU texture if dirty or not loaded

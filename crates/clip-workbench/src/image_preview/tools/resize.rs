@@ -87,7 +87,7 @@ impl TargetSizeSearch<'_> {
             scale: candidate.scale,
             quality: candidate.quality,
             format,
-            encoded_data: candidate.bytes,
+            encoded_data: Arc::new(candidate.bytes),
             result_rgba: candidate.image,
         }
     }
@@ -525,7 +525,7 @@ pub struct FileSizeOptimizationResult {
     pub scale: f32,
     pub quality: u8,
     pub format: TargetFormat,
-    pub encoded_data: Vec<u8>,
+    pub encoded_data: Arc<Vec<u8>>,
     pub result_rgba: RgbaImage,
 }
 
@@ -662,7 +662,7 @@ mod input_stamp_tests {
             scale: 1.0,
             quality: 80,
             format: TargetFormat::Png,
-            encoded_data: vec![1, 2, 3],
+            encoded_data: Arc::new(vec![1, 2, 3]),
             result_rgba: RgbaImage::from_pixel(4, 4, image::Rgba(color)),
         }
     }
@@ -889,7 +889,8 @@ mod input_stamp_tests {
                 .last_result
                 .as_ref()
                 .unwrap()
-                .encoded_data,
+                .encoded_data
+                .as_slice(),
             [1, 2, 3]
         );
         let retry_deadline = state.optimizer_retry_at.unwrap();
@@ -1280,48 +1281,29 @@ impl ImagePreviewState {
     /// and synchronizes with OS clipboard.
 
     pub fn copy_optimized_to_slot(&mut self) {
+        self.copy_optimized_to_slot_on(BackgroundJobs::global());
+    }
+
+    fn copy_optimized_to_slot_on(&mut self, jobs: &BackgroundJobs) {
         if !self.optimized_result_is_current() {
             return;
         }
-        let res = match &self.resize_state.last_result {
-            Some(r) => r,
+        let (bytes, mime, achieved_bytes, format_label) = match &self.resize_state.last_result {
+            Some(r) => (
+                Arc::clone(&r.encoded_data),
+                Self::format_label_or_mime(r.format),
+                r.achieved_bytes,
+                r.format.label(),
+            ),
             None => return,
         };
+        self.start_optimized_copy_to_slot(bytes, mime, achieved_bytes, format_label, jobs);
+    }
 
-        let mime = match res.format {
+    fn format_label_or_mime(format: TargetFormat) -> &'static str {
+        match format {
             TargetFormat::Jpeg => "image/jpeg",
             TargetFormat::Png => "image/png",
-        };
-
-        let req = IpcRequest::PushImage {
-            bytes: res.encoded_data.clone(),
-            mime: mime.to_string(),
-            hand: HandSide::Left,
-        };
-        let ipc_ok = crate::send_ipc_request(&req).is_ok();
-
-        let bytes_for_cmd = res.encoded_data.clone();
-        let mime_for_cmd = mime.to_string();
-        std::thread::spawn(move || {
-            if let Err(error) =
-                little_clip_core::copy_bytes_to_system_clipboard(&bytes_for_cmd, &mime_for_cmd)
-            {
-                tracing::debug!(%error, "failed to copy optimized image to system clipboard");
-            }
-        });
-
-        if ipc_ok {
-            self.show_toast(format!(
-                "📋 Copied optimized {} ({}) to Clipboard Slot (LH)",
-                format_bytes_size(res.achieved_bytes),
-                res.format.label()
-            ));
-        } else {
-            self.show_toast(format!(
-                "📋 Copied optimized {} ({}) to OS Clipboard",
-                format_bytes_size(res.achieved_bytes),
-                res.format.label()
-            ));
         }
     }
 
