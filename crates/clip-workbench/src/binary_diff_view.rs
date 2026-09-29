@@ -835,6 +835,7 @@ impl BinaryDiffViewState {
                         let search_edit = ui.add_sized(
                             [180.0, crate::ui_ext::CONTROL_HEIGHT],
                             egui::TextEdit::singleline(&mut self.search_query)
+                                .id(egui::Id::new("binary_diff_search_field"))
                                 .hint_text("Search Hex / ASCII..."),
                         );
                         if search_edit.changed() {
@@ -3170,6 +3171,77 @@ mod tests {
         nav.prev_search_match();
         assert_eq!(nav.current_search_idx, 2);
         assert_eq!(nav.scroll_target_row, Some(12));
+    }
+
+    #[test]
+    fn binary_diff_search_field_updates_matches_and_navigates_while_focused() {
+        let mut bytes = vec![b'x'; 96];
+        bytes[1..4].copy_from_slice(b"ABC");
+        bytes[65..68].copy_from_slice(b"ABC");
+        let mut state = BinaryDiffViewState::new(
+            "left.bin".to_string(),
+            bytes.clone(),
+            "right.bin".to_string(),
+            bytes,
+        );
+        let initial_rx = state.receiver.take().expect("initial compute receiver");
+        let (generation, result) = initial_rx
+            .recv()
+            .expect("initial job result")
+            .expect("initial diff result");
+        assert_eq!(generation, state.current_generation);
+        state.result = Some(result);
+        state.is_computing = false;
+        state.compute_ticket = None;
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let search_id = egui::Id::new("binary_diff_search_field");
+        ctx.memory_mut(|memory| memory.request_focus(search_id));
+        let palette = AppPalette::default();
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1200.0, 800.0));
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                });
+            },
+        );
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
+
+        let mut keyboard_focus_kept = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                events: vec![egui::Event::Text("ABC".to_string())],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                });
+                keyboard_focus_kept = ctx.wants_keyboard_input();
+            },
+        );
+        assert!(keyboard_focus_kept);
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
+        assert_eq!(state.search_query, "ABC");
+        assert_eq!(state.search_matches, vec![0, 2]);
+        assert_eq!(state.current_search_idx, 0);
+        assert_eq!(state.nav.scroll_target_row, Some(0));
+
+        state.next_search_match();
+        assert_eq!(state.current_search_idx, 1);
+        assert_eq!(state.scroll_target_row, Some(2));
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
+        state.prev_search_match();
+        assert_eq!(state.current_search_idx, 0);
+        assert_eq!(state.scroll_target_row, Some(0));
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
     }
 
     #[test]
