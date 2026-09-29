@@ -4247,6 +4247,20 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn auto_actions_escape_returns_to_palette_and_requests_search_focus() {
+        let mut view = WorkbenchView::AutoActions;
+        let mut canvas = NodeCanvasState::with_config(AppConfig::default());
+        let mut search_needs_focus = false;
+
+        assert_eq!(
+            route_workbench_escape(&mut view, &mut canvas, &mut search_needs_focus, false),
+            WorkbenchEscapeRoute::ReturnToPalette
+        );
+        assert_eq!(view, WorkbenchView::Palette);
+        assert!(search_needs_focus);
+    }
+
+    #[test]
     fn node_machine_catalog_and_save_overlays_hold_f1_f3_view_switches() {
         fn press_shortcut(app: &mut WorkbenchApp, key: egui::Key) {
             let ctx = egui::Context::default();
