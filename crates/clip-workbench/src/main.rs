@@ -5081,6 +5081,56 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn palette_prompt_escape_cancels_only_the_overlay() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.in_app_prompt = Some(InAppPromptState {
+            recipe_name: "Prompt Escape Fixture".to_owned(),
+            message: "Enter test text".to_owned(),
+            input_text: "unchanged input".to_owned(),
+            first_frame: true,
+        });
+        let ctx = egui::Context::default();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                let modal_active = app.render_modal_viewers(ctx);
+                assert!(modal_active, "the prompt owns the Escape frame");
+                if !modal_active {
+                    app.handle_global_shortcuts(ctx);
+                }
+            },
+        );
+
+        let close_commands = output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|output| {
+                output
+                    .commands
+                    .iter()
+                    .filter(|command| matches!(command, egui::ViewportCommand::Close))
+                    .count()
+            })
+            .unwrap_or_default();
+        assert_eq!(close_commands, 0, "Escape cancels only the prompt overlay");
+        assert!(app.in_app_prompt.is_none());
+        assert_eq!(app.view, WorkbenchView::Palette);
+    }
+
+    #[test]
     fn quick_palette_enter_executes_prompt_recipe_while_search_is_focused() {
         let mut app = test_workbench_app(None, VecDeque::new());
         let recipe_name = "Enter Prompt Fixture";
