@@ -478,6 +478,10 @@ Further source findings for the next footer work: Inspect subtracts guessed 36/3
 
 - Reran `cargo test -p clip-workbench --bin clip-workbench fixed_appearance_button_surfaces_meet_wcag_contrast`: pass. It evaluates active tab, inactive tab, add, secondary, delete, and translucent accent labels in both Light and Dark against effective backgrounds at >=4.5:1. This closes the shared control slice only; custom label coverage remains in H1.2c2/E2.4f2.
 
+## Purposeful contextual action accents, 2026-09-28
+
+Quick Palette contextual preview/editor/comparison/copy buttons now share the neutral secondary button treatment on `surface_panel`, including Audio, Image, Diff, PDF, Spreadsheet, MIDI, 3D, smart-preview, and Text/Markdown actions. Their labels, click routes, and spreadsheet/MIDI disabled states are unchanged. Success/danger/warning colors remain on operation-specific status and data affordances. `contextual_palette_preview_actions_use_neutral_secondary_surface` renders the production action-button helper in Light and Dark, verifies the neutral panel fill and rendered PDF action label, and checks label contrast. The focused test passes. This verifies the standard control treatment and source mapping; no new live Palette screenshot was captured.
+
 ## Palette search focus behavior, 2026-09-27
 
 - Extracted the existing inline focus transitions into `update_palette_search_focus`, used by the production Palette path. `palette_search_focus_yields_to_audio_and_returns_on_activation` renders a real egui text field over four frames: launch requests focus, active audio interaction surrenders it while the field is disabled, activation requests focus again, and subsequent editable frame retains it. Focused test passes.

@@ -558,6 +558,20 @@ impl Default for AutoActionsLayout {
     }
 }
 
+/// Neutral secondary treatment for contextual previews, editors, and copy actions.
+fn contextual_palette_action_button<'a>(
+    icon: Option<Icon>,
+    label: impl Into<String>,
+    palette: &AppPalette,
+) -> egui::Button<'a> {
+    ui_ext::secondary_button_icon(
+        icon,
+        label,
+        hex_to_c32(&palette.colors.surface_panel),
+        palette,
+    )
+}
+
 fn render_auto_actions(
     ui: &mut egui::Ui,
     config: &mut AppConfig,
@@ -1411,11 +1425,9 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some((path, title)) = first_audio_item {
                             ui.add_space(crate::ui_ext::SPACE_SM);
-                            let audio_bg = hex_to_c32(&self.ui_palette.diff_add);
-                            let audio_btn = ui_ext::action_button_icon(
+                            let audio_btn = contextual_palette_action_button(
                                 Some(Icon::Audio),
                                 "Preview & Slice Audio",
-                                audio_bg,
                                 &self.ui_palette,
                             );
                             if ui.add(audio_btn).clicked() {
@@ -1425,11 +1437,9 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some(slot) = first_image_slot {
                             ui.add_space(crate::ui_ext::SPACE_SM);
-                            let img_bg = hex_to_c32(&self.ui_palette.harmonies.base);
-                            let img_btn = ui_ext::action_button_icon(
+                            let img_btn = contextual_palette_action_button(
                                 Some(Icon::Image),
                                 "Preview & Edit Image",
-                                img_bg,
                                 &self.ui_palette,
                             );
                             if ui.add(img_btn).clicked() {
@@ -1467,11 +1477,9 @@ impl eframe::App for WorkbenchApp {
                         };
                         if has_two_images {
                             ui.add_space(crate::ui_ext::SPACE_SM);
-                            let diff_bg = hex_to_c32(&self.ui_palette.harmonies.warm_attention);
-                            let diff_btn = ui_ext::action_button_icon(
+                            let diff_btn = contextual_palette_action_button(
                                 Some(Icon::Diff),
                                 "Compare Images",
-                                diff_bg,
                                 &self.ui_palette,
                             );
                             if ui.add(diff_btn).on_hover_text("Open interactive visual diff comparing the 2 images").clicked() {
@@ -1530,11 +1538,9 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some(pdf_path) = first_pdf_item {
                             ui.add_space(crate::ui_ext::SPACE_SM);
-                            let pdf_bg = hex_to_c32(&self.ui_palette.diff_del);
-                            let pdf_btn = ui_ext::action_button_icon(
+                            let pdf_btn = contextual_palette_action_button(
                                 Some(Icon::Pdf),
                                 "Edit PDF",
-                                pdf_bg,
                                 &self.ui_palette,
                             );
                             if ui.add(pdf_btn).on_hover_text("Open PDF Page Editor (Delete / Rotate pages)").clicked() {
@@ -1544,11 +1550,9 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some(slot) = first_spreadsheet_slot {
                             ui.add_space(crate::ui_ext::SPACE_SM);
-                            let sheet_bg = hex_to_c32(&self.ui_palette.harmonies.triadic_1);
-                            let sheet_btn = ui_ext::action_button_icon(
+                            let sheet_btn = contextual_palette_action_button(
                                 Some(Icon::Spreadsheet),
                                 if self.spreadsheet_load_job.is_some() { "Opening Spreadsheet…" } else { "View Spreadsheet" },
-                                sheet_bg,
                                 &self.ui_palette,
                             );
                             let sheet_response = ui_ext::on_hover_text_with_disabled_reason(
@@ -1563,11 +1567,9 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some(midi_path) = first_midi_item {
                             ui.add_space(crate::ui_ext::SPACE_SM);
-                            let midi_bg = hex_to_c32(&self.ui_palette.harmonies.triadic_2);
-                            let midi_btn = ui_ext::action_button_icon(
+                            let midi_btn = contextual_palette_action_button(
                                 Some(Icon::Midi),
                                 if self.midi_load_job.is_some() { "Opening MIDI…" } else { "MIDI Piano Roll" },
-                                midi_bg,
                                 &self.ui_palette,
                             );
                             let midi_response = ui_ext::on_hover_text_with_disabled_reason(
@@ -1582,13 +1584,11 @@ impl eframe::App for WorkbenchApp {
 
                         if let Some(model_path) = first_3d_model_item {
                             ui.add_space(crate::ui_ext::SPACE_SM);
-                            let model_bg = hex_to_c32(&self.ui_palette.harmonies.split_comp_1);
                             let ext = model_path.extension().and_then(|s| s.to_str()).unwrap_or("3D").to_ascii_uppercase();
                             let btn_text = format!("3D {} Model", ext);
-                            let model_btn = ui_ext::action_button_icon(
+                            let model_btn = contextual_palette_action_button(
                                 Some(Icon::Model3d),
                                 &btn_text,
-                                model_bg,
                                 &self.ui_palette,
                             );
                             if ui.add(model_btn).on_hover_text("Open interactive 3D orbit viewer (pan, zoom, rotate)").clicked() {
@@ -1613,12 +1613,10 @@ impl eframe::App for WorkbenchApp {
                             let trimmed = text.trim();
                             if let Some(conv) = detect_unit_conversion(trimmed) {
                                 ui.add_space(crate::ui_ext::SPACE_SM);
-                                let unit_bg = hex_to_c32(&self.ui_palette.harmonies.split_comp_2);
                                 let label = conv.summary_line();
-                                let btn = ui_ext::action_button_icon(
+                                let btn = contextual_palette_action_button(
                                     Some(Icon::Swap),
                                     &label,
-                                    unit_bg,
                                     &self.ui_palette,
                                 );
                                 if ui.add(btn).on_hover_text("Click to copy converted unit").clicked() {
@@ -1627,15 +1625,13 @@ impl eframe::App for WorkbenchApp {
                                 }
                             } else if let Some(net) = detect_network_preview(trimmed) {
                                 ui.add_space(crate::ui_ext::SPACE_SM);
-                                let net_bg = hex_to_c32(&self.ui_palette.diff_mod);
                                 let (label, net_icon) = match &net {
                                     NetworkPreview::Ip { ip, rfc_class, .. } => (format!("{} ({})", ip, rfc_class), Icon::Link),
                                     NetworkPreview::Mac { formatted, vendor, .. } => (format!("{} ({})", formatted, vendor), Icon::Zap),
                                 };
-                                let btn = ui_ext::action_button_icon(
+                                let btn = contextual_palette_action_button(
                                     Some(net_icon),
                                     &label,
-                                    net_bg,
                                     &self.ui_palette,
                                 );
                                 if ui.add(btn).on_hover_text("Network address info (Click to copy summary)").clicked() {
@@ -1645,12 +1641,10 @@ impl eframe::App for WorkbenchApp {
                                 }
                             } else if let Some(ts) = detect_timestamp(trimmed) {
                                 ui.add_space(crate::ui_ext::SPACE_SM);
-                                let ts_bg = hex_to_c32(&self.ui_palette.harmonies.tetradic_1);
                                 let label = format!("{} ({})", ts.human_readable, ts.relative);
-                                let btn = ui_ext::action_button_icon(
+                                let btn = contextual_palette_action_button(
                                     Some(Icon::Calendar),
                                     &label,
-                                    ts_bg,
                                     &self.ui_palette,
                                 );
                                 if ui.add(btn).on_hover_text(format!("UTC: {}\nEpoch: {}\nClick to copy ISO 8601", ts.utc_iso, ts.epoch_sec)).clicked() {
@@ -1667,11 +1661,9 @@ impl eframe::App for WorkbenchApp {
                             } else {
                                 ("View Text / Code", Icon::Text)
                             };
-                            let txt_bg = hex_to_c32(&self.ui_palette.harmonies.tetradic_2);
-                            let txt_btn = ui_ext::action_button_icon(
+                            let txt_btn = contextual_palette_action_button(
                                 Some(txt_icon),
                                 label,
-                                txt_bg,
                                 &self.ui_palette,
                             );
                             if ui.add(txt_btn).on_hover_text("Open text or Markdown preview (syntax highlighting, line wrapping, search, and editor export)").clicked() {
@@ -3225,6 +3217,51 @@ fn main() -> Result<(), eframe::Error> {
 #[cfg(test)]
 mod workbench_layout_tests {
     use super::*;
+
+    #[test]
+    fn contextual_palette_preview_actions_use_neutral_secondary_surface() {
+        for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
+            let palette = ui_appearance::palette(appearance);
+            let expected_fill = hex_to_c32(&palette.colors.surface_panel);
+            let ctx = egui::Context::default();
+            let output = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add(contextual_palette_action_button(
+                        Some(Icon::Pdf),
+                        "Edit PDF",
+                        &palette,
+                    ));
+                });
+            });
+
+            let mut saw_fill = false;
+            let mut saw_label = false;
+            for shape in &output.shapes {
+                match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.fill == expected_fill => saw_fill = true,
+                    egui::Shape::Text(text) if text.galley.text() == "Edit PDF" => {
+                        saw_label = true;
+                        for section in &text.galley.job.sections {
+                            assert!(
+                                little_clip_core::palette::contrast_ratio(
+                                    (expected_fill.r(), expected_fill.g(), expected_fill.b()),
+                                    (
+                                        section.format.color.r(),
+                                        section.format.color.g(),
+                                        section.format.color.b(),
+                                    ),
+                                ) >= 4.5,
+                                "{appearance:?} contextual action label lacks contrast"
+                            );
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            assert!(saw_fill, "{appearance:?} action should use panel fill");
+            assert!(saw_label, "{appearance:?} action label should render");
+        }
+    }
 
     fn test_workbench_app(
         viewer: Option<ViewerSession>,
