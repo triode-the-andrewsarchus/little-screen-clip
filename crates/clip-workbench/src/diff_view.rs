@@ -1295,12 +1295,7 @@ impl DiffViewerState {
 
     fn copy_image_diff_to_clipboard(&mut self, now: f64) {
         if let Some(res) = &self.image_result {
-            if let Ok(png_bytes) = res.encode_mask_png() {
-                let req = IpcRequest::PushImage {
-                    bytes: png_bytes,
-                    mime: "image/png".to_string(),
-                    hand: HandSide::Left,
-                };
+            if let Ok(req) = image_mask_push_request(res) {
                 let _ = send_ipc_request(&req);
                 self.status_toast = Some((
                     "Diff Mask copied to Left Hand & clipboard!".to_string(),
@@ -1309,6 +1304,14 @@ impl DiffViewerState {
             }
         }
     }
+}
+
+fn image_mask_push_request(result: &ImageDiffResult) -> Result<IpcRequest, image::ImageError> {
+    Ok(IpcRequest::PushImage {
+        bytes: result.encode_mask_png()?,
+        mime: "image/png".to_string(),
+        hand: HandSide::Left,
+    })
 }
 
 fn strip_ansi_codes(text: &str) -> String {
@@ -1544,6 +1547,38 @@ mod tests {
         let result = state.image_result.as_ref().unwrap();
         assert_eq!((result.width, result.height), (3, 2));
         assert_eq!(result.diff_count, 1);
+    }
+
+    #[test]
+    fn image_diff_copy_request_contains_left_hand_mask_png() {
+        let mask_rgba = vec![
+            0, 0, 0, 255, // unchanged pixel
+            255, 0, 0, 255, // highlighted difference
+        ];
+        let result = ImageDiffResult {
+            width: 2,
+            height: 1,
+            diff_count: 1,
+            total_pixels: 2,
+            diff_percentage: 50.0,
+            is_identical: false,
+            base_rgba: vec![0; 8],
+            comp_rgba: vec![0; 8],
+            mask_rgba,
+            overlay_rgba: vec![0; 8],
+        };
+
+        let request = image_mask_push_request(&result).expect("encode mask request");
+        let IpcRequest::PushImage { bytes, mime, hand } = request else {
+            panic!("image mask must use PushImage");
+        };
+        assert_eq!(hand, HandSide::Left);
+        assert_eq!(mime, "image/png");
+        let decoded = image::load_from_memory(&bytes)
+            .expect("decode encoded mask")
+            .to_rgba8();
+        assert_eq!((decoded.width(), decoded.height()), (2, 1));
+        assert_eq!(decoded.as_raw(), &[0, 0, 0, 255, 255, 0, 0, 255]);
     }
 
     #[test]
