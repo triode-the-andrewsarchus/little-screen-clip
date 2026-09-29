@@ -1,5 +1,6 @@
 use super::super::*;
 use crate::shell::{render_context_slider, slider_double_clicked};
+use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 
 /// Message sent back from background thread rendering full creative FX.
 pub enum CreativeFxMsg {
@@ -70,6 +71,159 @@ mod ownership_tests {
         .unwrap();
         state.active_mode = ImageToolMode::CreativeFx;
         state
+    }
+
+    fn wait_render(state: &mut ImagePreviewState, jobs: &BackgroundJobs) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while state.creative_fx_state.is_rendering {
+            state.poll_creative_fx_on(jobs);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Creative FX render timed out"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    fn occupy_executor(jobs: &BackgroundJobs) -> std::sync::mpsc::Sender<()> {
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let _ = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        release_tx
+    }
+
+    #[test]
+    fn render_saturation_retries_after_deadline_and_matches_direct_output() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let release = occupy_executor(&jobs);
+        let drained = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let drained_job = drained.clone();
+        let _queued = jobs.submit(std::time::Duration::MAX, move || {
+            drained_job.store(true, std::sync::atomic::Ordering::Release);
+        });
+        let mut state = state();
+        let input = state.current_rgba.clone();
+        let depth = state.creative_fx_state.cached_depth_map.clone();
+        let alpha = state.creative_fx_state.cached_background_removal.clone();
+        let params = state.creative_fx_state.current_params();
+        let expected = apply_creative_fx_with_masks_cancellable(
+            &input,
+            depth.as_ref(),
+            alpha.as_ref(),
+            &params,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .unwrap();
+
+        state.run_creative_fx_render_on(&jobs);
+        state.poll_creative_fx_on(&jobs);
+        let retry_at = state.creative_fx_state.render_retry_at.unwrap();
+        assert!(retry_at > std::time::Instant::now());
+        assert!(
+            state
+                .creative_fx_state
+                .render_error
+                .as_deref()
+                .unwrap()
+                .contains("Waiting")
+        );
+        state.poll_creative_fx_on(&jobs);
+        assert_eq!(state.creative_fx_state.render_retry_at, Some(retry_at));
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !drained.load(std::sync::atomic::Ordering::Acquire) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        state.creative_fx_state.render_retry_at = Some(std::time::Instant::now());
+        state.poll_creative_fx_on(&jobs);
+        wait_render(&mut state, &jobs);
+        assert_eq!(
+            state.creative_fx_state.preview_rgba.as_ref(),
+            Some(&expected)
+        );
+        assert!(state.creative_fx_state.render_error.is_none());
+    }
+
+    #[test]
+    fn leaving_creative_fx_clears_cancelled_retry_status() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let release = occupy_executor(&jobs);
+        let _queued = jobs.submit(std::time::Duration::MAX, || ());
+        let mut state = state();
+        state.run_creative_fx_render_on(&jobs);
+        state.poll_creative_fx_on(&jobs);
+        assert!(state.creative_fx_state.render_retry_at.is_some());
+        state.active_mode = ImageToolMode::View;
+        state.poll_creative_fx_on(&jobs);
+        assert!(state.creative_fx_state.render_retry_at.is_none());
+        assert!(state.creative_fx_state.render_error.is_none());
+        release.send(()).unwrap();
+    }
+
+    #[test]
+    fn queued_render_is_cancelled_when_viewer_drops() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let release = occupy_executor(&jobs);
+        let mut state = state();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_calls = calls.clone();
+        state.run_creative_fx_render_with_on(&jobs, move |image, _, _, _, _| {
+            worker_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Some(image.clone())
+        });
+        let ticket = state
+            .creative_fx_state
+            .render_job_ticket
+            .as_ref()
+            .unwrap()
+            .clone();
+        let cancelled = state
+            .creative_fx_state
+            .render_cancel
+            .as_ref()
+            .unwrap()
+            .clone();
+        drop(state);
+        assert!(cancelled.load(std::sync::atomic::Ordering::Acquire));
+        drop(ticket);
+        release.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn active_render_cancellation_suppresses_stale_output() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = state();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        state.run_creative_fx_render_with_on(&jobs, move |image, _, _, _, _| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Some(image.clone())
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        let cancel = state
+            .creative_fx_state
+            .render_cancel
+            .as_ref()
+            .unwrap()
+            .clone();
+        state.creative_fx_state.mark_dirty();
+        assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
+        release_tx.send(()).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        state.poll_creative_fx_on(&jobs);
+        assert!(state.creative_fx_state.preview_rgba.is_none());
     }
 
     #[test]
@@ -266,7 +420,7 @@ mod ownership_tests {
         state.creative_fx_state.render_stamp = Some(stamp);
         state.creative_fx_state.render_rx = Some(rx);
         state.creative_fx_state.is_rendering = true;
-        tx.send(message).unwrap();
+        tx.send(Ok(Some(message))).unwrap();
     }
 
     #[test]
@@ -778,10 +932,12 @@ pub struct CreativeFxState {
 
     // Async render worker (Main preview image)
     pub is_rendering: bool,
-    pub render_rx: Option<std::sync::mpsc::Receiver<CreativeFxMsg>>,
+    pub render_rx: Option<std::sync::mpsc::Receiver<Result<Option<CreativeFxMsg>, JobError>>>,
     render_stamp: Option<CreativeFxRenderStamp>,
     preview_stamp: Option<CreativeFxRenderStamp>,
     render_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    render_job_ticket: Option<JobTicket>,
+    pub render_retry_at: Option<std::time::Instant>,
     pub render_error: Option<String>,
 
     // Async thumbnail worker (Sidebar 42x28 mini-photos for each FX)
@@ -843,6 +999,8 @@ impl Default for CreativeFxState {
             render_stamp: None,
             preview_stamp: None,
             render_cancel: None,
+            render_job_ticket: None,
+            render_retry_at: None,
             render_error: None,
             fx_thumbnails: std::collections::HashMap::new(),
             pending_thumbnails: Vec::new(),
@@ -880,12 +1038,19 @@ impl CreativeFxState {
     }
 
     pub(crate) fn cancel_render(&mut self) {
+        let was_retry_waiting = self.render_retry_at.take().is_some();
+        if let Some(ticket) = self.render_job_ticket.take() {
+            ticket.cancel();
+        }
         if let Some(cancel) = self.render_cancel.take() {
             cancel.store(true, std::sync::atomic::Ordering::Release);
         }
         self.render_rx = None;
         self.render_stamp = None;
         self.is_rendering = false;
+        if was_retry_waiting {
+            self.render_error = None;
+        }
     }
 
     fn select_fx(&mut self, fx_type: CreativeFxType) {
@@ -1119,6 +1284,32 @@ impl ImagePreviewState {
     }
 
     pub fn run_creative_fx_render(&mut self) {
+        self.run_creative_fx_render_with_on(
+            BackgroundJobs::global(),
+            |image, depth, alpha, params, cancel| {
+                apply_creative_fx_with_masks_cancellable(image, depth, alpha, params, cancel)
+            },
+        );
+    }
+
+    fn run_creative_fx_render_on(&mut self, jobs: &BackgroundJobs) {
+        self.run_creative_fx_render_with_on(jobs, |image, depth, alpha, params, cancel| {
+            apply_creative_fx_with_masks_cancellable(image, depth, alpha, params, cancel)
+        });
+    }
+
+    fn run_creative_fx_render_with_on<F>(&mut self, jobs: &BackgroundJobs, processor: F)
+    where
+        F: FnOnce(
+                &RgbaImage,
+                Option<&RgbaImage>,
+                Option<&RgbaImage>,
+                &CreativeFxParams,
+                &std::sync::atomic::AtomicBool,
+            ) -> Option<RgbaImage>
+            + Send
+            + 'static,
+    {
         if self.creative_fx_state.is_rendering || self.current_rgba.is_empty() {
             return;
         }
@@ -1131,22 +1322,20 @@ impl ImagePreviewState {
         let cached_depth = self.creative_fx_state.cached_depth_map.clone();
         let cached_background_removal = self.creative_fx_state.cached_background_removal.clone();
 
-        let (tx, rx) = std::sync::mpsc::channel::<CreativeFxMsg>();
-        self.creative_fx_state.render_rx = Some(rx);
         self.creative_fx_state.render_stamp = Some(stamp.clone());
         self.creative_fx_state.is_rendering = true;
         self.creative_fx_state.render_error = None;
+        self.creative_fx_state.render_retry_at = None;
         self.creative_fx_state.params_dirty_at = None;
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.creative_fx_state.render_cancel = Some(cancelled.clone());
-
-        std::thread::spawn(move || {
+        let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
             if cancelled.load(std::sync::atomic::Ordering::Acquire) {
-                return;
+                return None;
             }
             let start = std::time::Instant::now();
             let process_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                apply_creative_fx_with_masks_cancellable(
+                processor(
                     &input_rgba,
                     cached_depth.as_ref(),
                     cached_background_removal.as_ref(),
@@ -1155,18 +1344,18 @@ impl ImagePreviewState {
                 )
             }));
             if cancelled.load(std::sync::atomic::Ordering::Acquire) {
-                return;
+                return None;
             }
             match process_result {
                 Ok(Some(out_rgba)) => {
                     let duration_ms = start.elapsed().as_millis();
-                    let _ = tx.send(CreativeFxMsg::Done {
+                    Some(CreativeFxMsg::Done {
                         stamp,
                         rgba: out_rgba,
                         duration_ms,
-                    });
+                    })
                 }
-                Ok(None) => {}
+                Ok(None) => None,
                 Err(e) => {
                     let err_msg = if let Some(s) = e.downcast_ref::<&str>() {
                         s.to_string()
@@ -1175,13 +1364,15 @@ impl ImagePreviewState {
                     } else {
                         "Creative FX processing panicked".to_string()
                     };
-                    let _ = tx.send(CreativeFxMsg::Error {
+                    Some(CreativeFxMsg::Error {
                         stamp,
                         message: err_msg,
-                    });
+                    })
                 }
             }
         });
+        self.creative_fx_state.render_job_ticket = Some(ticket);
+        self.creative_fx_state.render_rx = Some(rx);
     }
 
     /// Spawn background thread to estimate AI depth map using Depth-Anything V2.
@@ -1375,15 +1566,24 @@ impl ImagePreviewState {
 
     /// Poll each Creative FX worker independently so result ownership and cleanup stay local.
     pub fn poll_creative_fx(&mut self) {
+        self.poll_creative_fx_on(BackgroundJobs::global());
+    }
+
+    fn poll_creative_fx_on(&mut self, jobs: &BackgroundJobs) {
         self.invalidate_stale_creative_fx_masks();
         self.invalidate_stale_creative_fx_thumbnails();
-        self.poll_creative_fx_render();
+        self.poll_creative_fx_render_on(jobs);
         self.poll_creative_fx_depth_mask();
         self.poll_creative_fx_alpha_mask();
         self.poll_creative_fx_thumbnails();
     }
 
-    fn poll_creative_fx_render(&mut self) {
+    fn poll_creative_fx_render_on(&mut self, jobs: &BackgroundJobs) {
+        if self.creative_fx_state.render_retry_at.is_some()
+            && self.active_mode != ImageToolMode::CreativeFx
+        {
+            self.creative_fx_state.cancel_render();
+        }
         if self
             .creative_fx_state
             .render_stamp
@@ -1394,15 +1594,37 @@ impl ImagePreviewState {
         {
             self.creative_fx_state.cancel_render();
         }
+        if self.creative_fx_state.render_retry_at.is_some()
+            && self.creative_fx_state.render_stamp.as_ref()
+                != Some(&self.creative_fx_render_stamp())
+        {
+            self.creative_fx_state.render_retry_at = None;
+            self.creative_fx_state.render_stamp = None;
+            self.creative_fx_state.render_error = None;
+            if self.active_mode == ImageToolMode::CreativeFx {
+                self.creative_fx_state.params_dirty_at = Some(std::time::Instant::now());
+            }
+        }
+        if self
+            .creative_fx_state
+            .render_retry_at
+            .is_some_and(|retry_at| {
+                std::time::Instant::now() >= retry_at
+                    && self.active_mode == ImageToolMode::CreativeFx
+            })
+        {
+            self.creative_fx_state.render_retry_at = None;
+            self.run_creative_fx_render_on(jobs);
+        }
         let Some(rx) = self.creative_fx_state.render_rx.take() else {
             return;
         };
         match rx.try_recv() {
-            Ok(CreativeFxMsg::Done {
+            Ok(Ok(Some(CreativeFxMsg::Done {
                 stamp,
                 rgba,
                 duration_ms,
-            }) => {
+            }))) => {
                 let is_current = self.creative_fx_state.render_stamp.as_ref() == Some(&stamp)
                     && stamp == self.creative_fx_render_stamp();
                 if is_current {
@@ -1419,8 +1641,10 @@ impl ImagePreviewState {
                 self.creative_fx_state.is_rendering = false;
                 self.creative_fx_state.render_stamp = None;
                 self.creative_fx_state.render_cancel = None;
+                self.creative_fx_state.render_job_ticket = None;
+                self.creative_fx_state.render_retry_at = None;
             }
-            Ok(CreativeFxMsg::Error { stamp, message }) => {
+            Ok(Ok(Some(CreativeFxMsg::Error { stamp, message }))) => {
                 let is_current = self.creative_fx_state.render_stamp.as_ref() == Some(&stamp)
                     && stamp == self.creative_fx_render_stamp();
                 if is_current {
@@ -1433,6 +1657,32 @@ impl ImagePreviewState {
                 self.creative_fx_state.is_rendering = false;
                 self.creative_fx_state.render_stamp = None;
                 self.creative_fx_state.render_cancel = None;
+                self.creative_fx_state.render_job_ticket = None;
+                self.creative_fx_state.render_retry_at = None;
+            }
+            Ok(Ok(None)) | Ok(Err(JobError::Cancelled)) => {
+                self.creative_fx_state.is_rendering = false;
+                self.creative_fx_state.render_stamp = None;
+                self.creative_fx_state.render_cancel = None;
+                self.creative_fx_state.render_job_ticket = None;
+            }
+            Ok(Err(JobError::QueueFull)) => {
+                self.creative_fx_state.is_rendering = false;
+                self.creative_fx_state.render_rx = None;
+                self.creative_fx_state.render_cancel = None;
+                self.creative_fx_state.render_job_ticket = None;
+                self.creative_fx_state.render_retry_at =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+                self.creative_fx_state.render_error =
+                    Some("Waiting for background workers; retrying shortly".to_string());
+            }
+            Ok(Err(error)) => {
+                self.creative_fx_state.is_rendering = false;
+                self.creative_fx_state.render_stamp = None;
+                self.creative_fx_state.render_cancel = None;
+                self.creative_fx_state.render_job_ticket = None;
+                self.creative_fx_state.render_error =
+                    Some(format!("Creative FX worker failed: {error}"));
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 self.creative_fx_state.render_rx = Some(rx);
@@ -1441,6 +1691,9 @@ impl ImagePreviewState {
                 self.creative_fx_state.is_rendering = false;
                 self.creative_fx_state.render_stamp = None;
                 self.creative_fx_state.render_cancel = None;
+                self.creative_fx_state.render_job_ticket = None;
+                self.creative_fx_state.render_error =
+                    Some("Creative FX worker disconnected".into());
             }
         }
     }

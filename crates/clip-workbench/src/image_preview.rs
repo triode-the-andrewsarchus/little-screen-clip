@@ -1109,6 +1109,11 @@ impl ImagePreviewState {
         // Poll creative fx background render + debounce
         self.poll_creative_fx();
         if self.active_mode == ImageToolMode::CreativeFx {
+            if let Some(retry_at) = self.creative_fx_state.render_retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            }
             if let Some(dirty_at) = self.creative_fx_state.params_dirty_at {
                 if dirty_at.elapsed() >= std::time::Duration::from_millis(150)
                     && !self.creative_fx_state.is_rendering
