@@ -1470,6 +1470,59 @@ mod tests {
     }
 
     #[test]
+    fn text_diff_tab_and_c_recompute_the_selected_mode() {
+        fn send_shortcut(state: &mut DiffViewerState, key: egui::Key) {
+            let ctx = egui::Context::default();
+            let mut close = false;
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| state.handle_shortcuts(ctx, &mut close),
+            );
+            assert!(!close);
+        }
+
+        let left = DiffTarget::ClipboardText {
+            label: "Left".to_string(),
+            content: "alpha\nold line\nomega\n".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+        let right = DiffTarget::ClipboardText {
+            label: "Right".to_string(),
+            content: "alpha\nnew line\nomega\n".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+        let mut state = DiffViewerState::new(left, right, DiffDisplayMode::Inline);
+        state.wait_for_completion();
+        let inline_result = state.result.raw_ansi.clone();
+
+        send_shortcut(&mut state, egui::Key::Tab);
+        assert_eq!(state.mode, DiffDisplayMode::SideBySide);
+        assert!(state.is_computing, "Tab should schedule a new text diff");
+        assert_eq!(state.result.mode, DiffDisplayMode::Inline);
+        state.wait_for_completion();
+        assert_eq!(state.result.mode, DiffDisplayMode::SideBySide);
+        let split_result = state.result.raw_ansi.clone();
+        assert_ne!(split_result, inline_result);
+
+        send_shortcut(&mut state, egui::Key::C);
+        assert_eq!(state.mode, DiffDisplayMode::Inline);
+        assert!(state.is_computing, "C should schedule a new text diff");
+        assert_eq!(state.result.mode, DiffDisplayMode::SideBySide);
+        state.wait_for_completion();
+        assert_eq!(state.result.mode, DiffDisplayMode::Inline);
+        assert_eq!(state.result.raw_ansi, inline_result);
+    }
+
+    #[test]
     fn saturated_diff_executor_reports_recoverable_error() {
         use std::sync::mpsc;
         use std::time::Duration;
