@@ -540,6 +540,7 @@ struct AutoActionsLayout {
     header: egui::Rect,
     subtitle: egui::Rect,
     card: egui::Rect,
+    checkbox: egui::Rect,
     status: egui::Rect,
     explanation: egui::Rect,
     behavior: egui::Rect,
@@ -551,6 +552,7 @@ impl Default for AutoActionsLayout {
             header: egui::Rect::NOTHING,
             subtitle: egui::Rect::NOTHING,
             card: egui::Rect::NOTHING,
+            checkbox: egui::Rect::NOTHING,
             status: egui::Rect::NOTHING,
             explanation: egui::Rect::NOTHING,
             behavior: egui::Rect::NOTHING,
@@ -621,6 +623,7 @@ fn render_auto_actions(
                             .size(BODY_FONT_SIZE)
                             .color(title_color),
                     );
+                    layout.checkbox = cb.rect;
                     if cb.changed() {
                         config.auto_actions.trim_link_tracking = trim;
                         changed = Some(trim);
@@ -1207,18 +1210,42 @@ impl WorkbenchApp {
         request: &IpcRequest,
         close_on_success: bool,
         send: &mut impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
-    ) {
+    ) -> bool {
         match send(request) {
             Ok(IpcResponse::OpResult { .. } | IpcResponse::Success { .. }) => {
                 if close_on_success {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 }
+                true
             }
             Ok(IpcResponse::Error { error }) => {
                 self.set_status_message(format!("Error: {error}"));
+                false
             }
-            Ok(_) => self.set_status_message("Error: unexpected response from daemon"),
-            Err(error) => self.set_status_message(format!("Error: {error}")),
+            Ok(_) => {
+                self.set_status_message("Error: unexpected response from daemon");
+                false
+            }
+            Err(error) => {
+                self.set_status_message(format!("Error: {error}"));
+                false
+            }
+        }
+    }
+
+    fn execute_auto_action_change_with(
+        &mut self,
+        ctx: &egui::Context,
+        previous_enabled: bool,
+        enabled: bool,
+        send: &mut impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
+    ) {
+        let request = IpcRequest::SetAutoAction {
+            key: "trim_link_tracking".to_owned(),
+            enabled,
+        };
+        if !self.execute_action_request_with(ctx, &request, false, send) {
+            self.config.auto_actions.trim_link_tracking = previous_enabled;
         }
     }
 
@@ -1812,14 +1839,16 @@ impl eframe::App for WorkbenchApp {
                     }
                 }
                 WorkbenchView::AutoActions => {
+                    let previous_enabled = self.config.auto_actions.trim_link_tracking;
                     if let Some(enabled) = render_auto_actions(ui, &mut self.config, &self.ui_palette).0 {
-                        let request = IpcRequest::SetAutoAction {
-                            key: "trim_link_tracking".to_string(),
+                        self.execute_auto_action_change_with(
+                            ctx,
+                            previous_enabled,
                             enabled,
-                        };
-                        self.execute_action_request_with(ctx, &request, false, &mut |request| {
-                            send_ipc_request(request).map_err(|error| error.to_string())
-                        });
+                            &mut |request| {
+                                send_ipc_request(request).map_err(|error| error.to_string())
+                            },
+                        );
                     }
                 }
             }
@@ -1998,9 +2027,19 @@ impl WorkbenchApp {
     }
 
     fn render_prompt_modal(&mut self, ctx: &egui::Context) -> bool {
+        self.render_prompt_modal_with(ctx, |request| {
+            send_ipc_request(request).map_err(|error| error.to_string())
+        })
+    }
+
+    fn render_prompt_modal_with(
+        &mut self,
+        ctx: &egui::Context,
+        mut send: impl FnMut(&IpcRequest) -> Result<IpcResponse, String>,
+    ) -> bool {
         if let Some(prompt) = &mut self.in_app_prompt {
             let mut close_prompt = false;
-            let mut submit_text: Option<String> = None;
+            let mut submit_request: Option<IpcRequest> = None;
 
             let modal_bg = hex_to_c32(&self.ui_palette.colors.surface_recessed);
             let modal_stroke = hex_to_c32(&self.ui_palette.harmonies.base);
@@ -2080,7 +2119,10 @@ impl WorkbenchApp {
                         );
 
                         if submit_btn.clicked() || enter {
-                            submit_text = Some(prompt.input_text.clone());
+                            submit_request = Some(IpcRequest::ExecuteRecipeWithPrompt {
+                                recipe_name: prompt.recipe_name.clone(),
+                                prompt_text: Some(prompt.input_text.clone()),
+                            });
                         }
 
                         if cancel_btn.clicked() || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -2089,13 +2131,8 @@ impl WorkbenchApp {
                     });
                 });
 
-            if let Some(text) = submit_text {
-                let req = IpcRequest::ExecuteRecipeWithPrompt {
-                    recipe_name: prompt.recipe_name.clone(),
-                    prompt_text: Some(text),
-                };
-                let _ = send_ipc_request(&req);
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            if let Some(request) = submit_request {
+                self.execute_action_request_with(ctx, &request, true, &mut send);
             } else if close_prompt {
                 self.in_app_prompt = None;
             }
@@ -3819,6 +3856,115 @@ mod workbench_layout_tests {
         assert_eq!(app.view, WorkbenchView::Palette);
     }
 
+    #[test]
+    fn auto_action_success_sends_once_and_keeps_enabled_config() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.config.auto_actions.trim_link_tracking = false;
+        let ctx = egui::Context::default();
+        let mut checkbox_rect = egui::Rect::NOTHING;
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0));
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    checkbox_rect = render_auto_actions(ui, &mut app.config, &app.ui_palette)
+                        .1
+                        .checkbox;
+                });
+            },
+        );
+        assert!(checkbox_rect.is_positive());
+        let click_pos = checkbox_rect.center();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                events: vec![egui::Event::PointerButton {
+                    pos: click_pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    render_auto_actions(ui, &mut app.config, &app.ui_palette);
+                });
+            },
+        );
+        let mut changed = None;
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                events: vec![egui::Event::PointerButton {
+                    pos: click_pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    changed = render_auto_actions(ui, &mut app.config, &app.ui_palette).0;
+                });
+            },
+        );
+        assert_eq!(
+            changed,
+            Some(true),
+            "rendered checkbox click should enable it"
+        );
+        assert!(app.config.auto_actions.trim_link_tracking);
+        let sent = std::cell::RefCell::new(Vec::new());
+
+        app.execute_auto_action_change_with(&ctx, false, true, &mut |request| {
+            sent.borrow_mut().push(request.clone());
+            Ok(IpcResponse::Success {
+                message: "updated".to_owned(),
+            })
+        });
+
+        assert!(matches!(
+            sent.borrow().as_slice(),
+            [IpcRequest::SetAutoAction { key, enabled: true }]
+                if key == "trim_link_tracking"
+        ));
+        assert!(app.config.auto_actions.trim_link_tracking);
+        assert!(app.status_msg.is_none());
+    }
+
+    #[test]
+    fn auto_action_failure_rolls_back_optimistic_toggle_with_feedback() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.config.auto_actions.trim_link_tracking = true;
+        let sent = std::cell::RefCell::new(Vec::new());
+
+        app.execute_auto_action_change_with(
+            &egui::Context::default(),
+            false,
+            true,
+            &mut |request| {
+                sent.borrow_mut().push(request.clone());
+                Err("controlled daemon failure".to_owned())
+            },
+        );
+
+        assert!(matches!(
+            sent.borrow().as_slice(),
+            [IpcRequest::SetAutoAction { key, enabled: true }]
+                if key == "trim_link_tracking"
+        ));
+        assert!(!app.config.auto_actions.trim_link_tracking);
+        assert_eq!(
+            app.status_msg.as_deref(),
+            Some("Error: controlled daemon failure")
+        );
+    }
+
     fn space_key_event() -> egui::Event {
         egui::Event::Key {
             key: egui::Key::Space,
@@ -5347,13 +5493,15 @@ mod workbench_layout_tests {
     #[test]
     fn in_app_prompt_enter_submits_from_focused_editor_once() {
         let mut app = test_workbench_app(None, VecDeque::new());
+        let recipe_name = "Prompt Enter Fixture";
         app.in_app_prompt = Some(InAppPromptState {
-            recipe_name: "Prompt Enter Fixture".to_owned(),
+            recipe_name: recipe_name.to_owned(),
             message: "Enter test text".to_owned(),
             input_text: "submitted value".to_owned(),
             first_frame: true,
         });
         let ctx = egui::Context::default();
+        let sent = std::cell::RefCell::new(Vec::new());
         let frame = |app: &mut WorkbenchApp, events| {
             ctx.run(
                 egui::RawInput {
@@ -5365,7 +5513,12 @@ mod workbench_layout_tests {
                     ..Default::default()
                 },
                 |ctx| {
-                    assert!(app.render_prompt_modal(ctx));
+                    assert!(app.render_prompt_modal_with(ctx, |request| {
+                        sent.borrow_mut().push(request.clone());
+                        Ok(IpcResponse::Success {
+                            message: "fixture complete".to_owned(),
+                        })
+                    }));
                 },
             )
         };
@@ -5404,6 +5557,16 @@ mod workbench_layout_tests {
         assert_eq!(
             close_commands, 1,
             "Enter submits and requests one window close"
+        );
+        assert!(
+            matches!(
+                sent.borrow().as_slice(),
+                [IpcRequest::ExecuteRecipeWithPrompt {
+                    recipe_name: sent_recipe,
+                    prompt_text: Some(text),
+                }] if sent_recipe == recipe_name && text == "submitted value"
+            ),
+            "Enter must send the captured prompt exactly once"
         );
         assert!(
             app.in_app_prompt.is_some(),
