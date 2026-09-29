@@ -97,7 +97,7 @@ pub fn auto_stride(width: u32, height: u32) -> usize {
 }
 
 /// Sample statistics from strided inspection of an image.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DecorrelationStats {
     pub sample_count: usize,
     pub mean: [f64; 3],
@@ -113,6 +113,16 @@ pub fn compute_stats(
     stride: usize,
     max_samples: Option<usize>,
 ) -> DecorrelationStats {
+    compute_stats_cancellable(img, stride, max_samples, &|| false)
+        .expect("non-cancellable statistics computation completes")
+}
+
+fn compute_stats_cancellable(
+    img: &RgbaImage,
+    stride: usize,
+    max_samples: Option<usize>,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Option<DecorrelationStats> {
     let w = img.width() as usize;
     let h = img.height() as usize;
     let stride = stride.max(1);
@@ -135,6 +145,9 @@ pub fn compute_stats(
     let mut s22: f64 = 0.0;
 
     for y in (0..h).step_by(stride) {
+        if is_cancelled() {
+            return None;
+        }
         for x in (0..w).step_by(stride) {
             let pixel = img.get_pixel(x as u32, y as u32);
             let r = pixel[0] as f64;
@@ -195,14 +208,14 @@ pub fn compute_stats(
         }
     }
 
-    DecorrelationStats {
+    Some(DecorrelationStats {
         sample_count: n,
         mean,
         sd,
         cov,
         corr,
         samples,
-    }
+    })
 }
 
 /// Result of cyclic Jacobi eigen-decomposition for a symmetric 3x3 matrix.
@@ -459,6 +472,15 @@ pub fn build_transform(
 ///
 /// Pixel assignment clamps outputs to [0, 255] and preserves the source pixel's alpha channel.
 pub fn apply_transform(src: &RgbaImage, transform: &DecorrelationTransform) -> RgbaImage {
+    apply_transform_cancellable(src, transform, &|| false)
+        .expect("non-cancellable transform completes")
+}
+
+fn apply_transform_cancellable(
+    src: &RgbaImage,
+    transform: &DecorrelationTransform,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Option<RgbaImage> {
     let w = src.width();
     let h = src.height();
     let mut dst = RgbaImage::new(w, h);
@@ -481,6 +503,9 @@ pub fn apply_transform(src: &RgbaImage, transform: &DecorrelationTransform) -> R
     let o2 = off[2];
 
     for (x, y, pixel) in src.enumerate_pixels() {
+        if x == 0 && is_cancelled() {
+            return None;
+        }
         let r = pixel[0] as f32;
         let g = pixel[1] as f32;
         let b = pixel[2] as f32;
@@ -493,7 +518,7 @@ pub fn apply_transform(src: &RgbaImage, transform: &DecorrelationTransform) -> R
         dst.put_pixel(x, y, Rgba([rout, gout, bout, a]));
     }
 
-    dst
+    Some(dst)
 }
 
 /// Convenience function to compute stats, build the transform, and produce the stretched image.
@@ -501,17 +526,27 @@ pub fn run_decorrelation_stretch(
     img: &RgbaImage,
     params: &DecorrelationStretchParams,
 ) -> (DecorrelationStats, DecorrelationTransform, RgbaImage) {
+    run_decorrelation_stretch_cancellable(img, params, &|| false)
+        .expect("non-cancellable decorrelation stretch completes")
+}
+
+/// Run the decorrelation stretch with cancellation checks between image rows.
+pub fn run_decorrelation_stretch_cancellable(
+    img: &RgbaImage,
+    params: &DecorrelationStretchParams,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Option<(DecorrelationStats, DecorrelationTransform, RgbaImage)> {
     let stride = if params.stride == 0 {
         auto_stride(img.width(), img.height())
     } else {
         params.stride
     };
 
-    let stats = compute_stats(img, stride, None);
+    let stats = compute_stats_cancellable(img, stride, None, is_cancelled)?;
     let transform = build_transform(&stats, params);
-    let result_img = apply_transform(img, &transform);
+    let result_img = apply_transform_cancellable(img, &transform, is_cancelled)?;
 
-    (stats, transform, result_img)
+    Some((stats, transform, result_img))
 }
 
 #[cfg(test)]
@@ -573,6 +608,34 @@ mod tests {
 
         // Alpha channel must be preserved
         assert_eq!(stretched.get_pixel(50, 50)[3], 255);
+    }
+
+    #[test]
+    fn cancellable_stretch_stops_before_stats_when_cancelled() {
+        let img = RgbaImage::from_pixel(64, 64, Rgba([10, 20, 30, 255]));
+        assert!(
+            run_decorrelation_stretch_cancellable(
+                &img,
+                &DecorrelationStretchParams::nasa(),
+                &|| true
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn cancellable_stretch_checks_between_stats_rows() {
+        let img = RgbaImage::from_fn(128, 96, |x, y| {
+            Rgba([(x * 3) as u8, (y * 5) as u8, (x ^ y) as u8, 255])
+        });
+        let checks = std::sync::atomic::AtomicUsize::new(0);
+        let output = run_decorrelation_stretch_cancellable(
+            &img,
+            &DecorrelationStretchParams::nasa(),
+            &|| checks.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 4,
+        );
+        assert!(output.is_none());
+        assert_eq!(checks.load(std::sync::atomic::Ordering::Relaxed), 5);
     }
 
     #[test]

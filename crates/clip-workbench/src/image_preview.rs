@@ -32,7 +32,7 @@ use little_clip_ops::creative_fx::{
 };
 use little_clip_ops::decorrelation_stretch::{
     DecorrelationMatrixMode, DecorrelationStats, DecorrelationStretchParams,
-    DecorrelationTransform, TargetValue, auto_stride, run_decorrelation_stretch,
+    DecorrelationTransform, TargetValue, auto_stride, run_decorrelation_stretch_cancellable,
 };
 use little_clip_ops::metadata::{ImageMetadataSummary, extract_image_metadata, strip_metadata};
 use little_clip_ops::perspective::{DeskewCropMode, QuadCorners, rectify_perspective_with_mode};
@@ -517,6 +517,7 @@ impl ImagePreviewState {
 
     pub(crate) fn mark_pixels_changed(&mut self) {
         self.cancel_barcode_scan();
+        self.invalidate_decorrelation_stretch();
         self.film_sim_state.cancel_render();
         self.creative_fx_state.cancel_render();
         self.cancel_optimizer();
@@ -538,6 +539,7 @@ impl ImagePreviewState {
 
     /// Returns the image as currently displayed/composed, taking into account any active crop selection if in Crop mode,
     /// and burning any placed redaction bars so exports/copies never leak private information.
+    #[cfg(test)]
     pub fn current_display_image(&self) -> RgbaImage {
         self.display_image_snapshot_request().compose()
     }
@@ -1083,6 +1085,17 @@ impl ImagePreviewState {
         // Poll background file size optimizer if running
         self.poll_palette_extraction(ctx);
 
+        self.poll_decorrelation_stretch(ctx, BackgroundJobs::global());
+        if self.active_mode == ImageToolMode::DecorrelationStretch {
+            if let Some(retry_at) = self.dcs_state.retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            } else if self.dcs_state.is_computing {
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+        }
+
         // Poll background file size optimizer if running
         self.poll_optimizer();
         if self.resize_state.is_optimizing {
@@ -1405,6 +1418,11 @@ impl ImagePreviewState {
             self.creative_fx_state.cancel_render();
             self.cancel_creative_fx_thumbnail_batch();
         }
+        if prev_mode == ImageToolMode::DecorrelationStretch
+            && target_mode != ImageToolMode::DecorrelationStretch
+        {
+            self.cancel_decorrelation_stretch();
+        }
         if prev_mode == ImageToolMode::Ocr
             && target_mode != ImageToolMode::Ocr
             && self.ocr_state.in_progress
@@ -1454,7 +1472,7 @@ impl ImagePreviewState {
                 }
             }
             ImageToolMode::DecorrelationStretch => {
-                if self.dcs_state.stretched_rgba.is_none() {
+                if !self.dcs_preview_is_current() && !self.dcs_state.is_computing {
                     self.update_decorrelation_stretch();
                 }
             }
@@ -2123,6 +2141,18 @@ fn render_svg_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wait_for_dcs(state: &mut ImagePreviewState) {
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while state.dcs_state.is_computing && std::time::Instant::now() < deadline {
+            state.poll_decorrelation_stretch(&ctx, BackgroundJobs::global());
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        state.poll_decorrelation_stretch(&ctx, BackgroundJobs::global());
+        assert!(!state.dcs_state.is_computing);
+        assert!(state.dcs_state.error.is_none());
+    }
 
     fn image_state_from_png(size: (u32, u32), title: &str) -> ImagePreviewState {
         let mut png = Vec::new();
@@ -3814,6 +3844,7 @@ mod tests {
         // Switching to DecorrelationStretch
         state.set_tool_mode(ImageToolMode::DecorrelationStretch);
         assert_eq!(state.active_mode, ImageToolMode::DecorrelationStretch);
+        wait_for_dcs(&mut state);
         assert!(state.dcs_state.stretched_rgba.is_some());
 
         // Switching from OCR in progress cancels OCR
@@ -3926,6 +3957,7 @@ mod tests {
         );
 
         state.update_decorrelation_stretch();
+        wait_for_dcs(&mut state);
         let stretched = state
             .dcs_state
             .stretched_rgba

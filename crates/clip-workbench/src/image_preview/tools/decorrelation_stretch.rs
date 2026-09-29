@@ -26,7 +26,25 @@ fn draw_numeric_rows(
         });
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct DcsRequestStamp {
+    image: ImageInputStamp,
+    params: DecorrelationStretchParams,
+}
+
 #[derive(Clone)]
+struct DcsRequest {
+    snapshot: DisplayImageSnapshotRequest,
+    params: DecorrelationStretchParams,
+    stamp: DcsRequestStamp,
+}
+
+struct DcsWorkerMsg {
+    stamp: DcsRequestStamp,
+    duration_ms: u128,
+    result: Result<(DecorrelationStats, DecorrelationTransform, RgbaImage), String>,
+}
+
 pub struct DecorrelationStretchState {
     pub params: DecorrelationStretchParams,
     pub custom_mean: f64,
@@ -41,6 +59,18 @@ pub struct DecorrelationStretchState {
     pub is_holding_original: bool,
     pub last_duration_ms: u128,
     pub params_dirty: bool,
+    worker_rx:
+        Option<std::sync::mpsc::Receiver<Result<Option<DcsWorkerMsg>, little_clip_core::JobError>>>,
+    worker_ticket: Option<little_clip_core::JobTicket>,
+    worker_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    request_stamp: Option<DcsRequestStamp>,
+    preview_stamp: Option<DcsRequestStamp>,
+    pub(crate) retry_at: Option<std::time::Instant>,
+    retry_stamp: Option<DcsRequestStamp>,
+    retry_request: Option<DcsRequest>,
+    pub(crate) is_computing: bool,
+    pub(crate) queue_status: Option<String>,
+    pub(crate) error: Option<String>,
 }
 
 impl Default for DecorrelationStretchState {
@@ -59,27 +89,230 @@ impl Default for DecorrelationStretchState {
             is_holding_original: false,
             last_duration_ms: 0,
             params_dirty: false,
+            worker_rx: None,
+            worker_ticket: None,
+            worker_cancel: None,
+            request_stamp: None,
+            preview_stamp: None,
+            retry_at: None,
+            retry_stamp: None,
+            retry_request: None,
+            is_computing: false,
+            queue_status: None,
+            error: None,
         }
     }
 }
 
 impl ImagePreviewState {
     pub fn update_decorrelation_stretch(&mut self) {
-        let base_img = self.current_display_image();
-        let t0 = std::time::Instant::now();
-        let (stats, transform, stretched) =
-            run_decorrelation_stretch(&base_img, &self.dcs_state.params);
-        let duration_ms = t0.elapsed().as_millis();
+        self.update_decorrelation_stretch_on(little_clip_core::BackgroundJobs::global());
+    }
 
-        self.dcs_state.stats = Some(stats);
-        self.dcs_state.transform = Some(transform);
-        self.dcs_state.stretched_rgba = Some(stretched);
-        self.dcs_state.dirty_texture = true;
-        self.dcs_state.last_duration_ms = duration_ms;
+    fn current_dcs_stamp(&self) -> DcsRequestStamp {
+        DcsRequestStamp {
+            image: self.input_stamp(),
+            params: self.dcs_state.params,
+        }
+    }
+
+    fn update_decorrelation_stretch_on(&mut self, jobs: &little_clip_core::BackgroundJobs) {
+        self.cancel_decorrelation_stretch();
+        let snapshot = self.display_image_snapshot_request();
+        let request = DcsRequest {
+            stamp: DcsRequestStamp {
+                image: snapshot.input_stamp.clone(),
+                params: self.dcs_state.params,
+            },
+            snapshot,
+            params: self.dcs_state.params,
+        };
+        self.submit_decorrelation_stretch(request, jobs);
+    }
+
+    fn submit_decorrelation_stretch(
+        &mut self,
+        request: DcsRequest,
+        jobs: &little_clip_core::BackgroundJobs,
+    ) {
+        let request_stamp = request.stamp.clone();
+        let worker_stamp = request_stamp.clone();
+        let worker_request = request.clone();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
+            let started = std::time::Instant::now();
+            let result = if worker_cancel.load(std::sync::atomic::Ordering::Acquire) {
+                Err("Decorrelation stretch was cancelled".into())
+            } else {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let image = worker_request.snapshot.compose();
+                    run_decorrelation_stretch_cancellable(&image, &worker_request.params, &|| {
+                        worker_cancel.load(std::sync::atomic::Ordering::Acquire)
+                    })
+                    .ok_or_else(|| "Decorrelation stretch was cancelled".to_string())
+                }))
+                .unwrap_or_else(|_| Err("Decorrelation stretch worker panicked".into()))
+            };
+            if worker_cancel.load(std::sync::atomic::Ordering::Acquire) {
+                return None;
+            }
+            Some(DcsWorkerMsg {
+                stamp: worker_stamp,
+                duration_ms: started.elapsed().as_millis(),
+                result,
+            })
+        });
+        self.dcs_state.worker_ticket = Some(ticket);
+        self.dcs_state.worker_rx = Some(rx);
+        self.dcs_state.worker_cancel = Some(cancel);
+        self.dcs_state.request_stamp = Some(request_stamp.clone());
+        self.dcs_state.retry_request = Some(request);
+        self.dcs_state.is_computing = true;
+        self.dcs_state.queue_status = None;
+        self.dcs_state.error = None;
+        self.dcs_state.retry_at = None;
+        self.dcs_state.retry_stamp = None;
         self.dcs_state.params_dirty = false;
     }
 
+    pub(crate) fn poll_decorrelation_stretch(
+        &mut self,
+        ctx: &egui::Context,
+        jobs: &little_clip_core::BackgroundJobs,
+    ) {
+        let current_stamp = self.current_dcs_stamp();
+        if self
+            .dcs_state
+            .request_stamp
+            .as_ref()
+            .is_some_and(|stamp| stamp != &current_stamp)
+        {
+            self.cancel_decorrelation_stretch();
+        }
+        if self
+            .dcs_state
+            .retry_stamp
+            .as_ref()
+            .is_some_and(|stamp| stamp != &current_stamp)
+        {
+            self.dcs_state.retry_at = None;
+            self.dcs_state.retry_stamp = None;
+            self.dcs_state.retry_request = None;
+            self.dcs_state.queue_status = None;
+        }
+        if let Some(retry_at) = self.dcs_state.retry_at {
+            if std::time::Instant::now() < retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+                return;
+            }
+            if let Some(request) = self.dcs_state.retry_request.take() {
+                self.dcs_state.retry_at = None;
+                self.dcs_state.retry_stamp = None;
+                self.submit_decorrelation_stretch(request, jobs);
+            }
+            return;
+        }
+        let Some(rx) = self.dcs_state.worker_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(Some(message))) => {
+                self.clear_dcs_worker();
+                if message.stamp != current_stamp {
+                    return;
+                }
+                match message.result {
+                    Ok((stats, transform, stretched)) => {
+                        self.dcs_state.stats = Some(stats);
+                        self.dcs_state.transform = Some(transform);
+                        self.dcs_state.stretched_rgba = Some(stretched);
+                        self.dcs_state.preview_stamp = Some(message.stamp);
+                        self.dcs_state.dirty_texture = true;
+                        self.dcs_state.last_duration_ms = message.duration_ms;
+                        self.dcs_state.error = None;
+                    }
+                    Err(error) => self.dcs_state.error = Some(error),
+                }
+            }
+            Ok(Ok(None)) => self.clear_dcs_worker(),
+            Ok(Err(little_clip_core::JobError::QueueFull)) => {
+                self.dcs_state.worker_ticket = None;
+                self.dcs_state.worker_cancel = None;
+                self.dcs_state.worker_rx = None;
+                self.dcs_state.request_stamp = None;
+                self.dcs_state.is_computing = false;
+                self.dcs_state.retry_stamp = Some(current_stamp);
+                self.dcs_state.retry_at =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+                self.dcs_state.queue_status =
+                    Some("Background workers are busy; retrying shortly".into());
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
+            Ok(Err(little_clip_core::JobError::Cancelled)) => self.clear_dcs_worker(),
+            Ok(Err(error)) => {
+                self.clear_dcs_worker();
+                self.dcs_state.error =
+                    Some(format!("Decorrelation stretch worker failed: {error}"));
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.dcs_state.worker_rx = Some(rx);
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.clear_dcs_worker();
+                self.dcs_state.error =
+                    Some("Decorrelation stretch worker stopped unexpectedly".into());
+            }
+        }
+    }
+
+    fn clear_dcs_worker(&mut self) {
+        self.dcs_state.worker_ticket = None;
+        self.dcs_state.worker_cancel = None;
+        self.dcs_state.worker_rx = None;
+        self.dcs_state.request_stamp = None;
+        self.dcs_state.is_computing = false;
+        self.dcs_state.retry_request = None;
+    }
+
+    pub(crate) fn cancel_decorrelation_stretch(&mut self) {
+        if let Some(ticket) = self.dcs_state.worker_ticket.take() {
+            ticket.cancel();
+        }
+        if let Some(cancel) = self.dcs_state.worker_cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        self.dcs_state.worker_rx = None;
+        self.dcs_state.request_stamp = None;
+        self.dcs_state.retry_at = None;
+        self.dcs_state.retry_stamp = None;
+        self.dcs_state.retry_request = None;
+        self.dcs_state.is_computing = false;
+        self.dcs_state.queue_status = None;
+    }
+
+    pub(crate) fn dcs_preview_is_current(&self) -> bool {
+        self.dcs_state.preview_stamp.as_ref() == Some(&self.current_dcs_stamp())
+    }
+
+    pub(crate) fn invalidate_decorrelation_stretch(&mut self) {
+        self.cancel_decorrelation_stretch();
+        self.dcs_state.stretched_rgba = None;
+        self.dcs_state.stretched_texture = None;
+        self.dcs_state.stats = None;
+        self.dcs_state.transform = None;
+        self.dcs_state.preview_stamp = None;
+        self.dcs_state.dirty_texture = true;
+    }
+
     pub fn apply_decorrelation_stretch(&mut self) {
+        if self.dcs_state.preview_stamp.as_ref() != Some(&self.current_dcs_stamp()) {
+            self.show_toast("Wait for the current stretch preview before applying");
+            return;
+        }
         if let Some(stretched) = self.dcs_state.stretched_rgba.clone() {
             self.undo_stack.push(self.current_rgba.clone());
             self.redo_stack.clear();
@@ -113,6 +346,16 @@ impl ImagePreviewState {
                 .strong()
                 .color(accent),
         );
+
+        if self.dcs_state.is_computing {
+            ui.label(egui::RichText::new("Computing decorrelation stretch…").color(muted));
+        }
+        if let Some(status) = &self.dcs_state.queue_status {
+            ui.label(egui::RichText::new(status).color(muted));
+        }
+        if let Some(error) = &self.dcs_state.error {
+            ui.label(egui::RichText::new(error).color(hex_to_c32(&palette.diff_del)));
+        }
         ui.label(
             egui::RichText::new("Separate correlated color channels to reveal subtle variation.")
                 .size(crate::ui_ext::BODY_FONT_SIZE)
@@ -469,6 +712,16 @@ impl ImagePreviewState {
                 .size(crate::ui_ext::BODY_FONT_SIZE)
                 .color(f_low),
         );
+
+        if !self.dcs_preview_is_current() {
+            ui.add_space(crate::ui_ext::SPACE_MD);
+            ui.label(
+                egui::RichText::new("Waiting for analysis with the current image and settings…")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(f_low),
+            );
+            return;
+        }
 
         let (Some(stats), Some(transform)) = (&self.dcs_state.stats, &self.dcs_state.transform)
         else {
@@ -882,6 +1135,226 @@ impl ImagePreviewState {
 mod tests {
     use super::*;
 
+    fn test_state() -> ImagePreviewState {
+        let mut png = Vec::new();
+        RgbaImage::from_fn(96, 72, |x, y| {
+            image::Rgba([
+                (x * 17 + y * 3) as u8,
+                (y * 13 + x * 5) as u8,
+                ((x + y) * 7) as u8,
+                255,
+            ])
+        })
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+        ImagePreviewState::from_bytes_with_meta(
+            png,
+            "image/png".into(),
+            None,
+            "DCS async test".into(),
+            &little_clip_core::config::AppConfig::default(),
+        )
+        .unwrap()
+    }
+
+    fn wait_for_dcs(state: &mut ImagePreviewState, jobs: &little_clip_core::BackgroundJobs) {
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while (state.dcs_state.is_computing || state.dcs_state.retry_at.is_some())
+            && std::time::Instant::now() < deadline
+        {
+            state.poll_decorrelation_stretch(&ctx, jobs);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        state.poll_decorrelation_stretch(&ctx, jobs);
+        assert!(
+            !state.dcs_state.is_computing,
+            "DCS worker completes before deadline"
+        );
+        assert!(state.dcs_state.error.is_none());
+    }
+
+    #[test]
+    fn bounded_dcs_output_matches_direct_current_result_and_can_apply() {
+        let mut state = test_state();
+        let jobs = little_clip_core::BackgroundJobs::new(1, 1);
+        let base = state.current_display_image();
+        let expected = little_clip_ops::decorrelation_stretch::run_decorrelation_stretch(
+            &base,
+            &state.dcs_state.params,
+        );
+        state.update_decorrelation_stretch_on(&jobs);
+        assert!(state.dcs_state.is_computing);
+        wait_for_dcs(&mut state, &jobs);
+        assert_eq!(state.dcs_state.stats.as_ref(), Some(&expected.0));
+        assert_eq!(state.dcs_state.transform.as_ref(), Some(&expected.1));
+        assert_eq!(state.dcs_state.stretched_rgba.as_ref(), Some(&expected.2));
+        assert!(state.dcs_preview_is_current());
+
+        let output = state.dcs_state.stretched_rgba.clone().unwrap();
+        state.apply_decorrelation_stretch();
+        assert_eq!(state.current_rgba.as_ref(), &output);
+        assert_eq!(state.undo_stack.len(), 1);
+    }
+
+    #[test]
+    fn queue_full_shows_delayed_retry_and_reuses_snapshot_without_losing_preview() {
+        let jobs = little_clip_core::BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let (_, filler_rx) = jobs.submit(std::time::Duration::MAX, || ());
+
+        let mut state = test_state();
+        let old_preview = RgbaImage::from_pixel(3, 3, image::Rgba([1, 2, 3, 255]));
+        state.dcs_state.stretched_rgba = Some(old_preview.clone());
+        state.update_decorrelation_stretch_on(&jobs);
+        let retained = std::sync::Arc::clone(
+            &state
+                .dcs_state
+                .retry_request
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .pixels,
+        );
+        let ctx = egui::Context::default();
+        state.poll_decorrelation_stretch(&ctx, &jobs);
+        assert!(!state.dcs_state.is_computing);
+        assert!(state.dcs_state.retry_at.is_some());
+        assert!(
+            state
+                .dcs_state
+                .queue_status
+                .as_deref()
+                .unwrap()
+                .contains("busy")
+        );
+        assert_eq!(state.dcs_state.stretched_rgba.as_ref(), Some(&old_preview));
+        assert!(std::sync::Arc::ptr_eq(
+            &retained,
+            &state
+                .dcs_state
+                .retry_request
+                .as_ref()
+                .unwrap()
+                .snapshot
+                .pixels
+        ));
+        let deadline = state.dcs_state.retry_at.unwrap();
+        state.poll_decorrelation_stretch(&ctx, &jobs);
+        assert_eq!(state.dcs_state.retry_at, Some(deadline));
+
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+        filler_rx.recv().unwrap().unwrap();
+        state.dcs_state.retry_at = Some(std::time::Instant::now());
+        state.poll_decorrelation_stretch(&ctx, &jobs);
+        assert!(state.dcs_state.is_computing);
+        wait_for_dcs(&mut state, &jobs);
+        let expected = little_clip_ops::decorrelation_stretch::run_decorrelation_stretch(
+            &state.current_display_image(),
+            &state.dcs_state.params,
+        );
+        assert_eq!(state.dcs_state.stretched_rgba.as_ref(), Some(&expected.2));
+        assert!(state.dcs_state.queue_status.is_none());
+    }
+
+    #[test]
+    fn stale_parameters_cancel_queued_result_and_prevent_apply() {
+        let jobs = little_clip_core::BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let mut state = test_state();
+        state.update_decorrelation_stretch_on(&jobs);
+        let cancel = state.dcs_state.worker_cancel.as_ref().unwrap().clone();
+        state.dcs_state.params.tol = 0.01;
+        state.poll_decorrelation_stretch(&egui::Context::default(), &jobs);
+        assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
+        assert!(!state.dcs_state.is_computing);
+        assert!(state.dcs_state.retry_request.is_none());
+        let before_apply = state.current_rgba.clone();
+        state.dcs_state.stretched_rgba =
+            Some(RgbaImage::from_pixel(2, 2, image::Rgba([9, 9, 9, 255])));
+        state.apply_decorrelation_stretch();
+        assert!(std::sync::Arc::ptr_eq(&before_apply, &state.current_rgba));
+
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+    }
+
+    #[test]
+    fn input_change_cancels_queued_stretch_and_invalidates_preview() {
+        let jobs = little_clip_core::BackgroundJobs::new(1, 2);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let mut state = test_state();
+        state.update_decorrelation_stretch_on(&jobs);
+        let cancel = state.dcs_state.worker_cancel.as_ref().unwrap().clone();
+        let worker_rx = state.dcs_state.worker_rx.take().unwrap();
+        state.current_rgba =
+            std::sync::Arc::new(RgbaImage::from_pixel(20, 20, image::Rgba([3, 4, 5, 255])));
+        state.mark_pixels_changed();
+        assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
+        assert!(state.dcs_state.stretched_rgba.is_none());
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+        assert!(matches!(
+            worker_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            Err(little_clip_core::JobError::Cancelled)
+        ));
+    }
+
+    #[test]
+    fn dropping_viewer_cancels_queued_dcs_job() {
+        let jobs = little_clip_core::BackgroundJobs::new(1, 2);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let mut state = test_state();
+        state.update_decorrelation_stretch_on(&jobs);
+        let cancel = state.dcs_state.worker_cancel.as_ref().unwrap().clone();
+        let worker_rx = state.dcs_state.worker_rx.take().unwrap();
+        drop(state);
+        assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+        assert!(matches!(
+            worker_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            Err(little_clip_core::JobError::Cancelled)
+        ));
+    }
+
     #[test]
     fn rendered_matrix_rows_keep_three_decimal_precision_inside_compact_and_wide_drawers() {
         for width in [360.0, 1200.0] {
@@ -904,7 +1377,9 @@ mod tests {
                 &little_clip_core::config::AppConfig::default(),
             )
             .unwrap();
-            state.update_decorrelation_stretch();
+            let jobs = little_clip_core::BackgroundJobs::new(1, 1);
+            state.update_decorrelation_stretch_on(&jobs);
+            wait_for_dcs(&mut state, &jobs);
             let stats = state.dcs_state.stats.as_ref().unwrap();
             let expected_rows: Vec<_> = stats
                 .corr
