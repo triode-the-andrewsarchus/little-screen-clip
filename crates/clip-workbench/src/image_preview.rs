@@ -1149,6 +1149,11 @@ impl ImagePreviewState {
                 retry_at.saturating_duration_since(std::time::Instant::now()),
             );
         }
+        if let Some(retry_at) = self.creative_fx_state.depth_retry_at {
+            ctx.request_repaint_after(
+                retry_at.saturating_duration_since(std::time::Instant::now()),
+            );
+        }
         if self.active_mode == ImageToolMode::CreativeFx {
             if let Some(retry_at) = self.creative_fx_state.render_retry_at {
                 ctx.request_repaint_after(

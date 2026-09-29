@@ -38,6 +38,14 @@ pub(crate) struct CreativeFxMaskMsg {
     result: Result<RgbaImage, String>,
 }
 
+#[derive(Clone)]
+struct CreativeFxDepthRequest {
+    png_bytes: std::sync::Arc<Vec<u8>>,
+    cmd_bin: String,
+    cmd_args: Vec<String>,
+    stamp: CreativeFxMaskStamp,
+}
+
 fn send_creative_fx_mask_result(
     tx: &std::sync::mpsc::Sender<CreativeFxMaskMsg>,
     stamp: &CreativeFxMaskStamp,
@@ -96,6 +104,244 @@ mod ownership_tests {
             .recv_timeout(std::time::Duration::from_secs(2))
             .unwrap();
         release_tx
+    }
+
+    fn fake_depth_output_script(
+        directory: &std::path::Path,
+        name: &str,
+        output: &RgbaImage,
+    ) -> std::path::PathBuf {
+        let output_path = directory.join("depth-output.png");
+        let mut png_bytes = Vec::new();
+        output
+            .write_to(
+                &mut std::io::Cursor::new(&mut png_bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        std::fs::write(&output_path, png_bytes).unwrap();
+        let script = directory.join(name);
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ncat >/dev/null\ncat '{}'\n",
+                output_path.display()
+            ),
+        )
+        .unwrap();
+        script
+    }
+
+    fn wait_depth_mask(state: &mut ImagePreviewState, jobs: &BackgroundJobs) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while state.creative_fx_state.depth_estimation_in_progress {
+            state.poll_creative_fx_on(jobs);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fake depth helper timed out"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn depth_mask_queue_full_retries_and_publishes_current_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = RgbaImage::from_pixel(5, 3, image::Rgba([70, 110, 160, 255]));
+        let script = fake_depth_output_script(directory.path(), "depth-output.sh", &output);
+        let jobs = BackgroundJobs::new(1, 1);
+        let release = occupy_executor(&jobs);
+        let drained = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let drained_job = drained.clone();
+        let _queued = jobs.submit(std::time::Duration::MAX, move || {
+            drained_job.store(true, std::sync::atomic::Ordering::Release);
+        });
+        let mut state = state();
+        state.creative_fx_state.lens_params.depth_mask.enabled = true;
+        state.run_depth_estimation_for_fx_with_command_on(
+            "sh".into(),
+            vec![script.display().to_string()],
+            &jobs,
+        );
+        let retained = std::sync::Arc::clone(
+            &state
+                .creative_fx_state
+                .depth_request
+                .as_ref()
+                .unwrap()
+                .png_bytes,
+        );
+        state.poll_creative_fx_on(&jobs);
+        let retry_at = state.creative_fx_state.depth_retry_at.unwrap();
+        assert!(
+            state
+                .creative_fx_state
+                .depth_queue_status
+                .as_deref()
+                .unwrap()
+                .contains("waiting")
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &retained,
+            &state
+                .creative_fx_state
+                .depth_request
+                .as_ref()
+                .unwrap()
+                .png_bytes
+        ));
+        state.poll_creative_fx_on(&jobs);
+        assert_eq!(state.creative_fx_state.depth_retry_at, Some(retry_at));
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !drained.load(std::sync::atomic::Ordering::Acquire) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        state.creative_fx_state.depth_retry_at = Some(std::time::Instant::now());
+        state.poll_creative_fx_on(&jobs);
+        wait_depth_mask(&mut state, &jobs);
+        assert_eq!(
+            state.creative_fx_state.cached_depth_map.as_ref(),
+            Some(&output)
+        );
+        assert!(state.creative_fx_state.depth_mask_for_active_fx().enabled);
+        assert!(state.creative_fx_state.depth_estimation_error.is_none());
+    }
+
+    #[test]
+    fn queued_depth_mask_is_canceled_when_viewer_drops() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("started");
+        let script = directory.path().join("queued-depth.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho started > '{}'\ncat >/dev/null\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let jobs = BackgroundJobs::new(1, 1);
+        let release = occupy_executor(&jobs);
+        let mut state = state();
+        state.run_depth_estimation_for_fx_with_command_on(
+            "sh".into(),
+            vec![script.display().to_string()],
+            &jobs,
+        );
+        assert!(state.creative_fx_state.depth_job_ticket.is_some());
+        drop(state);
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let (_, rx) = jobs.submit(std::time::Duration::MAX, || ());
+            match rx.recv_timeout(std::time::Duration::from_millis(20)) {
+                Ok(Ok(())) => break,
+                Ok(Err(JobError::QueueFull)) | Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+                    if std::time::Instant::now() < deadline =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
+                other => panic!("scheduler did not drain canceled depth mask: {other:?}"),
+            }
+        }
+        assert!(!marker.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn running_depth_mask_is_killed_and_reaped_when_viewer_drops() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("worker.pid");
+        let script = directory.path().join("running-depth.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho $$ > '{}'\ncat >/dev/null\nsleep 30\n",
+                pid_file.display()
+            ),
+        )
+        .unwrap();
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = state();
+        state.run_depth_estimation_for_fx_with_command_on(
+            "sh".into(),
+            vec![script.display().to_string()],
+            &jobs,
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !pid_file.exists() && std::time::Instant::now() < deadline {
+            state.poll_creative_fx_on(&jobs);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(pid_file.exists(), "synthetic depth helper did not start");
+        let pid = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .trim()
+            .parse::<u32>()
+            .unwrap();
+        let control = state
+            .creative_fx_state
+            .depth_process_control
+            .as_ref()
+            .unwrap()
+            .clone();
+        drop(state);
+        assert!(control.cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_process_exited(pid);
+    }
+
+    #[test]
+    fn depth_result_after_intent_change_is_cached_without_changing_new_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let output = RgbaImage::from_pixel(4, 4, image::Rgba([30, 80, 120, 255]));
+        let script = fake_depth_output_script(directory.path(), "late-depth.sh", &output);
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = state();
+        state.creative_fx_state.lens_params.depth_mask.enabled = true;
+        state.run_depth_estimation_for_fx_with_command_on(
+            "sh".into(),
+            vec![script.display().to_string()],
+            &jobs,
+        );
+        state.creative_fx_state.select_fx(CreativeFxType::Structure);
+        wait_depth_mask(&mut state, &jobs);
+        assert_eq!(
+            state.creative_fx_state.cached_depth_map.as_ref(),
+            Some(&output)
+        );
+        assert!(state.depth_mask_cache_is_current());
+        assert!(!state.creative_fx_state.depth_mask_for_active_fx().enabled);
+    }
+
+    #[test]
+    fn current_depth_mask_failure_is_reported() {
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("fail-depth.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ncat >/dev/null\necho synthetic depth failure >&2\nexit 7\n",
+        )
+        .unwrap();
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = state();
+        state.creative_fx_state.lens_params.depth_mask.enabled = true;
+        state.run_depth_estimation_for_fx_with_command_on(
+            "sh".into(),
+            vec![script.display().to_string()],
+            &jobs,
+        );
+        wait_depth_mask(&mut state, &jobs);
+        assert!(
+            state
+                .creative_fx_state
+                .depth_estimation_error
+                .as_deref()
+                .unwrap()
+                .contains("synthetic depth failure")
+        );
+        assert!(!state.creative_fx_state.depth_estimation_in_progress);
     }
 
     #[test]
@@ -1109,6 +1355,11 @@ pub struct CreativeFxState {
     pub depth_estimation_in_progress: bool,
     pub depth_estimation_rx: Option<std::sync::mpsc::Receiver<CreativeFxMaskMsg>>,
     depth_estimation_stamp: Option<CreativeFxMaskStamp>,
+    depth_job_rx: Option<std::sync::mpsc::Receiver<Result<(), JobError>>>,
+    pub(super) depth_job_ticket: Option<JobTicket>,
+    depth_request: Option<CreativeFxDepthRequest>,
+    pub depth_retry_at: Option<std::time::Instant>,
+    pub depth_queue_status: Option<String>,
     pub(super) depth_process_control: Option<std::sync::Arc<ImageToolProcessControl>>,
     pub depth_estimation_error: Option<String>,
 
@@ -1169,6 +1420,11 @@ impl Default for CreativeFxState {
             depth_estimation_in_progress: false,
             depth_estimation_rx: None,
             depth_estimation_stamp: None,
+            depth_job_rx: None,
+            depth_job_ticket: None,
+            depth_request: None,
+            depth_retry_at: None,
+            depth_queue_status: None,
             depth_process_control: None,
             depth_estimation_error: None,
             cached_background_removal: None,
@@ -1545,6 +1801,19 @@ impl ImagePreviewState {
     }
 
     fn run_depth_estimation_for_fx_with_command(&mut self, cmd_bin: String, cmd_args: Vec<String>) {
+        self.run_depth_estimation_for_fx_with_command_on(
+            cmd_bin,
+            cmd_args,
+            BackgroundJobs::global(),
+        );
+    }
+
+    fn run_depth_estimation_for_fx_with_command_on(
+        &mut self,
+        cmd_bin: String,
+        cmd_args: Vec<String>,
+        jobs: &BackgroundJobs,
+    ) {
         if self.creative_fx_state.depth_estimation_in_progress || self.current_rgba.is_empty() {
             return;
         }
@@ -1565,32 +1834,50 @@ impl ImagePreviewState {
         }
 
         let stamp = self.current_creative_fx_mask_stamp();
-        let (tx, rx) = std::sync::mpsc::channel::<CreativeFxMaskMsg>();
-        self.creative_fx_state.depth_estimation_rx = Some(rx);
         self.creative_fx_state.depth_estimation_stamp = Some(stamp.clone());
         self.creative_fx_state.depth_estimation_in_progress = true;
         self.creative_fx_state.depth_estimation_error = None;
+        self.creative_fx_state.depth_queue_status = None;
+        self.creative_fx_state.depth_retry_at = None;
+        self.creative_fx_state.depth_request = Some(CreativeFxDepthRequest {
+            png_bytes: std::sync::Arc::new(png_bytes),
+            cmd_bin,
+            cmd_args,
+            stamp,
+        });
+        self.submit_creative_fx_depth_attempt(jobs);
+    }
+
+    fn submit_creative_fx_depth_attempt(&mut self, jobs: &BackgroundJobs) {
+        let Some(request) = self.creative_fx_state.depth_request.clone() else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel::<CreativeFxMaskMsg>();
+        self.creative_fx_state.depth_estimation_rx = Some(rx);
+        self.creative_fx_state.depth_retry_at = None;
+        self.creative_fx_state.depth_queue_status = None;
         let control = std::sync::Arc::new(ImageToolProcessControl::new());
         self.creative_fx_state.depth_process_control = Some(control.clone());
-
-        std::thread::spawn(move || {
-            let mut cmd = Command::new(&cmd_bin);
-            cmd.args(&cmd_args);
+        let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            let mut cmd = Command::new(&request.cmd_bin);
+            cmd.args(&request.cmd_args);
             let result = super::background_removal::run_image_tool_subprocess(
                 cmd,
-                &png_bytes,
+                &request.png_bytes,
                 None,
                 Some(&control.cancel),
                 Some(&control.child_pid),
                 BgRemovalOperation::DepthMap,
-                &cmd_bin,
+                &request.cmd_bin,
             )
             .and_then(super::background_removal::decode_image_tool_output);
             if result.is_err() && control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
             }
-            send_creative_fx_mask_result(&tx, &stamp, result);
+            send_creative_fx_mask_result(&tx, &request.stamp, result);
         });
+        self.creative_fx_state.depth_job_ticket = Some(ticket);
+        self.creative_fx_state.depth_job_rx = Some(job_rx);
     }
 
     /// Spawn automatic FeyNoBg removal to provide an alpha mask for Creative FX.
@@ -1734,7 +2021,7 @@ impl ImagePreviewState {
         self.invalidate_stale_creative_fx_masks();
         self.invalidate_stale_creative_fx_thumbnails();
         self.poll_creative_fx_render_on(jobs);
-        self.poll_creative_fx_depth_mask();
+        self.poll_creative_fx_depth_mask(jobs);
         self.poll_creative_fx_alpha_mask();
         self.poll_creative_fx_thumbnail_job();
         self.poll_creative_fx_thumbnails();
@@ -1911,8 +2198,8 @@ impl ImagePreviewState {
         }
     }
 
-    fn poll_creative_fx_depth_mask(&mut self) {
-        if self.creative_fx_state.depth_estimation_rx.is_some()
+    fn poll_creative_fx_depth_mask(&mut self, jobs: &BackgroundJobs) {
+        if self.creative_fx_state.depth_estimation_in_progress
             && self
                 .creative_fx_state
                 .depth_estimation_stamp
@@ -1920,13 +2207,83 @@ impl ImagePreviewState {
                 .map(|stamp| &stamp.input)
                 != Some(&self.input_stamp())
         {
+            if let Some(ticket) = self.creative_fx_state.depth_job_ticket.take() {
+                ticket.cancel();
+            }
+            self.creative_fx_state.depth_job_rx = None;
             if let Some(control) = self.creative_fx_state.depth_process_control.take() {
                 control.cancel();
             }
             self.creative_fx_state.depth_estimation_rx = None;
             self.creative_fx_state.depth_estimation_stamp = None;
+            self.creative_fx_state.depth_request = None;
+            self.creative_fx_state.depth_retry_at = None;
+            self.creative_fx_state.depth_queue_status = None;
             self.creative_fx_state.depth_estimation_in_progress = false;
             return;
+        }
+
+        if self
+            .creative_fx_state
+            .depth_retry_at
+            .is_some_and(|retry_at| std::time::Instant::now() >= retry_at)
+        {
+            self.submit_creative_fx_depth_attempt(jobs);
+        } else if self.creative_fx_state.depth_retry_at.is_some() {
+            return;
+        }
+
+        if let Some(job_rx) = self.creative_fx_state.depth_job_rx.as_ref() {
+            match job_rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.creative_fx_state.depth_job_rx = None;
+                    self.creative_fx_state.depth_job_ticket = None;
+                }
+                Ok(Err(JobError::QueueFull)) => {
+                    self.creative_fx_state.depth_job_rx = None;
+                    self.creative_fx_state.depth_job_ticket = None;
+                    self.creative_fx_state.depth_estimation_rx = None;
+                    self.creative_fx_state.depth_retry_at =
+                        Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+                    self.creative_fx_state.depth_queue_status =
+                        Some("Depth map waiting for workers; retrying shortly".into());
+                    return;
+                }
+                Ok(Err(JobError::Cancelled)) => {
+                    self.finish_creative_fx_depth_mask();
+                    return;
+                }
+                Ok(Err(error)) => {
+                    let should_report = self
+                        .creative_fx_state
+                        .depth_estimation_stamp
+                        .as_ref()
+                        .is_some_and(|stamp| self.creative_fx_mask_intent_matches(stamp));
+                    self.finish_creative_fx_depth_mask();
+                    if should_report {
+                        self.creative_fx_state.depth_estimation_error =
+                            Some(format!("Depth map worker failed: {error}"));
+                    }
+                    return;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    let should_report = self
+                        .creative_fx_state
+                        .depth_estimation_stamp
+                        .as_ref()
+                        .is_some_and(|stamp| self.creative_fx_mask_intent_matches(stamp));
+                    if let Some(control) = self.creative_fx_state.depth_process_control.take() {
+                        control.cancel();
+                    }
+                    self.finish_creative_fx_depth_mask();
+                    if should_report {
+                        self.creative_fx_state.depth_estimation_error =
+                            Some("Depth map worker stopped".into());
+                    }
+                    return;
+                }
+            }
         }
         let Some(rx) = self.creative_fx_state.depth_estimation_rx.take() else {
             return;
@@ -1955,17 +2312,50 @@ impl ImagePreviewState {
                 }
                 self.creative_fx_state.depth_estimation_in_progress = false;
                 self.creative_fx_state.depth_estimation_stamp = None;
+                self.creative_fx_state.depth_request = None;
+                self.creative_fx_state.depth_retry_at = None;
+                self.creative_fx_state.depth_queue_status = None;
                 self.creative_fx_state.depth_process_control = None;
+                self.creative_fx_state.depth_job_rx = None;
+                self.creative_fx_state.depth_job_ticket = None;
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 self.creative_fx_state.depth_estimation_rx = Some(rx);
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                let should_report = self
+                    .creative_fx_state
+                    .depth_estimation_stamp
+                    .as_ref()
+                    .is_some_and(|stamp| self.creative_fx_mask_intent_matches(stamp));
                 self.creative_fx_state.depth_estimation_in_progress = false;
                 self.creative_fx_state.depth_estimation_stamp = None;
+                self.creative_fx_state.depth_request = None;
+                self.creative_fx_state.depth_retry_at = None;
+                self.creative_fx_state.depth_queue_status = None;
                 self.creative_fx_state.depth_process_control = None;
+                self.creative_fx_state.depth_job_rx = None;
+                self.creative_fx_state.depth_job_ticket = None;
+                if should_report {
+                    self.creative_fx_state.depth_estimation_error =
+                        Some("Depth map worker stopped".into());
+                }
             }
         }
+    }
+
+    fn finish_creative_fx_depth_mask(&mut self) {
+        if let Some(control) = self.creative_fx_state.depth_process_control.take() {
+            control.cancel();
+        }
+        self.creative_fx_state.depth_estimation_in_progress = false;
+        self.creative_fx_state.depth_estimation_rx = None;
+        self.creative_fx_state.depth_estimation_stamp = None;
+        self.creative_fx_state.depth_job_rx = None;
+        self.creative_fx_state.depth_job_ticket = None;
+        self.creative_fx_state.depth_request = None;
+        self.creative_fx_state.depth_retry_at = None;
+        self.creative_fx_state.depth_queue_status = None;
     }
 
     fn poll_creative_fx_alpha_mask(&mut self) {
@@ -2203,10 +2593,19 @@ impl ImagePreviewState {
         if depth_loading {
             render_creative_fx_mask_loading(
                 ui,
-                "Estimating depth map with Depth-Anything...",
+                self.creative_fx_state
+                    .depth_queue_status
+                    .as_deref()
+                    .unwrap_or("Estimating depth map with Depth-Anything..."),
                 base_c,
             );
-            ctx.request_repaint();
+            if let Some(retry_at) = self.creative_fx_state.depth_retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            } else {
+                ctx.request_repaint();
+            }
         } else if alpha_loading {
             render_creative_fx_mask_loading(ui, "Removing background with FeyNoBg...", base_c);
             ctx.request_repaint();

@@ -447,6 +447,9 @@ impl Drop for ImagePreviewState {
         if let Some(control) = self.creative_fx_state.depth_process_control.take() {
             control.cancel();
         }
+        if let Some(ticket) = self.creative_fx_state.depth_job_ticket.take() {
+            ticket.cancel();
+        }
         if let Some(control) = self.creative_fx_state.alpha_process_control.take() {
             control.cancel();
         }
