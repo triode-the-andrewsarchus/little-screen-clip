@@ -32,7 +32,7 @@ impl ImagePreviewState {
         let hex = format!("#{:02X}{:02X}{:02X}", col.r(), col.g(), col.b());
         ctx.output_mut(|o| o.copied_text = hex.clone());
 
-        schedule_pick_color_system_copy_on(jobs, hex.clone(), copy);
+        schedule_system_clipboard_copy_on(jobs, hex.clone(), copy);
 
         self.pick_color_state.last_picked = Some(col);
         if !self.pick_color_state.recent_colors.contains(&col) {
@@ -288,7 +288,7 @@ impl ImagePreviewState {
     }
 }
 
-fn schedule_pick_color_system_copy_on(
+pub fn schedule_system_clipboard_copy_on(
     jobs: &BackgroundJobs,
     text: String,
     copy: impl FnOnce(&str) + Send + 'static,

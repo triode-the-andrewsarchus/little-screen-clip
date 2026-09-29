@@ -192,7 +192,7 @@ pub(super) use ocr::{OcrEngine, OcrMsg, OcrState};
 mod palette;
 pub(super) use palette::{PaletteColor, PaletteState, extract_palette};
 mod pick_color;
-pub(super) use pick_color::PickColorState;
+pub(super) use pick_color::{PickColorState, schedule_system_clipboard_copy_on};
 mod redact;
 pub(super) use redact::{RedactionBox, RedactionDrag, RedactionState};
 mod resize;

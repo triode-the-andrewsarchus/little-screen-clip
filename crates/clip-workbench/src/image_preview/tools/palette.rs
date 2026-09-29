@@ -153,6 +153,27 @@ impl Default for PaletteState {
 }
 
 impl ImagePreviewState {
+    fn copy_palette_csv_on(
+        &mut self,
+        ctx: &egui::Context,
+        jobs: &BackgroundJobs,
+        csv: String,
+        copy: impl FnOnce(&str) + Send + 'static,
+    ) {
+        ctx.output_mut(|output| output.copied_text = csv.clone());
+        super::schedule_system_clipboard_copy_on(jobs, csv, copy);
+        self.show_toast("Copied palette hex codes to clipboard");
+    }
+
+    fn palette_csv(&self) -> String {
+        self.palette_state
+            .extracted_colors
+            .iter()
+            .map(|color| color.hex.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     pub fn run_palette_extraction(&mut self) {
         self.start_palette_extraction(BackgroundJobs::global());
     }
@@ -300,23 +321,12 @@ impl ImagePreviewState {
                 .on_hover_text("Copy all palette hex codes")
                 .clicked()
             {
-                let csv = self
-                    .palette_state
-                    .extracted_colors
-                    .iter()
-                    .map(|color| color.hex.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                ctx.output_mut(|output| output.copied_text = csv.clone());
-                let csv_for_command = csv.clone();
-                std::thread::spawn(move || {
-                    if let Err(error) =
-                        little_clip_core::copy_text_to_system_clipboard(&csv_for_command)
-                    {
+                let csv = self.palette_csv();
+                self.copy_palette_csv_on(ctx, BackgroundJobs::global(), csv, |text| {
+                    if let Err(error) = little_clip_core::copy_text_to_system_clipboard(text) {
                         tracing::debug!(%error, "failed to copy palette to system clipboard");
                     }
                 });
-                self.show_toast("Copied palette hex codes to clipboard");
             }
         });
 
@@ -413,6 +423,8 @@ impl ImagePreviewState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     fn rendered_copy_csv_button_center(output: &egui::FullOutput) -> Pos2 {
         output
@@ -428,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn rendered_copy_csv_button_emits_extracted_hex_values_in_order() {
+    fn copy_palette_csv_helper_preserves_order_and_egui_fallback() {
         let config = little_clip_core::config::AppConfig::default();
         let image = RgbaImage::from_fn(4, 1, |x, _| match x {
             0..=2 => image::Rgba([0x12, 0x34, 0x56, 255]),
@@ -456,54 +468,84 @@ mod tests {
             .collect();
         assert_eq!(extracted_hex, ["#123456", "#FEDCBA"]);
 
-        let palette = AppPalette::default();
         let context = egui::Context::default();
-        let render = |state: &mut ImagePreviewState, time, events| {
-            context.run(
-                egui::RawInput {
-                    time: Some(time),
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(600.0, 400.0))),
-                    events,
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        state.render_palette_panel(ui, ctx, &palette);
-                    });
-                },
-            )
-        };
-
-        let initial = render(&mut state, 0.0, Vec::new());
-        let button_center = rendered_copy_csv_button_center(&initial);
-        render(
-            &mut state,
-            0.1,
-            vec![
-                egui::Event::PointerMoved(button_center),
-                egui::Event::PointerButton {
-                    pos: button_center,
-                    button: egui::PointerButton::Primary,
-                    pressed: true,
-                    modifiers: egui::Modifiers::default(),
-                },
-            ],
-        );
-        let copied = render(
-            &mut state,
-            0.2,
-            vec![
-                egui::Event::PointerMoved(button_center),
-                egui::Event::PointerButton {
-                    pos: button_center,
-                    button: egui::PointerButton::Primary,
-                    pressed: false,
-                    modifiers: egui::Modifiers::default(),
-                },
-            ],
-        );
+        let (copy_tx, copy_rx) = mpsc::channel();
+        let csv = state.palette_csv();
+        let copied = context.run(Default::default(), |ctx| {
+            state.copy_palette_csv_on(ctx, &jobs, csv, move |text| {
+                copy_tx.send(text.to_owned()).unwrap();
+            });
+        });
 
         assert_eq!(copied.platform_output.copied_text, "#123456, #FEDCBA");
+        assert_eq!(
+            copy_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            "#123456, #FEDCBA"
+        );
+        assert_eq!(state.palette_state.extracted_colors.len(), 2);
+        assert!(
+            state
+                .status_toast
+                .as_ref()
+                .is_some_and(|(toast, _)| toast == "Copied palette hex codes to clipboard")
+        );
+    }
+
+    #[test]
+    fn palette_copy_queue_full_keeps_egui_fallback_without_running_write() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (blocker_ticket, blocker_rx) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (queued_ticket, queued_rx) = jobs.submit(Duration::MAX, || ());
+        let (copy_tx, copy_rx) = mpsc::channel();
+
+        let mut state = palette_state_for_image(RgbaImage::new(2, 2));
+        state.palette_state.extracted_colors = vec![
+            PaletteColor {
+                color: Color32::from_rgb(0x12, 0x34, 0x56),
+                hex: "#123456".into(),
+                percentage: 60.0,
+                count: 6,
+            },
+            PaletteColor {
+                color: Color32::from_rgb(0xfe, 0xdc, 0xba),
+                hex: "#FEDCBA".into(),
+                percentage: 40.0,
+                count: 4,
+            },
+        ];
+        let prior_colors = state.palette_state.extracted_colors.clone();
+        let context = egui::Context::default();
+        let csv = state.palette_csv();
+        let output = context.run(Default::default(), |ctx| {
+            state.copy_palette_csv_on(ctx, &jobs, csv, move |text| {
+                copy_tx.send(text.to_owned()).unwrap();
+            });
+        });
+
+        assert_eq!(output.platform_output.copied_text, "#123456, #FEDCBA");
+        assert_eq!(state.palette_state.extracted_colors, prior_colors);
+        assert_eq!(
+            state.status_toast.as_ref().map(|(toast, _)| toast.as_str()),
+            Some("Copied palette hex codes to clipboard")
+        );
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        queued_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert!(copy_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        blocker_ticket.cancel();
+        queued_ticket.cancel();
     }
 
     fn palette_state_for_image(image: RgbaImage) -> ImagePreviewState {
