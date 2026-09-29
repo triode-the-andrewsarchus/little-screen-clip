@@ -3554,6 +3554,77 @@ mod workbench_layout_tests {
         assert_eq!(app.view, WorkbenchView::Palette);
     }
 
+    #[test]
+    fn palette_image_diff_opens_and_escape_returns_to_palette() {
+        let png_item = |color: [u8; 4], title: &str| {
+            let image = image::RgbaImage::from_pixel(2, 2, image::Rgba(color));
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgba8(image)
+                .write_to(&mut bytes, image::ImageFormat::Png)
+                .expect("encode tiny PNG fixture");
+            ClipItem {
+                id: uuid::Uuid::new_v4(),
+                created_at: 0,
+                payload: ClipPayload::Image {
+                    bytes: bytes.into_inner(),
+                    path: None,
+                    width: 2,
+                    height: 2,
+                    mime: "image/png".to_owned(),
+                    thumbnail: None,
+                },
+                title: title.to_owned(),
+                subtitle: "PNG".to_owned(),
+                details: vec!["PNG".to_owned()],
+                handler_tag: "IMAGE".to_owned(),
+            }
+        };
+
+        let mut app = test_workbench_app(None, VecDeque::new());
+        *app.state.get_mut(SlotId::LeftHand).expect("left slot") =
+            Some(png_item([255, 0, 0, 255], "left.png"));
+        *app.state.get_mut(SlotId::RightHand).expect("right slot") =
+            Some(png_item([0, 0, 255, 255], "right.png"));
+        app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
+        app.search_query = "diff".to_owned();
+        let diff_action = app
+            .filtered_actions()
+            .iter()
+            .position(|action| matches!(action, PaletteAction::Op(op) if op.name == "diff"))
+            .expect("built-in image Diff action");
+        app.selected_action_index = diff_action;
+
+        app.execute_current_action(&egui::Context::default());
+
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::Diff(ref state)) if state.is_image()
+        ));
+        assert_eq!(app.view, WorkbenchView::Palette);
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| assert!(app.render_modal_viewers(ctx)),
+        );
+
+        assert!(app.viewer.is_none());
+        assert_eq!(app.view, WorkbenchView::Palette);
+    }
+
     fn space_key_event() -> egui::Event {
         egui::Event::Key {
             key: egui::Key::Space,
