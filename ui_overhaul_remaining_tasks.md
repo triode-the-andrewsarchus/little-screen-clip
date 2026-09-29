@@ -609,6 +609,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H2.3f4 [Luna] Verify prompt Enter submits captured input exactly once.** `in_app_prompt_enter_submits_from_focused_editor_once` captures one `ExecuteRecipeWithPrompt` carrying the edited input and returns controlled success through the shared result handler; the popup receives one close command. No daemon or recipe action runs.
     - [x] **H2.3f5 [Luna] Verify Auto Actions toggle request and failure feedback.** A rendered checkbox click emits one `SetAutoAction`; controlled success retains the enabled value, while transport failure restores the previous setting and shows status feedback. No daemon is contacted.
   - [ ] **H2.3g [Primary] Pass parity-ledger keyboard scenarios.**
+    - [x] **H2.3g1 [Luna] Verify Palette digit shortcuts select the documented slot sets.** `palette_digit_shortcuts_select_exact_slot_sets` checks 0–3 through the production shortcut handler, including selected slots, mirror invalidation, and action-index reset.
   - [ ] **H2.3h [Primary] Pass parity-ledger output scenarios.**
   - [ ] **H2.3i [Primary] Pass parity-ledger return-destination scenarios.**
 - **H2.4 Reusable preview hosting**

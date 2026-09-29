@@ -3966,8 +3966,12 @@ mod workbench_layout_tests {
     }
 
     fn space_key_event() -> egui::Event {
+        key_press_event(egui::Key::Space)
+    }
+
+    fn key_press_event(key: egui::Key) -> egui::Event {
         egui::Event::Key {
-            key: egui::Key::Space,
+            key,
             physical_key: None,
             pressed: true,
             repeat: false,
@@ -4003,6 +4007,35 @@ mod workbench_layout_tests {
             |ctx| app.handle_empty_search_shortcuts(ctx, true),
         );
         assert_eq!(app.selected_slots, vec![SlotId::LeftPrior1]);
+    }
+
+    #[test]
+    fn palette_digit_shortcuts_select_exact_slot_sets() {
+        let cases = [
+            (egui::Key::Num1, vec![SlotId::LeftHand, SlotId::LeftPrior1]),
+            (egui::Key::Num2, vec![SlotId::LeftHand, SlotId::LeftPrior2]),
+            (
+                egui::Key::Num3,
+                vec![SlotId::LeftHand, SlotId::LeftPrior1, SlotId::LeftPrior2],
+            ),
+            (egui::Key::Num0, vec![SlotId::LeftHand]),
+        ];
+
+        for (key, expected_slots) in cases {
+            let mut app = test_workbench_app(None, VecDeque::new());
+            app.selected_slots = vec![SlotId::RightPrior2];
+            let _ = egui::Context::default().run(
+                egui::RawInput {
+                    events: vec![key_press_event(key)],
+                    ..Default::default()
+                },
+                |ctx| app.handle_empty_search_shortcuts(ctx, false),
+            );
+
+            assert_eq!(app.selected_slots, expected_slots, "key {key:?}");
+            assert!(app.dirty_mirror, "key {key:?} should refresh the mirror");
+            assert_eq!(app.selected_action_index, 0, "key {key:?}");
+        }
     }
 
     #[test]
