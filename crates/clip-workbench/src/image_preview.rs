@@ -44,7 +44,10 @@ use std::sync::Arc;
 struct BgRemovalRequest {
     png_bytes: Arc<Vec<u8>>,
     prompt: Option<String>,
-    configured_command: Option<String>,
+    command: String,
+    args: Vec<String>,
+    operation: BgRemovalOperation,
+    initial_progress: String,
     status: String,
 }
 

@@ -3,6 +3,8 @@ use super::super::*;
 #[cfg(all(test, unix))]
 mod cancellation_tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
 
     fn state() -> ImagePreviewState {
         let image = RgbaImage::from_pixel(4, 4, image::Rgba([20, 30, 40, 255]));
@@ -70,6 +72,185 @@ mod cancellation_tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         panic!("depth child {pid} remained alive after cancellation");
+    }
+
+    fn write_script(directory: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        let path = directory.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        path
+    }
+
+    fn wait_depth(state: &mut ImagePreviewState, jobs: &BackgroundJobs) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while state.bg_removal_in_progress && Instant::now() < deadline {
+            state.poll_bg_removal_on(jobs);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            !state.bg_removal_in_progress,
+            "synthetic depth worker did not finish"
+        );
+    }
+
+    #[test]
+    fn depth_queue_full_retains_request_and_retries_with_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let expected = RgbaImage::from_pixel(3, 2, image::Rgba([180, 40, 20, 255]));
+        let mut expected_png = Vec::new();
+        expected
+            .write_to(
+                &mut std::io::Cursor::new(&mut expected_png),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let output = directory.path().join("depth.png");
+        std::fs::write(&output, expected_png).unwrap();
+        let script = write_script(
+            directory.path(),
+            "fake-depth.sh",
+            &format!("cat >/dev/null\ncat '{}'", output.display()),
+        );
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_blocker, blocker_rx) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (_filler, filler_rx) = jobs.submit(Duration::MAX, || ());
+        let mut state = state();
+        state.set_tool_mode(ImageToolMode::DepthMap);
+        state.run_depth_estimation_with_command_on(
+            "sh".into(),
+            vec![script.display().to_string()],
+            &jobs,
+        );
+        let retained = Arc::clone(&state.bg_removal_request.as_ref().unwrap().png_bytes);
+        state.poll_bg_removal_on(&jobs);
+        let deadline = state.bg_removal_retry_at.unwrap();
+        assert!(
+            state
+                .bg_removal_status
+                .as_deref()
+                .unwrap()
+                .contains("Depth Map")
+        );
+        assert!(Arc::ptr_eq(
+            &retained,
+            &state.bg_removal_request.as_ref().unwrap().png_bytes
+        ));
+        state.poll_bg_removal_on(&jobs);
+        assert_eq!(state.bg_removal_retry_at, Some(deadline));
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        filler_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        state.bg_removal_retry_at = Some(Instant::now());
+        state.poll_bg_removal_on(&jobs);
+        wait_depth(&mut state, &jobs);
+        assert_eq!(state.current_rgba.as_ref(), &expected);
+        assert!(
+            state
+                .status_toast
+                .as_ref()
+                .unwrap()
+                .0
+                .starts_with("🌊 Depth map generated")
+        );
+    }
+
+    #[test]
+    fn queued_depth_cancellation_prevents_helper_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("started");
+        let script = write_script(
+            directory.path(),
+            "queued-depth.sh",
+            &format!("echo started > '{}'\ncat >/dev/null", marker.display()),
+        );
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_blocker, blocker_rx) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let mut state = state();
+        state.set_tool_mode(ImageToolMode::DepthMap);
+        state.run_depth_estimation_with_command_on(
+            "sh".into(),
+            vec![script.display().to_string()],
+            &jobs,
+        );
+        state.cancel_image_tool_process();
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            let (_, receiver) = jobs.submit(Duration::MAX, || ());
+            match receiver.recv_timeout(Duration::from_millis(20)) {
+                Ok(Ok(())) => break,
+                Ok(Err(JobError::QueueFull)) | Err(mpsc::RecvTimeoutError::Timeout) => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                other => panic!("scheduler did not drain canceled depth job: {other:?}"),
+            }
+        }
+        assert!(!marker.exists());
+        assert!(!state.bg_removal_in_progress);
+    }
+
+    #[test]
+    fn running_depth_cancellation_kills_and_reaps_fake_process() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("worker.pid");
+        let script = write_script(
+            directory.path(),
+            "running-depth.sh",
+            &format!(
+                "echo $$ > '{}'\ncat >/dev/null\nsleep 30",
+                pid_file.display()
+            ),
+        );
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = state();
+        state.set_tool_mode(ImageToolMode::DepthMap);
+        state.run_depth_estimation_with_command_on(
+            "sh".into(),
+            vec![script.display().to_string()],
+            &jobs,
+        );
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !pid_file.exists() && Instant::now() < deadline {
+            state.poll_bg_removal_on(&jobs);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(pid_file.exists(), "synthetic depth child did not start");
+        let pid: i32 = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+        state.cancel_image_tool_process();
+        assert_exited(pid as u32);
+        assert_eq!(
+            state
+                .image_tool_child_pid
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
     }
 
     #[test]
@@ -193,6 +374,15 @@ impl ImagePreviewState {
         cmd_bin: String,
         cmd_args: Vec<String>,
     ) {
+        self.run_depth_estimation_with_command_on(cmd_bin, cmd_args, BackgroundJobs::global());
+    }
+
+    fn run_depth_estimation_with_command_on(
+        &mut self,
+        cmd_bin: String,
+        cmd_args: Vec<String>,
+        jobs: &BackgroundJobs,
+    ) {
         if self.bg_removal_in_progress {
             return;
         }
@@ -211,53 +401,23 @@ impl ImagePreviewState {
             return;
         }
 
-        let (tx, rx) = std::sync::mpsc::channel::<BgRemovalMsg>();
-        self.bg_removal_rx = Some(rx);
         self.bg_removal_input_stamp = Some(self.input_stamp());
         self.bg_removal_operation = BgRemovalOperation::DepthMap;
         self.bg_removal_in_progress = true;
-        self.bg_removal_status = Some("Estimating depth map with Depth-Anything...".to_string());
+        let status = "Estimating depth map with Depth-Anything...".to_string();
+        self.bg_removal_status = Some(status.clone());
         self.bg_removal_error = None;
-        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        self.image_tool_cancel = Some(cancel.clone());
-        self.image_tool_child_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let child_pid = self.image_tool_child_pid.clone();
-
-        std::thread::spawn(move || {
-            let start = std::time::Instant::now();
-            let tx_prog = tx.clone();
-            let _ = tx_prog.send(BgRemovalMsg::Progress(
-                "Invoking depth estimation neural network...".to_string(),
-            ));
-
-            let mut cmd = Command::new(&cmd_bin);
-            cmd.args(&cmd_args);
-            let result = super::background_removal::run_image_tool_subprocess(
-                cmd,
-                &png_bytes,
-                None,
-                Some(&cancel),
-                Some(&child_pid),
-                BgRemovalOperation::DepthMap,
-                &cmd_bin,
-            )
-            .and_then(super::background_removal::decode_image_tool_output);
-            let res_img = match result {
-                Ok(image) => image,
-                Err(error) => {
-                    if !cancel.load(std::sync::atomic::Ordering::SeqCst) {
-                        let _ = tx.send(BgRemovalMsg::Error(error));
-                    }
-                    return;
-                }
-            };
-
-            let duration_ms = start.elapsed().as_millis();
-            let _ = tx.send(BgRemovalMsg::Success {
-                result_rgba: res_img,
-                duration_ms,
-            });
+        self.bg_removal_request = Some(BgRemovalRequest {
+            png_bytes: Arc::new(png_bytes),
+            prompt: None,
+            command: cmd_bin,
+            args: cmd_args,
+            operation: BgRemovalOperation::DepthMap,
+            initial_progress: "Invoking depth estimation neural network...".to_string(),
+            status,
         });
+        self.bg_removal_retry_at = None;
+        self.submit_image_tool_attempt(jobs);
     }
 
     /// Polls the background removal worker channel and applies result on success.
@@ -270,7 +430,13 @@ impl ImagePreviewState {
     ) {
         self.poll_bg_removal();
         if self.bg_removal_in_progress {
-            ctx.request_repaint();
+            if let Some(retry_at) = self.bg_removal_retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            } else {
+                ctx.request_repaint();
+            }
         }
 
         let b_low = hex_to_c32(&palette.colors.surface_recessed);

@@ -309,11 +309,15 @@ impl ImagePreviewState {
         } else {
             "Starting FeyNoBg AI model...".to_string()
         };
+        let (command, args) = background_removal_command(self.bg_removal_cmd.as_deref());
 
         self.bg_removal_request = Some(BgRemovalRequest {
             png_bytes: Arc::new(png_bytes),
             prompt: prompt_opt,
-            configured_command: self.bg_removal_cmd.clone(),
+            command,
+            args,
+            operation: BgRemovalOperation::BackgroundRemoval,
+            initial_progress: "Invoking FeyNoBg neural network...".to_string(),
             status: status_desc.clone(),
         });
         self.bg_removal_retry_at = None;
@@ -322,10 +326,10 @@ impl ImagePreviewState {
         self.bg_removal_in_progress = true;
         self.bg_removal_status = Some(status_desc);
         self.bg_removal_error = None;
-        self.submit_background_removal_attempt(jobs);
+        self.submit_image_tool_attempt(jobs);
     }
 
-    fn submit_background_removal_attempt(&mut self, jobs: &BackgroundJobs) {
+    pub(super) fn submit_image_tool_attempt(&mut self, jobs: &BackgroundJobs) {
         let Some(request) = self.bg_removal_request.clone() else {
             return;
         };
@@ -342,22 +346,20 @@ impl ImagePreviewState {
             let init_msg = if let Some(ref p) = request.prompt {
                 format!("Invoking MultiMatte for '{}'...", p)
             } else {
-                "Invoking FeyNoBg neural network...".to_string()
+                request.initial_progress.clone()
             };
             let _ = tx.send(BgRemovalMsg::Progress(init_msg));
 
-            let (cmd_bin, cmd_args) =
-                background_removal_command(request.configured_command.as_deref());
-            let mut cmd = Command::new(&cmd_bin);
-            cmd.args(&cmd_args);
+            let mut cmd = Command::new(&request.command);
+            cmd.args(&request.args);
             let result = run_image_tool_subprocess(
                 cmd,
                 &request.png_bytes,
                 request.prompt.as_deref(),
                 Some(&cancel),
                 Some(&child_pid),
-                BgRemovalOperation::BackgroundRemoval,
-                &cmd_bin,
+                request.operation,
+                &request.command,
             )
             .and_then(decode_image_tool_output);
             match result {
@@ -384,7 +386,7 @@ impl ImagePreviewState {
         self.poll_bg_removal_on(BackgroundJobs::global());
     }
 
-    fn poll_bg_removal_on(&mut self, jobs: &BackgroundJobs) {
+    pub(super) fn poll_bg_removal_on(&mut self, jobs: &BackgroundJobs) {
         if self.bg_removal_in_progress
             && self.bg_removal_input_stamp.as_ref() != Some(&self.input_stamp())
         {
@@ -401,7 +403,7 @@ impl ImagePreviewState {
             .bg_removal_retry_at
             .is_some_and(|retry_at| std::time::Instant::now() >= retry_at)
         {
-            self.submit_background_removal_attempt(jobs);
+            self.submit_image_tool_attempt(jobs);
         } else if self.bg_removal_retry_at.is_some() {
             return;
         }
@@ -418,9 +420,12 @@ impl ImagePreviewState {
                     self.bg_removal_rx = None;
                     self.bg_removal_retry_at =
                         Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
-                    self.bg_removal_status = Some(
-                        "Background removal waiting for workers; retrying shortly".to_string(),
-                    );
+                    let label = match self.bg_removal_operation {
+                        BgRemovalOperation::BackgroundRemoval => "Background removal",
+                        BgRemovalOperation::DepthMap => "Depth Map",
+                    };
+                    self.bg_removal_status =
+                        Some(format!("{label} waiting for workers; retrying shortly"));
                     return;
                 }
                 Ok(Err(JobError::Cancelled)) => {
@@ -443,8 +448,11 @@ impl ImagePreviewState {
                     self.bg_removal_retry_at = None;
                     self.bg_removal_in_progress = false;
                     self.bg_removal_status = None;
-                    self.bg_removal_error =
-                        Some(format!("Background removal worker failed: {error}"));
+                    let label = match self.bg_removal_operation {
+                        BgRemovalOperation::BackgroundRemoval => "Background removal",
+                        BgRemovalOperation::DepthMap => "Depth Map",
+                    };
+                    self.bg_removal_error = Some(format!("{label} worker failed: {error}"));
                     return;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
@@ -457,7 +465,11 @@ impl ImagePreviewState {
                     self.bg_removal_retry_at = None;
                     self.bg_removal_in_progress = false;
                     self.bg_removal_status = None;
-                    self.bg_removal_error = Some("Background removal worker stopped".to_string());
+                    let label = match self.bg_removal_operation {
+                        BgRemovalOperation::BackgroundRemoval => "Background removal",
+                        BgRemovalOperation::DepthMap => "Depth Map",
+                    };
+                    self.bg_removal_error = Some(format!("{label} worker stopped"));
                     return;
                 }
             }
