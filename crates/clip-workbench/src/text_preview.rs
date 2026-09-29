@@ -95,6 +95,13 @@ const MAX_CODE_FRAGMENT_BYTES: usize = 4 * 1024;
 const MINIMAP_RETAINED_LINES: usize = 4096;
 const MINIMAP_CANCELLATION_CHECK_BYTES: usize = 64 * 1024;
 const MINIMAP_SCRATCH_REUSE_LIMIT: usize = 64 * 1024;
+const MINIMAP_MAX_SYNTAX_LINE_BYTES: usize = 1024 * 1024;
+const MINIMAP_NEUTRAL_COLOR: syntect::highlighting::Color = syntect::highlighting::Color {
+    r: 128,
+    g: 128,
+    b: 128,
+    a: 255,
+};
 const CODE_ROW_HEIGHT_BLOCK_SIZE: usize = 32;
 
 #[derive(Debug, Clone, Copy)]
@@ -1998,6 +2005,54 @@ fn build_minimap_line(line: &str, highlighter: &mut HighlightLines<'static>) -> 
     MinimapLine { segments }
 }
 
+fn build_neutral_minimap_line(line: &str) -> MinimapLine {
+    let mut first = None;
+    let mut end = 0;
+    for (column, character) in line.chars().take(MINIMAP_COLUMNS).enumerate() {
+        if !character.is_whitespace() {
+            first.get_or_insert(column);
+            end = column + 1;
+        }
+    }
+    MinimapLine {
+        segments: first
+            .map(|start_column| {
+                vec![MinimapSegment {
+                    start_column,
+                    end_column: end,
+                    color: MINIMAP_NEUTRAL_COLOR,
+                }]
+            })
+            .unwrap_or_default(),
+    }
+}
+
+fn minimap_source_shape(
+    source: &str,
+    mut is_cancelled: impl FnMut() -> bool,
+) -> Option<(usize, bool)> {
+    let mut line_count = 1;
+    let mut line_start = 0;
+    let mut neutral_fallback = false;
+    let mut bytes_until_cancel_check = 0;
+    for (index, byte) in source.as_bytes().iter().enumerate() {
+        if bytes_until_cancel_check == 0 && is_cancelled() {
+            return None;
+        }
+        bytes_until_cancel_check += 1;
+        if bytes_until_cancel_check == MINIMAP_CANCELLATION_CHECK_BYTES {
+            bytes_until_cancel_check = 0;
+        }
+        if *byte == b'\n' {
+            line_count += 1;
+            neutral_fallback |= index - line_start > MINIMAP_MAX_SYNTAX_LINE_BYTES;
+            line_start = index + 1;
+        }
+    }
+    neutral_fallback |= source.len() - line_start > MINIMAP_MAX_SYNTAX_LINE_BYTES;
+    (!is_cancelled()).then_some((line_count, neutral_fallback))
+}
+
 fn build_minimap_lines(
     text: &std::sync::Weak<String>,
     syntax: &'static SyntaxReference,
@@ -2006,20 +2061,11 @@ fn build_minimap_lines(
     let Some(source) = text.upgrade() else {
         return MinimapResult::Cancelled;
     };
-    let mut line_count: usize = 1;
-    let mut bytes_until_cancel_check = 0;
-    for byte in source.as_bytes() {
-        if bytes_until_cancel_check == 0 && cancelled.load(Ordering::Acquire) {
-            return MinimapResult::Cancelled;
-        }
-        bytes_until_cancel_check += 1;
-        if bytes_until_cancel_check == MINIMAP_CANCELLATION_CHECK_BYTES {
-            bytes_until_cancel_check = 0;
-        }
-        if *byte == b'\n' {
-            line_count += 1;
-        }
-    }
+    let Some((line_count, neutral_fallback)) =
+        minimap_source_shape(&source, || cancelled.load(Ordering::Acquire))
+    else {
+        return MinimapResult::Cancelled;
+    };
     drop(source);
     if cancelled.load(Ordering::Acquire) {
         return MinimapResult::Cancelled;
@@ -2052,6 +2098,22 @@ fn build_minimap_lines(
             line_end = chunk_end;
         }
         let next_cursor = (line_end + usize::from(line_end < source.len())).min(source.len());
+        if neutral_fallback {
+            // Skipping syntax for only the oversized line would leave the
+            // parser state unknown for every line after it.
+            if cancelled.load(Ordering::Acquire) {
+                return MinimapResult::Cancelled;
+            }
+            if source_line % stride == 0 {
+                lines.push((
+                    source_line,
+                    build_neutral_minimap_line(&source[cursor..line_end]),
+                ));
+            }
+            cursor = next_cursor;
+            drop(source);
+            continue;
+        }
         line_buffer.clear();
         let mut copy_cursor = cursor;
         while copy_cursor < line_end {
@@ -2089,7 +2151,11 @@ fn build_minimap_lines(
             line_buffer = String::new();
         }
     }
-    MinimapResult::Lines(lines)
+    if cancelled.load(Ordering::Acquire) {
+        MinimapResult::Cancelled
+    } else {
+        MinimapResult::Lines(lines)
+    }
 }
 
 /// Draws a VS Code-style overview from syntax-colored rectangles, not glyphs.
@@ -4476,6 +4542,122 @@ mod tests {
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].0, 0);
         assert_eq!(lines[1].0, 1);
+    }
+
+    #[test]
+    fn minimap_syntax_limit_is_inclusive_and_counts_utf8_bytes() {
+        let at_limit = "x".repeat(MINIMAP_MAX_SYNTAX_LINE_BYTES);
+        assert_eq!(minimap_source_shape(&at_limit, || false), Some((1, false)));
+        let exact_source = Arc::new(at_limit.clone());
+        let MinimapResult::Lines(exact_lines) = build_minimap_lines(
+            &Arc::downgrade(&exact_source),
+            find_syntax("txt"),
+            &AtomicBool::new(false),
+        ) else {
+            panic!("the inclusive boundary should retain syntax minimap output")
+        };
+        assert_ne!(exact_lines[0].1.segments[0].color, MINIMAP_NEUTRAL_COLOR);
+        assert_eq!(
+            minimap_source_shape(&(at_limit.clone() + "x"), || false),
+            Some((1, true))
+        );
+        assert_eq!(
+            minimap_source_shape(&(at_limit + "\nafter"), || false),
+            Some((2, false))
+        );
+        let multibyte = "界".repeat(MINIMAP_MAX_SYNTAX_LINE_BYTES / 3);
+        assert_eq!(minimap_source_shape(&multibyte, || false), Some((1, false)));
+        assert_eq!(
+            minimap_source_shape(&(multibyte + "界"), || false),
+            Some((1, true))
+        );
+    }
+
+    #[test]
+    fn minimap_shape_scan_checks_cancellation_within_64_kib() {
+        let text = "x".repeat(3 * MINIMAP_CANCELLATION_CHECK_BYTES);
+        let mut checks = 0;
+        assert_eq!(
+            minimap_source_shape(&text, || {
+                checks += 1;
+                checks == 3
+            }),
+            None
+        );
+        assert_eq!(checks, 3);
+    }
+
+    #[test]
+    fn oversized_line_makes_the_entire_minimap_neutral_and_keeps_later_rows() {
+        let text = Arc::new(format!(
+            "  let before = 1;\n/*{}\nlet after = 2;\n",
+            "x".repeat(MINIMAP_MAX_SYNTAX_LINE_BYTES)
+        ));
+        let MinimapResult::Lines(lines) = build_minimap_lines(
+            &Arc::downgrade(&text),
+            find_syntax("rs"),
+            &AtomicBool::new(false),
+        ) else {
+            panic!("oversized source should publish a neutral minimap")
+        };
+        assert_eq!(lines.len(), 4);
+        assert_eq!(
+            lines.iter().map(|(row, _)| *row).collect::<Vec<_>>(),
+            (0..4).collect::<Vec<_>>()
+        );
+        assert!(lines[3].1.segments.is_empty());
+        for (_, line) in lines.iter().take(3) {
+            assert_eq!(line.segments.len(), 1);
+            let segment = &line.segments[0];
+            assert_eq!(segment.color, MINIMAP_NEUTRAL_COLOR);
+            assert!(segment.start_column < segment.end_column);
+            assert!(segment.end_column <= MINIMAP_COLUMNS);
+        }
+        assert_eq!(lines[0].1.segments[0].start_column, 2);
+        assert_eq!(lines[2].1.segments[0].start_column, 0);
+
+        let mut state = TextPreviewState::from_text((*text).clone(), None, &AppConfig::default());
+        assert_eq!(state.content.as_str(), text.as_str());
+        state.find_query = "let after = 2".to_owned();
+        update_search_matches_and_wait(&mut state);
+        assert_eq!(state.match_count(), 1);
+        let matched = state.search_match(0).unwrap();
+        assert_eq!(
+            &state.content[matched.start_byte..matched.end_byte],
+            "let after = 2"
+        );
+    }
+
+    #[test]
+    fn neutral_minimap_retains_bounded_source_position_samples_and_cancels() {
+        let text = Arc::new(format!(
+            "{}\n{}",
+            "x".repeat(MINIMAP_MAX_SYNTAX_LINE_BYTES + 1),
+            "  row\n".repeat(5_000)
+        ));
+        let cancelled = AtomicBool::new(true);
+        assert!(matches!(
+            build_minimap_lines(&Arc::downgrade(&text), find_syntax("rs"), &cancelled),
+            MinimapResult::Cancelled
+        ));
+        let MinimapResult::Lines(lines) = build_minimap_lines(
+            &Arc::downgrade(&text),
+            find_syntax("rs"),
+            &AtomicBool::new(false),
+        ) else {
+            panic!("neutral minimap should complete")
+        };
+        let source_lines: usize = 5_002;
+        let stride = source_lines.div_ceil(MINIMAP_RETAINED_LINES);
+        assert_eq!(lines.len(), source_lines.div_ceil(stride));
+        assert!(lines.len() <= MINIMAP_RETAINED_LINES);
+        assert!(
+            lines
+                .iter()
+                .enumerate()
+                .all(|(sample, (row, line))| *row == sample * stride && line.segments.len() <= 1)
+        );
+        assert_eq!(lines.last().unwrap().0, 5_000);
     }
 
     #[test]
