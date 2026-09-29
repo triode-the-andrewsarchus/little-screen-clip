@@ -1,4 +1,5 @@
 use super::super::*;
+use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 
 fn run_optipng_optimization(
     png_bytes: &[u8],
@@ -76,7 +77,11 @@ pub struct ConvertState {
     render_input_stamp: Option<ImageInputStamp>,
     pub(crate) render_error_input_stamp: Option<ImageInputStamp>,
     pub render_error: Option<String>,
-    render_rx: Option<std::sync::mpsc::Receiver<ConvertWorkerMsg>>,
+    render_queue_status: Option<String>,
+    pub(crate) render_retry_at: Option<std::time::Instant>,
+    render_retry_input_stamp: Option<ImageInputStamp>,
+    render_job_ticket: Option<JobTicket>,
+    render_rx: Option<std::sync::mpsc::Receiver<Result<ConvertWorkerMsg, JobError>>>,
     optipng_rx: Option<std::sync::mpsc::Receiver<OptipngWorkerMsg>>,
 }
 
@@ -127,6 +132,10 @@ impl Default for ConvertState {
             render_input_stamp: None,
             render_error_input_stamp: None,
             render_error: None,
+            render_queue_status: None,
+            render_retry_at: None,
+            render_retry_input_stamp: None,
+            render_job_ticket: None,
             render_rx: None,
             optipng_rx: None,
         }
@@ -135,7 +144,10 @@ impl Default for ConvertState {
 
 impl ConvertState {
     pub fn is_pending(&self) -> bool {
-        self.params_dirty_at.is_some() || self.is_encoding || self.is_running_optipng
+        self.params_dirty_at.is_some()
+            || self.is_encoding
+            || self.is_running_optipng
+            || self.render_retry_at.is_some()
     }
 
     pub fn output_is_current(&self) -> bool {
@@ -369,9 +381,14 @@ fn encode_jpeg_conversion(
 
 impl Drop for ConvertState {
     fn drop(&mut self) {
+        if let Some(ticket) = self.render_job_ticket.take() {
+            ticket.cancel();
+        }
         if let Some(cancel) = self.render_cancel.take() {
             cancel.store(true, std::sync::atomic::Ordering::Release);
         }
+        self.render_retry_at = None;
+        self.render_retry_input_stamp = None;
     }
 }
 
@@ -418,9 +435,15 @@ impl ImagePreviewState {
         self.convert_state.optipng_savings = None;
         self.convert_state.render_error = None;
         self.convert_state.render_error_input_stamp = None;
+        self.convert_state.render_queue_status = None;
+        self.convert_state.render_retry_input_stamp = None;
     }
 
     pub fn run_conversion_worker(&mut self) {
+        self.run_conversion_worker_on(BackgroundJobs::global());
+    }
+
+    fn run_conversion_worker_on(&mut self, jobs: &BackgroundJobs) {
         if self.convert_state.is_encoding || self.current_rgba.is_empty() {
             return;
         }
@@ -433,51 +456,79 @@ impl ImagePreviewState {
         let generation = self.convert_state.request_generation;
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.convert_state.render_cancel = Some(cancel.clone());
-        let (tx, rx) = std::sync::mpsc::channel();
-
-        self.convert_state.render_rx = Some(rx);
         self.convert_state.render_input_stamp = Some(input_stamp.clone());
         self.convert_state.is_encoding = true;
         self.convert_state.params_dirty_at = None;
-
-        let _ = std::thread::Builder::new()
-            .name("image_conversion".to_string())
-            .spawn(move || {
-                let result = encode_conversion(image, format, quality, lossless, Some(&cancel));
-                if cancel.load(std::sync::atomic::Ordering::Acquire) {
-                    return;
-                }
-                let _ = tx.send(ConvertWorkerMsg {
-                    generation,
-                    input_stamp,
-                    result,
-                });
-            });
+        self.convert_state.render_retry_at = None;
+        self.convert_state.render_queue_status = None;
+        self.convert_state.render_retry_input_stamp = None;
+        let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                encode_conversion(image, format, quality, lossless, Some(&cancel))
+            }))
+            .unwrap_or_else(|_| Err("Conversion worker panicked".to_string()));
+            ConvertWorkerMsg {
+                generation,
+                input_stamp,
+                result,
+            }
+        });
+        self.convert_state.render_job_ticket = Some(ticket);
+        self.convert_state.render_rx = Some(rx);
     }
 
     pub fn poll_conversion(&mut self) {
+        self.poll_conversion_on(BackgroundJobs::global());
+    }
+
+    fn poll_conversion_on(&mut self, jobs: &BackgroundJobs) {
         self.poll_optipng();
         if self.convert_state.is_encoding
             && self.convert_state.render_input_stamp.as_ref() != Some(&self.input_stamp())
         {
             self.cancel_conversion_worker();
-            self.convert_state.render_rx = None;
-            self.convert_state.render_input_stamp = None;
-            self.convert_state.is_encoding = false;
             if self.active_mode == ImageToolMode::Convert {
                 self.convert_state.params_dirty_at = Some(std::time::Instant::now());
             }
             return;
+        }
+        if self.convert_state.render_retry_at.is_some()
+            && self.convert_state.render_retry_input_stamp.as_ref() != Some(&self.input_stamp())
+        {
+            self.convert_state.render_retry_at = None;
+            self.convert_state.render_retry_input_stamp = None;
+            self.convert_state.render_queue_status = None;
+            if self.active_mode == ImageToolMode::Convert {
+                self.convert_state.params_dirty_at = Some(std::time::Instant::now());
+            }
+        }
+        if self
+            .convert_state
+            .render_retry_at
+            .is_some_and(|retry_at| std::time::Instant::now() < retry_at)
+        {
+            return;
+        }
+        if self
+            .convert_state
+            .render_retry_at
+            .is_some_and(|retry_at| std::time::Instant::now() >= retry_at)
+        {
+            self.convert_state.render_retry_at = None;
+            self.run_conversion_worker_on(jobs);
         }
         let Some(rx) = self.convert_state.render_rx.take() else {
             return;
         };
 
         match rx.try_recv() {
-            Ok(message) => {
+            Ok(Ok(message)) => {
                 self.convert_state.is_encoding = false;
                 self.convert_state.render_cancel = None;
+                self.convert_state.render_job_ticket = None;
                 self.convert_state.render_input_stamp = None;
+                self.convert_state.render_queue_status = None;
+                self.convert_state.render_retry_input_stamp = None;
                 if message.generation != self.convert_state.request_generation
                     || message.input_stamp != self.input_stamp()
                 {
@@ -504,11 +555,40 @@ impl ImagePreviewState {
                     }
                 }
             }
+            Ok(Err(JobError::QueueFull)) => {
+                self.convert_state.is_encoding = false;
+                self.convert_state.render_cancel = None;
+                self.convert_state.render_job_ticket = None;
+                self.convert_state.render_input_stamp = None;
+                self.convert_state.render_retry_at =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+                self.convert_state.render_retry_input_stamp = Some(self.input_stamp());
+                self.convert_state.render_queue_status =
+                    Some("Waiting for background workers; retrying shortly".to_string());
+            }
+            Ok(Err(JobError::Cancelled)) => {
+                self.convert_state.is_encoding = false;
+                self.convert_state.render_cancel = None;
+                self.convert_state.render_job_ticket = None;
+                self.convert_state.render_input_stamp = None;
+            }
+            Ok(Err(error)) => {
+                self.convert_state.is_encoding = false;
+                self.convert_state.render_cancel = None;
+                self.convert_state.render_job_ticket = None;
+                self.convert_state.render_input_stamp = None;
+                self.convert_state.render_error =
+                    Some(format!("Conversion worker failed: {error}"));
+                self.convert_state.render_error_input_stamp = Some(self.input_stamp());
+            }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 self.convert_state.render_rx = Some(rx);
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.convert_state.is_encoding = false;
+                self.convert_state.render_job_ticket = None;
+                self.convert_state.render_retry_at = None;
+                self.convert_state.render_retry_input_stamp = None;
                 let was_cancelled = self
                     .convert_state
                     .render_cancel
@@ -526,12 +606,18 @@ impl ImagePreviewState {
     }
 
     fn cancel_conversion_worker(&mut self) {
+        if let Some(ticket) = self.convert_state.render_job_ticket.take() {
+            ticket.cancel();
+        }
         if let Some(cancel) = self.convert_state.render_cancel.take() {
             cancel.store(true, std::sync::atomic::Ordering::Release);
         }
         self.convert_state.render_rx = None;
         self.convert_state.render_input_stamp = None;
         self.convert_state.is_encoding = false;
+        self.convert_state.render_retry_at = None;
+        self.convert_state.render_queue_status = None;
+        self.convert_state.render_retry_input_stamp = None;
     }
 
     pub fn apply_converted_to_canvas(&mut self) {
@@ -736,6 +822,15 @@ impl ImagePreviewState {
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(error)
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
+                                .color(warning),
+                        )
+                        .truncate(true),
+                    );
+                } else if let Some(status) = &self.convert_state.render_queue_status {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(status)
                                 .size(crate::ui_ext::BODY_FONT_SIZE)
                                 .color(warning),
                         )
@@ -1092,7 +1187,11 @@ impl ImagePreviewState {
         // A control can become dirty after the top-level polling pass for this
         // frame. Ensure the debounce timer and worker continue without needing
         // another pointer event to wake the UI.
-        if self.convert_state.is_pending() {
+        if let Some(retry_at) = self.convert_state.render_retry_at {
+            ctx.request_repaint_after(
+                retry_at.saturating_duration_since(std::time::Instant::now()),
+            );
+        } else if self.convert_state.is_pending() {
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
     }
@@ -1359,6 +1458,136 @@ mod input_stamp_tests {
     }
 
     #[test]
+    fn bounded_conversion_matches_direct_encoder_output_for_tiny_png() {
+        let mut state = state();
+        state.convert_state.target_format = ConvertTargetFormat::Png;
+        state.convert_state.quality = 77;
+        let image = state.current_display_image();
+        let expected = encode_conversion(image, ConvertTargetFormat::Png, 77, false, None).unwrap();
+        let jobs = BackgroundJobs::new(1, 1);
+        state.run_conversion_worker_on(&jobs);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while state.convert_state.is_encoding && std::time::Instant::now() < deadline {
+            state.poll_conversion_on(&jobs);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        state.poll_conversion_on(&jobs);
+        assert!(!state.convert_state.is_encoding);
+        assert_eq!(state.convert_state.encoded_bytes, expected.0);
+        assert_eq!(
+            state.convert_state.converted_rgba.as_ref(),
+            Some(&expected.1)
+        );
+        assert!(state.convert_state.render_error.is_none());
+    }
+
+    #[test]
+    fn conversion_queue_saturation_retries_after_delay() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::from_secs(5), move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let (_, queued_rx) = jobs.submit(std::time::Duration::from_secs(5), || ());
+        let mut state = state();
+        state.convert_state.target_format = ConvertTargetFormat::Png;
+        state.run_conversion_worker_on(&jobs);
+        state.poll_conversion_on(&jobs);
+        assert!(state.convert_state.render_retry_at.is_some());
+        assert_eq!(
+            state.convert_state.render_queue_status.as_deref(),
+            Some("Waiting for background workers; retrying shortly")
+        );
+        assert!(state.convert_state.render_error.is_none());
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        queued_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        state.convert_state.render_retry_at = Some(std::time::Instant::now());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while (state.convert_state.is_encoding || state.convert_state.render_retry_at.is_some())
+            && std::time::Instant::now() < deadline
+        {
+            state.poll_conversion_on(&jobs);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        state.poll_conversion_on(&jobs);
+        assert!(state.convert_state.render_retry_at.is_none());
+        assert!(state.convert_state.render_queue_status.is_none());
+        assert!(state.convert_state.output_matches(&state.input_stamp()));
+    }
+
+    #[test]
+    fn stale_conversion_retry_is_discarded_after_image_change() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = state();
+        state.active_mode = ImageToolMode::Convert;
+        state.convert_state.render_retry_at =
+            Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+        state.convert_state.render_retry_input_stamp = Some(state.input_stamp());
+        state.convert_state.render_queue_status = Some("retrying".into());
+        state.mark_pixels_changed();
+
+        state.poll_conversion_on(&jobs);
+
+        assert!(state.convert_state.render_retry_at.is_none());
+        assert!(state.convert_state.render_retry_input_stamp.is_none());
+        assert!(state.convert_state.render_queue_status.is_none());
+        assert!(state.convert_state.params_dirty_at.is_some());
+        assert!(!state.convert_state.is_encoding);
+    }
+
+    #[test]
+    fn dropping_convert_state_cancels_queued_job_and_worker_flag() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::from_secs(5), move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_ran = ran.clone();
+        let (ticket, result_rx) = jobs.submit(std::time::Duration::from_secs(5), move || {
+            worker_ran.store(true, std::sync::atomic::Ordering::Release);
+        });
+        let mut state = state();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        state.convert_state.render_cancel = Some(cancelled.clone());
+        state.convert_state.render_job_ticket = Some(ticket);
+        drop(state);
+        assert!(cancelled.load(std::sync::atomic::Ordering::Acquire));
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            Err(JobError::Cancelled)
+        );
+        assert!(!ran.load(std::sync::atomic::Ordering::Acquire));
+    }
+
+    #[test]
     fn conversion_discards_stale_success_and_stale_failure() {
         for result in [
             Ok((
@@ -1372,13 +1601,13 @@ mod input_stamp_tests {
             let old_stamp = state.input_stamp();
             state.convert_state.render_input_stamp = Some(old_stamp.clone());
             state.convert_state.is_encoding = true;
-            let (tx, rx) = std::sync::mpsc::channel();
+            let (tx, rx) = std::sync::mpsc::channel::<Result<ConvertWorkerMsg, JobError>>();
             state.convert_state.render_rx = Some(rx);
-            tx.send(ConvertWorkerMsg {
+            tx.send(Ok(ConvertWorkerMsg {
                 generation: state.convert_state.request_generation,
                 input_stamp: old_stamp,
                 result,
-            })
+            }))
             .unwrap();
             state.mark_pixels_changed();
 
@@ -1434,7 +1663,7 @@ mod input_stamp_tests {
         let mut state = state();
         state.convert_state.is_encoding = true;
         state.convert_state.render_input_stamp = Some(state.input_stamp());
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::channel::<Result<ConvertWorkerMsg, JobError>>();
         drop(tx);
         state.convert_state.render_rx = Some(rx);
         state.convert_state.render_cancel = Some(std::sync::Arc::new(
@@ -1656,13 +1885,13 @@ mod input_stamp_tests {
         state.convert_state.render_input_stamp = Some(input_stamp.clone());
         state.convert_state.is_encoding = true;
         let output = RgbaImage::from_pixel(4, 4, image::Rgba([7, 8, 9, 255]));
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = std::sync::mpsc::channel::<Result<ConvertWorkerMsg, JobError>>();
         state.convert_state.render_rx = Some(rx);
-        tx.send(ConvertWorkerMsg {
+        tx.send(Ok(ConvertWorkerMsg {
             generation: state.convert_state.request_generation,
             input_stamp,
             result: Ok((vec![4, 5, 6], output.clone())),
-        })
+        }))
         .unwrap();
 
         state.poll_conversion();

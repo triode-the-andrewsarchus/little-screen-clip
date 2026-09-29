@@ -1021,7 +1021,11 @@ impl ImagePreviewState {
                     self.run_conversion_worker();
                 }
             }
-            if self.convert_state.is_pending() {
+            if let Some(retry_at) = self.convert_state.render_retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            } else if self.convert_state.is_pending() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(16));
             }
         }
