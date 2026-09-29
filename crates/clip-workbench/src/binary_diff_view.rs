@@ -2433,6 +2433,55 @@ mod tests {
     }
 
     #[test]
+    fn binary_diff_width_shortcuts_recompute_each_requested_width() {
+        let left_bytes: Vec<u8> = (0..48).collect();
+        let mut right_bytes = left_bytes.clone();
+        right_bytes[17] = 250;
+        let mut state = BinaryDiffViewState::new(
+            "left.bin".to_string(),
+            left_bytes,
+            "right.bin".to_string(),
+            right_bytes,
+        );
+        let initial_rx = state.receiver.take().expect("initial compute receiver");
+        let (initial_generation, initial_result) = initial_rx
+            .recv()
+            .expect("initial job result")
+            .expect("initial diff result");
+        assert_eq!(initial_generation, state.current_generation);
+        assert_eq!(initial_result.bytes_per_row, 32);
+        state.result = Some(initial_result);
+        state.is_computing = false;
+        state.compute_ticket = None;
+
+        for (key, expected_width) in [
+            (egui::Key::Num0, 8),
+            (egui::Key::Num1, 16),
+            (egui::Key::Num2, 32),
+        ] {
+            let previous_generation = state.current_generation;
+            let previous_width = state.result.as_ref().unwrap().bytes_per_row;
+            trigger_global_shortcut(&mut state, key);
+            assert_eq!(state.bytes_per_row, expected_width);
+            assert_eq!(state.current_generation, previous_generation + 1);
+            assert!(state.is_computing);
+            assert_eq!(state.result.as_ref().unwrap().bytes_per_row, previous_width);
+
+            let rx = state.receiver.take().expect("width recompute receiver");
+            let (generation, result) = rx
+                .recv()
+                .expect("width recompute job result")
+                .expect("width recompute result");
+            assert_eq!(generation, state.current_generation);
+            assert_eq!(result.bytes_per_row, expected_width);
+            assert_eq!(result.mode, BinaryDiffMode::Aligned);
+            state.result = Some(result);
+            state.is_computing = false;
+            state.compute_ticket = None;
+        }
+    }
+
+    #[test]
     fn binary_diff_queue_saturation_is_visible_and_recovers() {
         use std::sync::mpsc;
         use std::time::Duration;
