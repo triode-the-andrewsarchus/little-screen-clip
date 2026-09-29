@@ -3802,6 +3802,81 @@ mod tests {
     use super::*;
     use little_clip_core::audio::compute_full_audio_analysis;
 
+    fn render_inspect_frame(
+        ctx: &egui::Context,
+        state: &mut AudioPreviewState,
+        time: f64,
+        events: Vec<egui::Event>,
+    ) -> Rect {
+        let modifiers = events
+            .iter()
+            .find_map(|event| match event {
+                egui::Event::PointerButton { modifiers, .. }
+                | egui::Event::MouseWheel { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_default();
+        render_inspect_frame_with_modifiers(ctx, state, time, events, modifiers)
+    }
+
+    fn render_inspect_frame_with_modifiers(
+        ctx: &egui::Context,
+        state: &mut AudioPreviewState,
+        time: f64,
+        events: Vec<egui::Event>,
+        modifiers: egui::Modifiers,
+    ) -> Rect {
+        use egui::epaint::Shape;
+
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let canvas_fill = crate::hex_to_c32(&palette.colors.surface_recessed);
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
+                time: Some(time),
+                modifiers,
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut close_requested = false;
+                    state.render_standard_ui(ui, ctx, &palette, &mut close_requested, None);
+                });
+            },
+        );
+        output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                Shape::Rect(rect)
+                    if rect.fill == canvas_fill
+                        && rect.rounding == egui::Rounding::same(8.0)
+                        && rect.rect.width() > 500.0
+                        && rect.rect.height() > 100.0 =>
+                {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .expect("ready Inspect canvas should render")
+    }
+
+    fn pointer_button_event(
+        pos: Pos2,
+        button: egui::PointerButton,
+        pressed: bool,
+        modifiers: egui::Modifiers,
+    ) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button,
+            pressed,
+            modifiers,
+        }
+    }
+
     fn wait_for_audio_save(state: &mut AudioPreviewState) {
         let ctx = egui::Context::default();
         for _ in 0..500 {
@@ -4567,57 +4642,6 @@ mod tests {
 
     #[test]
     fn inspect_canvas_drag_selects_region_and_ruler_click_only_scrubs() {
-        use egui::epaint::Shape;
-
-        fn frame(
-            ctx: &egui::Context,
-            state: &mut AudioPreviewState,
-            time: f64,
-            events: Vec<egui::Event>,
-        ) -> Rect {
-            let palette =
-                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-            let canvas_fill = crate::hex_to_c32(&palette.colors.surface_recessed);
-            let output = ctx.run(
-                egui::RawInput {
-                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
-                    time: Some(time),
-                    events,
-                    ..Default::default()
-                },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        let mut close_requested = false;
-                        state.render_standard_ui(ui, ctx, &palette, &mut close_requested, None);
-                    });
-                },
-            );
-            output
-                .shapes
-                .iter()
-                .find_map(|clipped| match &clipped.shape {
-                    Shape::Rect(rect)
-                        if rect.fill == canvas_fill
-                            && rect.rounding == egui::Rounding::same(8.0)
-                            && rect.rect.width() > 500.0
-                            && rect.rect.height() > 100.0 =>
-                    {
-                        Some(rect.rect)
-                    }
-                    _ => None,
-                })
-                .expect("ready Inspect canvas should render")
-        }
-
-        fn pointer_button(pos: Pos2, pressed: bool) -> egui::Event {
-            egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed,
-                modifiers: egui::Modifiers::NONE,
-            }
-        }
-
         let (_temp_dir, path) = generate_fixture_wav("inspect-pointer", 5.0);
         let analysis = compute_full_audio_analysis(&path, 100).expect("fixture analysis");
         let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
@@ -4630,21 +4654,36 @@ mod tests {
 
         let ctx = egui::Context::default();
         crate::ui_ext::configure_workbench_style(&ctx);
-        let canvas = frame(&ctx, &mut state, 0.0, Vec::new());
+        let canvas = render_inspect_frame(&ctx, &mut state, 0.0, Vec::new());
         let track_min_x = canvas.min.x + 48.0;
         let track_width = canvas.width() - 54.0;
 
         let scrub = Pos2::new(track_min_x + track_width * 0.8, canvas.min.y + 8.0);
-        frame(
+        render_inspect_frame(
             &ctx,
             &mut state,
             0.01,
             vec![
                 egui::Event::PointerMoved(scrub),
-                pointer_button(scrub, true),
+                pointer_button_event(
+                    scrub,
+                    egui::PointerButton::Primary,
+                    true,
+                    egui::Modifiers::NONE,
+                ),
             ],
         );
-        frame(&ctx, &mut state, 0.02, vec![pointer_button(scrub, false)]);
+        render_inspect_frame(
+            &ctx,
+            &mut state,
+            0.02,
+            vec![pointer_button_event(
+                scrub,
+                egui::PointerButton::Primary,
+                false,
+                egui::Modifiers::NONE,
+            )],
+        );
         assert!(
             state.multi_selections.is_empty(),
             "ruler click created a region"
@@ -4653,31 +4692,46 @@ mod tests {
 
         let ctx = egui::Context::default();
         crate::ui_ext::configure_workbench_style(&ctx);
-        let canvas = frame(&ctx, &mut state, 0.0, Vec::new());
+        let canvas = render_inspect_frame(&ctx, &mut state, 0.0, Vec::new());
         let track_min_x = canvas.min.x + 48.0;
         let track_width = canvas.width() - 54.0;
         let wave_y = canvas.min.y + 80.0;
         let start = Pos2::new(track_min_x + track_width * 0.2, wave_y);
         let end = Pos2::new(track_min_x + track_width * 0.6, wave_y);
 
-        frame(
+        render_inspect_frame(
             &ctx,
             &mut state,
             0.01,
             vec![
                 egui::Event::PointerMoved(start),
-                pointer_button(start, true),
+                pointer_button_event(
+                    start,
+                    egui::PointerButton::Primary,
+                    true,
+                    egui::Modifiers::NONE,
+                ),
             ],
         );
         let drag_start = start + Vec2::new(12.0, 0.0);
-        frame(
+        render_inspect_frame(
             &ctx,
             &mut state,
             0.02,
             vec![egui::Event::PointerMoved(drag_start)],
         );
-        frame(&ctx, &mut state, 0.03, vec![egui::Event::PointerMoved(end)]);
-        frame(&ctx, &mut state, 0.04, vec![pointer_button(end, false)]);
+        render_inspect_frame(&ctx, &mut state, 0.03, vec![egui::Event::PointerMoved(end)]);
+        render_inspect_frame(
+            &ctx,
+            &mut state,
+            0.04,
+            vec![pointer_button_event(
+                end,
+                egui::PointerButton::Primary,
+                false,
+                egui::Modifiers::NONE,
+            )],
+        );
 
         assert_eq!(state.multi_selections.len(), 1);
         assert_eq!(state.active_multi_index, Some(0));
@@ -4693,6 +4747,175 @@ mod tests {
             state.multi_selections
         );
         assert!((state.current_time_sec - 3.0).abs() < 0.15);
+    }
+
+    #[test]
+    fn inspect_canvas_effect_gestures_only_edit_the_hit_multi_region() {
+        fn wheel_event(delta: f32, modifiers: egui::Modifiers) -> egui::Event {
+            if modifiers.shift {
+                egui::Event::Scroll(Vec2::new(0.0, delta))
+            } else {
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: Vec2::new(0.0, delta),
+                    modifiers,
+                }
+            }
+        }
+
+        let (_temp_dir, path) = generate_fixture_wav("inspect-effects", 5.0);
+        let analysis = compute_full_audio_analysis(&path, 100).expect("fixture analysis");
+        let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
+        state.cancel_session_analysis();
+        state.analysis = Some(analysis);
+        state.duration_sec = 5.0;
+        state.view_duration_sec = 5.0;
+        state.is_loading_analysis = false;
+        state.selection_mode = SelectionMode::Multi;
+        state.multi_selections = vec![(1.0, 2.0), (3.0, 4.0)];
+        state.active_multi_index = Some(0);
+        state.region_gain_db = vec![6.0, -6.0];
+        state.region_low_pass_hz = vec![Some(1_000.0), Some(2_000.0)];
+        state.region_high_pass_hz = vec![Some(80.0), Some(120.0)];
+        state.region_crossfade_sec = vec![0.1, 0.2];
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let canvas = render_inspect_frame(&ctx, &mut state, 0.0, Vec::new());
+        let track = Rect::from_min_max(
+            Pos2::new(canvas.min.x + 48.0, canvas.min.y),
+            Pos2::new(canvas.max.x - 6.0, canvas.max.y),
+        );
+        let [_, wave, spec, _, _] = layout::AudioWorkspace::inspect_timeline_rects(track);
+        let x_at = |time: f32| track.min.x + track.width() * time / state.duration_sec;
+        let region_one_x = x_at(1.5);
+        let region_two_x = x_at(3.5);
+        let region_one_wave = Pos2::new(region_one_x, wave.center().y);
+        let region_two_wave = Pos2::new(region_two_x, wave.center().y);
+        let region_one_low_pass = Pos2::new(region_one_x, spec.min.y + spec.height() * 0.25);
+        let region_two_high_pass = Pos2::new(region_two_x, spec.min.y + spec.height() * 0.75);
+
+        let middle = egui::PointerButton::Middle;
+        let low_pass_before_gain_reset = state.region_low_pass_hz.clone();
+        let high_pass_before_gain_reset = state.region_high_pass_hz.clone();
+        let crossfade_before_gain_reset = state.region_crossfade_sec.clone();
+        render_inspect_frame(
+            &ctx,
+            &mut state,
+            0.01,
+            vec![
+                egui::Event::PointerMoved(region_two_wave),
+                pointer_button_event(region_two_wave, middle, true, egui::Modifiers::NONE),
+            ],
+        );
+        render_inspect_frame(
+            &ctx,
+            &mut state,
+            0.02,
+            vec![pointer_button_event(
+                region_two_wave,
+                middle,
+                false,
+                egui::Modifiers::NONE,
+            )],
+        );
+        assert_eq!(state.region_gain_db, vec![6.0, 0.0]);
+        assert_eq!(state.active_multi_index, Some(1));
+        assert_eq!(state.region_low_pass_hz, low_pass_before_gain_reset);
+        assert_eq!(state.region_high_pass_hz, high_pass_before_gain_reset);
+        assert_eq!(state.region_crossfade_sec, crossfade_before_gain_reset);
+
+        let low_pass_before = state.region_low_pass_hz.clone();
+        let shift = egui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        render_inspect_frame_with_modifiers(
+            &ctx,
+            &mut state,
+            0.03,
+            vec![
+                egui::Event::PointerMoved(region_one_low_pass),
+                wheel_event(50.0, shift),
+            ],
+            shift,
+        );
+        assert!(state.region_low_pass_hz[0] > low_pass_before[0]);
+        assert_eq!(state.region_low_pass_hz[1], low_pass_before[1]);
+        assert_eq!(state.active_multi_index, Some(0));
+
+        let high_pass_before = state.region_high_pass_hz.clone();
+        render_inspect_frame_with_modifiers(
+            &ctx,
+            &mut state,
+            0.04,
+            vec![
+                egui::Event::PointerMoved(region_two_high_pass),
+                wheel_event(50.0, shift),
+            ],
+            shift,
+        );
+        assert_eq!(state.region_high_pass_hz[0], high_pass_before[0]);
+        assert!(state.region_high_pass_hz[1] > high_pass_before[1]);
+        assert_eq!(state.active_multi_index, Some(1));
+
+        let crossfade_before = state.region_crossfade_sec.clone();
+        let ctrl = egui::Modifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        render_inspect_frame_with_modifiers(
+            &ctx,
+            &mut state,
+            0.05,
+            vec![
+                egui::Event::PointerMoved(region_one_wave),
+                wheel_event(50.0, ctrl),
+            ],
+            ctrl,
+        );
+        assert!(state.region_crossfade_sec[0] > crossfade_before[0]);
+        assert_eq!(state.region_crossfade_sec[1], crossfade_before[1]);
+        assert_eq!(state.active_multi_index, Some(0));
+
+        let low_pass_before_crossfade_reset = state.region_low_pass_hz.clone();
+        let high_pass_before_crossfade_reset = state.region_high_pass_hz.clone();
+        render_inspect_frame(
+            &ctx,
+            &mut state,
+            0.06,
+            vec![
+                egui::Event::PointerMoved(region_two_wave),
+                pointer_button_event(
+                    region_two_wave,
+                    middle,
+                    true,
+                    egui::Modifiers {
+                        ctrl: true,
+                        ..Default::default()
+                    },
+                ),
+            ],
+        );
+        render_inspect_frame(
+            &ctx,
+            &mut state,
+            0.07,
+            vec![pointer_button_event(
+                region_two_wave,
+                middle,
+                false,
+                egui::Modifiers {
+                    ctrl: true,
+                    ..Default::default()
+                },
+            )],
+        );
+        assert_eq!(state.region_crossfade_sec[0], crossfade_before[0] + 0.01);
+        assert_eq!(state.region_crossfade_sec[1], 0.0);
+        assert_eq!(state.region_gain_db, vec![6.0, 0.0]);
+        assert_eq!(state.region_low_pass_hz, low_pass_before_crossfade_reset);
+        assert_eq!(state.region_high_pass_hz, high_pass_before_crossfade_reset);
     }
 
     fn preview_source_with_region(
