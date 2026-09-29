@@ -811,6 +811,61 @@ mod tests {
     }
 
     #[test]
+    fn dropping_file_load_viewer_cancels_queued_parse_publication() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let jobs = little_clip_core::BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_blocker_ticket, blocker_result) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("worker should reach blocker");
+
+        let parse_ran = std::sync::Arc::new(AtomicBool::new(false));
+        let parse_ran_worker = std::sync::Arc::clone(&parse_ran);
+        let (ticket, rx) = jobs.submit(Duration::MAX, move || {
+            parse_ran_worker.store(true, Ordering::SeqCst);
+            Ok(test_mesh())
+        });
+        let mut viewer = Model3dViewerState::from_model(test_mesh(), None);
+        viewer.status = ModelLoadingStatus::Loading;
+        viewer.rx = Some(rx);
+        viewer.load_ticket = Some(ticket);
+
+        drop(viewer);
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            blocker_result
+                .recv_timeout(Duration::from_secs(2))
+                .expect("blocker should finish"),
+            Ok(())
+        );
+
+        // A following accepted job completes only after the canceled parse has
+        // been dequeued, making the non-execution assertion deterministic.
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let (_ticket, result) = jobs.submit(Duration::MAX, || ());
+            match result.recv_timeout(Duration::from_millis(10)) {
+                Ok(Ok(())) => break,
+                Ok(Err(little_clip_core::JobError::QueueFull))
+                | Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "executor did not admit the follow-up job"
+                    );
+                }
+                result => panic!("unexpected follow-up job result: {result:?}"),
+            }
+        }
+        assert!(!parse_ran.load(Ordering::SeqCst));
+    }
+
+    #[test]
     fn toolbar_loading_and_error_copy_fit_compact_and_wide_hosts() {
         for (size_name, width) in [("compact", 420.0), ("wide", 1400.0)] {
             let mut ready = Model3dViewerState::from_model(test_mesh(), None);

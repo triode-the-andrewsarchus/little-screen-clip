@@ -4362,6 +4362,60 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn file_backed_3d_viewer_escape_returns_to_workbench_and_drops_pending_session() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let model_path = temp_dir.path().join("fixture.obj");
+        std::fs::write(
+            &model_path,
+            "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\nf 1 2 3\nf 1 2 4\nf 1 3 4\nf 2 3 4\n",
+        )
+        .unwrap();
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.view = WorkbenchView::Palette;
+
+        app.open_slot_file_preview(&model_path, false);
+
+        let Some(ViewerSession::Model3d(state)) = app.viewer.as_ref() else {
+            panic!("OBJ route should open the file-backed 3D viewer");
+        };
+        assert_eq!(state.path.as_deref(), Some(model_path.as_path()));
+        assert!(state.rx.is_some(), "file parsing should remain async");
+        assert_eq!(app.view, WorkbenchView::Palette);
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| assert!(app.render_modal_viewers(ctx)),
+        );
+        assert!(
+            app.viewer.is_none(),
+            "Escape should drop the 3D viewer session"
+        );
+        assert_eq!(app.view, WorkbenchView::Palette);
+
+        // A subsequent modal poll must not let a completed parse publish into
+        // or replace the workbench after the viewer has been closed.
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            assert!(!app.render_modal_viewers(ctx));
+        });
+        assert!(app.viewer.is_none());
+        assert_eq!(app.view, WorkbenchView::Palette);
+    }
+
+    #[test]
     fn malformed_image_preview_reports_cause_and_valid_preview_recovers() {
         let temp_dir = tempfile::tempdir().unwrap();
         let malformed_path = temp_dir.path().join("broken.png");
