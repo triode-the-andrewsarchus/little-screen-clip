@@ -220,18 +220,42 @@ fn launch_diff_tool_with(
     right_path: &std::path::Path,
     mut available: impl FnMut(&str) -> Option<std::path::PathBuf>,
     mut spawn: impl FnMut(&std::path::Path, &std::path::Path, &std::path::Path) -> bool,
-) -> String {
+) -> Result<String, String> {
+    let mut launch_failures = Vec::new();
     for (command, success_message) in [
         ("meld", "🚀 Launched Meld comparison"),
         ("kdiff3", "🚀 Launched KDiff3 comparison"),
     ] {
-        if let Some(app) = available(command)
-            && spawn(&app, left_path, right_path)
-        {
-            return success_message.to_string();
+        if let Some(app) = available(command) {
+            if spawn(&app, left_path, right_path) {
+                return Ok(success_message.to_string());
+            }
+            launch_failures.push(command);
         }
     }
-    "⚠️ Neither Meld nor KDiff3 is installed".to_string()
+    if launch_failures.is_empty() {
+        Ok("⚠️ Neither Meld nor KDiff3 is installed".to_string())
+    } else {
+        Err(format!(
+            "Failed to launch available comparison tool(s): {}",
+            launch_failures.join(", ")
+        ))
+    }
+}
+
+fn run_diff_handoff_with(
+    left: DiffHandoffTarget,
+    right: DiffHandoffTarget,
+    cancelled: &std::sync::atomic::AtomicBool,
+    available: impl FnMut(&str) -> Option<std::path::PathBuf>,
+    spawn: impl FnMut(&std::path::Path, &std::path::Path, &std::path::Path) -> bool,
+) -> Result<String, String> {
+    let left_path = left.stage()?;
+    let right_path = right.stage()?;
+    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("External handoff cancelled".to_string());
+    }
+    launch_diff_tool_with(&left_path, &right_path, available, spawn)
 }
 
 impl DiffViewerState {
@@ -472,14 +496,10 @@ impl DiffViewerState {
         let job_cancelled = cancelled.clone();
         let (ticket, receiver) =
             BackgroundJobs::global().submit(std::time::Duration::from_secs(30), move || {
-                let left_path = left.stage()?;
-                let right_path = right.stage()?;
-                if job_cancelled.load(std::sync::atomic::Ordering::Acquire) {
-                    return Err("External handoff cancelled".to_string());
-                }
-                Ok(launch_diff_tool_with(
-                    &left_path,
-                    &right_path,
+                run_diff_handoff_with(
+                    left,
+                    right,
+                    &job_cancelled,
                     |command| little_clip_core::command_available(command),
                     |app, left, right| {
                         std::process::Command::new(app)
@@ -488,7 +508,7 @@ impl DiffViewerState {
                             .spawn()
                             .is_ok()
                     },
-                ))
+                )
             });
         self.status_toast = Some(("Preparing comparison for external tool…".to_string(), now));
         self.handoff = Some((ticket, receiver));
@@ -1833,7 +1853,7 @@ mod tests {
                 true
             },
         );
-        assert_eq!(result, "🚀 Launched Meld comparison");
+        assert_eq!(result, Ok("🚀 Launched Meld comparison".to_string()));
         assert_eq!(lookups, vec!["meld"]);
         assert_eq!(
             launches,
@@ -1858,7 +1878,7 @@ mod tests {
                 true
             },
         );
-        assert_eq!(result, "🚀 Launched KDiff3 comparison");
+        assert_eq!(result, Ok("🚀 Launched KDiff3 comparison".to_string()));
         assert_eq!(lookups, vec!["meld", "kdiff3"]);
         assert_eq!(
             launches,
@@ -1876,8 +1896,135 @@ mod tests {
                 app.file_name().is_some_and(|name| name == "kdiff3")
             },
         );
-        assert_eq!(result, "🚀 Launched KDiff3 comparison");
+        assert_eq!(result, Ok("🚀 Launched KDiff3 comparison".to_string()));
         assert_eq!(launches, vec!["meld", "kdiff3"]);
+    }
+
+    #[test]
+    fn external_handoff_reports_unavailable_launch_and_staging_outcomes() {
+        use std::sync::{Arc, Mutex};
+        use std::time::Duration;
+
+        let fixture_dir = std::env::temp_dir().join(format!(
+            "clip-diff-handoff-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&fixture_dir).unwrap();
+        let left_path = fixture_dir.join("left.txt");
+        let right_path = fixture_dir.join("right.txt");
+        std::fs::write(&left_path, b"left fixture").unwrap();
+        std::fs::write(&right_path, b"right fixture").unwrap();
+        let left = DiffHandoffTarget::Existing(left_path.clone());
+        let right = DiffHandoffTarget::Existing(right_path.clone());
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+
+        let jobs = BackgroundJobs::new(1, 2);
+        let unavailable_lookups = Arc::new(Mutex::new(Vec::new()));
+        let lookup_log = unavailable_lookups.clone();
+        let (ticket, unavailable_rx) = jobs.submit(Duration::MAX, move || {
+            run_diff_handoff_with(
+                left,
+                right,
+                &cancelled,
+                move |command| {
+                    lookup_log.lock().unwrap().push(command.to_string());
+                    None
+                },
+                |_, _, _| panic!("spawn must not run when neither tool is installed"),
+            )
+        });
+        let unavailable = unavailable_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            unavailable,
+            Ok("⚠️ Neither Meld nor KDiff3 is installed".to_string())
+        );
+        assert_eq!(*unavailable_lookups.lock().unwrap(), vec!["meld", "kdiff3"]);
+        drop(ticket);
+
+        let left = DiffHandoffTarget::Existing(left_path.clone());
+        let right = DiffHandoffTarget::Existing(right_path.clone());
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let attempts = Arc::new(Mutex::new(Vec::new()));
+        let attempt_log = attempts.clone();
+        let passed_paths = Arc::new(Mutex::new(Vec::new()));
+        let path_log = passed_paths.clone();
+        let (ticket, launch_rx) = jobs.submit(Duration::MAX, move || {
+            run_diff_handoff_with(
+                left,
+                right,
+                &cancelled,
+                |command| Some(std::path::PathBuf::from(format!("/fake/{command}"))),
+                move |app, left, right| {
+                    attempt_log
+                        .lock()
+                        .unwrap()
+                        .push(app.file_name().unwrap().to_string_lossy().into_owned());
+                    path_log
+                        .lock()
+                        .unwrap()
+                        .push((left.to_path_buf(), right.to_path_buf()));
+                    false
+                },
+            )
+        });
+        let launch_failure = launch_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            launch_failure,
+            Err("Failed to launch available comparison tool(s): meld, kdiff3".to_string())
+        );
+        assert_eq!(*attempts.lock().unwrap(), vec!["meld", "kdiff3"]);
+        assert!(
+            passed_paths
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|(lhs, rhs)| { lhs == &left_path && rhs == &right_path })
+        );
+        drop(ticket);
+
+        let bad_left = DiffHandoffTarget::Shared(
+            Arc::new(DiffTarget::ClipboardText {
+                label: "bad extension fixture".into(),
+                content: "not written".into(),
+                ext_hint: Some("missing-parent/file".into()),
+            }),
+            "lhs".into(),
+        );
+        let right = DiffHandoffTarget::Existing(right_path.clone());
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let lookup_count = Arc::new(Mutex::new(0));
+        let lookup_count_worker = lookup_count.clone();
+        let (ticket, staging_rx) = jobs.submit(Duration::MAX, move || {
+            run_diff_handoff_with(
+                bad_left,
+                right,
+                &cancelled,
+                move |_| {
+                    *lookup_count_worker.lock().unwrap() += 1;
+                    Some(std::path::PathBuf::from("/fake/meld"))
+                },
+                |_, _, _| true,
+            )
+        });
+        let staging_failure = staging_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert!(
+            staging_failure
+                .unwrap_err()
+                .contains("Failed to stage diff lhs file")
+        );
+        assert_eq!(*lookup_count.lock().unwrap(), 0);
+        drop(ticket);
+
+        std::fs::remove_dir_all(fixture_dir).unwrap();
     }
 
     #[test]
