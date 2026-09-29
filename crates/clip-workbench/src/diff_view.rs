@@ -533,6 +533,8 @@ impl DiffViewerState {
                 && !i.modifiers.command
                 && !i.modifiers.ctrl
                 && !i.modifiers.mac_cmd
+                && !i.modifiers.shift
+                && !i.modifiers.alt
         }) {
             self.swap_operands();
         }
@@ -1363,42 +1365,97 @@ mod tests {
 
     #[test]
     fn modified_s_does_not_swap_diff_operands() {
+        fn send_modified_s(state: &mut DiffViewerState, modifiers: egui::Modifiers) {
+            let ctx = egui::Context::default();
+            let mut close = false;
+            let _ = ctx.run(
+                egui::RawInput {
+                    modifiers,
+                    events: vec![egui::Event::Key {
+                        key: egui::Key::S,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| state.handle_shortcuts(ctx, &mut close),
+            );
+            assert!(!close);
+        }
+
         let left = DiffTarget::ClipboardText {
             label: "Left".to_string(),
-            content: "left".to_string(),
+            content: "old text\n".to_string(),
             ext_hint: Some("txt".to_string()),
         };
         let right = DiffTarget::ClipboardText {
             label: "Right".to_string(),
-            content: "right".to_string(),
+            content: "new text\n".to_string(),
             ext_hint: Some("txt".to_string()),
         };
         let mut state = DiffViewerState::new(left, right, DiffDisplayMode::Inline);
+        state.wait_for_completion();
+        let original_result = state.result.raw_ansi.clone();
+
+        for modifiers in [
+            egui::Modifiers::CTRL,
+            egui::Modifiers::COMMAND,
+            egui::Modifiers::MAC_CMD,
+            egui::Modifiers {
+                shift: true,
+                ..egui::Modifiers::NONE
+            },
+            egui::Modifiers::ALT,
+        ] {
+            send_modified_s(&mut state, modifiers);
+            assert_eq!(state.lhs.label(), "Left");
+            assert_eq!(state.rhs.label(), "Right");
+            assert!(!state.is_computing);
+            assert_eq!(state.result.raw_ansi, original_result);
+        }
+    }
+
+    #[test]
+    fn unmodified_s_swaps_operands_and_recomputes_text_diff() {
+        let left = DiffTarget::ClipboardText {
+            label: "Left".to_string(),
+            content: "old text\n".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+        let right = DiffTarget::ClipboardText {
+            label: "Right".to_string(),
+            content: "new text\n".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+        let mut state = DiffViewerState::new(left, right, DiffDisplayMode::Inline);
+        state.wait_for_completion();
+
         let ctx = egui::Context::default();
-        crate::ui_ext::configure_workbench_style(&ctx);
-        let palette =
-            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
         let mut close = false;
         let _ = ctx.run(
             egui::RawInput {
-                modifiers: egui::Modifiers::CTRL,
                 events: vec![egui::Event::Key {
                     key: egui::Key::S,
                     physical_key: None,
                     pressed: true,
                     repeat: false,
-                    modifiers: egui::Modifiers::CTRL,
+                    modifiers: egui::Modifiers::NONE,
                 }],
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    state.render_ui(ui, ctx, &palette, &mut close);
-                });
-            },
+            |ctx| state.handle_shortcuts(ctx, &mut close),
         );
-        assert_eq!(state.lhs.label(), "Left");
-        assert_eq!(state.rhs.label(), "Right");
+
+        assert!(!close);
+        assert_eq!(state.lhs.label(), "Right");
+        assert_eq!(state.rhs.label(), "Left");
+        assert!(state.is_computing);
+        state.wait_for_completion();
+        let plain_result = strip_ansi_codes(&state.result.raw_ansi);
+        assert!(plain_result.contains("+ old text"));
+        assert!(plain_result.contains("- new text"));
     }
 
     #[test]

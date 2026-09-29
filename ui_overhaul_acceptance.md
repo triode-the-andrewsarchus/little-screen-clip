@@ -177,7 +177,9 @@ H2.3b2a adds `text_diff_tab_and_c_recompute_the_selected_mode`. It sends Tab and
 
 H2.3b2b adds `image_diff_tab_and_c_cycle_modes_without_recomputing`. Using two generated 2×2 PNGs, it sends Tab/C through the production shortcut handler across all four image presentation modes and confirms the computed result remains the same object, with no pending computation or changed compute timestamp. The focused test passes.
 
-H2.3b2c was removed after source audit: neither `DiffViewerState` nor its `StudioShell` contains a `TextEdit`, search field, or other text-entry widget. Diff content is displayed as scrollable output, while `handle_shortcuts` already yields when `ctx.wants_keyboard_input()` is true. The generic modal/viewer precedence behavior remains covered by H2.3a1b; no synthetic focus-only regression was added.
+Source audit found no `TextEdit`, search field, or other text-entry widget in `DiffViewerState` or its `StudioShell`. Diff content is scrollable output, and `handle_shortcuts` yields when `ctx.wants_keyboard_input()` is true; app-level modal precedence is covered under H2.3a1b.
+
+H2.3b2c tightens Diff operand swapping to unmodified S. `modified_s_does_not_swap_diff_operands` sends Ctrl, Command, Mac Command, Shift, and Alt variants and confirms the operands/result remain untouched. `unmodified_s_swaps_operands_and_recomputes_text_diff` verifies plain S swaps labels and publishes the reversed additions/deletions. Both focused tests pass.
 
 Binary Diff initial and recomputed byte comparisons now use the same bounded executor while keeping generation-tagged results. Superseded and dropped viewers cancel queued work; queue-full/disconnect failures stop the pending state and show a footer error. Tests verify visible queue saturation, queued cancellation on drop, stale-generation rejection, and existing comparison behavior. `cargo test -p clip-workbench binary_diff_view::tests:: -- --test-threads=1` passes (18 passed, 0 failed). A running byte comparison remains non-interruptible. PDF page decoding remains open under H1.3c2a4a.
 
