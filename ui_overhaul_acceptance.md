@@ -702,6 +702,10 @@ The initial decorated capture `/tmp/lsc-csd-1280x720-dark` showed Niri adding 8�
 
 `node_canvas_state_persists_across_palette_and_auto_actions_routes` sends F2→F3→F2→F1 through the production `WorkbenchApp::handle_global_shortcuts` route. After each transition, serialized graph contents, selected node, recipe name, and undo history match their original values. The focused workbench test passes. This verifies persistent in-memory canvas state through keyboard view routing; it does not cover process restarts or user-driven pointer tab clicks.
 
+## Node Machine app-modal input precedence, 2026-09-29
+
+`node_machine_prompt_and_viewer_preempt_workbench_shortcuts_until_closed` exercises the same modal-first branch used by `WorkbenchApp::update` with Node Machine selected. While an in-app recipe prompt or Component Gallery viewer is active, F2 and Delete do not switch the workbench route or mutate the selected canvas graph. Escape cancels the prompt or closes the viewer while leaving Node Machine active; F2 switches to Palette on the following frame. This directly tests keyboard routing and graph preservation for these two representative modal types. Other viewer-specific Escape behavior remains under their route tests; native pointer delivery and every `ViewerSession` variant are not individually exercised here.
+
 ## Node Machine view shortcuts and overlays, 2026-09-29
 
 `node_machine_catalog_and_save_overlays_hold_f1_f3_view_switches` sends F1, F2, and F3 through `WorkbenchApp::handle_global_shortcuts` with each Node Machine overlay open. Catalog and Save keep Node Machine active, preserve their open state, and leave the graph unchanged. In each same app instance, after closing the overlay, an F2→F1→F3 sequence routes Node Machine→Palette→Node Machine→Auto Actions without directly changing the route; graph state remains unchanged. The focused workbench regression passes. This validates source-path event routing, not native keyboard delivery under a compositor.

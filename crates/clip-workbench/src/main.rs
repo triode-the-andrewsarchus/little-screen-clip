@@ -3782,6 +3782,101 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn node_machine_prompt_and_viewer_preempt_workbench_shortcuts_until_closed() {
+        fn frame_with_key(app: &mut WorkbenchApp, key: egui::Key) -> bool {
+            let ctx = egui::Context::default();
+            let mut modal_active = false;
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 700.0),
+                    )),
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| {
+                    modal_active = app.render_modal_viewers(ctx);
+                    // Match update(): the prompt/viewer renderer owns the frame and
+                    // returns before workbench shortcut dispatch or canvas rendering.
+                    if modal_active {
+                        return;
+                    }
+                    app.handle_global_shortcuts(ctx);
+                },
+            );
+            modal_active
+        }
+
+        let mut prompt_app = test_workbench_app(None, VecDeque::new());
+        prompt_app.view = WorkbenchView::NodeMachine;
+        prompt_app.canvas_state.selected_node = prompt_app
+            .canvas_state
+            .graph
+            .nodes
+            .first()
+            .map(|node| node.id);
+        prompt_app.in_app_prompt = Some(InAppPromptState {
+            recipe_name: "Modal ownership fixture".to_owned(),
+            message: "Enter text".to_owned(),
+            input_text: "input".to_owned(),
+            first_frame: true,
+        });
+        let prompt_graph = serde_yaml::to_string(&prompt_app.canvas_state.graph).unwrap();
+        assert!(frame_with_key(&mut prompt_app, egui::Key::F2));
+        assert!(frame_with_key(&mut prompt_app, egui::Key::Delete));
+        assert_eq!(prompt_app.view, WorkbenchView::NodeMachine);
+        assert!(prompt_app.in_app_prompt.is_some());
+        assert_eq!(
+            serde_yaml::to_string(&prompt_app.canvas_state.graph).unwrap(),
+            prompt_graph
+        );
+        assert!(frame_with_key(&mut prompt_app, egui::Key::Escape));
+        assert!(prompt_app.in_app_prompt.is_none());
+        assert_eq!(prompt_app.view, WorkbenchView::NodeMachine);
+        assert!(!frame_with_key(&mut prompt_app, egui::Key::F2));
+        assert_eq!(prompt_app.view, WorkbenchView::Palette);
+
+        let mut viewer_app = test_workbench_app(
+            Some(ViewerSession::ComponentGallery(
+                component_gallery::ComponentGalleryState::default(),
+            )),
+            VecDeque::new(),
+        );
+        viewer_app.view = WorkbenchView::NodeMachine;
+        viewer_app.canvas_state.selected_node = viewer_app
+            .canvas_state
+            .graph
+            .nodes
+            .first()
+            .map(|node| node.id);
+        let viewer_graph = serde_yaml::to_string(&viewer_app.canvas_state.graph).unwrap();
+        assert!(frame_with_key(&mut viewer_app, egui::Key::F2));
+        assert!(frame_with_key(&mut viewer_app, egui::Key::Delete));
+        assert_eq!(viewer_app.view, WorkbenchView::NodeMachine);
+        assert!(viewer_app.viewer.is_some());
+        assert_eq!(
+            serde_yaml::to_string(&viewer_app.canvas_state.graph).unwrap(),
+            viewer_graph
+        );
+        assert!(frame_with_key(&mut viewer_app, egui::Key::Escape));
+        assert!(viewer_app.viewer.is_none());
+        assert_eq!(viewer_app.view, WorkbenchView::NodeMachine);
+        assert!(!frame_with_key(&mut viewer_app, egui::Key::F2));
+        assert_eq!(viewer_app.view, WorkbenchView::Palette);
+        assert_eq!(
+            serde_yaml::to_string(&viewer_app.canvas_state.graph).unwrap(),
+            viewer_graph
+        );
+    }
+
+    #[test]
     fn spreadsheet_completion_waits_until_modal_viewer_closes() {
         let mut app = test_workbench_app(
             Some(ViewerSession::ComponentGallery(
