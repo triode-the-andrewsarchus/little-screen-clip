@@ -56,6 +56,7 @@ mod barcode_worker;
 mod binary_diff_view;
 mod canvas;
 mod component_gallery;
+mod conversion_decode_worker;
 mod diff_view;
 pub mod icons;
 mod image_preview;
@@ -3079,6 +3080,23 @@ fn main() -> Result<(), eframe::Error> {
                     std::fs::write(std::path::Path::new(output).with_extension("error"), &error);
             }
             eprintln!("barcode worker: {error}");
+            std::process::exit(2);
+        }
+        return Ok(());
+    }
+    if args
+        .get(1)
+        .is_some_and(|arg| arg == "--internal-conversion-decode-worker")
+    {
+        let result = match (args.get(2), args.get(3), args.len()) {
+            (Some(input), Some(output), 4) => conversion_decode_worker::run_helper(
+                std::path::Path::new(input),
+                std::path::Path::new(output),
+            ),
+            _ => Err("invalid conversion decode worker arguments".into()),
+        };
+        if let Err(error) = result {
+            eprintln!("conversion decode worker: {error}");
             std::process::exit(2);
         }
         return Ok(());

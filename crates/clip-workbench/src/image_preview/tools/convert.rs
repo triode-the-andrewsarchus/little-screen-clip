@@ -71,6 +71,7 @@ pub struct ConvertState {
     pub request_generation: u64,
     pub completed_generation: u64,
     render_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    render_decode_control: Option<std::sync::Arc<ImageToolProcessControl>>,
     pub(crate) completed_input_stamp: Option<ImageInputStamp>,
     optipng_request: Option<OptipngRequestStamp>,
     optipng_process_control: Option<std::sync::Arc<ImageToolProcessControl>>,
@@ -140,6 +141,7 @@ impl Default for ConvertState {
             request_generation: 0,
             completed_generation: 0,
             render_cancel: None,
+            render_decode_control: None,
             completed_input_stamp: None,
             optipng_request: None,
             optipng_process_control: None,
@@ -184,6 +186,7 @@ fn encode_conversion(
     quality: u8,
     lossless: bool,
     cancel: Option<&std::sync::atomic::AtomicBool>,
+    decoder: Option<(&std::path::Path, &ImageToolProcessControl)>,
 ) -> Result<(Vec<u8>, RgbaImage), String> {
     let cancelled = || cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Acquire));
     if cancelled() {
@@ -194,15 +197,26 @@ fn encode_conversion(
         ConvertTargetFormat::Jpeg => encode_jpeg_conversion(&base_img, quality, cancel),
         ConvertTargetFormat::Webp => encode_webp_cancellable(&base_img, lossless, quality, cancel),
     }?;
-    // PNG checks cancellation per source row and WebP checks it through
-    // libwebp's progress hook. Output decoding remains opaque, so check again
-    // when that call returns.
     if cancelled() {
         return Err("cancelled".to_string());
     }
-    let decoded = image::load_from_memory(&bytes)
-        .map(|image| image.to_rgba8())
-        .unwrap_or(base_img);
+    // The RGBA PNG stream is lossless; the other codecs must preserve the
+    // image crate's exact output, but their opaque decoders run in a child.
+    let decoded = if format == ConvertTargetFormat::Png {
+        base_img
+    } else if let Some((program, control)) = decoder {
+        crate::conversion_decode_worker::decode_in_child(
+            &bytes,
+            base_img.as_raw().len(),
+            program,
+            control,
+        )?
+        .unwrap_or(base_img)
+    } else {
+        image::load_from_memory(&bytes)
+            .map(|image| image.to_rgba8())
+            .unwrap_or(base_img)
+    };
     if cancelled() {
         return Err("cancelled".to_string());
     }
@@ -414,6 +428,9 @@ impl Drop for ConvertState {
         if let Some(cancel) = self.render_cancel.take() {
             cancel.store(true, std::sync::atomic::Ordering::Release);
         }
+        if let Some(control) = self.render_decode_control.take() {
+            control.cancel();
+        }
         self.render_retry_at = None;
         self.render_retry_input_stamp = None;
     }
@@ -434,7 +451,7 @@ impl ImagePreviewState {
         self.convert_state.is_encoding = false;
         self.convert_state.render_input_stamp = None;
 
-        match encode_conversion(base_img, fmt, quality, lossless, None) {
+        match encode_conversion(base_img, fmt, quality, lossless, None, None) {
             Ok((bytes, decoded_rgba)) => {
                 self.convert_state.encoded_bytes = bytes;
                 self.convert_state.converted_rgba = Some(decoded_rgba);
@@ -475,14 +492,33 @@ impl ImagePreviewState {
             return;
         }
 
+        let format = self.convert_state.target_format;
+        let decode_program = if cfg!(test) || format == ConvertTargetFormat::Png {
+            None
+        } else {
+            match std::env::current_exe() {
+                Ok(program) => Some(program),
+                Err(error) => {
+                    self.convert_state.render_error =
+                        Some(format!("Conversion decoder unavailable: {error}"));
+                    self.convert_state.render_error_input_stamp = Some(self.input_stamp());
+                    self.convert_state.params_dirty_at = None;
+                    return;
+                }
+            }
+        };
+        let decode_control = decode_program
+            .as_ref()
+            .map(|_| std::sync::Arc::new(ImageToolProcessControl::new()));
+
         let image = self.current_display_image();
         let input_stamp = self.input_stamp();
-        let format = self.convert_state.target_format;
         let quality = self.convert_state.quality;
         let lossless = self.convert_state.lossless;
         let generation = self.convert_state.request_generation;
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.convert_state.render_cancel = Some(cancel.clone());
+        self.convert_state.render_decode_control = decode_control.clone();
         self.convert_state.render_input_stamp = Some(input_stamp.clone());
         self.convert_state.is_encoding = true;
         self.convert_state.params_dirty_at = None;
@@ -491,7 +527,14 @@ impl ImagePreviewState {
         self.convert_state.render_retry_input_stamp = None;
         let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                encode_conversion(image, format, quality, lossless, Some(&cancel))
+                encode_conversion(
+                    image,
+                    format,
+                    quality,
+                    lossless,
+                    Some(&cancel),
+                    decode_program.as_deref().zip(decode_control.as_deref()),
+                )
             }))
             .unwrap_or_else(|_| Err("Conversion worker panicked".to_string()));
             ConvertWorkerMsg {
@@ -548,7 +591,11 @@ impl ImagePreviewState {
             return;
         };
 
-        match rx.try_recv() {
+        let received = rx.try_recv();
+        if !matches!(&received, Err(std::sync::mpsc::TryRecvError::Empty)) {
+            self.convert_state.render_decode_control = None;
+        }
+        match received {
             Ok(Ok(message)) => {
                 self.convert_state.is_encoding = false;
                 self.convert_state.render_cancel = None;
@@ -638,6 +685,9 @@ impl ImagePreviewState {
         }
         if let Some(cancel) = self.convert_state.render_cancel.take() {
             cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        if let Some(control) = self.convert_state.render_decode_control.take() {
+            control.cancel();
         }
         self.convert_state.render_rx = None;
         self.convert_state.render_input_stamp = None;
@@ -1617,7 +1667,8 @@ mod input_stamp_tests {
         state.convert_state.target_format = ConvertTargetFormat::Png;
         state.convert_state.quality = 77;
         let image = state.current_display_image();
-        let expected = encode_conversion(image, ConvertTargetFormat::Png, 77, false, None).unwrap();
+        let expected =
+            encode_conversion(image, ConvertTargetFormat::Png, 77, false, None, None).unwrap();
         let jobs = BackgroundJobs::new(1, 1);
         state.run_conversion_worker_on(&jobs);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
@@ -1780,6 +1831,8 @@ mod input_stamp_tests {
     fn conversion_worker_is_cancelled_when_settings_or_input_go_stale() {
         let mut settings = state();
         settings.run_conversion_worker();
+        let settings_decoder = std::sync::Arc::new(ImageToolProcessControl::new());
+        settings.convert_state.render_decode_control = Some(settings_decoder.clone());
         let cancel = settings
             .convert_state
             .render_cancel
@@ -1788,17 +1841,39 @@ mod input_stamp_tests {
             .clone();
         settings.schedule_conversion();
         assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
+        assert!(
+            settings_decoder
+                .cancel
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
         assert!(!settings.convert_state.is_encoding);
         assert!(settings.convert_state.render_rx.is_none());
 
         let mut input = state();
         input.run_conversion_worker();
+        let input_decoder = std::sync::Arc::new(ImageToolProcessControl::new());
+        input.convert_state.render_decode_control = Some(input_decoder.clone());
         let cancel = input.convert_state.render_cancel.as_ref().unwrap().clone();
         input.mark_pixels_changed();
         input.poll_conversion();
         assert!(cancel.load(std::sync::atomic::Ordering::Acquire));
+        assert!(
+            input_decoder
+                .cancel
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
         assert!(!input.convert_state.is_encoding);
         assert!(input.convert_state.render_rx.is_none());
+
+        let mut dropped = state();
+        let drop_decoder = std::sync::Arc::new(ImageToolProcessControl::new());
+        dropped.convert_state.render_decode_control = Some(drop_decoder.clone());
+        drop(dropped);
+        assert!(
+            drop_decoder
+                .cancel
+                .load(std::sync::atomic::Ordering::Acquire)
+        );
     }
 
     #[test]
@@ -1806,10 +1881,40 @@ mod input_stamp_tests {
         let image = RgbaImage::new(4, 4);
         let cancel = std::sync::atomic::AtomicBool::new(true);
         assert_eq!(
-            encode_conversion(image, ConvertTargetFormat::Png, 80, false, Some(&cancel))
-                .unwrap_err(),
+            encode_conversion(
+                image,
+                ConvertTargetFormat::Png,
+                80,
+                false,
+                Some(&cancel),
+                None
+            )
+            .unwrap_err(),
             "cancelled"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_decode_failure_uses_the_original_rgba_preview() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("decode-fallback.sh");
+        std::fs::write(&script, "#!/bin/sh\nprintf '\\000' > \"$3\"\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let image = RgbaImage::from_pixel(3, 2, image::Rgba([11, 29, 47, 83]));
+        let control = ImageToolProcessControl::new();
+        let (_, preview) = encode_conversion(
+            image.clone(),
+            ConvertTargetFormat::Jpeg,
+            80,
+            false,
+            None,
+            Some((&script, &control)),
+        )
+        .unwrap();
+        assert_eq!(preview, image);
     }
 
     #[test]
