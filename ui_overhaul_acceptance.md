@@ -4,7 +4,16 @@ Working evidence sheet for E1.4 and final acceptance. Record each run with date,
 
 ## Fixed popup hints across the recorded size matrix, 2026-09-28
 
-The 56-case private Niri matrix in `/tmp/clip-e1-matrix-complete` plus serial retry `/tmp/clip-e1-matrix-retries` covers every recorded logical-size, scale, and appearance case. Each successful report records `initial_wayland_size_hints.min_size == max_size`, matching the expected popup size; the initial map and final size checks also pass. The first timed-out case produced no hint report and its serial retry did. This confirms fixed size hints on these tested private outputs; mixed physical output scales, actual maximize requests, and first-visible-frame placement remain separate open checks.
+The 56-case private Niri matrix in `/tmp/clip-e1-matrix-complete` plus serial retry `/tmp/clip-e1-matrix-retries` covers every recorded logical-size, scale, and appearance case. Each successful report records `initial_wayland_size_hints.min_size == max_size`, matching the expected popup size; the initial map and final size checks also pass. The first timed-out case produced no hint report and its serial retry did. This confirms fixed size hints on these tested private outputs; mixed physical output scales and actual maximize requests remain open. First-visible-frame placement now has separate direct-output captures at two representative size/scale pairs below; full-matrix first-frame coverage remains under H3.2a1.
+
+## First-visible-frame popup placement, 2026-09-29
+
+A private Wayland `zwlr_screencopy` observer started before each direct Workbench launch and captured the compositor output at roughly 16 ms intervals. Comparing each output frame with the pre-launch background shows the first visible popup frame, including Niri's low-opacity opening animation; an earlier RGB-difference threshold missed this faint frame, so the retained reports use a threshold of one channel value. Presentation timestamps and capture-ready times bound the observation interval, but do not identify an exact atomic scanout instant.
+
+- At **1280×800 / 100%** (`/tmp/clip-h11-first-visible-20260929-r4`), frame 23 is blank and frame 24 is the first visible frame. The first-visible pixel bounds are `[75,44,1207,755]`; the popup grows to its stable extent by frame 27. Initial min/max hints are both 1177×736, and Niri reports position `(52,32)`, center `(640.5,400)`, against output center `(640,400)`.
+- At **1600×1000 / 125%** (`/tmp/clip-h11-first-visible-20260929-r5`), frame 16 is blank and frame 17 is first visible. The first-visible pixel bounds are `[317,197,1682,1053]`; the stable extent begins at frame 19. Initial min/max hints are both 1472×920, and Niri reports position `(64,40)`, centered exactly at `(800,500)` on the logical output. Captured output pixels are 2000×1250.
+
+Both first-visible frames and their settled popup extents are centered; the app's fixed Wayland size hints remain unchanged while the compositor's opening animation changes the visible bounds. These runs use private Weston/Niri outputs and software rendering, not the user's compositor. They verify these two representative cases only; first-frame behavior across the full resolution/scale matrix is still open under H3.2a1.
 
 ## Large single-line text previews, 2026-09-28
 
