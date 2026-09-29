@@ -183,11 +183,12 @@ impl ImagePreviewState {
             ticket.cancel();
         }
         self.palette_rx = None;
-        let disp_img = self.current_display_image();
+        let snapshot = self.display_image_snapshot_request();
         let target_count = self.palette_state.num_colors;
-        let stamp = self.input_stamp();
+        let stamp = snapshot.input_stamp.clone();
         self.invalidate_stale_palette_result_for(&stamp, target_count);
         let (ticket, receiver) = jobs.submit(std::time::Duration::MAX, move || {
+            let disp_img = snapshot.compose();
             extract_palette(&disp_img, target_count)
         });
         self.palette_ticket = Some(ticket);

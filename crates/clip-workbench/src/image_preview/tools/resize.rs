@@ -879,10 +879,16 @@ mod input_stamp_tests {
         state.resize_state.last_result_request_stamp =
             Some(state.current_optimizer_request_stamp());
         state.run_target_file_size_optimizer_on(&jobs);
+        let retained_pixels =
+            std::sync::Arc::clone(&state.optimizer_retry_snapshot.as_ref().unwrap().pixels);
         state.poll_optimizer_on(&jobs);
 
         assert!(!state.resize_state.is_optimizing);
         assert!(state.optimizer_retry_at.is_some());
+        assert!(std::sync::Arc::ptr_eq(
+            &retained_pixels,
+            &state.optimizer_retry_snapshot.as_ref().unwrap().pixels
+        ));
         assert!(
             state
                 .optimizer_status
@@ -996,6 +1002,7 @@ impl ImagePreviewState {
         self.optimizer_job_rx = None;
         self.optimizer_retry_at = None;
         self.optimizer_retry_stamp = None;
+        self.optimizer_retry_snapshot = None;
         self.resize_state.optimizer_request_stamp = None;
         self.resize_state.is_optimizing = false;
         self.optimizer_status = None;
@@ -1053,7 +1060,11 @@ impl ImagePreviewState {
         let request_stamp = self.current_optimizer_request_stamp();
         let target_bytes = request_stamp.target_bytes;
         let format = request_stamp.format;
-        let base_img = self.current_display_image();
+        let snapshot = self
+            .optimizer_retry_snapshot
+            .take()
+            .unwrap_or_else(|| self.display_image_snapshot_request());
+        self.optimizer_retry_snapshot = Some(snapshot.clone());
         self.resize_state.optimizer_request_stamp = Some(request_stamp);
 
         let (progress_tx, rx) = std::sync::mpsc::channel::<OptimizerMsg>();
@@ -1074,7 +1085,7 @@ impl ImagePreviewState {
 
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 optimize_to_target_size_cancellable(
-                    &base_img,
+                    &snapshot.compose(),
                     target_bytes,
                     format,
                     Some(&progress_cb),
@@ -1119,6 +1130,7 @@ impl ImagePreviewState {
         {
             self.optimizer_retry_at = None;
             self.optimizer_retry_stamp = None;
+            self.optimizer_retry_snapshot = None;
             self.optimizer_status = None;
         }
         if let Some(retry_at) = self.optimizer_retry_at {
@@ -1179,6 +1191,7 @@ impl ImagePreviewState {
                     self.resize_state.optimizer_request_stamp = None;
                     self.optimizer_rx = None;
                     self.optimizer_status = None;
+                    self.optimizer_retry_snapshot = None;
                     return;
                 }
                 Ok(Err(error)) => {
@@ -1213,6 +1226,7 @@ impl ImagePreviewState {
             self.resize_state.optimizer_request_stamp = None;
             self.optimizer_rx = None;
             self.optimizer_status = Some(format!("Optimizer worker failed: {error}"));
+            self.optimizer_retry_snapshot = None;
             return;
         }
         if let Some(error) = worker_error {
@@ -1223,6 +1237,7 @@ impl ImagePreviewState {
             self.optimizer_ticket = None;
             self.optimizer_job_rx = None;
             self.optimizer_status = Some(error);
+            self.optimizer_retry_snapshot = None;
             return;
         }
         if let Some(res) = done_res {
@@ -1236,6 +1251,7 @@ impl ImagePreviewState {
             self.optimizer_ticket = None;
             self.optimizer_job_rx = None;
             self.resize_state.optimizer_request_stamp = None;
+            self.optimizer_retry_snapshot = None;
         } else if disconnected {
             self.resize_state.is_optimizing = false;
             self.optimizer_status = None;
@@ -1244,6 +1260,7 @@ impl ImagePreviewState {
             self.optimizer_ticket = None;
             self.optimizer_job_rx = None;
             self.resize_state.optimizer_request_stamp = None;
+            self.optimizer_retry_snapshot = None;
         }
     }
 

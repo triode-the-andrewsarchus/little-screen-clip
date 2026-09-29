@@ -61,7 +61,11 @@ impl ImagePreviewState {
         if self.barcode_state.is_scanning {
             return;
         }
-        let image = self.current_display_image();
+        let snapshot = self
+            .barcode_retry_snapshot
+            .take()
+            .unwrap_or_else(|| self.display_image_snapshot_request());
+        let retry_snapshot = snapshot.clone();
         let control = match &request {
             BarcodeScanRequest::Program(_) => {
                 Some(std::sync::Arc::new(ImageToolProcessControl::new()))
@@ -71,7 +75,7 @@ impl ImagePreviewState {
         };
         self.barcode_cancel = control.clone();
         self.barcode_state.is_scanning = true;
-        let input_stamp = self.input_stamp();
+        let input_stamp = snapshot.input_stamp.clone();
         self.barcode_input_stamp = Some(input_stamp);
         self.barcode_retry_at = None;
         self.barcode_retry_stamp = None;
@@ -81,6 +85,7 @@ impl ImagePreviewState {
         let worker_request = request.clone();
         let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
             let start = std::time::Instant::now();
+            let image = snapshot.compose();
             let result =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match worker_request {
                     BarcodeScanRequest::Program(program) => worker_control
@@ -107,6 +112,7 @@ impl ImagePreviewState {
         });
         self.barcode_ticket = Some(ticket);
         self.barcode_retry_request = Some(request);
+        self.barcode_retry_snapshot = Some(retry_snapshot);
         self.barcode_rx = Some(rx);
     }
 
@@ -123,6 +129,7 @@ impl ImagePreviewState {
         self.barcode_retry_at = None;
         self.barcode_retry_stamp = None;
         self.barcode_retry_request = None;
+        self.barcode_retry_snapshot = None;
         self.barcode_queue_status = None;
     }
 
@@ -169,6 +176,7 @@ impl ImagePreviewState {
                 self.barcode_rx = None;
                 self.barcode_input_stamp = None;
                 self.barcode_retry_request = None;
+                self.barcode_retry_snapshot = None;
                 self.barcode_queue_status = None;
                 self.barcode_state.is_scanning = false;
                 if let Some(error) = message.error {
@@ -214,6 +222,7 @@ impl ImagePreviewState {
                 self.barcode_rx = None;
                 self.barcode_input_stamp = None;
                 self.barcode_retry_request = None;
+                self.barcode_retry_snapshot = None;
                 self.barcode_state.is_scanning = false;
             }
             Some(Ok(Err(error))) => {
@@ -223,6 +232,7 @@ impl ImagePreviewState {
                 self.barcode_input_stamp = None;
                 self.barcode_state.is_scanning = false;
                 self.barcode_retry_request = None;
+                self.barcode_retry_snapshot = None;
                 self.show_toast(format!("Barcode scan failed: {error}"));
             }
             Some(Err(std::sync::mpsc::TryRecvError::Empty)) if self.barcode_state.is_scanning => {
@@ -234,6 +244,7 @@ impl ImagePreviewState {
                 self.barcode_rx = None;
                 self.barcode_input_stamp = None;
                 self.barcode_retry_request = None;
+                self.barcode_retry_snapshot = None;
                 self.barcode_state.is_scanning = false;
                 self.barcode_results_stamp = None;
                 self.barcode_state.detections.clear();
@@ -745,6 +756,8 @@ mod input_stamp_tests {
         }];
         state.barcode_results_stamp = Some(state.input_stamp());
         state.run_barcode_scan_with_program_on(quick, &jobs);
+        let retained_pixels =
+            std::sync::Arc::clone(&state.barcode_retry_snapshot.as_ref().unwrap().pixels);
         let ctx = egui::Context::default();
         state.poll_barcode_scan_on(&ctx, &jobs);
 
@@ -753,6 +766,10 @@ mod input_stamp_tests {
         assert_eq!(state.barcode_state.last_scan_duration_ms, 23);
         assert_eq!(state.barcode_state.detections[0].text, "preserved payload");
         assert!(state.barcode_retry_at.is_some());
+        assert!(std::sync::Arc::ptr_eq(
+            &retained_pixels,
+            &state.barcode_retry_snapshot.as_ref().unwrap().pixels
+        ));
         assert!(
             state
                 .barcode_queue_status
@@ -767,6 +784,10 @@ mod input_stamp_tests {
         state.poll_barcode_scan_on(&ctx, &jobs);
         assert!(state.barcode_state.is_scanning);
         assert!(state.barcode_retry_at.is_none());
+        assert!(std::sync::Arc::ptr_eq(
+            &retained_pixels,
+            &state.barcode_retry_snapshot.as_ref().unwrap().pixels
+        ));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
         while state.barcode_state.is_scanning && std::time::Instant::now() < deadline {
             state.poll_barcode_scan_on(&ctx, &jobs);

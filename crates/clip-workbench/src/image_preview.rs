@@ -170,6 +170,7 @@ pub struct ImagePreviewState {
     optimizer_ticket: Option<JobTicket>,
     pub(crate) optimizer_retry_at: Option<std::time::Instant>,
     optimizer_retry_stamp: Option<OptimizerRequestStamp>,
+    optimizer_retry_snapshot: Option<DisplayImageSnapshotRequest>,
     pub optimizer_status: Option<String>,
     optimizer_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 
@@ -214,6 +215,7 @@ pub struct ImagePreviewState {
     pub(crate) barcode_retry_at: Option<std::time::Instant>,
     pub(crate) barcode_retry_stamp: Option<ImageInputStamp>,
     pub(crate) barcode_retry_request: Option<BarcodeScanRequest>,
+    pub(crate) barcode_retry_snapshot: Option<DisplayImageSnapshotRequest>,
     pub(crate) barcode_queue_status: Option<String>,
 
     // Decorrelation Stretch State
@@ -439,6 +441,7 @@ impl ImagePreviewState {
             optimizer_ticket: None,
             optimizer_retry_at: None,
             optimizer_retry_stamp: None,
+            optimizer_retry_snapshot: None,
             optimizer_status: None,
             optimizer_cancel: None,
             bg_removal_in_progress: false,
@@ -474,6 +477,7 @@ impl ImagePreviewState {
             barcode_retry_at: None,
             barcode_retry_stamp: None,
             barcode_retry_request: None,
+            barcode_retry_snapshot: None,
             barcode_queue_status: None,
             dcs_state: DecorrelationStretchState::default(),
             film_sim_state: FilmSimState::default(),

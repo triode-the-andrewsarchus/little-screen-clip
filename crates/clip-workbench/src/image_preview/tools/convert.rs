@@ -80,6 +80,7 @@ pub struct ConvertState {
     optipng_queue_status: Option<String>,
     optipng_retry_work: Option<OptipngRetryWork>,
     render_input_stamp: Option<ImageInputStamp>,
+    render_snapshot: Option<DisplayImageSnapshotRequest>,
     pub(crate) render_error_input_stamp: Option<ImageInputStamp>,
     pub render_error: Option<String>,
     render_queue_status: Option<String>,
@@ -150,6 +151,7 @@ impl Default for ConvertState {
             optipng_queue_status: None,
             optipng_retry_work: None,
             render_input_stamp: None,
+            render_snapshot: None,
             render_error_input_stamp: None,
             render_error: None,
             render_queue_status: None,
@@ -511,7 +513,11 @@ impl ImagePreviewState {
             .as_ref()
             .map(|_| std::sync::Arc::new(ImageToolProcessControl::new()));
 
-        let image = self.current_display_image();
+        let snapshot = self
+            .convert_state
+            .render_snapshot
+            .take()
+            .unwrap_or_else(|| self.display_image_snapshot_request());
         let input_stamp = self.input_stamp();
         let quality = self.convert_state.quality;
         let lossless = self.convert_state.lossless;
@@ -520,6 +526,7 @@ impl ImagePreviewState {
         self.convert_state.render_cancel = Some(cancel.clone());
         self.convert_state.render_decode_control = decode_control.clone();
         self.convert_state.render_input_stamp = Some(input_stamp.clone());
+        self.convert_state.render_snapshot = Some(snapshot.clone());
         self.convert_state.is_encoding = true;
         self.convert_state.params_dirty_at = None;
         self.convert_state.render_retry_at = None;
@@ -528,7 +535,7 @@ impl ImagePreviewState {
         let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 encode_conversion(
-                    image,
+                    snapshot.compose(),
                     format,
                     quality,
                     lossless,
@@ -568,6 +575,7 @@ impl ImagePreviewState {
             self.convert_state.render_retry_at = None;
             self.convert_state.render_retry_input_stamp = None;
             self.convert_state.render_queue_status = None;
+            self.convert_state.render_snapshot = None;
             if self.active_mode == ImageToolMode::Convert {
                 self.convert_state.params_dirty_at = Some(std::time::Instant::now());
             }
@@ -601,6 +609,7 @@ impl ImagePreviewState {
                 self.convert_state.render_cancel = None;
                 self.convert_state.render_job_ticket = None;
                 self.convert_state.render_input_stamp = None;
+                self.convert_state.render_snapshot = None;
                 self.convert_state.render_queue_status = None;
                 self.convert_state.render_retry_input_stamp = None;
                 if message.generation != self.convert_state.request_generation
@@ -645,12 +654,14 @@ impl ImagePreviewState {
                 self.convert_state.render_cancel = None;
                 self.convert_state.render_job_ticket = None;
                 self.convert_state.render_input_stamp = None;
+                self.convert_state.render_snapshot = None;
             }
             Ok(Err(error)) => {
                 self.convert_state.is_encoding = false;
                 self.convert_state.render_cancel = None;
                 self.convert_state.render_job_ticket = None;
                 self.convert_state.render_input_stamp = None;
+                self.convert_state.render_snapshot = None;
                 self.convert_state.render_error =
                     Some(format!("Conversion worker failed: {error}"));
                 self.convert_state.render_error_input_stamp = Some(self.input_stamp());
@@ -668,6 +679,7 @@ impl ImagePreviewState {
                     .render_cancel
                     .take()
                     .is_some_and(|cancel| cancel.load(std::sync::atomic::Ordering::Acquire));
+                self.convert_state.render_snapshot = None;
                 if was_cancelled {
                     self.convert_state.render_input_stamp = None;
                 } else {
@@ -691,6 +703,7 @@ impl ImagePreviewState {
         }
         self.convert_state.render_rx = None;
         self.convert_state.render_input_stamp = None;
+        self.convert_state.render_snapshot = None;
         self.convert_state.is_encoding = false;
         self.convert_state.render_retry_at = None;
         self.convert_state.render_queue_status = None;
@@ -1702,8 +1715,14 @@ mod input_stamp_tests {
         let mut state = state();
         state.convert_state.target_format = ConvertTargetFormat::Png;
         state.run_conversion_worker_on(&jobs);
+        let retained_pixels =
+            std::sync::Arc::clone(&state.convert_state.render_snapshot.as_ref().unwrap().pixels);
         state.poll_conversion_on(&jobs);
         assert!(state.convert_state.render_retry_at.is_some());
+        assert!(std::sync::Arc::ptr_eq(
+            &retained_pixels,
+            &state.convert_state.render_snapshot.as_ref().unwrap().pixels
+        ));
         assert_eq!(
             state.convert_state.render_queue_status.as_deref(),
             Some("Waiting for background workers; retrying shortly")
@@ -1720,6 +1739,10 @@ mod input_stamp_tests {
             .unwrap()
             .unwrap();
         state.convert_state.render_retry_at = Some(std::time::Instant::now());
+        assert!(std::sync::Arc::ptr_eq(
+            &retained_pixels,
+            &state.convert_state.render_snapshot.as_ref().unwrap().pixels
+        ));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         while (state.convert_state.is_encoding || state.convert_state.render_retry_at.is_some())
             && std::time::Instant::now() < deadline
