@@ -125,6 +125,7 @@ pub struct ImagePreviewState {
 
     // Sizing & Optimization State
     pub resize_state: ResizeState,
+    pub(crate) pixel_resize_job: PixelResizeJobState,
 
     // Palette State
     pub palette_state: PaletteState,
@@ -409,6 +410,7 @@ impl ImagePreviewState {
             markup_state: MarkupState::default(),
             pick_color_state: PickColorState::default(),
             resize_state,
+            pixel_resize_job: PixelResizeJobState::default(),
             palette_state,
             palette_ticket: None,
             palette_rx: None,
@@ -516,6 +518,7 @@ impl ImagePreviewState {
     }
 
     pub(crate) fn mark_pixels_changed(&mut self) {
+        self.cancel_pixel_resize();
         self.cancel_barcode_scan();
         self.invalidate_decorrelation_stretch();
         self.film_sim_state.cancel_render();
@@ -1098,6 +1101,15 @@ impl ImagePreviewState {
 
         // Poll background file size optimizer if running
         self.poll_optimizer();
+        self.poll_pixel_resize(ctx, BackgroundJobs::global());
+        if self.pixel_resize_job.pending {
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        if let Some(retry_at) = self.pixel_resize_job.retry_at {
+            ctx.request_repaint_after(
+                retry_at.saturating_duration_since(std::time::Instant::now()),
+            );
+        }
         if self.resize_state.is_optimizing {
             ctx.request_repaint();
         }
@@ -1422,6 +1434,9 @@ impl ImagePreviewState {
             && target_mode != ImageToolMode::DecorrelationStretch
         {
             self.cancel_decorrelation_stretch();
+        }
+        if prev_mode == ImageToolMode::Resize && target_mode != ImageToolMode::Resize {
+            self.cancel_pixel_resize();
         }
         if prev_mode == ImageToolMode::Ocr
             && target_mode != ImageToolMode::Ocr
@@ -2152,6 +2167,20 @@ mod tests {
         state.poll_decorrelation_stretch(&ctx, BackgroundJobs::global());
         assert!(!state.dcs_state.is_computing);
         assert!(state.dcs_state.error.is_none());
+    }
+
+    fn wait_for_pixel_resize(state: &mut ImagePreviewState) {
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while (state.pixel_resize_job.pending || state.pixel_resize_job.retry_at.is_some())
+            && std::time::Instant::now() < deadline
+        {
+            state.poll_pixel_resize(&ctx, BackgroundJobs::global());
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        state.poll_pixel_resize(&ctx, BackgroundJobs::global());
+        assert!(!state.pixel_resize_job.pending);
+        assert!(state.pixel_resize_job.error.is_none());
     }
 
     fn image_state_from_png(size: (u32, u32), title: &str) -> ImagePreviewState {
@@ -3105,6 +3134,7 @@ mod tests {
 
         // Apply pixel resize to 75x150
         state.apply_pixel_resize(75, 150, ResizeFilter::Lanczos3);
+        wait_for_pixel_resize(&mut state);
         assert_eq!(state.current_rgba.width(), 75);
         assert_eq!(state.current_rgba.height(), 150);
         assert_eq!(state.undo_stack.len(), 1);

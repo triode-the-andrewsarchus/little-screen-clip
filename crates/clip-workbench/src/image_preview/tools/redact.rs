@@ -29,23 +29,11 @@ impl ImagePreviewState {
         self.undo_stack.push(self.current_rgba.clone());
         self.redo_stack.clear();
 
-        let img_w = self.current_rgba.width() as f32;
-        let img_h = self.current_rgba.height() as f32;
         let count = self.redaction_state.boxes.len();
-        let canvas = Arc::make_mut(&mut self.current_rgba);
-
-        for b in &self.redaction_state.boxes {
-            let px_min_x = (b.normalized_rect.min.x * img_w).round().clamp(0.0, img_w) as u32;
-            let px_max_x = (b.normalized_rect.max.x * img_w).round().clamp(0.0, img_w) as u32;
-            let px_min_y = (b.normalized_rect.min.y * img_h).round().clamp(0.0, img_h) as u32;
-            let px_max_y = (b.normalized_rect.max.y * img_h).round().clamp(0.0, img_h) as u32;
-
-            for y in px_min_y..px_max_y {
-                for x in px_min_x..px_max_x {
-                    canvas.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
-                }
-            }
-        }
+        self.current_rgba = Arc::new(compose_redactions_only(
+            &self.current_rgba,
+            &self.redaction_state.boxes,
+        ));
 
         self.redaction_state.boxes.clear();
         self.redaction_state.selected_idx = None;
@@ -503,6 +491,24 @@ impl ImagePreviewState {
             }
         }
     }
+}
+
+pub(crate) fn compose_redactions_only(source: &RgbaImage, boxes: &[RedactionBox]) -> RgbaImage {
+    let mut image = source.clone();
+    let img_w = image.width() as f32;
+    let img_h = image.height() as f32;
+    for b in boxes {
+        let px_min_x = (b.normalized_rect.min.x * img_w).round().clamp(0.0, img_w) as u32;
+        let px_max_x = (b.normalized_rect.max.x * img_w).round().clamp(0.0, img_w) as u32;
+        let px_min_y = (b.normalized_rect.min.y * img_h).round().clamp(0.0, img_h) as u32;
+        let px_max_y = (b.normalized_rect.max.y * img_h).round().clamp(0.0, img_h) as u32;
+        for y in px_min_y..px_max_y {
+            for x in px_min_x..px_max_x {
+                image.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+            }
+        }
+    }
+    image
 }
 
 #[cfg(test)]

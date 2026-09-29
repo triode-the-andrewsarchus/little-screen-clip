@@ -431,6 +431,7 @@ impl TargetSizeSearch<'_> {
 
 impl Drop for ImagePreviewState {
     fn drop(&mut self) {
+        self.cancel_pixel_resize();
         if let Some(ticket) = self.palette_ticket.take() {
             ticket.cancel();
         }
@@ -560,6 +561,41 @@ pub struct ResizeState {
     pub is_optimizing: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct PixelResizeStamp {
+    image: ImageInputStamp,
+    width: u32,
+    height: u32,
+    filter: ResizeFilter,
+}
+
+#[derive(Clone)]
+struct PixelResizeRequest {
+    source: Arc<RgbaImage>,
+    redactions: Vec<RedactionBox>,
+    stamp: PixelResizeStamp,
+}
+
+struct PixelResizeMessage {
+    stamp: PixelResizeStamp,
+    result: Result<RgbaImage, String>,
+}
+
+#[derive(Default)]
+pub struct PixelResizeJobState {
+    rx: Option<
+        std::sync::mpsc::Receiver<Result<Option<PixelResizeMessage>, little_clip_core::JobError>>,
+    >,
+    ticket: Option<little_clip_core::JobTicket>,
+    cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    stamp: Option<PixelResizeStamp>,
+    pub(crate) retry_at: Option<std::time::Instant>,
+    retry_request: Option<PixelResizeRequest>,
+    pub(crate) pending: bool,
+    pub(crate) status: Option<String>,
+    pub(crate) error: Option<String>,
+}
+
 impl Default for ResizeState {
     fn default() -> Self {
         Self {
@@ -642,6 +678,20 @@ mod input_stamp_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    fn wait_for_pixel_resize(state: &mut ImagePreviewState, jobs: &BackgroundJobs) {
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while (state.pixel_resize_job.pending || state.pixel_resize_job.retry_at.is_some())
+            && std::time::Instant::now() < deadline
+        {
+            state.poll_pixel_resize(&ctx, jobs);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        state.poll_pixel_resize(&ctx, jobs);
+        assert!(!state.pixel_resize_job.pending);
+        assert!(state.pixel_resize_job.error.is_none());
+    }
+
     fn state() -> ImagePreviewState {
         let mut bytes = Vec::new();
         RgbaImage::new(4, 4)
@@ -658,6 +708,190 @@ mod input_stamp_tests {
             &AppConfig::default(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn bounded_pixel_resize_matches_direct_filter_output_and_preserves_markup() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = state();
+        let source = RgbaImage::from_fn(7, 5, |x, y| {
+            image::Rgba([(x * 31) as u8, (y * 47) as u8, (x * 7 + y * 9) as u8, 255])
+        });
+        state.current_rgba = Arc::new(source.clone());
+        state.markup_state.items.push(MarkupShape::Rectangle {
+            rect: Rect::from_min_max(Pos2::new(0.1, 0.2), Pos2::new(0.8, 0.9)),
+            color: Color32::RED,
+            width: 2.0,
+            filled: false,
+            rounding: 0.0,
+        });
+        let markup_before = state.markup_state.items.clone();
+        let expected =
+            image::imageops::resize(&source, 11, 9, ResizeFilter::Triangle.to_image_filter());
+
+        state.apply_pixel_resize_on(11, 9, ResizeFilter::Triangle, &jobs);
+        assert!(state.pixel_resize_job.pending);
+        wait_for_pixel_resize(&mut state, &jobs);
+
+        assert_eq!(state.current_rgba.as_ref(), &expected);
+        assert_eq!(state.markup_state.items, markup_before);
+        assert_eq!(state.mime, "image/png");
+        assert_eq!(state.undo_stack.len(), 1);
+        assert_eq!(
+            (state.current_rgba.width(), state.current_rgba.height()),
+            (11, 9)
+        );
+    }
+
+    #[test]
+    fn resize_with_pending_redactions_matches_legacy_output_and_keeps_two_undo_steps() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = state();
+        let source = RgbaImage::from_fn(8, 6, |x, y| {
+            image::Rgba([(x * 20) as u8, (y * 30) as u8, 90, 255])
+        });
+        state.current_rgba = Arc::new(source.clone());
+        let redactions = vec![RedactionBox {
+            normalized_rect: Rect::from_min_max(Pos2::new(0.25, 0.25), Pos2::new(0.75, 0.75)),
+        }];
+        state.redaction_state.boxes = redactions.clone();
+        state.active_mode = ImageToolMode::Resize;
+        let baked = super::super::redact::compose_redactions_only(&source, &redactions);
+        let expected =
+            image::imageops::resize(&baked, 4, 3, ResizeFilter::Lanczos3.to_image_filter());
+
+        state.apply_pixel_resize_on(4, 3, ResizeFilter::Lanczos3, &jobs);
+        wait_for_pixel_resize(&mut state, &jobs);
+        assert_eq!(state.current_rgba.as_ref(), &expected);
+        assert!(state.redaction_state.boxes.is_empty());
+        assert_eq!(state.undo_stack.len(), 2);
+        state.undo();
+        assert_eq!(state.current_rgba.as_ref(), &baked);
+        state.undo();
+        assert_eq!(state.current_rgba.as_ref(), &source);
+    }
+
+    #[test]
+    fn pixel_resize_queue_full_shows_retry_and_reuses_source_arc() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let (_, filler_rx) = jobs.submit(std::time::Duration::MAX, || ());
+        let mut state = state();
+        let before = state.current_rgba.clone();
+        state.apply_pixel_resize_on(8, 7, ResizeFilter::Nearest, &jobs);
+        let retained = Arc::clone(
+            &state
+                .pixel_resize_job
+                .retry_request
+                .as_ref()
+                .unwrap()
+                .source,
+        );
+        state.poll_pixel_resize(&egui::Context::default(), &jobs);
+        assert!(!state.pixel_resize_job.pending);
+        assert!(state.pixel_resize_job.retry_at.is_some());
+        assert!(
+            state
+                .pixel_resize_job
+                .status
+                .as_deref()
+                .unwrap()
+                .contains("busy")
+        );
+        assert!(Arc::ptr_eq(
+            &retained,
+            &state
+                .pixel_resize_job
+                .retry_request
+                .as_ref()
+                .unwrap()
+                .source
+        ));
+        assert!(Arc::ptr_eq(&before, &state.current_rgba));
+        let retry_at = state.pixel_resize_job.retry_at.unwrap();
+        state.poll_pixel_resize(&egui::Context::default(), &jobs);
+        assert_eq!(state.pixel_resize_job.retry_at, Some(retry_at));
+
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+        filler_rx.recv().unwrap().unwrap();
+        state.pixel_resize_job.retry_at = Some(std::time::Instant::now());
+        state.poll_pixel_resize(&egui::Context::default(), &jobs);
+        assert!(state.pixel_resize_job.pending);
+        assert!(Arc::ptr_eq(
+            &retained,
+            &state
+                .pixel_resize_job
+                .retry_request
+                .as_ref()
+                .unwrap()
+                .source
+        ));
+        wait_for_pixel_resize(&mut state, &jobs);
+        assert!(state.pixel_resize_job.status.is_none());
+    }
+
+    #[test]
+    fn stale_resize_settings_cancel_queued_work_and_viewer_drop_cancels_ticket() {
+        let jobs = BackgroundJobs::new(1, 2);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let mut active = state();
+        active.apply_pixel_resize_on(9, 8, ResizeFilter::Nearest, &jobs);
+        let cancel = active.pixel_resize_job.cancel.as_ref().unwrap().clone();
+        let worker_rx = active.pixel_resize_job.rx.take().unwrap();
+        active.resize_state.filter = ResizeFilter::Triangle;
+        active.poll_pixel_resize(&egui::Context::default(), &jobs);
+        assert!(cancel.load(Ordering::Acquire));
+        assert!(!active.pixel_resize_job.pending);
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+        assert!(matches!(
+            worker_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            Err(little_clip_core::JobError::Cancelled)
+        ));
+
+        let jobs = BackgroundJobs::new(1, 2);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let mut dropped = state();
+        dropped.apply_pixel_resize_on(9, 8, ResizeFilter::Nearest, &jobs);
+        let cancel = dropped.pixel_resize_job.cancel.as_ref().unwrap().clone();
+        let worker_rx = dropped.pixel_resize_job.rx.take().unwrap();
+        drop(dropped);
+        assert!(cancel.load(Ordering::Acquire));
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+        assert!(matches!(
+            worker_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            Err(little_clip_core::JobError::Cancelled)
+        ));
     }
 
     fn result(color: [u8; 4]) -> FileSizeOptimizationResult {
@@ -1010,28 +1244,217 @@ impl ImagePreviewState {
     }
 
     pub fn apply_pixel_resize(&mut self, target_w: u32, target_h: u32, filter: ResizeFilter) {
+        self.apply_pixel_resize_on(target_w, target_h, filter, BackgroundJobs::global());
+    }
+
+    fn apply_pixel_resize_on(
+        &mut self,
+        target_w: u32,
+        target_h: u32,
+        filter: ResizeFilter,
+        jobs: &BackgroundJobs,
+    ) {
         let (w, h) = (target_w.clamp(1, 16384), target_h.clamp(1, 16384));
-        if w == self.current_rgba.width() && h == self.current_rgba.height() {
+        if (w == self.current_rgba.width() && h == self.current_rgba.height())
+            || self.pixel_resize_job.pending
+        {
             return;
         }
 
-        // Burn any pending redactions first so they scale with the image
-        if !self.redaction_state.boxes.is_empty() {
-            self.apply_redactions();
+        self.cancel_pixel_resize();
+        self.resize_state.target_width = w;
+        self.resize_state.target_height = h;
+        self.resize_state.width_input = w.to_string();
+        self.resize_state.height_input = h.to_string();
+        self.resize_state.filter = filter;
+        let snapshot = self.display_image_snapshot_request();
+        let request = PixelResizeRequest {
+            source: snapshot.pixels,
+            redactions: self.redaction_state.boxes.clone(),
+            stamp: PixelResizeStamp {
+                image: snapshot.input_stamp,
+                width: w,
+                height: h,
+                filter,
+            },
+        };
+        self.submit_pixel_resize(request, jobs);
+    }
+
+    fn current_pixel_resize_stamp(&self) -> PixelResizeStamp {
+        PixelResizeStamp {
+            image: self.input_stamp(),
+            width: self.resize_state.target_width.clamp(1, 16384),
+            height: self.resize_state.target_height.clamp(1, 16384),
+            filter: self.resize_state.filter,
         }
+    }
 
-        self.undo_stack.push(self.current_rgba.clone());
-        self.redo_stack.clear();
+    fn submit_pixel_resize(&mut self, request: PixelResizeRequest, jobs: &BackgroundJobs) {
+        let worker_request = request.clone();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
+            if worker_cancel.load(std::sync::atomic::Ordering::Acquire) {
+                return None;
+            }
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let prepared = super::redact::compose_redactions_only(
+                    &worker_request.source,
+                    &worker_request.redactions,
+                );
+                image::imageops::resize(
+                    &prepared,
+                    worker_request.stamp.width,
+                    worker_request.stamp.height,
+                    worker_request.stamp.filter.to_image_filter(),
+                )
+            }))
+            .map_err(|_| "Resize worker panicked".to_string());
+            if worker_cancel.load(std::sync::atomic::Ordering::Acquire) {
+                return None;
+            }
+            Some(PixelResizeMessage {
+                stamp: worker_request.stamp,
+                result,
+            })
+        });
+        self.pixel_resize_job.ticket = Some(ticket);
+        self.pixel_resize_job.rx = Some(rx);
+        self.pixel_resize_job.cancel = Some(cancel);
+        self.pixel_resize_job.stamp = Some(request.stamp.clone());
+        self.pixel_resize_job.retry_request = Some(request);
+        self.pixel_resize_job.retry_at = None;
+        self.pixel_resize_job.pending = true;
+        self.pixel_resize_job.status = Some("Resizing image…".into());
+        self.pixel_resize_job.error = None;
+    }
 
-        let resized =
-            image::imageops::resize(self.current_rgba.as_ref(), w, h, filter.to_image_filter());
-        self.current_rgba = Arc::new(resized);
-        self.mark_pixels_changed();
-        self.dirty_texture = true;
-        self.resize_state.sync_from_image(&self.current_rgba);
-        self.palette_state.is_extracted = false;
+    pub(crate) fn poll_pixel_resize(&mut self, ctx: &egui::Context, jobs: &BackgroundJobs) {
+        if self.pixel_resize_job.pending
+            && self.pixel_resize_job.stamp.as_ref() != Some(&self.current_pixel_resize_stamp())
+        {
+            self.cancel_pixel_resize();
+            return;
+        }
+        if self.pixel_resize_job.retry_at.is_some()
+            && self
+                .pixel_resize_job
+                .retry_request
+                .as_ref()
+                .map(|r| &r.stamp)
+                != Some(&self.current_pixel_resize_stamp())
+        {
+            self.cancel_pixel_resize();
+            return;
+        }
+        if let Some(retry_at) = self.pixel_resize_job.retry_at {
+            if std::time::Instant::now() < retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+                return;
+            }
+            if let Some(request) = self.pixel_resize_job.retry_request.take() {
+                self.submit_pixel_resize(request, jobs);
+            }
+            return;
+        }
+        let Some(rx) = self.pixel_resize_job.rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(Some(message))) => {
+                if message.stamp != self.current_pixel_resize_stamp() {
+                    self.clear_pixel_resize_job();
+                    return;
+                }
+                match message.result {
+                    Ok(resized) => {
+                        let redactions = self
+                            .pixel_resize_job
+                            .retry_request
+                            .as_ref()
+                            .map(|request| !request.redactions.is_empty())
+                            .unwrap_or(false);
+                        self.clear_pixel_resize_job();
+                        if redactions {
+                            self.apply_redactions();
+                        }
+                        self.undo_stack.push(self.current_rgba.clone());
+                        self.redo_stack.clear();
+                        self.current_rgba = Arc::new(resized);
+                        self.mark_pixels_changed();
+                        self.dirty_texture = true;
+                        self.resize_state.sync_from_image(&self.current_rgba);
+                        self.palette_state.is_extracted = false;
+                        self.show_toast(format!(
+                            "↔ Resized to {}×{} px ({})",
+                            message.stamp.width,
+                            message.stamp.height,
+                            message.stamp.filter.label()
+                        ));
+                    }
+                    Err(error) => {
+                        self.clear_pixel_resize_job();
+                        self.pixel_resize_job.error = Some(error);
+                        self.pixel_resize_job.status = None;
+                    }
+                }
+            }
+            Ok(Err(little_clip_core::JobError::QueueFull)) => {
+                self.pixel_resize_job.ticket = None;
+                self.pixel_resize_job.rx = None;
+                self.pixel_resize_job.cancel = None;
+                self.pixel_resize_job.stamp = None;
+                self.pixel_resize_job.pending = false;
+                self.pixel_resize_job.status =
+                    Some("Background workers busy; retrying resize…".into());
+                self.pixel_resize_job.retry_at =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
+            Ok(Err(little_clip_core::JobError::Cancelled)) => self.clear_pixel_resize_job(),
+            Ok(Err(error)) => {
+                self.clear_pixel_resize_job();
+                self.pixel_resize_job.error = Some(format!("Resize worker failed: {error}"));
+            }
+            Ok(Ok(None)) => self.clear_pixel_resize_job(),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.pixel_resize_job.rx = Some(rx);
+                ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.clear_pixel_resize_job();
+                self.pixel_resize_job.error = Some("Resize worker stopped unexpectedly".into());
+            }
+        }
+    }
 
-        self.show_toast(format!("↔ Resized to {}×{} px ({})", w, h, filter.label()));
+    fn clear_pixel_resize_job(&mut self) {
+        self.pixel_resize_job.ticket = None;
+        self.pixel_resize_job.rx = None;
+        self.pixel_resize_job.cancel = None;
+        self.pixel_resize_job.stamp = None;
+        self.pixel_resize_job.retry_at = None;
+        self.pixel_resize_job.retry_request = None;
+        self.pixel_resize_job.pending = false;
+        self.pixel_resize_job.status = None;
+    }
+
+    pub(crate) fn cancel_pixel_resize(&mut self) {
+        if let Some(ticket) = self.pixel_resize_job.ticket.take() {
+            ticket.cancel();
+        }
+        if let Some(cancel) = self.pixel_resize_job.cancel.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Release);
+        }
+        self.pixel_resize_job.rx = None;
+        self.pixel_resize_job.stamp = None;
+        self.pixel_resize_job.retry_at = None;
+        self.pixel_resize_job.retry_request = None;
+        self.pixel_resize_job.pending = false;
+        self.pixel_resize_job.status = None;
     }
 
     fn current_optimizer_request_stamp(&self) -> OptimizerRequestStamp {
@@ -1547,9 +1970,26 @@ impl ImagePreviewState {
                     });
 
                 ui.add_space(14.0);
+                if let Some(status) = &self.pixel_resize_job.status {
+                    ui.label(
+                        egui::RichText::new(status)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                            .color(muted),
+                    );
+                }
+                if let Some(error) = &self.pixel_resize_job.error {
+                    ui.label(
+                        egui::RichText::new(error)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                            .color(hex_to_c32(&palette.diff_del)),
+                    );
+                }
                 let apply = crate::action_button("Apply resize (Enter)", accent, palette);
                 if ui
-                    .add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], apply)
+                    .add_enabled_ui(!self.pixel_resize_job.pending, |ui| {
+                        ui.add_sized([ui.available_width(), crate::ui_ext::CONTROL_HEIGHT], apply)
+                    })
+                    .inner
                     .on_hover_text("Resize the image to the dimensions above")
                     .clicked()
                 {

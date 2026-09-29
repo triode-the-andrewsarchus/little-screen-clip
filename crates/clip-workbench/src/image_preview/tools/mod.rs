@@ -198,6 +198,7 @@ pub(super) use redact::{RedactionBox, RedactionDrag, RedactionState};
 mod resize;
 pub(super) use resize::OptimizerMsg;
 pub(crate) use resize::OptimizerRequestStamp;
+pub(super) use resize::PixelResizeJobState;
 pub(super) use resize::{
     FileSizeOptimizationResult, ResizeFilter, ResizeState, ResizeSubTab, TargetFormat,
 };
