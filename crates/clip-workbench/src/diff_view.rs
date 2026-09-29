@@ -1465,6 +1465,65 @@ mod tests {
     }
 
     #[test]
+    fn text_diff_ctrl_c_publishes_exact_ansi_stripped_result() {
+        let left = DiffTarget::ClipboardText {
+            label: "Left".to_string(),
+            content: "left".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+        let right = DiffTarget::ClipboardText {
+            label: "Right".to_string(),
+            content: "right".to_string(),
+            ext_hint: Some("txt".to_string()),
+        };
+        let mut state = DiffViewerState::new(left, right, DiffDisplayMode::Inline);
+        state.wait_for_completion();
+        let ansi_result = "\x1b[1;91m--- Left\x1b[0m\n\x1b[91m- old\x1b[0m\n\x1b[92m+ new\x1b[0m\n";
+        let expected = "--- Left\n- old\n+ new\n";
+        state.result = DiffResult {
+            engine_name: "synthetic fixture".to_string(),
+            raw_ansi: ansi_result.to_string(),
+            is_identical: false,
+            mode: DiffDisplayMode::Inline,
+        };
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 620.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::C,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::CTRL,
+                }],
+                modifiers: egui::Modifiers::CTRL,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                });
+            },
+        );
+
+        assert_eq!(output.platform_output.copied_text, expected);
+        assert!(
+            state
+                .status_toast
+                .as_ref()
+                .is_some_and(|(message, _)| message == "Diff text copied to clipboard!")
+        );
+    }
+
+    #[test]
     fn image_diff_state_uses_generated_fixture_images() {
         let temp_dir = tempfile::tempdir().unwrap();
         let left_path = temp_dir.path().join("left.png");
