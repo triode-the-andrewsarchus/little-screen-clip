@@ -610,7 +610,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H2.3f5 [Luna] Verify Auto Actions toggle request and failure feedback.** A rendered checkbox click emits one `SetAutoAction`; controlled success retains the enabled value, while transport failure restores the previous setting and shows status feedback. No daemon is contacted.
   - [ ] **H2.3g [Primary] Pass parity-ledger keyboard scenarios.**
     - [x] **H2.3g1 [Luna] Verify Palette digit shortcuts select the documented slot sets.** `palette_digit_shortcuts_select_exact_slot_sets` checks 0–3 through the production shortcut handler, including selected slots, mirror invalidation, and action-index reset.
-    - [ ] **H2.3g2 [Luna] Verify Palette search-prefix selection commands preserve the intended query.** Cover numeric/backtick prefixes and a leading-space Left+Right prefix through the production parser.
+    - [x] **H2.3g2 [Luna] Verify Palette search-prefix selection commands preserve the intended query.** `palette_search_prefixes_select_slots_and_keep_remaining_query` covers numeric/backtick prefixes and a leading-space Left+Right prefix through the production parser.
+    - [x] **H2.3g3 [Luna] Verify Palette Up/Down navigation wraps across filtered actions.** `palette_action_navigation_wraps_in_both_directions` uses a deterministic recipe pair to check next, Down wrap, and Up wrap.
   - [ ] **H2.3h [Primary] Pass parity-ledger output scenarios.**
   - [ ] **H2.3i [Primary] Pass parity-ledger return-destination scenarios.**
 - **H2.4 Reusable preview hosting**

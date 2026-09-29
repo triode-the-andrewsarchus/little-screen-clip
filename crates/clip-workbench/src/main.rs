@@ -4080,6 +4080,52 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn palette_action_navigation_wraps_in_both_directions() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        for name in ["Navigation Fixture A", "Navigation Fixture B"] {
+            app.recipes.push(Recipe {
+                name: name.to_owned(),
+                description: String::new(),
+                input_type: little_clip_ops::pipeline::types::RecipeInputType::None,
+                tags: Vec::new(),
+                graph: little_clip_ops::pipeline::types::NodeGraph::default(),
+            });
+        }
+        app.search_query = "Navigation Fixture".to_owned();
+        assert_eq!(app.filtered_actions().len(), 2);
+
+        let _ = egui::Context::default().run(
+            egui::RawInput {
+                events: vec![key_press_event(egui::Key::ArrowDown)],
+                ..Default::default()
+            },
+            |ctx| app.handle_palette_nav_and_execution(ctx),
+        );
+        assert_eq!(app.selected_action_index, 1, "Down selects the next action");
+
+        let _ = egui::Context::default().run(
+            egui::RawInput {
+                events: vec![key_press_event(egui::Key::ArrowDown)],
+                ..Default::default()
+            },
+            |ctx| app.handle_palette_nav_and_execution(ctx),
+        );
+        assert_eq!(
+            app.selected_action_index, 0,
+            "Down wraps to the first action"
+        );
+
+        let _ = egui::Context::default().run(
+            egui::RawInput {
+                events: vec![key_press_event(egui::Key::ArrowUp)],
+                ..Default::default()
+            },
+            |ctx| app.handle_palette_nav_and_execution(ctx),
+        );
+        assert_eq!(app.selected_action_index, 1, "Up wraps to the last action");
+    }
+
+    #[test]
     fn rolling_audio_space_requires_selection_and_yields_to_focused_text() {
         let mut query = String::new();
         let mut eligible = false;
