@@ -227,6 +227,150 @@ mod ownership_tests {
     }
 
     #[test]
+    fn thumbnail_queue_saturation_retries_incrementally_with_direct_pixel_parity() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let release = occupy_executor(&jobs);
+        let drained = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let drained_job = drained.clone();
+        let _queued = jobs.submit(std::time::Duration::MAX, move || {
+            drained_job.store(true, std::sync::atomic::Ordering::Release);
+        });
+        let mut state = state();
+        state.run_creative_fx_thumbnail_batch_on(&jobs);
+        state.poll_creative_fx_on(&jobs);
+        let retry_at = state.creative_fx_state.thumbnail_retry_at.unwrap();
+        assert!(retry_at > std::time::Instant::now());
+        assert!(
+            state
+                .creative_fx_state
+                .thumbnail_queue_status
+                .as_deref()
+                .unwrap()
+                .contains("Waiting")
+        );
+        assert!(!state.creative_fx_state.is_generating_thumbnails);
+        state.poll_creative_fx_on(&jobs);
+        assert_eq!(state.creative_fx_state.thumbnail_retry_at, Some(retry_at));
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !drained.load(std::sync::atomic::Ordering::Acquire) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        state.creative_fx_state.thumbnail_retry_at = Some(std::time::Instant::now());
+        state.poll_creative_fx_on(&jobs);
+        assert!(state.creative_fx_state.is_generating_thumbnails);
+
+        let thumb_base = image::imageops::resize(
+            state.current_rgba.as_ref(),
+            42,
+            28,
+            image::imageops::FilterType::Nearest,
+        );
+        let expected: Vec<_> = CreativeFxType::all()
+            .into_iter()
+            .map(|fx| {
+                let preset = default_preset_for_fx(*fx);
+                (*fx, apply_creative_fx(&thumb_base, &preset.params))
+            })
+            .collect();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        while state.creative_fx_state.is_generating_thumbnails {
+            state.poll_creative_fx_on(&jobs);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        assert_eq!(
+            state.creative_fx_state.pending_thumbnails.len(),
+            expected.len()
+        );
+        for ((actual_fx, actual), (expected_fx, expected)) in state
+            .creative_fx_state
+            .pending_thumbnails
+            .iter()
+            .zip(expected.iter())
+        {
+            assert_eq!(actual_fx, expected_fx);
+            assert_eq!(actual, expected);
+        }
+        assert!(state.creative_fx_state.thumbnail_queue_status.is_none());
+    }
+
+    #[test]
+    fn queued_thumbnail_batch_cancels_on_replacement() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let release = occupy_executor(&jobs);
+        let mut state = state();
+        state.run_creative_fx_thumbnail_batch_on(&jobs);
+        let old_cancel = state
+            .creative_fx_state
+            .thumbnail_cancel
+            .as_ref()
+            .unwrap()
+            .clone();
+        let result_rx = state.creative_fx_state.thumbnail_job_rx.take().unwrap();
+        state.cancel_creative_fx_thumbnail_batch();
+        assert!(old_cancel.load(std::sync::atomic::Ordering::Acquire));
+        release.send(()).unwrap();
+        assert_eq!(
+            result_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap(),
+            Err(JobError::Cancelled)
+        );
+    }
+
+    #[test]
+    fn queued_thumbnail_batch_cancels_on_viewer_drop() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let release = occupy_executor(&jobs);
+        let mut state = state();
+        state.run_creative_fx_thumbnail_batch_on(&jobs);
+        let dropped_cancel = state
+            .creative_fx_state
+            .thumbnail_cancel
+            .as_ref()
+            .unwrap()
+            .clone();
+        let result_rx = state.creative_fx_state.thumbnail_job_rx.take().unwrap();
+        drop(state);
+        assert!(dropped_cancel.load(std::sync::atomic::Ordering::Acquire));
+        release.send(()).unwrap();
+        assert_eq!(
+            result_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap(),
+            Err(JobError::Cancelled)
+        );
+    }
+
+    #[test]
+    fn stale_thumbnail_batch_messages_are_rejected_after_pixel_revision_changes() {
+        let mut state = state();
+        let old_revision = state.pixel_revision;
+        let old_epoch = 7;
+        state.creative_fx_state.thumbnail_epoch = old_epoch;
+        state.creative_fx_state.thumbnail_pixel_revision = Some(old_revision);
+        state.creative_fx_state.thumbnail_rx = Some({
+            let (tx, rx) = std::sync::mpsc::channel();
+            tx.send(CreativeFxThumbnailMsg {
+                epoch: old_epoch,
+                pixel_revision: old_revision,
+                fx_type: CreativeFxType::LensAberration,
+                rgba: RgbaImage::from_pixel(42, 28, image::Rgba([8, 9, 10, 255])),
+            })
+            .unwrap();
+            rx
+        });
+        state.creative_fx_state.is_generating_thumbnails = true;
+        state.mark_pixels_changed();
+        state.poll_creative_fx();
+        assert!(state.creative_fx_state.pending_thumbnails.is_empty());
+        assert!(state.creative_fx_state.fx_thumbnails.is_empty());
+        assert_ne!(state.creative_fx_state.thumbnail_epoch, old_epoch);
+    }
+
+    #[test]
     fn creative_render_tokens_cancel_on_edits_exit_and_drop_then_reentry_renders() {
         let mut state = state();
         state.run_creative_fx_render();
@@ -944,10 +1088,14 @@ pub struct CreativeFxState {
     pub fx_thumbnails: std::collections::HashMap<CreativeFxType, egui::TextureHandle>,
     pub pending_thumbnails: Vec<(CreativeFxType, RgbaImage)>,
     pub thumbnail_rx: Option<std::sync::mpsc::Receiver<CreativeFxThumbnailMsg>>,
+    thumbnail_job_rx: Option<std::sync::mpsc::Receiver<Result<(), JobError>>>,
     pub thumbnail_epoch: u64,
     pub thumbnail_pixel_revision: Option<u64>,
     pub(in crate::image_preview) thumbnail_cancel:
         Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    thumbnail_job_ticket: Option<JobTicket>,
+    pub thumbnail_retry_at: Option<std::time::Instant>,
+    pub thumbnail_queue_status: Option<String>,
     pub is_generating_thumbnails: bool,
 
     // Debounce timer
@@ -1005,9 +1153,13 @@ impl Default for CreativeFxState {
             fx_thumbnails: std::collections::HashMap::new(),
             pending_thumbnails: Vec::new(),
             thumbnail_rx: None,
+            thumbnail_job_rx: None,
             thumbnail_epoch: 0,
             thumbnail_pixel_revision: None,
             thumbnail_cancel: None,
+            thumbnail_job_ticket: None,
+            thumbnail_retry_at: None,
+            thumbnail_queue_status: None,
             is_generating_thumbnails: false,
             params_dirty_at: None,
             auto_fitted: false,
@@ -1274,13 +1426,19 @@ impl ImagePreviewState {
     }
 
     pub(crate) fn cancel_creative_fx_thumbnail_batch(&mut self) {
+        if let Some(ticket) = self.creative_fx_state.thumbnail_job_ticket.take() {
+            ticket.cancel();
+        }
         if let Some(cancel) = self.creative_fx_state.thumbnail_cancel.take() {
             cancel.store(true, std::sync::atomic::Ordering::Release);
         }
         self.creative_fx_state.thumbnail_epoch =
             self.creative_fx_state.thumbnail_epoch.wrapping_add(1);
         self.creative_fx_state.thumbnail_rx = None;
+        self.creative_fx_state.thumbnail_job_rx = None;
         self.creative_fx_state.is_generating_thumbnails = false;
+        self.creative_fx_state.thumbnail_retry_at = None;
+        self.creative_fx_state.thumbnail_queue_status = None;
     }
 
     pub fn run_creative_fx_render(&mut self) {
@@ -1490,6 +1648,10 @@ impl ImagePreviewState {
 
     /// Spawn low-priority background thread to generate 42x28 thumbnail previews for all FX.
     pub fn run_creative_fx_thumbnail_batch(&mut self) {
+        self.run_creative_fx_thumbnail_batch_on(BackgroundJobs::global());
+    }
+
+    fn run_creative_fx_thumbnail_batch_on(&mut self, jobs: &BackgroundJobs) {
         if self.current_rgba.is_empty() {
             return;
         }
@@ -1533,35 +1695,34 @@ impl ImagePreviewState {
         self.creative_fx_state.thumbnail_cancel = Some(cancelled.clone());
         self.creative_fx_state.thumbnail_rx = Some(rx);
         self.creative_fx_state.is_generating_thumbnails = true;
+        self.creative_fx_state.thumbnail_queue_status = None;
+        self.creative_fx_state.thumbnail_retry_at = None;
 
-        let spawn_result = std::thread::Builder::new()
-            .name("creative_fx_thumbnails".to_string())
-            .spawn(move || {
-                super::run_thumbnail_items(
-                    todo,
-                    || cancelled.load(std::sync::atomic::Ordering::Acquire),
-                    |fx| {
-                        let preset = default_preset_for_fx(fx);
-                        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            apply_creative_fx(&thumb_base, &preset.params)
-                        }));
-                        if let Ok(rgba) = res {
-                            tx.send(CreativeFxThumbnailMsg {
-                                epoch,
-                                pixel_revision,
-                                fx_type: fx,
-                                rgba,
-                            })
-                            .is_ok()
-                        } else {
-                            true
-                        }
-                    },
-                );
-            });
-        if spawn_result.is_err() {
-            self.cancel_creative_fx_thumbnail_batch();
-        }
+        let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            super::run_thumbnail_items(
+                todo,
+                || cancelled.load(std::sync::atomic::Ordering::Acquire),
+                |fx| {
+                    let preset = default_preset_for_fx(fx);
+                    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        apply_creative_fx(&thumb_base, &preset.params)
+                    }));
+                    if let Ok(rgba) = res {
+                        tx.send(CreativeFxThumbnailMsg {
+                            epoch,
+                            pixel_revision,
+                            fx_type: fx,
+                            rgba,
+                        })
+                        .is_ok()
+                    } else {
+                        true
+                    }
+                },
+            );
+        });
+        self.creative_fx_state.thumbnail_job_ticket = Some(ticket);
+        self.creative_fx_state.thumbnail_job_rx = Some(job_rx);
     }
 
     /// Poll each Creative FX worker independently so result ownership and cleanup stay local.
@@ -1575,7 +1736,59 @@ impl ImagePreviewState {
         self.poll_creative_fx_render_on(jobs);
         self.poll_creative_fx_depth_mask();
         self.poll_creative_fx_alpha_mask();
+        self.poll_creative_fx_thumbnail_job();
         self.poll_creative_fx_thumbnails();
+        self.retry_creative_fx_thumbnail_batch_if_due(jobs);
+    }
+
+    fn poll_creative_fx_thumbnail_job(&mut self) {
+        let Some(rx) = self.creative_fx_state.thumbnail_job_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Err(JobError::QueueFull)) => {
+                self.cancel_creative_fx_thumbnail_batch();
+                self.creative_fx_state.thumbnail_retry_at =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+                self.creative_fx_state.thumbnail_queue_status =
+                    Some("Waiting for background workers; retrying thumbnail batch shortly".into());
+            }
+            Ok(Err(error)) => {
+                self.creative_fx_state.thumbnail_job_ticket = None;
+                self.creative_fx_state.is_generating_thumbnails = false;
+                self.creative_fx_state.thumbnail_queue_status =
+                    Some(format!("Thumbnail worker failed: {error}"));
+            }
+            Ok(Ok(())) => self.creative_fx_state.thumbnail_job_ticket = None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                self.creative_fx_state.thumbnail_job_rx = Some(rx);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.creative_fx_state.thumbnail_job_ticket = None;
+                self.creative_fx_state.is_generating_thumbnails = false;
+                self.creative_fx_state.thumbnail_queue_status =
+                    Some("Thumbnail worker disconnected".into());
+            }
+        }
+    }
+
+    fn retry_creative_fx_thumbnail_batch_if_due(&mut self, jobs: &BackgroundJobs) -> bool {
+        if self.current_rgba.is_empty()
+            || self.creative_fx_state.is_generating_thumbnails
+            || self
+                .creative_fx_state
+                .thumbnail_retry_at
+                .is_none_or(|retry_at| std::time::Instant::now() < retry_at)
+            || self.creative_fx_state.fx_thumbnails.len()
+                + self.creative_fx_state.pending_thumbnails.len()
+                >= CreativeFxType::all().len()
+            || self.creative_fx_state.thumbnail_pixel_revision != Some(self.pixel_revision)
+        {
+            return false;
+        }
+        self.creative_fx_state.thumbnail_retry_at = None;
+        self.run_creative_fx_thumbnail_batch_on(jobs);
+        true
     }
 
     fn poll_creative_fx_render_on(&mut self, jobs: &BackgroundJobs) {
@@ -2190,6 +2403,7 @@ impl ImagePreviewState {
             + self.creative_fx_state.pending_thumbnails.len()
             < CreativeFxType::all().len()
             && !self.creative_fx_state.is_generating_thumbnails
+            && self.creative_fx_state.thumbnail_retry_at.is_none()
             && !self.current_rgba.is_empty()
         {
             self.run_creative_fx_thumbnail_batch();
@@ -2248,6 +2462,13 @@ impl ImagePreviewState {
                         }
                     });
                     ui.add_space(crate::ui_ext::SPACE_XS);
+                    if let Some(status) = &self.creative_fx_state.thumbnail_queue_status {
+                        ui.label(
+                            egui::RichText::new(status)
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
+                                .color(f_low),
+                        );
+                    }
                     ui.separator();
                     ui.add_space(crate::ui_ext::SPACE_XS);
 
