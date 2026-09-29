@@ -2008,12 +2008,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn binary_handoff_preserves_exact_bytes() {
-        let bytes = [0, 255, 0, 0x7f, 13, 10];
-        let path = stage_binary_handoff(&bytes, "lhs").unwrap();
-        assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some("bin"));
-        assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        let _ = std::fs::remove_file(path);
+    fn binary_handoff_stages_exact_left_and_right_bytes_as_bin_files() {
+        let left_bytes = [0, 255, 0, 0x7f, 13, 10];
+        let right_bytes = [0xfe, 0x00, 0x01, 0x80, 0x42];
+        let left_path = stage_binary_handoff(&left_bytes, "lhs").unwrap();
+        let right_path = stage_binary_handoff(&right_bytes, "rhs").unwrap();
+
+        assert_eq!(
+            left_path.extension().and_then(|ext| ext.to_str()),
+            Some("bin")
+        );
+        assert_eq!(
+            right_path.extension().and_then(|ext| ext.to_str()),
+            Some("bin")
+        );
+        assert_eq!(std::fs::read(&left_path).unwrap(), left_bytes);
+        assert_eq!(std::fs::read(&right_path).unwrap(), right_bytes);
+
+        std::fs::remove_file(left_path).unwrap();
+        std::fs::remove_file(right_path).unwrap();
     }
 
     #[test]
