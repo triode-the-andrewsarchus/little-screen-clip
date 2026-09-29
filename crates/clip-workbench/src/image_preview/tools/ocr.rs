@@ -1,5 +1,50 @@
 use super::super::*;
 
+struct OcrChildGuard {
+    child: std::process::Child,
+    control: std::sync::Arc<ImageToolProcessControl>,
+    reaped: bool,
+}
+
+impl OcrChildGuard {
+    fn new(child: std::process::Child, control: std::sync::Arc<ImageToolProcessControl>) -> Self {
+        Self {
+            child,
+            control,
+            reaped: false,
+        }
+    }
+
+    fn reap(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        let status = self.child.wait()?;
+        self.reaped = true;
+        Ok(status)
+    }
+}
+
+impl std::ops::Deref for OcrChildGuard {
+    type Target = std::process::Child;
+
+    fn deref(&self) -> &Self::Target {
+        &self.child
+    }
+}
+
+impl std::ops::DerefMut for OcrChildGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.child
+    }
+}
+
+impl Drop for OcrChildGuard {
+    fn drop(&mut self) {
+        if !self.reaped {
+            self.control.cancel();
+            let _ = self.child.wait();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OcrEngine {
     #[default]
@@ -32,6 +77,15 @@ pub enum OcrMsg {
         duration_ms: u128,
     },
     Error(String),
+}
+
+#[derive(Clone)]
+pub struct OcrRequest {
+    png_bytes: std::sync::Arc<Vec<u8>>,
+    python_bin: String,
+    script_path: String,
+    engine_arg: String,
+    custom_prompt: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +138,15 @@ impl ImagePreviewState {
     }
 
     fn run_ocr_with_command(&mut self, python_bin: String, script_path: String) {
+        self.run_ocr_with_command_on(python_bin, script_path, BackgroundJobs::global());
+    }
+
+    fn run_ocr_with_command_on(
+        &mut self,
+        python_bin: String,
+        script_path: String,
+        jobs: &BackgroundJobs,
+    ) {
         if self.ocr_state.in_progress {
             return;
         }
@@ -105,27 +168,45 @@ impl ImagePreviewState {
             Some(self.ocr_state.custom_prompt.trim().to_string())
         };
 
-        let (tx, rx) = std::sync::mpsc::channel::<OcrMsg>();
-        self.ocr_rx = Some(rx);
+        self.ocr_rx = None;
+        self.ocr_job_rx = None;
+        self.ocr_retry_at = None;
+        self.ocr_request = Some(OcrRequest {
+            png_bytes: std::sync::Arc::new(png_bytes),
+            python_bin,
+            script_path,
+            engine_arg,
+            custom_prompt,
+        });
         self.ocr_input_stamp = Some(self.input_stamp());
         self.ocr_state.in_progress = true;
         self.ocr_state.error = None;
         self.ocr_state.status_text = Some(format!("Starting {}...", engine.label()));
+        self.submit_ocr_attempt(jobs);
+    }
+
+    fn submit_ocr_attempt(&mut self, jobs: &BackgroundJobs) {
+        let Some(request) = self.ocr_request.clone() else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel::<OcrMsg>();
+        self.ocr_rx = Some(rx);
+        self.ocr_retry_at = None;
         let control = std::sync::Arc::new(ImageToolProcessControl::new());
         self.ocr_process_control = Some(control.clone());
 
-        std::thread::spawn(move || {
+        let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
             let start = std::time::Instant::now();
             let _ = tx.send(OcrMsg::Progress(format!(
                 "Launching OCR engine ({})...",
-                engine_arg
+                request.engine_arg
             )));
 
-            let mut cmd = Command::new(python_bin);
-            cmd.arg(&script_path);
+            let mut cmd = Command::new(&request.python_bin);
+            cmd.arg(&request.script_path);
             cmd.arg("-").arg("-");
-            cmd.arg("--engine").arg(&engine_arg);
-            if let Some(ref p) = custom_prompt {
+            cmd.arg("--engine").arg(&request.engine_arg);
+            if let Some(ref p) = request.custom_prompt {
                 cmd.arg("--prompt").arg(p);
             }
 
@@ -133,12 +214,12 @@ impl ImagePreviewState {
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
             let mut child = match super::background_removal::spawn_image_tool_child(cmd, &control) {
-                Ok(c) => c,
+                Ok(c) => OcrChildGuard::new(c, control.clone()),
                 Err(e) => {
                     if !control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
                         let _ = tx.send(OcrMsg::Error(format!(
                             "Failed to spawn python3 {}: {}",
-                            script_path, e
+                            request.script_path, e
                         )));
                     }
                     return;
@@ -147,28 +228,10 @@ impl ImagePreviewState {
 
             let pid = child.id();
 
-            if let Some(mut stdin) = child.stdin.take() {
-                use std::io::Write;
-                if let Err(e) = stdin.write_all(&png_bytes) {
-                    super::background_removal::terminate_image_tool_process(pid);
-                    let _ = child.wait();
-                    super::background_removal::clear_image_tool_pid_if_owned(
-                        &control.child_pid,
-                        pid,
-                    );
-                    if !control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
-                        let _ = tx.send(OcrMsg::Error(format!(
-                            "Failed to pipe image to OCR worker: {}",
-                            e
-                        )));
-                    }
-                    return;
-                }
-            }
-
+            // Start both drainers before writing image input: either output pipe can fill while
+            // the parent is still feeding a large PNG to stdin.
             let stdout_handle = child.stdout.take();
             let stderr_handle = child.stderr.take();
-
             let (stdout_tx, stdout_rx) = std::sync::mpsc::channel::<Vec<u8>>();
             if let Some(mut stdout) = stdout_handle {
                 std::thread::spawn(move || {
@@ -178,7 +241,6 @@ impl ImagePreviewState {
                     let _ = stdout_tx.send(out);
                 });
             }
-
             let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<String>();
             let tx_progress = tx.clone();
             if let Some(stderr) = stderr_handle {
@@ -198,7 +260,29 @@ impl ImagePreviewState {
                 });
             }
 
-            let status = match child.wait() {
+            if let Some(mut stdin) = child.stdin.take() {
+                use std::io::Write;
+                if let Err(e) = stdin.write_all(&request.png_bytes) {
+                    drop(stdin);
+                    super::background_removal::terminate_image_tool_process(pid);
+                    let _ = child.reap();
+                    let _ = stdout_rx.recv();
+                    let _ = stderr_rx.recv();
+                    super::background_removal::clear_image_tool_pid_if_owned(
+                        &control.child_pid,
+                        pid,
+                    );
+                    if !control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                        let _ = tx.send(OcrMsg::Error(format!(
+                            "Failed to pipe image to OCR worker: {}",
+                            e
+                        )));
+                    }
+                    return;
+                }
+            }
+
+            let status = match child.reap() {
                 Ok(status) => status,
                 Err(e) => {
                     if super::background_removal::clear_image_tool_pid_if_owned(
@@ -207,6 +291,9 @@ impl ImagePreviewState {
                     ) {
                         super::background_removal::terminate_image_tool_process(pid);
                     }
+                    let _ = child.reap();
+                    let _ = stdout_rx.recv();
+                    let _ = stderr_rx.recv();
                     if !control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
                         let _ = tx.send(OcrMsg::Error(format!(
                             "Error waiting for OCR worker: {}",
@@ -217,12 +304,11 @@ impl ImagePreviewState {
                 }
             };
             super::background_removal::clear_image_tool_pid_if_owned(&control.child_pid, pid);
+            let stdout_bytes = stdout_rx.recv().unwrap_or_default();
+            let stderr_text = stderr_rx.recv().unwrap_or_default();
             if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
             }
-
-            let stdout_bytes = stdout_rx.recv().unwrap_or_default();
-            let stderr_text = stderr_rx.recv().unwrap_or_default();
 
             let duration_ms = start.elapsed().as_millis();
             if status.success() {
@@ -242,7 +328,7 @@ impl ImagePreviewState {
                 } else {
                     let _ = tx.send(OcrMsg::Success {
                         text,
-                        engine: engine_arg,
+                        engine: request.engine_arg,
                         duration_ms,
                     });
                 }
@@ -256,12 +342,60 @@ impl ImagePreviewState {
                 let _ = tx.send(OcrMsg::Error(format!("OCR worker failed: {}", err_detail)));
             }
         });
+        self.ocr_ticket = Some(ticket);
+        self.ocr_job_rx = Some(job_rx);
     }
 
     pub fn poll_ocr(&mut self) {
-        if self.ocr_rx.is_some() && self.ocr_input_stamp.as_ref() != Some(&self.input_stamp()) {
+        self.poll_ocr_on(BackgroundJobs::global());
+    }
+
+    fn poll_ocr_on(&mut self, jobs: &BackgroundJobs) {
+        if self.ocr_state.in_progress && self.ocr_input_stamp.as_ref() != Some(&self.input_stamp())
+        {
             self.cancel_ocr_with_feedback(false);
             return;
+        }
+        if self
+            .ocr_retry_at
+            .is_some_and(|retry_at| std::time::Instant::now() >= retry_at)
+        {
+            self.submit_ocr_attempt(jobs);
+        } else if self.ocr_retry_at.is_some() {
+            return;
+        }
+        if let Some(job_rx) = self.ocr_job_rx.as_ref() {
+            match job_rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.ocr_job_rx = None;
+                    self.ocr_ticket = None;
+                }
+                Ok(Err(JobError::QueueFull)) => {
+                    self.ocr_job_rx = None;
+                    self.ocr_ticket = None;
+                    self.ocr_rx = None;
+                    self.ocr_retry_at =
+                        Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+                    self.ocr_state.status_text =
+                        Some("OCR waiting for workers; retrying shortly".into());
+                    return;
+                }
+                Ok(Err(JobError::Cancelled)) => {
+                    self.finish_ocr_worker();
+                    return;
+                }
+                Ok(Err(error)) => {
+                    self.finish_ocr_worker();
+                    self.ocr_state.error = Some(format!("OCR worker failed: {error}"));
+                    return;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.finish_ocr_worker();
+                    self.ocr_state.error = Some("OCR worker stopped".into());
+                    return;
+                }
+            }
         }
         if let Some(ref rx) = self.ocr_rx {
             while let Ok(msg) = rx.try_recv() {
@@ -281,6 +415,10 @@ impl ImagePreviewState {
                         self.ocr_state.status_text = None;
                         self.ocr_rx = None;
                         self.ocr_process_control = None;
+                        self.ocr_request = None;
+                        self.ocr_retry_at = None;
+                        self.ocr_ticket = None;
+                        self.ocr_job_rx = None;
                         self.show_toast(format!(
                             "✔ OCR complete with {} in {:.2}s",
                             engine,
@@ -295,6 +433,10 @@ impl ImagePreviewState {
                         self.ocr_rx = None;
                         self.ocr_input_stamp = None;
                         self.ocr_process_control = None;
+                        self.ocr_request = None;
+                        self.ocr_retry_at = None;
+                        self.ocr_ticket = None;
+                        self.ocr_job_rx = None;
                         break;
                     }
                 }
@@ -307,6 +449,12 @@ impl ImagePreviewState {
     }
 
     fn cancel_ocr_with_feedback(&mut self, show_toast: bool) {
+        if let Some(ticket) = self.ocr_ticket.take() {
+            ticket.cancel();
+        }
+        self.ocr_job_rx = None;
+        self.ocr_request = None;
+        self.ocr_retry_at = None;
         if let Some(control) = self.ocr_process_control.take() {
             control.cancel();
         }
@@ -319,6 +467,21 @@ impl ImagePreviewState {
                 self.show_toast("⏹ OCR process cancelled");
             }
         }
+    }
+
+    fn finish_ocr_worker(&mut self) {
+        if let Some(control) = self.ocr_process_control.take() {
+            control.cancel();
+        }
+        self.ocr_job_rx = None;
+        self.ocr_ticket = None;
+        self.ocr_rx = None;
+        self.ocr_request = None;
+        self.ocr_retry_at = None;
+        self.ocr_input_stamp = None;
+        self.ocr_process_control = None;
+        self.ocr_state.in_progress = false;
+        self.ocr_state.status_text = None;
     }
 
     pub fn push_text_to_hand_slot(&mut self, hand: HandSide, text: String) {
@@ -350,7 +513,13 @@ impl ImagePreviewState {
     ) {
         self.poll_ocr();
         if self.ocr_state.in_progress {
-            ctx.request_repaint();
+            if let Some(retry_at) = self.ocr_retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            } else {
+                ctx.request_repaint();
+            }
         }
 
         let accent = hex_to_c32(&palette.harmonies.triadic_1);
@@ -764,6 +933,8 @@ impl ImagePreviewState {
 #[cfg(test)]
 mod input_stamp_tests {
     use super::*;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
 
     fn state() -> ImagePreviewState {
         let mut bytes = Vec::new();
@@ -781,6 +952,176 @@ mod input_stamp_tests {
             &AppConfig::default(),
         )
         .unwrap()
+    }
+
+    fn write_script(directory: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
+        let path = directory.join(name);
+        std::fs::write(&path, format!("#!/usr/bin/env python3\n{body}\n")).unwrap();
+        path
+    }
+
+    fn wait_ocr(state: &mut ImagePreviewState, jobs: &BackgroundJobs) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while state.ocr_state.in_progress && Instant::now() < deadline {
+            state.poll_ocr_on(jobs);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            !state.ocr_state.in_progress,
+            "synthetic OCR worker did not finish"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ocr_queue_full_retains_request_and_retries_progress_and_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let script = write_script(
+            directory.path(),
+            "fake-ocr.py",
+            "import sys\nprint('[ocr:progress] fake stage', file=sys.stderr, flush=True)\nsys.stderr.write('x' * 200000 + '\\n')\nsys.stderr.flush()\nsys.stdin.buffer.read()\nprint('recognized from synthetic helper')",
+        );
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_blocker, blocker_rx) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (_filler, filler_rx) = jobs.submit(Duration::MAX, || ());
+        let mut state = state();
+        state.current_rgba = std::sync::Arc::new(RgbaImage::from_fn(512, 512, |x, y| {
+            let n = x
+                .wrapping_mul(1_103_515_245)
+                .wrapping_add(y.wrapping_mul(12_345));
+            image::Rgba([
+                (n & 0xff) as u8,
+                ((n >> 8) & 0xff) as u8,
+                ((n >> 16) & 0xff) as u8,
+                255,
+            ])
+        }));
+        state.run_ocr_with_command_on("python3".into(), script.display().to_string(), &jobs);
+        let retained = std::sync::Arc::clone(&state.ocr_request.as_ref().unwrap().png_bytes);
+        assert!(
+            retained.len() > 64 * 1024,
+            "fixture PNG must exceed a pipe buffer"
+        );
+        state.poll_ocr_on(&jobs);
+        let retry_at = state.ocr_retry_at.expect("QueueFull must schedule a retry");
+        assert!(
+            state
+                .ocr_state
+                .status_text
+                .as_deref()
+                .unwrap()
+                .contains("waiting")
+        );
+        assert!(std::sync::Arc::ptr_eq(
+            &retained,
+            &state.ocr_request.as_ref().unwrap().png_bytes
+        ));
+        state.poll_ocr_on(&jobs);
+        assert_eq!(state.ocr_retry_at, Some(retry_at));
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        filler_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        state.ocr_retry_at = Some(Instant::now());
+        state.poll_ocr_on(&jobs);
+        wait_ocr(&mut state, &jobs);
+        assert_eq!(
+            state.ocr_state.extracted_text.trim(),
+            "recognized from synthetic helper"
+        );
+        assert!(state.ocr_output_is_current());
+        let _ = std::fs::remove_file(script);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn queued_ocr_cancellation_prevents_helper_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("started");
+        let script = write_script(
+            directory.path(),
+            "queued-ocr.py",
+            &format!(
+                "import pathlib,sys\nsys.stdin.buffer.read()\npathlib.Path(r'{}').write_text('started')\nprint('unexpected')",
+                marker.display()
+            ),
+        );
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_blocker, blocker_rx) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let mut state = state();
+        state.run_ocr_with_command_on("python3".into(), script.display().to_string(), &jobs);
+        assert!(state.ocr_ticket.is_some());
+        state.cancel_ocr_with_feedback(false);
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let (_, receiver) = jobs.submit(Duration::MAX, || ());
+            match receiver.recv_timeout(Duration::from_millis(20)) {
+                Ok(Ok(())) => break,
+                Ok(Err(JobError::QueueFull)) | Err(mpsc::RecvTimeoutError::Timeout)
+                    if Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                other => panic!("scheduler did not drain canceled OCR job: {other:?}"),
+            }
+        }
+        assert!(!marker.exists());
+        assert!(!state.ocr_state.in_progress);
+        let _ = std::fs::remove_file(script);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn running_ocr_cancellation_kills_and_reaps_fake_process() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("worker.pid");
+        let script = write_script(
+            directory.path(),
+            "running-ocr.py",
+            &format!(
+                "import os,sys,time\nopen(r'{}','w').write(str(os.getpid()))\nsys.stdin.buffer.read()\ntime.sleep(30)",
+                pid_file.display()
+            ),
+        );
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = state();
+        state.run_ocr_with_command_on("python3".into(), script.display().to_string(), &jobs);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !pid_file.exists() && Instant::now() < deadline {
+            state.poll_ocr_on(&jobs);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(pid_file.exists(), "synthetic OCR child did not start");
+        let pid: u32 = std::fs::read_to_string(&pid_file).unwrap().parse().unwrap();
+        let control = state.ocr_process_control.as_ref().unwrap().clone();
+        state.cancel_ocr_with_feedback(false);
+        assert!(control.cancel.load(std::sync::atomic::Ordering::SeqCst));
+        assert_ocr_child_exited(pid);
+        assert!(!state.ocr_state.in_progress);
+        let _ = std::fs::remove_file(script);
     }
 
     #[cfg(unix)]

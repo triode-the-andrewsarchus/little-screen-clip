@@ -188,7 +188,7 @@ mod layout;
 mod markup;
 pub(super) use markup::{MarkupDrag, MarkupShape, MarkupState, MarkupToolType, rasterize_markup};
 mod ocr;
-pub(super) use ocr::{OcrEngine, OcrMsg, OcrState};
+pub(super) use ocr::{OcrEngine, OcrMsg, OcrRequest, OcrState};
 mod palette;
 pub(super) use palette::{PaletteColor, PaletteState, extract_palette};
 mod pick_color;
