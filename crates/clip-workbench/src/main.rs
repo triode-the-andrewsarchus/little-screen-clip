@@ -3631,11 +3631,12 @@ mod workbench_layout_tests {
     }
 
     #[test]
-    fn node_dialogs_own_escape_before_returning_to_palette() {
+    fn node_machine_substates_each_consume_escape_before_palette_return() {
         let mut view = WorkbenchView::NodeMachine;
         let mut canvas = NodeCanvasState::with_config(AppConfig::default());
         canvas.catalog_open = true;
         canvas.save_dialog_open = true;
+        canvas.dragging_from = Some((uuid::Uuid::new_v4(), "Out".to_owned(), true));
         let mut search_needs_focus = false;
 
         assert_eq!(
@@ -3644,6 +3645,7 @@ mod workbench_layout_tests {
         );
         assert!(!canvas.catalog_open);
         assert!(canvas.save_dialog_open);
+        assert!(canvas.dragging_from.is_some());
         assert_eq!(view, WorkbenchView::NodeMachine);
 
         assert_eq!(
@@ -3651,6 +3653,14 @@ mod workbench_layout_tests {
             WorkbenchEscapeRoute::Handled
         );
         assert!(!canvas.save_dialog_open);
+        assert!(canvas.dragging_from.is_some());
+        assert_eq!(view, WorkbenchView::NodeMachine);
+
+        assert_eq!(
+            route_workbench_escape(&mut view, &mut canvas, &mut search_needs_focus, false),
+            WorkbenchEscapeRoute::Handled
+        );
+        assert!(canvas.dragging_from.is_none());
         assert_eq!(view, WorkbenchView::NodeMachine);
 
         assert_eq!(
