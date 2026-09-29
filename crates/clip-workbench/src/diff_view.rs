@@ -2066,18 +2066,41 @@ mod tests {
     }
 
     #[test]
-    fn external_handoff_preserves_clipboard_bytes_and_extension() {
-        let target = std::sync::Arc::new(DiffTarget::ClipboardText {
-            label: "fixture".into(),
-            content: "exact\nclipboard bytes\n".into(),
+    fn external_handoff_stages_both_exact_operands_with_expected_extensions() {
+        let lhs = std::sync::Arc::new(DiffTarget::ClipboardText {
+            label: "left fixture".into(),
+            content: "left exact\nclipboard bytes\n".into(),
             ext_hint: Some("md".into()),
         });
-        let path = DiffHandoffTarget::from_target(&target, "lhs")
-            .stage()
-            .unwrap();
-        assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some("md"));
-        assert_eq!(std::fs::read(&path).unwrap(), b"exact\nclipboard bytes\n");
-        let _ = std::fs::remove_file(path);
+        let rhs = std::sync::Arc::new(DiffTarget::Image {
+            label: "right fixture".into(),
+            path: None,
+            bytes: b"right encoded image bytes".to_vec(),
+            width: 1,
+            height: 1,
+            mime: "image/png".into(),
+        });
+
+        let lhs_path = DiffHandoffTarget::from_target(&lhs, "lhs").stage().unwrap();
+        let rhs_path = DiffHandoffTarget::from_target(&rhs, "rhs").stage().unwrap();
+        assert_eq!(
+            lhs_path.extension().and_then(|ext| ext.to_str()),
+            Some("md")
+        );
+        assert_eq!(
+            rhs_path.extension().and_then(|ext| ext.to_str()),
+            Some("png")
+        );
+        assert_eq!(
+            std::fs::read(&lhs_path).unwrap(),
+            b"left exact\nclipboard bytes\n"
+        );
+        assert_eq!(
+            std::fs::read(&rhs_path).unwrap(),
+            b"right encoded image bytes"
+        );
+        std::fs::remove_file(lhs_path).unwrap();
+        std::fs::remove_file(rhs_path).unwrap();
     }
 
     #[test]
