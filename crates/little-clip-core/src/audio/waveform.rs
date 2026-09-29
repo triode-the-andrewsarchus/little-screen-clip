@@ -52,7 +52,7 @@ impl FullAudioAnalysis {
                 .zip(ch2.iter())
                 .map(|(&a, &b)| (a + b) * 0.5)
                 .collect(),
-            None => self.ch1_samples.clone(),
+            None => self.ch1_samples.to_vec(),
         };
         self.transients =
             detect_transients_with_sensitivity(&mixed, self.sample_rate as f32, sensitivity);

@@ -604,7 +604,7 @@ mod tests {
             sample_rate,
             duration_ms: 3000,
             total_frames: 3000,
-            ch1_samples: samples,
+            ch1_samples: samples.into(),
             ch2_samples: None,
             overview_peaks1: Vec::new(),
             overview_peaks2: None,
@@ -639,7 +639,7 @@ mod tests {
         assert!(end >= 1.99 && end <= 2.05);
 
         // Entirely silent track should return None
-        analysis.ch1_samples = vec![0.0; 1000];
+        analysis.ch1_samples = vec![0.0; 1000].into();
         assert_eq!(analysis.detect_silence_bounds(-45.0), None);
     }
 

@@ -3772,6 +3772,7 @@ impl Drop for AudioPreviewState {
     fn drop(&mut self) {
         self.cancel_session_analysis();
         self.cancel_edit_analysis();
+        self.cancel_digital_decode();
     }
 }
 
@@ -5206,8 +5207,8 @@ Separated track
             sample_rate: 44100,
             duration_ms: 0,
             total_frames: 0,
-            ch1_samples: Vec::new(),
-            ch2_samples: Some(Vec::new()),
+            ch1_samples: Vec::new().into(),
+            ch2_samples: Some(Vec::new().into()),
             overview_peaks1: Vec::new(),
             overview_peaks2: Some(Vec::new()),
             peaks_lvl0_ch1: Vec::new(),
@@ -5479,6 +5480,96 @@ Separated track
         let cancelled = state.analysis_cancel.as_ref().unwrap().clone();
         drop(state);
         assert!(cancelled.load(Ordering::Acquire));
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn digital_decode_queue_saturation_retries_without_clearing_current_symbols() {
+        let (_dir, path) = generate_fixture_wav("digital_queue_retry", 0.1);
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let (_, blocker_rx) = jobs.submit(Duration::from_secs(5), move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (_, queued_rx) = jobs.submit(Duration::from_secs(5), || ());
+
+        let mut state = AudioPreviewState::new(path, "digital_queue_retry.wav".into());
+        state.analysis = Some(empty_audio_analysis());
+        state
+            .digital_decode
+            .symbols
+            .push(little_clip_ops::digital_decode::DecodedSymbol {
+                protocol: little_clip_ops::digital_decode::DecoderProtocol::Dtmf,
+                symbol: "old".into(),
+                start_sec: 0.0,
+                end_sec: 0.1,
+                confidence: 1.0,
+                details: None,
+            });
+        state.start_digital_decode_on(&jobs);
+        for _ in 0..100 {
+            state.poll_digital_decode_on(&egui::Context::default(), &jobs);
+            if state.digital_decode.retry_at.is_some() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(state.digital_decode.retry_at.is_some());
+        assert_eq!(state.digital_decode.symbols[0].symbol, "old");
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        queued_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        state.digital_decode.retry_at = Some(Instant::now());
+        state.poll_digital_decode_on(&egui::Context::default(), &jobs);
+        for _ in 0..100 {
+            state.poll_digital_decode_on(&egui::Context::default(), &jobs);
+            if !state.digital_decode.in_progress {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert_eq!(
+            state.digital_decode.status_msg.as_deref(),
+            Some("Decoded 0 symbols in 0.00s")
+        );
+    }
+
+    #[test]
+    fn digital_decode_rescan_and_viewer_drop_cancel_queued_jobs() {
+        let (_dir, path) = generate_fixture_wav("digital_cancel", 0.1);
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let (_, blocker_rx) = jobs.submit(Duration::from_secs(5), move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let mut state = AudioPreviewState::new(path, "digital_cancel.wav".into());
+        state.analysis = Some(empty_audio_analysis());
+        state.start_digital_decode_on(&jobs);
+        let old_flag = state.digital_decode.cancel_flag.as_ref().unwrap().clone();
+        state.start_digital_decode_on(&jobs);
+        assert!(old_flag.load(Ordering::Acquire));
+        let drop_flag = state.digital_decode.cancel_flag.as_ref().unwrap().clone();
+        drop(state);
+        assert!(drop_flag.load(Ordering::Acquire));
+
         release_tx.send(()).unwrap();
         blocker_rx
             .recv_timeout(Duration::from_secs(1))

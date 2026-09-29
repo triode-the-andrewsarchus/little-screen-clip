@@ -857,11 +857,146 @@ pub fn scan_digital_decode_streaming<F>(
     channels: u16,
     sample_rate: u32,
     cancel_flag: Option<Arc<AtomicBool>>,
-    mut on_batch: F,
+    on_batch: F,
+) where
+    F: FnMut(Vec<DecodedSymbol>),
+{
+    const CURRENTLY_SCANNED_PROTOCOLS: &[DecoderProtocol] = &[
+        DecoderProtocol::Dtmf,
+        DecoderProtocol::CwMorse,
+        DecoderProtocol::Bell202Aprs,
+        DecoderProtocol::Ft8,
+        DecoderProtocol::Wspr,
+    ];
+    scan_digital_decode_streaming_enabled(
+        samples,
+        channels,
+        sample_rate,
+        CURRENTLY_SCANNED_PROTOCOLS,
+        cancel_flag,
+        on_batch,
+    );
+}
+
+/// Scans only the selected protocols and streams each non-empty result batch.
+/// Bell 103 and M17 remain excluded because the current scanner has no decoder stages for them.
+pub fn scan_digital_decode_streaming_enabled<F>(
+    samples: &[f32],
+    channels: u16,
+    sample_rate: u32,
+    enabled_protocols: &[DecoderProtocol],
+    cancel_flag: Option<Arc<AtomicBool>>,
+    on_batch: F,
 ) where
     F: FnMut(Vec<DecodedSymbol>),
 {
     let mono = downmix_to_mono(samples, channels);
+    scan_digital_decode_mono_streaming_enabled(
+        &mono,
+        sample_rate,
+        enabled_protocols,
+        cancel_flag,
+        on_batch,
+    );
+}
+
+/// Scans shared per-channel buffers without building a temporary interleaved buffer.
+/// The downmix matches `downmix_to_mono` applied to the prior interleaved preparation.
+pub fn scan_digital_decode_channels_streaming_enabled<F>(
+    ch1: &[f32],
+    ch2: Option<&[f32]>,
+    channels: u16,
+    sample_rate: u32,
+    enabled_protocols: &[DecoderProtocol],
+    cancel_flag: Option<Arc<AtomicBool>>,
+    on_batch: F,
+) where
+    F: FnMut(Vec<DecodedSymbol>),
+{
+    let is_cancelled = || {
+        cancel_flag
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+    };
+    let mono = match ch2 {
+        Some(ch2) => {
+            let len = ch1.len().min(ch2.len());
+            let interleaved_len = len.saturating_mul(2);
+            if channels <= 1 {
+                let mut samples = Vec::with_capacity(interleaved_len);
+                for i in 0..len {
+                    if i.is_multiple_of(16_384) && is_cancelled() {
+                        return;
+                    }
+                    samples.push(ch1[i]);
+                    samples.push(ch2[i]);
+                }
+                samples
+            } else {
+                let channel_count = channels as usize;
+                let frames = interleaved_len / channel_count;
+                let mut samples = Vec::with_capacity(frames);
+                for frame in 0..frames {
+                    if frame.is_multiple_of(16_384) && is_cancelled() {
+                        return;
+                    }
+                    let mut sum = 0.0f32;
+                    for channel in 0..channel_count {
+                        let sample_index = frame * channel_count + channel;
+                        sum += if sample_index.is_multiple_of(2) {
+                            ch1[sample_index / 2]
+                        } else {
+                            ch2[sample_index / 2]
+                        };
+                    }
+                    samples.push(sum / channels as f32);
+                }
+                samples
+            }
+        }
+        None if channels <= 1 => {
+            let mut samples = Vec::with_capacity(ch1.len());
+            for (index, &sample) in ch1.iter().enumerate() {
+                if index.is_multiple_of(16_384) && is_cancelled() {
+                    return;
+                }
+                samples.push(sample);
+            }
+            samples
+        }
+        None => {
+            let channel_count = channels as usize;
+            let frames = ch1.len() / channel_count;
+            let mut samples = Vec::with_capacity(frames);
+            for frame in 0..frames {
+                if frame.is_multiple_of(16_384) && is_cancelled() {
+                    return;
+                }
+                let start = frame * channel_count;
+                let sum: f32 = ch1[start..start + channel_count].iter().sum();
+                samples.push(sum / channels as f32);
+            }
+            samples
+        }
+    };
+    scan_digital_decode_mono_streaming_enabled(
+        &mono,
+        sample_rate,
+        enabled_protocols,
+        cancel_flag,
+        on_batch,
+    );
+}
+
+fn scan_digital_decode_mono_streaming_enabled<F>(
+    mono: &[f32],
+    sample_rate: u32,
+    enabled_protocols: &[DecoderProtocol],
+    cancel_flag: Option<Arc<AtomicBool>>,
+    mut on_batch: F,
+) where
+    F: FnMut(Vec<DecodedSymbol>),
+{
     if mono.is_empty() {
         return;
     }
@@ -874,49 +1009,74 @@ pub fn scan_digital_decode_streaming<F>(
     };
 
     // 1. DTMF Decoder
-    if is_cancelled() {
-        return;
-    }
-    let dtmf_mono = resample_linear(&mono, sample_rate, 8000);
-    let dtmf_symbols = decode_dtmf(&dtmf_mono, 8000);
-    if !dtmf_symbols.is_empty() {
-        on_batch(dtmf_symbols);
+    if enabled_protocols.contains(&DecoderProtocol::Dtmf) {
+        if is_cancelled() {
+            return;
+        }
+        let dtmf_mono = resample_linear(&mono, sample_rate, 8000);
+        let dtmf_symbols = decode_dtmf(&dtmf_mono, 8000);
+        if is_cancelled() {
+            return;
+        }
+        if !dtmf_symbols.is_empty() {
+            on_batch(dtmf_symbols);
+        }
     }
 
     // 2. Morse / CW Decoder
-    if is_cancelled() {
-        return;
-    }
-    let cw_symbols = decode_morse_cw(&mono, sample_rate);
-    if !cw_symbols.is_empty() {
-        on_batch(cw_symbols);
+    if enabled_protocols.contains(&DecoderProtocol::CwMorse) {
+        if is_cancelled() {
+            return;
+        }
+        let cw_symbols = decode_morse_cw(&mono, sample_rate);
+        if is_cancelled() {
+            return;
+        }
+        if !cw_symbols.is_empty() {
+            on_batch(cw_symbols);
+        }
     }
 
     // 3. Bell 202 / APRS Decoder
-    if is_cancelled() {
-        return;
-    }
-    let aprs_symbols = decode_bell202_aprs(&mono, sample_rate);
-    if !aprs_symbols.is_empty() {
-        on_batch(aprs_symbols);
+    if enabled_protocols.contains(&DecoderProtocol::Bell202Aprs) {
+        if is_cancelled() {
+            return;
+        }
+        let aprs_symbols = decode_bell202_aprs(&mono, sample_rate);
+        if is_cancelled() {
+            return;
+        }
+        if !aprs_symbols.is_empty() {
+            on_batch(aprs_symbols);
+        }
     }
 
     // 4. FT8 Decoder (runs if buffer >= 12.64s)
-    if is_cancelled() {
-        return;
-    }
-    let ft8_symbols = decode_ft8(&mono, sample_rate);
-    if !ft8_symbols.is_empty() {
-        on_batch(ft8_symbols);
+    if enabled_protocols.contains(&DecoderProtocol::Ft8) {
+        if is_cancelled() {
+            return;
+        }
+        let ft8_symbols = decode_ft8(&mono, sample_rate);
+        if is_cancelled() {
+            return;
+        }
+        if !ft8_symbols.is_empty() {
+            on_batch(ft8_symbols);
+        }
     }
 
     // 5. WSPR Decoder (runs if buffer >= 110s)
-    if is_cancelled() {
-        return;
-    }
-    let wspr_symbols = decode_wspr(&mono, sample_rate);
-    if !wspr_symbols.is_empty() {
-        on_batch(wspr_symbols);
+    if enabled_protocols.contains(&DecoderProtocol::Wspr) {
+        if is_cancelled() {
+            return;
+        }
+        let wspr_symbols = decode_wspr(&mono, sample_rate);
+        if is_cancelled() {
+            return;
+        }
+        if !wspr_symbols.is_empty() {
+            on_batch(wspr_symbols);
+        }
     }
 }
 
@@ -989,6 +1149,57 @@ mod tests {
         assert_eq!(decoded[0].symbol, "5");
         assert_eq!(decoded[0].protocol, DecoderProtocol::Dtmf);
         assert!(decoded[0].start_sec >= 0.01 && decoded[0].start_sec <= 0.08);
+    }
+
+    #[test]
+    fn enabled_streaming_scanner_matches_channel_buffer_dtmf_batches() {
+        let rate = 8000u32;
+        let mut mono = vec![0.0; 200];
+        for i in 0..800 {
+            let t = i as f32 / rate as f32;
+            mono.push(
+                0.5 * (2.0 * std::f32::consts::PI * 770.0 * t).sin()
+                    + 0.5 * (2.0 * std::f32::consts::PI * 1336.0 * t).sin(),
+            );
+        }
+        mono.extend(vec![0.0; 200]);
+        let ch1 = mono.clone();
+        let ch2 = mono.clone();
+        let mut interleaved = Vec::with_capacity(mono.len() * 2);
+        for (&left, &right) in ch1.iter().zip(&ch2) {
+            interleaved.extend([left, right]);
+        }
+        let enabled = [DecoderProtocol::Dtmf];
+
+        let mut interleaved_batches = Vec::new();
+        scan_digital_decode_streaming_enabled(&interleaved, 2, rate, &enabled, None, |batch| {
+            interleaved_batches.push(batch)
+        });
+        let mut channel_batches = Vec::new();
+        scan_digital_decode_channels_streaming_enabled(
+            &ch1,
+            Some(&ch2),
+            2,
+            rate,
+            &enabled,
+            None,
+            |batch| channel_batches.push(batch),
+        );
+
+        assert_eq!(channel_batches, interleaved_batches);
+        assert_eq!(channel_batches.concat(), decode_dtmf(&mono, rate));
+
+        let mut disabled = Vec::new();
+        scan_digital_decode_channels_streaming_enabled(
+            &ch1,
+            Some(&ch2),
+            2,
+            rate,
+            &[],
+            None,
+            |batch| disabled.push(batch),
+        );
+        assert!(disabled.is_empty());
     }
 
     #[test]

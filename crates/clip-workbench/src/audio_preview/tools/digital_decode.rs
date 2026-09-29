@@ -6,11 +6,14 @@
 
 use super::super::*;
 use crate::icons::Icon;
-use little_clip_ops::digital_decode::{DecodedSymbol, DecoderProtocol, downmix_to_mono};
+use little_clip_ops::digital_decode::{
+    DecodedSymbol, DecoderProtocol, scan_digital_decode_channels_streaming_enabled,
+};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::time::Duration;
 use std::time::Instant;
 
 /// Active tab within the digital decode transcript inspector panel.
@@ -33,6 +36,8 @@ pub(crate) enum DigitalDecodeMsg {
     /// An error encountered during audio preparation or decoding.
     #[allow(dead_code)]
     Error(String),
+    /// The executor accepted the scan; prior results can now be replaced.
+    Started,
 }
 
 /// State machine for the Digital Decode studio tool.
@@ -43,6 +48,9 @@ pub(crate) struct DigitalDecodeState {
     pub(crate) cancel_flag: Option<Arc<AtomicBool>>,
     /// Channel receiver for incoming streaming decode results.
     pub(crate) rx: Option<Receiver<DigitalDecodeMsg>>,
+    job_rx: Option<Receiver<Result<(), little_clip_core::JobError>>>,
+    job_ticket: Option<little_clip_core::JobTicket>,
+    pub(in crate::audio_preview) retry_at: Option<Instant>,
     /// Chronological collection of all decoded symbols across all modes.
     pub(crate) symbols: Vec<DecodedSymbol>,
     /// Index of the currently selected symbol, if any.
@@ -75,6 +83,9 @@ impl Default for DigitalDecodeState {
             in_progress: false,
             cancel_flag: None,
             rx: None,
+            job_rx: None,
+            job_ticket: None,
+            retry_at: None,
             symbols: Vec::new(),
             selected_symbol: None,
             hovered_symbol: None,
@@ -92,6 +103,13 @@ impl Default for DigitalDecodeState {
 impl AudioPreviewState {
     /// Launches an asynchronous multi-protocol digital demodulation scan over the full audio buffer.
     pub(crate) fn start_digital_decode(&mut self) {
+        self.start_digital_decode_on(little_clip_core::BackgroundJobs::global());
+    }
+
+    pub(in crate::audio_preview) fn start_digital_decode_on(
+        &mut self,
+        jobs: &little_clip_core::BackgroundJobs,
+    ) {
         if self.analysis.is_none() {
             self.digital_decode.status_msg =
                 Some("Waiting for audio track decoding to finish…".to_string());
@@ -108,108 +126,94 @@ impl AudioPreviewState {
         self.digital_decode.in_progress = true;
         self.digital_decode.cancel_flag = Some(cancel);
         self.digital_decode.rx = Some(rx);
-        self.digital_decode.symbols.clear();
-        self.digital_decode.selected_symbol = None;
-        self.digital_decode.hovered_symbol = None;
         self.digital_decode.status_msg = Some("Demodulating digital signals…".to_string());
         self.digital_decode.scan_start = Some(Instant::now());
 
         let channels = analysis.channels;
         let sample_rate = analysis.sample_rate;
-        let enabled_protocols = self.digital_decode.enabled_protocols.clone();
+        let enabled_protocols: Vec<_> = DecoderProtocol::all()
+            .iter()
+            .copied()
+            .filter(|protocol| self.digital_decode.enabled_protocols.contains(protocol))
+            .collect();
+        let ch1_samples = Arc::clone(&analysis.ch1_samples);
+        let ch2_samples = analysis.ch2_samples.as_ref().map(Arc::clone);
 
-        // Synthesize interleaved or mono samples from analysis buffers
-        let samples: Vec<f32> = if let Some(ch2) = &analysis.ch2_samples {
-            let ch1 = &analysis.ch1_samples;
-            let len = ch1.len().min(ch2.len());
-            let mut interleaved = Vec::with_capacity(len * 2);
-            for i in 0..len {
-                interleaved.push(ch1[i]);
-                interleaved.push(ch2[i]);
-            }
-            interleaved
-        } else {
-            analysis.ch1_samples.clone()
-        };
-
-        std::thread::spawn(move || {
-            let start = Instant::now();
-            let mono = downmix_to_mono(&samples, channels);
-            if mono.is_empty() {
-                let _ = tx.send(DigitalDecodeMsg::Done(0.0));
+        let (ticket, job_rx) = jobs.submit(Duration::MAX, move || {
+            if cancel_thread.load(Ordering::Acquire) {
                 return;
             }
+            let _ = tx.send(DigitalDecodeMsg::Started);
+            let start = Instant::now();
+            scan_digital_decode_channels_streaming_enabled(
+                &ch1_samples,
+                ch2_samples.as_deref(),
+                channels,
+                sample_rate,
+                &enabled_protocols,
+                Some(Arc::clone(&cancel_thread)),
+                |batch| {
+                    let _ = tx.send(DigitalDecodeMsg::Batch(batch));
+                },
+            );
 
-            let is_cancelled = || cancel_thread.load(Ordering::Relaxed);
-
-            // 1. DTMF Demodulation
-            if enabled_protocols.contains(&DecoderProtocol::Dtmf) && !is_cancelled() {
-                let dtmf_mono =
-                    little_clip_ops::digital_decode::resample_linear(&mono, sample_rate, 8000);
-                let dtmf_symbols = little_clip_ops::digital_decode::decode_dtmf(&dtmf_mono, 8000);
-                if !dtmf_symbols.is_empty() && !is_cancelled() {
-                    let _ = tx.send(DigitalDecodeMsg::Batch(dtmf_symbols));
-                }
+            if !cancel_thread.load(Ordering::Acquire) {
+                let elapsed = start.elapsed().as_secs_f32();
+                let _ = tx.send(DigitalDecodeMsg::Done(elapsed));
             }
-
-            // 2. Morse / CW Demodulation
-            if enabled_protocols.contains(&DecoderProtocol::CwMorse) && !is_cancelled() {
-                let cw_symbols =
-                    little_clip_ops::digital_decode::decode_morse_cw(&mono, sample_rate);
-                if !cw_symbols.is_empty() && !is_cancelled() {
-                    let _ = tx.send(DigitalDecodeMsg::Batch(cw_symbols));
-                }
-            }
-
-            // 3. Bell 202 / AX.25 / APRS Demodulation
-            if enabled_protocols.contains(&DecoderProtocol::Bell202Aprs) && !is_cancelled() {
-                let aprs_symbols =
-                    little_clip_ops::digital_decode::decode_bell202_aprs(&mono, sample_rate);
-                if !aprs_symbols.is_empty() && !is_cancelled() {
-                    let _ = tx.send(DigitalDecodeMsg::Batch(aprs_symbols));
-                }
-            }
-
-            // 4. FT8 Demodulation (cycles requiring >= 12.64s)
-            if enabled_protocols.contains(&DecoderProtocol::Ft8) && !is_cancelled() {
-                let ft8_symbols = little_clip_ops::digital_decode::decode_ft8(&mono, sample_rate);
-                if !ft8_symbols.is_empty() && !is_cancelled() {
-                    let _ = tx.send(DigitalDecodeMsg::Batch(ft8_symbols));
-                }
-            }
-
-            // 5. WSPR Demodulation (cycles requiring >= 110s)
-            if enabled_protocols.contains(&DecoderProtocol::Wspr) && !is_cancelled() {
-                let wspr_symbols = little_clip_ops::digital_decode::decode_wspr(&mono, sample_rate);
-                if !wspr_symbols.is_empty() && !is_cancelled() {
-                    let _ = tx.send(DigitalDecodeMsg::Batch(wspr_symbols));
-                }
-            }
-
-            let elapsed = start.elapsed().as_secs_f32();
-            let _ = tx.send(DigitalDecodeMsg::Done(elapsed));
         });
+        self.digital_decode.job_ticket = Some(ticket);
+        self.digital_decode.job_rx = Some(job_rx);
+        self.digital_decode.retry_at = None;
     }
 
     /// Cancels any in-flight background demodulation scan.
     pub(crate) fn cancel_digital_decode(&mut self) {
+        if let Some(ticket) = self.digital_decode.job_ticket.take() {
+            ticket.cancel();
+        }
         if let Some(flag) = self.digital_decode.cancel_flag.take() {
             flag.store(true, Ordering::Relaxed);
         }
         self.digital_decode.in_progress = false;
         self.digital_decode.rx = None;
+        self.digital_decode.job_rx = None;
+        self.digital_decode.retry_at = None;
     }
 
     /// Polls for incoming streaming decode batches from the background demodulation worker.
     pub(crate) fn poll_digital_decode(&mut self, ctx: &egui::Context) {
+        self.poll_digital_decode_on(ctx, little_clip_core::BackgroundJobs::global());
+    }
+
+    pub(in crate::audio_preview) fn poll_digital_decode_on(
+        &mut self,
+        ctx: &egui::Context,
+        jobs: &little_clip_core::BackgroundJobs,
+    ) {
+        if let Some(retry_at) = self.digital_decode.retry_at {
+            if Instant::now() >= retry_at && !self.digital_decode.in_progress {
+                self.start_digital_decode_on(jobs);
+            } else {
+                ctx.request_repaint_after(retry_at.saturating_duration_since(Instant::now()));
+            }
+        }
         let mut new_batches = Vec::new();
         let mut done_time = None;
         let mut error_msg = None;
+        let mut started = false;
 
         if let Some(rx) = &self.digital_decode.rx {
-            ctx.request_repaint();
-            while let Ok(msg) = rx.try_recv() {
+            if self.digital_decode.in_progress {
+                ctx.request_repaint();
+            }
+            loop {
+                let msg = match rx.try_recv() {
+                    Ok(msg) => msg,
+                    Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+                };
                 match msg {
+                    DigitalDecodeMsg::Started => started = true,
                     DigitalDecodeMsg::Batch(batch) => {
                         new_batches.push(batch);
                     }
@@ -223,6 +227,11 @@ impl AudioPreviewState {
             }
         }
 
+        if started {
+            self.digital_decode.symbols.clear();
+            self.digital_decode.selected_symbol = None;
+            self.digital_decode.hovered_symbol = None;
+        }
         for batch in new_batches {
             self.digital_decode.symbols.extend(batch);
             self.digital_decode.symbols.sort_by(|a, b| {
@@ -235,10 +244,15 @@ impl AudioPreviewState {
         if let Some(err) = error_msg {
             self.digital_decode.in_progress = false;
             self.digital_decode.rx = None;
+            self.digital_decode.job_rx = None;
+            self.digital_decode.job_ticket = None;
             self.digital_decode.status_msg = Some(format!("Decoding error: {err}"));
         } else if let Some(elapsed) = done_time {
             self.digital_decode.in_progress = false;
             self.digital_decode.rx = None;
+            self.digital_decode.job_ticket = None;
+            self.digital_decode.cancel_flag = None;
+            self.digital_decode.retry_at = None;
             self.digital_decode.scan_duration_sec = Some(elapsed);
             let count = self.digital_decode.symbols.len();
             self.digital_decode.status_msg = Some(format!(
@@ -246,6 +260,54 @@ impl AudioPreviewState {
                 if count == 1 { "" } else { "s" },
                 elapsed
             ));
+        }
+
+        if let Some(rx) = self.digital_decode.job_rx.take() {
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.digital_decode.job_rx = None;
+                    if self.digital_decode.in_progress {
+                        self.digital_decode.in_progress = false;
+                        self.digital_decode.rx = None;
+                        self.digital_decode.job_ticket = None;
+                        self.digital_decode.cancel_flag = None;
+                        self.digital_decode.status_msg =
+                            Some("Digital Decode worker exited before completing".to_owned());
+                    }
+                }
+                Ok(Err(little_clip_core::JobError::QueueFull)) => {
+                    self.digital_decode.in_progress = false;
+                    self.digital_decode.rx = None;
+                    self.digital_decode.job_rx = None;
+                    self.digital_decode.job_ticket = None;
+                    self.digital_decode.cancel_flag = None;
+                    self.digital_decode.retry_at =
+                        Some(Instant::now() + Duration::from_millis(500));
+                    self.digital_decode.status_msg = Some(
+                        "Digital Decode is waiting for background workers; retrying shortly"
+                            .to_owned(),
+                    );
+                    ctx.request_repaint_after(Duration::from_millis(500));
+                }
+                Ok(Err(error)) => {
+                    self.digital_decode.in_progress = false;
+                    self.digital_decode.rx = None;
+                    self.digital_decode.job_rx = None;
+                    self.digital_decode.job_ticket = None;
+                    self.digital_decode.cancel_flag = None;
+                    self.digital_decode.status_msg = Some(format!("Decoding error: {error}"));
+                }
+                Err(TryRecvError::Empty) => self.digital_decode.job_rx = Some(rx),
+                Err(TryRecvError::Disconnected) => {
+                    self.digital_decode.in_progress = false;
+                    self.digital_decode.rx = None;
+                    self.digital_decode.job_rx = None;
+                    self.digital_decode.job_ticket = None;
+                    self.digital_decode.cancel_flag = None;
+                    self.digital_decode.status_msg =
+                        Some("Digital Decode worker disconnected unexpectedly".to_owned());
+                }
+            }
         }
     }
 

@@ -1,5 +1,7 @@
 //! Core audio data structures, metadata, waveforms, and DSP filter chains.
 
+use std::sync::Arc;
+
 /// Downsampled audio waveform peaks and optional spectral frequency coloring for UI display.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct AudioWaveform {
@@ -90,8 +92,8 @@ pub struct FullAudioAnalysis {
     pub sample_rate: u32,
     pub duration_ms: u64,
     pub total_frames: usize,
-    pub ch1_samples: Vec<f32>,
-    pub ch2_samples: Option<Vec<f32>>,
+    pub ch1_samples: Arc<[f32]>,
+    pub ch2_samples: Option<Arc<[f32]>>,
     pub overview_peaks1: Vec<f32>,
     pub overview_peaks2: Option<Vec<f32>>,
     pub peaks_lvl0_ch1: Vec<PeakBlock>,
