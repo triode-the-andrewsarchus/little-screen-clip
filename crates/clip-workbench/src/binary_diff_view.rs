@@ -34,6 +34,35 @@ fn stage_binary_handoff(bytes: &[u8], side: &str) -> Result<std::path::PathBuf, 
     Ok(path)
 }
 
+fn launch_binary_diff_tool_with(
+    left_path: &std::path::Path,
+    right_path: &std::path::Path,
+    mut available: impl FnMut(&str) -> Option<std::path::PathBuf>,
+    mut spawn: impl FnMut(&std::path::Path, &std::path::Path, Option<&std::path::Path>) -> bool,
+) -> Result<String, String> {
+    let mut launch_failures = Vec::new();
+    if let Some(app) = available("imhex") {
+        if spawn(&app, left_path, Some(right_path)) {
+            return Ok("🚀 Launched ImHex hex editor".to_string());
+        }
+        launch_failures.push("imhex");
+    }
+    if let Some(app) = available("xdg-open") {
+        if spawn(&app, left_path, None) {
+            return Ok("🚀 Opened left binary file with system default".to_string());
+        }
+        launch_failures.push("xdg-open");
+    }
+    if launch_failures.is_empty() {
+        Ok("⚠️ Neither ImHex nor xdg-open is installed".to_string())
+    } else {
+        Err(format!(
+            "Failed to launch available external tool(s): {}",
+            launch_failures.join(", ")
+        ))
+    }
+}
+
 /// Color highlighting mode for hexadecimal byte displays.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ByteColorMode {
@@ -426,26 +455,19 @@ impl BinaryDiffViewState {
                 if job_cancelled.load(std::sync::atomic::Ordering::Acquire) {
                     return Err("External handoff cancelled".to_string());
                 }
-                if let Some(app) = little_clip_core::command_available("imhex") {
-                    if std::process::Command::new(app)
-                        .arg(&temp_left)
-                        .arg(&temp_right)
-                        .spawn()
-                        .is_ok()
-                    {
-                        return Ok("🚀 Launched ImHex hex editor".to_string());
-                    }
-                }
-                if let Some(app) = little_clip_core::command_available("xdg-open") {
-                    if std::process::Command::new(app)
-                        .arg(&temp_left)
-                        .spawn()
-                        .is_ok()
-                    {
-                        return Ok("🚀 Opened left binary file with system default".to_string());
-                    }
-                }
-                Ok("⚠️ ImHex is not installed".to_string())
+                launch_binary_diff_tool_with(
+                    &temp_left,
+                    &temp_right,
+                    |command| little_clip_core::command_available(command),
+                    |app, left, right| {
+                        let mut command = std::process::Command::new(app);
+                        command.arg(left);
+                        if let Some(right) = right {
+                            command.arg(right);
+                        }
+                        command.spawn().is_ok()
+                    },
+                )
             });
         self.status_toast
             .set("Preparing binary files for external tool…", now);
@@ -1992,6 +2014,127 @@ mod tests {
         assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some("bin"));
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn binary_external_tool_prefers_imhex_then_uses_xdg_open_fallback() {
+        let left = std::path::PathBuf::from("/private/left.bin");
+        let right = std::path::PathBuf::from("/private/right.bin");
+
+        let mut lookups = Vec::new();
+        let mut launches = Vec::new();
+        let result = launch_binary_diff_tool_with(
+            &left,
+            &right,
+            |command| {
+                lookups.push(command.to_string());
+                Some(std::path::PathBuf::from(format!("/fake/{command}")))
+            },
+            |app, left_arg, right_arg| {
+                launches.push((
+                    app.file_name().unwrap().to_string_lossy().into_owned(),
+                    left_arg.to_path_buf(),
+                    right_arg.map(std::path::Path::to_path_buf),
+                ));
+                true
+            },
+        );
+        assert_eq!(result, Ok("🚀 Launched ImHex hex editor".to_string()));
+        assert_eq!(lookups, vec!["imhex"]);
+        assert_eq!(
+            launches,
+            vec![("imhex".to_string(), left.clone(), Some(right.clone()))]
+        );
+
+        let mut lookups = Vec::new();
+        let mut launches = Vec::new();
+        let result = launch_binary_diff_tool_with(
+            &left,
+            &right,
+            |command| {
+                lookups.push(command.to_string());
+                (command == "xdg-open").then(|| std::path::PathBuf::from("/fake/xdg-open"))
+            },
+            |app, left_arg, right_arg| {
+                launches.push((
+                    app.file_name().unwrap().to_string_lossy().into_owned(),
+                    left_arg.to_path_buf(),
+                    right_arg.map(std::path::Path::to_path_buf),
+                ));
+                true
+            },
+        );
+        assert_eq!(
+            result,
+            Ok("🚀 Opened left binary file with system default".to_string())
+        );
+        assert_eq!(lookups, vec!["imhex", "xdg-open"]);
+        assert_eq!(launches, vec![("xdg-open".to_string(), left.clone(), None)]);
+
+        let mut launches = Vec::new();
+        let result = launch_binary_diff_tool_with(
+            &left,
+            &right,
+            |command| Some(std::path::PathBuf::from(format!("/fake/{command}"))),
+            |app, left_arg, right_arg| {
+                launches.push(app.file_name().unwrap().to_string_lossy().into_owned());
+                let _ = (left_arg, right_arg);
+                app.file_name().is_some_and(|name| name == "xdg-open")
+            },
+        );
+        assert_eq!(
+            result,
+            Ok("🚀 Opened left binary file with system default".to_string())
+        );
+        assert_eq!(launches, vec!["imhex", "xdg-open"]);
+
+        let mut attempts = Vec::new();
+        let result = launch_binary_diff_tool_with(
+            &left,
+            &right,
+            |command| (command == "xdg-open").then(|| std::path::PathBuf::from("/fake/xdg-open")),
+            |app, _, _| {
+                attempts.push(app.file_name().unwrap().to_string_lossy().into_owned());
+                false
+            },
+        );
+        assert_eq!(
+            result,
+            Err("Failed to launch available external tool(s): xdg-open".to_string())
+        );
+        assert_eq!(attempts, vec!["xdg-open"]);
+
+        let mut attempts = Vec::new();
+        let result = launch_binary_diff_tool_with(
+            &left,
+            &right,
+            |command| Some(std::path::PathBuf::from(format!("/fake/{command}"))),
+            |app, _, _| {
+                attempts.push(app.file_name().unwrap().to_string_lossy().into_owned());
+                false
+            },
+        );
+        assert_eq!(
+            result,
+            Err("Failed to launch available external tool(s): imhex, xdg-open".to_string())
+        );
+        assert_eq!(attempts, vec!["imhex", "xdg-open"]);
+
+        let mut lookups = Vec::new();
+        let result = launch_binary_diff_tool_with(
+            &left,
+            &right,
+            |command| {
+                lookups.push(command.to_string());
+                None
+            },
+            |_, _, _| panic!("spawn must not run when no opener is installed"),
+        );
+        assert_eq!(
+            result,
+            Ok("⚠️ Neither ImHex nor xdg-open is installed".to_string())
+        );
+        assert_eq!(lookups, vec!["imhex", "xdg-open"]);
     }
 
     #[test]
