@@ -33,6 +33,7 @@ from ui_acceptance_fixtures import pdf_fixture
 
 APP_ID = "little-clip-workbench"
 STARTUP_SECONDS = 20.0
+FALLBACK_WINDOW_SIZE = (960, 540)
 IMAGE_TOOL_KEYS = {
     "view": "v",
     "crop": "c",
@@ -902,8 +903,12 @@ def inspect_geometry(
     logical_size: tuple[int, int],
     hints: dict[str, list[int] | None],
     report: dict[str, Any],
+    expected_size: tuple[int, int] | None = None,
 ) -> None:
-    expected = [math.floor(logical_size[0] * 0.92), math.floor(logical_size[1] * 0.92)]
+    expected = list(expected_size or (
+        math.floor(logical_size[0] * 0.92),
+        math.floor(logical_size[1] * 0.92),
+    ))
     first = first_windows[0] if first_windows else {}
     final = final_windows[0] if final_windows else {}
     initial_event = next((event for event in layout_events if event.get("_event_type") == "WindowOpenedOrChanged"), {})
@@ -915,12 +920,12 @@ def inspect_geometry(
         item.get("window_size") == expected and item.get("centered") for item in event_observations
     )
     checks = {
-        "first_observed_window_size_matches_floor_92_percent": first_observation["window_size"] == expected,
-        "final_window_size_matches_floor_92_percent": final_observation["window_size"] == expected,
+        "first_observed_window_size_matches_expected": first_observation["window_size"] == expected,
+        "final_window_size_matches_expected": final_observation["window_size"] == expected,
         "first_and_final_window_size_stable": first_observation["window_size"] is not None
         and first_observation["window_size"] == final_observation["window_size"],
         "initial_wayland_min_max_hints_match_expected_size": hints["min_size"] == expected and hints["max_size"] == expected,
-        "initial_window_opened_event_size_matches_floor_92_percent": initial_observation.get("window_size") == expected,
+        "initial_window_opened_event_size_matches_expected": initial_observation.get("window_size") == expected,
         "initial_window_opened_event_centered_within_1_logical_pixel": initial_observation.get("centered") is True,
         "first_observed_tile_centered_within_1_logical_pixel": first_observation["centered"],
         "final_tile_centered_within_1_logical_pixel": final_observation["centered"],
@@ -934,6 +939,7 @@ def inspect_geometry(
     report["initial_wayland_size_hints"] = hints
     report["geometry"] = {
         "expected_window_size": expected,
+        "size_source": "fixed fallback" if expected_size is not None else "92 percent of focused output",
         "first_observed": first_observation,
         "final": final_observation,
         "initial_event": initial_observation,
@@ -1030,6 +1036,27 @@ graph:
     niri_bin, weston_bin = shutil.which("niri"), shutil.which("weston")
     if not niri_bin or not weston_bin:
         raise RuntimeError("both niri and weston must be installed")
+    startup_query_failure_marker: Path | None = None
+    if args.fail_startup_output_query:
+        private_bin = output / "private-bin"
+        private_bin.mkdir(mode=0o700)
+        startup_query_failure_marker = output / "startup-output-query-failure.txt"
+        niri_shim = private_bin / "niri"
+        niri_shim.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os, sys\n"
+            f"real_niri = {str(Path(niri_bin).resolve())!r}\n"
+            f"failure_marker = {str(startup_query_failure_marker)!r}\n"
+            "if sys.argv[1:] == ['msg', '--json', 'focused-output']:\n"
+            "    with open(failure_marker, 'a', encoding='utf-8') as marker:\n"
+            "        marker.write('focused-output query failed as requested\\n')\n"
+            "    print('injected focused-output query failure', file=sys.stderr)\n"
+            "    raise SystemExit(1)\n"
+            "os.execv(real_niri, [real_niri, *sys.argv[1:]])\n",
+            encoding="utf-8",
+        )
+        niri_shim.chmod(0o700)
+        clean_env["PATH"] = f"{private_bin}{os.pathsep}{clean_env.get('PATH', '')}"
     try:
         run_checked([niri_bin, "validate", "--config", str(niri_config)], env=clean_env, timeout=5)
     except (RuntimeError, subprocess.TimeoutExpired) as exc:
@@ -1041,6 +1068,7 @@ graph:
         "niri_bin": Path(niri_bin),
         "weston_bin": Path(weston_bin),
         "niri_config": niri_config,
+        "startup_query_failure_marker": startup_query_failure_marker,
     }
 
 
@@ -1364,7 +1392,30 @@ def capture_workbench(
 
     layout_events = window_layout_events(output / "niri-events.jsonl", app.pid)
     hints = wayland_size_hints(output / "workbench.log")
-    inspect_geometry(first_windows, final_windows, layout_events, logical_size, hints, report)
+    expected_size = FALLBACK_WINDOW_SIZE if args.fail_startup_output_query else None
+    inspect_geometry(
+        first_windows, final_windows, layout_events, logical_size, hints, report,
+        expected_size=expected_size,
+    )
+    if args.fail_startup_output_query:
+        marker = config["startup_query_failure_marker"]
+        marker_seen = marker.is_file() and "focused-output query failed as requested" in marker.read_text(
+            encoding="utf-8", errors="replace"
+        )
+        observed_size = layout_size(first_windows[0]) if first_windows else None
+        fallback_pass = marker_seen and observed_size == FALLBACK_WINDOW_SIZE
+        report["startup_fallback"] = {
+            "forced_focused_output_query_failure": marker_seen,
+            "expected_fallback_size": list(FALLBACK_WINDOW_SIZE),
+            "observed_window_size": list(observed_size) if observed_size else None,
+            "fixed_size_hints": hints,
+            "visible_workbench_capture": report["screenshots"]["first_observed"]["path"],
+            "pass": fallback_pass,
+        }
+        if not fallback_pass:
+            report["failures"].append(
+                "startup output-query failure did not open the workbench at the fixed fallback size"
+            )
 
     if args.verify_return:
         run_checked(["wtype", "-k", "Escape"], env=niri_env)
@@ -1444,6 +1495,10 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--height", type=int, default=800, help="Weston logical height (default: 800)")
     parser.add_argument("--scale", type=float, default=1.0, help="nested Niri output scale (default: 1)")
     parser.add_argument("--appearance", choices=("light", "dark"), required=True)
+    parser.add_argument(
+        "--fail-startup-output-query", action="store_true",
+        help="privately fail the workbench's focused-output query to verify its fixed-size startup fallback",
+    )
     parser.add_argument("--component-gallery", action="store_true", help="open the workbench component gallery directly")
     parser.add_argument(
         "--image-tool",
@@ -1748,6 +1803,7 @@ def main() -> int:
             "logical_size": [args.width, args.height],
             "scale": args.scale,
             "appearance": args.appearance,
+            "fail_startup_output_query": args.fail_startup_output_query,
             "image_tool": args.image_tool,
             "image_action": args.image_action,
             "post_tool_delay_ms": args.post_tool_delay_ms,
