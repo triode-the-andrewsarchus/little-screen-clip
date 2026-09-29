@@ -4565,6 +4565,136 @@ mod tests {
         }
     }
 
+    #[test]
+    fn inspect_canvas_drag_selects_region_and_ruler_click_only_scrubs() {
+        use egui::epaint::Shape;
+
+        fn frame(
+            ctx: &egui::Context,
+            state: &mut AudioPreviewState,
+            time: f64,
+            events: Vec<egui::Event>,
+        ) -> Rect {
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+            let canvas_fill = crate::hex_to_c32(&palette.colors.surface_recessed);
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        let mut close_requested = false;
+                        state.render_standard_ui(ui, ctx, &palette, &mut close_requested, None);
+                    });
+                },
+            );
+            output
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    Shape::Rect(rect)
+                        if rect.fill == canvas_fill
+                            && rect.rounding == egui::Rounding::same(8.0)
+                            && rect.rect.width() > 500.0
+                            && rect.rect.height() > 100.0 =>
+                    {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .expect("ready Inspect canvas should render")
+        }
+
+        fn pointer_button(pos: Pos2, pressed: bool) -> egui::Event {
+            egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            }
+        }
+
+        let (_temp_dir, path) = generate_fixture_wav("inspect-pointer", 5.0);
+        let analysis = compute_full_audio_analysis(&path, 100).expect("fixture analysis");
+        let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
+        state.cancel_session_analysis();
+        state.analysis = Some(analysis);
+        state.duration_sec = 5.0;
+        state.view_duration_sec = 5.0;
+        state.is_loading_analysis = false;
+        state.selection_mode = SelectionMode::Multi;
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let canvas = frame(&ctx, &mut state, 0.0, Vec::new());
+        let track_min_x = canvas.min.x + 48.0;
+        let track_width = canvas.width() - 54.0;
+
+        let scrub = Pos2::new(track_min_x + track_width * 0.8, canvas.min.y + 8.0);
+        frame(
+            &ctx,
+            &mut state,
+            0.01,
+            vec![
+                egui::Event::PointerMoved(scrub),
+                pointer_button(scrub, true),
+            ],
+        );
+        frame(&ctx, &mut state, 0.02, vec![pointer_button(scrub, false)]);
+        assert!(
+            state.multi_selections.is_empty(),
+            "ruler click created a region"
+        );
+        assert!((state.current_time_sec - 4.0).abs() < 0.15);
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let canvas = frame(&ctx, &mut state, 0.0, Vec::new());
+        let track_min_x = canvas.min.x + 48.0;
+        let track_width = canvas.width() - 54.0;
+        let wave_y = canvas.min.y + 80.0;
+        let start = Pos2::new(track_min_x + track_width * 0.2, wave_y);
+        let end = Pos2::new(track_min_x + track_width * 0.6, wave_y);
+
+        frame(
+            &ctx,
+            &mut state,
+            0.01,
+            vec![
+                egui::Event::PointerMoved(start),
+                pointer_button(start, true),
+            ],
+        );
+        let drag_start = start + Vec2::new(12.0, 0.0);
+        frame(
+            &ctx,
+            &mut state,
+            0.02,
+            vec![egui::Event::PointerMoved(drag_start)],
+        );
+        frame(&ctx, &mut state, 0.03, vec![egui::Event::PointerMoved(end)]);
+        frame(&ctx, &mut state, 0.04, vec![pointer_button(end, false)]);
+
+        assert_eq!(state.multi_selections.len(), 1);
+        assert_eq!(state.active_multi_index, Some(0));
+        let (selection_start, selection_end) = state.multi_selections[0];
+        assert!(
+            (selection_start - 1.0).abs() < 0.2,
+            "selection={:?}",
+            state.multi_selections
+        );
+        assert!(
+            (selection_end - 3.0).abs() < 0.15,
+            "selection={:?}",
+            state.multi_selections
+        );
+        assert!((state.current_time_sec - 3.0).abs() < 0.15);
+    }
+
     fn preview_source_with_region(
         region: AudioRegionEdit,
     ) -> (
