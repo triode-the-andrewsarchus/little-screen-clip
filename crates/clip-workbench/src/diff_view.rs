@@ -20,6 +20,26 @@ enum DiffHandoffTarget {
     Shared(std::sync::Arc<DiffTarget>, String),
 }
 
+#[derive(Debug)]
+struct StagedHandoffPath {
+    path: std::path::PathBuf,
+    remove_on_drop: bool,
+}
+
+impl StagedHandoffPath {
+    fn preserve_for_external_tool(&mut self) {
+        self.remove_on_drop = false;
+    }
+}
+
+impl Drop for StagedHandoffPath {
+    fn drop(&mut self) {
+        if self.remove_on_drop {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 struct HandoffCancelGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
 impl Drop for HandoffCancelGuard {
@@ -39,9 +59,12 @@ impl DiffHandoffTarget {
         }
     }
 
-    fn stage(self) -> Result<std::path::PathBuf, String> {
+    fn stage(self) -> Result<StagedHandoffPath, String> {
         match self {
-            Self::Existing(path) => Ok(path),
+            Self::Existing(path) => Ok(StagedHandoffPath {
+                path,
+                remove_on_drop: false,
+            }),
             Self::Shared(target, side) => {
                 let (bytes, ext): (&[u8], &str) = match target.as_ref() {
                     DiffTarget::ClipboardText {
@@ -59,7 +82,10 @@ impl DiffHandoffTarget {
                 ));
                 std::fs::write(&path, bytes)
                     .map_err(|error| format!("Failed to stage diff {side} file: {error}"))?;
-                Ok(path)
+                Ok(StagedHandoffPath {
+                    path,
+                    remove_on_drop: true,
+                })
             }
         }
     }
@@ -144,6 +170,7 @@ impl Drop for DiffViewerState {
         if let Some(ticket) = &self.compute_ticket {
             ticket.cancel();
         }
+        self.cancel_handoff();
     }
 }
 
@@ -218,23 +245,30 @@ fn spawn_text_diff_worker(
 fn launch_diff_tool_with(
     left_path: &std::path::Path,
     right_path: &std::path::Path,
+    cancelled: &std::sync::atomic::AtomicBool,
     mut available: impl FnMut(&str) -> Option<std::path::PathBuf>,
     mut spawn: impl FnMut(&std::path::Path, &std::path::Path, &std::path::Path) -> bool,
-) -> Result<String, String> {
+) -> Result<Option<String>, String> {
     let mut launch_failures = Vec::new();
     for (command, success_message) in [
         ("meld", "🚀 Launched Meld comparison"),
         ("kdiff3", "🚀 Launched KDiff3 comparison"),
     ] {
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            return Err("External handoff cancelled".to_string());
+        }
         if let Some(app) = available(command) {
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                return Err("External handoff cancelled".to_string());
+            }
             if spawn(&app, left_path, right_path) {
-                return Ok(success_message.to_string());
+                return Ok(Some(success_message.to_string()));
             }
             launch_failures.push(command);
         }
     }
     if launch_failures.is_empty() {
-        Ok("⚠️ Neither Meld nor KDiff3 is installed".to_string())
+        Ok(None)
     } else {
         Err(format!(
             "Failed to launch available comparison tool(s): {}",
@@ -250,12 +284,25 @@ fn run_diff_handoff_with(
     available: impl FnMut(&str) -> Option<std::path::PathBuf>,
     spawn: impl FnMut(&std::path::Path, &std::path::Path, &std::path::Path) -> bool,
 ) -> Result<String, String> {
-    let left_path = left.stage()?;
-    let right_path = right.stage()?;
+    let mut left_path = left.stage()?;
+    let mut right_path = right.stage()?;
     if cancelled.load(std::sync::atomic::Ordering::Acquire) {
         return Err("External handoff cancelled".to_string());
     }
-    launch_diff_tool_with(&left_path, &right_path, available, spawn)
+    match launch_diff_tool_with(
+        &left_path.path,
+        &right_path.path,
+        cancelled,
+        available,
+        spawn,
+    )? {
+        Some(message) => {
+            left_path.preserve_for_external_tool();
+            right_path.preserve_for_external_tool();
+            Ok(message)
+        }
+        None => Ok("⚠️ Neither Meld nor KDiff3 is installed".to_string()),
+    }
 }
 
 impl DiffViewerState {
@@ -486,30 +533,42 @@ impl DiffViewerState {
 
     /// Triggers launching Meld or KDiff3 for visual comparison.
     pub fn trigger_escape_hatch(&mut self, now: f64) {
+        self.trigger_escape_hatch_on(
+            now,
+            BackgroundJobs::global(),
+            |command| little_clip_core::command_available(command),
+            |app, left, right| {
+                std::process::Command::new(app)
+                    .arg(left)
+                    .arg(right)
+                    .spawn()
+                    .is_ok()
+            },
+        );
+    }
+
+    fn cancel_handoff(&mut self) {
         if let Some((ticket, _)) = self.handoff.take() {
             ticket.cancel();
         }
         self.handoff_cancel.take();
+    }
+
+    fn trigger_escape_hatch_on(
+        &mut self,
+        now: f64,
+        jobs: &BackgroundJobs,
+        available: impl FnMut(&str) -> Option<std::path::PathBuf> + Send + 'static,
+        spawn: impl FnMut(&std::path::Path, &std::path::Path, &std::path::Path) -> bool + Send + 'static,
+    ) {
+        self.cancel_handoff();
         let left = DiffHandoffTarget::from_target(&self.lhs, "lhs");
         let right = DiffHandoffTarget::from_target(&self.rhs, "rhs");
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let job_cancelled = cancelled.clone();
-        let (ticket, receiver) =
-            BackgroundJobs::global().submit(std::time::Duration::from_secs(30), move || {
-                run_diff_handoff_with(
-                    left,
-                    right,
-                    &job_cancelled,
-                    |command| little_clip_core::command_available(command),
-                    |app, left, right| {
-                        std::process::Command::new(app)
-                            .arg(left)
-                            .arg(right)
-                            .spawn()
-                            .is_ok()
-                    },
-                )
-            });
+        let (ticket, receiver) = jobs.submit(std::time::Duration::from_secs(30), move || {
+            run_diff_handoff_with(left, right, &job_cancelled, available, spawn)
+        });
         self.status_toast = Some(("Preparing comparison for external tool…".to_string(), now));
         self.handoff = Some((ticket, receiver));
         self.handoff_cancel = Some(HandoffCancelGuard(cancelled));
@@ -1367,6 +1426,32 @@ fn strip_ansi_codes(text: &str) -> String {
 mod tests {
     use super::*;
 
+    fn staged_files_with_bytes(expected: &[u8]) -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("clip_diff_"))
+                    && std::fs::read(path).is_ok_and(|bytes| bytes == expected)
+            })
+            .collect()
+    }
+
+    fn assert_staged_bytes_cleaned(bytes: &[u8]) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while !staged_files_with_bytes(bytes).is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            staged_files_with_bytes(bytes).is_empty(),
+            "temporary staged file containing {:?} was not removed",
+            String::from_utf8_lossy(bytes)
+        );
+    }
+
     #[test]
     fn image_diff_labels_meet_contrast_on_the_view_surface() {
         for appearance in [
@@ -1834,12 +1919,14 @@ mod tests {
     fn diff_external_tool_prefers_meld_then_falls_back_to_kdiff3() {
         let left_path = std::path::PathBuf::from("/tmp/diff-left.txt");
         let right_path = std::path::PathBuf::from("/tmp/diff-right.txt");
+        let not_cancelled = std::sync::atomic::AtomicBool::new(false);
 
         let mut lookups = Vec::new();
         let mut launches = Vec::new();
         let result = launch_diff_tool_with(
             &left_path,
             &right_path,
+            &not_cancelled,
             |command| {
                 lookups.push(command.to_string());
                 Some(std::path::PathBuf::from(format!("/fake/{command}")))
@@ -1853,7 +1940,7 @@ mod tests {
                 true
             },
         );
-        assert_eq!(result, Ok("🚀 Launched Meld comparison".to_string()));
+        assert_eq!(result, Ok(Some("🚀 Launched Meld comparison".to_string())));
         assert_eq!(lookups, vec!["meld"]);
         assert_eq!(
             launches,
@@ -1865,6 +1952,7 @@ mod tests {
         let result = launch_diff_tool_with(
             &left_path,
             &right_path,
+            &not_cancelled,
             |command| {
                 lookups.push(command.to_string());
                 (command == "kdiff3").then(|| std::path::PathBuf::from("/fake/kdiff3"))
@@ -1878,7 +1966,10 @@ mod tests {
                 true
             },
         );
-        assert_eq!(result, Ok("🚀 Launched KDiff3 comparison".to_string()));
+        assert_eq!(
+            result,
+            Ok(Some("🚀 Launched KDiff3 comparison".to_string()))
+        );
         assert_eq!(lookups, vec!["meld", "kdiff3"]);
         assert_eq!(
             launches,
@@ -1889,6 +1980,7 @@ mod tests {
         let result = launch_diff_tool_with(
             &left_path,
             &right_path,
+            &not_cancelled,
             |command| Some(std::path::PathBuf::from(format!("/fake/{command}"))),
             |app, left, right| {
                 launches.push(app.file_name().unwrap().to_string_lossy().into_owned());
@@ -1896,7 +1988,10 @@ mod tests {
                 app.file_name().is_some_and(|name| name == "kdiff3")
             },
         );
-        assert_eq!(result, Ok("🚀 Launched KDiff3 comparison".to_string()));
+        assert_eq!(
+            result,
+            Ok(Some("🚀 Launched KDiff3 comparison".to_string()))
+        );
         assert_eq!(launches, vec!["meld", "kdiff3"]);
     }
 
@@ -1988,22 +2083,31 @@ mod tests {
         );
         drop(ticket);
 
-        let bad_left = DiffHandoffTarget::Shared(
+        let partial_stage_bytes =
+            format!("diff-partial-stage-{}", uuid::Uuid::new_v4().simple()).into_bytes();
+        let good_left = DiffHandoffTarget::Shared(
+            Arc::new(DiffTarget::ClipboardText {
+                label: "left stage fixture".into(),
+                content: String::from_utf8(partial_stage_bytes.clone()).unwrap(),
+                ext_hint: Some("txt".into()),
+            }),
+            "lhs".into(),
+        );
+        let bad_right = DiffHandoffTarget::Shared(
             Arc::new(DiffTarget::ClipboardText {
                 label: "bad extension fixture".into(),
                 content: "not written".into(),
                 ext_hint: Some("missing-parent/file".into()),
             }),
-            "lhs".into(),
+            "rhs".into(),
         );
-        let right = DiffHandoffTarget::Existing(right_path.clone());
         let cancelled = std::sync::atomic::AtomicBool::new(false);
         let lookup_count = Arc::new(Mutex::new(0));
         let lookup_count_worker = lookup_count.clone();
         let (ticket, staging_rx) = jobs.submit(Duration::MAX, move || {
             run_diff_handoff_with(
-                bad_left,
-                right,
+                good_left,
+                bad_right,
                 &cancelled,
                 move |_| {
                     *lookup_count_worker.lock().unwrap() += 1;
@@ -2019,12 +2123,196 @@ mod tests {
         assert!(
             staging_failure
                 .unwrap_err()
-                .contains("Failed to stage diff lhs file")
+                .contains("Failed to stage diff rhs file")
         );
         assert_eq!(*lookup_count.lock().unwrap(), 0);
         drop(ticket);
+        assert_staged_bytes_cleaned(&partial_stage_bytes);
 
         std::fs::remove_dir_all(fixture_dir).unwrap();
+    }
+
+    #[test]
+    fn handoff_failure_and_running_cancellation_remove_owned_staging_files() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let left_bytes =
+            format!("diff-launch-fail-left-{}", uuid::Uuid::new_v4().simple()).into_bytes();
+        let right_bytes =
+            format!("diff-launch-fail-right-{}", uuid::Uuid::new_v4().simple()).into_bytes();
+        let target = |bytes: &[u8], side: &str| {
+            DiffHandoffTarget::Shared(
+                std::sync::Arc::new(DiffTarget::ClipboardText {
+                    label: side.into(),
+                    content: String::from_utf8(bytes.to_vec()).unwrap(),
+                    ext_hint: Some("txt".into()),
+                }),
+                side.into(),
+            )
+        };
+
+        let jobs = BackgroundJobs::new(1, 1);
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let left_target = target(&left_bytes, "lhs");
+        let right_target = target(&right_bytes, "rhs");
+        let (ticket, rx) = jobs.submit(Duration::MAX, move || {
+            run_diff_handoff_with(
+                left_target,
+                right_target,
+                &cancelled,
+                |command| Some(std::path::PathBuf::from(format!("/fake/{command}"))),
+                |_, _, _| false,
+            )
+        });
+        assert!(
+            rx.recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        drop(ticket);
+        assert_staged_bytes_cleaned(&left_bytes);
+        assert_staged_bytes_cleaned(&right_bytes);
+
+        let success_left_bytes =
+            format!("diff-success-left-{}", uuid::Uuid::new_v4().simple()).into_bytes();
+        let success_right_bytes =
+            format!("diff-success-right-{}", uuid::Uuid::new_v4().simple()).into_bytes();
+        let left_target = target(&success_left_bytes, "lhs");
+        let right_target = target(&success_right_bytes, "rhs");
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let (paths_tx, paths_rx) = mpsc::channel();
+        let (ticket, rx) = jobs.submit(Duration::MAX, move || {
+            run_diff_handoff_with(
+                left_target,
+                right_target,
+                &cancelled,
+                |_| Some(std::path::PathBuf::from("/fake/meld")),
+                move |_, left, right| {
+                    let _ = paths_tx.send((left.to_path_buf(), right.to_path_buf()));
+                    true
+                },
+            )
+        });
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(),
+            Ok("🚀 Launched Meld comparison".to_string())
+        );
+        let (left_path, right_path) = paths_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(std::fs::read(&left_path).unwrap(), success_left_bytes);
+        assert_eq!(std::fs::read(&right_path).unwrap(), success_right_bytes);
+        std::fs::remove_file(left_path).unwrap();
+        std::fs::remove_file(right_path).unwrap();
+        drop(ticket);
+
+        let left_bytes = format!("diff-cancel-left-{}", uuid::Uuid::new_v4().simple()).into_bytes();
+        let right_bytes =
+            format!("diff-cancel-right-{}", uuid::Uuid::new_v4().simple()).into_bytes();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_cancelled = cancelled.clone();
+        let left_target = target(&left_bytes, "lhs");
+        let right_target = target(&right_bytes, "rhs");
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (spawn_tx, spawn_rx) = mpsc::channel();
+        let (ticket, rx) = jobs.submit(Duration::MAX, move || {
+            run_diff_handoff_with(
+                left_target,
+                right_target,
+                &worker_cancelled,
+                move |_| {
+                    let _ = entered_tx.send(());
+                    let _ = release_rx.recv();
+                    Some(std::path::PathBuf::from("/fake/meld"))
+                },
+                move |_, _, _| {
+                    let _ = spawn_tx.send(());
+                    true
+                },
+            )
+        });
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        cancelled.store(true, std::sync::atomic::Ordering::Release);
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            rx.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(),
+            Err("External handoff cancelled".to_string())
+        );
+        assert!(spawn_rx.try_recv().is_err());
+        drop(ticket);
+        assert_staged_bytes_cleaned(&left_bytes);
+        assert_staged_bytes_cleaned(&right_bytes);
+    }
+
+    #[test]
+    fn replacing_and_dropping_diff_viewer_cancel_queued_handoffs() {
+        use std::sync::{Arc, atomic::AtomicUsize, mpsc};
+        use std::time::Duration;
+
+        let jobs = BackgroundJobs::new(1, 3);
+        let (blocker_started_tx, blocker_started_rx) = mpsc::channel();
+        let (blocker_release_tx, blocker_release_rx) = mpsc::channel();
+        let (_blocker_ticket, blocker_rx) = jobs.submit(Duration::MAX, move || {
+            let _ = blocker_started_tx.send(());
+            let _ = blocker_release_rx.recv();
+        });
+        blocker_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        let mut state = DiffViewerState::new(
+            DiffTarget::ClipboardText {
+                label: "left".into(),
+                content: "left fixture".into(),
+                ext_hint: Some("txt".into()),
+            },
+            DiffTarget::ClipboardText {
+                label: "right".into(),
+                content: "right fixture".into(),
+                ext_hint: Some("txt".into()),
+            },
+            DiffDisplayMode::Inline,
+        );
+        state.wait_for_completion();
+
+        let lookups = Arc::new(AtomicUsize::new(0));
+        let first_lookups = lookups.clone();
+        state.trigger_escape_hatch_on(
+            0.0,
+            &jobs,
+            move |_| {
+                first_lookups.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                None
+            },
+            |_, _, _| false,
+        );
+        let second_lookups = lookups.clone();
+        state.trigger_escape_hatch_on(
+            0.1,
+            &jobs,
+            move |_| {
+                second_lookups.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                None
+            },
+            |_, _, _| false,
+        );
+        let closing_flag = state.handoff_cancel.as_ref().unwrap().0.clone();
+        drop(state);
+        assert!(closing_flag.load(std::sync::atomic::Ordering::Acquire));
+
+        let (sentinel_ticket, sentinel_rx) = jobs.submit(Duration::MAX, || ());
+        blocker_release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        sentinel_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(lookups.load(std::sync::atomic::Ordering::Relaxed), 0);
+        drop(sentinel_ticket);
     }
 
     #[test]
@@ -2231,23 +2519,21 @@ mod tests {
         let lhs_path = DiffHandoffTarget::from_target(&lhs, "lhs").stage().unwrap();
         let rhs_path = DiffHandoffTarget::from_target(&rhs, "rhs").stage().unwrap();
         assert_eq!(
-            lhs_path.extension().and_then(|ext| ext.to_str()),
+            lhs_path.path.extension().and_then(|ext| ext.to_str()),
             Some("md")
         );
         assert_eq!(
-            rhs_path.extension().and_then(|ext| ext.to_str()),
+            rhs_path.path.extension().and_then(|ext| ext.to_str()),
             Some("png")
         );
         assert_eq!(
-            std::fs::read(&lhs_path).unwrap(),
+            std::fs::read(&lhs_path.path).unwrap(),
             b"left exact\nclipboard bytes\n"
         );
         assert_eq!(
-            std::fs::read(&rhs_path).unwrap(),
+            std::fs::read(&rhs_path.path).unwrap(),
             b"right encoded image bytes"
         );
-        std::fs::remove_file(lhs_path).unwrap();
-        std::fs::remove_file(rhs_path).unwrap();
     }
 
     #[test]
