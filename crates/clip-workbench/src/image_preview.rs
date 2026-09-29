@@ -186,10 +186,16 @@ pub struct ImagePreviewState {
 
     // Barcode / QR / DataMatrix Decoder
     pub barcode_state: BarcodeScanState,
-    pub barcode_rx: Option<std::sync::mpsc::Receiver<BarcodeScanMsg>>,
+    pub barcode_rx:
+        Option<std::sync::mpsc::Receiver<Result<BarcodeScanMsg, little_clip_core::JobError>>>,
     pub(crate) barcode_cancel: Option<std::sync::Arc<ImageToolProcessControl>>,
+    pub(crate) barcode_ticket: Option<JobTicket>,
     pub(crate) barcode_input_stamp: Option<ImageInputStamp>,
     pub(crate) barcode_results_stamp: Option<ImageInputStamp>,
+    pub(crate) barcode_retry_at: Option<std::time::Instant>,
+    pub(crate) barcode_retry_stamp: Option<ImageInputStamp>,
+    pub(crate) barcode_retry_request: Option<BarcodeScanRequest>,
+    pub(crate) barcode_queue_status: Option<String>,
 
     // Decorrelation Stretch State
     pub dcs_state: DecorrelationStretchState,
@@ -411,8 +417,13 @@ impl ImagePreviewState {
             barcode_state: BarcodeScanState::default(),
             barcode_rx: None,
             barcode_cancel: None,
+            barcode_ticket: None,
             barcode_input_stamp: None,
             barcode_results_stamp: None,
+            barcode_retry_at: None,
+            barcode_retry_stamp: None,
+            barcode_retry_request: None,
+            barcode_queue_status: None,
             dcs_state: DecorrelationStretchState::default(),
             film_sim_state: FilmSimState::default(),
             creative_fx_state: CreativeFxState::default(),

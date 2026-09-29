@@ -18,6 +18,13 @@ pub struct BarcodeScanMsg {
     error: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) enum BarcodeScanRequest {
+    Program(std::path::PathBuf),
+    #[cfg(test)]
+    InProcess,
+}
+
 impl ImagePreviewState {
     pub fn run_barcode_scan(&mut self) {
         #[cfg(test)]
@@ -35,64 +42,95 @@ impl ImagePreviewState {
 
     #[cfg(test)]
     fn run_barcode_scan_in_process_for_test(&mut self) {
-        if self.barcode_state.is_scanning {
-            return;
-        }
-        self.barcode_state.is_scanning = true;
-        let base_img = self.current_display_image();
-        self.barcode_input_stamp = Some(self.input_stamp());
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let start = std::time::Instant::now();
-            let detections = little_clip_ops::barcode::detect_barcodes(&base_img);
-            let _ = tx.send(BarcodeScanMsg {
-                detections,
-                duration_ms: start.elapsed().as_millis(),
-                error: None,
-            });
-        });
-        self.barcode_rx = Some(rx);
+        self.run_barcode_scan_request_on(BarcodeScanRequest::InProcess, BackgroundJobs::global());
     }
 
     pub(crate) fn run_barcode_scan_with_program(&mut self, program: std::path::PathBuf) {
+        self.run_barcode_scan_with_program_on(program, BackgroundJobs::global());
+    }
+
+    fn run_barcode_scan_with_program_on(
+        &mut self,
+        program: std::path::PathBuf,
+        jobs: &BackgroundJobs,
+    ) {
+        self.run_barcode_scan_request_on(BarcodeScanRequest::Program(program), jobs);
+    }
+
+    fn run_barcode_scan_request_on(&mut self, request: BarcodeScanRequest, jobs: &BackgroundJobs) {
         if self.barcode_state.is_scanning {
             return;
         }
         let image = self.current_display_image();
-        let control = std::sync::Arc::new(ImageToolProcessControl::new());
-        self.barcode_cancel = Some(std::sync::Arc::clone(&control));
-        self.barcode_state.is_scanning = true;
-        self.barcode_input_stamp = Some(self.input_stamp());
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let start = std::time::Instant::now();
-            let result = crate::barcode_worker::scan_in_child(image, &program, &control);
-            if control.cancel.load(std::sync::atomic::Ordering::Acquire) {
-                return;
+        let control = match &request {
+            BarcodeScanRequest::Program(_) => {
+                Some(std::sync::Arc::new(ImageToolProcessControl::new()))
             }
+            #[cfg(test)]
+            BarcodeScanRequest::InProcess => None,
+        };
+        self.barcode_cancel = control.clone();
+        self.barcode_state.is_scanning = true;
+        let input_stamp = self.input_stamp();
+        self.barcode_input_stamp = Some(input_stamp);
+        self.barcode_retry_at = None;
+        self.barcode_retry_stamp = None;
+        self.barcode_retry_request = None;
+        self.barcode_queue_status = None;
+        let worker_control = control.clone();
+        let worker_request = request.clone();
+        let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
+            let start = std::time::Instant::now();
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match worker_request {
+                    BarcodeScanRequest::Program(program) => worker_control
+                        .as_ref()
+                        .ok_or_else(|| "barcode process control is missing".to_string())
+                        .and_then(|control| {
+                            crate::barcode_worker::scan_in_child(image, &program, control)
+                        }),
+                    #[cfg(test)]
+                    BarcodeScanRequest::InProcess => {
+                        Ok(little_clip_ops::barcode::detect_barcodes(&image))
+                    }
+                }))
+                .unwrap_or_else(|_| Err("Barcode scan worker panicked".to_string()));
             let (detections, error) = match result {
                 Ok(detections) => (detections, None),
                 Err(error) => (Vec::new(), Some(error)),
             };
-            let _ = tx.send(BarcodeScanMsg {
+            BarcodeScanMsg {
                 detections,
                 duration_ms: start.elapsed().as_millis(),
                 error,
-            });
+            }
         });
+        self.barcode_ticket = Some(ticket);
+        self.barcode_retry_request = Some(request);
         self.barcode_rx = Some(rx);
     }
 
     pub(crate) fn cancel_barcode_scan(&mut self) {
+        if let Some(ticket) = self.barcode_ticket.take() {
+            ticket.cancel();
+        }
         if let Some(control) = self.barcode_cancel.take() {
             control.cancel();
         }
         self.barcode_rx = None;
         self.barcode_input_stamp = None;
         self.barcode_state.is_scanning = false;
+        self.barcode_retry_at = None;
+        self.barcode_retry_stamp = None;
+        self.barcode_retry_request = None;
+        self.barcode_queue_status = None;
     }
 
     pub(crate) fn poll_barcode_scan(&mut self, ctx: &egui::Context) {
+        self.poll_barcode_scan_on(ctx, BackgroundJobs::global());
+    }
+
+    fn poll_barcode_scan_on(&mut self, ctx: &egui::Context, jobs: &BackgroundJobs) {
         let current_stamp = self.input_stamp();
         if self
             .barcode_results_stamp
@@ -105,15 +143,33 @@ impl ImagePreviewState {
             self.barcode_state.has_scanned = false;
             self.barcode_state.last_scan_duration_ms = 0;
         }
-        if self.barcode_rx.is_some() && self.barcode_input_stamp.as_ref() != Some(&current_stamp) {
+        if (self.barcode_rx.is_some() && self.barcode_input_stamp.as_ref() != Some(&current_stamp))
+            || (self.barcode_retry_at.is_some()
+                && self.barcode_retry_stamp.as_ref() != Some(&current_stamp))
+        {
             self.cancel_barcode_scan();
             return;
         }
+        if let Some(retry_at) = self.barcode_retry_at {
+            if std::time::Instant::now() < retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+                return;
+            }
+            if let Some(request) = self.barcode_retry_request.take() {
+                self.run_barcode_scan_request_on(request, jobs);
+            }
+            return;
+        }
         match self.barcode_rx.as_ref().map(|rx| rx.try_recv()) {
-            Some(Ok(message)) => {
+            Some(Ok(Ok(message))) => {
                 self.barcode_cancel = None;
+                self.barcode_ticket = None;
                 self.barcode_rx = None;
                 self.barcode_input_stamp = None;
+                self.barcode_retry_request = None;
+                self.barcode_queue_status = None;
                 self.barcode_state.is_scanning = false;
                 if let Some(error) = message.error {
                     self.barcode_results_stamp = None;
@@ -140,13 +196,44 @@ impl ImagePreviewState {
                     self.show_toast("No barcodes or QR codes found");
                 }
             }
+            Some(Ok(Err(little_clip_core::JobError::QueueFull))) => {
+                self.barcode_cancel = None;
+                self.barcode_ticket = None;
+                self.barcode_rx = None;
+                self.barcode_input_stamp = None;
+                self.barcode_state.is_scanning = false;
+                self.barcode_retry_at =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+                self.barcode_retry_stamp = Some(current_stamp);
+                self.barcode_queue_status = Some("Workers busy; retrying scan…".to_string());
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
+            Some(Ok(Err(little_clip_core::JobError::Cancelled))) => {
+                self.barcode_cancel = None;
+                self.barcode_ticket = None;
+                self.barcode_rx = None;
+                self.barcode_input_stamp = None;
+                self.barcode_retry_request = None;
+                self.barcode_state.is_scanning = false;
+            }
+            Some(Ok(Err(error))) => {
+                self.barcode_cancel = None;
+                self.barcode_ticket = None;
+                self.barcode_rx = None;
+                self.barcode_input_stamp = None;
+                self.barcode_state.is_scanning = false;
+                self.barcode_retry_request = None;
+                self.show_toast(format!("Barcode scan failed: {error}"));
+            }
             Some(Err(std::sync::mpsc::TryRecvError::Empty)) if self.barcode_state.is_scanning => {
                 ctx.request_repaint();
             }
             Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
                 self.barcode_cancel = None;
+                self.barcode_ticket = None;
                 self.barcode_rx = None;
                 self.barcode_input_stamp = None;
+                self.barcode_retry_request = None;
                 self.barcode_state.is_scanning = false;
                 self.barcode_results_stamp = None;
                 self.barcode_state.detections.clear();
@@ -213,6 +300,8 @@ impl ImagePreviewState {
                     let count = self.barcode_state.detections.len();
                     let (badge_txt, fg, bg) = if self.barcode_state.is_scanning {
                         ("Scanning image…".to_string(), base_c, b_low)
+                    } else if let Some(status) = self.barcode_queue_status.as_ref() {
+                        (status.clone(), f_med, b_low)
                     } else if count > 0 {
                         (
                             format!(
@@ -544,11 +633,11 @@ mod input_stamp_tests {
         stale.barcode_input_stamp = Some(stale.input_stamp());
         let (tx, rx) = std::sync::mpsc::channel();
         stale.barcode_rx = Some(rx);
-        tx.send(BarcodeScanMsg {
+        tx.send(Ok(BarcodeScanMsg {
             detections: Vec::new(),
             duration_ms: 1,
             error: None,
-        })
+        }))
         .unwrap();
         stale.mark_pixels_changed();
 
@@ -563,11 +652,11 @@ mod input_stamp_tests {
         current.barcode_input_stamp = Some(current.input_stamp());
         let (tx, rx) = std::sync::mpsc::channel();
         current.barcode_rx = Some(rx);
-        tx.send(BarcodeScanMsg {
+        tx.send(Ok(BarcodeScanMsg {
             detections: Vec::new(),
             duration_ms: 2,
             error: None,
-        })
+        }))
         .unwrap();
 
         current.poll_barcode_scan(&ctx);
@@ -584,7 +673,8 @@ mod input_stamp_tests {
         let mut state = state();
         state.barcode_state.is_scanning = true;
         state.barcode_input_stamp = Some(state.input_stamp());
-        let (tx, rx) = std::sync::mpsc::channel::<BarcodeScanMsg>();
+        let (tx, rx) =
+            std::sync::mpsc::channel::<Result<BarcodeScanMsg, little_clip_core::JobError>>();
         state.barcode_rx = Some(rx);
         drop(tx);
 
@@ -622,6 +712,112 @@ mod input_stamp_tests {
         }
         assert!(state.barcode_state.has_scanned);
         assert!(state.barcode_state.detections.is_empty());
+    }
+
+    #[test]
+    fn queue_full_preserves_results_and_retries_fake_worker_after_delay() {
+        let directory = tempfile::tempdir().unwrap();
+        let quick = directory.path().join("quick.sh");
+        std::fs::write(&quick, "#!/bin/sh\nprintf '[]' > \"$3\"\n").unwrap();
+        std::fs::set_permissions(&quick, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let (_, queued_rx) = jobs.submit(std::time::Duration::MAX, || ());
+
+        let mut state = state();
+        state.barcode_state.has_scanned = true;
+        state.barcode_state.last_scan_duration_ms = 23;
+        state.barcode_state.detections = vec![BarcodeDetection {
+            format: "QR Code".to_owned(),
+            text: "preserved payload".to_owned(),
+            points: vec![],
+            bbox: [0.0; 4],
+            is_url: false,
+        }];
+        state.barcode_results_stamp = Some(state.input_stamp());
+        state.run_barcode_scan_with_program_on(quick, &jobs);
+        let ctx = egui::Context::default();
+        state.poll_barcode_scan_on(&ctx, &jobs);
+
+        assert!(!state.barcode_state.is_scanning);
+        assert!(state.barcode_state.has_scanned);
+        assert_eq!(state.barcode_state.last_scan_duration_ms, 23);
+        assert_eq!(state.barcode_state.detections[0].text, "preserved payload");
+        assert!(state.barcode_retry_at.is_some());
+        assert!(
+            state
+                .barcode_queue_status
+                .as_deref()
+                .is_some_and(|status| status.contains("busy"))
+        );
+
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+        queued_rx.recv().unwrap().unwrap();
+        state.barcode_retry_at = Some(std::time::Instant::now());
+        state.poll_barcode_scan_on(&ctx, &jobs);
+        assert!(state.barcode_state.is_scanning);
+        assert!(state.barcode_retry_at.is_none());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while state.barcode_state.is_scanning && std::time::Instant::now() < deadline {
+            state.poll_barcode_scan_on(&ctx, &jobs);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        state.poll_barcode_scan_on(&ctx, &jobs);
+        assert!(!state.barcode_state.is_scanning);
+        assert!(state.barcode_state.has_scanned);
+        assert!(state.barcode_queue_status.is_none());
+    }
+
+    #[test]
+    fn queued_fake_worker_is_cancelled_before_launch_on_viewer_drop() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("ran");
+        let program = directory.path().join("mark.sh");
+        std::fs::write(
+            &program,
+            format!("#!/bin/sh\ntouch {:?}\nprintf '[]' > \"$3\"\n", marker),
+        )
+        .unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        let jobs = BackgroundJobs::new(1, 2);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let (_, queued_rx) = jobs.submit(std::time::Duration::MAX, || ());
+        let mut state = state();
+        state.run_barcode_scan_with_program_on(program, &jobs);
+        let control = state.barcode_cancel.as_ref().unwrap().clone();
+        let worker_rx = state.barcode_rx.take().unwrap();
+        drop(state);
+        assert!(control.cancel.load(std::sync::atomic::Ordering::Acquire));
+
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+        queued_rx.recv().unwrap().unwrap();
+        assert!(matches!(
+            worker_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            Err(little_clip_core::JobError::Cancelled)
+        ));
+        assert!(!marker.exists());
     }
 
     #[test]

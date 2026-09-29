@@ -166,6 +166,7 @@ pub(super) enum BgRemovalOperation {
 }
 
 mod barcode;
+pub(crate) use barcode::BarcodeScanRequest;
 pub(super) use barcode::{BarcodeScanMsg, BarcodeScanState};
 mod convert;
 pub(super) use convert::{ConvertState, ConvertTargetFormat};
