@@ -277,6 +277,10 @@ mod cancellation_tests {
 
 impl ImagePreviewState {
     pub fn run_background_removal(&mut self) {
+        self.run_background_removal_on(BackgroundJobs::global());
+    }
+
+    fn run_background_removal_on(&mut self, jobs: &BackgroundJobs) {
         if self.bg_removal_in_progress {
             return;
         }
@@ -306,37 +310,50 @@ impl ImagePreviewState {
             "Starting FeyNoBg AI model...".to_string()
         };
 
-        let (tx, rx) = std::sync::mpsc::channel::<BgRemovalMsg>();
-        self.bg_removal_rx = Some(rx);
+        self.bg_removal_request = Some(BgRemovalRequest {
+            png_bytes: Arc::new(png_bytes),
+            prompt: prompt_opt,
+            configured_command: self.bg_removal_cmd.clone(),
+            status: status_desc.clone(),
+        });
+        self.bg_removal_retry_at = None;
         self.bg_removal_input_stamp = Some(self.input_stamp());
         self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
         self.bg_removal_in_progress = true;
         self.bg_removal_status = Some(status_desc);
         self.bg_removal_error = None;
-        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        self.image_tool_cancel = Some(cancel.clone());
-        self.image_tool_child_pid = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let child_pid = self.image_tool_child_pid.clone();
+        self.submit_background_removal_attempt(jobs);
+    }
 
-        let configured_cmd = self.bg_removal_cmd.clone();
-        let thread_prompt = prompt_opt.clone();
-        std::thread::spawn(move || {
+    fn submit_background_removal_attempt(&mut self, jobs: &BackgroundJobs) {
+        let Some(request) = self.bg_removal_request.clone() else {
+            return;
+        };
+        let (tx, rx) = std::sync::mpsc::channel::<BgRemovalMsg>();
+        self.bg_removal_rx = Some(rx);
+        self.bg_removal_retry_at = None;
+        self.bg_removal_status = Some(request.status.clone());
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.image_tool_cancel = Some(cancel.clone());
+        self.image_tool_child_pid = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let child_pid = self.image_tool_child_pid.clone();
+        let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
             let start = std::time::Instant::now();
-            let tx_prog = tx.clone();
-            let init_msg = if let Some(ref p) = thread_prompt {
+            let init_msg = if let Some(ref p) = request.prompt {
                 format!("Invoking MultiMatte for '{}'...", p)
             } else {
                 "Invoking FeyNoBg neural network...".to_string()
             };
-            let _ = tx_prog.send(BgRemovalMsg::Progress(init_msg));
+            let _ = tx.send(BgRemovalMsg::Progress(init_msg));
 
-            let (cmd_bin, cmd_args) = background_removal_command(configured_cmd.as_deref());
+            let (cmd_bin, cmd_args) =
+                background_removal_command(request.configured_command.as_deref());
             let mut cmd = Command::new(&cmd_bin);
             cmd.args(&cmd_args);
             let result = run_image_tool_subprocess(
                 cmd,
-                &png_bytes,
-                thread_prompt.as_deref(),
+                &request.png_bytes,
+                request.prompt.as_deref(),
                 Some(&cancel),
                 Some(&child_pid),
                 BgRemovalOperation::BackgroundRemoval,
@@ -357,12 +374,18 @@ impl ImagePreviewState {
                 }
             }
         });
+        self.bg_removal_ticket = Some(ticket);
+        self.bg_removal_job_rx = Some(job_rx);
     }
 
     /// Runs AI depth estimation asynchronously using Depth-Anything / MiDaS.
 
     pub fn poll_bg_removal(&mut self) {
-        if self.bg_removal_rx.is_some()
+        self.poll_bg_removal_on(BackgroundJobs::global());
+    }
+
+    fn poll_bg_removal_on(&mut self, jobs: &BackgroundJobs) {
+        if self.bg_removal_in_progress
             && self.bg_removal_input_stamp.as_ref() != Some(&self.input_stamp())
         {
             self.cancel_image_tool_process();
@@ -372,6 +395,72 @@ impl ImagePreviewState {
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
             return;
+        }
+
+        if self
+            .bg_removal_retry_at
+            .is_some_and(|retry_at| std::time::Instant::now() >= retry_at)
+        {
+            self.submit_background_removal_attempt(jobs);
+        } else if self.bg_removal_retry_at.is_some() {
+            return;
+        }
+
+        if let Some(job_rx) = self.bg_removal_job_rx.as_ref() {
+            match job_rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.bg_removal_job_rx = None;
+                    self.bg_removal_ticket = None;
+                }
+                Ok(Err(JobError::QueueFull)) => {
+                    self.bg_removal_job_rx = None;
+                    self.bg_removal_ticket = None;
+                    self.bg_removal_rx = None;
+                    self.bg_removal_retry_at =
+                        Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+                    self.bg_removal_status = Some(
+                        "Background removal waiting for workers; retrying shortly".to_string(),
+                    );
+                    return;
+                }
+                Ok(Err(JobError::Cancelled)) => {
+                    self.bg_removal_job_rx = None;
+                    self.bg_removal_ticket = None;
+                    self.bg_removal_rx = None;
+                    self.bg_removal_input_stamp = None;
+                    self.bg_removal_request = None;
+                    self.bg_removal_retry_at = None;
+                    self.bg_removal_in_progress = false;
+                    self.bg_removal_status = None;
+                    return;
+                }
+                Ok(Err(error)) => {
+                    self.bg_removal_job_rx = None;
+                    self.bg_removal_ticket = None;
+                    self.bg_removal_rx = None;
+                    self.bg_removal_input_stamp = None;
+                    self.bg_removal_request = None;
+                    self.bg_removal_retry_at = None;
+                    self.bg_removal_in_progress = false;
+                    self.bg_removal_status = None;
+                    self.bg_removal_error =
+                        Some(format!("Background removal worker failed: {error}"));
+                    return;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.bg_removal_job_rx = None;
+                    self.bg_removal_ticket = None;
+                    self.bg_removal_rx = None;
+                    self.bg_removal_input_stamp = None;
+                    self.bg_removal_request = None;
+                    self.bg_removal_retry_at = None;
+                    self.bg_removal_in_progress = false;
+                    self.bg_removal_status = None;
+                    self.bg_removal_error = Some("Background removal worker stopped".to_string());
+                    return;
+                }
+            }
         }
 
         let mut success_data = None;
@@ -429,7 +518,11 @@ impl ImagePreviewState {
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
             self.bg_removal_rx = None;
+            self.bg_removal_job_rx = None;
+            self.bg_removal_ticket = None;
             self.bg_removal_input_stamp = None;
+            self.bg_removal_request = None;
+            self.bg_removal_retry_at = None;
             self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
             self.bg_removal_error = None;
             self.resize_state.sync_from_image(&self.current_rgba);
@@ -448,19 +541,33 @@ impl ImagePreviewState {
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
             self.bg_removal_rx = None;
+            self.bg_removal_job_rx = None;
+            self.bg_removal_ticket = None;
             self.bg_removal_input_stamp = None;
+            self.bg_removal_request = None;
+            self.bg_removal_retry_at = None;
             self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
             self.bg_removal_error = Some(err);
         } else if disconnected {
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;
             self.bg_removal_rx = None;
+            self.bg_removal_job_rx = None;
+            self.bg_removal_ticket = None;
             self.bg_removal_input_stamp = None;
+            self.bg_removal_request = None;
+            self.bg_removal_retry_at = None;
             self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
         }
     }
 
     pub(crate) fn cancel_image_tool_process(&mut self) {
+        if let Some(ticket) = self.bg_removal_ticket.take() {
+            ticket.cancel();
+        }
+        self.bg_removal_job_rx = None;
+        self.bg_removal_request = None;
+        self.bg_removal_retry_at = None;
         if let Some(cancel) = self.image_tool_cancel.take() {
             cancel.store(true, std::sync::atomic::Ordering::SeqCst);
         }
@@ -484,7 +591,13 @@ impl ImagePreviewState {
     ) {
         self.poll_bg_removal();
         if self.bg_removal_in_progress {
-            ctx.request_repaint();
+            if let Some(retry_at) = self.bg_removal_retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            } else {
+                ctx.request_repaint();
+            }
         }
 
         let accent = hex_to_c32(&palette.harmonies.base);
@@ -718,5 +831,205 @@ impl ImagePreviewState {
                 self.undo();
             }
         }
+    }
+}
+
+#[cfg(all(test, unix))]
+mod bounded_job_tests {
+    use super::*;
+    use crate::image_preview::ImagePreviewState;
+    use little_clip_core::AppConfig;
+    use std::sync::atomic::Ordering;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    fn state_with_command(command: String) -> ImagePreviewState {
+        let image = RgbaImage::from_pixel(5, 4, image::Rgba([20, 80, 140, 255]));
+        let mut encoded = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut encoded),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let mut state = ImagePreviewState::from_bytes_with_meta(
+            encoded,
+            "image/png".into(),
+            None,
+            "background removal job test".into(),
+            &AppConfig::default(),
+        )
+        .unwrap();
+        state.bg_removal_cmd = Some(command);
+        state
+    }
+
+    fn write_script(directory: &Path, name: &str, body: &str) -> PathBuf {
+        let path = directory.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        path
+    }
+
+    fn wait_for_removal(state: &mut ImagePreviewState, jobs: &BackgroundJobs) {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while state.bg_removal_in_progress && Instant::now() < deadline {
+            state.poll_bg_removal_on(jobs);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(
+            !state.bg_removal_in_progress,
+            "synthetic background-removal worker did not finish"
+        );
+    }
+
+    #[test]
+    fn queue_full_keeps_request_and_retries_after_deadline() {
+        let directory = tempfile::tempdir().unwrap();
+        let output_image = RgbaImage::from_pixel(3, 2, image::Rgba([230, 30, 40, 255]));
+        let mut output_png = Vec::new();
+        output_image
+            .write_to(
+                &mut std::io::Cursor::new(&mut output_png),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let output_path = directory.path().join("result.png");
+        std::fs::write(&output_path, output_png).unwrap();
+        let script = write_script(
+            directory.path(),
+            "fake-remove-bg.sh",
+            &format!("cat >/dev/null\ncat '{}'", output_path.display()),
+        );
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_blocker_ticket, blocker_rx) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (_filler_ticket, filler_rx) = jobs.submit(Duration::MAX, || ());
+        let mut state = state_with_command(format!("sh {}", script.display()));
+
+        state.run_background_removal_on(&jobs);
+        let retained_png = Arc::clone(&state.bg_removal_request.as_ref().unwrap().png_bytes);
+        state.poll_bg_removal_on(&jobs);
+        let retry_at = state
+            .bg_removal_retry_at
+            .expect("QueueFull must schedule retry");
+        assert!(state.bg_removal_in_progress);
+        assert!(
+            state
+                .bg_removal_status
+                .as_deref()
+                .unwrap()
+                .contains("retrying")
+        );
+        assert!(Arc::ptr_eq(
+            &retained_png,
+            &state.bg_removal_request.as_ref().unwrap().png_bytes
+        ));
+        state.poll_bg_removal_on(&jobs);
+        assert_eq!(state.bg_removal_retry_at, Some(retry_at));
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        filler_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        state.bg_removal_retry_at = Some(Instant::now());
+        state.poll_bg_removal_on(&jobs);
+        wait_for_removal(&mut state, &jobs);
+
+        assert!(state.bg_removal_error.is_none());
+        assert_eq!(state.current_rgba.as_ref(), &output_image);
+        assert_eq!(state.undo_stack.len(), 1);
+    }
+
+    #[test]
+    fn queued_request_cancellation_prevents_helper_start() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("started");
+        let script = write_script(
+            directory.path(),
+            "queued-remove-bg.sh",
+            &format!("echo started > '{}'\ncat >/dev/null", marker.display()),
+        );
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_blocker_ticket, blocker_rx) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let mut state = state_with_command(format!("sh {}", script.display()));
+        state.run_background_removal_on(&jobs);
+        assert!(state.bg_removal_in_progress);
+        state.cancel_image_tool_process();
+        assert!(!state.bg_removal_in_progress);
+        assert!(state.bg_removal_retry_at.is_none());
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let (_, result_rx) = jobs.submit(Duration::MAX, || ());
+            match result_rx.recv_timeout(Duration::from_millis(20)) {
+                Ok(Ok(())) => break,
+                Ok(Err(JobError::QueueFull)) | Err(mpsc::RecvTimeoutError::Timeout)
+                    if Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                other => panic!("scheduler did not drain canceled job: {other:?}"),
+            }
+        }
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn running_cancellation_kills_and_reaps_fake_process() {
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("worker.pid");
+        let script = write_script(
+            directory.path(),
+            "running-remove-bg.sh",
+            &format!(
+                "echo $$ > '{}'\ncat >/dev/null\nsleep 30",
+                pid_file.display()
+            ),
+        );
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = state_with_command(format!("sh {}", script.display()));
+        state.run_background_removal_on(&jobs);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !pid_file.exists() && Instant::now() < deadline {
+            state.poll_bg_removal_on(&jobs);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(pid_file.exists(), "synthetic child did not start");
+        let pid: i32 = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert_eq!(unsafe { libc::kill(pid, 0) }, 0);
+
+        state.cancel_image_tool_process();
+        assert!(!state.bg_removal_in_progress);
+        let reap_deadline = Instant::now() + Duration::from_secs(2);
+        while unsafe { libc::kill(pid, 0) } == 0 && Instant::now() < reap_deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+        assert_eq!(state.image_tool_child_pid.load(Ordering::SeqCst), 0);
     }
 }

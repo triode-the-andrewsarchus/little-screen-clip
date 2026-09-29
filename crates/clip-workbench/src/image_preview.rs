@@ -19,7 +19,7 @@ use image::RgbaImage;
 use little_clip_core::ClipItem;
 use little_clip_core::palette::AppPalette;
 use little_clip_core::{
-    AppConfig, BackgroundJobs, CommandRequest, HandSide, IpcRequest, JobTicket,
+    AppConfig, BackgroundJobs, CommandRequest, HandSide, IpcRequest, JobError, JobTicket,
 };
 use little_clip_ops::barcode::BarcodeDetection;
 use little_clip_ops::creative_fx::{
@@ -39,6 +39,14 @@ use little_clip_ops::perspective::{DeskewCropMode, QuadCorners, rectify_perspect
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
+
+#[derive(Clone)]
+struct BgRemovalRequest {
+    png_bytes: Arc<Vec<u8>>,
+    prompt: Option<String>,
+    configured_command: Option<String>,
+    status: String,
+}
 
 // filmr physics-based film simulation engine
 use filmr::film::FilmStyle;
@@ -165,6 +173,10 @@ pub struct ImagePreviewState {
     // Background Removal Async Worker & State
     pub bg_removal_in_progress: bool,
     pub bg_removal_rx: Option<std::sync::mpsc::Receiver<BgRemovalMsg>>,
+    bg_removal_job_rx: Option<std::sync::mpsc::Receiver<Result<(), JobError>>>,
+    bg_removal_ticket: Option<JobTicket>,
+    bg_removal_request: Option<BgRemovalRequest>,
+    pub(crate) bg_removal_retry_at: Option<std::time::Instant>,
     pub(crate) bg_removal_input_stamp: Option<ImageInputStamp>,
     bg_removal_operation: BgRemovalOperation,
     pub bg_removal_status: Option<String>,
@@ -400,6 +412,10 @@ impl ImagePreviewState {
             optimizer_cancel: None,
             bg_removal_in_progress: false,
             bg_removal_rx: None,
+            bg_removal_job_rx: None,
+            bg_removal_ticket: None,
+            bg_removal_request: None,
+            bg_removal_retry_at: None,
             bg_removal_input_stamp: None,
             bg_removal_operation: BgRemovalOperation::BackgroundRemoval,
             bg_removal_status: None,
@@ -1035,7 +1051,13 @@ impl ImagePreviewState {
         // Poll background AI background removal if running
         self.poll_bg_removal();
         if self.bg_removal_in_progress {
-            ctx.request_repaint();
+            if let Some(retry_at) = self.bg_removal_retry_at {
+                ctx.request_repaint_after(
+                    retry_at.saturating_duration_since(std::time::Instant::now()),
+                );
+            } else {
+                ctx.request_repaint();
+            }
         }
 
         // Poll format conversion and debounce costly full-resolution encodes.
