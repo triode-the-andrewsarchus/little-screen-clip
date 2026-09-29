@@ -563,10 +563,11 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **H2.3b1a [Luna implementation; primary review] Verify text Diff opens from the Palette and returns to the invoking workbench view on Escape.** A focused workbench regression executes the built-in Palette `diff` action with two text slots, confirms a `Diff` viewer opens without changing the selected Palette view, then sends Escape through modal routing and confirms return to Palette. Existing private runtime capture independently verifies typing `diff`/Enter and Escape in the focused popup; see `ui_overhaul_acceptance.md`.
       - [x] **H2.3b1b [Luna implementation; primary review] Verify image Diff opens from the Palette and returns to the invoking workbench view on Escape.** A focused workbench regression executes the built-in Palette `diff` action with two generated tiny PNG slots, confirms an image `Diff` viewer opens without changing the selected Palette view, then sends Escape through modal routing and confirms return to Palette. Existing private runtime capture independently verifies typing `diff`/Enter, Picture Diff, and Escape in the focused popup; see `ui_overhaul_acceptance.md`.
     - **H2.3b2 Diff input ownership checks.**
-      - [ ] **H2.3b2a [Luna implementation; primary review] Verify text Diff Tab/C mode changes recompute text results and yield to focused text input.**
+      - [ ] **H2.3b2a [Luna implementation; primary review] Verify text Diff Tab/C changes mode and recomputes the text result.**
       - [ ] **H2.3b2b [Luna implementation; primary review] Verify image Diff Tab/C cycles presentation modes without recomputing the image result.**
-      - [ ] **H2.3b2c [Luna implementation; primary review] Verify the Diff S operand-swap shortcut respects its documented modifiers and text-input focus.**
-      - [ ] **H2.3b2d [Luna implementation; primary review] Verify Diff copy uses the intended operand and exact result bytes.**
+      - [ ] **H2.3b2c [Luna implementation; primary review] Verify focused text input preempts Diff Tab/C/S shortcuts.**
+      - [ ] **H2.3b2d [Luna implementation; primary review] Verify the Diff S operand-swap shortcut respects its documented modifiers.**
+      - [ ] **H2.3b2e [Luna implementation; primary review] Verify Diff copy uses the intended operand and exact result bytes.**
     - **H2.3b3 Binary Diff route and input checks.**
       - [ ] **H2.3b3a [Luna implementation; primary review] Verify Binary Diff opens from the Palette and returns to the invoking workbench view on Escape.**
       - [ ] **H2.3b3b [Luna implementation; primary review] Verify aligned/raw mode shortcuts update Binary Diff and yield to focused text input.**
