@@ -215,6 +215,25 @@ fn spawn_text_diff_worker(
     })
 }
 
+fn launch_diff_tool_with(
+    left_path: &std::path::Path,
+    right_path: &std::path::Path,
+    mut available: impl FnMut(&str) -> Option<std::path::PathBuf>,
+    mut spawn: impl FnMut(&std::path::Path, &std::path::Path, &std::path::Path) -> bool,
+) -> String {
+    for (command, success_message) in [
+        ("meld", "🚀 Launched Meld comparison"),
+        ("kdiff3", "🚀 Launched KDiff3 comparison"),
+    ] {
+        if let Some(app) = available(command)
+            && spawn(&app, left_path, right_path)
+        {
+            return success_message.to_string();
+        }
+    }
+    "⚠️ Neither Meld nor KDiff3 is installed".to_string()
+}
+
 impl DiffViewerState {
     /// Initializes text or image diff calculation between two comparison targets.
     pub fn new(lhs: DiffTarget, rhs: DiffTarget, mode: DiffDisplayMode) -> Self {
@@ -458,27 +477,18 @@ impl DiffViewerState {
                 if job_cancelled.load(std::sync::atomic::Ordering::Acquire) {
                     return Err("External handoff cancelled".to_string());
                 }
-                if let Some(app) = little_clip_core::command_available("meld") {
-                    if std::process::Command::new(app)
-                        .arg(&left_path)
-                        .arg(&right_path)
-                        .spawn()
-                        .is_ok()
-                    {
-                        return Ok("🚀 Launched Meld comparison".to_string());
-                    }
-                }
-                if let Some(app) = little_clip_core::command_available("kdiff3") {
-                    if std::process::Command::new(app)
-                        .arg(&left_path)
-                        .arg(&right_path)
-                        .spawn()
-                        .is_ok()
-                    {
-                        return Ok("🚀 Launched KDiff3 comparison".to_string());
-                    }
-                }
-                Ok("⚠️ Neither Meld nor KDiff3 is installed".to_string())
+                Ok(launch_diff_tool_with(
+                    &left_path,
+                    &right_path,
+                    |command| little_clip_core::command_available(command),
+                    |app, left, right| {
+                        std::process::Command::new(app)
+                            .arg(left)
+                            .arg(right)
+                            .spawn()
+                            .is_ok()
+                    },
+                ))
             });
         self.status_toast = Some(("Preparing comparison for external tool…".to_string(), now));
         self.handoff = Some((ticket, receiver));
@@ -1798,6 +1808,76 @@ mod tests {
         }));
 
         let _ = release_tx.send(());
+    }
+
+    #[test]
+    fn diff_external_tool_prefers_meld_then_falls_back_to_kdiff3() {
+        let left_path = std::path::PathBuf::from("/tmp/diff-left.txt");
+        let right_path = std::path::PathBuf::from("/tmp/diff-right.txt");
+
+        let mut lookups = Vec::new();
+        let mut launches = Vec::new();
+        let result = launch_diff_tool_with(
+            &left_path,
+            &right_path,
+            |command| {
+                lookups.push(command.to_string());
+                Some(std::path::PathBuf::from(format!("/fake/{command}")))
+            },
+            |app, left, right| {
+                launches.push((
+                    app.file_name().unwrap().to_string_lossy().into_owned(),
+                    left.to_path_buf(),
+                    right.to_path_buf(),
+                ));
+                true
+            },
+        );
+        assert_eq!(result, "🚀 Launched Meld comparison");
+        assert_eq!(lookups, vec!["meld"]);
+        assert_eq!(
+            launches,
+            vec![("meld".to_string(), left_path.clone(), right_path.clone())]
+        );
+
+        let mut lookups = Vec::new();
+        let mut launches = Vec::new();
+        let result = launch_diff_tool_with(
+            &left_path,
+            &right_path,
+            |command| {
+                lookups.push(command.to_string());
+                (command == "kdiff3").then(|| std::path::PathBuf::from("/fake/kdiff3"))
+            },
+            |app, left, right| {
+                launches.push((
+                    app.file_name().unwrap().to_string_lossy().into_owned(),
+                    left.to_path_buf(),
+                    right.to_path_buf(),
+                ));
+                true
+            },
+        );
+        assert_eq!(result, "🚀 Launched KDiff3 comparison");
+        assert_eq!(lookups, vec!["meld", "kdiff3"]);
+        assert_eq!(
+            launches,
+            vec![("kdiff3".to_string(), left_path.clone(), right_path.clone())]
+        );
+
+        let mut launches = Vec::new();
+        let result = launch_diff_tool_with(
+            &left_path,
+            &right_path,
+            |command| Some(std::path::PathBuf::from(format!("/fake/{command}"))),
+            |app, left, right| {
+                launches.push(app.file_name().unwrap().to_string_lossy().into_owned());
+                let _ = (left, right);
+                app.file_name().is_some_and(|name| name == "kdiff3")
+            },
+        );
+        assert_eq!(result, "🚀 Launched KDiff3 comparison");
+        assert_eq!(launches, vec!["meld", "kdiff3"]);
     }
 
     #[test]
