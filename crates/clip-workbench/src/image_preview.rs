@@ -155,6 +155,10 @@ pub struct ImagePreviewState {
 
     // File Size Optimizer Async Worker
     pub optimizer_rx: Option<std::sync::mpsc::Receiver<OptimizerMsg>>,
+    optimizer_job_rx: Option<std::sync::mpsc::Receiver<Result<(), little_clip_core::JobError>>>,
+    optimizer_ticket: Option<JobTicket>,
+    pub(crate) optimizer_retry_at: Option<std::time::Instant>,
+    optimizer_retry_stamp: Option<OptimizerRequestStamp>,
     pub optimizer_status: Option<String>,
     optimizer_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 
@@ -382,6 +386,10 @@ impl ImagePreviewState {
             fallback_save_confirm_overwrite: false,
             fallback_save_path: String::new(),
             optimizer_rx: None,
+            optimizer_job_rx: None,
+            optimizer_ticket: None,
+            optimizer_retry_at: None,
+            optimizer_retry_stamp: None,
             optimizer_status: None,
             optimizer_cancel: None,
             bg_removal_in_progress: false,
@@ -1003,6 +1011,11 @@ impl ImagePreviewState {
         self.poll_optimizer();
         if self.resize_state.is_optimizing {
             ctx.request_repaint();
+        }
+        if let Some(retry_at) = self.optimizer_retry_at {
+            ctx.request_repaint_after(
+                retry_at.saturating_duration_since(std::time::Instant::now()),
+            );
         }
 
         // Poll background AI background removal if running

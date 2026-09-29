@@ -457,6 +457,7 @@ impl Drop for ImagePreviewState {
 pub enum OptimizerMsg {
     Progress(String),
     Done(FileSizeOptimizationResult),
+    Failed(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -811,14 +812,183 @@ mod input_stamp_tests {
         assert!(cancelled.load(Ordering::Acquire));
         assert!(result.is_none());
     }
+
+    #[test]
+    fn bounded_optimizer_matches_direct_tiny_png_output_and_streams_progress() {
+        let mut state = state();
+        state.resize_state.target_format = TargetFormat::Png;
+        state.resize_state.target_size_unit_mb = false;
+        state.resize_state.target_size_val = 1.0;
+        let image = state.current_display_image();
+        let expected = optimize_to_target_size_with_progress(
+            &image,
+            state.resize_state.target_bytes(),
+            TargetFormat::Png,
+            None,
+        );
+        let jobs = little_clip_core::BackgroundJobs::new(1, 1);
+        state.active_mode = ImageToolMode::Resize;
+        state.resize_state.sub_tab = ResizeSubTab::FileSize;
+        state.run_target_file_size_optimizer_on(&jobs);
+        let saw_progress = matches!(
+            state
+                .optimizer_rx
+                .as_ref()
+                .unwrap()
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            OptimizerMsg::Progress(status) if status.contains("full resolution")
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while state.resize_state.is_optimizing && std::time::Instant::now() < deadline {
+            state.poll_optimizer_on(&jobs);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        state.poll_optimizer_on(&jobs);
+        let actual = state.resize_state.last_result.as_ref().unwrap();
+        assert!(saw_progress);
+        assert_eq!(actual.encoded_data, expected.encoded_data);
+        assert_eq!(actual.result_rgba, expected.result_rgba);
+        assert_eq!(actual.width, expected.width);
+        assert_eq!(actual.height, expected.height);
+    }
+
+    #[test]
+    fn optimizer_queue_full_preserves_result_and_retries_after_delay() {
+        let jobs = little_clip_core::BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let (_, queued_rx) = jobs.submit(std::time::Duration::MAX, || ());
+        let mut state = state();
+        state.active_mode = ImageToolMode::Resize;
+        state.resize_state.sub_tab = ResizeSubTab::FileSize;
+        state.resize_state.last_result = Some(result([2, 3, 4, 255]));
+        state.resize_state.last_result_request_stamp =
+            Some(state.current_optimizer_request_stamp());
+        state.run_target_file_size_optimizer_on(&jobs);
+        state.poll_optimizer_on(&jobs);
+
+        assert!(!state.resize_state.is_optimizing);
+        assert!(state.optimizer_retry_at.is_some());
+        assert!(
+            state
+                .optimizer_status
+                .as_deref()
+                .is_some_and(|status| status.contains("busy"))
+        );
+        assert_eq!(
+            state
+                .resize_state
+                .last_result
+                .as_ref()
+                .unwrap()
+                .encoded_data,
+            [1, 2, 3]
+        );
+        let retry_deadline = state.optimizer_retry_at.unwrap();
+        state.poll_optimizer_on(&jobs);
+        assert!(!state.resize_state.is_optimizing);
+        assert_eq!(state.optimizer_retry_at, Some(retry_deadline));
+
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+        queued_rx.recv().unwrap().unwrap();
+        state.optimizer_retry_at = Some(std::time::Instant::now());
+        state.poll_optimizer_on(&jobs);
+        assert!(state.resize_state.is_optimizing);
+        assert!(state.optimizer_retry_at.is_none());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while state.resize_state.is_optimizing && std::time::Instant::now() < deadline {
+            state.poll_optimizer_on(&jobs);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        state.poll_optimizer_on(&jobs);
+        assert!(state.resize_state.last_result.is_some());
+    }
+
+    #[test]
+    fn optimizer_drop_cancels_queued_ticket_and_cooperative_flag() {
+        let jobs = little_clip_core::BackgroundJobs::new(1, 2);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let (_, queued_rx) = jobs.submit(std::time::Duration::MAX, || ());
+        let mut state = state();
+        state.run_target_file_size_optimizer_on(&jobs);
+        let cancel = state.optimizer_cancel.as_ref().unwrap().clone();
+        let worker_rx = state.optimizer_job_rx.take().unwrap();
+        drop(state);
+        assert!(cancel.load(Ordering::Acquire));
+
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+        queued_rx.recv().unwrap().unwrap();
+        assert_eq!(
+            worker_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            Err(little_clip_core::JobError::Cancelled)
+        );
+    }
+
+    #[test]
+    fn optimizer_rejects_stale_retry_and_completion() {
+        let mut retry = state();
+        retry.active_mode = ImageToolMode::Resize;
+        retry.resize_state.sub_tab = ResizeSubTab::FileSize;
+        retry.optimizer_retry_stamp = Some(retry.current_optimizer_request_stamp());
+        retry.optimizer_retry_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_millis(1));
+        retry.optimizer_status = Some("waiting".into());
+        retry.resize_state.target_size_val += 1.0;
+        retry.poll_optimizer_on(&little_clip_core::BackgroundJobs::new(1, 1));
+        assert!(retry.optimizer_retry_at.is_none());
+        assert!(!retry.resize_state.is_optimizing);
+        assert!(retry.optimizer_status.is_none());
+
+        let mut stale = state();
+        stale.resize_state.target_size_unit_mb = false;
+        stale.resize_state.target_size_val = 1.0;
+        stale.resize_state.target_format = TargetFormat::Png;
+        stale.resize_state.optimizer_request_stamp = Some(stale.current_optimizer_request_stamp());
+        stale.resize_state.is_optimizing = true;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        stale.optimizer_cancel = Some(cancelled.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        stale.optimizer_rx = Some(rx);
+        tx.send(OptimizerMsg::Done(result([9, 8, 7, 255]))).unwrap();
+        stale.resize_state.target_size_val = 2.0;
+        stale.poll_optimizer_on(&little_clip_core::BackgroundJobs::new(1, 1));
+        assert!(stale.resize_state.last_result.is_none());
+        assert!(cancelled.load(Ordering::Acquire));
+    }
 }
 
 impl ImagePreviewState {
     pub(crate) fn cancel_optimizer(&mut self) {
+        if let Some(ticket) = self.optimizer_ticket.take() {
+            ticket.cancel();
+        }
         if let Some(cancelled) = self.optimizer_cancel.take() {
             cancelled.store(true, std::sync::atomic::Ordering::Release);
         }
         self.optimizer_rx = None;
+        self.optimizer_job_rx = None;
+        self.optimizer_retry_at = None;
+        self.optimizer_retry_stamp = None;
         self.resize_state.optimizer_request_stamp = None;
         self.resize_state.is_optimizing = false;
         self.optimizer_status = None;
@@ -865,6 +1035,10 @@ impl ImagePreviewState {
     /// Runs the target file size optimizer solving the quality vs. resolution trade-off asynchronously.
 
     pub fn run_target_file_size_optimizer(&mut self) {
+        self.run_target_file_size_optimizer_on(little_clip_core::BackgroundJobs::global());
+    }
+
+    fn run_target_file_size_optimizer_on(&mut self, jobs: &little_clip_core::BackgroundJobs) {
         if self.resize_state.is_optimizing {
             return;
         }
@@ -875,40 +1049,57 @@ impl ImagePreviewState {
         let base_img = self.current_display_image();
         self.resize_state.optimizer_request_stamp = Some(request_stamp);
 
-        let (tx, rx) = std::sync::mpsc::channel::<OptimizerMsg>();
+        let (progress_tx, rx) = std::sync::mpsc::channel::<OptimizerMsg>();
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let worker_cancelled = cancelled.clone();
         self.optimizer_cancel = Some(cancelled);
         self.optimizer_rx = Some(rx);
+        self.optimizer_retry_at = None;
+        self.optimizer_retry_stamp = None;
         self.resize_state.is_optimizing = true;
         self.optimizer_status = Some("Starting optimizer...".to_string());
 
-        std::thread::spawn(move || {
-            let tx_prog = tx.clone();
+        let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            let tx_prog = progress_tx.clone();
             let progress_cb = move |msg: String| {
                 let _ = tx_prog.send(OptimizerMsg::Progress(msg));
             };
 
-            let result = optimize_to_target_size_cancellable(
-                &base_img,
-                target_bytes,
-                format,
-                Some(&progress_cb),
-                &|| worker_cancelled.load(std::sync::atomic::Ordering::Acquire),
-            );
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                optimize_to_target_size_cancellable(
+                    &base_img,
+                    target_bytes,
+                    format,
+                    Some(&progress_cb),
+                    &|| worker_cancelled.load(std::sync::atomic::Ordering::Acquire),
+                )
+            }));
 
-            if let Some(result) = result
-                && !worker_cancelled.load(std::sync::atomic::Ordering::Acquire)
-            {
-                let _ = tx.send(OptimizerMsg::Done(result));
+            if !worker_cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                match result {
+                    Ok(Some(result)) => {
+                        let _ = progress_tx.send(OptimizerMsg::Done(result));
+                    }
+                    Ok(None) => {}
+                    Err(_) => {
+                        let _ = progress_tx
+                            .send(OptimizerMsg::Failed("Optimizer worker panicked".into()));
+                    }
+                }
             }
         });
+        self.optimizer_ticket = Some(ticket);
+        self.optimizer_job_rx = Some(job_rx);
     }
 
     /// Polls the background file size optimizer channel, updating status messages
     /// and storing the final result when complete.
 
     pub fn poll_optimizer(&mut self) {
+        self.poll_optimizer_on(little_clip_core::BackgroundJobs::global());
+    }
+
+    fn poll_optimizer_on(&mut self, jobs: &little_clip_core::BackgroundJobs) {
         if self.optimizer_rx.is_some()
             && self.resize_state.optimizer_request_stamp.as_ref()
                 != Some(&self.current_optimizer_request_stamp())
@@ -916,7 +1107,23 @@ impl ImagePreviewState {
             self.cancel_optimizer();
             return;
         }
+        if self.optimizer_retry_at.is_some()
+            && self.optimizer_retry_stamp.as_ref() != Some(&self.current_optimizer_request_stamp())
+        {
+            self.optimizer_retry_at = None;
+            self.optimizer_retry_stamp = None;
+            self.optimizer_status = None;
+        }
+        if let Some(retry_at) = self.optimizer_retry_at {
+            if std::time::Instant::now() < retry_at {
+                return;
+            }
+            self.optimizer_retry_at = None;
+            self.run_target_file_size_optimizer_on(jobs);
+            return;
+        }
         let mut done_res = None;
+        let mut worker_error = None;
         let mut disconnected = false;
         if let Some(rx) = &self.optimizer_rx {
             loop {
@@ -926,6 +1133,10 @@ impl ImagePreviewState {
                     }
                     Ok(OptimizerMsg::Done(res)) => {
                         done_res = Some(res);
+                        break;
+                    }
+                    Ok(OptimizerMsg::Failed(error)) => {
+                        worker_error = Some(error);
                         break;
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -938,6 +1149,75 @@ impl ImagePreviewState {
                 }
             }
         }
+        let mut queue_full = false;
+        let mut job_failed = None;
+        if let Some(job_rx) = self.optimizer_job_rx.take() {
+            match job_rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.optimizer_ticket = None;
+                    self.optimizer_cancel = None;
+                    self.optimizer_job_rx = None;
+                }
+                Ok(Err(little_clip_core::JobError::QueueFull)) => {
+                    queue_full = true;
+                    self.optimizer_ticket = None;
+                    self.optimizer_cancel = None;
+                    self.optimizer_job_rx = None;
+                }
+                Ok(Err(little_clip_core::JobError::Cancelled)) => {
+                    self.optimizer_ticket = None;
+                    self.optimizer_cancel = None;
+                    self.optimizer_job_rx = None;
+                    self.resize_state.is_optimizing = false;
+                    self.resize_state.optimizer_request_stamp = None;
+                    self.optimizer_rx = None;
+                    self.optimizer_status = None;
+                    return;
+                }
+                Ok(Err(error)) => {
+                    job_failed = Some(error.to_string());
+                    self.optimizer_ticket = None;
+                    self.optimizer_cancel = None;
+                    self.optimizer_job_rx = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.optimizer_job_rx = Some(job_rx);
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    disconnected = true;
+                    self.optimizer_ticket = None;
+                    self.optimizer_cancel = None;
+                    self.optimizer_job_rx = None;
+                }
+            }
+        }
+        if queue_full {
+            self.resize_state.is_optimizing = false;
+            self.resize_state.optimizer_request_stamp = None;
+            self.optimizer_rx = None;
+            self.optimizer_status = Some("Background workers are busy; retrying shortly".into());
+            self.optimizer_retry_stamp = Some(self.current_optimizer_request_stamp());
+            self.optimizer_retry_at =
+                Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+            return;
+        }
+        if let Some(error) = job_failed {
+            self.resize_state.is_optimizing = false;
+            self.resize_state.optimizer_request_stamp = None;
+            self.optimizer_rx = None;
+            self.optimizer_status = Some(format!("Optimizer worker failed: {error}"));
+            return;
+        }
+        if let Some(error) = worker_error {
+            self.resize_state.is_optimizing = false;
+            self.resize_state.optimizer_request_stamp = None;
+            self.optimizer_rx = None;
+            self.optimizer_cancel = None;
+            self.optimizer_ticket = None;
+            self.optimizer_job_rx = None;
+            self.optimizer_status = Some(error);
+            return;
+        }
         if let Some(res) = done_res {
             self.resize_state.last_result = Some(res);
             self.resize_state.last_result_request_stamp =
@@ -946,12 +1226,16 @@ impl ImagePreviewState {
             self.optimizer_status = None;
             self.optimizer_rx = None;
             self.optimizer_cancel = None;
+            self.optimizer_ticket = None;
+            self.optimizer_job_rx = None;
             self.resize_state.optimizer_request_stamp = None;
         } else if disconnected {
             self.resize_state.is_optimizing = false;
             self.optimizer_status = None;
             self.optimizer_rx = None;
             self.optimizer_cancel = None;
+            self.optimizer_ticket = None;
+            self.optimizer_job_rx = None;
             self.resize_state.optimizer_request_stamp = None;
         }
     }
@@ -1391,6 +1675,13 @@ impl ImagePreviewState {
                             .color(accent),
                         );
                     });
+                } else if let Some(status) = self.optimizer_status.as_deref() {
+                    ui.add_space(crate::ui_ext::SPACE_SM);
+                    ui.label(
+                        egui::RichText::new(status)
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                            .color(accent),
+                    );
                 } else if self.optimized_result_is_current()
                     && let Some(result) = self.resize_state.last_result.clone()
                 {
