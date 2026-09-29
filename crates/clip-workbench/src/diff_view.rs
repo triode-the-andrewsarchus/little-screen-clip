@@ -1523,6 +1523,71 @@ mod tests {
     }
 
     #[test]
+    fn image_diff_tab_and_c_cycle_modes_without_recomputing() {
+        fn send_shortcut(state: &mut DiffViewerState, key: egui::Key) {
+            let ctx = egui::Context::default();
+            let mut close = false;
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| state.handle_shortcuts(ctx, &mut close),
+            );
+            assert!(!close);
+        }
+
+        let image_target = |label: &str, color: [u8; 4]| {
+            let rgba = image::RgbaImage::from_pixel(2, 2, image::Rgba(color));
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgba8(rgba)
+                .write_to(&mut bytes, image::ImageFormat::Png)
+                .expect("encode tiny PNG fixture");
+            DiffTarget::Image {
+                label: label.to_owned(),
+                path: None,
+                bytes: bytes.into_inner(),
+                width: 2,
+                height: 2,
+                mime: "image/png".to_owned(),
+            }
+        };
+        let mut state = DiffViewerState::new(
+            image_target("Left", [255, 0, 0, 255]),
+            image_target("Right", [0, 0, 255, 255]),
+            DiffDisplayMode::SideBySide,
+        );
+        state.wait_for_completion();
+        let initial_result = state.image_result.as_ref().expect("image diff result");
+        let result_address = std::ptr::from_ref(initial_result);
+        let compute_started = state.compute_start_time;
+
+        for (key, expected_mode) in [
+            (egui::Key::Tab, ImageDiffViewMode::Overlay),
+            (egui::Key::C, ImageDiffViewMode::MaskOnly),
+            (egui::Key::Tab, ImageDiffViewMode::Split),
+            (egui::Key::C, ImageDiffViewMode::ThreeUp),
+        ] {
+            send_shortcut(&mut state, key);
+            assert_eq!(state.image_mode, expected_mode);
+            assert!(!state.is_computing, "presentation change must not compute");
+            assert!(state.image_receiver.is_none());
+            assert_eq!(state.compute_start_time, compute_started);
+            assert_eq!(
+                std::ptr::from_ref(state.image_result.as_ref().unwrap()),
+                result_address,
+                "presentation change must retain the computed image result"
+            );
+        }
+    }
+
+    #[test]
     fn saturated_diff_executor_reports_recoverable_error() {
         use std::sync::mpsc;
         use std::time::Duration;
