@@ -23,6 +23,32 @@ impl Drop for HandoffCancelGuard {
     }
 }
 
+struct StagedBinaryFile {
+    path: std::path::PathBuf,
+    remove_on_drop: bool,
+}
+
+impl StagedBinaryFile {
+    fn preserve_for_external_tool(&mut self) {
+        self.remove_on_drop = false;
+    }
+}
+
+impl Drop for StagedBinaryFile {
+    fn drop(&mut self) {
+        if self.remove_on_drop {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BinaryToolLaunch {
+    ImHex,
+    XdgOpen,
+    Unavailable,
+}
+
 fn stage_binary_handoff(bytes: &[u8], side: &str) -> Result<std::path::PathBuf, String> {
     let path = std::env::temp_dir().join(format!(
         "clip_bin_{}_{}.bin",
@@ -50,35 +76,73 @@ fn run_binary_handoff_with(
     available: impl FnMut(&str) -> Option<std::path::PathBuf>,
     spawn: impl FnMut(&std::path::Path, &std::path::Path, Option<&std::path::Path>) -> bool,
 ) -> Result<String, String> {
-    let left_path = stage(left, "lhs")?;
-    let right_path = stage(right, "rhs")?;
+    let mut left_path = StagedBinaryFile {
+        path: stage(left, "lhs")?,
+        remove_on_drop: true,
+    };
+    let mut right_path = StagedBinaryFile {
+        path: stage(right, "rhs")?,
+        remove_on_drop: true,
+    };
     if cancelled.load(std::sync::atomic::Ordering::Acquire) {
         return Err("External handoff cancelled".to_string());
     }
-    launch_binary_diff_tool_with(&left_path, &right_path, available, spawn)
+    match launch_binary_diff_tool_with(
+        &left_path.path,
+        &right_path.path,
+        cancelled,
+        available,
+        spawn,
+    )? {
+        BinaryToolLaunch::ImHex => {
+            left_path.preserve_for_external_tool();
+            right_path.preserve_for_external_tool();
+            Ok("🚀 Launched ImHex hex editor".to_string())
+        }
+        BinaryToolLaunch::XdgOpen => {
+            left_path.preserve_for_external_tool();
+            Ok("🚀 Opened left binary file with system default".to_string())
+        }
+        BinaryToolLaunch::Unavailable => {
+            Ok("⚠️ Neither ImHex nor xdg-open is installed".to_string())
+        }
+    }
 }
 
 fn launch_binary_diff_tool_with(
     left_path: &std::path::Path,
     right_path: &std::path::Path,
+    cancelled: &std::sync::atomic::AtomicBool,
     mut available: impl FnMut(&str) -> Option<std::path::PathBuf>,
     mut spawn: impl FnMut(&std::path::Path, &std::path::Path, Option<&std::path::Path>) -> bool,
-) -> Result<String, String> {
+) -> Result<BinaryToolLaunch, String> {
     let mut launch_failures = Vec::new();
+    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("External handoff cancelled".to_string());
+    }
     if let Some(app) = available("imhex") {
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            return Err("External handoff cancelled".to_string());
+        }
         if spawn(&app, left_path, Some(right_path)) {
-            return Ok("🚀 Launched ImHex hex editor".to_string());
+            return Ok(BinaryToolLaunch::ImHex);
         }
         launch_failures.push("imhex");
     }
+    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("External handoff cancelled".to_string());
+    }
     if let Some(app) = available("xdg-open") {
+        if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+            return Err("External handoff cancelled".to_string());
+        }
         if spawn(&app, left_path, None) {
-            return Ok("🚀 Opened left binary file with system default".to_string());
+            return Ok(BinaryToolLaunch::XdgOpen);
         }
         launch_failures.push("xdg-open");
     }
     if launch_failures.is_empty() {
-        Ok("⚠️ Neither ImHex nor xdg-open is installed".to_string())
+        Ok(BinaryToolLaunch::Unavailable)
     } else {
         Err(format!(
             "Failed to launch available external tool(s): {}",
@@ -216,6 +280,7 @@ impl Drop for BinaryDiffViewState {
         if let Some(ticket) = &self.compute_ticket {
             ticket.cancel();
         }
+        self.cancel_handoff();
     }
 }
 
@@ -464,32 +529,54 @@ impl BinaryDiffViewState {
 
     /// Triggers opening the binary comparison in ImHex hex editor.
     pub fn trigger_escape_hatch(&mut self, now: f64) {
+        self.trigger_escape_hatch_on(
+            now,
+            BackgroundJobs::global(),
+            stage_binary_handoff,
+            |command| little_clip_core::command_available(command),
+            |app, left, right| {
+                let mut command = std::process::Command::new(app);
+                command.arg(left);
+                if let Some(right) = right {
+                    command.arg(right);
+                }
+                command.spawn().is_ok()
+            },
+        );
+    }
+
+    fn cancel_handoff(&mut self) {
         if let Some((ticket, _)) = self.handoff.take() {
             ticket.cancel();
         }
         self.handoff_cancel.take();
+    }
+
+    fn trigger_escape_hatch_on(
+        &mut self,
+        now: f64,
+        jobs: &BackgroundJobs,
+        stage: impl FnMut(&[u8], &str) -> Result<std::path::PathBuf, String> + Send + 'static,
+        available: impl FnMut(&str) -> Option<std::path::PathBuf> + Send + 'static,
+        spawn: impl FnMut(&std::path::Path, &std::path::Path, Option<&std::path::Path>) -> bool
+        + Send
+        + 'static,
+    ) {
+        self.cancel_handoff();
         let left = self.left_bytes.clone();
         let right = self.right_bytes.clone();
         let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let job_cancelled = cancelled.clone();
-        let (ticket, rx) =
-            BackgroundJobs::global().submit(std::time::Duration::from_secs(30), move || {
-                run_binary_handoff_with(
-                    left.as_slice(),
-                    right.as_slice(),
-                    &job_cancelled,
-                    stage_binary_handoff,
-                    |command| little_clip_core::command_available(command),
-                    |app, left, right| {
-                        let mut command = std::process::Command::new(app);
-                        command.arg(left);
-                        if let Some(right) = right {
-                            command.arg(right);
-                        }
-                        command.spawn().is_ok()
-                    },
-                )
-            });
+        let (ticket, rx) = jobs.submit(std::time::Duration::from_secs(30), move || {
+            run_binary_handoff_with(
+                left.as_slice(),
+                right.as_slice(),
+                &job_cancelled,
+                stage,
+                available,
+                spawn,
+            )
+        });
         self.status_toast
             .set("Preparing binary files for external tool…", now);
         self.handoff = Some((ticket, rx));
@@ -2028,6 +2115,28 @@ fn format_bytes_size(len: usize) -> String {
 mod tests {
     use super::*;
 
+    fn staged_files_with_bytes(expected: &[u8]) -> Vec<std::path::PathBuf> {
+        std::fs::read_dir(std::env::temp_dir())
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("clip_bin_"))
+                    && std::fs::read(path).is_ok_and(|bytes| bytes == expected)
+            })
+            .collect()
+    }
+
+    fn assert_staged_bytes_cleaned(bytes: &[u8]) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while !staged_files_with_bytes(bytes).is_empty() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(staged_files_with_bytes(bytes).is_empty());
+    }
+
     #[test]
     fn binary_handoff_stages_exact_left_and_right_bytes_as_bin_files() {
         let left_bytes = [0, 255, 0, 0x7f, 13, 10];
@@ -2122,7 +2231,10 @@ mod tests {
         );
         assert_eq!(lookups.get(), 0);
         assert_eq!(launches.get(), 0);
-        std::fs::remove_file(staged_left).unwrap();
+        assert!(
+            !staged_left.exists(),
+            "partial staging output should be cleaned"
+        );
         std::fs::remove_dir_all(fixture_dir).unwrap();
     }
 
@@ -2130,12 +2242,14 @@ mod tests {
     fn binary_external_tool_prefers_imhex_then_uses_xdg_open_fallback() {
         let left = std::path::PathBuf::from("/private/left.bin");
         let right = std::path::PathBuf::from("/private/right.bin");
+        let not_cancelled = std::sync::atomic::AtomicBool::new(false);
 
         let mut lookups = Vec::new();
         let mut launches = Vec::new();
         let result = launch_binary_diff_tool_with(
             &left,
             &right,
+            &not_cancelled,
             |command| {
                 lookups.push(command.to_string());
                 Some(std::path::PathBuf::from(format!("/fake/{command}")))
@@ -2149,7 +2263,7 @@ mod tests {
                 true
             },
         );
-        assert_eq!(result, Ok("🚀 Launched ImHex hex editor".to_string()));
+        assert_eq!(result, Ok(BinaryToolLaunch::ImHex));
         assert_eq!(lookups, vec!["imhex"]);
         assert_eq!(
             launches,
@@ -2161,6 +2275,7 @@ mod tests {
         let result = launch_binary_diff_tool_with(
             &left,
             &right,
+            &not_cancelled,
             |command| {
                 lookups.push(command.to_string());
                 (command == "xdg-open").then(|| std::path::PathBuf::from("/fake/xdg-open"))
@@ -2174,10 +2289,7 @@ mod tests {
                 true
             },
         );
-        assert_eq!(
-            result,
-            Ok("🚀 Opened left binary file with system default".to_string())
-        );
+        assert_eq!(result, Ok(BinaryToolLaunch::XdgOpen));
         assert_eq!(lookups, vec!["imhex", "xdg-open"]);
         assert_eq!(launches, vec![("xdg-open".to_string(), left.clone(), None)]);
 
@@ -2185,6 +2297,7 @@ mod tests {
         let result = launch_binary_diff_tool_with(
             &left,
             &right,
+            &not_cancelled,
             |command| Some(std::path::PathBuf::from(format!("/fake/{command}"))),
             |app, left_arg, right_arg| {
                 launches.push(app.file_name().unwrap().to_string_lossy().into_owned());
@@ -2192,16 +2305,14 @@ mod tests {
                 app.file_name().is_some_and(|name| name == "xdg-open")
             },
         );
-        assert_eq!(
-            result,
-            Ok("🚀 Opened left binary file with system default".to_string())
-        );
+        assert_eq!(result, Ok(BinaryToolLaunch::XdgOpen));
         assert_eq!(launches, vec!["imhex", "xdg-open"]);
 
         let mut attempts = Vec::new();
         let result = launch_binary_diff_tool_with(
             &left,
             &right,
+            &not_cancelled,
             |command| (command == "xdg-open").then(|| std::path::PathBuf::from("/fake/xdg-open")),
             |app, _, _| {
                 attempts.push(app.file_name().unwrap().to_string_lossy().into_owned());
@@ -2218,6 +2329,7 @@ mod tests {
         let result = launch_binary_diff_tool_with(
             &left,
             &right,
+            &not_cancelled,
             |command| Some(std::path::PathBuf::from(format!("/fake/{command}"))),
             |app, _, _| {
                 attempts.push(app.file_name().unwrap().to_string_lossy().into_owned());
@@ -2234,17 +2346,304 @@ mod tests {
         let result = launch_binary_diff_tool_with(
             &left,
             &right,
+            &not_cancelled,
             |command| {
                 lookups.push(command.to_string());
                 None
             },
             |_, _, _| panic!("spawn must not run when no opener is installed"),
         );
+        assert_eq!(result, Ok(BinaryToolLaunch::Unavailable));
+        assert_eq!(lookups, vec!["imhex", "xdg-open"]);
+    }
+
+    #[test]
+    fn binary_handoff_cleans_staged_files_unless_an_opener_needs_them() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let left_bytes =
+            format!("binary-lifecycle-left-{}", uuid::Uuid::new_v4().simple()).into_bytes();
+        let right_bytes =
+            format!("binary-lifecycle-right-{}", uuid::Uuid::new_v4().simple()).into_bytes();
+        let jobs = BackgroundJobs::new(1, 1);
+
+        let left = left_bytes.clone();
+        let right = right_bytes.clone();
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let (ticket, failed_rx) = jobs.submit(Duration::MAX, move || {
+            run_binary_handoff_with(
+                &left,
+                &right,
+                &cancelled,
+                stage_binary_handoff,
+                |command| Some(std::path::PathBuf::from(format!("/fake/{command}"))),
+                |_, _, _| false,
+            )
+        });
+        assert!(
+            failed_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        drop(ticket);
+        assert_staged_bytes_cleaned(&left_bytes);
+        assert_staged_bytes_cleaned(&right_bytes);
+
+        let left = left_bytes.clone();
+        let right = right_bytes.clone();
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let (ticket, unavailable_rx) = jobs.submit(Duration::MAX, move || {
+            run_binary_handoff_with(
+                &left,
+                &right,
+                &cancelled,
+                stage_binary_handoff,
+                |_| None,
+                |_, _, _| panic!("spawn must not run when no opener is installed"),
+            )
+        });
         assert_eq!(
-            result,
+            unavailable_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap(),
             Ok("⚠️ Neither ImHex nor xdg-open is installed".to_string())
         );
-        assert_eq!(lookups, vec!["imhex", "xdg-open"]);
+        drop(ticket);
+        assert_staged_bytes_cleaned(&left_bytes);
+        assert_staged_bytes_cleaned(&right_bytes);
+
+        let partial_left =
+            format!("binary-partial-left-{}", uuid::Uuid::new_v4().simple()).into_bytes();
+        let left = partial_left.clone();
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let (ticket, partial_rx) = jobs.submit(Duration::MAX, move || {
+            run_binary_handoff_with(
+                &left,
+                b"right unused",
+                &cancelled,
+                |bytes, side| {
+                    if side == "rhs" {
+                        Err("Failed to write rhs temp file: forced test error".to_string())
+                    } else {
+                        stage_binary_handoff(bytes, side)
+                    }
+                },
+                |_| panic!("staging failure must skip opener lookup"),
+                |_, _, _| panic!("staging failure must skip opener spawn"),
+            )
+        });
+        assert!(
+            partial_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap()
+                .unwrap_err()
+                .contains("Failed to write rhs temp file")
+        );
+        drop(ticket);
+        assert_staged_bytes_cleaned(&partial_left);
+
+        let cancelled_left =
+            format!("binary-cancel-left-{}", uuid::Uuid::new_v4().simple()).into_bytes();
+        let cancelled_right =
+            format!("binary-cancel-right-{}", uuid::Uuid::new_v4().simple()).into_bytes();
+        let worker_left = cancelled_left.clone();
+        let worker_right = cancelled_right.clone();
+        let cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let worker_cancelled = cancelled.clone();
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (spawn_tx, spawn_rx) = mpsc::channel();
+        let (ticket, cancelled_rx) = jobs.submit(Duration::MAX, move || {
+            run_binary_handoff_with(
+                &worker_left,
+                &worker_right,
+                &worker_cancelled,
+                stage_binary_handoff,
+                move |_| {
+                    let _ = entered_tx.send(());
+                    let _ = release_rx.recv();
+                    Some(std::path::PathBuf::from("/fake/imhex"))
+                },
+                move |_, _, _| {
+                    let _ = spawn_tx.send(());
+                    true
+                },
+            )
+        });
+        entered_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        cancelled.store(true, std::sync::atomic::Ordering::Release);
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            cancelled_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap(),
+            Err("External handoff cancelled".to_string())
+        );
+        assert!(spawn_rx.try_recv().is_err());
+        drop(ticket);
+        assert_staged_bytes_cleaned(&cancelled_left);
+        assert_staged_bytes_cleaned(&cancelled_right);
+
+        let (imhex_paths_tx, imhex_paths_rx) = mpsc::channel();
+        let left = left_bytes.clone();
+        let right = right_bytes.clone();
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let (ticket, imhex_rx) = jobs.submit(Duration::MAX, move || {
+            run_binary_handoff_with(
+                &left,
+                &right,
+                &cancelled,
+                stage_binary_handoff,
+                |command| Some(std::path::PathBuf::from(format!("/fake/{command}"))),
+                move |_, left, right| {
+                    let _ = imhex_paths_tx.send((left.to_path_buf(), right.unwrap().to_path_buf()));
+                    true
+                },
+            )
+        });
+        assert_eq!(
+            imhex_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap(),
+            Ok("🚀 Launched ImHex hex editor".to_string())
+        );
+        let (imhex_left_path, imhex_right_path) =
+            imhex_paths_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert_eq!(std::fs::read(&imhex_left_path).unwrap(), left_bytes);
+        assert_eq!(std::fs::read(&imhex_right_path).unwrap(), right_bytes);
+        std::fs::remove_file(imhex_left_path).unwrap();
+        std::fs::remove_file(imhex_right_path).unwrap();
+        drop(ticket);
+
+        let (xdg_left_tx, xdg_left_rx) = mpsc::channel();
+        let left = left_bytes.clone();
+        let right = right_bytes.clone();
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let (ticket, xdg_rx) = jobs.submit(Duration::MAX, move || {
+            run_binary_handoff_with(
+                &left,
+                &right,
+                &cancelled,
+                stage_binary_handoff,
+                |command| {
+                    (command == "xdg-open").then(|| std::path::PathBuf::from("/fake/xdg-open"))
+                },
+                move |_, left, right| {
+                    let _ = xdg_left_tx.send((left.to_path_buf(), right.is_none()));
+                    true
+                },
+            )
+        });
+        assert_eq!(
+            xdg_rx
+                .recv_timeout(Duration::from_secs(1))
+                .unwrap()
+                .unwrap(),
+            Ok("🚀 Opened left binary file with system default".to_string())
+        );
+        let (xdg_left_path, xdg_received_only_left) =
+            xdg_left_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(xdg_received_only_left);
+        assert_eq!(std::fs::read(&xdg_left_path).unwrap(), left_bytes);
+        assert_staged_bytes_cleaned(&right_bytes);
+        std::fs::remove_file(xdg_left_path).unwrap();
+        drop(ticket);
+    }
+
+    #[test]
+    fn replacing_and_dropping_binary_viewer_cancel_queued_handoffs() {
+        use std::sync::{Arc, atomic::AtomicUsize, mpsc};
+        use std::time::Duration;
+
+        let mut state = BinaryDiffViewState::new(
+            "left".into(),
+            b"left bytes".to_vec(),
+            "right".into(),
+            b"right bytes".to_vec(),
+        );
+        let (generation, result) = state
+            .receiver
+            .take()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(generation, state.current_generation);
+        state.result = Some(result);
+        state.is_computing = false;
+        state.compute_ticket = None;
+
+        let jobs = BackgroundJobs::new(1, 3);
+        let (blocker_started_tx, blocker_started_rx) = mpsc::channel();
+        let (blocker_release_tx, blocker_release_rx) = mpsc::channel();
+        let (blocker_ticket, blocker_rx) = jobs.submit(Duration::MAX, move || {
+            let _ = blocker_started_tx.send(());
+            let _ = blocker_release_rx.recv();
+        });
+        blocker_started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+
+        let stage_calls = Arc::new(AtomicUsize::new(0));
+        let lookup_calls = Arc::new(AtomicUsize::new(0));
+        let first_stages = stage_calls.clone();
+        let first_lookups = lookup_calls.clone();
+        state.trigger_escape_hatch_on(
+            0.0,
+            &jobs,
+            move |_, _| {
+                first_stages.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(std::path::PathBuf::from("/private/first.bin"))
+            },
+            move |_| {
+                first_lookups.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                None
+            },
+            |_, _, _| false,
+        );
+        let first_flag = state.handoff_cancel.as_ref().unwrap().0.clone();
+
+        let second_stages = stage_calls.clone();
+        let second_lookups = lookup_calls.clone();
+        state.trigger_escape_hatch_on(
+            0.1,
+            &jobs,
+            move |_, _| {
+                second_stages.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(std::path::PathBuf::from("/private/second.bin"))
+            },
+            move |_| {
+                second_lookups.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                None
+            },
+            |_, _, _| false,
+        );
+        assert!(first_flag.load(std::sync::atomic::Ordering::Acquire));
+        let close_flag = state.handoff_cancel.as_ref().unwrap().0.clone();
+        drop(state);
+        assert!(close_flag.load(std::sync::atomic::Ordering::Acquire));
+
+        let (sentinel_ticket, sentinel_rx) = jobs.submit(Duration::MAX, || ());
+        blocker_release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        sentinel_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(stage_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+        assert_eq!(lookup_calls.load(std::sync::atomic::Ordering::Relaxed), 0);
+        drop(sentinel_ticket);
+        drop(blocker_ticket);
     }
 
     #[test]
