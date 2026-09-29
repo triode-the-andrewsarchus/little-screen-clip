@@ -28,6 +28,8 @@ import zlib
 from pathlib import Path
 from typing import Any
 
+from ui_acceptance_fixtures import pdf_fixture
+
 
 APP_ID = "little-clip-workbench"
 STARTUP_SECONDS = 20.0
@@ -54,6 +56,7 @@ KEY_ACTIONS = {
     "enter": ["-k", "Return"],
     "f3": ["-k", "F3"],
     "f6": ["-k", "F6"],
+    "r": ["-k", "r"],
     "ctrl-f": ["-M", "ctrl", "-k", "f", "-m", "ctrl"],
 }
 
@@ -251,6 +254,7 @@ class FakeTextPreviewDaemon:
     ITEM_ID = "9b1de26a-4101-4e08-93d0-2ab14dad415e"
     DIFF_LEFT_ITEM_ID = "3f6ea64c-9b6a-4db8-a3dd-108c92b70b21"
     DIFF_RIGHT_ITEM_ID = "aa64938e-27ae-4f16-861f-8a24dfd5d2e2"
+    PDF_ITEM_ID = "5d74ae02-65cb-44db-991a-5b5837642d09"
     TEXT = (
         "# Markdown Preview\n\n"
         "A body paragraph with **emphasis**, `inline code`, and a [link](https://example.invalid).\n\n"
@@ -279,6 +283,7 @@ class FakeTextPreviewDaemon:
         binary_diff_preview: bool = False,
         diff_preview: bool = False,
         image_diff_preview: bool = False,
+        pdf_preview: bool = False,
         reload_config_error: bool = False,
     ):
         self.socket_path = runtime / "little-screen-clip.sock"
@@ -289,6 +294,7 @@ class FakeTextPreviewDaemon:
         self.binary_diff_preview = binary_diff_preview
         self.diff_preview = diff_preview
         self.image_diff_preview = image_diff_preview
+        self.pdf_preview = pdf_preview
         self.reload_config_error = reload_config_error
         self.xlsx_path = log_path.parent / "acceptance-multisheet.xlsx"
         if xlsx_preview:
@@ -302,6 +308,9 @@ class FakeTextPreviewDaemon:
         self.binary_right_path = log_path.parent / "acceptance-right.bin"
         self.image_left_path = log_path.parent / "acceptance-image-left.png"
         self.image_right_path = log_path.parent / "acceptance-image-right.png"
+        self.pdf_path = log_path.parent / "acceptance-mirror.pdf"
+        if pdf_preview:
+            pdf_fixture(log_path.parent, 2, self.pdf_path.name)
         if image_diff_preview:
             self._write_png_fixture(self.image_left_path, (42, 128, 220), (220, 80, 52))
             self._write_png_fixture(self.image_right_path, (220, 80, 52), (42, 128, 220))
@@ -425,6 +434,16 @@ class FakeTextPreviewDaemon:
             stl.write("endsolid acceptance_mesh\n")
 
     def _item(self) -> dict[str, Any]:
+        if self.pdf_preview:
+            return {
+                "id": self.PDF_ITEM_ID,
+                "created_at": int(time.time()),
+                "payload": {"Text": str(self.pdf_path)},
+                "title": self.pdf_path.name,
+                "subtitle": "PDF • 2 pages",
+                "details": ["PDF", "2 pages"],
+                "handler_tag": "PDF",
+            }
         if self.image_diff_preview:
             return {
                 "id": self.DIFF_LEFT_ITEM_ID,
@@ -517,13 +536,18 @@ class FakeTextPreviewDaemon:
         if request == "ReloadConfig" and self.reload_config_error:
             return {"Error": {"error": "acceptance reload rejected"}}, "reload_config_error"
         if request == "GetState":
-            return {"State": self._state()}, "state"
+            state = self._state()
+            if self.pdf_preview:
+                # Force one normal state-poller hydration so the capture can
+                # distinguish startup item loading from any later refresh.
+                state["left_hand"] = None
+            return {"State": state}, "state"
         if request == "GetStateSummary":
             cards = [{
                 "slot": "LeftHand",
-                "item_id": self.DIFF_LEFT_ITEM_ID if self.diff_preview or self.image_diff_preview else self.ITEM_ID,
-                "payload_kind": "Image" if self.image_diff_preview else "Text" if self.csv_preview or self.xlsx_preview or self.model3d_variant or self.diff_preview else "Markdown",
-                "preview_phase": "Ready",
+                "item_id": self.DIFF_LEFT_ITEM_ID if self.diff_preview or self.image_diff_preview else self.PDF_ITEM_ID if self.pdf_preview else self.ITEM_ID,
+                "payload_kind": "Image" if self.image_diff_preview else "Text" if self.csv_preview or self.xlsx_preview or self.model3d_variant or self.diff_preview or self.pdf_preview else "Markdown",
+                "preview_phase": "NotApplicable" if self.pdf_preview else "Ready",
             }]
             if self.diff_preview or self.image_diff_preview:
                 cards.append({
@@ -570,14 +594,40 @@ class FakeTextPreviewDaemon:
         self.listener.close()
         self.thread.join(timeout=1)
         self.log_path.write_text(json.dumps(self.events, indent=2) + "\n", encoding="utf-8")
-        item_requested = any(event["kind"] == "slot_item" for event in self.events)
-        return {
+        slot_item_events = [
+            event for event in self.events
+            if event["kind"] == "slot_item" and event["request"] == {"GetSlotItem": "LeftHand"}
+        ]
+        item_requested = bool(slot_item_events)
+        result = {
             "log": str(self.log_path),
             "rolling_audio_fixture": str(self.rolling_audio_path),
             "slot_item_requested": item_requested,
             "pass": item_requested,
             "events": len(self.events),
         }
+        if self.pdf_preview:
+            result.update({
+                "pdf_fixture": str(self.pdf_path),
+                "initial_slot_item_hydrations": len(slot_item_events),
+                "additional_slot_item_hydrations_after_initial": max(0, len(slot_item_events) - 1),
+            })
+        return result
+
+    def pdf_slot_item_hydration_count(self) -> int:
+        return sum(
+            event["kind"] == "slot_item"
+            and event["request"] == {"GetSlotItem": "LeftHand"}
+            for event in self.events
+        )
+
+    def wait_for_pdf_slot_item_hydrations(self, count: int, timeout: float = 5.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.pdf_slot_item_hydration_count() >= count:
+                return True
+            time.sleep(0.05)
+        return self.pdf_slot_item_hydration_count() >= count
 
 def command_version(command: str) -> str | None:
     executable = shutil.which(command)
@@ -1141,6 +1191,7 @@ def capture_workbench(
     outputs: Any,
     children: ChildProcesses,
     report: dict[str, Any],
+    fake_text_daemon: FakeTextPreviewDaemon | None = None,
 ) -> None:
     niri_bin, scratch = config["niri_bin"], config["scratch"]
     logical_size = output_logical_size(outputs)
@@ -1172,6 +1223,10 @@ def capture_workbench(
     )
     first_windows, mapped_ms = wait_for_app_window(niri_bin, niri_env, app, output)
     report["mapped_elapsed_ms"] = mapped_ms
+    if args.fake_pdf_preview and fake_text_daemon is not None:
+        if not fake_text_daemon.wait_for_pdf_slot_item_hydrations(1):
+            raise RuntimeError("fake PDF slot item was not initially hydrated by the workbench")
+        time.sleep(0.3)
     if args.fake_node_machine:
         run_checked(["wtype", "-k", "F1"], env=niri_env)
         report["node_machine_route"] = "F1 sent through private Wayland keyboard input"
@@ -1180,6 +1235,10 @@ def capture_workbench(
     report["screenshots"]["first_observed"] = screenshot(
         niri_bin, niri_env, output / "first-observed.png"
     )
+    if args.fake_pdf_preview:
+        report["screenshots"]["before_pdf_open"] = screenshot(
+            niri_bin, niri_env, output / "before-pdf-open.png"
+        )
     if args.image_tool:
         run_checked(["wtype", "-k", IMAGE_TOOL_KEYS[args.image_tool]], env=niri_env)
         if args.image_action:
@@ -1358,6 +1417,24 @@ def capture_workbench(
             report["failures"].append(
                 "Escape did not return from the viewer to the existing focused workbench popup"
             )
+        if args.fake_pdf_preview and fake_text_daemon is not None:
+            time.sleep(1.5)
+            hydration_count = fake_text_daemon.pdf_slot_item_hydration_count()
+            report["pdf_dirty_close_mirror_refresh"] = {
+                "initial_slot_item_hydrations": min(hydration_count, 1),
+                "additional_daemon_slot_item_hydrations_after_viewer_close": max(0, hydration_count - 1),
+                "local_mirror_redraw_is_verified_by": "closing_dirty_pdf_requests_and_consumes_dirty_mirror in clip-workbench tests",
+                "daemon_rehydration_expected": False,
+                "pass": report["viewer_return_check"]["pass"],
+            }
+            if report["pdf_dirty_close_mirror_refresh"]["pass"]:
+                report["screenshots"]["after_dirty_pdf_close"] = screenshot(
+                    niri_bin, niri_env, output / "after-dirty-pdf-close.png"
+                )
+            if hydration_count == 0:
+                report["failures"].append(
+                    "fake PDF clipboard item was never hydrated before opening the editor"
+                )
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -1445,6 +1522,10 @@ def create_parser() -> argparse.ArgumentParser:
         help="serve a private Markdown clipboard item through IPC for isolated viewer acceptance",
     )
     parser.add_argument(
+        "--fake-pdf-preview", action="store_true",
+        help="serve a private PDF path item and deterministic PDF fixture through IPC",
+    )
+    parser.add_argument(
         "--fake-csv-preview", action="store_true",
         help="serve private CSV clipboard text through IPC for spreadsheet viewer acceptance",
     )
@@ -1497,6 +1578,14 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         args.fake_audio_transition or any((args.image, args.audio, args.pdf, args.midi))
     ):
         raise SystemExit("--fake-text-preview cannot be combined with other fixture routes")
+    if args.fake_pdf_preview and (
+        args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
+        or args.fake_model3d or args.fake_binary_diff or args.fake_diff_preview
+        or args.fake_image_diff_preview or args.fake_audio_transition
+        or args.fake_node_machine or args.fake_reload_error
+        or any((args.image, args.audio, args.pdf, args.midi))
+    ):
+        raise SystemExit("--fake-pdf-preview cannot be combined with other fixture routes")
     if args.fake_csv_preview and (
         args.fake_text_preview or args.fake_audio_transition
         or any((args.image, args.audio, args.pdf, args.midi))
@@ -1532,7 +1621,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
     ):
         raise SystemExit("--fake-image-diff-preview cannot be combined with other fixture routes")
     fake_fixture_flags = (
-        args.fake_audio_transition, args.fake_text_preview, args.fake_csv_preview,
+        args.fake_audio_transition, args.fake_text_preview, args.fake_pdf_preview, args.fake_csv_preview,
         args.fake_multisheet_xlsx, bool(args.fake_model3d), args.fake_binary_diff,
         args.fake_diff_preview, args.fake_image_diff_preview, args.fake_node_machine,
     )
@@ -1558,12 +1647,20 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         (args.fake_diff_preview or args.fake_image_diff_preview) and args.type_text == "diff"
         and args.key_action and "enter" in args.key_action
     )
-    if args.verify_viewer_return and not (direct_viewer_route or palette_diff_route):
+    if args.verify_viewer_return and not (
+        direct_viewer_route or palette_diff_route or args.fake_pdf_preview
+    ):
         raise SystemExit(
-            "--verify-viewer-return requires one direct file fixture or a fake Diff route"
+            "--verify-viewer-return requires one direct file fixture, fake Diff route, or fake PDF route"
         )
     if args.verify_viewer_return and args.verify_return:
         raise SystemExit("--verify-viewer-return cannot be combined with --verify-return")
+    if args.fake_pdf_preview and args.verify_viewer_return and (
+        not args.click or "r" not in (args.key_action or [])
+    ):
+        raise SystemExit(
+            "--fake-pdf-preview with --verify-viewer-return requires a Palette click and --key-action r"
+        )
     if args.image_tool and not args.image:
         raise SystemExit("--image-tool requires --image")
     if args.click is not None and any(
@@ -1608,6 +1705,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         if not (
             (all(action in {"f3", "f6"} for action in args.key_action))
             or (args.fake_text_preview and all(action in {"f3", "ctrl-f"} for action in args.key_action))
+            or (args.fake_pdf_preview and all(action == "r" for action in args.key_action))
             or ((args.fake_diff_preview or args.fake_image_diff_preview)
                 and all(action == "enter" for action in args.key_action))
         ):
@@ -1616,7 +1714,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
                 "except in a fake text preview run"
             )
     if args.type_text and not (
-        args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
+        args.fake_text_preview or args.fake_pdf_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
         or args.fake_diff_preview or args.fake_image_diff_preview or args.fake_model3d
     ):
         raise SystemExit("--type-text requires a fake text preview route")
@@ -1670,6 +1768,7 @@ def main() -> int:
             "midi_fixture": str(args.midi.resolve()) if args.midi else None,
             "fake_audio_transition": args.fake_audio_transition,
             "fake_text_preview": args.fake_text_preview,
+            "fake_pdf_preview": args.fake_pdf_preview,
             "fake_csv_preview": args.fake_csv_preview,
             "fake_multisheet_xlsx": args.fake_multisheet_xlsx,
             "fake_model3d": args.fake_model3d,
@@ -1721,7 +1820,7 @@ def main() -> int:
                 config["runtime"], output / "fake-daemon-events.json"
             )
         if (
-            args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
+            args.fake_text_preview or args.fake_pdf_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
             or args.fake_model3d or args.fake_binary_diff or args.fake_diff_preview
             or args.fake_image_diff_preview or args.fake_reload_error
         ):
@@ -1733,9 +1832,13 @@ def main() -> int:
                 binary_diff_preview=args.fake_binary_diff,
                 diff_preview=args.fake_diff_preview,
                 image_diff_preview=args.fake_image_diff_preview,
+                pdf_preview=args.fake_pdf_preview,
                 reload_config_error=args.fake_reload_error,
             )
-        capture_workbench(args, binary, output, config, niri_env, outputs, children, report)
+        capture_workbench(
+            args, binary, output, config, niri_env, outputs, children, report,
+            fake_text_daemon=fake_text_daemon,
+        )
     except Exception as exc:
         report["status"] = "failed"
         report["failures"].append(str(exc))
@@ -1757,6 +1860,8 @@ def main() -> int:
             text_route = fake_text_daemon.close()
             if args.fake_binary_diff:
                 report["fake_binary_diff"] = text_route
+            elif args.fake_pdf_preview:
+                report["fake_pdf_preview"] = text_route
             elif args.fake_diff_preview:
                 report["fake_diff_preview"] = text_route
             elif args.fake_image_diff_preview:

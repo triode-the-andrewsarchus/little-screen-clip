@@ -3466,6 +3466,45 @@ mod workbench_layout_tests {
         assert!(app.midi_load_job.is_some());
     }
 
+    #[test]
+    fn closing_dirty_pdf_requests_workbench_mirror_redraw() {
+        let mut pdf = PdfEditorState::new(PathBuf::from("edited.pdf"));
+        pdf.dirty = true;
+        let mut app = test_workbench_app(Some(ViewerSession::Pdf(pdf)), VecDeque::new());
+        let ctx = egui::Context::default();
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![escape],
+                ..Default::default()
+            },
+            |ctx| assert!(app.render_modal_viewers(ctx)),
+        );
+
+        assert!(app.viewer.is_none());
+        assert!(
+            app.dirty_mirror,
+            "closing an edited PDF must invalidate the mirror"
+        );
+        app.update_mirror_texture(&ctx);
+        assert!(
+            !app.dirty_mirror,
+            "the next mirror render should consume invalidation"
+        );
+        assert!(app.mirror_texture.is_some());
+    }
+
     fn space_key_event() -> egui::Event {
         egui::Event::Key {
             key: egui::Key::Space,
