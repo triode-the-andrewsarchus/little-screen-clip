@@ -697,3 +697,7 @@ The initial decorated capture `/tmp/lsc-csd-1280x720-dark` showed Niri adding 8�
 ## Node Machine focused shortcut ownership, 2026-09-29
 
 `node_machine_history_and_delete_shortcuts_yield_to_focused_text_input` sends Undo, Redo, and Delete through the production canvas render path with its catalog-search `TextEdit` focused. Each leaves the selected node and history state intact. The same commands on an unfocused canvas perform their expected history or deletion action. The focused regression passes; node-property and save-name editor fields are not separately exercised.
+
+## Node Machine view shortcuts and overlays, 2026-09-29
+
+`node_machine_catalog_and_save_overlays_hold_f1_f3_view_switches` sends F1, F2, and F3 through `WorkbenchApp::handle_global_shortcuts` with each Node Machine overlay open. Catalog and Save keep Node Machine active, preserve their open state, and leave the graph unchanged. In each same app instance, after closing the overlay, an F2→F1→F3 sequence routes Node Machine→Palette→Node Machine→Auto Actions without directly changing the route; graph state remains unchanged. The focused workbench regression passes. This validates source-path event routing, not native keyboard delivery under a compositor.

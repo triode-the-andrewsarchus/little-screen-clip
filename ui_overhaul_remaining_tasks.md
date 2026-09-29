@@ -557,7 +557,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H2.3a3 [Luna implementation; primary review] Verify Node Machine Escape ownership.** The inline route regression proves catalog, save dialog, and cable drag each consume one Escape before the next Escape returns to Palette and restores search focus.
     - **H2.3a4 Node Machine keyboard ownership checks.**
       - [x] **H2.3a4a [Luna implementation; primary review] Verify Undo/Redo/Delete yield to focused text input.** A production-path egui regression exercises all three shortcuts with Node Machine catalog search focused and without a text owner; broader editor-field coverage is not claimed.
-      - [ ] **H2.3a4b [Primary] Verify F1–F3 view shortcuts yield to Node Machine overlays.** Confirm catalog/save overlays keep ownership while open, then view switching resumes after dismissal without graph mutation.
+      - [x] **H2.3a4b [Luna implementation; primary review] Verify F1–F3 view shortcuts yield to Node Machine overlays.** `node_machine_catalog_and_save_overlays_hold_f1_f3_view_switches` exercises the production workbench shortcut router: each F-key leaves the active view and graph unchanged with either catalog or save dialog open; after dismissal, the same app completes an F2→F1→F3 route cycle with graph unchanged.
   - [ ] **H2.3b [Primary] Migrate diff/comparison modes to session/action/overlay contracts.**
   - [ ] **H2.3c [Primary] Migrate PDF page/edit flow to session/action/overlay contracts.**
   - [ ] **H2.3d [Primary] Migrate 3D interaction to session/action/overlay contracts.**

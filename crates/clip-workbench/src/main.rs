@@ -3672,6 +3672,66 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn node_machine_catalog_and_save_overlays_hold_f1_f3_view_switches() {
+        fn press_shortcut(app: &mut WorkbenchApp, key: egui::Key) {
+            let ctx = egui::Context::default();
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| app.handle_global_shortcuts(ctx),
+            );
+        }
+
+        let shortcuts = [egui::Key::F1, egui::Key::F2, egui::Key::F3];
+        for catalog_open in [true, false] {
+            for shortcut in shortcuts {
+                let mut app = test_workbench_app(None, VecDeque::new());
+                app.view = WorkbenchView::NodeMachine;
+                app.canvas_state.catalog_open = catalog_open;
+                app.canvas_state.save_dialog_open = !catalog_open;
+                let graph_before = serde_yaml::to_string(&app.canvas_state.graph).unwrap();
+
+                press_shortcut(&mut app, shortcut);
+
+                assert_eq!(app.view, WorkbenchView::NodeMachine);
+                assert_eq!(app.canvas_state.catalog_open, catalog_open);
+                assert_eq!(app.canvas_state.save_dialog_open, !catalog_open);
+                assert_eq!(
+                    serde_yaml::to_string(&app.canvas_state.graph).unwrap(),
+                    graph_before,
+                    "{shortcut:?} must not mutate the graph while an overlay is open"
+                );
+
+                app.canvas_state.catalog_open = false;
+                app.canvas_state.save_dialog_open = false;
+                for (resume_key, expected_view) in [
+                    (egui::Key::F2, WorkbenchView::Palette),
+                    (egui::Key::F1, WorkbenchView::NodeMachine),
+                    (egui::Key::F3, WorkbenchView::AutoActions),
+                ] {
+                    press_shortcut(&mut app, resume_key);
+                    assert_eq!(app.view, expected_view);
+                    assert!(!app.canvas_state.catalog_open);
+                    assert!(!app.canvas_state.save_dialog_open);
+                    assert_eq!(
+                        serde_yaml::to_string(&app.canvas_state.graph).unwrap(),
+                        graph_before,
+                        "{resume_key:?} after dismissal must preserve graph state"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn spreadsheet_completion_waits_until_modal_viewer_closes() {
         let mut app = test_workbench_app(
             Some(ViewerSession::ComponentGallery(
