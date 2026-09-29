@@ -2376,6 +2376,63 @@ mod tests {
     }
 
     #[test]
+    fn binary_diff_tab_shortcut_recomputes_raw_result() {
+        let mut state = BinaryDiffViewState::new(
+            "left.bin".to_string(),
+            b"A B C D".to_vec(),
+            "right.bin".to_string(),
+            b"A X B C D".to_vec(),
+        );
+        let initial_rx = state.receiver.take().expect("initial compute receiver");
+        let (initial_generation, initial_result) = initial_rx
+            .recv()
+            .expect("initial job result")
+            .expect("initial diff result");
+        assert_eq!(initial_generation, state.current_generation);
+        assert_eq!(initial_result.mode, BinaryDiffMode::Aligned);
+        state.result = Some(initial_result);
+        state.is_computing = false;
+        state.compute_ticket = None;
+
+        let previous_generation = state.current_generation;
+        let ctx = egui::Context::default();
+        let mut close = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Tab,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| state.handle_global_shortcuts(ctx, &mut close),
+        );
+
+        assert!(!close);
+        assert_eq!(state.mode, BinaryDiffMode::Raw);
+        assert_eq!(state.current_generation, previous_generation + 1);
+        assert!(state.is_computing);
+        assert_eq!(state.result.as_ref().unwrap().mode, BinaryDiffMode::Aligned);
+
+        let recompute_rx = state.receiver.take().expect("raw recompute receiver");
+        let (generation, recomputed) = recompute_rx
+            .recv()
+            .expect("recompute job result")
+            .expect("raw diff result");
+        assert_eq!(generation, state.current_generation);
+        assert_eq!(recomputed.mode, BinaryDiffMode::Raw);
+        assert_eq!(recomputed.left_label, "left.bin");
+        assert_eq!(recomputed.right_label, "right.bin");
+        state.result = Some(recomputed);
+        state.is_computing = false;
+        state.compute_ticket = None;
+        assert_eq!(state.result.as_ref().unwrap().mode, BinaryDiffMode::Raw);
+    }
+
+    #[test]
     fn binary_diff_queue_saturation_is_visible_and_recovers() {
         use std::sync::mpsc;
         use std::time::Duration;
