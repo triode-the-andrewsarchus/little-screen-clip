@@ -570,11 +570,12 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **H2.3b2e [Luna implementation; primary review] Verify image Diff Copy Mask encodes the mask and hands it to Left Hand.** `image_diff_copy_request_contains_left_hand_mask_png` exercises the pure request builder used by production, checks `PushImage`, Left Hand, and `image/png`, then decodes the bytes and verifies exact mask dimensions/pixels. It does not send IPC or access a clipboard.
     - **H2.3b3 Binary Diff route and input checks.**
       - [x] **H2.3b3a [Luna implementation; primary review] Verify Binary Diff opens from the Palette and returns to the invoking workbench view on Escape.** `palette_binary_diff_opens_and_escape_returns_to_palette` executes the built-in Palette `binary-diff` action with two byte-backed text fixtures, confirms a Binary Diff viewer opens without changing the Palette view, then sends Escape through modal routing and verifies return to Palette. The existing private runtime run verifies the direct Binary Diff viewer route and popup cleanup, but does not exercise Palette selection; see `ui_overhaul_acceptance.md`.
-      - [ ] **H2.3b3b [Luna implementation; primary review] Verify aligned/raw mode shortcuts update Binary Diff and yield to focused text input.**
-      - [ ] **H2.3b3c [Luna implementation; primary review] Verify byte-width shortcuts update Binary Diff and yield to focused text input.**
+      - [ ] **H2.3b3b [Luna implementation; primary review] Verify Tab switches Binary Diff between aligned and raw modes and recomputes the result.**
+      - [ ] **H2.3b3c [Luna implementation; primary review] Verify Num0/Num1/Num2 select 8/16/32-byte row widths and recompute the result.**
       - [ ] **H2.3b3d [Luna implementation; primary review] Verify Binary Diff operand swap preserves the intended left/right targets.**
       - [ ] **H2.3b3e [Luna implementation; primary review] Verify previous/next-difference navigation selects and scrolls to the expected block.**
       - [ ] **H2.3b3f [Luna implementation; primary review] Verify Binary Diff search owns text entry and result navigation while focused.**
+      - [ ] **H2.3b3g [Luna implementation; primary review] Verify focused Binary Diff search prevents global mode, width, swap, and difference-navigation shortcuts.**
     - **H2.3b4 External comparison handoff checks.**
       - [ ] **H2.3b4a [Luna implementation; primary review] Verify Diff chooses Meld/KDiff3 using the documented executable priority.**
       - [ ] **H2.3b4b [Luna implementation; primary review] Verify Diff stages exact operand bytes with the expected file extensions.**
