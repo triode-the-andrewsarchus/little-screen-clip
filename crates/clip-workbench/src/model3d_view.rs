@@ -762,6 +762,51 @@ mod tests {
             .collect()
     }
 
+    fn render_interaction_frame(
+        ctx: &egui::Context,
+        viewer: &mut Model3dViewerState,
+        time: f64,
+        events: Vec<egui::Event>,
+    ) -> egui::Rect {
+        let palette = AppPalette::default();
+        let canvas_fill = crate::hex_to_c32(&palette.colors.surface_recessed);
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut close = false;
+                    viewer.render_ui(ui, &palette, &mut close);
+                });
+            },
+        );
+        output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Rect(rect) if rect.fill == canvas_fill => Some(rect.rect),
+                _ => None,
+            })
+            .max_by(|left, right| left.area().total_cmp(&right.area()))
+            .expect("ready viewer should paint its canvas")
+    }
+
+    fn pointer_button_event(pos: Pos2, button: egui::PointerButton, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
     #[test]
     fn test_triangle_sample_step_preserves_full_density() {
         let budget = 120_000;
@@ -863,6 +908,128 @@ mod tests {
             }
         }
         assert!(!parse_ran.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn primary_drag_orbits_and_disables_auto_rotation() {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let mut viewer = Model3dViewerState::from_model(test_mesh(), None);
+        let canvas = render_interaction_frame(&ctx, &mut viewer, 0.0, Vec::new());
+        let start = canvas.center();
+        let end = start + Vec2::new(32.0, 20.0);
+
+        render_interaction_frame(
+            &ctx,
+            &mut viewer,
+            0.01,
+            vec![
+                egui::Event::PointerMoved(start),
+                pointer_button_event(start, egui::PointerButton::Primary, true),
+            ],
+        );
+        let yaw_before_drag = viewer.yaw;
+        render_interaction_frame(
+            &ctx,
+            &mut viewer,
+            0.02,
+            vec![egui::Event::PointerMoved(end)],
+        );
+        render_interaction_frame(
+            &ctx,
+            &mut viewer,
+            0.03,
+            vec![pointer_button_event(
+                end,
+                egui::PointerButton::Primary,
+                false,
+            )],
+        );
+
+        assert!((viewer.pitch - 0.6).abs() < 0.02, "pitch={}", viewer.pitch);
+        assert!(viewer.yaw > yaw_before_drag + 0.25, "yaw={}", viewer.yaw);
+        assert!(
+            !viewer.auto_rotate,
+            "primary drag should pause auto-rotation"
+        );
+        let yaw_after_drag = viewer.yaw;
+        render_interaction_frame(&ctx, &mut viewer, 0.04, Vec::new());
+        assert_eq!(viewer.yaw, yaw_after_drag, "auto-rotation remains paused");
+    }
+
+    #[test]
+    fn secondary_and_middle_drags_pan_without_orbiting() {
+        for button in [egui::PointerButton::Secondary, egui::PointerButton::Middle] {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let mut viewer = Model3dViewerState::from_model(test_mesh(), None);
+            viewer.auto_rotate = false;
+            let canvas = render_interaction_frame(&ctx, &mut viewer, 0.0, Vec::new());
+            let start = canvas.center();
+            let end = start + Vec2::new(24.0, -13.0);
+
+            render_interaction_frame(
+                &ctx,
+                &mut viewer,
+                0.01,
+                vec![
+                    egui::Event::PointerMoved(start),
+                    pointer_button_event(start, button, true),
+                ],
+            );
+            render_interaction_frame(
+                &ctx,
+                &mut viewer,
+                0.02,
+                vec![egui::Event::PointerMoved(end)],
+            );
+            render_interaction_frame(
+                &ctx,
+                &mut viewer,
+                0.03,
+                vec![pointer_button_event(end, button, false)],
+            );
+
+            assert_eq!(viewer.pan_offset, Vec2::new(24.0, -13.0), "{button:?}");
+            assert_eq!(viewer.yaw, 0.6, "{button:?} drag must not orbit yaw");
+            assert_eq!(viewer.pitch, 0.4, "{button:?} drag must not orbit pitch");
+        }
+    }
+
+    #[test]
+    fn hovered_scroll_zoom_clamps_to_documented_limits() {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let mut viewer = Model3dViewerState::from_model(test_mesh(), None);
+        viewer.auto_rotate = false;
+        let canvas = render_interaction_frame(&ctx, &mut viewer, 0.0, Vec::new());
+        let canvas_pointer = canvas.center();
+
+        for index in 0..32 {
+            render_interaction_frame(
+                &ctx,
+                &mut viewer,
+                (index + 1) as f64 * 0.01,
+                vec![
+                    egui::Event::PointerMoved(canvas_pointer),
+                    egui::Event::Scroll(Vec2::new(0.0, 20.0)),
+                ],
+            );
+        }
+        assert_eq!(viewer.zoom, 20.0, "scroll-in should clamp at 20×");
+
+        for index in 0..48 {
+            render_interaction_frame(
+                &ctx,
+                &mut viewer,
+                0.33 + index as f64 * 0.01,
+                vec![
+                    egui::Event::PointerMoved(canvas_pointer),
+                    egui::Event::Scroll(Vec2::new(0.0, -20.0)),
+                ],
+            );
+        }
+        assert_eq!(viewer.zoom, 0.1, "scroll-out should clamp at 0.1×");
     }
 
     #[test]
