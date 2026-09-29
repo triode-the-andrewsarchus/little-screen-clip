@@ -4039,6 +4039,47 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn palette_search_prefixes_select_slots_and_keep_remaining_query() {
+        let cases = [
+            (
+                "1",
+                vec![SlotId::LeftHand, SlotId::LeftPrior1],
+                String::new(),
+            ),
+            (
+                "2",
+                vec![SlotId::LeftHand, SlotId::LeftPrior2],
+                String::new(),
+            ),
+            (
+                "3",
+                vec![SlotId::LeftHand, SlotId::LeftPrior1, SlotId::LeftPrior2],
+                String::new(),
+            ),
+            ("0", vec![SlotId::LeftHand], String::new()),
+            ("`", vec![SlotId::LeftHand], String::new()),
+            (
+                "  uppercase",
+                vec![SlotId::LeftHand, SlotId::RightHand],
+                "uppercase".to_owned(),
+            ),
+        ];
+
+        for (query, expected_slots, expected_query) in cases {
+            let mut app = test_workbench_app(None, VecDeque::new());
+            app.search_query = query.to_owned();
+            app.handle_search_prefix_shortcuts(false);
+
+            assert_eq!(app.selected_slots, expected_slots, "query {query:?}");
+            assert_eq!(app.search_query, expected_query, "query {query:?}");
+            assert!(
+                app.dirty_mirror,
+                "query {query:?} should refresh the mirror"
+            );
+        }
+    }
+
+    #[test]
     fn rolling_audio_space_requires_selection_and_yields_to_focused_text() {
         let mut query = String::new();
         let mut eligible = false;
