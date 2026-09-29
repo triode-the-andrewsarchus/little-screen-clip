@@ -29,9 +29,33 @@ fn stage_binary_handoff(bytes: &[u8], side: &str) -> Result<std::path::PathBuf, 
         uuid::Uuid::new_v4().simple(),
         side
     ));
+    stage_binary_handoff_at(bytes, side, path)
+}
+
+fn stage_binary_handoff_at(
+    bytes: &[u8],
+    side: &str,
+    path: std::path::PathBuf,
+) -> Result<std::path::PathBuf, String> {
     std::fs::write(&path, bytes)
         .map_err(|error| format!("Failed to write {side} temp file: {error}"))?;
     Ok(path)
+}
+
+fn run_binary_handoff_with(
+    left: &[u8],
+    right: &[u8],
+    cancelled: &std::sync::atomic::AtomicBool,
+    mut stage: impl FnMut(&[u8], &str) -> Result<std::path::PathBuf, String>,
+    available: impl FnMut(&str) -> Option<std::path::PathBuf>,
+    spawn: impl FnMut(&std::path::Path, &std::path::Path, Option<&std::path::Path>) -> bool,
+) -> Result<String, String> {
+    let left_path = stage(left, "lhs")?;
+    let right_path = stage(right, "rhs")?;
+    if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("External handoff cancelled".to_string());
+    }
+    launch_binary_diff_tool_with(&left_path, &right_path, available, spawn)
 }
 
 fn launch_binary_diff_tool_with(
@@ -450,14 +474,11 @@ impl BinaryDiffViewState {
         let job_cancelled = cancelled.clone();
         let (ticket, rx) =
             BackgroundJobs::global().submit(std::time::Duration::from_secs(30), move || {
-                let temp_left = stage_binary_handoff(left.as_slice(), "lhs")?;
-                let temp_right = stage_binary_handoff(right.as_slice(), "rhs")?;
-                if job_cancelled.load(std::sync::atomic::Ordering::Acquire) {
-                    return Err("External handoff cancelled".to_string());
-                }
-                launch_binary_diff_tool_with(
-                    &temp_left,
-                    &temp_right,
+                run_binary_handoff_with(
+                    left.as_slice(),
+                    right.as_slice(),
+                    &job_cancelled,
+                    stage_binary_handoff,
                     |command| little_clip_core::command_available(command),
                     |app, left, right| {
                         let mut command = std::process::Command::new(app);
@@ -2027,6 +2048,82 @@ mod tests {
 
         std::fs::remove_file(left_path).unwrap();
         std::fs::remove_file(right_path).unwrap();
+    }
+
+    #[test]
+    fn binary_handoff_write_failures_skip_external_tool_lookup_and_spawn() {
+        use std::cell::Cell;
+
+        let fixture_dir = std::env::temp_dir().join(format!(
+            "clip-bin-stage-error-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&fixture_dir).unwrap();
+        let blocked_parent = fixture_dir.join("not-a-directory");
+        std::fs::write(&blocked_parent, b"fixture blocker").unwrap();
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let lookups = Cell::new(0);
+        let launches = Cell::new(0);
+
+        let left_failure = run_binary_handoff_with(
+            b"left bytes",
+            b"right bytes",
+            &cancelled,
+            |_, side| {
+                stage_binary_handoff_at(
+                    b"left bytes",
+                    side,
+                    blocked_parent.join("left-stage-fail.bin"),
+                )
+            },
+            |_| {
+                lookups.set(lookups.get() + 1);
+                Some(std::path::PathBuf::from("/fake/imhex"))
+            },
+            |_, _, _| {
+                launches.set(launches.get() + 1);
+                true
+            },
+        );
+        assert!(
+            left_failure
+                .unwrap_err()
+                .contains("Failed to write lhs temp file")
+        );
+        assert_eq!(lookups.get(), 0);
+        assert_eq!(launches.get(), 0);
+
+        let staged_left = fixture_dir.join("successful-left.bin");
+        let right_failure = run_binary_handoff_with(
+            b"left bytes",
+            b"right bytes",
+            &cancelled,
+            |bytes, side| {
+                let path = if side == "lhs" {
+                    staged_left.clone()
+                } else {
+                    blocked_parent.join("right-stage-fail.bin")
+                };
+                stage_binary_handoff_at(bytes, side, path)
+            },
+            |_| {
+                lookups.set(lookups.get() + 1);
+                Some(std::path::PathBuf::from("/fake/imhex"))
+            },
+            |_, _, _| {
+                launches.set(launches.get() + 1);
+                true
+            },
+        );
+        assert!(
+            right_failure
+                .unwrap_err()
+                .contains("Failed to write rhs temp file")
+        );
+        assert_eq!(lookups.get(), 0);
+        assert_eq!(launches.get(), 0);
+        std::fs::remove_file(staged_left).unwrap();
+        std::fs::remove_dir_all(fixture_dir).unwrap();
     }
 
     #[test]
