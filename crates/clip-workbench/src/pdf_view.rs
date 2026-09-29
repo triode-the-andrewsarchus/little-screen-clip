@@ -1095,6 +1095,18 @@ impl Drop for PdfEditorState {
 mod tests {
     use super::*;
 
+    fn action_guard_state(
+        path: PathBuf,
+        page_count: usize,
+        selected_page: Option<usize>,
+    ) -> PdfEditorState {
+        let mut state = raster_state(page_count, 1);
+        state.path = path;
+        state.title = "fixture.pdf".to_owned();
+        state.selected_page = selected_page;
+        state
+    }
+
     fn raster_state(page_count: usize, dimension: u32) -> PdfEditorState {
         let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
             dimension,
@@ -1695,6 +1707,95 @@ mod tests {
                 "selected page preview escapes its pane at {host_size:?}: page={preview_rect:?}, pane={preview_pane:?}"
             );
         }
+    }
+
+    #[test]
+    fn pdf_delete_and_rotate_wait_for_metadata_before_dispatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = action_guard_state(temp.path().join("fixture.pdf"), 2, Some(1));
+        let jobs = BackgroundJobs::new(1, 1);
+        let (ticket, receiver) = jobs.submit(Duration::MAX, || {
+            Ok(PdfInfo {
+                page_count: 2,
+                title: Some("fixture".into()),
+                author: None,
+                page_size: None,
+            })
+        });
+        state.info_job = Some((ticket, receiver));
+
+        state.delete_current_page(1.0);
+        state.rotate_current_page(90, 2.0);
+
+        assert!(state.info_job.is_some(), "metadata load remains pending");
+        assert!(!state.edit_in_progress);
+        assert!(
+            state.edit_rx.is_none(),
+            "guarded actions must not dispatch edits"
+        );
+        let (ticket, _) = state.info_job.take().unwrap();
+        ticket.cancel();
+    }
+
+    #[test]
+    fn pdf_delete_and_rotate_without_selection_do_not_dispatch_edits() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = action_guard_state(temp.path().join("fixture.pdf"), 2, None);
+
+        state.delete_current_page(1.0);
+        state.rotate_current_page(90, 2.0);
+
+        assert!(!state.edit_in_progress);
+        assert!(state.edit_rx.is_none());
+    }
+
+    #[test]
+    fn pdf_delete_and_rotate_do_not_replace_an_active_edit() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = action_guard_state(temp.path().join("fixture.pdf"), 2, Some(2));
+        let staging_dir = tempfile::tempdir_in(temp.path()).unwrap();
+        let (sender, receiver) = channel();
+        state.edit_rx = Some(receiver);
+        state.edit_in_progress = true;
+
+        state.delete_current_page(1.0);
+        state.rotate_current_page(90, 2.0);
+
+        assert!(state.edit_in_progress);
+        assert_eq!(
+            state.status_toast.message(2.0),
+            Some("A PDF edit is already in progress")
+        );
+        assert!(state.edit_rx.is_some());
+        assert!(
+            sender
+                .send(PdfEditMsg {
+                    operation: "sentinel",
+                    page_num: 2,
+                    output: temp.path().join("untouched.pdf"),
+                    staging_dir,
+                    result: Err("sentinel only".into()),
+                })
+                .is_ok(),
+            "the original edit receiver should remain connected"
+        );
+        assert!(!temp.path().join("untouched.pdf").exists());
+    }
+
+    #[test]
+    fn pdf_delete_only_page_keeps_feedback_without_dispatching_edit() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut state = action_guard_state(temp.path().join("fixture.pdf"), 1, Some(1));
+
+        state.delete_current_page(3.5);
+
+        assert_eq!(
+            state.status_toast.message(3.5),
+            Some("Cannot delete only page from PDF")
+        );
+        assert!(!state.edit_in_progress);
+        assert!(state.edit_rx.is_none());
+        assert!(!temp.path().join("fixture.delete.edited.pdf").exists());
     }
 
     #[test]
