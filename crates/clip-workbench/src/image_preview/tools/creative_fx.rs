@@ -40,7 +40,7 @@ pub(crate) struct CreativeFxMaskMsg {
 
 #[derive(Clone)]
 struct CreativeFxMaskRequest {
-    png_bytes: std::sync::Arc<Vec<u8>>,
+    snapshot: DisplayImageSnapshotRequest,
     cmd_bin: String,
     cmd_args: Vec<String>,
     stamp: CreativeFxMaskStamp,
@@ -169,7 +169,8 @@ mod ownership_tests {
                 .depth_request
                 .as_ref()
                 .unwrap()
-                .png_bytes,
+                .snapshot
+                .pixels,
         );
         state.poll_creative_fx_on(&jobs);
         let retry_at = state.creative_fx_state.depth_retry_at.unwrap();
@@ -188,7 +189,8 @@ mod ownership_tests {
                 .depth_request
                 .as_ref()
                 .unwrap()
-                .png_bytes
+                .snapshot
+                .pixels
         ));
         state.poll_creative_fx_on(&jobs);
         assert_eq!(state.creative_fx_state.depth_retry_at, Some(retry_at));
@@ -366,7 +368,8 @@ mod ownership_tests {
                 .alpha_request
                 .as_ref()
                 .unwrap()
-                .png_bytes,
+                .snapshot
+                .pixels,
         );
         state.poll_creative_fx_on(&jobs);
         let retry_at = state.creative_fx_state.alpha_retry_at.unwrap();
@@ -385,7 +388,8 @@ mod ownership_tests {
                 .alpha_request
                 .as_ref()
                 .unwrap()
-                .png_bytes
+                .snapshot
+                .pixels
         ));
         state.poll_creative_fx_on(&jobs);
         assert_eq!(state.creative_fx_state.alpha_retry_at, Some(retry_at));
@@ -1835,6 +1839,7 @@ impl ImagePreviewState {
         }
     }
 
+    #[cfg(test)]
     fn current_creative_fx_mask_stamp(&self) -> CreativeFxMaskStamp {
         self.creative_fx_state.mask_stamp(self.input_stamp())
     }
@@ -2033,25 +2038,17 @@ impl ImagePreviewState {
             self.apply_redactions();
         }
 
-        let base_img = self.current_display_image();
-        let mut png_bytes = Vec::new();
-        if let Err(e) = base_img.write_to(
-            &mut std::io::Cursor::new(&mut png_bytes),
-            image::ImageFormat::Png,
-        ) {
-            self.creative_fx_state.depth_estimation_error =
-                Some(format!("Failed to encode image to PNG: {}", e));
-            return;
-        }
-
-        let stamp = self.current_creative_fx_mask_stamp();
+        let snapshot = self.display_image_snapshot_request();
+        let stamp = self
+            .creative_fx_state
+            .mask_stamp(snapshot.input_stamp.clone());
         self.creative_fx_state.depth_estimation_stamp = Some(stamp.clone());
         self.creative_fx_state.depth_estimation_in_progress = true;
         self.creative_fx_state.depth_estimation_error = None;
         self.creative_fx_state.depth_queue_status = None;
         self.creative_fx_state.depth_retry_at = None;
         self.creative_fx_state.depth_request = Some(CreativeFxMaskRequest {
-            png_bytes: std::sync::Arc::new(png_bytes),
+            snapshot,
             cmd_bin,
             cmd_args,
             stamp,
@@ -2072,16 +2069,22 @@ impl ImagePreviewState {
         let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
             let mut cmd = Command::new(&request.cmd_bin);
             cmd.args(&request.cmd_args);
-            let result = super::background_removal::run_image_tool_subprocess(
-                cmd,
-                &request.png_bytes,
-                None,
-                Some(&control.cancel),
-                Some(&control.child_pid),
-                BgRemovalOperation::DepthMap,
-                &request.cmd_bin,
-            )
-            .and_then(super::background_removal::decode_image_tool_output);
+            let result = request
+                .snapshot
+                .compose_png()
+                .map_err(|error| format!("Failed to encode image to PNG: {error}"))
+                .and_then(|png_bytes| {
+                    super::background_removal::run_image_tool_subprocess(
+                        cmd,
+                        &png_bytes,
+                        None,
+                        Some(&control.cancel),
+                        Some(&control.child_pid),
+                        BgRemovalOperation::DepthMap,
+                        &request.cmd_bin,
+                    )
+                    .and_then(super::background_removal::decode_image_tool_output)
+                });
             if result.is_err() && control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
             }
@@ -2105,27 +2108,20 @@ impl ImagePreviewState {
             self.apply_redactions();
         }
 
-        let base_img = self.current_display_image();
-        let mut png_bytes = Vec::new();
-        if let Err(error) = base_img.write_to(
-            &mut std::io::Cursor::new(&mut png_bytes),
-            image::ImageFormat::Png,
-        ) {
-            self.creative_fx_state.alpha_mask_error =
-                Some(format!("Failed to encode image to PNG: {}", error));
-            return;
-        }
+        let snapshot = self.display_image_snapshot_request();
 
         let (cmd_bin, cmd_args) =
             super::background_removal::background_removal_command(self.bg_removal_cmd.as_deref());
-        let stamp = self.current_creative_fx_mask_stamp();
+        let stamp = self
+            .creative_fx_state
+            .mask_stamp(snapshot.input_stamp.clone());
         self.creative_fx_state.alpha_mask_stamp = Some(stamp.clone());
         self.creative_fx_state.alpha_mask_in_progress = true;
         self.creative_fx_state.alpha_mask_error = None;
         self.creative_fx_state.alpha_queue_status = None;
         self.creative_fx_state.alpha_retry_at = None;
         self.creative_fx_state.alpha_request = Some(CreativeFxMaskRequest {
-            png_bytes: std::sync::Arc::new(png_bytes),
+            snapshot,
             cmd_bin,
             cmd_args,
             stamp,
@@ -2146,16 +2142,22 @@ impl ImagePreviewState {
         let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
             let mut cmd = Command::new(&request.cmd_bin);
             cmd.args(&request.cmd_args);
-            let result = super::background_removal::run_image_tool_subprocess(
-                cmd,
-                &request.png_bytes,
-                None,
-                Some(&control.cancel),
-                Some(&control.child_pid),
-                BgRemovalOperation::BackgroundRemoval,
-                &request.cmd_bin,
-            )
-            .and_then(super::background_removal::decode_image_tool_output);
+            let result = request
+                .snapshot
+                .compose_png()
+                .map_err(|error| format!("Failed to encode image to PNG: {error}"))
+                .and_then(|png_bytes| {
+                    super::background_removal::run_image_tool_subprocess(
+                        cmd,
+                        &png_bytes,
+                        None,
+                        Some(&control.cancel),
+                        Some(&control.child_pid),
+                        BgRemovalOperation::BackgroundRemoval,
+                        &request.cmd_bin,
+                    )
+                    .and_then(super::background_removal::decode_image_tool_output)
+                });
             if result.is_err() && control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
                 return;
             }

@@ -81,7 +81,7 @@ pub enum OcrMsg {
 
 #[derive(Clone)]
 pub struct OcrRequest {
-    png_bytes: std::sync::Arc<Vec<u8>>,
+    snapshot: DisplayImageSnapshotRequest,
     python_bin: String,
     script_path: String,
     engine_arg: String,
@@ -150,15 +150,7 @@ impl ImagePreviewState {
         if self.ocr_state.in_progress {
             return;
         }
-        let base_img = self.current_display_image();
-        let mut png_bytes = Vec::new();
-        if let Err(e) = base_img.write_to(
-            &mut std::io::Cursor::new(&mut png_bytes),
-            image::ImageFormat::Png,
-        ) {
-            self.ocr_state.error = Some(format!("Failed to encode image to PNG: {}", e));
-            return;
-        }
+        let snapshot = self.display_image_snapshot_request();
 
         let engine = self.ocr_state.engine;
         let engine_arg = engine.arg_name().to_string();
@@ -172,13 +164,13 @@ impl ImagePreviewState {
         self.ocr_job_rx = None;
         self.ocr_retry_at = None;
         self.ocr_request = Some(OcrRequest {
-            png_bytes: std::sync::Arc::new(png_bytes),
+            snapshot: snapshot.clone(),
             python_bin,
             script_path,
             engine_arg,
             custom_prompt,
         });
-        self.ocr_input_stamp = Some(self.input_stamp());
+        self.ocr_input_stamp = Some(snapshot.input_stamp);
         self.ocr_state.in_progress = true;
         self.ocr_state.error = None;
         self.ocr_state.status_text = Some(format!("Starting {}...", engine.label()));
@@ -197,6 +189,15 @@ impl ImagePreviewState {
 
         let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
             let start = std::time::Instant::now();
+            let png_bytes = match request.snapshot.compose_png() {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let _ = tx.send(OcrMsg::Error(format!(
+                        "Failed to encode image to PNG: {error}"
+                    )));
+                    return;
+                }
+            };
             let _ = tx.send(OcrMsg::Progress(format!(
                 "Launching OCR engine ({})...",
                 request.engine_arg
@@ -262,7 +263,7 @@ impl ImagePreviewState {
 
             if let Some(mut stdin) = child.stdin.take() {
                 use std::io::Write;
-                if let Err(e) = stdin.write_all(&request.png_bytes) {
+                if let Err(e) = stdin.write_all(&png_bytes) {
                     drop(stdin);
                     super::background_removal::terminate_image_tool_process(pid);
                     let _ = child.reap();
@@ -1003,7 +1004,7 @@ mod input_stamp_tests {
             ])
         }));
         state.run_ocr_with_command_on("python3".into(), script.display().to_string(), &jobs);
-        let retained = std::sync::Arc::clone(&state.ocr_request.as_ref().unwrap().png_bytes);
+        let retained = std::sync::Arc::clone(&state.ocr_request.as_ref().unwrap().snapshot.pixels);
         assert!(
             retained.len() > 64 * 1024,
             "fixture PNG must exceed a pipe buffer"
@@ -1020,7 +1021,7 @@ mod input_stamp_tests {
         );
         assert!(std::sync::Arc::ptr_eq(
             &retained,
-            &state.ocr_request.as_ref().unwrap().png_bytes
+            &state.ocr_request.as_ref().unwrap().snapshot.pixels
         ));
         state.poll_ocr_on(&jobs);
         assert_eq!(state.ocr_retry_at, Some(retry_at));

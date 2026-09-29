@@ -42,7 +42,7 @@ use std::sync::Arc;
 
 #[derive(Clone)]
 struct BgRemovalRequest {
-    png_bytes: Arc<Vec<u8>>,
+    snapshot: DisplayImageSnapshotRequest,
     prompt: Option<String>,
     command: String,
     args: Vec<String>,
@@ -302,6 +302,15 @@ impl DisplayImageSnapshotRequest {
     /// Compose redactions, markup, and the captured crop selection on the calling worker.
     pub(crate) fn compose(&self) -> RgbaImage {
         compose_display_image(self.pixels.as_ref().clone(), &self.input_stamp)
+    }
+
+    pub(crate) fn compose_png(&self) -> image::ImageResult<Vec<u8>> {
+        let mut png_bytes = Vec::new();
+        self.compose().write_to(
+            &mut std::io::Cursor::new(&mut png_bytes),
+            image::ImageFormat::Png,
+        )?;
+        Ok(png_bytes)
     }
 }
 

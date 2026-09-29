@@ -126,7 +126,7 @@ mod cancellation_tests {
             vec![script.display().to_string()],
             &jobs,
         );
-        let retained = Arc::clone(&state.bg_removal_request.as_ref().unwrap().png_bytes);
+        let retained = Arc::clone(&state.bg_removal_request.as_ref().unwrap().snapshot.pixels);
         state.poll_bg_removal_on(&jobs);
         let deadline = state.bg_removal_retry_at.unwrap();
         assert!(
@@ -138,7 +138,7 @@ mod cancellation_tests {
         );
         assert!(Arc::ptr_eq(
             &retained,
-            &state.bg_removal_request.as_ref().unwrap().png_bytes
+            &state.bg_removal_request.as_ref().unwrap().snapshot.pixels
         ));
         state.poll_bg_removal_on(&jobs);
         assert_eq!(state.bg_removal_retry_at, Some(deadline));
@@ -391,24 +391,16 @@ impl ImagePreviewState {
             self.apply_redactions();
         }
 
-        let base_img = self.current_display_image();
-        let mut png_bytes = Vec::new();
-        if let Err(e) = base_img.write_to(
-            &mut std::io::Cursor::new(&mut png_bytes),
-            image::ImageFormat::Png,
-        ) {
-            self.bg_removal_error = Some(format!("Failed to encode image to PNG: {}", e));
-            return;
-        }
+        let snapshot = self.display_image_snapshot_request();
 
-        self.bg_removal_input_stamp = Some(self.input_stamp());
+        self.bg_removal_input_stamp = Some(snapshot.input_stamp.clone());
         self.bg_removal_operation = BgRemovalOperation::DepthMap;
         self.bg_removal_in_progress = true;
         let status = "Estimating depth map with Depth-Anything...".to_string();
         self.bg_removal_status = Some(status.clone());
         self.bg_removal_error = None;
         self.bg_removal_request = Some(BgRemovalRequest {
-            png_bytes: Arc::new(png_bytes),
+            snapshot,
             prompt: None,
             command: cmd_bin,
             args: cmd_args,

@@ -289,15 +289,7 @@ impl ImagePreviewState {
             self.apply_redactions();
         }
 
-        let base_img = self.current_display_image();
-        let mut png_bytes = Vec::new();
-        if let Err(e) = base_img.write_to(
-            &mut std::io::Cursor::new(&mut png_bytes),
-            image::ImageFormat::Png,
-        ) {
-            self.bg_removal_error = Some(format!("Failed to encode image to PNG: {}", e));
-            return;
-        }
+        let snapshot = self.display_image_snapshot_request();
 
         let prompt_opt = if !self.multimatte_prompt.trim().is_empty() {
             Some(self.multimatte_prompt.trim().to_string())
@@ -311,8 +303,9 @@ impl ImagePreviewState {
         };
         let (command, args) = background_removal_command(self.bg_removal_cmd.as_deref());
 
+        self.bg_removal_input_stamp = Some(snapshot.input_stamp.clone());
         self.bg_removal_request = Some(BgRemovalRequest {
-            png_bytes: Arc::new(png_bytes),
+            snapshot,
             prompt: prompt_opt,
             command,
             args,
@@ -321,7 +314,6 @@ impl ImagePreviewState {
             status: status_desc.clone(),
         });
         self.bg_removal_retry_at = None;
-        self.bg_removal_input_stamp = Some(self.input_stamp());
         self.bg_removal_operation = BgRemovalOperation::BackgroundRemoval;
         self.bg_removal_in_progress = true;
         self.bg_removal_status = Some(status_desc);
@@ -350,11 +342,21 @@ impl ImagePreviewState {
             };
             let _ = tx.send(BgRemovalMsg::Progress(init_msg));
 
+            let png_bytes = match request.snapshot.compose_png() {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    let _ = tx.send(BgRemovalMsg::Error(format!(
+                        "Failed to encode image to PNG: {error}"
+                    )));
+                    return;
+                }
+            };
+
             let mut cmd = Command::new(&request.command);
             cmd.args(&request.args);
             let result = run_image_tool_subprocess(
                 cmd,
-                &request.png_bytes,
+                &png_bytes,
                 request.prompt.as_deref(),
                 Some(&cancel),
                 Some(&child_pid),
@@ -924,7 +926,8 @@ mod bounded_job_tests {
         let mut state = state_with_command(format!("sh {}", script.display()));
 
         state.run_background_removal_on(&jobs);
-        let retained_png = Arc::clone(&state.bg_removal_request.as_ref().unwrap().png_bytes);
+        let retained_pixels =
+            Arc::clone(&state.bg_removal_request.as_ref().unwrap().snapshot.pixels);
         state.poll_bg_removal_on(&jobs);
         let retry_at = state
             .bg_removal_retry_at
@@ -938,8 +941,8 @@ mod bounded_job_tests {
                 .contains("retrying")
         );
         assert!(Arc::ptr_eq(
-            &retained_png,
-            &state.bg_removal_request.as_ref().unwrap().png_bytes
+            &retained_pixels,
+            &state.bg_removal_request.as_ref().unwrap().snapshot.pixels
         ));
         state.poll_bg_removal_on(&jobs);
         assert_eq!(state.bg_removal_retry_at, Some(retry_at));
