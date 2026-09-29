@@ -549,7 +549,15 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] Verify ASCII panning keeps its header and byte hit targets aligned after horizontal scrolling.
   - [x] **H2.2g [Luna/Primary] Validate comparison ANSI long-line scrolling.** ANSI rows explicitly disable label wrapping so horizontal panning can reach the tail; a production-render regression verifies a 5,039-character ANSI line scrolls to its final marker in Light and Dark. Standard, truecolor, and 256-color foreground contrast passes against the console surface in both appearances. Diff-view and ANSI suites pass.
 - **H2.3 Complex workspace semantics**
-  - [ ] **H2.3a [Primary] Migrate node editor semantics to session/action/overlay contracts.**
+  - **H2.3a Node Machine session/action/overlay contracts.** `NodeCanvasState` owns the persistent graph and its catalog/save/cable-drag substates; `WorkbenchApp` owns route selection and higher-priority modal viewers/prompts. Do not move graph behavior into the shared shell.
+    - **H2.3a1 Node Machine route ownership checks.**
+      - [ ] **H2.3a1a [Primary] Verify Node Machine state survives workbench route changes.** Switch to Palette and Auto Actions, then return and confirm graph, selection, recipe, and undo state remain owned by the persistent canvas.
+      - [ ] **H2.3a1b [Primary] Verify app-level modals preempt Node Machine input.** Confirm an in-app prompt or modal viewer owns keyboard/pointer input until dismissed.
+    - [x] **H2.3a2 [Luna implementation; primary review] Execute Node Machine graphs once and return bounded result metadata.** The canvas now sends graph YAML without running it locally; the daemon executes/applies once and returns only node previews, output title, and execution duration, avoiding full clipboard-item IPC payloads. Canvas tests cover request ownership and response restoration; IPC tests verify the compact response. Remaining broad IPC-wait performance work is under H3.2g2.
+    - [ ] **H2.3a3 [Primary] Verify Node Machine Escape ownership.** Cover Escape closing the catalog, save dialog, and cable drag before the next Escape returns to Palette with search focus restored.
+    - **H2.3a4 Node Machine keyboard ownership checks.**
+      - [ ] **H2.3a4a [Primary] Verify Undo/Redo/Delete yield to focused text inputs.** Exercise the commands with node property, catalog search, and save-name fields focused, then without a text owner.
+      - [ ] **H2.3a4b [Primary] Verify F1–F3 workbench routing around Node Machine overlays.** Confirm documented view shortcuts reach their route while catalog and save overlays are open, with no unintended graph mutation.
   - [ ] **H2.3b [Primary] Migrate diff/comparison modes to session/action/overlay contracts.**
   - [ ] **H2.3c [Primary] Migrate PDF page/edit flow to session/action/overlay contracts.**
   - [ ] **H2.3d [Primary] Migrate 3D interaction to session/action/overlay contracts.**

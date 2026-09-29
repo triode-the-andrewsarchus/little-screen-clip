@@ -1790,13 +1790,18 @@ impl eframe::App for WorkbenchApp {
 
                 }
                 WorkbenchView::NodeMachine => {
-                    let action = self.canvas_state.ui(ui, &self.state, &self.ui_palette);
-                    if let Some(CanvasAction::RunPipeline) = action {
-                        if let Ok(yaml) = serde_yaml::to_string(&self.canvas_state.graph) {
-                            let _ = send_ipc_request(&IpcRequest::ExecuteGraphYaml { yaml });
-                            self.dirty_mirror = true;
-                            ctx.request_repaint();
+                    let action = self.canvas_state.ui(ui, &self.ui_palette);
+                    if let Some(CanvasAction::RunPipeline { yaml }) = action {
+                        match send_ipc_request(&IpcRequest::ExecuteGraphYaml { yaml }) {
+                            Ok(response) => self.canvas_state.apply_pipeline_response(response),
+                            Err(error) => self.canvas_state.apply_pipeline_response(
+                                IpcResponse::Error {
+                                    error: error.to_string(),
+                                },
+                            ),
                         }
+                        self.dirty_mirror = true;
+                        ctx.request_repaint();
                     }
                 }
                 WorkbenchView::AutoActions => {

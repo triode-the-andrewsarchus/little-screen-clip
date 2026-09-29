@@ -886,11 +886,29 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 match serde_yaml::from_str::<little_clip_ops::NodeGraph>(&yaml) {
                     Ok(graph) => {
                         let mgr_snapshot = { ctx.manager.read().await.clone() };
+                        let started = std::time::Instant::now();
                         let execution = tokio::task::spawn_blocking(move || {
                             little_clip_ops::PipelineExecutor::new(&graph, &mgr_snapshot).execute()
                         });
                         match tokio::time::timeout(Duration::from_secs(65), execution).await {
-                            Ok(Ok(Ok(pipe_res))) => apply_pipeline_result(pipe_res, &ctx).await,
+                            Ok(Ok(Ok(pipe_res))) => {
+                                let duration_ms = started.elapsed().as_millis();
+                                let node_previews = pipe_res.node_previews.clone();
+                                let output_title = pipe_res
+                                    .left_hand_item
+                                    .as_ref()
+                                    .map(|item| item.title.clone());
+                                match apply_pipeline_result(pipe_res, &ctx).await {
+                                    IpcResponse::OpResult { .. } | IpcResponse::Success { .. } => {
+                                        IpcResponse::PipelineExecuted {
+                                            node_previews,
+                                            output_title,
+                                            duration_ms,
+                                        }
+                                    }
+                                    other => other,
+                                }
+                            }
                             Ok(Ok(Err(e))) => IpcResponse::Error {
                                 error: format!("Graph execution failed: {}", e),
                             },

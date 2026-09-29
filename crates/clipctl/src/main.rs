@@ -384,6 +384,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}: Transformed -> {}", "Result".green().bold(), item.title);
                 println!("  Subtitle: {}", item.subtitle.dimmed());
             }
+            IpcResponse::PipelineExecuted {
+                node_previews,
+                output_title,
+                duration_ms,
+            } => {
+                println!(
+                    "{} in {}ms{}",
+                    "Pipeline executed".green().bold(),
+                    duration_ms,
+                    output_title
+                        .as_deref()
+                        .map(|title| format!("; output: {title}"))
+                        .unwrap_or_default()
+                );
+                if !node_previews.is_empty() {
+                    println!("  Node previews:");
+                    let mut previews: Vec<_> = node_previews.into_iter().collect();
+                    previews.sort_unstable_by_key(|(id, _)| *id);
+                    for (id, preview) in previews {
+                        let truncated = preview.chars().count() > 120;
+                        let preview = preview.chars().take(120).collect::<String>();
+                        println!(
+                            "    {}: {}{}",
+                            id,
+                            preview,
+                            if truncated { "…" } else { "" }
+                        );
+                    }
+                }
+            }
             IpcResponse::LockStatus(locked) => {
                 if locked {
                     println!("{}", "LOCKED (Screen blanked)".yellow().bold());

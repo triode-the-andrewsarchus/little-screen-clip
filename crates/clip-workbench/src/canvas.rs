@@ -7,10 +7,8 @@ use crate::icons::Icon;
 use crate::ui_ext::{BODY_FONT_SIZE, CONTROL_HEIGHT};
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, Id, Pos2, Rect, Rounding, Stroke, Vec2};
-use little_clip_core::SlotManager;
 use little_clip_core::config::AppConfig;
 use little_clip_core::palette::AppPalette;
-use little_clip_ops::PipelineExecutor;
 use little_clip_ops::pipeline::catalog::{instantiate_template, search_templates};
 use little_clip_ops::pipeline::recipes::{
     create_script_file_scaffold, get_recipes_dir, load_all_recipes, make_basic_template_recipe,
@@ -21,16 +19,12 @@ use little_clip_ops::pipeline::types::{
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Instant;
 use uuid::Uuid;
 
 /// Actions emitted by the canvas UI back to the main workbench loop.
 pub enum CanvasAction {
-    /// Request asynchronous execution of the current pipeline graph.
-    RunPipeline,
-    /// Result was applied directly to slots.
-    #[allow(dead_code)]
-    AppliedResult { item_title: String },
+    /// Request execution of the current graph by the daemon.
+    RunPipeline { yaml: String },
 }
 
 /// Interactive state for the visual node pipeline graph editor canvas.
@@ -138,43 +132,45 @@ impl NodeCanvasState {
         self.available_recipes = load_all_recipes();
     }
 
-    pub fn run_current_graph(
-        &mut self,
-        slot_mgr: &SlotManager,
-    ) -> Option<little_clip_ops::PipelineExecutionResult> {
-        let start = Instant::now();
-        let executor = PipelineExecutor::new(&self.graph, slot_mgr);
-        match executor.execute() {
-            Ok(res) => {
-                let duration = start.elapsed().as_millis();
-                self.last_run_duration_ms = Some(duration);
-                self.node_previews = res.node_previews.clone();
-                self.status_message = Some((
-                    format!(
-                        "Executed in {}ms. Output: {}",
-                        duration,
-                        res.left_hand_item
-                            .as_ref()
-                            .map(|i| i.title.as_str())
-                            .unwrap_or("Done")
-                    ),
-                    false,
-                ));
-                Some(res)
+    fn run_pipeline_action(&mut self) -> Option<CanvasAction> {
+        match serde_yaml::to_string(&self.graph) {
+            Ok(yaml) => {
+                self.status_message = Some(("Running pipeline…".to_owned(), false));
+                Some(CanvasAction::RunPipeline { yaml })
             }
-            Err(e) => {
-                self.status_message = Some((format!("Error: {}", e), true));
+            Err(error) => {
+                self.status_message = Some((format!("Error: {}", error), true));
                 None
             }
         }
     }
 
-    pub fn ui(
-        &mut self,
-        ui: &mut egui::Ui,
-        slot_mgr: &SlotManager,
-        palette: &AppPalette,
-    ) -> Option<CanvasAction> {
+    pub fn apply_pipeline_response(&mut self, response: little_clip_core::ipc::IpcResponse) {
+        match response {
+            little_clip_core::ipc::IpcResponse::PipelineExecuted {
+                node_previews,
+                output_title,
+                duration_ms,
+            } => {
+                self.node_previews = node_previews;
+                self.last_run_duration_ms = Some(duration_ms);
+                let output = output_title.as_deref().unwrap_or("Done");
+                self.status_message = Some((
+                    format!("Executed in {}ms. Output: {}", duration_ms, output),
+                    false,
+                ));
+            }
+            little_clip_core::ipc::IpcResponse::Error { error } => {
+                self.status_message = Some((format!("Error: {}", error), true));
+            }
+            _ => {
+                self.status_message =
+                    Some(("Error: unexpected pipeline response".to_owned(), true));
+            }
+        }
+    }
+
+    pub fn ui(&mut self, ui: &mut egui::Ui, palette: &AppPalette) -> Option<CanvasAction> {
         let mut action = None;
 
         // Undo / Redo & Node Delete shortcuts (when not typing in a text field)
@@ -205,7 +201,7 @@ impl NodeCanvasState {
         }
 
         // Top Toolbar
-        self.render_toolbar(ui, slot_mgr, &mut action, palette);
+        self.render_toolbar(ui, &mut action, palette);
 
         ui.separator();
 
@@ -565,7 +561,6 @@ impl NodeCanvasState {
     fn render_toolbar(
         &mut self,
         ui: &mut egui::Ui,
-        slot_mgr: &SlotManager,
         action: &mut Option<CanvasAction>,
         palette: &AppPalette,
     ) {
@@ -774,14 +769,7 @@ impl NodeCanvasState {
                 .min_size(Vec2::new(140.0, CONTROL_HEIGHT));
 
                 if ui.add(run_btn).clicked() {
-                    if let Some(res) = self.run_current_graph(slot_mgr) {
-                        *action = Some(CanvasAction::RunPipeline);
-                        if let Some(item) = res.left_hand_item {
-                            *action = Some(CanvasAction::AppliedResult {
-                                item_title: item.title,
-                            });
-                        }
-                    }
+                    *action = self.run_pipeline_action();
                 }
             });
         });
@@ -1784,6 +1772,65 @@ mod tests {
     use super::*;
 
     #[test]
+    fn run_pipeline_emits_graph_for_single_daemon_execution() {
+        let mut canvas = NodeCanvasState::new();
+        let source = instantiate_template(
+            little_clip_ops::pipeline::catalog::find_template("source_const_text").unwrap(),
+            [0.0, 0.0],
+        );
+        let mut source = source;
+        source.props.insert("text".to_owned(), "once".to_owned());
+        let sink = instantiate_template(
+            little_clip_ops::pipeline::catalog::find_template("sink_lh").unwrap(),
+            [300.0, 0.0],
+        );
+        canvas.graph.nodes = vec![source.clone(), sink.clone()];
+        canvas.graph.connections = vec![Connection {
+            from_node: source.id,
+            from_pin: "Text".to_owned(),
+            to_node: sink.id,
+            to_pin: "In".to_owned(),
+        }];
+
+        let action = canvas.run_pipeline_action();
+        let Some(CanvasAction::RunPipeline { yaml }) = action else {
+            panic!("run action must send the graph to its single execution owner");
+        };
+        let sent_graph: NodeGraph = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(sent_graph.nodes.len(), 2);
+        assert!(
+            canvas.node_previews.is_empty(),
+            "UI must not execute locally"
+        );
+        assert!(canvas.last_run_duration_ms.is_none());
+        assert!(matches!(
+            canvas.status_message.as_ref(),
+            Some((message, false)) if message == "Running pipeline…"
+        ));
+    }
+
+    #[test]
+    fn daemon_pipeline_response_restores_previews_and_output_status() {
+        let mut canvas = NodeCanvasState::new();
+        let node_id = canvas.graph.nodes[0].id;
+        canvas.apply_pipeline_response(little_clip_core::ipc::IpcResponse::PipelineExecuted {
+            node_previews: [(node_id, "preview".to_owned())].into_iter().collect(),
+            output_title: Some("once".to_owned()),
+            duration_ms: 17,
+        });
+
+        assert_eq!(
+            canvas.node_previews.get(&node_id).map(String::as_str),
+            Some("preview")
+        );
+        assert_eq!(canvas.last_run_duration_ms, Some(17));
+        assert!(matches!(
+            canvas.status_message.as_ref(),
+            Some((message, false)) if message == "Executed in 17ms. Output: once"
+        ));
+    }
+
+    #[test]
     fn node_machine_toolbar_wraps_controls_and_status_at_compact_widths() {
         for width in [760.0, 1280.0, 1760.0] {
             let ctx = egui::Context::default();
@@ -1792,7 +1839,6 @@ mod tests {
                 crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
             let mut canvas = NodeCanvasState::with_config(AppConfig::default());
             canvas.status_message = Some(("Pipeline complete".to_string(), false));
-            let slots = SlotManager::default();
             let mut action = None;
             let output = ctx.run(
                 egui::RawInput {
@@ -1802,7 +1848,7 @@ mod tests {
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
                         let host = ui.available_rect_before_wrap();
-                        canvas.render_toolbar(ui, &slots, &mut action, &palette);
+                        canvas.render_toolbar(ui, &mut action, &palette);
                         assert!(ui.min_rect().left() >= host.left() - 0.5);
                     });
                 },
@@ -1891,7 +1937,6 @@ mod tests {
         canvas.graph.zoom = 1.24;
         canvas.selected_node = Some(script_id);
         canvas.status_message = Some(("Saved recipe 'Pad and Caption'".to_owned(), false));
-        let slots = SlotManager::default();
         let mut canvas_bounds = None;
         let output = ctx.run(
             egui::RawInput {
@@ -1903,7 +1948,7 @@ mod tests {
                     // Compact host after a reduced, still-interactive mirror and shared footer.
                     // The production canvas receives this remaining vertical budget.
                     let allocated = ui.allocate_ui(Vec2::new(ui.available_width(), 270.0), |ui| {
-                        canvas.ui(ui, &slots, &palette);
+                        canvas.ui(ui, &palette);
                     });
                     canvas_bounds = Some(allocated.response.rect);
                 });
