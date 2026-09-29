@@ -4918,6 +4918,168 @@ mod tests {
         assert_eq!(state.region_high_pass_hz, high_pass_before_crossfade_reset);
     }
 
+    #[test]
+    fn inspect_canvas_right_click_preview_loop_and_shift_remove_stay_session_owned() {
+        let (_temp_dir, path) = generate_fixture_wav("inspect-right-click", 5.0);
+        let analysis = compute_full_audio_analysis(&path, 100).expect("fixture analysis");
+        let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
+        state.cancel_session_analysis();
+        state.analysis = Some(analysis);
+        state.duration_sec = 5.0;
+        state.view_duration_sec = 5.0;
+        state.is_loading_analysis = false;
+        state.selection_mode = SelectionMode::Multi;
+        state.multi_selections = vec![(1.0, 2.0), (3.0, 4.0)];
+        state.active_multi_index = Some(0);
+        state.region_gain_db = vec![6.0, -6.0];
+        state.region_low_pass_hz = vec![Some(1_000.0), Some(2_000.0)];
+        state.region_high_pass_hz = vec![Some(80.0), Some(120.0)];
+        state.region_crossfade_sec = vec![0.1, 0.2];
+        // Keep the production preview-state transitions while preventing output to speakers.
+        state.player = None;
+        state._sink = None;
+
+        let secondary = egui::PointerButton::Secondary;
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let canvas = render_inspect_frame(&ctx, &mut state, 0.0, Vec::new());
+        let track = Rect::from_min_max(
+            Pos2::new(canvas.min.x + 48.0, canvas.min.y),
+            Pos2::new(canvas.max.x - 6.0, canvas.max.y),
+        );
+        let [_, wave, _, _, _] = layout::AudioWorkspace::inspect_timeline_rects(track);
+        let x_at = |time: f32| track.min.x + track.width() * time / state.duration_sec;
+        let second_region = Pos2::new(x_at(3.5), wave.center().y);
+
+        render_inspect_frame(
+            &ctx,
+            &mut state,
+            0.01,
+            vec![
+                egui::Event::PointerMoved(second_region),
+                pointer_button_event(second_region, secondary, true, egui::Modifiers::NONE),
+            ],
+        );
+        let hold = state.right_click_hold.as_ref().expect("slice hold starts");
+        assert_eq!(hold.target_range, (3.0, 4.0));
+        assert_eq!(hold.slice_index, Some(1));
+        assert!(!hold.started_looping);
+        render_inspect_frame(
+            &ctx,
+            &mut state,
+            0.02,
+            vec![pointer_button_event(
+                second_region,
+                secondary,
+                false,
+                egui::Modifiers::NONE,
+            )],
+        );
+        assert!(state.right_click_hold.is_none());
+        assert_eq!(state.active_multi_index, Some(1));
+        assert_eq!(state.preview_slice_range, Some((3.0, 4.0)));
+        assert_eq!(state.preview_stop_time, Some(4.0));
+        assert!(!state.preview_is_looping);
+        assert!(!state.is_playing, "test must not start physical playback");
+
+        state.pause();
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let canvas = render_inspect_frame(&ctx, &mut state, 0.0, Vec::new());
+        let track = Rect::from_min_max(
+            Pos2::new(canvas.min.x + 48.0, canvas.min.y),
+            Pos2::new(canvas.max.x - 6.0, canvas.max.y),
+        );
+        let [_, wave, _, _, _] = layout::AudioWorkspace::inspect_timeline_rects(track);
+        let first_region = Pos2::new(
+            track.min.x + track.width() * 1.5 / state.duration_sec,
+            wave.center().y,
+        );
+        render_inspect_frame(
+            &ctx,
+            &mut state,
+            0.01,
+            vec![
+                egui::Event::PointerMoved(first_region),
+                pointer_button_event(first_region, secondary, true, egui::Modifiers::NONE),
+            ],
+        );
+        state
+            .right_click_hold
+            .as_mut()
+            .expect("hold state remains session-owned")
+            .start_instant = Instant::now() - RIGHT_CLICK_HOLD_TIMEOUT - Duration::from_millis(1);
+        render_inspect_frame(&ctx, &mut state, 0.4, Vec::new());
+        let hold = state
+            .right_click_hold
+            .as_ref()
+            .expect("hold state continues");
+        assert!(hold.started_looping);
+        assert_eq!(hold.target_range, (1.0, 2.0));
+        assert_eq!(state.preview_slice_range, Some((1.0, 2.0)));
+        assert!(state.preview_is_looping);
+        assert!(
+            !state.is_playing,
+            "loop state must not start physical playback"
+        );
+
+        render_inspect_frame(
+            &ctx,
+            &mut state,
+            0.41,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(state.right_click_hold.is_none());
+        assert_eq!(state.preview_slice_range, None);
+        assert!(!state.preview_is_looping);
+        assert!(!state.is_playing);
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let canvas = render_inspect_frame(&ctx, &mut state, 0.0, Vec::new());
+        let track = Rect::from_min_max(
+            Pos2::new(canvas.min.x + 48.0, canvas.min.y),
+            Pos2::new(canvas.max.x - 6.0, canvas.max.y),
+        );
+        let [_, wave, _, _, _] = layout::AudioWorkspace::inspect_timeline_rects(track);
+        let first_region = Pos2::new(
+            track.min.x + track.width() * 1.5 / state.duration_sec,
+            wave.center().y,
+        );
+        let shift = egui::Modifiers {
+            shift: true,
+            ..Default::default()
+        };
+        render_inspect_frame_with_modifiers(
+            &ctx,
+            &mut state,
+            0.01,
+            vec![
+                egui::Event::PointerMoved(first_region),
+                pointer_button_event(first_region, secondary, true, shift),
+            ],
+            shift,
+        );
+        render_inspect_frame_with_modifiers(
+            &ctx,
+            &mut state,
+            0.02,
+            vec![pointer_button_event(first_region, secondary, false, shift)],
+            shift,
+        );
+        assert_eq!(state.multi_selections, vec![(3.0, 4.0)]);
+        assert_eq!(state.region_gain_db, vec![-6.0]);
+        assert_eq!(state.region_low_pass_hz, vec![Some(2_000.0)]);
+        assert_eq!(state.region_high_pass_hz, vec![Some(120.0)]);
+        assert_eq!(state.region_crossfade_sec, vec![0.2]);
+    }
+
     fn preview_source_with_region(
         region: AudioRegionEdit,
     ) -> (
