@@ -15,15 +15,24 @@ impl ImagePreviewState {
     /// Copies the given color as a hex code string to the clipboard and tracks recent colors.
 
     pub fn copy_color_to_clipboard(&mut self, col: Color32, ctx: &egui::Context) {
-        let hex = format!("#{:02X}{:02X}{:02X}", col.r(), col.g(), col.b());
-        ctx.output_mut(|o| o.copied_text = hex.clone());
-
-        let hex_for_cmd = hex.clone();
-        std::thread::spawn(move || {
-            if let Err(error) = little_clip_core::copy_text_to_system_clipboard(&hex_for_cmd) {
+        self.copy_color_to_clipboard_on(col, ctx, BackgroundJobs::global(), |text| {
+            if let Err(error) = little_clip_core::copy_text_to_system_clipboard(text) {
                 tracing::debug!(%error, "failed to copy picked color to system clipboard");
             }
         });
+    }
+
+    fn copy_color_to_clipboard_on(
+        &mut self,
+        col: Color32,
+        ctx: &egui::Context,
+        jobs: &BackgroundJobs,
+        copy: impl FnOnce(&str) + Send + 'static,
+    ) {
+        let hex = format!("#{:02X}{:02X}{:02X}", col.r(), col.g(), col.b());
+        ctx.output_mut(|o| o.copied_text = hex.clone());
+
+        schedule_pick_color_system_copy_on(jobs, hex.clone(), copy);
 
         self.pick_color_state.last_picked = Some(col);
         if !self.pick_color_state.recent_colors.contains(&col) {
@@ -276,6 +285,111 @@ impl ImagePreviewState {
             );
             readout_y += row_height + 2.0;
         }
+    }
+}
+
+fn schedule_pick_color_system_copy_on(
+    jobs: &BackgroundJobs,
+    text: String,
+    copy: impl FnOnce(&str) + Send + 'static,
+) {
+    let _ = jobs.submit(std::time::Duration::MAX, move || copy(&text));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image_preview::ImagePreviewState;
+    use little_clip_core::AppConfig;
+    use std::sync::mpsc;
+
+    fn state() -> ImagePreviewState {
+        let mut bytes = Vec::new();
+        image::RgbaImage::new(2, 2)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        ImagePreviewState::from_bytes_with_meta(
+            bytes,
+            "image/png".into(),
+            None,
+            "pick color clipboard test".into(),
+            &AppConfig::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn color_copy_keeps_immediate_egui_output_and_recent_color_with_bounded_write() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (text_tx, text_rx) = mpsc::channel();
+        let context = egui::Context::default();
+        let mut state = state();
+        let color = Color32::from_rgb(0x12, 0x34, 0x56);
+        let output = context.run(Default::default(), |ctx| {
+            state.copy_color_to_clipboard_on(color, ctx, &jobs, move |text| {
+                text_tx.send(text.to_owned()).unwrap();
+            });
+        });
+
+        assert_eq!(output.platform_output.copied_text, "#123456");
+        assert_eq!(state.pick_color_state.last_picked, Some(color));
+        assert_eq!(state.pick_color_state.recent_colors, vec![color]);
+        assert!(
+            state
+                .status_toast
+                .as_ref()
+                .is_some_and(|(toast, _)| toast.contains("#123456"))
+        );
+        assert_eq!(
+            text_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            "#123456"
+        );
+    }
+
+    #[test]
+    fn color_copy_queue_full_keeps_egui_clipboard_fallback_without_running_write() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let (_, queued_rx) = jobs.submit(std::time::Duration::MAX, || ());
+        let (copied_tx, copied_rx) = mpsc::channel();
+        let context = egui::Context::default();
+        let mut state = state();
+        let color = Color32::from_rgb(0xAB, 0xCD, 0xEF);
+        let output = context.run(Default::default(), |ctx| {
+            state.copy_color_to_clipboard_on(color, ctx, &jobs, move |text| {
+                copied_tx.send(text.to_owned()).unwrap();
+            });
+        });
+
+        assert_eq!(output.platform_output.copied_text, "#ABCDEF");
+        assert_eq!(state.pick_color_state.recent_colors, vec![color]);
+        assert!(
+            state
+                .status_toast
+                .as_ref()
+                .is_some_and(|(toast, _)| toast.contains("#ABCDEF"))
+        );
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+        queued_rx.recv().unwrap().unwrap();
+        assert!(
+            copied_rx
+                .recv_timeout(std::time::Duration::from_millis(50))
+                .is_err()
+        );
     }
 }
 
