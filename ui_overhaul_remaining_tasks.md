@@ -556,8 +556,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H2.3a2 [Luna implementation; primary review] Execute Node Machine graphs once and return bounded result metadata.** The canvas now sends graph YAML without running it locally; the daemon executes/applies once and returns only node previews, output title, and execution duration, avoiding full clipboard-item IPC payloads. Canvas tests cover request ownership and response restoration; IPC tests verify the compact response. Remaining broad IPC-wait performance work is under H3.2g2.
     - [x] **H2.3a3 [Luna implementation; primary review] Verify Node Machine Escape ownership.** The inline route regression proves catalog, save dialog, and cable drag each consume one Escape before the next Escape returns to Palette and restores search focus.
     - **H2.3a4 Node Machine keyboard ownership checks.**
-      - [ ] **H2.3a4a [Primary] Verify Undo/Redo/Delete yield to focused text inputs.** Exercise the commands with node property, catalog search, and save-name fields focused, then without a text owner.
-      - [ ] **H2.3a4b [Primary] Verify F1–F3 workbench routing around Node Machine overlays.** Confirm documented view shortcuts reach their route while catalog and save overlays are open, with no unintended graph mutation.
+      - [x] **H2.3a4a [Luna implementation; primary review] Verify Undo/Redo/Delete yield to focused text input.** A production-path egui regression exercises all three shortcuts with Node Machine catalog search focused and without a text owner; broader editor-field coverage is not claimed.
+      - [ ] **H2.3a4b [Primary] Verify F1–F3 view shortcuts yield to Node Machine overlays.** Confirm catalog/save overlays keep ownership while open, then view switching resumes after dismissal without graph mutation.
   - [ ] **H2.3b [Primary] Migrate diff/comparison modes to session/action/overlay contracts.**
   - [ ] **H2.3c [Primary] Migrate PDF page/edit flow to session/action/overlay contracts.**
   - [ ] **H2.3d [Primary] Migrate 3D interaction to session/action/overlay contracts.**

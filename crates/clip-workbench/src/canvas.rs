@@ -1831,6 +1831,121 @@ mod tests {
     }
 
     #[test]
+    fn node_machine_history_and_delete_shortcuts_yield_to_focused_text_input() {
+        fn test_canvas() -> NodeCanvasState {
+            let mut canvas = NodeCanvasState::with_config(AppConfig::default());
+            let node = instantiate_template(
+                little_clip_ops::pipeline::catalog::find_template("source_const_text").unwrap(),
+                [0.0, 0.0],
+            );
+            let mut previous = node.clone();
+            previous.title = "Previous title".to_owned();
+            let mut next = node.clone();
+            next.title = "Next title".to_owned();
+            canvas.graph.nodes = vec![node.clone()];
+            canvas.selected_node = Some(node.id);
+            let mut previous_graph = canvas.graph.clone();
+            previous_graph.nodes[0] = previous;
+            let mut next_graph = canvas.graph.clone();
+            next_graph.nodes[0] = next;
+            canvas.undo_stack.push(previous_graph);
+            canvas.redo_stack.push(next_graph);
+            canvas
+        }
+
+        fn input(events: Vec<egui::Event>) -> egui::RawInput {
+            let modifiers = events
+                .iter()
+                .find_map(|event| match event {
+                    egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                    _ => None,
+                })
+                .unwrap_or_default();
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 760.0))),
+                events,
+                modifiers,
+                ..Default::default()
+            }
+        }
+
+        fn key(key: egui::Key, command: bool) -> egui::Event {
+            egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers {
+                    command,
+                    ctrl: command,
+                    ..Default::default()
+                },
+            }
+        }
+
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let cases = [
+            (egui::Key::Z, true, "Previous title"),
+            (egui::Key::Y, true, "Next title"),
+            (egui::Key::Delete, false, "Deleted node"),
+        ];
+
+        for (shortcut, command, unfocused_title) in cases {
+            let ctx = egui::Context::default();
+            let mut focused_canvas = test_canvas();
+            focused_canvas.catalog_open = true;
+            let _ = ctx.run(input(Vec::new()), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    focused_canvas.ui(ui, &palette);
+                });
+            });
+            let node_id = focused_canvas.selected_node.unwrap();
+            let _ = ctx.run(input(vec![key(shortcut, command)]), |ctx| {
+                assert!(
+                    ctx.wants_keyboard_input(),
+                    "catalog search owns keyboard focus"
+                );
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    focused_canvas.ui(ui, &palette);
+                });
+            });
+            assert!(
+                focused_canvas
+                    .graph
+                    .nodes
+                    .iter()
+                    .any(|node| node.id == node_id),
+                "focused text input must prevent {shortcut:?} from changing the canvas"
+            );
+            assert_eq!(
+                focused_canvas.graph.nodes[0].title,
+                test_canvas().graph.nodes[0].title,
+                "focused text input must prevent {shortcut:?} from changing history state"
+            );
+
+            let ctx = egui::Context::default();
+            let mut unfocused_canvas = test_canvas();
+            let _ = ctx.run(input(Vec::new()), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    unfocused_canvas.ui(ui, &palette);
+                });
+            });
+            let _ = ctx.run(input(vec![key(shortcut, command)]), |ctx| {
+                assert!(!ctx.wants_keyboard_input());
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    unfocused_canvas.ui(ui, &palette);
+                });
+            });
+            if shortcut == egui::Key::Delete {
+                assert!(unfocused_canvas.graph.nodes.is_empty());
+            } else {
+                assert_eq!(unfocused_canvas.graph.nodes[0].title, unfocused_title);
+            }
+        }
+    }
+
+    #[test]
     fn node_machine_toolbar_wraps_controls_and_status_at_compact_widths() {
         for width in [760.0, 1280.0, 1760.0] {
             let ctx = egui::Context::default();

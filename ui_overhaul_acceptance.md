@@ -693,3 +693,7 @@ The private runner's `--fail-startup-output-query` inserts a run-local `niri` sh
 ## Default Niri decoration geometry, 2026-09-29
 
 The initial decorated capture `/tmp/lsc-csd-1280x720-dark` showed Niri adding 8×32 around the requested 1177×662 client area and drawing a redundant titlebar. The popup now requests decorations off in both `NativeOptions` and the pre-map fixed viewport. Repeating the capture at 1280×720 / 100% / Dark without `prefer-no-csd` maps and remains at 1177×662, centered at `(52,29)` with matching Wayland min/max hints; the singleton check passes. [`settled.png`](/tmp/clip-h11-csd-popup-undecorated-20260929/settled.png) shows the app using the full popup area, and the runtime measurements are in [`report.json`](/tmp/clip-h11-csd-popup-undecorated-20260929/report.json). The focused popup test asserts that fixed startup geometry disables decorations. This verifies the native fixed popup path under nested Niri, not other compositor implementations.
+
+## Node Machine focused shortcut ownership, 2026-09-29
+
+`node_machine_history_and_delete_shortcuts_yield_to_focused_text_input` sends Undo, Redo, and Delete through the production canvas render path with its catalog-search `TextEdit` focused. Each leaves the selected node and history state intact. The same commands on an unfocused canvas perform their expected history or deletion action. The focused regression passes; node-property and save-name editor fields are not separately exercised.
