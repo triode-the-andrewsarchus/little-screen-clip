@@ -3245,6 +3245,131 @@ mod tests {
     }
 
     #[test]
+    fn focused_binary_diff_search_preempts_global_shortcuts() {
+        fn render_frame(
+            state: &mut BinaryDiffViewState,
+            ctx: &egui::Context,
+            screen_rect: egui::Rect,
+            events: Vec<egui::Event>,
+        ) -> bool {
+            let mut wants_keyboard_before_render = false;
+            let palette = AppPalette::default();
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen_rect),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    wants_keyboard_before_render = ctx.wants_keyboard_input();
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                },
+            );
+            wants_keyboard_before_render
+        }
+
+        let mut left_bytes = vec![b'x'; 96];
+        left_bytes[1..4].copy_from_slice(b"ABC");
+        left_bytes[65..68].copy_from_slice(b"ABC");
+        let mut right_bytes = left_bytes.clone();
+        right_bytes[20] = b'y';
+        right_bytes[80] = b'z';
+        let mut state = BinaryDiffViewState::new(
+            "left.bin".to_string(),
+            left_bytes,
+            "right.bin".to_string(),
+            right_bytes,
+        );
+        let initial_rx = state.receiver.take().expect("initial compute receiver");
+        let (generation, result) = initial_rx
+            .recv()
+            .expect("initial job result")
+            .expect("initial diff result");
+        assert_eq!(generation, state.current_generation);
+        state.result = Some(result);
+        state.is_computing = false;
+        state.compute_ticket = None;
+        state.search_query = "ABC".to_string();
+        state.update_search();
+        assert_eq!(state.search_matches, vec![0, 2]);
+        state.next_diff();
+        assert!(state.selected_diff_block.is_some());
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let search_id = egui::Id::new("binary_diff_search_field");
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1200.0, 800.0));
+        ctx.memory_mut(|memory| memory.request_focus(search_id));
+        let _ = render_frame(&mut state, &ctx, screen_rect, Vec::new());
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
+
+        let baseline = (
+            state.mode,
+            state.left_label.clone(),
+            state.right_label.clone(),
+            (*state.left_bytes).clone(),
+            (*state.right_bytes).clone(),
+            state.bytes_per_row,
+            state.current_diff_idx,
+            state.selected_diff_block,
+            state.scroll_target_row,
+        );
+        let mut keys = vec![
+            egui::Key::Tab,
+            egui::Key::S,
+            egui::Key::J,
+            egui::Key::ArrowRight,
+            egui::Key::ArrowDown,
+            egui::Key::K,
+            egui::Key::ArrowLeft,
+            egui::Key::ArrowUp,
+            egui::Key::Num0,
+            egui::Key::Num1,
+            egui::Key::Num2,
+        ];
+
+        for key in keys.drain(..) {
+            ctx.memory_mut(|memory| memory.request_focus(search_id));
+            let _ = render_frame(&mut state, &ctx, screen_rect, Vec::new());
+            assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
+
+            let wants_keyboard_before_render = render_frame(
+                &mut state,
+                &ctx,
+                screen_rect,
+                vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            assert!(
+                wants_keyboard_before_render,
+                "{key:?} frame must enter with search focused"
+            );
+            assert_eq!(
+                (
+                    state.mode,
+                    state.left_label.clone(),
+                    state.right_label.clone(),
+                    (*state.left_bytes).clone(),
+                    (*state.right_bytes).clone(),
+                    state.bytes_per_row,
+                    state.current_diff_idx,
+                    state.selected_diff_block,
+                    state.scroll_target_row,
+                ),
+                baseline,
+                "{key:?} must not run a global shortcut while search owns keyboard input"
+            );
+        }
+    }
+
+    #[test]
     fn test_stale_generation_discarded() {
         let mut state = BinaryDiffViewState::new(
             "file_a.bin".to_string(),
