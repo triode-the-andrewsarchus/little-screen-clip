@@ -2654,18 +2654,32 @@ mod tests {
             8,
         ));
         state.is_computing = false;
+        let diff_blocks = state.result.as_ref().unwrap().diff_blocks.clone();
+        assert!(diff_blocks.len() >= 2);
 
         for key in [egui::Key::J, egui::Key::ArrowRight, egui::Key::ArrowDown] {
             state.nav.current_diff_idx = 0;
             state.current_diff_idx = 0;
+            state.nav.selected_diff_block = None;
+            state.nav.scroll_target_row = None;
             trigger_global_shortcut(&mut state, key);
             assert_eq!(state.current_diff_idx, 1);
+            assert_eq!(state.nav.selected_diff_block, Some(diff_blocks[1].id));
+            assert_eq!(state.selected_diff_block, Some(diff_blocks[1].id));
+            assert_eq!(state.nav.scroll_target_row, Some(diff_blocks[1].start_row));
+            assert_eq!(state.scroll_target_row, Some(diff_blocks[1].start_row));
         }
         for key in [egui::Key::K, egui::Key::ArrowLeft, egui::Key::ArrowUp] {
             state.nav.current_diff_idx = 1;
             state.current_diff_idx = 1;
+            state.nav.selected_diff_block = None;
+            state.nav.scroll_target_row = None;
             trigger_global_shortcut(&mut state, key);
             assert_eq!(state.current_diff_idx, 0);
+            assert_eq!(state.nav.selected_diff_block, Some(diff_blocks[0].id));
+            assert_eq!(state.selected_diff_block, Some(diff_blocks[0].id));
+            assert_eq!(state.nav.scroll_target_row, Some(diff_blocks[0].start_row));
+            assert_eq!(state.scroll_target_row, Some(diff_blocks[0].start_row));
         }
         for (key, expected_width) in [
             (egui::Key::Num0, 8),
