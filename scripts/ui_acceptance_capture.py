@@ -1472,7 +1472,7 @@ def create_parser() -> argparse.ArgumentParser:
                         help="open binary diff directly (requires --fake-binary-diff)")
     parser.add_argument("--verify-return", action="store_true", help="send Escape and verify the popup closes while private Niri remains responsive")
     parser.add_argument("--verify-viewer-return", action="store_true",
-                        help="send Escape and verify a nested viewer returns to the existing popup")
+                        help="send Escape and verify a directly opened viewer returns to the existing popup")
     parser.add_argument("--binary", type=Path, help="workbench binary (default: target/debug/clip-workbench)")
     parser.add_argument("--settle-ms", type=int, default=500, help="settling delay before second capture (default: 500)")
     return parser
@@ -1550,12 +1550,17 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         raise SystemExit("--fake-node-machine cannot be combined with other fixture routes")
     if args.binary_diff_view and not args.fake_binary_diff:
         raise SystemExit("--binary-diff-view requires --fake-binary-diff")
-    if args.verify_viewer_return and not (
+    direct_fixture_count = sum(
+        fixture is not None for fixture in (args.image, args.audio, args.pdf, args.midi)
+    )
+    direct_viewer_route = direct_fixture_count == 1 and not any(fake_fixture_flags)
+    palette_diff_route = (
         (args.fake_diff_preview or args.fake_image_diff_preview) and args.type_text == "diff"
         and args.key_action and "enter" in args.key_action
-    ):
+    )
+    if args.verify_viewer_return and not (direct_viewer_route or palette_diff_route):
         raise SystemExit(
-            "--verify-viewer-return requires a fake Diff fixture, --type-text diff, and --key-action enter"
+            "--verify-viewer-return requires one direct file fixture or a fake Diff route"
         )
     if args.verify_viewer_return and args.verify_return:
         raise SystemExit("--verify-viewer-return cannot be combined with --verify-return")
