@@ -192,11 +192,11 @@ fn encode_conversion(
     let bytes = match format {
         ConvertTargetFormat::Png => encode_png_conversion(&base_img, cancel),
         ConvertTargetFormat::Jpeg => encode_jpeg_conversion(&base_img, quality, cancel),
-        ConvertTargetFormat::Webp => encode_webp(&base_img, lossless, quality),
+        ConvertTargetFormat::Webp => encode_webp_cancellable(&base_img, lossless, quality, cancel),
     }?;
-    // PNG checks cancellation per source row and through its output sink.
-    // WebP encoding and output decoding remain opaque, so check again when
-    // each call returns.
+    // PNG checks cancellation per source row and WebP checks it through
+    // libwebp's progress hook. Output decoding remains opaque, so check again
+    // when that call returns.
     if cancelled() {
         return Err("cancelled".to_string());
     }
@@ -1457,6 +1457,50 @@ impl ImagePreviewState {
 #[cfg(test)]
 mod input_stamp_tests {
     use super::*;
+
+    #[test]
+    fn cancellable_webp_bytes_match_the_existing_encoder_for_lossy_and_lossless() {
+        let image = RgbaImage::from_fn(37, 23, |x, y| {
+            image::Rgba([
+                (x.wrapping_mul(17) ^ y.wrapping_mul(3)) as u8,
+                (y.wrapping_mul(29) ^ x.wrapping_mul(5)) as u8,
+                ((x + y).wrapping_mul(11)) as u8,
+                ((x * 7 + y * 13) % 256) as u8,
+            ])
+        });
+        for (lossless, quality) in [(false, 83), (true, 100)] {
+            let expected = super::super::super::encode_webp(&image, lossless, quality).unwrap();
+            let actual =
+                super::super::super::encode_webp_cancellable(&image, lossless, quality, None)
+                    .unwrap();
+            assert_eq!(actual, expected, "lossless={lossless}, quality={quality}");
+        }
+    }
+
+    #[test]
+    fn webp_progress_hook_aborts_when_preview_cancel_token_becomes_stale() {
+        let image = RgbaImage::from_fn(512, 512, |x, y| {
+            image::Rgba([
+                (x.wrapping_mul(37) ^ y.wrapping_mul(7)) as u8,
+                (y.wrapping_mul(53) ^ x.wrapping_mul(13)) as u8,
+                ((x * 19 + y * 31) % 256) as u8,
+                255,
+            ])
+        });
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let callbacks = std::sync::atomic::AtomicUsize::new(0);
+        let result = super::super::super::encode_webp_cancellable_with_progress(
+            &image,
+            false,
+            86,
+            Some(&cancelled),
+            Some(&callbacks),
+            true,
+        );
+        assert_eq!(result.unwrap_err(), "cancelled");
+        assert!(callbacks.load(std::sync::atomic::Ordering::Relaxed) > 0);
+        assert!(cancelled.load(std::sync::atomic::Ordering::Acquire));
+    }
 
     #[cfg(unix)]
     fn start_sleeping_optipng(
