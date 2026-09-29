@@ -186,6 +186,7 @@ fn fixed_viewport(viewport: ViewportBuilder, size: Vec2) -> ViewportBuilder {
         .with_min_inner_size(size)
         .with_max_inner_size(size)
         .with_resizable(false)
+        .with_decorations(false)
         .with_maximized(false)
         .with_maximize_button(false)
 }
@@ -270,6 +271,7 @@ mod tests {
         assert_eq!(viewport.min_inner_size, Some(size));
         assert_eq!(viewport.max_inner_size, Some(size));
         assert_eq!(viewport.resizable, Some(false));
+        assert_eq!(viewport.decorations, Some(false));
         assert_eq!(viewport.maximized, Some(false));
         assert_eq!(viewport.maximize_button, Some(false));
     }

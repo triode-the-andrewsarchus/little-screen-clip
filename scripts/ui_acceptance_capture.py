@@ -1023,10 +1023,12 @@ graph:
         )
     niri_config = output / "niri.kdl"
     niri_config.write_text(
-        "hotkey-overlay { skip-at-startup; }\n"
-        "prefer-no-csd\n"
-        f'output "winit" {{ scale {args.scale}; }}\n'
-        'window-rule { match app-id="little-clip-workbench"; open-floating true; }\n',
+        "".join((
+            "hotkey-overlay { skip-at-startup; }\n",
+            "" if args.allow_server_decorations else "prefer-no-csd\n",
+            f'output "winit" {{ scale {args.scale}; }}\n',
+            'window-rule { match app-id="little-clip-workbench"; open-floating true; }\n',
+        )),
         encoding="utf-8",
     )
     clean_env = os.environ.copy()
@@ -1496,6 +1498,10 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scale", type=float, default=1.0, help="nested Niri output scale (default: 1)")
     parser.add_argument("--appearance", choices=("light", "dark"), required=True)
     parser.add_argument(
+        "--allow-server-decorations", action="store_true",
+        help="omit Niri's prefer-no-csd setting to characterize decorated popup geometry",
+    )
+    parser.add_argument(
         "--fail-startup-output-query", action="store_true",
         help="privately fail the workbench's focused-output query to verify its fixed-size startup fallback",
     )
@@ -1803,6 +1809,7 @@ def main() -> int:
             "logical_size": [args.width, args.height],
             "scale": args.scale,
             "appearance": args.appearance,
+            "allow_server_decorations": args.allow_server_decorations,
             "fail_startup_output_query": args.fail_startup_output_query,
             "image_tool": args.image_tool,
             "image_action": args.image_action,
