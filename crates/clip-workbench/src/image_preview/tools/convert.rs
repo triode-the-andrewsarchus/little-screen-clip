@@ -74,6 +74,10 @@ pub struct ConvertState {
     pub(crate) completed_input_stamp: Option<ImageInputStamp>,
     optipng_request: Option<OptipngRequestStamp>,
     optipng_process_control: Option<std::sync::Arc<ImageToolProcessControl>>,
+    optipng_job_ticket: Option<JobTicket>,
+    pub(crate) optipng_retry_at: Option<std::time::Instant>,
+    optipng_queue_status: Option<String>,
+    optipng_retry_work: Option<OptipngRetryWork>,
     render_input_stamp: Option<ImageInputStamp>,
     pub(crate) render_error_input_stamp: Option<ImageInputStamp>,
     pub render_error: Option<String>,
@@ -82,7 +86,7 @@ pub struct ConvertState {
     render_retry_input_stamp: Option<ImageInputStamp>,
     render_job_ticket: Option<JobTicket>,
     render_rx: Option<std::sync::mpsc::Receiver<Result<ConvertWorkerMsg, JobError>>>,
-    optipng_rx: Option<std::sync::mpsc::Receiver<OptipngWorkerMsg>>,
+    optipng_rx: Option<std::sync::mpsc::Receiver<Result<OptipngWorkerMsg, JobError>>>,
 }
 
 struct ConvertWorkerMsg {
@@ -96,6 +100,16 @@ struct OptipngWorkerMsg {
     input_stamp: ImageInputStamp,
     original_len: usize,
     result: Result<Vec<u8>, String>,
+}
+
+type OptipngOptimizer =
+    dyn Fn(&[u8], &ImageToolProcessControl) -> Result<Vec<u8>, String> + Send + Sync;
+
+#[derive(Clone)]
+struct OptipngRetryWork {
+    request: OptipngRequestStamp,
+    original_bytes: Vec<u8>,
+    optimizer: std::sync::Arc<OptipngOptimizer>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -129,6 +143,10 @@ impl Default for ConvertState {
             completed_input_stamp: None,
             optipng_request: None,
             optipng_process_control: None,
+            optipng_job_ticket: None,
+            optipng_retry_at: None,
+            optipng_queue_status: None,
+            optipng_retry_work: None,
             render_input_stamp: None,
             render_error_input_stamp: None,
             render_error: None,
@@ -147,6 +165,7 @@ impl ConvertState {
         self.params_dirty_at.is_some()
             || self.is_encoding
             || self.is_running_optipng
+            || self.optipng_retry_at.is_some()
             || self.render_retry_at.is_some()
     }
 
@@ -381,6 +400,14 @@ fn encode_jpeg_conversion(
 
 impl Drop for ConvertState {
     fn drop(&mut self) {
+        if let Some(ticket) = self.optipng_job_ticket.take() {
+            ticket.cancel();
+        }
+        if let Some(control) = self.optipng_process_control.take() {
+            control.cancel();
+        }
+        self.optipng_retry_at = None;
+        self.optipng_retry_work = None;
         if let Some(ticket) = self.render_job_ticket.take() {
             ticket.cancel();
         }
@@ -482,7 +509,7 @@ impl ImagePreviewState {
     }
 
     fn poll_conversion_on(&mut self, jobs: &BackgroundJobs) {
-        self.poll_optipng();
+        self.poll_optipng(jobs);
         if self.convert_state.is_encoding
             && self.convert_state.render_input_stamp.as_ref() != Some(&self.input_stamp())
         {
@@ -646,9 +673,20 @@ impl ImagePreviewState {
 
     fn run_optipng_conversion_with<F>(&mut self, optimizer: F)
     where
-        F: FnOnce(&[u8], &ImageToolProcessControl) -> Result<Vec<u8>, String> + Send + 'static,
+        F: Fn(&[u8], &ImageToolProcessControl) -> Result<Vec<u8>, String> + Send + Sync + 'static,
     {
-        if self.convert_state.is_running_optipng {
+        self.run_optipng_conversion_with_on(
+            std::sync::Arc::new(optimizer),
+            BackgroundJobs::global(),
+        );
+    }
+
+    fn run_optipng_conversion_with_on(
+        &mut self,
+        optimizer: std::sync::Arc<OptipngOptimizer>,
+        jobs: &BackgroundJobs,
+    ) {
+        if self.convert_state.is_running_optipng || self.convert_state.optipng_retry_at.is_some() {
             return;
         }
         if !self.convert_state.output_matches(&self.input_stamp()) {
@@ -659,62 +697,72 @@ impl ImagePreviewState {
             return;
         }
 
-        self.convert_state.is_running_optipng = true;
         let original_bytes = self.convert_state.encoded_bytes.clone();
         if original_bytes.is_empty() {
-            self.convert_state.is_running_optipng = false;
             self.show_toast("⚠ No PNG bytes available to optimize");
             return;
         }
 
-        let orig_len = original_bytes.len();
-        let input_stamp = self.input_stamp();
-        let generation = self.convert_state.request_generation;
-        let control = std::sync::Arc::new(ImageToolProcessControl::new());
-        self.convert_state.optipng_request = Some(OptipngRequestStamp {
-            generation,
-            input_stamp: input_stamp.clone(),
+        let request = OptipngRequestStamp {
+            generation: self.convert_state.request_generation,
+            input_stamp: self.input_stamp(),
             target_format: self.convert_state.target_format,
             quality: self.convert_state.quality,
             lossless: self.convert_state.lossless,
+        };
+        let work = OptipngRetryWork {
+            request,
+            original_bytes,
+            optimizer,
+        };
+        self.start_optipng_job_on(work, jobs);
+    }
+
+    fn start_optipng_job_on(&mut self, work: OptipngRetryWork, jobs: &BackgroundJobs) {
+        let control = std::sync::Arc::new(ImageToolProcessControl::new());
+        let worker_control = control.clone();
+        let worker_optimizer = work.optimizer.clone();
+        let original_bytes = work.original_bytes.clone();
+        let original_len = original_bytes.len();
+        let request = work.request.clone();
+        let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                worker_optimizer(&original_bytes, &worker_control)
+            }))
+            .unwrap_or_else(|_| Err("OptiPNG worker panicked".to_string()));
+            OptipngWorkerMsg {
+                generation: request.generation,
+                input_stamp: request.input_stamp,
+                original_len,
+                result,
+            }
         });
+        self.convert_state.optipng_request = Some(work.request.clone());
         self.convert_state.optipng_process_control = Some(control.clone());
-        let (tx, rx) = std::sync::mpsc::channel();
+        self.convert_state.optipng_job_ticket = Some(ticket);
         self.convert_state.optipng_rx = Some(rx);
         self.convert_state.is_running_optipng = true;
-        let spawn = std::thread::Builder::new()
-            .name("image_optipng".to_string())
-            .spawn(move || {
-                let result = optimizer(&original_bytes, &control);
-                if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
-                    return;
-                }
-                let _ = tx.send(OptipngWorkerMsg {
-                    generation,
-                    input_stamp,
-                    original_len: orig_len,
-                    result,
-                });
-            });
-        if let Err(error) = spawn {
-            self.convert_state.optipng_rx = None;
-            self.convert_state.is_running_optipng = false;
-            self.convert_state.optipng_request = None;
-            self.convert_state.optipng_process_control = None;
-            self.show_toast(format!("❌ OptiPNG error: failed to start worker: {error}"));
-        }
+        self.convert_state.optipng_retry_work = Some(work);
+        self.convert_state.optipng_retry_at = None;
+        self.convert_state.optipng_queue_status = None;
     }
 
     pub(crate) fn cancel_optipng_process(&mut self) {
+        if let Some(ticket) = self.convert_state.optipng_job_ticket.take() {
+            ticket.cancel();
+        }
         if let Some(control) = self.convert_state.optipng_process_control.take() {
             control.cancel();
         }
         self.convert_state.optipng_rx = None;
         self.convert_state.optipng_request = None;
         self.convert_state.is_running_optipng = false;
+        self.convert_state.optipng_retry_at = None;
+        self.convert_state.optipng_retry_work = None;
+        self.convert_state.optipng_queue_status = None;
     }
 
-    fn poll_optipng(&mut self) {
+    fn poll_optipng(&mut self, jobs: &BackgroundJobs) {
         let current_stamp = self.input_stamp();
         let request_is_stale = self
             .convert_state
@@ -732,14 +780,27 @@ impl ImagePreviewState {
             self.cancel_optipng_process();
             return;
         }
+        if let Some(retry_at) = self.convert_state.optipng_retry_at {
+            if std::time::Instant::now() < retry_at {
+                return;
+            }
+            if let Some(work) = self.convert_state.optipng_retry_work.clone() {
+                self.start_optipng_job_on(work, jobs);
+            }
+            return;
+        }
         let Some(rx) = self.convert_state.optipng_rx.take() else {
             return;
         };
         match rx.try_recv() {
-            Ok(message) => {
+            Ok(Ok(message)) => {
                 self.convert_state.is_running_optipng = false;
                 self.convert_state.optipng_request = None;
                 self.convert_state.optipng_process_control = None;
+                self.convert_state.optipng_job_ticket = None;
+                self.convert_state.optipng_retry_work = None;
+                self.convert_state.optipng_retry_at = None;
+                self.convert_state.optipng_queue_status = None;
                 if message.generation != self.convert_state.request_generation
                     || message.input_stamp != current_stamp
                     || self.convert_state.target_format != ConvertTargetFormat::Png
@@ -766,6 +827,37 @@ impl ImagePreviewState {
                     Err(error) => self.show_toast(format!("❌ OptiPNG error: {}", error)),
                 }
             }
+            Ok(Err(JobError::QueueFull)) => {
+                self.convert_state.is_running_optipng = false;
+                self.convert_state.optipng_process_control = None;
+                self.convert_state.optipng_job_ticket = None;
+                self.convert_state.optipng_rx = None;
+                self.convert_state.optipng_retry_at =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(500));
+                self.convert_state.optipng_queue_status =
+                    Some("Background workers are busy; retrying OptiPNG shortly".to_string());
+            }
+            Ok(Err(JobError::Cancelled)) => {
+                self.convert_state.is_running_optipng = false;
+                self.convert_state.optipng_request = None;
+                self.convert_state.optipng_process_control = None;
+                self.convert_state.optipng_job_ticket = None;
+                self.convert_state.optipng_retry_work = None;
+                self.convert_state.optipng_rx = None;
+            }
+            Ok(Err(error)) => {
+                self.convert_state.is_running_optipng = false;
+                self.convert_state.optipng_request = None;
+                self.convert_state.optipng_process_control = None;
+                self.convert_state.optipng_job_ticket = None;
+                self.convert_state.optipng_retry_work = None;
+                self.convert_state.optipng_rx = None;
+                if self.convert_state.target_format == ConvertTargetFormat::Png
+                    && self.convert_state.output_matches(&current_stamp)
+                {
+                    self.show_toast(format!("❌ OptiPNG error: {error}"));
+                }
+            }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 self.convert_state.optipng_rx = Some(rx);
             }
@@ -773,6 +865,8 @@ impl ImagePreviewState {
                 self.convert_state.is_running_optipng = false;
                 self.convert_state.optipng_request = None;
                 self.convert_state.optipng_process_control = None;
+                self.convert_state.optipng_job_ticket = None;
+                self.convert_state.optipng_retry_work = None;
                 if self.convert_state.target_format == ConvertTargetFormat::Png
                     && self.convert_state.output_matches(&current_stamp)
                 {
@@ -828,6 +922,15 @@ impl ImagePreviewState {
                         .truncate(true),
                     );
                 } else if let Some(status) = &self.convert_state.render_queue_status {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(status)
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
+                                .color(warning),
+                        )
+                        .truncate(true),
+                    );
+                } else if let Some(status) = &self.convert_state.optipng_queue_status {
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(status)
@@ -1017,6 +1120,7 @@ impl ImagePreviewState {
             if ui
                 .add_enabled_ui(
                     !self.convert_state.is_running_optipng
+                        && self.convert_state.optipng_retry_at.is_none()
                         && self.convert_state.output_matches(&self.input_stamp()),
                     |ui| {
                         ui.add_sized(
@@ -1187,7 +1291,13 @@ impl ImagePreviewState {
         // A control can become dirty after the top-level polling pass for this
         // frame. Ensure the debounce timer and worker continue without needing
         // another pointer event to wake the UI.
-        if let Some(retry_at) = self.convert_state.render_retry_at {
+        let retry_at = self
+            .convert_state
+            .render_retry_at
+            .into_iter()
+            .chain(self.convert_state.optipng_retry_at)
+            .min();
+        if let Some(retry_at) = retry_at {
             ctx.request_repaint_after(
                 retry_at.saturating_duration_since(std::time::Instant::now()),
             );
@@ -1364,7 +1474,7 @@ mod input_stamp_tests {
         state.run_optipng_conversion_with(move |_, control| {
             let mut command = Command::new("python3");
             command
-                .arg(command_script)
+                .arg(&command_script)
                 .arg("-o2")
                 .arg("-quiet")
                 .arg("fixture.png");
@@ -1919,6 +2029,15 @@ mod input_stamp_tests {
         assert!(!state.convert_state.is_running_optipng);
     }
 
+    fn wait_for_optipng_on(state: &mut ImagePreviewState, jobs: &BackgroundJobs) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while state.convert_state.is_running_optipng && std::time::Instant::now() < deadline {
+            state.poll_conversion_on(jobs);
+            std::thread::yield_now();
+        }
+        assert!(!state.convert_state.is_running_optipng);
+    }
+
     #[test]
     fn optipng_worker_publishes_current_success_and_preserves_bytes_on_failure() {
         let mut state = state();
@@ -1930,7 +2049,7 @@ mod input_stamp_tests {
         let expected_optimized = optimized.clone();
         state.run_optipng_conversion_with(move |bytes, _control| {
             assert_eq!(bytes, original);
-            Ok(optimized)
+            Ok(optimized.clone())
         });
         assert!(state.convert_state.is_running_optipng);
         wait_for_optipng(&mut state);
@@ -1958,9 +2077,11 @@ mod input_stamp_tests {
         let original = state.convert_state.encoded_bytes.clone();
         let (started_tx, started_rx) = std::sync::mpsc::channel();
         let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = std::sync::Arc::new(std::sync::Mutex::new(release_rx));
+        let worker_release_rx = release_rx.clone();
         state.run_optipng_conversion_with(move |_, _control| {
             started_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
+            worker_release_rx.lock().unwrap().recv().unwrap();
             Ok(b"stale optimized PNG".to_vec())
         });
         started_rx
@@ -1974,5 +2095,159 @@ mod input_stamp_tests {
         assert_eq!(state.convert_state.encoded_bytes, original);
         assert_eq!(state.convert_state.optipng_savings, None);
         assert!(state.convert_state.params_dirty_at.is_some());
+    }
+
+    #[test]
+    fn optipng_queue_full_preserves_output_and_retries_after_delay() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let (_, queued_rx) = jobs.submit(std::time::Duration::MAX, || ());
+
+        let mut state = state_with_png_conversion();
+        let original = state.convert_state.encoded_bytes.clone();
+        let original_len = original.len();
+        state.convert_state.optipng_savings = Some((original_len + 4, original_len));
+        let saved_before = state.convert_state.optipng_savings;
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_calls = calls.clone();
+        let optimizer: std::sync::Arc<OptipngOptimizer> = std::sync::Arc::new(move |_, _| {
+            worker_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(b"synthetic optimized png".to_vec())
+        });
+        state.run_optipng_conversion_with_on(optimizer, &jobs);
+        state.poll_conversion_on(&jobs);
+
+        assert!(!state.convert_state.is_running_optipng);
+        assert!(state.convert_state.optipng_retry_at.is_some());
+        assert!(
+            state
+                .convert_state
+                .optipng_queue_status
+                .as_deref()
+                .is_some_and(|status| status.contains("busy"))
+        );
+        assert_eq!(state.convert_state.encoded_bytes, original);
+        assert_eq!(state.convert_state.optipng_savings, saved_before);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+        let retry_deadline = state.convert_state.optipng_retry_at.unwrap();
+        state.poll_conversion_on(&jobs);
+        assert!(!state.convert_state.is_running_optipng);
+        assert_eq!(state.convert_state.optipng_retry_at, Some(retry_deadline));
+
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+        queued_rx.recv().unwrap().unwrap();
+        state.convert_state.optipng_retry_at = Some(std::time::Instant::now());
+        state.poll_conversion_on(&jobs);
+        assert!(state.convert_state.is_running_optipng);
+        assert!(state.convert_state.optipng_retry_at.is_none());
+        wait_for_optipng_on(&mut state, &jobs);
+        state.poll_conversion_on(&jobs);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            state.convert_state.encoded_bytes,
+            b"synthetic optimized png"
+        );
+        assert_eq!(
+            state.convert_state.optipng_savings,
+            Some((original_len, b"synthetic optimized png".len()))
+        );
+        assert!(state.convert_state.optipng_queue_status.is_none());
+    }
+
+    #[test]
+    fn optipng_stale_retry_is_cancelled_for_input_and_settings_changes() {
+        for change_input in [false, true] {
+            let jobs = BackgroundJobs::new(1, 1);
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            });
+            started_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap();
+            let (_, queued_rx) = jobs.submit(std::time::Duration::MAX, || ());
+            let mut state = state_with_png_conversion();
+            let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let worker_calls = calls.clone();
+            let optimizer: std::sync::Arc<OptipngOptimizer> = std::sync::Arc::new(move |_, _| {
+                worker_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(vec![1, 2, 3])
+            });
+            state.run_optipng_conversion_with_on(optimizer, &jobs);
+            state.poll_conversion_on(&jobs);
+            assert!(state.convert_state.optipng_retry_at.is_some());
+
+            if change_input {
+                state.mark_pixels_changed();
+            } else {
+                state.convert_state.quality = state.convert_state.quality.saturating_sub(1);
+                state.poll_conversion_on(&jobs);
+            }
+            assert!(state.convert_state.optipng_retry_at.is_none());
+            assert!(state.convert_state.optipng_retry_work.is_none());
+            assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+
+            release_tx.send(()).unwrap();
+            blocker_rx.recv().unwrap().unwrap();
+            queued_rx.recv().unwrap().unwrap();
+        }
+    }
+
+    #[test]
+    fn dropping_viewer_cancels_queued_optipng_ticket_and_worker() {
+        let jobs = BackgroundJobs::new(1, 2);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_, blocker_rx) = jobs.submit(std::time::Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let (_, queued_rx) = jobs.submit(std::time::Duration::MAX, || ());
+        let mut state = state_with_png_conversion();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_calls = calls.clone();
+        let optimizer: std::sync::Arc<OptipngOptimizer> = std::sync::Arc::new(move |_, _| {
+            worker_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(vec![9, 8, 7])
+        });
+        state.run_optipng_conversion_with_on(optimizer, &jobs);
+        let process_control = state
+            .convert_state
+            .optipng_process_control
+            .as_ref()
+            .unwrap()
+            .clone();
+        let worker_rx = state.convert_state.optipng_rx.take().unwrap();
+        drop(state);
+        assert!(
+            process_control
+                .cancel
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+
+        release_tx.send(()).unwrap();
+        blocker_rx.recv().unwrap().unwrap();
+        queued_rx.recv().unwrap().unwrap();
+        assert!(matches!(
+            worker_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            Err(JobError::Cancelled)
+        ));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }
