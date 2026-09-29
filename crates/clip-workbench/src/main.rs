@@ -3732,6 +3732,56 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn node_canvas_state_persists_across_palette_and_auto_actions_routes() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.view = WorkbenchView::NodeMachine;
+        app.canvas_state.selected_recipe_name = "Persistence fixture".to_owned();
+        app.canvas_state.graph.nodes[0].title = "Persistent graph node".to_owned();
+        app.canvas_state.selected_node = Some(app.canvas_state.graph.nodes[0].id);
+        app.canvas_state
+            .undo_stack
+            .push(app.canvas_state.graph.clone());
+        let graph_before = serde_yaml::to_string(&app.canvas_state.graph).unwrap();
+        let undo_before = serde_yaml::to_string(&app.canvas_state.undo_stack).unwrap();
+        let selected_node = app.canvas_state.selected_node;
+        let recipe_name = app.canvas_state.selected_recipe_name.clone();
+
+        for (key, expected_view) in [
+            (egui::Key::F2, WorkbenchView::Palette),
+            (egui::Key::F3, WorkbenchView::AutoActions),
+            (egui::Key::F2, WorkbenchView::Palette),
+            (egui::Key::F1, WorkbenchView::NodeMachine),
+        ] {
+            let ctx = egui::Context::default();
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::NONE,
+                    }],
+                    ..Default::default()
+                },
+                |ctx| app.handle_global_shortcuts(ctx),
+            );
+
+            assert_eq!(app.view, expected_view);
+            assert_eq!(
+                serde_yaml::to_string(&app.canvas_state.graph).unwrap(),
+                graph_before
+            );
+            assert_eq!(app.canvas_state.selected_node, selected_node);
+            assert_eq!(app.canvas_state.selected_recipe_name, recipe_name);
+            assert_eq!(
+                serde_yaml::to_string(&app.canvas_state.undo_stack).unwrap(),
+                undo_before
+            );
+        }
+    }
+
+    #[test]
     fn spreadsheet_completion_waits_until_modal_viewer_closes() {
         let mut app = test_workbench_app(
             Some(ViewerSession::ComponentGallery(
