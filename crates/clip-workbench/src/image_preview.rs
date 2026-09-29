@@ -290,6 +290,21 @@ pub(crate) struct ImageInputStamp {
     crop: Option<Rect>,
 }
 
+/// Cheap immutable display-image request captured before submitting worker work.
+/// Cloning this request shares the source pixels; composition is deferred to the worker.
+#[derive(Clone)]
+pub(crate) struct DisplayImageSnapshotRequest {
+    pub(crate) pixels: Arc<RgbaImage>,
+    pub(crate) input_stamp: ImageInputStamp,
+}
+
+impl DisplayImageSnapshotRequest {
+    /// Compose redactions, markup, and the captured crop selection on the calling worker.
+    pub(crate) fn compose(&self) -> RgbaImage {
+        compose_display_image(self.pixels.as_ref().clone(), &self.input_stamp)
+    }
+}
+
 impl ImagePreviewState {
     pub fn from_path(path: PathBuf, config: &AppConfig) -> Result<Self, String> {
         let bytes = std::fs::read(&path)
@@ -480,6 +495,13 @@ impl ImagePreviewState {
         }
     }
 
+    pub(crate) fn display_image_snapshot_request(&self) -> DisplayImageSnapshotRequest {
+        DisplayImageSnapshotRequest {
+            pixels: self.current_rgba.clone(),
+            input_stamp: self.input_stamp(),
+        }
+    }
+
     pub(crate) fn mark_pixels_changed(&mut self) {
         self.cancel_barcode_scan();
         self.film_sim_state.cancel_render();
@@ -504,7 +526,7 @@ impl ImagePreviewState {
     /// Returns the image as currently displayed/composed, taking into account any active crop selection if in Crop mode,
     /// and burning any placed redaction bars so exports/copies never leak private information.
     pub fn current_display_image(&self) -> RgbaImage {
-        compose_display_image(self.current_rgba.as_ref().clone(), &self.input_stamp())
+        self.display_image_snapshot_request().compose()
     }
 
     /// Burns all pending redaction black bars permanently into current_rgba and records an undo point.
@@ -2136,6 +2158,43 @@ mod tests {
         let view_mode = state.input_stamp();
         state.mark_pixels_changed();
         assert_ne!(state.input_stamp(), view_mode);
+    }
+
+    #[test]
+    fn display_snapshot_request_shares_the_pixel_arc() {
+        let state = image_state_from_png((12, 9), "snapshot arc test");
+
+        let request = state.display_image_snapshot_request();
+
+        assert!(Arc::ptr_eq(&request.pixels, &state.current_rgba));
+        assert_eq!(request.input_stamp, state.input_stamp());
+    }
+
+    #[test]
+    fn display_snapshot_composes_redactions_markup_and_crop_like_current_image() {
+        let mut state = image_state_from_png((80, 60), "snapshot compose test");
+        state.current_rgba = Arc::new(RgbaImage::from_fn(80, 60, |x, y| {
+            image::Rgba([(x * 3) as u8, (y * 4) as u8, (x + y) as u8, 255])
+        }));
+        state.redaction_state.boxes.push(RedactionBox {
+            normalized_rect: Rect::from_min_max(Pos2::new(0.2, 0.2), Pos2::new(0.45, 0.5)),
+        });
+        state.markup_state.items.push(MarkupShape::Text {
+            pos: Pos2::new(0.55, 0.5),
+            text: "snapshot".into(),
+            font_size: 12.0,
+        });
+
+        let edited_request = state.display_image_snapshot_request();
+        assert_eq!(edited_request.compose(), state.current_display_image());
+
+        state.active_mode = ImageToolMode::Crop;
+        state.crop_state.normalized_rect =
+            Rect::from_min_max(Pos2::new(0.1, 0.15), Pos2::new(0.8, 0.85));
+        let crop_request = state.display_image_snapshot_request();
+        assert_eq!(crop_request.compose(), state.current_display_image());
+        assert_eq!(crop_request.compose().dimensions(), (56, 42));
+        assert!(Arc::ptr_eq(&crop_request.pixels, &state.current_rgba));
     }
 
     #[test]
