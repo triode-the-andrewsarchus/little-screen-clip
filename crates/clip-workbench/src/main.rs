@@ -2817,6 +2817,19 @@ impl WorkbenchApp {
     }
 
     fn handle_empty_search_shortcuts(&mut self, ctx: &egui::Context, audio_region_active: bool) {
+        self.handle_empty_search_shortcuts_with_swap(
+            ctx,
+            audio_region_active,
+            Self::swap_selected_slots,
+        );
+    }
+
+    fn handle_empty_search_shortcuts_with_swap(
+        &mut self,
+        ctx: &egui::Context,
+        audio_region_active: bool,
+        mut swap_slots: impl FnMut(&mut Self),
+    ) {
         if ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
             self.view = WorkbenchView::NodeMachine;
             return;
@@ -2845,7 +2858,7 @@ impl WorkbenchApp {
             i.modifiers.is_none() && (i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::X))
         }) && self.selected_slots.len() == 2
         {
-            self.swap_selected_slots();
+            swap_slots(self);
         }
     }
 
@@ -4131,6 +4144,7 @@ mod workbench_layout_tests {
             let state_before = app.state.clone();
             app.dirty_mirror = false;
             app.search_query.clear();
+            let mut swap_calls = 0;
 
             let _ = egui::Context::default().run(
                 egui::RawInput {
@@ -4144,9 +4158,10 @@ mod workbench_layout_tests {
                     modifiers,
                     ..Default::default()
                 },
-                |ctx| app.handle_empty_search_shortcuts(ctx, false),
+                |ctx| app.handle_empty_search_shortcuts_with_swap(ctx, false, |_| swap_calls += 1),
             );
 
+            assert_eq!(swap_calls, 0, "key {key:?}, modifiers {modifiers:?}");
             assert_eq!(
                 app.selected_slots,
                 vec![SlotId::LeftHand, SlotId::RightHand]
