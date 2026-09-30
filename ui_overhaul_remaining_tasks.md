@@ -659,10 +659,10 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **H2.3h5 Verify link cleaning preserves the original URL in Undo.** Confirm the Undo payload.
     - **Image Studio**
       - [ ] **H2.3h6 Verify Pick Color Copy Hex writes the sampled hex value to the clipboard.** Confirm exact text.
-      - [ ] **H2.3h7 Verify Palette Export CSV writes the selected palette.** Confirm CSV fields and values.
+      - [x] **H2.3h7 [Primary] Verify Palette Export CSV copies the selected color values in order.** `copy_palette_csv_helper_preserves_order_and_egui_fallback` extracts a deterministic two-color palette, then checks both egui's copied text and an injected clipboard-writer callback receive exactly `#123456, #FEDCBA`. This covers the current serializer's value list; it does not produce headered CSV fields.
       - [ ] **H2.3h8 Verify Convert Save As writes the chosen format to the selected path.** Confirm encoding and source remains unchanged.
       - [ ] **H2.3h9 Verify OCR Copy All writes recognized text to the clipboard.** Confirm exact text.
-      - [ ] **H2.3h10 Verify Barcode selected-payload Copy writes that code to the clipboard.** Confirm exact payload.
+      - [x] **H2.3h10 [Primary] Verify Barcode Copy All and selected Copy publish exact payloads.** `barcode_copy_actions_emit_exact_payloads` clicks the rendered Copy All and selected-code actions for generated detections and confirms exact egui clipboard text, including Unicode. It also verifies URL-only Open behavior separately; no system clipboard or external browser is used.
       - [ ] **H2.3h11 Verify Background Removal Copy Left writes its result to Left Hand.** Confirm image payload.
       - [ ] **H2.3h12 Verify Metadata Copy writes the selected fields to the clipboard.** Confirm exact text.
     - **Audio surfaces**
