@@ -1113,6 +1113,38 @@ mod tests {
         state
     }
 
+    fn write_two_page_pdf(path: &Path) {
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 300] /Resources << >> /Contents 4 0 R >>",
+            "<< /Length 0 >>\nstream\n\nendstream",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 100] /Resources << >> /Contents 6 0 R >>",
+            "<< /Length 0 >>\nstream\n\nendstream",
+        ];
+        let mut bytes = b"%PDF-1.4\n".to_vec();
+        let mut offsets = vec![0usize];
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(bytes.len());
+            bytes
+                .extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", index + 1, object).as_bytes());
+        }
+        let xref_offset = bytes.len();
+        bytes.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+        bytes.extend_from_slice(b"0000000000 65535 f \n");
+        for offset in offsets.into_iter().skip(1) {
+            bytes.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        bytes.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n",
+                objects.len() + 1
+            )
+            .as_bytes(),
+        );
+        std::fs::write(path, bytes).unwrap();
+    }
+
     fn raster_state(page_count: usize, dimension: u32) -> PdfEditorState {
         let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
             dimension,
@@ -1898,6 +1930,82 @@ mod tests {
         );
         assert!(state.edit_in_progress);
         assert!(state.edit_rx.is_some());
+    }
+
+    #[test]
+    fn idle_r_rotates_selected_pdf_page_and_adopts_sibling_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("fixture.pdf");
+        let output = temp.path().join("fixture.rotate.edited.pdf");
+        write_two_page_pdf(&source);
+        let source_bytes = std::fs::read(&source).unwrap();
+        assert_eq!(get_pdf_info(&source).unwrap().page_count, 2);
+        let (_, source_page_width, source_page_height) =
+            render_pdf_page_preview(&source, 2, 64).expect("render original page two");
+        assert!(source_page_width > source_page_height);
+
+        let mut state = action_guard_state(source.clone(), 2, Some(2));
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut close = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(900.0, 600.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::R,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::default(),
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                });
+            },
+        );
+        assert!(
+            state.edit_in_progress,
+            "idle R should dispatch the selected-page edit"
+        );
+        assert_eq!(state.selected_page, Some(2));
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        while state.edit_in_progress && std::time::Instant::now() < deadline {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                state.poll_edit_worker(ctx, 1.0)
+            });
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!state.edit_in_progress, "PDF rotate edit did not finish");
+        assert_eq!(state.path, output);
+        assert!(output.is_file());
+        assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+        assert_eq!(get_pdf_info(&output).unwrap().page_count, 2);
+        assert_eq!(state.selected_page, Some(2));
+        let (_, rotated_page_width, rotated_page_height) =
+            render_pdf_page_preview(&output, 2, 64).expect("render rotated page two");
+        assert!(rotated_page_width < rotated_page_height);
+
+        while state.info_job.is_some() && std::time::Instant::now() < deadline {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                state.poll_info_worker(ctx, 1.0)
+            });
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            state.info_job.is_none(),
+            "edited PDF metadata did not reload"
+        );
+        assert_eq!(state.selected_page, Some(2));
+        assert!(!close);
     }
 
     #[test]
