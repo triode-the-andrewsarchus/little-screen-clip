@@ -275,6 +275,33 @@ enum ViewerSession {
     ComponentGallery(component_gallery::ComponentGalleryState),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ImageSessionKey {
+    ClipboardItem(uuid::Uuid),
+    File {
+        path: PathBuf,
+        len: u64,
+        modified_ns: u128,
+    },
+}
+
+impl ImageSessionKey {
+    fn file(path: &std::path::Path) -> Option<Self> {
+        let metadata = std::fs::metadata(path).ok()?;
+        let modified_ns = metadata
+            .modified()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        Some(Self::File {
+            path: path.to_path_buf(),
+            len: metadata.len(),
+            modified_ns,
+        })
+    }
+}
+
 fn show_viewer_panel(ctx: &egui::Context, contents: impl FnOnce(&mut egui::Ui)) {
     egui::CentralPanel::default()
         .frame(egui::Frame::none())
@@ -354,6 +381,7 @@ impl ImageLoadSource {
 }
 
 struct ImageLoadJob {
+    key: Option<ImageSessionKey>,
     ticket: JobTicket,
     receiver: Receiver<Result<Result<ImagePreviewState, String>, JobError>>,
 }
@@ -385,6 +413,15 @@ impl Drop for RollingEditorLoadJob {
 
 impl ImageLoadJob {
     fn new(source: ImageLoadSource, config: AppConfig) -> Self {
+        let key = source.session_key();
+        Self::new_with_key(source, key, config)
+    }
+
+    fn new_with_key(
+        source: ImageLoadSource,
+        key: Option<ImageSessionKey>,
+        config: AppConfig,
+    ) -> Self {
         let (ticket, receiver) =
             BackgroundJobs::global().submit(Duration::from_secs(30), move || match source {
                 ImageLoadSource::File(path) => ImagePreviewState::from_path(path, &config),
@@ -406,7 +443,20 @@ impl ImageLoadJob {
                     title,
                 } => ImagePreviewState::from_bytes_with_meta(bytes, mime, path, title, &config),
             });
-        Self { ticket, receiver }
+        Self {
+            key,
+            ticket,
+            receiver,
+        }
+    }
+}
+
+impl ImageLoadSource {
+    fn session_key(&self) -> Option<ImageSessionKey> {
+        match self {
+            Self::File(path) | Self::ItemFile { path, .. } => ImageSessionKey::file(path),
+            Self::Bytes { path, .. } => path.as_deref().and_then(ImageSessionKey::file),
+        }
     }
 }
 
@@ -473,6 +523,9 @@ struct WorkbenchApp {
     dirty_mirror: bool,
     in_app_prompt: Option<InAppPromptState>,
     viewer: Option<ViewerSession>,
+    active_image_key: Option<ImageSessionKey>,
+    retained_image_session: Option<(ImageSessionKey, ImagePreviewState)>,
+    pending_image_close: bool,
     startup_viewers: VecDeque<ViewerSession>,
     startup_midi: Option<PathBuf>,
     image_load_job: Option<ImageLoadJob>,
@@ -760,6 +813,9 @@ impl WorkbenchApp {
             dirty_mirror: true,
             in_app_prompt: None,
             viewer: None,
+            active_image_key: None,
+            retained_image_session: None,
+            pending_image_close: false,
             startup_viewers,
             startup_midi: initial_midi,
             image_load_job: None,
@@ -791,7 +847,12 @@ impl WorkbenchApp {
     }
 
     fn advance_startup(&mut self) {
+        if !self.retain_current_image_session() {
+            self.pending_image_close = true;
+            return;
+        }
         self.viewer = self.startup_viewers.pop_front();
+        self.active_image_key = None;
         if self.viewer.is_none() {
             if let Some(path) = self.startup_midi.take() {
                 self.start_midi_load(path);
@@ -1426,6 +1487,11 @@ impl eframe::App for WorkbenchApp {
 
         self.poll_rolling_editor_load(ctx);
         self.render_rolling_editor_status(ctx);
+        if let Some((_, state)) = self.retained_image_session.as_mut()
+            && state.poll_cached_jobs()
+        {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
         self.poll_image_load(ctx);
         self.poll_text_load(ctx);
         if self.render_modal_viewers(ctx) {
@@ -1548,8 +1614,8 @@ impl eframe::App for WorkbenchApp {
                                 &self.ui_palette,
                             );
                             if ui.add(img_btn).clicked() {
-                                let source = ImageLoadSource::from_item(self.state.get(slot).unwrap());
-                                self.start_image_item_load(source);
+                                let item = self.state.get(slot).unwrap().clone();
+                                self.start_image_item_load(&item);
                             }
                         }
 
@@ -1910,7 +1976,7 @@ impl WorkbenchApp {
             }
             return false;
         };
-        let mut close = false;
+        let mut close = self.pending_image_close;
         let mut pdf_dirty = false;
         match viewer {
             ViewerSession::Diff(state) => {
@@ -2038,6 +2104,13 @@ impl WorkbenchApp {
         if close {
             self.image_load_job = None;
             self.text_load_job = None;
+            if !self.retain_current_image_session() {
+                self.pending_image_close = true;
+                ctx.request_repaint_after(Duration::from_millis(16));
+                return true;
+            }
+            self.pending_image_close = false;
+            self.active_image_key = None;
             self.advance_startup();
             self.dirty_mirror |= pdf_dirty;
             ctx.request_repaint();
@@ -2161,23 +2234,65 @@ impl WorkbenchApp {
     }
 
     fn replace_viewer(&mut self, viewer: Option<ViewerSession>) {
+        if !self.retain_current_image_session() {
+            return;
+        }
         self.image_load_job = None;
         self.text_load_job = None;
+        self.active_image_key = None;
+        self.pending_image_close = false;
         self.viewer = viewer;
     }
 
-    fn start_image_item_load(&mut self, source: Result<ImageLoadSource, String>) {
+    fn retain_current_image_session(&mut self) -> bool {
+        if let Some(ViewerSession::Image(state)) = self.viewer.as_mut() {
+            if !state.poll_session_snapshots() {
+                return false;
+            }
+        }
+        if let Some(ViewerSession::Image(mut state)) = self.viewer.take() {
+            let key = self.active_image_key.take();
+            let edited = !state.undo_stack.is_empty()
+                || !state.redo_stack.is_empty()
+                || state.current_rgba.as_ref() != state.original_rgba.as_ref();
+            state.suspend_pending_work();
+            if let Some(key) = key.filter(|_| edited) {
+                self.retained_image_session = Some((key, state));
+            }
+        }
+        true
+    }
+
+    fn start_image_item_load(&mut self, item: &ClipItem) {
+        let key = ImageSessionKey::ClipboardItem(item.id);
+        if self.restore_image_session(&key) {
+            return;
+        }
+        let source = ImageLoadSource::from_item(item);
         match source {
-            Ok(source) => self.start_image_load(source),
+            Ok(source) => self.start_image_load_with_key(source, Some(key)),
             Err(error) => {
                 self.image_load_job = None;
                 self.text_load_job = None;
+                self.active_image_key = None;
                 self.set_status_message(format!("Image preview failed: {error}"));
             }
         }
     }
 
     fn start_image_load(&mut self, source: ImageLoadSource) {
+        let key = source.session_key();
+        if key
+            .as_ref()
+            .is_some_and(|key| self.restore_image_session(key))
+        {
+            return;
+        }
+        self.start_image_load_with_key(source, key);
+    }
+
+    fn start_image_load_with_key(&mut self, source: ImageLoadSource, key: Option<ImageSessionKey>) {
+        self.retained_image_session = None;
         self.image_load_job = None;
         self.text_load_job = None;
         if matches!(self.viewer, Some(ViewerSession::ImageLoading(_))) {
@@ -2189,8 +2304,30 @@ impl WorkbenchApp {
         if let Some((ticket, _)) = self.midi_load_job.take() {
             ticket.cancel();
         }
-        self.image_load_job = Some(ImageLoadJob::new(source, self.config.clone()));
+        self.image_load_job = Some(ImageLoadJob::new_with_key(source, key, self.config.clone()));
         self.clear_status_message();
+    }
+
+    fn restore_image_session(&mut self, key: &ImageSessionKey) -> bool {
+        if self.active_image_key.as_ref() == Some(key)
+            && matches!(self.viewer, Some(ViewerSession::Image(_)))
+        {
+            return true;
+        }
+        let Some((cached_key, state)) = self.retained_image_session.take() else {
+            return false;
+        };
+        if cached_key == *key {
+            self.image_load_job = None;
+            self.text_load_job = None;
+            self.viewer = Some(ViewerSession::Image(state));
+            self.active_image_key = Some(key.clone());
+            self.clear_status_message();
+            true
+        } else {
+            drop(state);
+            false
+        }
     }
 
     fn poll_image_load(&mut self, ctx: &egui::Context) {
@@ -2204,6 +2341,7 @@ impl WorkbenchApp {
         } else {
             return;
         };
+        let key = job.key.clone();
         let result = match job.receiver.try_recv() {
             Ok(result) => result,
             Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -2215,7 +2353,11 @@ impl WorkbenchApp {
         self.image_load_job = None;
         match result {
             Ok(Ok(state)) => {
-                self.replace_viewer(Some(ViewerSession::Image(state)));
+                self.viewer = None;
+                self.active_image_key = None;
+                self.retained_image_session = None;
+                self.viewer = Some(ViewerSession::Image(state));
+                self.active_image_key = key;
                 self.status_msg = None;
             }
             failure => {
@@ -2624,9 +2766,13 @@ impl WorkbenchApp {
             return;
         }
         if let Some(fp) = bounded_item_file_path(item) {
-            self.open_slot_file_preview(&fp, item.is_image());
+            if item.is_image() || is_image_path(&fp) {
+                self.start_image_item_load(item);
+            } else {
+                self.open_slot_file_preview(&fp, false);
+            }
         } else if item.is_image() {
-            self.start_image_item_load(ImageLoadSource::from_item(item));
+            self.start_image_item_load(item);
         } else if let Some(text) = item.to_clipboard_text() {
             self.open_slot_text_preview(text, &item.title);
         }
@@ -3383,6 +3529,9 @@ mod workbench_layout_tests {
             dirty_mirror: false,
             in_app_prompt: None,
             viewer,
+            active_image_key: None,
+            retained_image_session: None,
+            pending_image_close: false,
             startup_viewers,
             startup_midi: None,
             image_load_job: None,
@@ -5661,6 +5810,132 @@ mod workbench_layout_tests {
         assert_eq!(app.selected_slots, originating_slots);
     }
 
+    fn test_image_preview_state() -> ImagePreviewState {
+        let image = image::RgbaImage::from_pixel(2, 2, image::Rgba([12, 34, 56, 255]));
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        ImagePreviewState::from_bytes_with_meta(
+            encoded.into_inner(),
+            "image/png".to_owned(),
+            None,
+            "session fixture".to_owned(),
+            &AppConfig::default(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn image_session_suspension_retains_edited_state_for_matching_clipboard_item() {
+        let key = ImageSessionKey::ClipboardItem(uuid::Uuid::new_v4());
+        let mut image = test_image_preview_state();
+        Arc::make_mut(&mut image.current_rgba).put_pixel(0, 0, image::Rgba([200, 10, 20, 255]));
+        image.undo_stack.push(Arc::clone(&image.original_rgba));
+        let edited_pixels = Arc::clone(&image.current_rgba);
+
+        let mut app = test_workbench_app(Some(ViewerSession::Image(image)), VecDeque::new());
+        app.active_image_key = Some(key.clone());
+        app.retain_current_image_session();
+
+        assert!(app.viewer.is_none());
+        assert!(app.restore_image_session(&key));
+        let Some(ViewerSession::Image(restored)) = &app.viewer else {
+            panic!("matching image session should be restored");
+        };
+        assert!(Arc::ptr_eq(&restored.current_rgba, &edited_pixels));
+        assert_eq!(
+            restored.current_rgba.get_pixel(0, 0),
+            &image::Rgba([200, 10, 20, 255])
+        );
+        assert_eq!(restored.undo_stack.len(), 1);
+        assert_eq!(app.active_image_key, Some(key));
+    }
+
+    #[test]
+    fn file_backed_clipboard_image_restores_by_item_id_before_reading_its_path() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("backed.png");
+        write_test_image(&path, 2);
+        let item = ClipItem {
+            id: uuid::Uuid::new_v4(),
+            created_at: 0,
+            payload: ClipPayload::Image {
+                bytes: Vec::new(),
+                path: Some(path.clone()),
+                width: 2,
+                height: 2,
+                mime: "image/png".to_owned(),
+                thumbnail: None,
+            },
+            title: "backed image".to_owned(),
+            subtitle: "PNG".to_owned(),
+            details: Vec::new(),
+            handler_tag: "IMAGE".to_owned(),
+        };
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.open_slot_preview_modal(&item);
+        wait_for_image_load(&mut app);
+        let Some(ViewerSession::Image(state)) = &mut app.viewer else {
+            panic!("file-backed item should load into Image Studio");
+        };
+        Arc::make_mut(&mut state.current_rgba).put_pixel(0, 0, image::Rgba([9, 8, 7, 255]));
+        state.undo_stack.push(Arc::clone(&state.original_rgba));
+        app.retain_current_image_session();
+
+        std::fs::remove_file(path).unwrap();
+        app.open_slot_preview_modal(&item);
+        assert!(app.image_load_job.is_none());
+        let Some(ViewerSession::Image(restored)) = &app.viewer else {
+            panic!("same clipboard item should restore without reopening its file");
+        };
+        assert_eq!(
+            restored.current_rgba.get_pixel(0, 0),
+            &image::Rgba([9, 8, 7, 255])
+        );
+        assert_eq!(restored.undo_stack.len(), 1);
+        assert_eq!(
+            app.active_image_key,
+            Some(ImageSessionKey::ClipboardItem(item.id))
+        );
+    }
+
+    #[test]
+    fn image_session_cache_drops_entry_for_a_different_clipboard_item() {
+        let retained_key = ImageSessionKey::ClipboardItem(uuid::Uuid::new_v4());
+        let requested_key = ImageSessionKey::ClipboardItem(uuid::Uuid::new_v4());
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.retained_image_session = Some((retained_key, test_image_preview_state()));
+
+        assert!(!app.restore_image_session(&requested_key));
+        assert!(app.retained_image_session.is_none());
+        assert!(app.viewer.is_none());
+    }
+
+    #[test]
+    fn image_session_retention_skips_unmodified_image_state() {
+        let key = ImageSessionKey::ClipboardItem(uuid::Uuid::new_v4());
+        let app_viewer = ViewerSession::Image(test_image_preview_state());
+        let mut app = test_workbench_app(Some(app_viewer), VecDeque::new());
+        app.active_image_key = Some(key);
+
+        app.retain_current_image_session();
+
+        assert!(app.viewer.is_none());
+        assert!(app.retained_image_session.is_none());
+    }
+
+    #[test]
+    fn file_image_session_key_changes_when_file_version_changes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("image.png");
+        std::fs::write(&path, b"first version").unwrap();
+        let first = ImageSessionKey::file(&path).unwrap();
+        std::fs::write(&path, b"a different file version").unwrap();
+        let second = ImageSessionKey::file(&path).unwrap();
+        assert_ne!(first, second);
+    }
+
     #[test]
     fn malformed_image_preview_reports_cause_and_valid_preview_recovers() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -5792,7 +6067,7 @@ mod workbench_layout_tests {
     }
 
     #[test]
-    fn image_studio_escape_closes_view_without_mutating_source_clipboard_item() {
+    fn rendered_image_studio_escape_restores_only_the_matching_edited_session() {
         let mut bytes = Vec::new();
         image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
             3,
@@ -5813,7 +6088,12 @@ mod workbench_layout_tests {
 
         app.open_slot_preview_modal(&item);
         wait_for_image_load(&mut app);
-        assert!(matches!(app.viewer, Some(ViewerSession::Image(_))));
+        let Some(ViewerSession::Image(state)) = &mut app.viewer else {
+            panic!("missing image viewer")
+        };
+        Arc::make_mut(&mut state.current_rgba).put_pixel(0, 0, image::Rgba([210, 30, 40, 255]));
+        state.undo_stack.push(Arc::clone(&state.original_rgba));
+        let edited_pixel = *state.current_rgba.get_pixel(0, 0);
 
         let _ = egui::Context::default().run(
             egui::RawInput {
@@ -5837,6 +6117,44 @@ mod workbench_layout_tests {
             app.state, state_before,
             "source clipboard item is unchanged"
         );
+        assert_eq!(
+            app.retained_image_session.as_ref().map(|(key, _)| key),
+            Some(&ImageSessionKey::ClipboardItem(item.id))
+        );
+
+        app.open_slot_preview_modal(&item);
+        let Some(ViewerSession::Image(restored)) = &app.viewer else {
+            panic!("matching image item should restore its edited session")
+        };
+        assert_eq!(restored.current_rgba.get_pixel(0, 0), &edited_pixel);
+        assert_eq!(restored.undo_stack.len(), 1);
+        assert!(app.retained_image_session.is_none());
+
+        let mut other_bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            2,
+            2,
+            image::Rgba([1, 2, 3, 255]),
+        ))
+        .write_to(
+            &mut std::io::Cursor::new(&mut other_bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        let other_item = ClipItem::from_image_bytes(other_bytes, "image/png".to_owned()).unwrap();
+        app.open_slot_preview_modal(&other_item);
+        wait_for_image_load(&mut app);
+        let Some(ViewerSession::Image(replacement)) = &app.viewer else {
+            panic!("different clipboard item should open a new image session")
+        };
+        assert_eq!(replacement.current_rgba.dimensions(), (2, 2));
+        assert_eq!(
+            replacement.current_rgba.get_pixel(0, 0),
+            &image::Rgba([1, 2, 3, 255])
+        );
+        assert!(replacement.undo_stack.is_empty());
+        assert!(app.retained_image_session.is_none());
+        assert!(matches!(&item.payload, ClipPayload::Image { bytes, .. } if !bytes.is_empty()));
     }
 
     #[test]

@@ -318,6 +318,20 @@ impl DisplayImageSnapshotRequest {
 }
 
 impl ImagePreviewState {
+    /// Polls snapshot workers while this editor is hidden in the session cache.
+    /// Returns true while a save or copy still needs a later poll.
+    pub(crate) fn poll_cached_jobs(&mut self) -> bool {
+        self.poll_save_job();
+        self.poll_copy_job();
+        self.save_job.is_some() || self.copy_job.is_some()
+    }
+
+    /// Restore worker-owned pixel snapshots before moving the editor out of the UI.
+    pub(crate) fn poll_session_snapshots(&mut self) -> bool {
+        self.poll_cached_jobs();
+        !self.save_snapshot_pending() && !self.copy_snapshot_pending()
+    }
+
     pub fn from_path(path: PathBuf, config: &AppConfig) -> Result<Self, String> {
         let bytes = std::fs::read(&path)
             .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;

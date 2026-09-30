@@ -1045,6 +1045,67 @@ mod tests {
     }
 
     #[test]
+    fn pending_save_defers_session_cache_until_canvas_is_restored() {
+        let jobs = BackgroundJobs::new(1, 2);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (_blocker_ticket, _blocker_rx) = jobs.submit(SAVE_TIMEOUT, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv().unwrap();
+
+        let invoked = Arc::new(AtomicBool::new(false));
+        let worker_invoked = Arc::clone(&invoked);
+        let mut state = state();
+        Arc::make_mut(&mut state.current_rgba).put_pixel(0, 0, image::Rgba([1, 2, 3, 255]));
+        state.undo_stack.push(Arc::clone(&state.original_rgba));
+        let pixels = Arc::clone(&state.current_rgba);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let save_path = temp_dir.path().join("retained.png");
+
+        state.start_save(&save_path, &jobs);
+        state.copy_job = Some(ImageCopyJob::start_encoded_with(
+            Arc::new(b"captured".to_vec()),
+            "image/png".into(),
+            "success".into(),
+            "fallback".into(),
+            &jobs,
+            move |_, _, _, _, _| {
+                worker_invoked.store(true, Ordering::Release);
+                Ok("copied".into())
+            },
+        ));
+
+        assert!(!state.poll_session_snapshots());
+        assert!(state.current_rgba.is_empty());
+        assert!(state.save_job.is_some());
+        assert!(state.copy_job.is_some());
+
+        release_tx.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !state.poll_session_snapshots() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(state.poll_session_snapshots());
+        assert!(Arc::ptr_eq(&state.current_rgba, &pixels));
+        assert_eq!(
+            state.current_rgba.get_pixel(0, 0),
+            &image::Rgba([1, 2, 3, 255])
+        );
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while (state.save_job.is_some() || state.copy_job.is_some()) && Instant::now() < deadline {
+            state.poll_cached_jobs();
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(state.save_job.is_none());
+        assert!(state.copy_job.is_none());
+        assert!(save_path.exists());
+        assert!(invoked.load(Ordering::Acquire));
+    }
+
+    #[test]
     fn stale_clipboard_delivery_does_not_publish() {
         let mut pushed = false;
         let mut copied = false;

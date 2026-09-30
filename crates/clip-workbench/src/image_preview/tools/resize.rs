@@ -429,8 +429,8 @@ impl TargetSizeSearch<'_> {
     }
 }
 
-impl Drop for ImagePreviewState {
-    fn drop(&mut self) {
+impl ImagePreviewState {
+    pub(crate) fn suspend_pending_work(&mut self) {
         self.cancel_pixel_resize();
         if let Some(ticket) = self.palette_ticket.take() {
             ticket.cancel();
@@ -458,6 +458,12 @@ impl Drop for ImagePreviewState {
         if let Some(ticket) = self.creative_fx_state.alpha_job_ticket.take() {
             ticket.cancel();
         }
+    }
+}
+
+impl Drop for ImagePreviewState {
+    fn drop(&mut self) {
+        self.suspend_pending_work();
     }
 }
 
