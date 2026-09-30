@@ -674,8 +674,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **H2.3h18 Verify Rolling Audio Copy writes the selected range to its declared destination.** Confirm payload and destination.
     - **Preview and comparison surfaces**
       - [x] **H2.3h19 [Primary] Verify Text Preview Copy All writes the full source text.** `rendered_copy_all_button_copies_full_text_preview_source` clicks the rendered Copy All toolbar label in a headless `TextPreviewState::from_text` view and asserts egui's `copied_text` exactly matches the complete multiline source, including Japanese and emoji. It uses no system clipboard or filesystem.
-      - [ ] **H2.3h20 Verify Text/Image Diff text copy writes ANSI-stripped diff text.** Confirm clipboard contents.
-      - [ ] **H2.3h21 Verify Text/Image Diff image copy writes the generated mask.** Confirm image MIME and pixels.
+      - [x] **H2.3h20 [Primary] Verify Text Diff copy publishes ANSI-stripped result text.** `text_diff_ctrl_c_publishes_exact_ansi_stripped_result` sends Ctrl+C through the rendered Diff viewer and checks egui's copied text exactly matches the result after ANSI codes are removed. It does not access the system clipboard.
+      - [x] **H2.3h21 [Primary] Verify Image Diff builds an exact Left Hand mask-copy request.** `image_diff_copy_request_contains_left_hand_mask_png` checks the production request builder selects Left Hand and `image/png`, then decodes the bytes and verifies exact mask dimensions and pixels. It does not send IPC or touch a clipboard.
       - [ ] **H2.3h22 Verify Binary Diff Summary copies its displayed text.** Confirm clipboard contents.
       - [ ] **H2.3h23 Verify PDF rotation writes the declared sibling file and adopts its path.** Confirm persisted page orientation and active path.
       - [ ] **H2.3h24 Verify Spreadsheet Copy Table writes active-sheet TSV.** Confirm tabs, newlines, and paste fidelity.
