@@ -710,9 +710,19 @@ impl ImagePreviewState {
     }
 
     pub fn launch_external_app(&mut self, app: &str, _ctx: &egui::Context, _close: &mut bool) {
+        self.launch_external_app_with(app, |app_name, command, path| {
+            crate::shell::EscapeHatchLauncher::spawn_with_fallback(app_name, command, path)
+        });
+    }
+
+    fn launch_external_app_with(
+        &mut self,
+        app: &str,
+        launch: impl FnOnce(&str, &str, &std::path::Path) -> Result<String, String>,
+    ) {
         match self.ensure_disk_path() {
             Ok(file_path) => {
-                match crate::shell::EscapeHatchLauncher::spawn_with_fallback(app, app, &file_path) {
+                match launch(app, app, &file_path) {
                     Ok(msg) => {
                         self.show_toast(msg);
                         // Workbench remains open so the user does not lose their session
@@ -2255,6 +2265,45 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn assert_unavailable_configured_app_sets_failure_toast(
+        executable_name: &str,
+        configure: impl FnOnce(&mut AppConfig, &str),
+    ) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_path = temp_dir.path().join("source.png");
+        RgbaImage::from_pixel(3, 2, image::Rgba([17, 83, 149, 255]))
+            .save(&source_path)
+            .unwrap();
+        let missing_app = temp_dir.path().join(format!("missing-{executable_name}"));
+        let missing_fallback = temp_dir.path().join("missing-default-opener");
+        let mut config = AppConfig::default();
+        configure(&mut config, missing_app.to_str().unwrap());
+        let mut state = ImagePreviewState::from_path(source_path, &config).unwrap();
+        let app = match executable_name {
+            "krita" => state.external_editor.clone(),
+            "inkscape" => state.svg_editor.clone(),
+            _ => state.viewer.clone(),
+        };
+        state.launch_external_app_with(&app, |app_name, command, path| {
+            crate::shell::EscapeHatchLauncher::spawn_with_fallback_command(
+                app_name,
+                command,
+                path,
+                missing_fallback.to_str().unwrap(),
+            )
+        });
+
+        let expected = format!(
+            "⚠️ Failed to launch '{}' (tool not installed)",
+            missing_app.display()
+        );
+        assert!(matches!(
+            state.status_toast.as_ref(),
+            Some((message, _)) if message == &expected
+        ));
+    }
+
+    #[cfg(unix)]
     #[test]
     fn krita_handoff_receives_current_source_image_file() {
         assert_configured_app_receives_source_image("fake-krita", |config, executable| {
@@ -2274,6 +2323,30 @@ mod tests {
     #[test]
     fn viewer_handoff_receives_current_source_image_file() {
         assert_configured_app_receives_source_image("fake-nomacs", |config, executable| {
+            config.image.viewer = executable.to_owned();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_krita_sets_image_studio_failure_toast_without_host_fallback() {
+        assert_unavailable_configured_app_sets_failure_toast("krita", |config, executable| {
+            config.image.external_editor = executable.to_owned();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_inkscape_sets_image_studio_failure_toast_without_host_fallback() {
+        assert_unavailable_configured_app_sets_failure_toast("inkscape", |config, executable| {
+            config.image.svg_editor = executable.to_owned();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn missing_viewer_sets_image_studio_failure_toast_without_host_fallback() {
+        assert_unavailable_configured_app_sets_failure_toast("nomacs", |config, executable| {
             config.image.viewer = executable.to_owned();
         });
     }

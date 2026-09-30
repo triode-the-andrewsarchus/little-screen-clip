@@ -77,7 +77,7 @@ impl EscapeHatchLauncher {
         Self::spawn_with_fallback_command(app_name, command, file_path, "xdg-open")
     }
 
-    fn spawn_with_fallback_command(
+    pub(crate) fn spawn_with_fallback_command(
         app_name: &str,
         command: &str,
         file_path: &Path,
