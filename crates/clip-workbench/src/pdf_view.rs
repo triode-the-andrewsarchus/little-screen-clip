@@ -13,8 +13,9 @@ use little_clip_core::pdf::{
 };
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError, channel, sync_channel};
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const PREVIEW_QUEUE_CAPACITY: usize = 3;
@@ -309,7 +310,7 @@ pub struct PdfEditorState {
     )>,
     preview_rx: Option<Receiver<PdfPreviewMsg>>,
     preview_job: Option<(JobTicket, Receiver<Result<(), JobError>>)>,
-    preview_cancel: Option<Arc<Mutex<bool>>>,
+    preview_cancel: Option<Arc<AtomicBool>>,
     previews_loading: bool,
     edit_rx: Option<Receiver<PdfEditMsg>>,
     edit_in_progress: bool,
@@ -455,7 +456,7 @@ impl PdfEditorState {
         // Bound pending raster data if rendering outruns the UI. Cancellation
         // drops this receiver to unblock a producer waiting to publish a page.
         let (tx, rx) = sync_channel(PREVIEW_QUEUE_CAPACITY);
-        let cancelled = Arc::new(Mutex::new(false));
+        let cancelled = Arc::new(AtomicBool::new(false));
         let (ticket, job_rx) = spawn_preview_worker(
             jobs,
             path,
@@ -474,7 +475,7 @@ impl PdfEditorState {
 
     fn cancel_preview_worker(&mut self) {
         if let Some(cancelled) = self.preview_cancel.take() {
-            *cancelled.lock().expect("PDF preview cancel mutex poisoned") = true;
+            cancelled.store(true, Ordering::Release);
         }
         if let Some((ticket, _)) = self.preview_job.take() {
             ticket.cancel();
@@ -1286,7 +1287,7 @@ fn spawn_preview_worker<F>(
     selected_page: usize,
     raster_cache: std::sync::Arc<tempfile::TempDir>,
     tx: std::sync::mpsc::SyncSender<PdfPreviewMsg>,
-    cancelled: Arc<Mutex<bool>>,
+    cancelled: Arc<AtomicBool>,
     render_page: F,
 ) -> (JobTicket, Receiver<Result<(), JobError>>)
 where
@@ -1302,7 +1303,7 @@ where
         }
         order.extend((1..=page_count).filter(|page| *page != selected_page));
         for page_num in order {
-            if *cancelled.lock().expect("PDF preview cancel mutex poisoned") {
+            if cancelled.load(Ordering::Acquire) {
                 break;
             }
             let max_dim = if page_num == selected_page {
@@ -1311,29 +1312,24 @@ where
                 360
             };
             let rendered = render_page(&path, page_num, max_dim);
-            let result = {
-                // Hold the cancellation gate through the file write. Once the
-                // owner cancels, a completed render cannot cache a stale page.
-                let cancelled = cancelled.lock().expect("PDF preview cancel mutex poisoned");
-                if *cancelled {
-                    break;
-                }
-                rendered.and_then(|(png_bytes, width, height)| {
-                    let raster_path = raster_cache.path().join(format!("page-{page_num}.png"));
-                    std::fs::write(&raster_path, png_bytes)
-                        .map(|()| {
-                            Arc::new(PdfPageRasterResource {
-                                page_num,
-                                path: raster_path,
-                                width,
-                                height,
-                                _raster_directory: Arc::clone(&raster_cache),
-                            })
+            if cancelled.load(Ordering::Acquire) {
+                break;
+            }
+            let result = rendered.and_then(|(png_bytes, width, height)| {
+                let raster_path = raster_cache.path().join(format!("page-{page_num}.png"));
+                std::fs::write(&raster_path, png_bytes)
+                    .map(|()| {
+                        Arc::new(PdfPageRasterResource {
+                            page_num,
+                            path: raster_path,
+                            width,
+                            height,
+                            _raster_directory: Arc::clone(&raster_cache),
                         })
-                        .map_err(|error| format!("Could not cache PDF page {page_num}: {error}"))
-                })
-            };
-            if *cancelled.lock().expect("PDF preview cancel mutex poisoned") {
+                    })
+                    .map_err(|error| format!("Could not cache PDF page {page_num}: {error}"))
+            });
+            if cancelled.load(Ordering::Acquire) {
                 break;
             }
             if tx.send(PdfPreviewMsg { page_num, result }).is_err() {
@@ -1844,7 +1840,7 @@ mod tests {
         let render_count = Arc::clone(&rendered);
         let jobs = BackgroundJobs::new(1, 1);
         let (tx, rx) = sync_channel(PREVIEW_QUEUE_CAPACITY);
-        let cancelled = Arc::new(Mutex::new(false));
+        let cancelled = Arc::new(AtomicBool::new(false));
         let (ticket, result_rx) = spawn_preview_worker(
             &jobs,
             PathBuf::from("fixture.pdf"),
@@ -1866,7 +1862,7 @@ mod tests {
             std::thread::yield_now();
         }
         assert_eq!(rendered.load(Ordering::SeqCst), PREVIEW_QUEUE_CAPACITY + 1);
-        *cancelled.lock().unwrap() = true;
+        cancelled.store(true, Ordering::Release);
         ticket.cancel();
         drop(rx);
         assert_eq!(
@@ -2011,7 +2007,7 @@ mod tests {
     }
 
     #[test]
-    fn dropping_editor_during_render_prevents_stale_raster_write() {
+    fn cancelling_active_render_discards_stale_page_and_releases_cache() {
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         let jobs = BackgroundJobs::new(1, 1);
@@ -2020,6 +2016,9 @@ mod tests {
         let (started_tx, started_rx) = channel();
         let (release_tx, release_rx) = channel();
         let mut state = raster_state(2, 16);
+        for page in &mut state.pages {
+            page.raster = None;
+        }
         state.start_preview_worker_on(&jobs, move |_, _, _| {
             render_count.fetch_add(1, Ordering::SeqCst);
             started_tx.send(()).unwrap();
@@ -2029,7 +2028,7 @@ mod tests {
         let cache = Arc::clone(state.raster_cache.as_ref().unwrap());
         let cache_path = cache.path().to_owned();
         started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-        drop(state);
+        state.cancel_preview_worker();
         let (_, sentinel_rx) = jobs.submit(Duration::MAX, || ());
         release_tx.send(()).unwrap();
         sentinel_rx
@@ -2037,7 +2036,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(rendered.load(Ordering::SeqCst), 1);
+        state.poll_preview_worker(&egui::Context::default());
+        assert!(state.pages.iter().all(|page| page.raster.is_none()));
         assert!(!cache.path().join("page-1.png").exists());
+        drop(state);
         drop(cache);
         assert!(!cache_path.exists());
     }
