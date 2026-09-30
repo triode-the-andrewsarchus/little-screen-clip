@@ -4080,6 +4080,34 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn palette_swap_prefix_stays_available_without_exactly_two_selected_slots() {
+        for selected_slots in [
+            vec![SlotId::LeftHand],
+            vec![SlotId::LeftHand, SlotId::LeftPrior1, SlotId::RightHand],
+        ] {
+            let mut app = test_workbench_app(None, VecDeque::new());
+            app.selected_slots = selected_slots.clone();
+            app.state.left_hand = Some(ClipItem::from_text("left fixture".to_owned()));
+            app.state.right_hand = Some(ClipItem::from_text("right fixture".to_owned()));
+            let state_before = app.state.clone();
+            app.search_query = "swap".to_owned();
+            app.dirty_mirror = false;
+            app.selected_action_index = 2;
+
+            // With no daemon running, this production parser path must keep the
+            // command as a query and avoid entering the IPC-backed swap path.
+            app.handle_search_prefix_shortcuts(false);
+
+            assert_eq!(app.search_query, "swap");
+            assert_eq!(app.selected_slots, selected_slots);
+            assert_eq!(app.state, state_before);
+            assert!(!app.dirty_mirror);
+            assert_eq!(app.selected_action_index, 2);
+            assert!(app.status_msg.is_none());
+        }
+    }
+
+    #[test]
     fn palette_action_navigation_wraps_in_both_directions() {
         let mut app = test_workbench_app(None, VecDeque::new());
         for name in ["Navigation Fixture A", "Navigation Fixture B"] {
