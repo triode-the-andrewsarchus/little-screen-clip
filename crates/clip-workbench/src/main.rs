@@ -6620,6 +6620,42 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn dropping_workbench_cancels_queued_image_load() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let worker_ran = Arc::clone(&ran);
+        let (jobs, release, ticket, receiver) = queued_job_behind_blocker(move || {
+            worker_ran.store(true, Ordering::Release);
+            Err::<ImageLoadResult, String>("obsolete image load".into())
+        });
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.image_load_job = Some(ImageLoadJob {
+            key: None,
+            ticket,
+            receiver,
+        });
+
+        drop(app);
+        release_blocker_and_wait_for_queue_to_drain(&jobs, release);
+        assert!(!ran.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn dropping_workbench_cancels_queued_text_load() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let worker_ran = Arc::clone(&ran);
+        let (jobs, release, ticket, receiver) = queued_job_behind_blocker(move || {
+            worker_ran.store(true, Ordering::Release);
+            Err::<TextPreviewState, String>("obsolete text load".into())
+        });
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.text_load_job = Some(TextPreviewLoadJob { ticket, receiver });
+
+        drop(app);
+        release_blocker_and_wait_for_queue_to_drain(&jobs, release);
+        assert!(!ran.load(Ordering::Acquire));
+    }
+
+    #[test]
     fn image_load_queue_full_reports_status_and_accepts_later_completion() {
         let mut app = test_workbench_app(None, VecDeque::new());
         let (_ticket_jobs, ticket) = isolated_job_ticket();

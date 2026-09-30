@@ -970,6 +970,56 @@ endsolid test_cache
     }
 
     #[test]
+    fn dropping_file_load_viewer_drops_running_parse_result() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let jobs = little_clip_core::BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let parse_finished = std::sync::Arc::new(AtomicBool::new(false));
+        let parse_finished_worker = std::sync::Arc::clone(&parse_finished);
+        let (ticket, rx) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            let parsed = Arc::new(test_mesh());
+            parse_finished_worker.store(true, Ordering::Release);
+            Ok(parsed)
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("parse worker should be running before viewer drop");
+
+        let mut viewer = Model3dViewerState::from_model(test_mesh(), None);
+        viewer.status = ModelLoadingStatus::Loading;
+        viewer.rx = Some(rx);
+        viewer.load_ticket = Some(ticket);
+        drop(viewer);
+
+        release_tx
+            .send(())
+            .expect("running parse should be waiting for release");
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            if parse_finished.load(Ordering::Acquire) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "running parse did not finish after viewer drop"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        // A sentinel accepted after the parse proves its successful result
+        // returned through the executor after the only receiver was dropped.
+        let (_sentinel_ticket, sentinel_rx) = jobs.submit(Duration::MAX, || ());
+        sentinel_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("executor should finish parse and sentinel")
+            .expect("sentinel should run");
+    }
+
+    #[test]
     fn primary_drag_orbits_and_disables_auto_rotation() {
         let ctx = egui::Context::default();
         crate::ui_ext::configure_workbench_style(&ctx);
