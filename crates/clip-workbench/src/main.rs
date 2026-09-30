@@ -5870,6 +5870,11 @@ mod workbench_layout_tests {
             app.in_app_prompt.is_some(),
             "submission should close the popup through its viewport command, not also dismiss prompt state"
         );
+        assert_eq!(
+            app.view,
+            WorkbenchView::Palette,
+            "successful prompt submission must retain its Palette route"
+        );
     }
 
     #[test]
