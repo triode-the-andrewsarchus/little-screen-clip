@@ -3601,6 +3601,7 @@ mod workbench_layout_tests {
         *app.state.get_mut(SlotId::RightHand).expect("right slot") =
             Some(ClipItem::from_text("right text\n"));
         app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
+        let original_slots = app.selected_slots.clone();
         app.search_query = "diff".to_owned();
         let diff_action = app
             .filtered_actions()
@@ -3635,6 +3636,7 @@ mod workbench_layout_tests {
 
         assert!(app.viewer.is_none());
         assert_eq!(app.view, WorkbenchView::Palette);
+        assert_eq!(app.selected_slots, original_slots);
     }
 
     #[test]
@@ -3669,6 +3671,7 @@ mod workbench_layout_tests {
         *app.state.get_mut(SlotId::RightHand).expect("right slot") =
             Some(png_item([0, 0, 255, 255], "right.png"));
         app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
+        let original_slots = app.selected_slots.clone();
         app.search_query = "diff".to_owned();
         let diff_action = app
             .filtered_actions()
@@ -3706,6 +3709,7 @@ mod workbench_layout_tests {
 
         assert!(app.viewer.is_none());
         assert_eq!(app.view, WorkbenchView::Palette);
+        assert_eq!(app.selected_slots, original_slots);
     }
 
     #[test]
