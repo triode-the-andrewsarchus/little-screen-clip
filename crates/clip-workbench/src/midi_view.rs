@@ -282,6 +282,11 @@ impl MidiViewerState {
     }
 
     fn from_data(data: MidiData, path: Option<PathBuf>, title: String) -> Self {
+        Self::from_shared(Arc::new(data), path, title)
+    }
+
+    /// Creates an independent MIDI viewer state from shared parsed score data.
+    pub fn from_shared(data: Arc<MidiData>, path: Option<PathBuf>, title: String) -> Self {
         let total_dur = data.duration_sec.max(0.5);
         Self {
             path,
@@ -309,7 +314,7 @@ impl MidiViewerState {
             synth_rx: None,
             synth_ticket: None,
             export_job: None,
-            data: Arc::new(data),
+            data,
         }
     }
 
@@ -1574,6 +1579,45 @@ mod tests {
     use super::*;
     use little_clip_core::config::WorkbenchAppearance;
     use little_clip_core::palette::AppPalette;
+
+    #[test]
+    fn independent_midi_views_share_score_and_keep_transport_separate() {
+        let source = Arc::new(MidiData {
+            title: "Shared score".to_owned(),
+            track_count: 1,
+            track_names: vec!["Track".to_owned()],
+            total_notes: 1,
+            duration_sec: 4.0,
+            bpm: 120.0,
+            min_key: 60,
+            max_key: 60,
+            notes: vec![MidiNote {
+                track: 0,
+                channel: 0,
+                program: 0,
+                key: 60,
+                velocity: 100,
+                start_sec: 0.5,
+                duration_sec: 1.0,
+            }],
+        });
+        let mut first =
+            MidiViewerState::from_shared(Arc::clone(&source), None, "First score view".to_owned());
+        let second =
+            MidiViewerState::from_shared(Arc::clone(&source), None, "Second score view".to_owned());
+
+        assert!(Arc::ptr_eq(&first.data, &second.data));
+        assert!(Arc::ptr_eq(&first.data, &source));
+        first.is_playing = true;
+        first.playhead_sec = 1.25;
+        first.selected_region = Some((0.5, 1.5));
+        first.solo_track = Some(0);
+
+        assert!(!second.is_playing);
+        assert_eq!(second.playhead_sec, 0.0);
+        assert_eq!(second.selected_region, None);
+        assert_eq!(second.solo_track, None);
+    }
 
     #[test]
     fn midi_space_runs_the_render_handler_and_sets_selected_region_bounds() {
