@@ -1044,6 +1044,15 @@ impl TextPreviewState {
 
     /// Triggers opening the text in the configured external editor (e.g. VS Code).
     pub fn trigger_escape_hatch(&mut self) {
+        self.trigger_escape_hatch_with(|editor, command, target| {
+            EscapeHatchLauncher::spawn_with_fallback(editor, command, target)
+        });
+    }
+
+    fn trigger_escape_hatch_with(
+        &mut self,
+        launch: impl FnOnce(&str, &str, &Path) -> Result<String, String>,
+    ) {
         let editor = &self.editor_cmd;
 
         let target_path = if let Some(ref p) = self.path {
@@ -1089,7 +1098,9 @@ impl TextPreviewState {
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
 
-        EscapeHatchLauncher::launch(editor, editor, &target_path, &mut self.status_toast, now);
+        match launch(editor, editor, &target_path) {
+            Ok(message) | Err(message) => self.status_toast.set(message, now),
+        }
     }
 
     /// Copies the full text content to the system clipboard.
@@ -2523,6 +2534,42 @@ mod tests {
             .filter_map(|entry| std::fs::read_link(entry.path()).ok())
             .filter(|target| target.starts_with(directory))
             .count()
+    }
+
+    #[test]
+    fn external_editor_handoff_keeps_text_source_search_and_scroll_state() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("source.txt");
+        std::fs::write(&path, "first line\nmatch line\nlast line\n").unwrap();
+        let mut state = TextPreviewState::from_file(&path, &AppConfig::default()).unwrap();
+        state.editor_cmd = "test-editor".to_owned();
+        state.show_find = true;
+        state.find_query = "match".to_owned();
+        state.scroll_to_line = Some(2);
+        let content = Arc::clone(&state.content);
+        let mut launched_path = None;
+
+        state.trigger_escape_hatch_with(|app, command, target| {
+            assert_eq!(app, "test-editor");
+            assert_eq!(command, "test-editor");
+            launched_path = Some(target.to_path_buf());
+            Ok("Launched test editor".to_owned())
+        });
+
+        assert_eq!(launched_path.as_deref(), Some(path.as_path()));
+        assert!(Arc::ptr_eq(&state.content, &content));
+        assert_eq!(state.path.as_deref(), Some(path.as_path()));
+        assert!(state.show_find);
+        assert_eq!(state.find_query, "match");
+        assert_eq!(state.scroll_to_line, Some(2));
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        assert_eq!(
+            state.status_toast.message(now),
+            Some("Launched test editor")
+        );
     }
 
     #[test]
