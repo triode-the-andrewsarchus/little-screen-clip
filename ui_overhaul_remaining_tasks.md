@@ -771,17 +771,32 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 - **H3.1 Review Easy 3 and close parity gaps**
   - [ ] **H3.1a [Primary] Review complete Easy 3 diff.**
   - [ ] **H3.1b [Primary] Compare every parity-ledger item against running behavior.**
-  - [ ] **H3.1c [Primary] Create a concrete task for each failing scenario and assign the appropriate model.**
-  - [ ] **H3.1d [Primary] Resolve all assigned parity gaps before sign-off.**
+  - [ ] **H3.1c1 [Primary] Create a concrete task for each failing parity scenario.**
+  - [ ] **H3.1c2 [Primary] Assign each concrete parity-gap task to the appropriate model.**
+  - **H3.1d Close the parity gaps found in H3.1b.** Resolve each assigned gap in its owning task before sign-off; this heading is a dependency summary, not a duplicate completion checkbox.
 - **H3.2 Reliability, performance, and boundaries**
-  - [ ] **H3.2a [Primary] Exercise full resolution/DPI matrix.**
-  - [ ] **H3.2a1 [Primary] Prove first-visible-frame popup placement and centering across the matrix.** Map-event dimensions alone do not prove visible placement.
-  - [ ] **H3.2b [Primary] Verify fixed, non-resizable, centered singleton popup.**
+  - **H3.2a Exercise the documented resolution/DPI matrix.** Run the seven logical outputs and four scales in both appearances from `ui_overhaul_acceptance.md`; retain a result for every case.
+    - [ ] **H3.2a1 [Primary] Prove first-visible-frame popup placement and centering across the matrix.** Map-event dimensions alone do not prove visible placement.
+    - [ ] **H3.2a2 [Primary] Record fixed-size geometry for compact outputs (1280×720 and 1366×768) at all documented scales and appearances.**
+    - [ ] **H3.2a3 [Primary] Record fixed-size geometry for standard outputs (1920×1080 and 1920×1200) at all documented scales and appearances.**
+    - [ ] **H3.2a4 [Primary] Record fixed-size geometry for large and wide outputs (2560×1600, 3440×1440, and 3840×2160) at all documented scales and appearances.**
+    - [ ] **H3.2a5 [Primary] Inspect one settled capture per logical output for clipping and containment in both appearances.**
+  - **H3.2b Verify fixed, non-resizable, centered singleton popup behavior.**
+    - [ ] **H3.2b2 [Primary] Verify initial min/max hints equal the expected client size on each matrix output.**
+    - [ ] **H3.2b3 [Primary] Verify the popup remains floating and rejects resize/maximize requests.**
+    - [ ] **H3.2b4 [Primary] Verify the first visible and settled popup frames remain centered without a top-left jump.**
+    - [ ] **H3.2b5 [Primary] Verify a repeated launch focuses the existing popup and leaves exactly one instance.**
   - [ ] **H3.2b1 [Primary] Recheck repeated-launch reliability for the software-renderer matrix case that initially timed out.** Retain the original EGL allocation failure and successful serial retry.
-  - [ ] **H3.2c [Primary] Verify virtual/no-hardware daemon behavior.**
+  - **H3.2c Verify the virtual/no-hardware workbench path.**
+    - [ ] **H3.2c1 [Primary] Verify the popup opens and reports unavailable IPC when no daemon is running.**
+    - [ ] **H3.2c2 [Primary] Verify the virtual little-screen renderer remains usable when no USB display is attached.**
   - [ ] **H3.2d [Primary] Verify idle repaint behavior.**
-  - [ ] **H3.2e [Primary] Measure 60 Hz interaction target.** Include frame-time profiling on representative dense interactions and fixtures.
-  - [ ] **H3.2f [Primary] Verify bounded cache and job lifetimes.**
+  - **H3.2e Measure the 60 Hz interaction target.** The target is a 16.7 ms frame budget with next-frame visible response; record the inputs, fixture, and measurement boundary.
+    - [ ] **H3.2e1 [Primary] Profile representative dense interactions and report frame-time results against the 16.7 ms budget.**
+    - [ ] **H3.2e2 [Primary] Measure compositor-visible response for a representative interaction and distinguish it from headless egui timing.**
+  - **H3.2f Verify bounded preview resources.**
+    - [ ] **H3.2f1 [Primary] Verify preview caches and textures stay within declared bounds and evict stale entries.**
+    - [ ] **H3.2f2 [Primary] Verify preview jobs are bounded and do not publish after their owning viewer closes.**
   - **H3.2g Verify expensive work stays off the UI thread**
     - [ ] **H3.2g1 [Primary] Verify decoding and parsing do not block the UI thread.**
     - [ ] **H3.2g2 [Primary] Verify IPC waits do not block the UI thread.**
@@ -790,14 +805,33 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
   - [ ] **H3.2i [Primary] Run `cargo test --workspace`.**
   - [ ] **H3.2j [Primary] Run `cargo clippy --workspace --all-targets -- -D warnings`.**
   - [ ] **H3.2k [Primary] Run comparable architecture measurements and review the comparison.**
-  - [ ] **H3.2l [Hard, primary] Exercise hardware-backed display behavior in a deliberate separate run and record results.**
+  - **H3.2l [Hard, primary] Exercise hardware-backed display behavior in a deliberate separate run and record results.** Keep physical-device evidence distinct from virtual-renderer checks.
+    - [ ] **H3.2l1 [Primary] Verify a clipboard item renders on the attached USB display from the real daemon.**
+    - [ ] **H3.2l2 [Primary] Verify the Light/Dark appearance switch updates colors on the attached USB display.**
+    - [ ] **H3.2l3 [Primary] Verify an asynchronous preview completion refreshes the attached USB display while Workbench remains open.**
 - **H3.3 Reviewable delivery**
-  - [ ] **H3.3a [Primary] Verify every original feature remains reachable.**
-  - [ ] **H3.3b [Primary] Verify both appearance modes are readable.**
-  - [ ] **H3.3c [Primary] Verify inline preview reuse works.**
-  - [ ] **H3.3d [Primary] Verify documentation matches code.**
+  - **H3.3a Verify feature reachability for every parity-ledger surface.** Use the ledger's individual actions and record any failure under H3.1 rather than treating source declarations as proof.
+    - [ ] **H3.3a1 [Primary] Verify Quick Palette and Node Machine actions remain reachable and return to the expected route.**
+    - [ ] **H3.3a2 [Primary] Verify Image Studio view, edit, extract, analyze, output, and external-handoff actions remain reachable.**
+    - [ ] **H3.3a3 [Primary] Verify Audio Inspect and Audio HF controls and output actions remain reachable.**
+    - [ ] **H3.3a4 [Primary] Verify Stems, Digital Decode, and Rolling Audio actions remain reachable.**
+    - [ ] **H3.3a5 [Primary] Verify Text, Spreadsheet, PDF, and Metadata actions remain reachable.**
+    - [ ] **H3.3a6 [Primary] Verify Text/Image Diff and Binary Diff actions remain reachable.**
+    - [ ] **H3.3a7 [Primary] Verify MIDI, Model 3D, and Film Look actions remain reachable.**
+    - [ ] **H3.3a8 [Primary] Verify the shared mirror and appearance controls remain reachable from Workbench.**
+  - **H3.3b Verify readability in both appearance modes.**
+    - [ ] **H3.3b1 [Primary] Verify Light appearance text, controls, statuses, and data surfaces remain readable.**
+    - [ ] **H3.3b2 [Primary] Verify Dark appearance text, controls, statuses, and data surfaces remain readable.**
+  - **H3.3c Verify shared preview reuse.**
+    - [ ] **H3.3c1 [Primary] Verify multiple inline previews can render independently from shared decoded data.**
+    - [ ] **H3.3c2 [Primary] Verify full studios render from shared data without losing their existing actions.**
+  - **H3.3d Verify documentation matches implemented behavior.**
+    - [ ] **H3.3d1 [Primary] Verify the architecture design and remaining-task tree describe current code boundaries and open work.**
+    - [ ] **H3.3d2 [Primary] Verify the parity ledger and acceptance observations point to current tests, runtime evidence, and limitations.**
   - [ ] **H3.3e [Primary] Verify no temporary second design system remains.**
-  - [ ] **H3.3f [Primary] Provide final before/after evidence and explicit limitations.**
+  - **H3.3f Provide final evidence and limitations.**
+    - [ ] **H3.3f1 [Primary] Record before/after captures or measurements for the completed overhaul.**
+    - [ ] **H3.3f2 [Primary] Record unverified behavior, environment constraints, and deferred scope explicitly.**
 
 ## Dependencies
 
