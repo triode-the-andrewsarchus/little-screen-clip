@@ -11,14 +11,15 @@ use little_clip_core::config::AppConfig;
 use little_clip_core::palette::AppPalette;
 use little_clip_ops::pipeline::catalog::{instantiate_template, search_templates};
 use little_clip_ops::pipeline::recipes::{
-    create_script_file_scaffold, get_recipes_dir, load_all_recipes, make_basic_template_recipe,
-    make_pad_and_caption_recipe, save_recipe, sync_recipe_script_headers,
+    create_script_file_scaffold, get_recipes_dir, load_all_recipes, load_recipes_in_dir,
+    make_basic_template_recipe, make_pad_and_caption_recipe, save_recipe, save_recipe_in_dir,
+    sync_recipe_script_headers, sync_recipe_script_headers_in_dir,
 };
 use little_clip_ops::pipeline::types::{
     Connection, NodeGraph, NodeInstance, NodeKind, PortType, Recipe,
 };
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// Actions emitted by the canvas UI back to the main workbench loop.
@@ -130,6 +131,10 @@ impl NodeCanvasState {
 
     pub fn reload_recipes(&mut self) {
         self.available_recipes = load_all_recipes();
+    }
+
+    fn reload_recipes_in_dir(&mut self, dir: &Path) {
+        self.available_recipes = load_recipes_in_dir(dir);
     }
 
     fn run_pipeline_action(&mut self) -> Option<CanvasAction> {
@@ -1006,6 +1011,15 @@ impl NodeCanvasState {
     }
 
     fn render_save_window(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
+        self.render_save_window_in_dir(ui, palette, &get_recipes_dir());
+    }
+
+    fn render_save_window_in_dir(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &AppPalette,
+        recipes_dir: &Path,
+    ) {
         let title = if self.save_is_save_as {
             "Save Recipe As..."
         } else {
@@ -1034,10 +1048,11 @@ impl NodeCanvasState {
                     {
                         let new_name = self.save_name.trim().to_string();
                         let duplicate_scripts = self.save_is_save_as;
-                        let _ = sync_recipe_script_headers(
+                        let _ = sync_recipe_script_headers_in_dir(
                             &mut self.graph,
                             &new_name,
                             duplicate_scripts,
+                            recipes_dir,
                         );
 
                         let recipe = Recipe {
@@ -1048,13 +1063,13 @@ impl NodeCanvasState {
                             graph: self.graph.clone(),
                         };
 
-                        match save_recipe(&recipe) {
+                        match save_recipe_in_dir(&recipe, recipes_dir) {
                             Ok(path) => {
                                 self.status_message =
                                     Some((format!("Saved recipe '{}'", recipe.name), false));
                                 self.current_recipe_file = Some(path);
                                 self.selected_recipe_name = recipe.name;
-                                self.reload_recipes();
+                                self.reload_recipes_in_dir(recipes_dir);
                             }
                             Err(e) => {
                                 self.status_message =

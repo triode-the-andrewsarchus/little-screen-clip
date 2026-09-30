@@ -28,7 +28,12 @@ pub fn get_recipes_dir() -> PathBuf {
 
 /// Ensures the recipe storage directory exists and initializes default recipes if empty.
 pub fn ensure_recipes_dir_and_defaults() -> Result<PathBuf, std::io::Error> {
-    let dir = get_recipes_dir();
+    ensure_recipes_dir_and_defaults_in(&get_recipes_dir())
+}
+
+/// Ensures an explicit recipe directory exists and contains the default recipes if empty.
+pub fn ensure_recipes_dir_and_defaults_in(dir: &Path) -> Result<PathBuf, std::io::Error> {
+    let dir = dir.to_path_buf();
     if !dir.exists() {
         fs::create_dir_all(&dir)?;
         init_default_recipes(&dir)?;
@@ -52,7 +57,12 @@ pub fn ensure_recipes_dir_and_defaults() -> Result<PathBuf, std::io::Error> {
 
 /// Loads all recipes from the recipes directory, sorted alphabetically by name.
 pub fn load_all_recipes() -> Vec<Recipe> {
-    let dir = match ensure_recipes_dir_and_defaults() {
+    load_recipes_in_dir(&get_recipes_dir())
+}
+
+/// Loads recipes from an explicit directory, initializing defaults there if it is empty.
+pub fn load_recipes_in_dir(dir: &Path) -> Vec<Recipe> {
+    let dir = match ensure_recipes_dir_and_defaults_in(dir) {
         Ok(d) => d,
         Err(e) => {
             warn!("Failed to ensure recipes dir: {}", e);
@@ -91,7 +101,12 @@ pub fn load_all_recipes() -> Vec<Recipe> {
 /// If an existing file with the same slug belongs to a recipe with a different name,
 /// an incrementing numeric suffix is appended to prevent silent data overwrite.
 pub fn save_recipe(recipe: &Recipe) -> Result<PathBuf, std::io::Error> {
-    let dir = ensure_recipes_dir_and_defaults()?;
+    save_recipe_in_dir(recipe, &get_recipes_dir())
+}
+
+/// Saves a recipe in an explicit directory using the production slug and collision rules.
+pub fn save_recipe_in_dir(recipe: &Recipe, dir: &Path) -> Result<PathBuf, std::io::Error> {
+    let dir = ensure_recipes_dir_and_defaults_in(dir)?;
     let safe_name: String = recipe
         .name
         .chars()
@@ -381,7 +396,16 @@ pub fn create_script_file_scaffold(
     recipe_name: &str,
     is_python: bool,
 ) -> Result<String, std::io::Error> {
-    let dir = ensure_recipes_dir_and_defaults()?;
+    create_script_file_scaffold_in_dir(recipe_name, is_python, &get_recipes_dir())
+}
+
+/// Creates a script scaffold in an explicit recipe directory.
+pub fn create_script_file_scaffold_in_dir(
+    recipe_name: &str,
+    is_python: bool,
+    dir: &Path,
+) -> Result<String, std::io::Error> {
+    let dir = ensure_recipes_dir_and_defaults_in(dir)?;
     let safe_recipe: String = recipe_name
         .chars()
         .filter_map(|c| {
@@ -473,7 +497,17 @@ pub fn sync_recipe_script_headers(
     new_recipe_name: &str,
     duplicate_files: bool,
 ) -> Result<(), std::io::Error> {
-    let dir = ensure_recipes_dir_and_defaults()?;
+    sync_recipe_script_headers_in_dir(graph, new_recipe_name, duplicate_files, &get_recipes_dir())
+}
+
+/// Synchronizes script headers using an explicit recipe directory.
+pub fn sync_recipe_script_headers_in_dir(
+    graph: &mut NodeGraph,
+    new_recipe_name: &str,
+    duplicate_files: bool,
+    dir: &Path,
+) -> Result<(), std::io::Error> {
+    let dir = ensure_recipes_dir_and_defaults_in(dir)?;
 
     for node in &mut graph.nodes {
         let is_py = matches!(node.kind, NodeKind::PythonScript);
@@ -486,7 +520,9 @@ pub fn sync_recipe_script_headers(
             let src_path = dir.join(&filename);
             if !src_path.exists() {
                 // If the script file doesn't exist, generate a fresh scaffolded file
-                if let Ok(new_fname) = create_script_file_scaffold(new_recipe_name, is_py) {
+                if let Ok(new_fname) =
+                    create_script_file_scaffold_in_dir(new_recipe_name, is_py, &dir)
+                {
                     node.props.insert("script_file".to_string(), new_fname);
                 }
                 continue;
@@ -671,5 +707,43 @@ mod tests {
         // Cleanup
         let _ = fs::remove_file(path1);
         let _ = fs::remove_file(path2);
+    }
+
+    #[test]
+    fn explicit_recipe_directory_saves_loads_and_syncs_script_nodes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dir = temp_dir.path();
+        let script_name = create_script_file_scaffold_in_dir("Before", true, dir).unwrap();
+        let mut script_node =
+            instantiate_template(find_template("script_python").unwrap(), [0.0, 0.0]);
+        script_node
+            .props
+            .insert("script_file".to_string(), script_name);
+        let mut graph = NodeGraph {
+            nodes: vec![script_node],
+            connections: Vec::new(),
+            pan: [0.0, 0.0],
+            zoom: 1.0,
+        };
+
+        sync_recipe_script_headers_in_dir(&mut graph, "After", true, dir).unwrap();
+        let script_name = graph.nodes[0].props.get("script_file").unwrap();
+        let script_text = fs::read_to_string(dir.join(script_name)).unwrap();
+        assert!(script_text.starts_with("# Recipe: After"));
+
+        let recipe = Recipe {
+            name: "After".to_string(),
+            description: "Explicit directory test".to_string(),
+            input_type: RecipeInputType::Any,
+            tags: vec!["custom".to_string()],
+            graph: graph.clone(),
+        };
+        let path = save_recipe_in_dir(&recipe, dir).unwrap();
+        assert_eq!(path.parent(), Some(dir));
+        let loaded = load_recipes_in_dir(dir)
+            .into_iter()
+            .find(|saved| saved.name == "After")
+            .expect("saved recipe reloads from explicit directory");
+        assert_eq!(loaded.graph, graph);
     }
 }
