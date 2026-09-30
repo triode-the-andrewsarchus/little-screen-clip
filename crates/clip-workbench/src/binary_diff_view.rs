@@ -517,14 +517,18 @@ impl BinaryDiffViewState {
 
     /// Fits the byte columns into the available width, shrinking their font when needed.
     /// Returns: (cell_w, cell_h, font_size, ascii_w, offset_w, row_height)
-    pub fn layout_metrics(&self, available_width: f32) -> (f32, f32, f32, f32, f32, f32) {
+    pub fn layout_metrics(
+        &self,
+        bytes_per_row: usize,
+        available_width: f32,
+    ) -> (f32, f32, f32, f32, f32, f32) {
         let base_font_size = crate::ui_ext::MONO_FONT_SIZE;
         let base_glyph_width = base_font_size * 0.6;
-        let bpr = self.bytes_per_row as f32;
-        let groups = if self.bytes_per_row == 8 {
+        let bpr = bytes_per_row as f32;
+        let groups = if bytes_per_row == 8 {
             1.0
         } else {
-            (self.bytes_per_row / 8).saturating_sub(1) as f32
+            (bytes_per_row / 8).saturating_sub(1) as f32
         };
         let base_cell_w = base_glyph_width * 2.0 + 6.0;
         let base_ascii_w = base_glyph_width + 3.0;
@@ -534,8 +538,7 @@ impl BinaryDiffViewState {
         let ascii_w = bpr * base_ascii_w + (bpr - 1.0) * 2.0;
         let gaps = 42.0 + crate::ui_ext::SPACE_XS + crate::ui_ext::SPACE_SM * 2.0 + 18.0;
         let natural_width = base_offset_w * 2.0 + hex_w * 2.0 + ascii_w * 2.0 + gaps;
-        // Reserve a small safety margin for egui's nested layout spacing and text galley rounding.
-        let scale = (available_width.max(1.0) / (natural_width * 1.12)).min(1.0);
+        let scale = (available_width.max(1.0) / natural_width).min(1.0);
         let font_size = base_font_size * scale;
         let glyph_width = font_size * 0.6;
         (
@@ -544,7 +547,9 @@ impl BinaryDiffViewState {
             font_size,
             glyph_width + 3.0 * scale,
             glyph_width * 9.0 + 9.0 * scale,
-            font_size + 13.0 * scale,
+            // Text labels keep egui's minimum row height even when their font shrinks.
+            // Keep virtual rows and stripe geometry in step with that fixed label padding.
+            font_size + 13.0,
         )
     }
 
@@ -1046,7 +1051,7 @@ impl BinaryDiffViewState {
         };
 
         let (cell_w, _cell_h, font_size, ascii_char_w, offset_w, row_height) =
-            self.layout_metrics(ui.available_width());
+            self.layout_metrics(res.bytes_per_row, ui.available_width());
         let total_rows = res.rows.len();
         let bpr = res.bytes_per_row;
 
@@ -1123,7 +1128,7 @@ impl BinaryDiffViewState {
                 } else if row.has_diff {
                     hex_to_c32_alpha(&palette.diff_mod, 18)
                 } else if row_idx % 2 == 1 {
-                    hex_to_c32_alpha(&palette.colors.text_muted, 8)
+                    hex_to_c32_alpha(&palette.colors.text_muted, 4)
                 } else {
                     Color32::TRANSPARENT
                 };
@@ -1428,7 +1433,7 @@ impl BinaryDiffViewState {
 
         // Viewport position indicator
         let (_cell_w, _cell_h, _font_size, _ascii_w, _offset_w, row_height) =
-            self.layout_metrics(ui.available_width());
+            self.layout_metrics(res.bytes_per_row, ui.available_width());
         let total_height = (total_rows as f32 * row_height).max(1.0);
         let scroll_frac = (self.current_scroll_offset_y / total_height).clamp(0.0, 1.0);
         let visible_frac = (avail_h / total_height).clamp(0.03, 1.0);
@@ -3676,7 +3681,7 @@ mod tests {
         let palette = AppPalette::default();
         let ctx = egui::Context::default();
         let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1100.0, 760.0));
-        let font_size = state.layout_metrics(1050.0).2;
+        let font_size = state.layout_metrics(32, 1050.0).2;
         assert!(font_size < crate::ui_ext::MONO_FONT_SIZE);
 
         let mut time = 0.0;
@@ -3740,13 +3745,66 @@ mod tests {
     }
 
     #[test]
+    fn alternating_row_bands_follow_row_positions() {
+        let bytes = vec![0x55; 128];
+        let mut state = BinaryDiffViewState::new(
+            "left.bin".into(),
+            bytes.clone(),
+            "right.bin".into(),
+            bytes.clone(),
+        );
+        state.result = Some(compute_binary_diff(
+            "left.bin",
+            &bytes,
+            "right.bin",
+            &bytes,
+            BinaryDiffMode::Aligned,
+            32,
+        ));
+        state.is_computing = false;
+        state.receiver = None;
+        state.panel_state.right_collapsed = true;
+        state.bytes_per_row = 32;
+
+        let palette = AppPalette::default();
+        let stripe = hex_to_c32_alpha(&palette.colors.text_muted, 4);
+        let ctx = egui::Context::default();
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1100.0, 760.0));
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                });
+            },
+        );
+        let mut bands: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Rect(rect) if rect.fill == stripe && rect.rect.width() > 500.0 => {
+                    Some(rect.rect)
+                }
+                _ => None,
+            })
+            .collect();
+        bands.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        assert_eq!(bands.len(), 2, "only odd-numbered rows should be striped");
+        assert!(bands[0].height() > 0.0);
+        assert!((bands[1].top() - bands[0].top() - 2.0 * bands[0].height()).abs() < 0.1);
+    }
+
+    #[test]
     fn byte_density_shrinks_to_fit_only_when_needed() {
         let mut state =
             BinaryDiffViewState::new("left".to_owned(), vec![0], "right".to_owned(), vec![1]);
         for bpr in [8, 16, 32] {
             state.bytes_per_row = bpr;
             let (cell_w, _, font_size, ascii_w, offset_w, row_height) =
-                state.layout_metrics(3600.0);
+                state.layout_metrics(bpr, 3600.0);
             assert_eq!(font_size, crate::ui_ext::MONO_FONT_SIZE);
             assert!(cell_w >= font_size * 1.2);
             assert!(ascii_w >= font_size * 0.6);
@@ -3754,7 +3812,7 @@ mod tests {
             assert!(row_height >= font_size + 10.0);
         }
         state.bytes_per_row = 32;
-        assert!(state.layout_metrics(1100.0).2 < crate::ui_ext::MONO_FONT_SIZE);
+        assert!(state.layout_metrics(32, 1100.0).2 < crate::ui_ext::MONO_FONT_SIZE);
     }
 
     #[test]
