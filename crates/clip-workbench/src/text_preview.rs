@@ -3384,6 +3384,90 @@ mod tests {
     }
 
     #[test]
+    fn rendered_copy_all_button_copies_full_text_preview_source() {
+        let content = format!(
+            "First line\n日本語 and emoji 🧪\n{}",
+            "full source row\n".repeat(64)
+        );
+        let mut state = TextPreviewState::from_text(
+            content.clone(),
+            Some("Copy fixture.txt".to_owned()),
+            &AppConfig::default(),
+        );
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette = AppPalette::default();
+        let mut close = false;
+        let mut time = 0.0;
+        let mut render =
+            |state: &mut TextPreviewState, time: &mut f64, events: Vec<egui::Event>| {
+                *time += 0.1;
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1200.0, 800.0),
+                        )),
+                        time: Some(*time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            state.render_ui(ui, ctx, &palette, &mut close);
+                        });
+                    },
+                )
+            };
+
+        let frame = render(&mut state, &mut time, Vec::new());
+        let copy_position = frame
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text().contains("Copy All") => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("rendered Copy All button label");
+        render(
+            &mut state,
+            &mut time,
+            vec![egui::Event::PointerMoved(copy_position)],
+        );
+        render(
+            &mut state,
+            &mut time,
+            vec![
+                egui::Event::PointerMoved(copy_position),
+                egui::Event::PointerButton {
+                    pos: copy_position,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        let copied = render(
+            &mut state,
+            &mut time,
+            vec![
+                egui::Event::PointerMoved(copy_position),
+                egui::Event::PointerButton {
+                    pos: copy_position,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+
+        assert_eq!(copied.platform_output.copied_text, content);
+        assert!(!close);
+    }
+
+    #[test]
     fn markdown_body_list_and_quote_wrap_without_clipping_at_compact_and_wide_widths() {
         let markers = ["BODY_MARKER", "LIST_MARKER", "QUOTE_MARKER"];
         let content = format!(
