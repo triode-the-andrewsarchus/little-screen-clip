@@ -1210,6 +1210,77 @@ mod tests {
     }
 
     #[test]
+    fn rendered_waveform_right_click_opens_editor_for_the_captured_source_range() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("rolling-source.wav");
+        let mut buffer = RollingAudioBuffer::new(2, 44_100, 2);
+        buffer.push_samples(&vec![1000i16; 44_100 * 4]);
+        buffer.write_wav(&source).unwrap();
+
+        let mut strip = empty_test_strip();
+        strip.path = Some(source.clone());
+        strip.duration_sec = 2.0;
+        strip.sample_rate = 44_100;
+        strip.channels = 2;
+        strip.mono_samples = vec![0.05; 44_100 * 2];
+        strip.is_loaded = true;
+        strip.selected_region = Some((0.25, 1.25));
+
+        let ctx = egui::Context::default();
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let pointer = Pos2::new(450.0, 75.0);
+        let mut action = None;
+        let mut frame = |time: f64, events: Vec<egui::Event>| {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 160.0))),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        strip.render_ui(ui, ctx, &palette, &mut action);
+                    });
+                },
+            );
+        };
+
+        frame(1.0, Vec::new());
+        frame(1.1, vec![egui::Event::PointerMoved(pointer)]);
+        frame(
+            1.2,
+            vec![
+                egui::Event::PointerMoved(pointer),
+                egui::Event::PointerButton {
+                    pos: pointer,
+                    button: egui::PointerButton::Secondary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        frame(
+            1.3,
+            vec![egui::Event::PointerButton {
+                pos: pointer,
+                button: egui::PointerButton::Secondary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+
+        assert_eq!(
+            action,
+            Some(RollingAudioAction::OpenEditor {
+                snapshot_path: source,
+                selected_region: Some((0.25, 1.25)),
+            })
+        );
+    }
+
+    #[test]
     fn header_wraps_at_narrow_width_without_extra_rows_when_wide() {
         fn rendered_header_text(strip: &mut RollingAudioStripState, width: f32) -> Vec<String> {
             let ctx = egui::Context::default();
