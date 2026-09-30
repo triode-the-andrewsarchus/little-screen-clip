@@ -6158,6 +6158,56 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn audio_inspect_and_hf_escape_close_to_the_originating_workbench_route() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let wav_path = temp_dir.path().join("escape-audio.wav");
+        let mut wav = Vec::with_capacity(44 + 16_000);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36u32 + 16_000).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8_000u32.to_le_bytes());
+        wav.extend_from_slice(&16_000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&16_000u32.to_le_bytes());
+        wav.resize(44 + 16_000, 0);
+        std::fs::write(&wav_path, wav).unwrap();
+
+        for mode in [
+            audio_preview::AudioToolMode::Inspect,
+            audio_preview::AudioToolMode::HfAnalysis,
+        ] {
+            let mut audio = AudioPreviewState::new(wav_path.clone(), "escape-audio.wav".into());
+            audio.active_mode = mode;
+            audio.is_playing = true;
+            let mut app = test_workbench_app(Some(ViewerSession::Audio(audio)), VecDeque::new());
+            app.view = WorkbenchView::NodeMachine;
+            app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
+            let selected_slots = app.selected_slots.clone();
+
+            let _ = egui::Context::default().run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 700.0),
+                    )),
+                    events: vec![key_press_event(egui::Key::Escape)],
+                    ..Default::default()
+                },
+                |ctx| assert!(app.render_modal_viewers(ctx)),
+            );
+
+            assert!(app.viewer.is_none(), "Escape closes {mode:?} Audio Studio");
+            assert_eq!(app.view, WorkbenchView::NodeMachine);
+            assert_eq!(app.selected_slots, selected_slots);
+        }
+    }
+
+    #[test]
     fn text_file_preview_loads_on_worker_and_reports_read_errors() {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("sample.rs");

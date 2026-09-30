@@ -4376,6 +4376,24 @@ mod tests {
     }
 
     #[test]
+    fn stopping_synthetic_audio_resets_playback_to_the_active_selection_start() {
+        let (_temp_dir, path) = generate_fixture_wav("escape-stop", 0.2);
+        let mut state = AudioPreviewState::new(path, "escape-stop.wav".to_owned());
+        state.cancel_session_analysis();
+        state.selection_mode = SelectionMode::Single;
+        state.selection = Some((0.05, 0.15));
+        state.current_time_sec = 0.18;
+        state.playback_start_instant = Some(Instant::now());
+        state.is_playing = true;
+
+        state.stop();
+
+        assert!(!state.is_playing);
+        assert!(state.playback_start_instant.is_none());
+        assert_eq!(state.current_time_sec, 0.05);
+    }
+
+    #[test]
     fn stem_space_dispatches_one_start_for_idle_empty_state() {
         let (_temp_dir, path) = generate_fixture_wav("stem-space-start", 1.0);
         let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
