@@ -423,7 +423,13 @@ impl BinaryDiffViewState {
 
     fn handle_global_shortcuts(&mut self, ctx: &egui::Context, close_requested: &mut bool) {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            *close_requested = true;
+            if self.search_query.is_empty() {
+                *close_requested = true;
+            } else {
+                self.search_query.clear();
+                self.update_search();
+            }
+            return;
         }
         if ctx.wants_keyboard_input() {
             return;
@@ -3965,6 +3971,76 @@ mod tests {
         assert_eq!(state.current_search_idx, 0);
         assert_eq!(state.scroll_target_row, Some(0));
         assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
+    }
+
+    #[test]
+    fn focused_binary_diff_search_escape_clears_query_before_close() {
+        let mut left_bytes = vec![b'x'; 96];
+        left_bytes[1..4].copy_from_slice(b"ABC");
+        let mut right_bytes = left_bytes.clone();
+        right_bytes[20] = b'y';
+        let mut state = BinaryDiffViewState::new(
+            "left.bin".to_string(),
+            left_bytes,
+            "right.bin".to_string(),
+            right_bytes,
+        );
+        let initial_rx = state.receiver.take().expect("initial compute receiver");
+        let (generation, result) = initial_rx
+            .recv()
+            .expect("initial job result")
+            .expect("initial diff result");
+        assert_eq!(generation, state.current_generation);
+        state.result = Some(result);
+        state.is_computing = false;
+        state.compute_ticket = None;
+        state.search_query = "ABC".to_string();
+        state.update_search();
+        assert!(!state.search_matches.is_empty());
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let search_id = egui::Id::new("binary_diff_search_field");
+        ctx.memory_mut(|memory| memory.request_focus(search_id));
+        let palette = AppPalette::default();
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1200.0, 800.0));
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                });
+            },
+        );
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
+        assert!(ctx.wants_keyboard_input());
+
+        let mut close_requested = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close_requested);
+                });
+            },
+        );
+
+        assert!(state.search_query.is_empty());
+        assert!(state.search_matches.is_empty());
+        assert!(!close_requested, "Escape clears the focused search first");
     }
 
     #[test]

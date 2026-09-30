@@ -3720,6 +3720,7 @@ mod workbench_layout_tests {
         *app.state.get_mut(SlotId::RightHand).expect("right slot") =
             Some(ClipItem::from_text("right binary fixture\n"));
         app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
+        let original_slots = app.selected_slots.clone();
         app.search_query = "binary-diff".to_owned();
         let binary_diff_action = app
             .filtered_actions()
@@ -3734,6 +3735,28 @@ mod workbench_layout_tests {
         assert_eq!(app.view, WorkbenchView::Palette);
 
         let ctx = egui::Context::default();
+        let search_id = egui::Id::new("binary_diff_search_field");
+        if let Some(ViewerSession::BinaryDiff(state)) = &mut app.viewer {
+            state.search_query = "fixture".to_owned();
+            state.update_search();
+        }
+        ctx.memory_mut(|memory| memory.request_focus(search_id));
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| assert!(app.render_modal_viewers(ctx)),
+        );
+        assert_eq!(ctx.memory(|memory| memory.focused()), Some(search_id));
+        let Some(ViewerSession::BinaryDiff(state)) = app.viewer.as_ref() else {
+            panic!("Binary Diff should remain open while search is focused");
+        };
+        assert_eq!(state.search_query, "fixture");
+
         let _ = ctx.run(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -3752,8 +3775,27 @@ mod workbench_layout_tests {
             |ctx| assert!(app.render_modal_viewers(ctx)),
         );
 
+        let Some(ViewerSession::BinaryDiff(state)) = app.viewer.as_ref() else {
+            panic!("first Escape should leave Binary Diff open");
+        };
+        assert!(state.search_query.is_empty());
+        assert_eq!(app.view, WorkbenchView::Palette);
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![key_press_event(egui::Key::Escape)],
+                ..Default::default()
+            },
+            |ctx| assert!(app.render_modal_viewers(ctx)),
+        );
+
         assert!(app.viewer.is_none());
         assert_eq!(app.view, WorkbenchView::Palette);
+        assert_eq!(app.selected_slots, original_slots);
     }
 
     #[test]
