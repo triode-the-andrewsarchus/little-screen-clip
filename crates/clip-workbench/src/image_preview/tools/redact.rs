@@ -43,7 +43,7 @@ impl ImagePreviewState {
 
         // Automatically ensure metadata is stripped when redactions are permanently burned
         if let Ok(clean) = strip_metadata(&self.current_rgba, &self.mime) {
-            self.raw_bytes = clean;
+            self.raw_bytes = std::sync::Arc::new(clean);
             self.file_size_bytes = self.raw_bytes.len();
             self.metadata = None;
         }

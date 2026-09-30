@@ -80,7 +80,7 @@ use audio_preview::AudioPreviewState;
 use binary_diff_view::BinaryDiffViewState;
 use canvas::*;
 use diff_view::DiffViewerState;
-use image_preview::ImagePreviewState;
+use image_preview::{DecodedImageData, ImagePreviewState};
 use little_clip_ops::binary_diff::resolve_binary_diff_pair;
 use little_clip_ops::diff::{
     DiffDisplayMode, is_image_path, resolve_diff_pair, resolve_diff_target,
@@ -378,12 +378,57 @@ impl ImageLoadSource {
             .map(Self::File)
             .ok_or_else(|| "Item payload does not contain a recognizable image".to_string())
     }
+
+    fn decode(self) -> Result<ImageLoadResult, String> {
+        match self {
+            Self::File(path) => {
+                let title = image_title_for_path(&path);
+                let data = DecodedImageData::from_path(&path)?;
+                Ok(ImageLoadResult {
+                    data,
+                    path: Some(path),
+                    title,
+                })
+            }
+            Self::ItemFile { path, mime, title } => {
+                let bytes = std::fs::read(&path)
+                    .map_err(|error| format!("Failed to read file {}: {error}", path.display()))?;
+                let data = DecodedImageData::from_bytes(bytes, mime, Some(path.clone()))?;
+                Ok(ImageLoadResult {
+                    data,
+                    path: Some(path),
+                    title,
+                })
+            }
+            Self::Bytes {
+                bytes,
+                mime,
+                path,
+                title,
+            } => {
+                let data = DecodedImageData::from_bytes(bytes, mime, path.clone())?;
+                Ok(ImageLoadResult { data, path, title })
+            }
+        }
+    }
+}
+
+struct ImageLoadResult {
+    data: DecodedImageData,
+    path: Option<PathBuf>,
+    title: String,
+}
+
+fn image_title_for_path(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Image Preview".to_string())
 }
 
 struct ImageLoadJob {
     key: Option<ImageSessionKey>,
     ticket: JobTicket,
-    receiver: Receiver<Result<Result<ImagePreviewState, String>, JobError>>,
+    receiver: Receiver<Result<Result<ImageLoadResult, String>, JobError>>,
 }
 
 struct TextPreviewLoadJob {
@@ -412,37 +457,14 @@ impl Drop for RollingEditorLoadJob {
 }
 
 impl ImageLoadJob {
-    fn new(source: ImageLoadSource, config: AppConfig) -> Self {
+    fn new(source: ImageLoadSource) -> Self {
         let key = source.session_key();
-        Self::new_with_key(source, key, config)
+        Self::new_with_key(source, key)
     }
 
-    fn new_with_key(
-        source: ImageLoadSource,
-        key: Option<ImageSessionKey>,
-        config: AppConfig,
-    ) -> Self {
+    fn new_with_key(source: ImageLoadSource, key: Option<ImageSessionKey>) -> Self {
         let (ticket, receiver) =
-            BackgroundJobs::global().submit(Duration::from_secs(30), move || match source {
-                ImageLoadSource::File(path) => ImagePreviewState::from_path(path, &config),
-                ImageLoadSource::ItemFile { path, mime, title } => std::fs::read(&path)
-                    .map_err(|error| format!("Failed to read file {}: {error}", path.display()))
-                    .and_then(|bytes| {
-                        ImagePreviewState::from_bytes_with_meta(
-                            bytes,
-                            mime,
-                            Some(path),
-                            title,
-                            &config,
-                        )
-                    }),
-                ImageLoadSource::Bytes {
-                    bytes,
-                    mime,
-                    path,
-                    title,
-                } => ImagePreviewState::from_bytes_with_meta(bytes, mime, path, title, &config),
-            });
+            BackgroundJobs::global().submit(Duration::from_secs(30), move || source.decode());
         Self {
             key,
             ticket,
@@ -787,7 +809,6 @@ impl WorkbenchApp {
         if let Some(path) = initial_image {
             startup_viewers.push_back(ViewerSession::ImageLoading(ImageLoadJob::new(
                 ImageLoadSource::File(path),
-                config.clone(),
             )));
         }
         if let Some(path) = initial_pdf {
@@ -2330,7 +2351,7 @@ impl WorkbenchApp {
         if let Some((ticket, _)) = self.midi_load_job.take() {
             ticket.cancel();
         }
-        self.image_load_job = Some(ImageLoadJob::new_with_key(source, key, self.config.clone()));
+        self.image_load_job = Some(ImageLoadJob::new_with_key(source, key));
         self.clear_status_message();
     }
 
@@ -2378,11 +2399,16 @@ impl WorkbenchApp {
         };
         self.image_load_job = None;
         match result {
-            Ok(Ok(state)) => {
+            Ok(Ok(loaded)) => {
                 self.viewer = None;
                 self.active_image_key = None;
                 self.retained_image_session = None;
-                self.viewer = Some(ViewerSession::Image(state));
+                self.viewer = Some(ViewerSession::Image(ImagePreviewState::from_decoded(
+                    loaded.data,
+                    loaded.path,
+                    loaded.title,
+                    &self.config,
+                )));
                 self.active_image_key = key;
                 self.status_msg = None;
             }
@@ -6479,10 +6505,7 @@ mod workbench_layout_tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("image.png");
         write_test_image(&path, 3);
-        let loading = ViewerSession::ImageLoading(ImageLoadJob::new(
-            ImageLoadSource::File(path),
-            AppConfig::default(),
-        ));
+        let loading = ViewerSession::ImageLoading(ImageLoadJob::new(ImageLoadSource::File(path)));
         let mut app = test_workbench_app(Some(loading), VecDeque::new());
         app.start_image_load(ImageLoadSource::File(temp_dir.path().join("missing.png")));
         assert!(app.viewer.is_none());
@@ -6528,10 +6551,7 @@ mod workbench_layout_tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("image.png");
         write_test_image(&path, 4);
-        let loading = ViewerSession::ImageLoading(ImageLoadJob::new(
-            ImageLoadSource::File(path),
-            AppConfig::default(),
-        ));
+        let loading = ViewerSession::ImageLoading(ImageLoadJob::new(ImageLoadSource::File(path)));
         let mut app = test_workbench_app(
             Some(gallery_viewer()),
             VecDeque::from([loading, gallery_viewer()]),

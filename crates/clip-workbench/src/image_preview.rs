@@ -96,7 +96,7 @@ pub struct ImagePreviewState {
     #[allow(dead_code)]
     pub original_height: u32,
     pub is_svg: bool,
-    pub raw_bytes: Vec<u8>,
+    pub raw_bytes: Arc<Vec<u8>>,
 
     // Committed revisions are shared until an in-place edit calls Arc::make_mut.
     #[allow(dead_code)]
@@ -236,6 +236,66 @@ pub struct ImagePreviewState {
     pub deskew_state: DeskewState,
 }
 
+/// Immutable encoded and decoded image content shared by one or more image views.
+/// Viewer identity, editing, navigation, and texture state stay outside this value.
+#[derive(Clone)]
+pub(crate) struct DecodedImageData {
+    mime: String,
+    encoded_bytes: Arc<Vec<u8>>,
+    original_rgba: Arc<RgbaImage>,
+    width: u32,
+    height: u32,
+    is_svg: bool,
+    metadata: Option<ImageMetadataSummary>,
+}
+
+impl DecodedImageData {
+    pub(crate) fn from_path(path: &Path) -> Result<Self, String> {
+        let bytes = std::fs::read(&path)
+            .map_err(|error| format!("Failed to read file {}: {error}", path.display()))?;
+        let mime = little_clip_core::item::guess_image_mime(&path);
+        Self::from_bytes(bytes, mime, Some(path.to_path_buf()))
+    }
+
+    pub(crate) fn from_bytes(
+        bytes: Vec<u8>,
+        mime: String,
+        path: Option<PathBuf>,
+    ) -> Result<Self, String> {
+        let is_svg = mime.contains("svg")
+            || little_clip_core::item::is_svg_bytes(&bytes)
+            || path
+                .as_ref()
+                .and_then(|path| path.extension())
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"));
+        let rgba = if is_svg {
+            if let Some(png_bytes) = render_svg_to_png(&bytes) {
+                image::load_from_memory(&png_bytes)
+                    .map_err(|error| format!("Failed to decode rendered SVG PNG: {error}"))?
+                    .to_rgba8()
+            } else {
+                return Err("Failed to rasterize SVG via rsvg-convert. Ensure librsvg / rsvg-convert is installed.".to_string());
+            }
+        } else {
+            image::load_from_memory(&bytes)
+                .map_err(|error| format!("Failed to decode image bytes: {error}"))?
+                .to_rgba8()
+        };
+
+        let (width, height) = rgba.dimensions();
+        let metadata = extract_image_metadata(&bytes);
+        Ok(Self {
+            mime,
+            encoded_bytes: Arc::new(bytes),
+            original_rgba: Arc::new(rgba),
+            width,
+            height,
+            is_svg,
+            metadata: metadata.has_any_metadata().then_some(metadata),
+        })
+    }
+}
+
 fn compose_display_image(mut img: RgbaImage, stamp: &ImageInputStamp) -> RgbaImage {
     // Burn any pending redactions onto the output image
     if !stamp.redactions.is_empty() {
@@ -332,15 +392,14 @@ impl ImagePreviewState {
         !self.save_snapshot_pending() && !self.copy_snapshot_pending()
     }
 
+    #[cfg(test)]
     pub fn from_path(path: PathBuf, config: &AppConfig) -> Result<Self, String> {
-        let bytes = std::fs::read(&path)
-            .map_err(|e| format!("Failed to read file {}: {}", path.display(), e))?;
-        let mime = little_clip_core::item::guess_image_mime(&path);
         let title = path
             .file_name()
-            .map(|n| n.to_string_lossy().to_string())
+            .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Image Preview".to_string());
-        Self::from_bytes_with_meta(bytes, mime, Some(path), title, config)
+        let source = DecodedImageData::from_path(&path)?;
+        Ok(Self::from_decoded(source, Some(path), title, config))
     }
 
     #[cfg(test)]
@@ -362,6 +421,7 @@ impl ImagePreviewState {
         }
     }
 
+    #[cfg(test)]
     pub fn from_bytes_with_meta(
         bytes: Vec<u8>,
         mime: String,
@@ -369,41 +429,30 @@ impl ImagePreviewState {
         title: String,
         config: &AppConfig,
     ) -> Result<Self, String> {
-        let file_size_bytes = bytes.len();
-        let is_svg = mime.contains("svg")
-            || little_clip_core::item::is_svg_bytes(&bytes)
-            || path
-                .as_ref()
-                .and_then(|p| p.extension())
-                .map_or(false, |e| e.eq_ignore_ascii_case("svg"));
+        let source = DecodedImageData::from_bytes(bytes, mime, path.clone())?;
+        Ok(Self::from_decoded(source, path, title, config))
+    }
 
-        let rgba = if is_svg {
-            if let Some(png_bytes) = render_svg_to_png(&bytes) {
-                image::load_from_memory(&png_bytes)
-                    .map_err(|e| format!("Failed to decode rendered SVG PNG: {}", e))?
-                    .to_rgba8()
-            } else {
-                return Err("Failed to rasterize SVG via rsvg-convert. Ensure librsvg / rsvg-convert is installed.".to_string());
-            }
-        } else {
-            image::load_from_memory(&bytes)
-                .map_err(|e| format!("Failed to decode image bytes: {}", e))?
-                .to_rgba8()
-        };
-
-        let (width, height) = rgba.dimensions();
+    pub(crate) fn from_decoded(
+        source: DecodedImageData,
+        path: Option<PathBuf>,
+        title: String,
+        config: &AppConfig,
+    ) -> Self {
+        let DecodedImageData {
+            mime,
+            encoded_bytes,
+            original_rgba,
+            width,
+            height,
+            is_svg,
+            metadata,
+        } = source;
+        let file_size_bytes = encoded_bytes.len();
         let mut resize_state = ResizeState::default();
-        resize_state.sync_from_image(&rgba);
+        resize_state.sync_from_image(&original_rgba);
         let palette_state = PaletteState::default();
-        let meta = extract_image_metadata(&bytes);
-        let metadata = if meta.has_any_metadata() {
-            Some(meta)
-        } else {
-            None
-        };
-
-        let rgba = Arc::new(rgba);
-        let preview = Self {
+        Self {
             path,
             title,
             mime,
@@ -411,9 +460,9 @@ impl ImagePreviewState {
             original_width: width,
             original_height: height,
             is_svg,
-            raw_bytes: bytes,
-            original_rgba: rgba.clone(),
-            current_rgba: rgba,
+            raw_bytes: encoded_bytes,
+            original_rgba: original_rgba.clone(),
+            current_rgba: original_rgba,
             pixel_revision: 0,
             texture: None,
             dirty_texture: true,
@@ -501,9 +550,7 @@ impl ImagePreviewState {
             metadata,
             show_metadata_drawer: false,
             deskew_state: DeskewState::default(),
-        };
-
-        Ok(preview)
+        }
     }
 
     pub fn show_toast(&mut self, msg: impl Into<String>) {
@@ -567,7 +614,7 @@ impl ImagePreviewState {
             Ok(clean_bytes) => {
                 self.undo_stack.push(self.current_rgba.clone());
                 self.redo_stack.clear();
-                self.raw_bytes = clean_bytes;
+                self.raw_bytes = Arc::new(clean_bytes);
                 self.file_size_bytes = self.raw_bytes.len();
                 self.metadata = None;
                 self.show_toast("✔ Stripped all EXIF & location metadata");
@@ -716,7 +763,7 @@ impl ImagePreviewState {
                 .save(&staging_path)
                 .map_err(|e| format!("Failed to save modified staging file: {}", e))?;
         } else {
-            std::fs::write(&staging_path, &self.raw_bytes)
+            std::fs::write(&staging_path, self.raw_bytes.as_slice())
                 .map_err(|e| format!("Failed to write staging file: {}", e))?;
         }
 
@@ -2190,6 +2237,49 @@ fn render_svg_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decoded_image_data_is_shared_across_independent_editor_states() {
+        let image = RgbaImage::from_pixel(2, 2, image::Rgba([24, 80, 180, 255]));
+        let mut encoded = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut encoded),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let source = DecodedImageData::from_bytes(encoded, "image/png".to_string(), None).unwrap();
+
+        let first = ImagePreviewState::from_decoded(
+            source.clone(),
+            None,
+            "shared.png".to_string(),
+            &AppConfig::default(),
+        );
+        let mut second = ImagePreviewState::from_decoded(
+            source,
+            None,
+            "shared.png".to_string(),
+            &AppConfig::default(),
+        );
+        assert!(Arc::ptr_eq(&first.current_rgba, &second.current_rgba));
+        assert!(Arc::ptr_eq(&first.raw_bytes, &second.raw_bytes));
+        assert_eq!(first.title, second.title);
+
+        second.zoom = 2.0;
+        assert_eq!(first.zoom, 1.0);
+        Arc::make_mut(&mut second.current_rgba).put_pixel(0, 0, image::Rgba([240, 20, 40, 255]));
+        assert!(!Arc::ptr_eq(&first.current_rgba, &second.current_rgba));
+        assert_eq!(
+            *first.current_rgba.get_pixel(0, 0),
+            image::Rgba([24, 80, 180, 255])
+        );
+        assert_eq!(
+            *second.current_rgba.get_pixel(0, 0),
+            image::Rgba([240, 20, 40, 255])
+        );
+        assert!(Arc::ptr_eq(&first.raw_bytes, &second.raw_bytes));
+    }
 
     fn wait_for_dcs(state: &mut ImagePreviewState) {
         let ctx = egui::Context::default();
