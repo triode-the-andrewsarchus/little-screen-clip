@@ -1445,6 +1445,90 @@ mod tests {
     }
 
     #[test]
+    fn rendered_copy_transcript_button_copies_exact_seeded_text() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut state = AudioPreviewState::new(
+            directory.path().join("missing-audio.wav"),
+            "copy-transcript-test.wav".into(),
+        );
+        state.cancel_session_analysis();
+        state.digital_decode.symbols.push(DecodedSymbol {
+            protocol: DecoderProtocol::Dtmf,
+            symbol: "5".into(),
+            start_sec: 1.0,
+            end_sec: 1.25,
+            confidence: 0.9,
+            details: Some("fixture payload".into()),
+        });
+
+        let ctx = egui::Context::default();
+        let palette = AppPalette::default();
+        let mut time = 0.0;
+        let mut render = |state: &mut AudioPreviewState, events: Vec<egui::Event>| {
+            time += 0.1;
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200.0, 800.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_digital_decode_transcript(ui, ctx, &palette);
+                    });
+                },
+            )
+        };
+
+        let initial = render(&mut state, Vec::new());
+        let copy_position = initial
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text().contains("Copy Transcript") => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("rendered Copy Transcript button label");
+        render(&mut state, vec![egui::Event::PointerMoved(copy_position)]);
+        render(
+            &mut state,
+            vec![
+                egui::Event::PointerMoved(copy_position),
+                egui::Event::PointerButton {
+                    pos: copy_position,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        let copied = render(
+            &mut state,
+            vec![
+                egui::Event::PointerMoved(copy_position),
+                egui::Event::PointerButton {
+                    pos: copy_position,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+
+        assert_eq!(
+            copied.platform_output.copied_text,
+            "=== DTMF ===\n[1.000s - 1.250s] 5: fixture payload\n\n"
+        );
+        state.cancel_session_analysis();
+    }
+
+    #[test]
     fn protocol_labels_meet_contrast_on_controls_and_timeline_chips() {
         for appearance in [
             little_clip_core::config::WorkbenchAppearance::Dark,
