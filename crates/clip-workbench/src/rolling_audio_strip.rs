@@ -458,22 +458,31 @@ impl RollingAudioStripState {
     }
 
     pub fn copy_selection(&mut self, now: f64) -> bool {
-        let (s, e) = match self.selected_region {
-            Some((a, b)) if (b - a).abs() > 0.05 => (a.min(b), a.max(b)),
-            _ => return false,
-        };
-
-        let source_path = match &self.path {
-            Some(p) => p.clone(),
-            None => return false,
-        };
-
         let slice_dir = if let Ok(rt) = std::env::var("XDG_RUNTIME_DIR") {
             PathBuf::from(rt)
                 .join("little-screen-clip")
                 .join("rolling_slices")
         } else {
             PathBuf::from("/tmp/little-screen-clip/rolling_slices")
+        };
+        self.copy_selection_to(now, &slice_dir, |request| {
+            crate::send_ipc_request(request).is_ok()
+        })
+    }
+
+    fn copy_selection_to(
+        &mut self,
+        now: f64,
+        slice_dir: &Path,
+        mut push: impl FnMut(&IpcRequest) -> bool,
+    ) -> bool {
+        let (s, e) = match self.selected_region {
+            Some((a, b)) if (b - a).abs() > 0.05 => (a.min(b), a.max(b)),
+            _ => return false,
+        };
+        let source_path = match &self.path {
+            Some(path) => path.clone(),
+            None => return false,
         };
         if let Err(err) = std::fs::create_dir_all(&slice_dir) {
             tracing::warn!(
@@ -495,7 +504,7 @@ impl RollingAudioStripState {
                     path: slice_path,
                     hand: HandSide::Left,
                 };
-                if crate::send_ipc_request(&req).is_ok() {
+                if push(&req) {
                     self.status_toast = Some((
                         format!("Copied {:.1}s audio slice to Left Hand & clipboard!", e - s),
                         now,
@@ -1443,6 +1452,74 @@ mod tests {
         assert!(strip.selected_region.is_none());
 
         let _ = std::fs::remove_file(wav_path);
+    }
+
+    #[test]
+    fn copy_selection_slices_selected_wav_and_requests_left_hand_delivery() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.wav");
+        let output_dir = directory.path().join("rolling-slices");
+        let interleaved = [
+            10, 100, 20, 200, 30, 300, 40, 400, 50, 500, 60, 600, 70, 700, 80, 800,
+        ];
+        let mut buffer = RollingAudioBuffer::new(2, 4, 2);
+        buffer.push_samples(&interleaved);
+        assert_eq!(buffer.write_wav(&source).unwrap(), 2.0);
+
+        let mut strip = empty_test_strip();
+        strip.path = Some(source);
+        strip.duration_sec = 2.0;
+        strip.sample_rate = 4;
+        strip.channels = 2;
+        strip.selected_region = Some((0.5, 1.5));
+        let mut captured = None;
+        assert!(strip.copy_selection_to(7.0, &output_dir, |request| {
+            match request {
+                IpcRequest::PushFile { path, hand } => {
+                    captured = Some((path.clone(), *hand));
+                    true
+                }
+                _ => false,
+            }
+        }));
+
+        let (output_path, hand) = captured.expect("PushFile request captured");
+        assert_eq!(hand, HandSide::Left);
+        assert_eq!(output_path.parent(), Some(output_dir.as_path()));
+        assert!(
+            output_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("rolling_slice_")
+        );
+        assert_eq!(
+            output_path.extension().and_then(|ext| ext.to_str()),
+            Some("wav")
+        );
+
+        let output = std::fs::read(output_path).unwrap();
+        assert_eq!(&output[0..4], b"RIFF");
+        assert_eq!(&output[8..12], b"WAVE");
+        assert_eq!(u16::from_le_bytes([output[22], output[23]]), 2);
+        assert_eq!(u32::from_le_bytes(output[24..28].try_into().unwrap()), 4);
+        assert_eq!(u16::from_le_bytes([output[34], output[35]]), 16);
+        let data_size = u32::from_le_bytes(output[40..44].try_into().unwrap());
+        assert_eq!(data_size, 16);
+        let duration_sec = data_size as f32 / (4.0 * 2.0 * 2.0);
+        assert_eq!(duration_sec, 1.0);
+        let sliced_samples = output[44..]
+            .chunks_exact(2)
+            .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
+            .collect::<Vec<_>>();
+        assert_eq!(sliced_samples, interleaved[4..12]);
+        assert_eq!(
+            strip
+                .status_toast
+                .as_ref()
+                .map(|(message, _)| message.as_str()),
+            Some("Copied 1.0s audio slice to Left Hand & clipboard!")
+        );
     }
 
     #[test]
