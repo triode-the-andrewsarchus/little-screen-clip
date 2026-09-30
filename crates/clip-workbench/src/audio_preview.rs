@@ -476,8 +476,13 @@ pub struct AudioPreviewState {
     pub title: String,
     pub active_mode: AudioToolMode,
     pub metadata: Option<AudioMetadata>,
-    pub analysis: Option<FullAudioAnalysis>,
-    edited_waveform: Option<FullAudioAnalysis>,
+    /// Progressive analysis stays session-owned until all stages have completed.
+    analysis: Option<Arc<FullAudioAnalysis>>,
+    /// Immutable source snapshot published only after the progressive job completes.
+    completed_source_analysis: Option<Arc<FullAudioAnalysis>>,
+    edited_waveform: Option<Arc<FullAudioAnalysis>>,
+    /// Session-specific transient markers recomputed from sensitivity controls.
+    session_transients: Option<Arc<[f32]>>,
     pub analysis_rx: Option<Receiver<AudioAnalysisProgress>>,
     analysis_job_rx: Option<Receiver<Result<(), JobError>>>,
     analysis_ticket: Option<JobTicket>,
@@ -986,6 +991,34 @@ fn plan_destination_name(path: &str) -> String {
 }
 
 impl AudioPreviewState {
+    /// Returns the immutable source snapshot once all progressive analysis stages finish.
+    #[allow(dead_code)] // Exposed for the follow-up inline-preview sharing task.
+    pub fn completed_source_analysis(&self) -> Option<&Arc<FullAudioAnalysis>> {
+        self.completed_source_analysis.as_ref()
+    }
+
+    pub(super) fn current_transient_markers(&self) -> &[f32] {
+        self.session_transients
+            .as_deref()
+            .or_else(|| {
+                self.analysis
+                    .as_deref()
+                    .map(|analysis| analysis.transients.as_slice())
+            })
+            .unwrap_or_default()
+    }
+
+    pub(super) fn set_transient_sensitivity(&mut self, sensitivity: f32) {
+        self.transient_sensitivity = sensitivity;
+        if let Some(transients) = self
+            .analysis
+            .as_deref()
+            .and_then(|analysis| analysis.transients_with_sensitivity(sensitivity))
+        {
+            self.session_transients = Some(transients.into());
+        }
+    }
+
     const MIN_GAIN_DB: f32 = -60.0;
     const MAX_GAIN_DB: f32 = 40.0; // 100x
     const NORMALIZE_TARGET_DBFS: f32 = -1.0;
@@ -1145,7 +1178,9 @@ impl AudioPreviewState {
         self.cancel_session_analysis();
         self.cancel_edit_analysis();
         self.analysis = None;
+        self.completed_source_analysis = None;
         self.edited_waveform = None;
+        self.session_transients = None;
         self.spectrogram_texture = None;
         self.note_strip_texture = None;
         self.hf_analysis.viewport_cache.clear();
@@ -1918,7 +1953,9 @@ impl AudioPreviewState {
             active_mode: AudioToolMode::Inspect,
             metadata,
             analysis: None,
+            completed_source_analysis: None,
             edited_waveform: None,
+            session_transients: None,
             analysis_rx: Some(analysis_rx),
             analysis_job_rx: Some(analysis_job_rx),
             analysis_ticket: Some(analysis_ticket),
@@ -2341,7 +2378,16 @@ impl AudioPreviewState {
             if self.show_transients {
                 // Magnetic snapping radius: ~12px in screen space converted to seconds
                 let snap_radius = (self.view_duration_sec / 800.0) * 12.0;
-                if let Some(t_transient) = analysis.find_nearest_transient(time_sec, snap_radius) {
+                let mut nearest_transient = None;
+                let mut nearest_distance = snap_radius;
+                for &transient in self.current_transient_markers() {
+                    let distance = (transient - time_sec).abs();
+                    if distance <= nearest_distance {
+                        nearest_distance = distance;
+                        nearest_transient = Some(transient);
+                    }
+                }
+                if let Some(t_transient) = nearest_transient {
                     return if self.snap_zero_crossings {
                         analysis.snap_to_zero_crossing(t_transient, 500)
                     } else {
@@ -3358,19 +3404,22 @@ impl AudioPreviewState {
                         if self.view_duration_sec <= 0.05 {
                             self.view_duration_sec = self.duration_sec;
                         }
-                        self.analysis = Some(analysis);
+                        self.analysis = Some(Arc::new(analysis));
                         self.is_loading_analysis = false;
                     }
                     AudioAnalysisProgress::TransientsReady(transients) => {
-                        if let Some(ref mut analysis) = self.analysis {
-                            analysis.transients = transients;
+                        if let Some(analysis) = self.analysis.as_mut() {
+                            let analysis = Arc::make_mut(analysis);
+                            analysis.transients = transients.clone();
                             analysis.is_transients_ready = true;
                         }
+                        self.session_transients = Some(transients.into());
                     }
                     progress @ AudioAnalysisProgress::SpectrogramAndNotesReady { .. } => {
-                        self.install_spectral_analysis(ctx, progress);
+                        self.install_spectral_analysis(ctx, progress, false);
                     }
                     AudioAnalysisProgress::Complete => {
+                        self.completed_source_analysis = self.analysis.clone();
                         finished = true;
                         break;
                     }
@@ -3450,7 +3499,12 @@ impl AudioPreviewState {
         self.analysis_progress_disconnected = false;
     }
 
-    fn install_spectral_analysis(&mut self, ctx: &egui::Context, progress: AudioAnalysisProgress) {
+    fn install_spectral_analysis(
+        &mut self,
+        ctx: &egui::Context,
+        progress: AudioAnalysisProgress,
+        edited: bool,
+    ) {
         let AudioAnalysisProgress::SpectrogramAndNotesReady {
             spectrogram_width,
             spectrogram_height,
@@ -3484,7 +3538,13 @@ impl AudioPreviewState {
             note_img,
             egui::TextureOptions::NEAREST,
         ));
-        if let Some(analysis) = &mut self.analysis {
+        let target = if edited {
+            self.edited_waveform.as_mut()
+        } else {
+            self.analysis.as_mut()
+        };
+        if let Some(analysis) = target {
+            let analysis = Arc::make_mut(analysis);
             analysis.spectrogram_width = spectrogram_width;
             analysis.spectrogram_height = spectrogram_height;
             analysis.spectrogram_rgba = spectrogram_rgba;
@@ -3561,12 +3621,12 @@ impl AudioPreviewState {
                 match progress {
                     AudioAnalysisProgress::WaveformReady(analysis) => {
                         if self.edit_analysis_inflight == self.edit_analysis_observed {
-                            self.edited_waveform = Some(*analysis);
+                            self.edited_waveform = Some(Arc::new(*analysis));
                         }
                     }
                     progress @ AudioAnalysisProgress::SpectrogramAndNotesReady { .. } => {
                         if self.edit_analysis_inflight == self.edit_analysis_observed {
-                            self.install_spectral_analysis(ctx, progress);
+                            self.install_spectral_analysis(ctx, progress, true);
                             self.edit_analysis_displayed = self.edit_analysis_inflight.clone();
                         }
                     }
@@ -4823,7 +4883,7 @@ mod tests {
             let mut state = AudioPreviewState::new(path.clone(), "fixture.wav".to_string());
             state.analysis_rx = None;
             if ready {
-                state.analysis = Some(compute_full_audio_analysis(&path, 100).unwrap());
+                state.analysis = Some(Arc::new(compute_full_audio_analysis(&path, 100).unwrap()));
                 state.is_loading_analysis = false;
             }
 
@@ -4924,7 +4984,7 @@ mod tests {
         let analysis = compute_full_audio_analysis(&path, 100).expect("fixture analysis");
         let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
         state.cancel_session_analysis();
-        state.analysis = Some(analysis);
+        state.analysis = Some(Arc::new(analysis));
         state.duration_sec = 1.0;
         state.view_duration_sec = 1.0;
         state.is_loading_analysis = false;
@@ -4962,7 +5022,7 @@ mod tests {
         let analysis = compute_full_audio_analysis(&path, 100).expect("fixture analysis");
         let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
         state.cancel_session_analysis();
-        state.analysis = Some(analysis);
+        state.analysis = Some(Arc::new(analysis));
         state.duration_sec = 1.0;
         state.view_duration_sec = 1.0;
         state.is_loading_analysis = false;
@@ -5014,7 +5074,7 @@ mod tests {
         let analysis = compute_full_audio_analysis(&path, 100).expect("fixture analysis");
         let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
         state.cancel_session_analysis();
-        state.analysis = Some(analysis);
+        state.analysis = Some(Arc::new(analysis));
         state.duration_sec = 5.0;
         state.view_duration_sec = 5.0;
         state.is_loading_analysis = false;
@@ -5135,7 +5195,7 @@ mod tests {
         let analysis = compute_full_audio_analysis(&path, 100).expect("fixture analysis");
         let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
         state.cancel_session_analysis();
-        state.analysis = Some(analysis);
+        state.analysis = Some(Arc::new(analysis));
         state.duration_sec = 5.0;
         state.view_duration_sec = 5.0;
         state.is_loading_analysis = false;
@@ -5292,7 +5352,7 @@ mod tests {
         let analysis = compute_full_audio_analysis(&path, 100).expect("fixture analysis");
         let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
         state.cancel_session_analysis();
-        state.analysis = Some(analysis);
+        state.analysis = Some(Arc::new(analysis));
         state.duration_sec = 5.0;
         state.view_duration_sec = 5.0;
         state.is_loading_analysis = false;
@@ -5505,7 +5565,7 @@ mod tests {
         let (_dir, path) = generate_fixture_wav("normalize", 5.0);
         let analysis = compute_full_audio_analysis(&path, 50).expect("analysis");
         let mut state = AudioPreviewState::new(path, "normalize.wav".to_string());
-        state.analysis = Some(analysis);
+        state.analysis = Some(Arc::new(analysis));
         state.selection_mode = SelectionMode::Multi;
         state.multi_selections = vec![(1.0, 2.0), (3.0, 4.0)];
         state.region_gain_db = vec![0.0, 0.0];
@@ -6126,6 +6186,93 @@ Separated track
     }
 
     #[test]
+    fn source_analysis_snapshots_share_data_while_progress_and_edits_detach() {
+        let mut source_data = empty_audio_analysis();
+        source_data.ch1_samples = vec![0.25, -0.5].into();
+        source_data.transients = vec![0.25];
+        let source = Arc::new(source_data);
+        let mut state = AudioPreviewState::new(PathBuf::from("source.wav"), "source.wav".into());
+        state.analysis = Some(Arc::clone(&source));
+        state.completed_source_analysis = Some(Arc::clone(&source));
+
+        let source_snapshot = Arc::clone(state.completed_source_analysis().unwrap());
+        assert!(Arc::ptr_eq(&source, &source_snapshot));
+        state.set_transient_sensitivity(0.8);
+        assert_eq!(source_snapshot.transients, vec![0.25]);
+        assert_ne!(
+            state.current_transient_markers(),
+            source_snapshot.transients
+        );
+        assert!(Arc::ptr_eq(&source, &source_snapshot));
+
+        let mut edited_data = empty_audio_analysis();
+        edited_data.ch1_samples = vec![0.0, 0.0].into();
+        state.edited_waveform = Some(Arc::new(edited_data));
+        let edited = state.edited_waveform.as_ref().unwrap();
+        assert!(!Arc::ptr_eq(&source, edited));
+        assert_eq!(&*source.ch1_samples, &[0.25, -0.5]);
+        assert_eq!(&*edited.ch1_samples, &[0.0, 0.0]);
+    }
+
+    #[test]
+    fn completed_source_analysis_is_published_only_after_progress_completes() {
+        let (_dir, path) = generate_fixture_wav("completed-analysis", 0.1);
+        let mut state = AudioPreviewState::new(path, "completed-analysis.wav".into());
+        state.cancel_session_analysis();
+
+        let mut data = empty_audio_analysis();
+        data.ch1_samples = vec![0.1, -0.1].into();
+        data.sample_rate = 44_100;
+        let (progress_tx, progress_rx) = channel();
+        progress_tx
+            .send(AudioAnalysisProgress::WaveformReady(Box::new(data)))
+            .unwrap();
+        progress_tx
+            .send(AudioAnalysisProgress::TransientsReady(vec![0.25]))
+            .unwrap();
+        state.analysis_rx = Some(progress_rx);
+        let jobs = BackgroundJobs::new(1, 1);
+        let ctx = egui::Context::default();
+        state.poll_audio_analysis_on(&ctx, 1.0, &jobs);
+
+        assert!(state.completed_source_analysis().is_none());
+        state.set_transient_sensitivity(0.8);
+        assert_eq!(state.analysis.as_ref().unwrap().transients, vec![0.25]);
+        assert_ne!(state.current_transient_markers(), [0.25]);
+
+        let (progress_tx, progress_rx) = channel();
+        progress_tx
+            .send(AudioAnalysisProgress::SpectrogramAndNotesReady {
+                spectrogram_width: 1,
+                spectrogram_height: 1,
+                spectrogram_rgba: vec![255; 4],
+                note_strip_width: 1,
+                note_strip_height: 1,
+                note_strip_rgba: vec![255; 4],
+                note_strip_info: Vec::new(),
+                spectral_colors: Vec::new(),
+                ultrasonic_roi: Vec::new(),
+                ultrasonic_peak_times: Vec::new(),
+            })
+            .unwrap();
+        progress_tx.send(AudioAnalysisProgress::Complete).unwrap();
+        state.analysis_rx = Some(progress_rx);
+        state.poll_audio_analysis_on(&ctx, 1.0, &jobs);
+
+        let completed = state
+            .completed_source_analysis()
+            .expect("completed source snapshot should be published");
+        assert!(Arc::ptr_eq(state.analysis.as_ref().unwrap(), completed));
+        assert_eq!(&*completed.ch1_samples, &[0.1, -0.1]);
+        assert_eq!(completed.transients, vec![0.25]);
+        assert_ne!(state.current_transient_markers(), completed.transients);
+
+        state.restart_session_analysis_on(&jobs);
+        assert!(state.completed_source_analysis().is_none());
+        state.cancel_session_analysis();
+    }
+
+    #[test]
     fn waveform_image_delivery_captures_identical_left_png_and_clipboard_payloads() {
         let mut analysis = empty_audio_analysis();
         analysis.sample_rate = 4;
@@ -6264,7 +6411,7 @@ Separated track
             None,
             &jobs,
         );
-        state.analysis = Some(empty_audio_analysis());
+        state.analysis = Some(Arc::new(empty_audio_analysis()));
         state.edit_analysis_observed = state.session_audio_edits();
         state.edit_analysis_inflight = SessionAudioEdits {
             track_gain_db: 1.0,
@@ -6292,7 +6439,7 @@ Separated track
             &jobs,
         );
         state.cancel_session_analysis();
-        state.analysis = Some(empty_audio_analysis());
+        state.analysis = Some(Arc::new(empty_audio_analysis()));
         state.edit_analysis_observed = state.session_audio_edits();
         state.edit_analysis_inflight = state.edit_analysis_observed.clone();
         state.edit_analysis_displayed = SessionAudioEdits {
@@ -6368,8 +6515,8 @@ Separated track
         state.analysis_job_rx = None;
         state.analysis_cancel = None;
         state.analysis_ticket = None;
-        state.analysis = Some(empty_audio_analysis());
-        state.edited_waveform = Some(empty_audio_analysis());
+        state.analysis = Some(Arc::new(empty_audio_analysis()));
+        state.edited_waveform = Some(Arc::new(empty_audio_analysis()));
         state.edit_analysis_observed = state.session_audio_edits();
         state.edit_analysis_displayed = SessionAudioEdits {
             track_gain_db: 1.0,
@@ -6457,7 +6604,7 @@ Separated track
         let (_, queued_rx) = jobs.submit(Duration::from_secs(5), || ());
 
         let mut state = AudioPreviewState::new(path, "digital_queue_retry.wav".into());
-        state.analysis = Some(empty_audio_analysis());
+        state.analysis = Some(Arc::new(empty_audio_analysis()));
         state
             .digital_decode
             .symbols
@@ -6517,7 +6664,7 @@ Separated track
         started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
 
         let mut state = AudioPreviewState::new(path, "digital_cancel.wav".into());
-        state.analysis = Some(empty_audio_analysis());
+        state.analysis = Some(Arc::new(empty_audio_analysis()));
         state.start_digital_decode_on(&jobs);
         let old_flag = state.digital_decode.cancel_flag.as_ref().unwrap().clone();
         state.start_digital_decode_on(&jobs);
@@ -6749,7 +6896,7 @@ Separated track
         assert!(state.snap_zero_crossings);
 
         let analysis = compute_full_audio_analysis(&p, 50).expect("analysis");
-        state.analysis = Some(analysis);
+        state.analysis = Some(Arc::new(analysis));
 
         let snapped_s = state.snap_time(1.0123, false);
         let snapped_e = state.snap_time(2.4567, false);
@@ -6779,7 +6926,7 @@ Separated track
         if analysis.transients.is_empty() {
             analysis.transients.push(1.234);
         }
-        state.analysis = Some(analysis.clone());
+        state.analysis = Some(Arc::new(analysis.clone()));
 
         let target_t = analysis.transients[0];
         // Test snapping near the transient (within ~5ms)

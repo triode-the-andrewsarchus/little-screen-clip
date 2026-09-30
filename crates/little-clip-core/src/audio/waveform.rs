@@ -42,8 +42,17 @@ impl FullAudioAnalysis {
 
     /// Recompute transient detection points using an adjustable sensitivity factor.
     pub fn recompute_transients(&mut self, sensitivity: f32) {
-        if self.ch1_samples.is_empty() || self.sample_rate == 0 {
+        let Some(transients) = self.transients_with_sensitivity(sensitivity) else {
             return;
+        };
+        self.transients = transients;
+        self.is_transients_ready = true;
+    }
+
+    /// Computes transient detection points without changing the immutable source analysis.
+    pub fn transients_with_sensitivity(&self, sensitivity: f32) -> Option<Vec<f32>> {
+        if self.ch1_samples.is_empty() || self.sample_rate == 0 {
+            return None;
         }
         let mixed: Vec<f32> = match &self.ch2_samples {
             Some(ch2) => self
@@ -54,9 +63,11 @@ impl FullAudioAnalysis {
                 .collect(),
             None => self.ch1_samples.to_vec(),
         };
-        self.transients =
-            detect_transients_with_sensitivity(&mixed, self.sample_rate as f32, sensitivity);
-        self.is_transients_ready = true;
+        Some(detect_transients_with_sensitivity(
+            &mixed,
+            self.sample_rate as f32,
+            sensitivity,
+        ))
     }
 
     /// Finds the non-silent start and end boundary times (in seconds) based on threshold dB (e.g. -45.0 dB).
@@ -870,4 +881,59 @@ fn resample_peaks(source: &[f32], target_len: usize) -> Vec<f32> {
     }
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn analysis_with_impulse() -> FullAudioAnalysis {
+        let mut samples = vec![0.0; 44_100];
+        for index in (4_000..samples.len()).step_by(8_000) {
+            samples[index] = 0.95;
+        }
+        FullAudioAnalysis {
+            channels: 1,
+            sample_rate: 44_100,
+            duration_ms: 1_000,
+            total_frames: samples.len(),
+            ch1_samples: samples.into(),
+            ch2_samples: None,
+            overview_peaks1: Vec::new(),
+            overview_peaks2: None,
+            peaks_lvl0_ch1: Vec::new(),
+            peaks_lvl0_ch2: None,
+            peaks_lvl1_ch1: Vec::new(),
+            peaks_lvl1_ch2: None,
+            peaks_lvl2_ch1: Vec::new(),
+            peaks_lvl2_ch2: None,
+            spectrogram_width: 0,
+            spectrogram_height: 0,
+            spectrogram_rgba: Vec::new(),
+            note_strip_width: 0,
+            note_strip_height: 0,
+            note_strip_rgba: Vec::new(),
+            note_strip_info: Vec::new(),
+            spectral_colors: Vec::new(),
+            transients: vec![0.25],
+            is_transients_ready: true,
+            is_spectrogram_ready: false,
+            ultrasonic_roi: Vec::new(),
+            ultrasonic_peak_times: Vec::new(),
+            is_truncated: false,
+            truncation_warning: None,
+        }
+    }
+
+    #[test]
+    fn transient_sensitivity_can_be_computed_without_mutating_source_analysis() {
+        let mut analysis = analysis_with_impulse();
+        let original_transients = analysis.transients.clone();
+        let adjusted = analysis.transients_with_sensitivity(0.8).unwrap();
+
+        assert_eq!(analysis.transients, original_transients);
+        analysis.recompute_transients(0.8);
+        assert_eq!(analysis.transients, adjusted);
+        assert!(analysis.is_transients_ready);
+    }
 }

@@ -710,11 +710,9 @@ impl AudioPreviewState {
                             )
                             .changed()
                         {
-                            self.transient_sensitivity =
-                                transient_sensitivity_from_slider(sensitivity_position);
-                            if let Some(ref mut analysis) = self.analysis {
-                                analysis.recompute_transients(self.transient_sensitivity);
-                            }
+                            self.set_transient_sensitivity(
+                                transient_sensitivity_from_slider(sensitivity_position),
+                            );
                         }
                     }
                 } else {
@@ -2379,7 +2377,7 @@ impl AudioPreviewState {
 
         // Render transient marks across waveform when enabled
         if self.show_transients {
-            for &t_trans in &source_analysis.transients {
+            for &t_trans in self.current_transient_markers() {
                 if t_trans >= v_start && t_trans <= v_start + v_dur {
                     let tx = time_to_x(t_trans);
                     // Draw vertical transient marker line
