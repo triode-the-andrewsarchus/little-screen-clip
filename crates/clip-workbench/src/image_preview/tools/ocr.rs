@@ -973,6 +973,76 @@ mod input_stamp_tests {
         );
     }
 
+    #[test]
+    fn rendered_ocr_copy_all_publishes_exact_recognized_text() {
+        let mut state = state();
+        state.ocr_state.extracted_text = "First recognized line\n日本語 OCR ✓".to_owned();
+        let expected = state.ocr_state.extracted_text.clone();
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette = AppPalette::default();
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0));
+
+        let initial = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ocr_results(ui, ctx, &palette);
+                });
+            },
+        );
+        let copy_position = initial
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Copy all text" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("rendered OCR Copy all text button label");
+        let mut render = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen_rect),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ocr_results(ui, ctx, &palette);
+                    });
+                },
+            )
+        };
+        render(vec![egui::Event::PointerMoved(copy_position)]);
+        render(vec![
+            egui::Event::PointerMoved(copy_position),
+            egui::Event::PointerButton {
+                pos: copy_position,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let copied = render(vec![
+            egui::Event::PointerMoved(copy_position),
+            egui::Event::PointerButton {
+                pos: copy_position,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+
+        assert_eq!(copied.platform_output.copied_text, expected);
+        assert!(!state.ocr_state.in_progress);
+        assert!(state.ocr_rx.is_none());
+    }
+
     #[cfg(unix)]
     #[test]
     fn ocr_queue_full_retains_request_and_retries_progress_and_output() {
