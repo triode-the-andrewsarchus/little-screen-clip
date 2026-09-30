@@ -1132,6 +1132,105 @@ mod tests {
     }
 
     #[test]
+    fn rendered_background_removal_copy_left_targets_current_cutout_payload() {
+        let cutout = RgbaImage::from_fn(3, 2, |x, y| {
+            image::Rgba([
+                20 + x as u8,
+                80 + y as u8,
+                140,
+                if x == 0 { 0 } else { 200 },
+            ])
+        });
+        let mut state = state();
+        state.current_rgba = Arc::new(cutout.clone());
+        state.active_mode = ImageToolMode::RemoveBg;
+        state.rendering_frame = true;
+        let palette = AppPalette::default();
+        let ctx = egui::Context::default();
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(900.0, 900.0));
+
+        let initial = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_remove_bg_toolbar(ui, ctx, &palette);
+                });
+            },
+        );
+        let left_button = initial
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Left hand" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("rendered Background Removal Left hand action");
+        let click = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        for events in [
+            vec![egui::Event::PointerMoved(left_button)],
+            vec![
+                egui::Event::PointerMoved(left_button),
+                click(left_button, true),
+            ],
+            vec![
+                egui::Event::PointerMoved(left_button),
+                click(left_button, false),
+            ],
+        ] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen_rect),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_remove_bg_toolbar(ui, ctx, &palette);
+                    });
+                },
+            );
+        }
+        state.rendering_frame = false;
+        let hand = state
+            .copy_requested
+            .take()
+            .expect("rendered Copy Left should request a hand-slot copy");
+        assert_eq!(hand, HandSide::Left);
+
+        let stamp = state.input_stamp();
+        let composed = compose_display_image(state.current_rgba.as_ref().clone(), &stamp);
+        let encoded = encode_png(&composed).unwrap();
+        let mut pushed = None;
+        deliver_image_copy(
+            &encoded,
+            hand,
+            || false,
+            |request| {
+                pushed = Some(request.clone());
+                Ok(())
+            },
+            |_, _| Ok(()),
+        )
+        .unwrap();
+        let Some(IpcRequest::PushImage { bytes, mime, hand }) = pushed else {
+            panic!("Background Removal should route an image to Left Hand");
+        };
+        assert_eq!(hand, HandSide::Left);
+        assert_eq!(mime, "image/png");
+        assert_eq!(image::load_from_memory(&bytes).unwrap().to_rgba8(), cutout);
+    }
+
+    #[test]
     fn pending_redaction_and_crop_are_burned_into_export_without_changing_canvas() {
         let mut state = state();
         state.redaction_state.boxes.push(RedactionBox {
