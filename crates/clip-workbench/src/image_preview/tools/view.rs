@@ -324,3 +324,117 @@ impl ImagePreviewState {
             });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rendered_metadata_gps_copy_button_publishes_selected_coordinates() {
+        let mut png_bytes = Vec::new();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([20, 40, 60, 255]))
+            .write_to(
+                &mut std::io::Cursor::new(&mut png_bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let mut state = ImagePreviewState::from_bytes_with_meta(
+            png_bytes,
+            "image/png".into(),
+            None,
+            "Synthetic metadata fixture".into(),
+            &AppConfig::default(),
+        )
+        .unwrap();
+        state.metadata = Some(little_clip_ops::metadata::ImageMetadataSummary {
+            make: Some("Synthetic Camera Co.".to_owned()),
+            model: Some("Fixture 1".to_owned()),
+            gps_latitude: Some(47.25),
+            gps_longitude: Some(-122.5),
+            ..Default::default()
+        });
+        state.show_metadata_drawer = true;
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette = AppPalette::default();
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 800.0));
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_view_toolbar(ui, ctx, &palette);
+                });
+            },
+        );
+        let initial = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(screen_rect),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_view_toolbar(ui, ctx, &palette);
+                });
+            },
+        );
+        let copy_position = initial
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Copy" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                let labels = initial
+                    .shapes
+                    .iter()
+                    .filter_map(|clipped| match &clipped.shape {
+                        egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                panic!("rendered GPS coordinate Copy action missing; labels={labels:?}")
+            });
+        let mut render = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen_rect),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_view_toolbar(ui, ctx, &palette);
+                    });
+                },
+            )
+        };
+        render(vec![egui::Event::PointerMoved(copy_position)]);
+        render(vec![
+            egui::Event::PointerMoved(copy_position),
+            egui::Event::PointerButton {
+                pos: copy_position,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let copied = render(vec![
+            egui::Event::PointerMoved(copy_position),
+            egui::Event::PointerButton {
+                pos: copy_position,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+
+        assert_eq!(copied.platform_output.copied_text, "47.250000, -122.500000");
+    }
+}
