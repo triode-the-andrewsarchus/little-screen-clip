@@ -3643,6 +3643,33 @@ mod workbench_layout_tests {
         }
     }
 
+    fn isolated_job_ticket() -> (BackgroundJobs, JobTicket) {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (ticket, _receiver) = jobs.submit(Duration::MAX, || ());
+        (jobs, ticket)
+    }
+
+    fn synthetic_job_receiver<T>(result: Result<T, JobError>) -> Receiver<Result<T, JobError>> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send(result).unwrap();
+        receiver
+    }
+
+    fn synthetic_image_bytes() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            1,
+            1,
+            image::Rgba([12, 34, 56, 255]),
+        ))
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        bytes
+    }
+
     fn click_text_smart_copy_action(source_text: &str, button_label: &str) -> String {
         fn frame(
             ctx: &egui::Context,
@@ -6590,6 +6617,140 @@ mod workbench_layout_tests {
         drop(app);
         release_blocker_and_wait_for_queue_to_drain(&jobs, release);
         assert!(!ran.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn image_load_queue_full_reports_status_and_accepts_later_completion() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        let (_ticket_jobs, ticket) = isolated_job_ticket();
+        app.image_load_job = Some(ImageLoadJob {
+            key: None,
+            ticket,
+            receiver: synthetic_job_receiver(Err(JobError::QueueFull)),
+        });
+
+        app.poll_image_load(&egui::Context::default());
+
+        assert!(app.image_load_job.is_none());
+        assert!(
+            app.status_msg
+                .as_deref()
+                .is_some_and(|message| message.contains("background job queue is full"))
+        );
+
+        app.start_image_load(ImageLoadSource::Bytes {
+            bytes: synthetic_image_bytes(),
+            mime: "image/png".to_owned(),
+            path: None,
+            title: "synthetic image".to_owned(),
+        });
+        wait_for_image_load(&mut app);
+
+        let Some(ViewerSession::Image(state)) = &app.viewer else {
+            panic!("image load should recover after queue saturation")
+        };
+        assert_eq!(state.current_rgba.dimensions(), (1, 1));
+        assert!(app.status_msg.is_none());
+    }
+
+    #[test]
+    fn text_load_queue_full_reports_status_and_accepts_later_completion() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        let (_ticket_jobs, ticket) = isolated_job_ticket();
+        app.text_load_job = Some(TextPreviewLoadJob {
+            ticket,
+            receiver: synthetic_job_receiver(Err(JobError::QueueFull)),
+        });
+
+        app.poll_text_load(&egui::Context::default());
+
+        assert!(app.text_load_job.is_none());
+        assert!(
+            app.status_msg
+                .as_deref()
+                .is_some_and(|message| message.contains("background job queue is full"))
+        );
+
+        app.start_text_preview_load("synthetic text".to_owned(), Some("queue retry".to_owned()));
+        wait_for_text_load(&mut app);
+
+        let Some(ViewerSession::Text(state)) = &app.viewer else {
+            panic!("text load should recover after queue saturation")
+        };
+        assert!(state.content.contains("synthetic text"));
+        assert!(app.status_msg.is_none());
+    }
+
+    #[test]
+    fn spreadsheet_load_queue_full_reports_status_and_accepts_later_completion() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        let (_ticket_jobs, ticket) = isolated_job_ticket();
+        app.spreadsheet_load_job = Some((
+            ticket,
+            synthetic_job_receiver(Err(JobError::QueueFull)),
+            None,
+        ));
+
+        app.poll_spreadsheet_load(&egui::Context::default());
+
+        assert!(app.spreadsheet_load_job.is_none());
+        assert!(
+            app.status_msg
+                .as_deref()
+                .is_some_and(|message| message.contains("background job queue is full"))
+        );
+
+        app.start_spreadsheet_load(SpreadsheetLoadSource::Text {
+            content: Arc::new("name,value\nclip,1\nnext,2".to_owned()),
+            title: "synthetic table".to_owned(),
+        });
+        wait_for_text_load(&mut app);
+
+        assert!(matches!(app.viewer, Some(ViewerSession::Spreadsheet(_))));
+        assert!(app.status_msg.is_none());
+    }
+
+    #[test]
+    fn midi_load_queue_full_reports_status_and_accepts_later_completion() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        let (_ticket_jobs, ticket) = isolated_job_ticket();
+        app.midi_load_job = Some((ticket, synthetic_job_receiver(Err(JobError::QueueFull))));
+
+        app.poll_midi_load(&egui::Context::default());
+
+        assert!(app.midi_load_job.is_none());
+        assert!(
+            app.status_msg
+                .as_deref()
+                .is_some_and(|message| message.contains("background job queue is full"))
+        );
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let midi_path = temp_dir.path().join("synthetic.mid");
+        let mut midi_bytes = b"MThd\0\0\0\x06\0\0\0\x01\0\x60MTrk\0\0\0\x0c".to_vec();
+        midi_bytes.extend_from_slice(&[
+            0x00, 0x90, 0x3c, 0x40, // note on
+            0x60, 0x80, 0x3c, 0x00, // note off
+            0x00, 0xff, 0x2f, 0x00, // end track
+        ]);
+        std::fs::write(&midi_path, midi_bytes).unwrap();
+        app.start_midi_load(midi_path);
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while app.midi_load_job.is_some() {
+            app.poll_midi_load(&ctx);
+            assert!(
+                std::time::Instant::now() < deadline,
+                "MIDI load did not recover after queue saturation"
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+
+        let Some(ViewerSession::Midi(state)) = &app.viewer else {
+            panic!("MIDI load should recover after queue saturation")
+        };
+        assert_eq!(state.data.title, "synthetic");
+        assert!(app.status_msg.is_none());
     }
 
     #[test]
