@@ -687,7 +687,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - **Workbench and Quick Palette**
       - [x] **H2.3i1 [Primary] Verify closing a foreground queued viewer advances to the next viewer.** `closing_startup_viewers_advances_fifo_then_returns_to_selected_workbench_view` constructs a foreground gallery and queued spreadsheet, closes the gallery, and confirms the spreadsheet is shown next. This does not launch a real startup queue.
       - [x] **H2.3i2 [Primary] Verify closing the final queued viewer returns to Node Machine.** `closing_startup_viewers_advances_fifo_then_returns_to_selected_workbench_view` closes the constructed queued spreadsheet and confirms the selected Node Machine view is restored. This does not launch a real startup queue.
-      - [ ] **H2.3i3 Verify recipe-prompt Escape returns to the same Palette query.** Confirm the query remains available.
+      - [x] **H2.3i3 [Primary] Verify recipe-prompt Escape preserves Palette search state.** `palette_prompt_escape_cancels_only_the_overlay` seeds a nonempty query and selected action index, then confirms Escape clears only the prompt, preserves both values, leaves Palette active, and emits no viewport-close command.
       - [ ] **H2.3i4 Verify successful recipe-prompt submission returns to Palette.** Confirm the resulting view.
     - **Image and audio surfaces**
       - [ ] **H2.3i5 Verify Image Studio Escape returns to its originating workbench state.** Confirm the same item and edit session remain available.

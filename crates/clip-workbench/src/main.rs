@@ -5673,6 +5673,8 @@ mod workbench_layout_tests {
     #[test]
     fn palette_prompt_escape_cancels_only_the_overlay() {
         let mut app = test_workbench_app(None, VecDeque::new());
+        app.search_query = "preserve this Palette query".to_owned();
+        app.selected_action_index = 3;
         app.in_app_prompt = Some(InAppPromptState {
             recipe_name: "Prompt Escape Fixture".to_owned(),
             message: "Enter test text".to_owned(),
@@ -5718,6 +5720,8 @@ mod workbench_layout_tests {
         assert_eq!(close_commands, 0, "Escape cancels only the prompt overlay");
         assert!(app.in_app_prompt.is_none());
         assert_eq!(app.view, WorkbenchView::Palette);
+        assert_eq!(app.search_query, "preserve this Palette query");
+        assert_eq!(app.selected_action_index, 3);
     }
 
     #[test]
