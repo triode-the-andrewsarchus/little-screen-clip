@@ -5595,6 +5595,41 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn text_preview_escape_without_find_returns_to_source_route_and_slots() {
+        let config = AppConfig::default();
+        let state = TextPreviewState::from_text(
+            "in-memory preview text".to_owned(),
+            Some("Text Preview Fixture".to_owned()),
+            &config,
+        );
+        assert!(!state.show_find);
+
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.view = WorkbenchView::NodeMachine;
+        app.selected_slots = vec![SlotId::RightHand, SlotId::RightPrior2];
+        let original_slots = app.selected_slots.clone();
+        app.viewer = Some(ViewerSession::Text(state));
+
+        let ctx = egui::Context::default();
+        assert!(ctx.memory(|memory| memory.focused()).is_none());
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![key_press_event(egui::Key::Escape)],
+                ..Default::default()
+            },
+            |ctx| assert!(app.render_modal_viewers(ctx)),
+        );
+
+        assert!(app.viewer.is_none(), "Escape closes the idle text preview");
+        assert_eq!(app.view, WorkbenchView::NodeMachine);
+        assert_eq!(app.selected_slots, original_slots);
+    }
+
+    #[test]
     fn clipboard_text_preview_prepares_on_worker_and_preserves_full_searchable_text() {
         let text = format!("{}\nTARGET_AT_END", "clipboard row\n".repeat(80_000));
         let expected = text.clone();
