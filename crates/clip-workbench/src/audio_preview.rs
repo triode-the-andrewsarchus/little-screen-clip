@@ -4436,6 +4436,52 @@ mod tests {
     }
 
     #[test]
+    fn inspect_space_starts_playback_with_a_silent_player() {
+        let (_temp_dir, path) = generate_fixture_wav("inspect-space-start", 1.0);
+        let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
+        state.cancel_session_analysis();
+        state.is_loading_analysis = false;
+        state.duration_sec = 1.0;
+        // Drain the test output queue without opening an audio device.
+        let (silent_player, mut silent_output) = Player::new();
+        let stop_silent_output = Arc::new(AtomicBool::new(false));
+        let stop_silent_output_thread = Arc::clone(&stop_silent_output);
+        let silent_output_thread = std::thread::spawn(move || {
+            while !stop_silent_output_thread.load(Ordering::Relaxed) {
+                for _ in 0..256 {
+                    let _ = silent_output.next();
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        });
+        state.player = Some(silent_player);
+        state._sink = None;
+        assert!(!state.is_playing);
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        render_inspect_frame(&ctx, &mut state, 0.0, Vec::new());
+        render_inspect_frame(
+            &ctx,
+            &mut state,
+            0.01,
+            vec![egui::Event::Key {
+                key: egui::Key::Space,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+
+        assert!(state.is_playing, "Space should start idle Inspect playback");
+        assert!(state.playback_start_instant.is_some());
+        state.stop();
+        stop_silent_output.store(true, Ordering::Relaxed);
+        silent_output_thread.join().expect("silent output thread");
+    }
+
+    #[test]
     fn audio_studio_space_yields_to_focused_text_editor() {
         let ctx = egui::Context::default();
         let mut state = AudioPreviewState::new(

@@ -286,6 +286,7 @@ class FakeTextPreviewDaemon:
         image_diff_preview: bool = False,
         pdf_preview: bool = False,
         reload_config_error: bool = False,
+        midi_export: bool = False,
     ):
         self.socket_path = runtime / "little-screen-clip.sock"
         self.log_path = log_path
@@ -297,6 +298,9 @@ class FakeTextPreviewDaemon:
         self.image_diff_preview = image_diff_preview
         self.pdf_preview = pdf_preview
         self.reload_config_error = reload_config_error
+        self.midi_export = midi_export
+        self.runtime = runtime
+        self.midi_export_result: dict[str, Any] | None = None
         self.xlsx_path = log_path.parent / "acceptance-multisheet.xlsx"
         if xlsx_preview:
             self._write_xlsx_fixture()
@@ -534,6 +538,30 @@ class FakeTextPreviewDaemon:
         }
 
     def _response(self, request: Any) -> tuple[Any, str]:
+        if self.midi_export and isinstance(request, dict) and "PushFile" in request:
+            push = request["PushFile"]
+            path = Path(push["path"])
+            expected_dir = self.runtime / "little-screen-clip" / "midi_slices"
+            inside_private_runtime = path.parent == expected_dir
+            midi_bytes = path.read_bytes() if inside_private_runtime and path.is_file() else b""
+            declared_tracks = struct.unpack_from(">H", midi_bytes, 10)[0] if len(midi_bytes) >= 14 else 0
+            track_chunks = midi_bytes.count(b"MTrk")
+            self.midi_export_result = {
+                "path": str(path),
+                "hand": push["hand"],
+                "inside_private_runtime": inside_private_runtime,
+                "bytes": len(midi_bytes),
+                "midi_header": midi_bytes.startswith(b"MThd\x00\x00\x00\x06"),
+                "declared_tracks": declared_tracks,
+                "track_chunks": track_chunks,
+                "contains_note_on": any(bytes([status, 60]) in midi_bytes for status in range(0x90, 0xA0)),
+            }
+            if (push["hand"] == "Left" and inside_private_runtime
+                    and self.midi_export_result["midi_header"]
+                    and declared_tracks > 0 and declared_tracks == track_chunks
+                    and self.midi_export_result["contains_note_on"]):
+                return {"Success": {"message": "Accepted private MIDI export"}}, "midi_export"
+            return {"Error": {"error": "Invalid private MIDI export"}}, "midi_export_rejected"
         if request == "ReloadConfig" and self.reload_config_error:
             return {"Error": {"error": "acceptance reload rejected"}}, "reload_config_error"
         if request == "GetState":
@@ -607,6 +635,14 @@ class FakeTextPreviewDaemon:
             "pass": item_requested,
             "events": len(self.events),
         }
+        if self.midi_export:
+            result["midi_export"] = self.midi_export_result
+            result["pass"] = (
+                sum(event["kind"] in ("midi_export", "midi_export_rejected") for event in self.events) == 1
+                and any(event["kind"] == "midi_export" for event in self.events)
+                and self.midi_export_result is not None
+                and self.midi_export_result["inside_private_runtime"]
+            )
         if self.pdf_preview:
             result.update({
                 "pdf_fixture": str(self.pdf_path),
@@ -1574,6 +1610,10 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pdf", type=Path, help="optional existing PDF fixture")
     parser.add_argument("--midi", type=Path, help="optional existing MIDI fixture")
     parser.add_argument(
+        "--verify-midi-copy-pointer", action="store_true",
+        help="accept one private pointer click on Copy MIDI through a fake Left Hand IPC receiver",
+    )
+    parser.add_argument(
         "--fake-audio-transition",
         action="store_true",
         help="serve a private pending-to-ready audio slot over IPC while the workbench stays open",
@@ -1633,6 +1673,19 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
     for fixture in (args.image, args.audio, args.pdf, args.midi):
         if fixture is not None and not fixture.is_file():
             raise SystemExit(f"fixture does not exist: {fixture}")
+    if args.verify_midi_copy_pointer and (
+        args.midi is None or not args.click or len(args.click) != 1
+        or args.key_action or args.click_after_key_action or args.type_text
+        or args.verify_return or args.verify_viewer_return
+        or args.image_tool or args.image_action or args.drag or args.scroll
+        or any((args.fake_audio_transition, args.fake_text_preview, args.fake_pdf_preview,
+                args.fake_csv_preview, args.fake_multisheet_xlsx, args.fake_model3d,
+                args.fake_binary_diff, args.fake_diff_preview, args.fake_image_diff_preview,
+                args.fake_node_machine, args.fake_reload_error))
+    ):
+        raise SystemExit(
+            "--verify-midi-copy-pointer requires --midi and one --click, with no keyboard or return actions"
+        )
     if args.fake_audio_transition and any((args.image, args.audio, args.pdf, args.midi)):
         raise SystemExit("--fake-audio-transition cannot be combined with file-entry fixtures")
     if args.fake_text_preview and (
@@ -1829,6 +1882,7 @@ def main() -> int:
             "audio_fixture": str(args.audio.resolve()) if args.audio else None,
             "pdf_fixture": str(args.pdf.resolve()) if args.pdf else None,
             "midi_fixture": str(args.midi.resolve()) if args.midi else None,
+            "verify_midi_copy_pointer": args.verify_midi_copy_pointer,
             "fake_audio_transition": args.fake_audio_transition,
             "fake_text_preview": args.fake_text_preview,
             "fake_pdf_preview": args.fake_pdf_preview,
@@ -1886,6 +1940,7 @@ def main() -> int:
             args.fake_text_preview or args.fake_pdf_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
             or args.fake_model3d or args.fake_binary_diff or args.fake_diff_preview
             or args.fake_image_diff_preview or args.fake_reload_error
+            or args.verify_midi_copy_pointer
         ):
             fake_text_daemon = FakeTextPreviewDaemon(
                 config["runtime"], output / "fake-text-daemon-events.json",
@@ -1897,6 +1952,7 @@ def main() -> int:
                 image_diff_preview=args.fake_image_diff_preview,
                 pdf_preview=args.fake_pdf_preview,
                 reload_config_error=args.fake_reload_error,
+                midi_export=args.verify_midi_copy_pointer,
             )
         capture_workbench(
             args, binary, output, config, niri_env, outputs, children, report,
@@ -1923,6 +1979,12 @@ def main() -> int:
             text_route = fake_text_daemon.close()
             if args.fake_binary_diff:
                 report["fake_binary_diff"] = text_route
+            elif args.verify_midi_copy_pointer:
+                report["midi_copy_pointer"] = text_route
+                if not text_route["pass"]:
+                    report["failures"].append(
+                        "private pointer click did not send one valid MIDI PushFile to Left Hand"
+                    )
             elif args.fake_pdf_preview:
                 report["fake_pdf_preview"] = text_route
             elif args.fake_diff_preview:
