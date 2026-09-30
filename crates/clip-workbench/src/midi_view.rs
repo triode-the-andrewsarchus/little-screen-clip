@@ -19,6 +19,185 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
+const INLINE_MIDI_MAX_NOTES_SCANNED: usize = 512;
+const INLINE_MIDI_MAX_NOTES_DRAWN: usize = 128;
+static NEXT_INLINE_MIDI_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Compact score overview for embedding in another view.
+///
+/// Playback is intentionally local to the preview: seeking only moves its
+/// playhead and never starts the full viewer's audio synthesis pipeline.
+#[allow(dead_code)]
+pub struct InlineMidiPreview {
+    data: Arc<MidiData>,
+    host_size: Vec2,
+    id: egui::Id,
+    playhead_sec: f32,
+    selected_note: Option<usize>,
+}
+
+#[allow(dead_code)]
+impl InlineMidiPreview {
+    /// Creates a compact score preview with a positive finite host size.
+    pub fn new(data: Arc<MidiData>, host_size: Vec2) -> Self {
+        assert!(
+            host_size.x.is_finite()
+                && host_size.y.is_finite()
+                && host_size.x > 0.0
+                && host_size.y > 0.0,
+            "inline MIDI preview requires a positive finite host size"
+        );
+        Self {
+            data,
+            host_size,
+            id: egui::Id::new((
+                "inline-midi-preview",
+                NEXT_INLINE_MIDI_ID.fetch_add(1, Ordering::Relaxed),
+            )),
+            playhead_sec: 0.0,
+            selected_note: None,
+        }
+    }
+
+    /// Draws a bounded overview and supports per-instance note selection and seeking.
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::palette::AppPalette,
+    ) -> egui::Response {
+        let (rect, _) = ui.allocate_exact_size(self.host_size, egui::Sense::hover());
+        let response = ui.interact(rect, self.id.with("host"), egui::Sense::click());
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
+
+        let clip_rect = rect.intersect(ui.clip_rect());
+        let painter = ui.painter().with_clip_rect(clip_rect);
+        let panel = crate::hex_to_c32(&palette.colors.surface_recessed);
+        let border = crate::hex_to_c32(&palette.colors.surface_panel);
+        painter.rect_filled(
+            rect,
+            Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+            panel,
+        );
+        painter.rect_stroke(
+            rect,
+            Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+            Stroke::new(1.0_f32, border),
+        );
+
+        let header_height = 22.0_f32.min(rect.height() * 0.35);
+        painter.text(
+            Pos2::new(rect.left() + 8.0, rect.top() + header_height * 0.5),
+            egui::Align2::LEFT_CENTER,
+            format!(
+                "{} notes · {:.1}s",
+                self.data.total_notes, self.data.duration_sec
+            ),
+            egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
+            crate::hex_to_c32(&palette.colors.text_primary),
+        );
+
+        let canvas_rect = Rect::from_min_max(
+            Pos2::new(rect.left() + 6.0, rect.top() + header_height + 3.0),
+            Pos2::new(rect.right() - 6.0, rect.bottom() - 6.0),
+        );
+        if canvas_rect.width() <= 0.0 || canvas_rect.height() <= 0.0 {
+            return response;
+        }
+        let canvas_painter = painter.with_clip_rect(canvas_rect);
+        let duration = self.data.duration_sec.max(f32::EPSILON);
+        let key_min = f32::from(self.data.min_key);
+        let key_range = (f32::from(self.data.max_key) - key_min + 1.0).max(1.0);
+        let note_height = (canvas_rect.height() / key_range).clamp(2.0, 9.0);
+        let mut note_rects = Vec::with_capacity(INLINE_MIDI_MAX_NOTES_DRAWN);
+
+        let note_count = self.data.notes.len();
+        let sample_count = note_count
+            .min(INLINE_MIDI_MAX_NOTES_SCANNED)
+            .min(INLINE_MIDI_MAX_NOTES_DRAWN);
+        for sample_index in 0..sample_count {
+            let index = if sample_count <= 1 {
+                0
+            } else {
+                sample_index * (note_count - 1) / (sample_count - 1)
+            };
+            let Some(note) = self.data.notes.get(index) else {
+                continue;
+            };
+            if note_rects.len() >= INLINE_MIDI_MAX_NOTES_DRAWN
+                || !note.start_sec.is_finite()
+                || !note.duration_sec.is_finite()
+                || note.duration_sec <= 0.0
+            {
+                continue;
+            }
+            let start = note.start_sec.clamp(0.0, duration);
+            let end = (note.start_sec + note.duration_sec).clamp(0.0, duration);
+            if end <= start || note.key < self.data.min_key || note.key > self.data.max_key {
+                continue;
+            }
+            let x_start = canvas_rect.left() + (start / duration) * canvas_rect.width();
+            let x_end = canvas_rect.left() + (end / duration) * canvas_rect.width();
+            let pitch = f32::from(note.key) - key_min;
+            let y = canvas_rect.bottom() - ((pitch + 1.0) / key_range) * canvas_rect.height();
+            let note_rect = Rect::from_min_max(
+                Pos2::new(x_start, y),
+                Pos2::new(x_end.max(x_start + 2.0), y + note_height),
+            )
+            .intersect(canvas_rect);
+            if note_rect.is_positive() {
+                let (r, g, b) = palette.midi_note_color(
+                    note.track,
+                    note.channel,
+                    self.data.track_count,
+                    note.key,
+                    note.velocity,
+                );
+                let color = Color32::from_rgb(r, g, b);
+                canvas_painter.rect_filled(note_rect, Rounding::same(2.0), color);
+                if self.selected_note == Some(index) {
+                    canvas_painter.rect_stroke(
+                        note_rect,
+                        Rounding::same(2.0),
+                        Stroke::new(1.5_f32, crate::hex_to_c32(&palette.colors.text_primary)),
+                    );
+                }
+                note_rects.push((index, note_rect));
+            }
+        }
+
+        let playhead_x = canvas_rect.left()
+            + (self.playhead_sec.clamp(0.0, duration) / duration) * canvas_rect.width();
+        canvas_painter.line_segment(
+            [
+                Pos2::new(playhead_x, canvas_rect.top()),
+                Pos2::new(playhead_x, canvas_rect.bottom()),
+            ],
+            Stroke::new(1.5_f32, crate::hex_to_c32(&palette.harmonies.complementary)),
+        );
+
+        if response.clicked()
+            && let Some(pointer) = response.interact_pointer_pos()
+            && canvas_rect.contains(pointer)
+        {
+            if let Some((index, _)) = note_rects
+                .iter()
+                .find(|(_, note_rect)| note_rect.contains(pointer))
+            {
+                self.selected_note = Some(*index);
+                self.playhead_sec = self.data.notes[*index].start_sec.clamp(0.0, duration);
+            } else {
+                self.selected_note = None;
+                self.playhead_sec = ((pointer.x - canvas_rect.left()) / canvas_rect.width())
+                    .clamp(0.0, 1.0)
+                    * duration;
+            }
+        }
+        response
+    }
+}
+
 /// Interactive UI state for piano roll inspection and MIDI playback.
 pub struct MidiViewerState {
     #[allow(dead_code)]
@@ -1579,6 +1758,205 @@ mod tests {
     use super::*;
     use little_clip_core::config::WorkbenchAppearance;
     use little_clip_core::palette::AppPalette;
+
+    fn inline_midi_data(note_count: usize) -> Arc<MidiData> {
+        Arc::new(MidiData {
+            title: "Shared compact score".to_owned(),
+            track_count: 1,
+            track_names: vec!["Track".to_owned()],
+            total_notes: note_count,
+            duration_sec: note_count.max(1) as f32,
+            bpm: 120.0,
+            min_key: 60,
+            max_key: 72,
+            notes: (0..note_count)
+                .map(|index| MidiNote {
+                    track: 0,
+                    channel: 0,
+                    program: 0,
+                    key: 60,
+                    velocity: 100,
+                    start_sec: index as f32,
+                    duration_sec: 0.15,
+                })
+                .collect(),
+        })
+    }
+
+    fn render_inline_midi_pair(
+        ctx: &egui::Context,
+        first: &mut InlineMidiPreview,
+        second: &mut InlineMidiPreview,
+        events: Vec<egui::Event>,
+        time: f64,
+    ) -> (egui::FullOutput, [Rect; 2]) {
+        let palette = AppPalette::default();
+        let mut rects = [Rect::NOTHING; 2];
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(480.0, 180.0))),
+                events,
+                time: Some(time),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        rects[0] = first.show(ui, &palette).rect;
+                        rects[1] = second.show(ui, &palette).rect;
+                    });
+                });
+            },
+        );
+        (output, rects)
+    }
+
+    fn click_events(position: Pos2, pressed: bool) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(position),
+            egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    }
+
+    #[test]
+    fn inline_midi_previews_share_data_with_independent_seek_and_selection() {
+        let data = inline_midi_data(300);
+        let mut first = InlineMidiPreview::new(Arc::clone(&data), Vec2::new(220.0, 124.0));
+        let mut second = InlineMidiPreview::new(Arc::clone(&data), Vec2::new(220.0, 124.0));
+        assert!(Arc::ptr_eq(&first.data, &second.data));
+        assert_ne!(first.id, second.id);
+
+        let ctx = egui::Context::default();
+        let palette = AppPalette::default();
+        let (initial, rects) =
+            render_inline_midi_pair(&ctx, &mut first, &mut second, Vec::new(), 0.0);
+        let note_color = {
+            let (r, g, b) = palette.midi_note_color(0, 0, 1, 60, 100);
+            Color32::from_rgb(r, g, b)
+        };
+        let note_center = initial
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Rect(rect)
+                    if shape.clip_rect.intersects(rects[0]) && rect.fill == note_color =>
+                {
+                    Some(rect.rect.center())
+                }
+                _ => None,
+            })
+            .expect("first preview should render its notes");
+
+        render_inline_midi_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            click_events(note_center, true),
+            0.1,
+        );
+        render_inline_midi_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            click_events(note_center, false),
+            0.2,
+        );
+        assert_eq!(first.selected_note, Some(0));
+        assert!((first.playhead_sec - data.notes[0].start_sec).abs() < f32::EPSILON);
+        assert_eq!(second.selected_note, None);
+        assert_eq!(second.playhead_sec, 0.0);
+
+        let seek_position = Pos2::new(rects[1].right() - 16.0, rects[1].top() + 30.0);
+        render_inline_midi_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            click_events(seek_position, true),
+            0.3,
+        );
+        render_inline_midi_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            click_events(seek_position, false),
+            0.4,
+        );
+        assert!(second.playhead_sec > first.playhead_sec);
+        assert_eq!(second.selected_note, None);
+        assert_eq!(first.selected_note, Some(0));
+        // The preview has only score data and local seek/selection state; it owns no parser,
+        // synthesis receiver, or executor handle, so clicking cannot schedule either job.
+    }
+
+    #[test]
+    fn inline_midi_preview_clips_geometry_and_caps_note_rendering() {
+        let mut data = (*inline_midi_data(2_000)).clone();
+        data.duration_sec = 100.0;
+        for (index, note) in data.notes.iter_mut().enumerate() {
+            note.start_sec = index as f32 * 0.001;
+        }
+        data.notes.last_mut().unwrap().start_sec = 99.0;
+        let data = Arc::new(data);
+        let mut first = InlineMidiPreview::new(Arc::clone(&data), Vec2::new(220.0, 124.0));
+        let mut second = InlineMidiPreview::new(data, Vec2::new(220.0, 124.0));
+        let palette = AppPalette::default();
+        let ctx = egui::Context::default();
+        let (output, rects) =
+            render_inline_midi_pair(&ctx, &mut first, &mut second, Vec::new(), 0.0);
+        let (r, g, b) = palette.midi_note_color(0, 0, 1, 60, 100);
+        let note_color = Color32::from_rgb(r, g, b);
+        let note_shapes: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Rect(rect) if rect.fill == note_color => {
+                    Some((shape.clip_rect, rect.rect))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(note_shapes.len() <= INLINE_MIDI_MAX_NOTES_DRAWN * 2);
+        assert!(note_shapes.len() > INLINE_MIDI_MAX_NOTES_DRAWN);
+        assert!(
+            note_shapes.iter().any(|(_, note_rect)| {
+                note_rect.center().x > rects[0].left() + rects[0].width() * 0.8
+            }),
+            "bounded sampling should include the sparse final note"
+        );
+        for (clip_rect, note_rect) in note_shapes {
+            let owner = rects
+                .iter()
+                .find(|host| host.intersects(clip_rect) && host.intersects(note_rect))
+                .expect("every note belongs to a visible host");
+            assert!(clip_rect.intersects(*owner));
+            assert!(note_rect.intersects(*owner));
+            assert!(owner.contains_rect(note_rect));
+            assert!(note_rect.is_positive());
+        }
+
+        let clipped_ctx = egui::Context::default();
+        let mut clipped = InlineMidiPreview::new(inline_midi_data(100), Vec2::new(220.0, 124.0));
+        let clipped_output = clipped_ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(300.0, 100.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add_space(200.0);
+                    clipped.show(ui, &palette);
+                });
+            },
+        );
+        assert!(clipped_output.shapes.iter().all(|shape| {
+            !matches!(&shape.shape, egui::epaint::Shape::Rect(rect) if rect.fill == note_color)
+        }));
+    }
 
     #[test]
     fn independent_midi_views_share_score_and_keep_transport_separate() {

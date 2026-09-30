@@ -12,8 +12,12 @@ use little_clip_core::JobTicket;
 use little_clip_core::palette::AppPalette;
 use little_clip_core::presentation::model3d::{Model3d, ModelFormat, Vec3};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc::Receiver};
 use std::time::Duration;
+
+const INLINE_MODEL3D_TRIANGLE_BUDGET: usize = 2_000;
+static NEXT_INLINE_MODEL3D_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Caps the number of facets submitted per frame for extreme high-poly meshes based on configured budget.
 /// Preserves full triangle density without dropping facets during interactive dragging.
@@ -55,6 +59,110 @@ pub struct Model3dViewerState {
     pub up_axis: UpAxis,
     pub status_toast: StatusToast,
     pub config: Option<little_clip_core::config::Model3dConfig>,
+}
+
+/// Compact 3D mesh preview for embedding in another view.
+///
+/// Parsed geometry is shared across hosts; orbit, zoom, pan, and wireframe
+/// state belong to each preview instance.
+#[allow(dead_code)]
+pub struct InlineModel3dPreview {
+    mesh: Arc<Model3d>,
+    host_size: Vec2,
+    id: egui::Id,
+    pitch: f32,
+    yaw: f32,
+    zoom: f32,
+    pan_offset: Vec2,
+    up_axis: UpAxis,
+    wireframe: bool,
+}
+
+#[allow(dead_code)]
+impl InlineModel3dPreview {
+    /// Creates a compact preview with a fixed finite host size.
+    pub fn new(mesh: Arc<Model3d>, host_size: Vec2) -> Self {
+        assert!(
+            host_size.x.is_finite()
+                && host_size.y.is_finite()
+                && host_size.x > 0.0
+                && host_size.y > 0.0,
+            "inline Model3D preview requires a positive finite host size"
+        );
+        let up_axis = if mesh.format == ModelFormat::Stl {
+            UpAxis::ZUp
+        } else {
+            UpAxis::YUp
+        };
+        Self {
+            mesh,
+            host_size,
+            id: egui::Id::new((
+                "inline-model3d-preview",
+                NEXT_INLINE_MODEL3D_ID.fetch_add(1, Ordering::Relaxed),
+            )),
+            pitch: 0.4,
+            yaw: 0.6,
+            zoom: 1.0,
+            pan_offset: Vec2::ZERO,
+            up_axis,
+            wireframe: false,
+        }
+    }
+
+    /// Draws a bounded mesh preview; drag to orbit/pan and scroll to zoom.
+    pub fn show(&mut self, ui: &mut egui::Ui, palette: &AppPalette) -> egui::Response {
+        let (rect, response) = ui
+            .push_id(self.id, |ui| {
+                ui.allocate_exact_size(self.host_size, egui::Sense::click_and_drag())
+            })
+            .inner;
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
+        if response.dragged_by(egui::PointerButton::Primary) {
+            let delta = response.drag_delta();
+            self.yaw += delta.x * 0.01;
+            self.pitch = (self.pitch + delta.y * 0.01).clamp(-1.5, 1.5);
+        }
+        if response.dragged_by(egui::PointerButton::Secondary)
+            || response.dragged_by(egui::PointerButton::Middle)
+        {
+            self.pan_offset += response.drag_delta();
+        }
+        let scroll = ui.input(|input| input.raw_scroll_delta.y);
+        if scroll.abs() > 0.1 && response.hovered() {
+            self.zoom = (self.zoom * if scroll > 0.0 { 1.15 } else { 0.85 }).clamp(0.1, 20.0);
+        }
+
+        let painter = ui.painter_at(rect);
+        let background = crate::hex_to_c32(&palette.colors.surface_recessed);
+        painter.rect_filled(
+            rect,
+            Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+            background,
+        );
+        painter.rect_stroke(
+            rect,
+            Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS),
+            Stroke::new(1.0_f32, crate::hex_to_c32(&palette.colors.surface_panel)),
+        );
+        let accent = crate::hex_to_c32(&palette.harmonies.base);
+        render_mesh_projection(
+            &self.mesh,
+            &painter,
+            rect.shrink(crate::ui_ext::SPACE_XS),
+            self.pan_offset,
+            self.zoom,
+            self.yaw,
+            self.pitch,
+            self.wireframe,
+            self.up_axis,
+            accent,
+            INLINE_MODEL3D_TRIANGLE_BUDGET,
+        );
+        response
+    }
 }
 
 impl Model3dViewerState {
@@ -705,6 +813,145 @@ impl Drop for Model3dViewerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn inline_test_mesh() -> Arc<Model3d> {
+        let triangle = little_clip_core::presentation::model3d::Triangle::new(
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(-0.5, -0.5, 0.0),
+            Vec3::new(0.5, -0.5, 0.0),
+            Vec3::new(0.0, 0.5, 0.0),
+        );
+        Arc::new(Model3d {
+            name: "inline-shape.obj".to_owned(),
+            format: ModelFormat::Obj,
+            triangles: vec![triangle; INLINE_MODEL3D_TRIANGLE_BUDGET * 3],
+            thumbnail_triangles: vec![triangle],
+            min_bounds: Vec3::new(-0.5, -0.5, 0.0),
+            max_bounds: Vec3::new(0.5, 0.5, 0.0),
+            center: Vec3::ZERO,
+            size: Vec3::new(1.0, 1.0, 0.0),
+            max_dimension: 1.0,
+        })
+    }
+
+    fn render_inline_pair(
+        ctx: &egui::Context,
+        first: &mut InlineModel3dPreview,
+        second: &mut InlineModel3dPreview,
+        events: Vec<egui::Event>,
+        time: f64,
+    ) -> (egui::FullOutput, [egui::Rect; 2]) {
+        let palette = AppPalette::default();
+        let mut rects = [egui::Rect::NOTHING; 2];
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    Pos2::ZERO,
+                    Vec2::new(500.0, 240.0),
+                )),
+                events,
+                time: Some(time),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        rects[0] = first.show(ui, &palette).rect;
+                        rects[1] = second.show(ui, &palette).rect;
+                    });
+                });
+            },
+        );
+        (output, rects)
+    }
+
+    #[test]
+    fn inline_model3d_previews_share_mesh_with_independent_camera_and_bounded_paint() {
+        let mesh = inline_test_mesh();
+        let mut first = InlineModel3dPreview::new(Arc::clone(&mesh), Vec2::new(180.0, 140.0));
+        let mut second = InlineModel3dPreview::new(Arc::clone(&mesh), Vec2::new(180.0, 140.0));
+        assert!(Arc::ptr_eq(&first.mesh, &second.mesh));
+        assert_ne!(first.id, second.id);
+
+        let ctx = egui::Context::default();
+        let (initial, rects) = render_inline_pair(&ctx, &mut first, &mut second, Vec::new(), 0.0);
+        let mesh_shapes: Vec<_> = initial
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Mesh(mesh) => Some((shape.clip_rect, mesh)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(mesh_shapes.len(), 2, "each visible host paints its mesh");
+        for (clip_rect, mesh_shape) in mesh_shapes {
+            assert!(rects.iter().any(|host| {
+                clip_rect.intersects(*host)
+                    && clip_rect.min.x >= host.min.x
+                    && clip_rect.max.x <= host.max.x
+                    && clip_rect.min.y >= host.min.y
+                    && clip_rect.max.y <= host.max.y
+            }));
+            assert!(
+                mesh_shape.vertices.len() <= INLINE_MODEL3D_TRIANGLE_BUDGET * 3,
+                "preview mesh paint must respect its triangle budget"
+            );
+        }
+
+        let start = rects[0].center();
+        let yaw = first.yaw;
+        let pitch = first.pitch;
+        render_inline_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            vec![
+                egui::Event::PointerMoved(start),
+                egui::Event::PointerButton {
+                    pos: start,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            0.1,
+        );
+        render_inline_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            vec![egui::Event::PointerMoved(start + Vec2::new(20.0, 10.0))],
+            0.2,
+        );
+        render_inline_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            vec![egui::Event::PointerButton {
+                pos: start + Vec2::new(20.0, 10.0),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            0.3,
+        );
+        assert_ne!((first.yaw, first.pitch), (yaw, pitch));
+        assert_eq!((second.yaw, second.pitch), (0.6, 0.4));
+
+        let zoom_before = first.zoom;
+        render_inline_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            vec![
+                egui::Event::PointerMoved(rects[0].center()),
+                egui::Event::Scroll(Vec2::new(0.0, 80.0)),
+            ],
+            0.4,
+        );
+        assert!(first.zoom > zoom_before);
+        assert_eq!(second.zoom, 1.0);
+    }
 
     fn test_mesh() -> Model3d {
         Model3d {
