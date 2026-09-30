@@ -658,7 +658,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **H2.3h4 Verify link cleaning writes the cleaned URL to the active hand.** Confirm the resulting slot payload.
       - [ ] **H2.3h5 Verify link cleaning preserves the original URL in Undo.** Confirm the Undo payload.
     - **Image Studio**
-      - [ ] **H2.3h6 Verify Pick Color Copy Hex writes the sampled hex value to the clipboard.** Confirm exact text.
+      - [x] **H2.3h6 [Primary] Verify Pick Color Copy current hex writes the sampled value.** `rendered_copy_current_hex_uses_sampled_color_and_injected_clipboard_writer` sets a deterministic hovered sample, clicks the rendered Copy current hex button, and verifies both egui `copied_text` and the injected bounded clipboard writer receive `#123456`; recent-color tracking is also checked. Existing `color_copy_keeps_immediate_egui_output_and_recent_color_with_bounded_write` covers the same production copy function directly, including toast and writer behavior, but not the toolbar click/sample selection. No system clipboard is used.
       - [x] **H2.3h7 [Primary] Verify Palette Export CSV copies the selected color values in order.** `copy_palette_csv_helper_preserves_order_and_egui_fallback` extracts a deterministic two-color palette, then checks both egui's copied text and an injected clipboard-writer callback receive exactly `#123456, #FEDCBA`. This covers the current serializer's value list; it does not produce headered CSV fields.
       - [ ] **H2.3h8 Verify Convert Save As writes the chosen format to the selected path.** Confirm encoding and source remains unchanged.
       - [ ] **H2.3h9 Verify OCR Copy All writes recognized text to the clipboard.** Confirm exact text.

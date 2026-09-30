@@ -352,6 +352,86 @@ mod tests {
     }
 
     #[test]
+    fn rendered_copy_current_hex_uses_sampled_color_and_injected_clipboard_writer() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (text_tx, text_rx) = mpsc::channel();
+        let context = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&context);
+        let palette = AppPalette::default();
+        let mut state = state();
+        let color = Color32::from_rgb(0x12, 0x34, 0x56);
+        state.pick_color_state.hovered_color = Some(color);
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 700.0));
+        let mut render = |events, copy: Box<dyn FnOnce(&str) + Send>| {
+            context.run(
+                egui::RawInput {
+                    screen_rect: Some(screen_rect),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_pick_color_results_with_copy(ui, ctx, &palette, &jobs, copy);
+                    });
+                },
+            )
+        };
+
+        let initial = render(
+            Vec::new(),
+            Box::new(|_| panic!("initial frame cannot copy")),
+        );
+        let copy_position = initial
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Copy current hex" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("rendered Copy current hex button label");
+        render(
+            vec![egui::Event::PointerMoved(copy_position)],
+            Box::new(|_| panic!("hover frame cannot copy")),
+        );
+        render(
+            vec![
+                egui::Event::PointerMoved(copy_position),
+                egui::Event::PointerButton {
+                    pos: copy_position,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            Box::new(|_| panic!("press frame cannot copy")),
+        );
+        let copied = render(
+            vec![
+                egui::Event::PointerMoved(copy_position),
+                egui::Event::PointerButton {
+                    pos: copy_position,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            Box::new(move |text| text_tx.send(text.to_owned()).unwrap()),
+        );
+
+        assert_eq!(copied.platform_output.copied_text, "#123456");
+        assert_eq!(
+            text_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            "#123456"
+        );
+        assert_eq!(state.pick_color_state.last_picked, Some(color));
+        assert_eq!(state.pick_color_state.recent_colors, vec![color]);
+    }
+
+    #[test]
     fn color_copy_queue_full_keeps_egui_clipboard_fallback_without_running_write() {
         let jobs = BackgroundJobs::new(1, 1);
         let (started_tx, started_rx) = mpsc::channel();
@@ -399,6 +479,27 @@ impl ImagePreviewState {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         palette: &AppPalette,
+    ) {
+        self.render_pick_color_results_with_copy(
+            ui,
+            ctx,
+            palette,
+            BackgroundJobs::global(),
+            |text| {
+                if let Err(error) = little_clip_core::copy_text_to_system_clipboard(text) {
+                    tracing::debug!(%error, "failed to copy picked color to system clipboard");
+                }
+            },
+        );
+    }
+
+    fn render_pick_color_results_with_copy(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: &AppPalette,
+        jobs: &BackgroundJobs,
+        copy: impl FnOnce(&str) + Send + 'static,
     ) {
         let accent = hex_to_c32(&palette.harmonies.base);
         let surface = hex_to_c32(&palette.colors.surface_panel);
@@ -464,7 +565,7 @@ impl ImagePreviewState {
             )
             .clicked()
         {
-            self.copy_color_to_clipboard(current, ctx);
+            self.copy_color_to_clipboard_on(current, ctx, jobs, copy);
         }
 
         ui.add_space(crate::ui_ext::SPACE_MD);
