@@ -5957,9 +5957,13 @@ mod workbench_layout_tests {
 
     #[test]
     fn palette_prompt_escape_cancels_only_the_overlay() {
-        let mut app = test_workbench_app(None, VecDeque::new());
+        let viewer =
+            ViewerSession::ComponentGallery(component_gallery::ComponentGalleryState::default());
+        let mut app = test_workbench_app(Some(viewer), VecDeque::new());
         app.search_query = "preserve this Palette query".to_owned();
         app.selected_action_index = 3;
+        app.selected_slots = vec![SlotId::RightHand, SlotId::LeftPrior1];
+        let original_slots = app.selected_slots.clone();
         app.in_app_prompt = Some(InAppPromptState {
             recipe_name: "Prompt Escape Fixture".to_owned(),
             message: "Enter test text".to_owned(),
@@ -5967,31 +5971,43 @@ mod workbench_layout_tests {
             first_frame: true,
         });
         let ctx = egui::Context::default();
-        let output = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(900.0, 700.0),
-                )),
-                events: vec![egui::Event::Key {
-                    key: egui::Key::Escape,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-                ..Default::default()
-            },
-            |ctx| {
-                let modal_active = app.render_modal_viewers(ctx);
-                assert!(modal_active, "the prompt owns the Escape frame");
-                if !modal_active {
-                    app.handle_global_shortcuts(ctx);
-                }
-            },
-        );
+        let input = |events| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 700.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let escape = || egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
 
-        let close_commands = output
+        let _ = ctx.run(input(Vec::new()), |ctx| {
+            assert!(app.render_modal_viewers(ctx));
+            assert!(
+                ctx.wants_keyboard_input(),
+                "prompt editor should own keyboard focus"
+            );
+        });
+        assert!(app.in_app_prompt.is_some());
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
+
+        let first_escape_output = ctx.run(input(vec![escape()]), |ctx| {
+            let modal_active = app.render_modal_viewers(ctx);
+            assert!(modal_active, "the prompt owns the Escape frame");
+            if !modal_active {
+                app.handle_global_shortcuts(ctx);
+            }
+        });
+        let close_commands = first_escape_output
             .viewport_output
             .get(&egui::ViewportId::ROOT)
             .map(|output| {
@@ -6004,9 +6020,41 @@ mod workbench_layout_tests {
             .unwrap_or_default();
         assert_eq!(close_commands, 0, "Escape cancels only the prompt overlay");
         assert!(app.in_app_prompt.is_none());
+        assert!(matches!(
+            app.viewer,
+            Some(ViewerSession::ComponentGallery(_))
+        ));
         assert_eq!(app.view, WorkbenchView::Palette);
         assert_eq!(app.search_query, "preserve this Palette query");
         assert_eq!(app.selected_action_index, 3);
+        assert_eq!(app.selected_slots, original_slots);
+
+        let second_escape_output = ctx.run(input(vec![escape()]), |ctx| {
+            let modal_active = app.render_modal_viewers(ctx);
+            assert!(
+                modal_active,
+                "the gallery viewer owns the second Escape frame"
+            );
+            if !modal_active {
+                app.handle_global_shortcuts(ctx);
+            }
+        });
+        let close_commands = second_escape_output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|output| {
+                output
+                    .commands
+                    .iter()
+                    .filter(|command| matches!(command, egui::ViewportCommand::Close))
+                    .count()
+            })
+            .unwrap_or_default();
+        assert_eq!(close_commands, 0, "Escape closes the viewer, not the popup");
+        assert!(app.in_app_prompt.is_none());
+        assert!(app.viewer.is_none());
+        assert_eq!(app.view, WorkbenchView::Palette);
+        assert_eq!(app.selected_slots, original_slots);
     }
 
     #[test]
