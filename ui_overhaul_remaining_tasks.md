@@ -732,15 +732,25 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
 
   - **H2.4a [Primary] Separate decoded source data from preview view state.**
     - [x] **H2.4a1 Separate decoded image content from image editor state.** `DecodedImageData` holds cloneable encoded bytes, decoded pixels, dimensions, MIME/SVG status, and extracted metadata; the asynchronous image loader returns that immutable data separately from path/title context, and creates `ImagePreviewState` only when the result is published. Two editor states initialized from one source share the original bytes/pixels, retain independent view state, and detach pixels on edit through Arc copy-on-write. `decoded_image_data_is_shared_across_independent_editor_states` verifies these ownership boundaries.
-    - [ ] **H2.4a2 Audit and separate shared source data for text, audio, PDF, and other previewable payloads where multiple views can safely share it.** Record types that already share immutable data and keep view/job/texture ownership separate.
-  - [ ] **H2.4b [Primary] Separate editor state from decoded source data.**
-  - [ ] **H2.4c [Primary] Render multiple independent inline previews from shared data where safe.**
-  - [ ] **H2.4d [Primary] Render full studios from shared data where safe.**
-  - [ ] **H2.4e [Primary] Add revision-aware bounded cache/job/texture lifetimes for future file thumbnails.**
-  - [ ] **H2.4f [Primary] Add preview cache/job/texture invalidation and eviction.**
+    - [x] **H2.4a2 Audit source ownership and choose format-specific reuse work.** Text already stores `Arc<String>` but mixes content with search, scroll, and minimap state; MIDI already stores `Arc<MidiData>`; Spreadsheet owns cloneable parsed data; Model3D's core cache returns `Arc<Model3d>` but its viewer currently owns a separate model; Audio PCM is Arc-backed while completed analysis/render vectors and view jobs are mixed; PDF raster paths are bounded but tied to the editor's `Arc<TempDir>`. Keep these format-specific ownership rules instead of adding one generic preview trait. Detailed follow-ups are grouped under H2.4b–H2.4e.
+  - **H2.4b [Luna] Separate reusable text and spreadsheet data from per-view state.**
+    - [x] **H2.4b1 Share normalized text and code-fragment layout across independent text previews.** `TextPreviewData` owns shared content, language/Markdown detection, and compact code-fragment layout; independent `TextPreviewState`s clone those `Arc`s while search, selection, scroll, minimap, and jobs stay separate. `TextPreviewLoadJob::from_shared_text` now retains the existing source Arc instead of copying the full string. The test `independent_text_views_share_immutable_data_and_keep_view_state_separate` checks source and layout pointer identity plus separate interaction state. The current route still constructs one source object per load; H2.4g must wire multiple inline hosts to the same object.
+    - [ ] **H2.4b2 Share parsed SpreadsheetData across independent spreadsheet previews.** Keep active sheet, filter/search, selection, measurements, scroll, and egui state per viewer.
+  - **H2.4c [Luna] Reuse immutable MIDI and Model3D source data in viewers and previews.**
+    - [ ] **H2.4c1 Verify embedded and full MIDI views share `Arc<MidiData>` without sharing transport/selection state.**
+    - [ ] **H2.4c2 Let Model3dViewerState share `Arc<Model3d>` from file and byte-backed loaders.** Keep orbit, pan, zoom, display options, and loading ownership per viewer; content identity must distinguish byte sources from stale file-cache entries.
+  - **H2.4d [Primary] Separate completed audio source analysis from playback, editing, and job state.**
+    - [ ] **H2.4d1 Define immutable completed source-analysis data with Arc-backed large arrays.** Keep progressive jobs and readiness transitions session-owned; edited waveform results must not alias source analysis.
+    - [ ] **H2.4d2 Prove an inline waveform and Audio Studio can share source analysis while keeping transport/edit state independent.**
+  - **H2.4e [Primary] Separate PDF page rasters from editor texture, selection, and job state.**
+    - [ ] **H2.4e1 Define a PDF preview resource owner that keeps raster files alive across viewers and textures.** Preserve bounded decode/texture residency and page re-selection after eviction.
+    - [ ] **H2.4e2 Prove a PDF inline preview and editor share page raster data without invalid temp paths after either view closes.**
+  - **H2.4f [Primary] Add revision-aware bounded preview data, job, and texture lifetimes.**
+    - [ ] **H2.4f1 Bound decoded preview cache bytes and evict by source revision/visibility.**
+    - [ ] **H2.4f2 Bound preview jobs and suppress publication after the last owner closes.**
   - **H2.4g Embedding reuse checks**
-    - [ ] **H2.4g1 [Primary] Demonstrate independent inline previews in the embedding harness.**
-    - [ ] **H2.4g2 [Primary] Demonstrate full studios rendered from shared data in the embedding harness.**
+    - [ ] **H2.4g1 [Primary] Demonstrate independent image, text, spreadsheet, MIDI, and Model3D inline previews in the embedding harness.**
+    - [ ] **H2.4g2 [Primary] Demonstrate full studios rendering from already-shared source data in the embedding harness.**
   - **H2.4h Embedding lifecycle checks**
     - [ ] **H2.4h1 [Primary] Demonstrate that embedded previews cause no repeated side effects.**
     - [ ] **H2.4h2 [Primary] Demonstrate bounded embedded preview loading.** File-manager operations are out of scope.

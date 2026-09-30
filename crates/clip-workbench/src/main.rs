@@ -91,7 +91,7 @@ use pdf_view::PdfEditorState;
 use rolling_audio_strip::{RollingAudioAction, RollingAudioStripState};
 pub use shell::*;
 use spreadsheet_view::SpreadsheetViewerState;
-use text_preview::TextPreviewState;
+use text_preview::{TextPreviewData, TextPreviewState};
 pub use ui_ext::*;
 
 /// Primary navigation view tabs in the desktop workbench.
@@ -510,11 +510,8 @@ impl TextPreviewLoadJob {
     fn from_shared_text(content: Arc<String>, title: String, config: AppConfig) -> Self {
         let (ticket, receiver) =
             BackgroundJobs::global().submit(Duration::from_secs(30), move || {
-                Ok(TextPreviewState::from_text(
-                    content.as_str().to_owned(),
-                    Some(title),
-                    &config,
-                ))
+                let data = TextPreviewData::from_text(content);
+                Ok(TextPreviewState::from_data(data, Some(title), &config))
             });
         Self { ticket, receiver }
     }

@@ -110,6 +110,62 @@ struct CodeFragment {
     end_byte: usize,
 }
 
+/// Immutable text and layout facts that can be reused by independent viewers.
+pub struct TextPreviewData {
+    content: Arc<String>,
+    language: &'static str,
+    is_markdown: bool,
+    code_fragments: Arc<Vec<CodeFragment>>,
+    line_first_fragment: Arc<Vec<usize>>,
+}
+
+impl TextPreviewData {
+    /// Prepares shared source data from in-memory text using the preview's normal format detection.
+    pub fn from_text(content: Arc<String>) -> Arc<Self> {
+        let content = if content.starts_with('\u{feff}') {
+            Arc::new(content[char::len_utf8('\u{feff}')..].to_owned())
+        } else {
+            content
+        };
+        let line_starts = line_start_offsets(&content);
+        let (code_fragments, line_first_fragment) = code_fragments(&content, &line_starts);
+        let is_markdown = detect_markdown_text(&content);
+        let language = if is_markdown {
+            "md"
+        } else {
+            detect_language(&content, None)
+        };
+
+        Arc::new(Self {
+            content,
+            language,
+            is_markdown,
+            code_fragments: Arc::new(code_fragments),
+            line_first_fragment: Arc::new(line_first_fragment),
+        })
+    }
+
+    fn from_file(content: String, extension: Option<&str>) -> Arc<Self> {
+        let content = Arc::new(content);
+        let line_starts = line_start_offsets(&content);
+        let (code_fragments, line_first_fragment) = code_fragments(&content, &line_starts);
+        let language = detect_language(&content, extension);
+        let is_markdown = extension
+            .map(|extension| {
+                extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
+            })
+            .unwrap_or(false);
+
+        Arc::new(Self {
+            content,
+            language,
+            is_markdown,
+            code_fragments: Arc::new(code_fragments),
+            line_first_fragment: Arc::new(line_first_fragment),
+        })
+    }
+}
+
 fn code_fragments(text: &str, line_starts: &[usize]) -> (Vec<CodeFragment>, Vec<usize>) {
     let mut fragments = Vec::new();
     let mut line_first_fragment = Vec::with_capacity(line_starts.len());
@@ -667,8 +723,8 @@ pub struct TextPreviewState {
     pub scroll_to_line: Option<usize>,
     /// Exact pixel offset requested by minimap navigation.
     scroll_to_offset: Option<f32>,
-    code_fragments: Vec<CodeFragment>,
-    line_first_fragment: Vec<usize>,
+    code_fragments: Arc<Vec<CodeFragment>>,
+    line_first_fragment: Arc<Vec<usize>>,
     code_rows: CodeRowHeights,
     code_scroll_offset: f32,
     code_selection: Option<(usize, usize)>,
@@ -708,41 +764,48 @@ pub(super) fn update_search_matches_and_wait(state: &mut TextPreviewState) {
 impl TextPreviewState {
     /// Creates a new text preview from in-memory text.
     pub fn from_text(text: String, title: Option<String>, config: &AppConfig) -> Self {
-        let text = if text.starts_with('\u{feff}') {
-            text[char::len_utf8('\u{feff}')..].to_owned()
-        } else {
-            text
-        };
-        let line_starts = line_start_offsets(&text);
-        let (code_fragments, line_first_fragment) = code_fragments(&text, &line_starts);
-        let is_md = detect_markdown_text(&text);
-        let lang = if is_md {
-            "md"
-        } else {
-            detect_language(&text, None)
-        };
+        Self::from_data(TextPreviewData::from_text(Arc::new(text)), title, config)
+    }
+
+    /// Creates an independent view state from reusable immutable text data.
+    pub fn from_data(
+        data: Arc<TextPreviewData>,
+        title: Option<String>,
+        config: &AppConfig,
+    ) -> Self {
         let title = title.unwrap_or_else(|| {
-            if is_md {
+            if data.is_markdown {
                 "Markdown Preview".to_string()
-            } else if lang != "txt" {
-                format!("{} Code Preview", lang.to_uppercase())
+            } else if data.language != "txt" {
+                format!("{} Code Preview", data.language.to_uppercase())
             } else {
                 "Text Preview".to_string()
             }
         });
-        let show_line_numbers = lang != "txt" && !is_md;
-        let view_mode = if is_md {
+        let show_line_numbers = data.language != "txt" && !data.is_markdown;
+        let view_mode = if data.is_markdown {
             TextViewMode::RenderedMarkdown
         } else {
             TextViewMode::Raw
         };
 
+        Self::from_data_with_path(data, title, None, config, show_line_numbers, view_mode)
+    }
+
+    fn from_data_with_path(
+        data: Arc<TextPreviewData>,
+        title: String,
+        path: Option<PathBuf>,
+        config: &AppConfig,
+        show_line_numbers: bool,
+        view_mode: TextViewMode,
+    ) -> Self {
         Self {
             title,
-            content: Arc::new(text),
-            path: None,
-            language: lang,
-            is_markdown: is_md,
+            content: Arc::clone(&data.content),
+            path,
+            language: data.language,
+            is_markdown: data.is_markdown,
             view_mode,
             wrap_lines: true,
             show_line_numbers,
@@ -765,8 +828,8 @@ impl TextPreviewState {
             status_toast: crate::ui_ext::StatusToast::new(),
             scroll_to_line: None,
             scroll_to_offset: None,
-            code_fragments,
-            line_first_fragment,
+            code_fragments: Arc::clone(&data.code_fragments),
+            line_first_fragment: Arc::clone(&data.line_first_fragment),
             code_rows: CodeRowHeights::default(),
             code_scroll_offset: 0.0,
             code_selection: None,
@@ -784,66 +847,26 @@ impl TextPreviewState {
     pub fn from_file<P: AsRef<Path>>(path: P, config: &AppConfig) -> Option<Self> {
         let path_ref = path.as_ref();
         let content = little_clip_ops::read_text_file_preview(path_ref, 2 * 1024 * 1024)?;
-        let line_starts = line_start_offsets(&content);
-        let (code_fragments, line_first_fragment) = code_fragments(&content, &line_starts);
         let ext = path_ref.extension().and_then(|e| e.to_str());
-        let lang = detect_language(&content, ext);
-        // Only actual .md / .markdown files default to markdown preview
-        let is_md = ext
-            .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
-            .unwrap_or(false);
+        let data = TextPreviewData::from_file(content, ext);
         let title = path_ref
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "Text file".to_string());
-        let show_line_numbers = lang != "txt" && !is_md;
-        let view_mode = if is_md {
+        let show_line_numbers = data.language != "txt" && !data.is_markdown;
+        let view_mode = if data.is_markdown {
             TextViewMode::RenderedMarkdown
         } else {
             TextViewMode::Raw
         };
-
-        Some(Self {
+        Some(Self::from_data_with_path(
+            data,
             title,
-            content: Arc::new(content),
-            path: Some(path_ref.to_path_buf()),
-            language: lang,
-            is_markdown: is_md,
-            view_mode,
-            wrap_lines: true,
+            Some(path_ref.to_path_buf()),
+            config,
             show_line_numbers,
-            editor_cmd: config.text.resolve_editor(),
-            show_find: false,
-            find_query: String::new(),
-            is_regex: false,
-            case_sensitive: false,
-            matches: None,
-            match_count: 0,
-            active_match_idx: 0,
-            regex_error: None,
-            search_error: None,
-            search_revision: 0,
-            search_pending: false,
-            search_debounce_until: None,
-            search_retry_at: None,
-            search_job: None,
-            focus_find_input: false,
-            status_toast: crate::ui_ext::StatusToast::new(),
-            scroll_to_line: None,
-            scroll_to_offset: None,
-            code_fragments,
-            line_first_fragment,
-            code_rows: CodeRowHeights::default(),
-            code_scroll_offset: 0.0,
-            code_selection: None,
-            code_selection_dragging: false,
-            minimap_fraction: 0.0,
-            minimap_view_fraction: 1.0,
-            minimap_content_height: 1.0,
-            minimap_viewport_height: 1.0,
-            minimap_lines: MinimapCache::default(),
-            minimap_overflows: false,
-        })
+            view_mode,
+        ))
     }
 
     /// Recalculates search matches based on query, regex, and case sensitivity.
@@ -2570,6 +2593,43 @@ mod tests {
             state.status_toast.message(now),
             Some("Launched test editor")
         );
+    }
+
+    #[test]
+    fn independent_text_views_share_immutable_data_and_keep_view_state_separate() {
+        let original_content = Arc::new("fn main() {\n    println!(\"shared\");\n}\n".to_owned());
+        let source = TextPreviewData::from_text(Arc::clone(&original_content));
+        assert!(Arc::ptr_eq(&source.content, &original_content));
+        let mut first = TextPreviewState::from_data(
+            Arc::clone(&source),
+            Some("First view".to_owned()),
+            &AppConfig::default(),
+        );
+        let second = TextPreviewState::from_data(
+            Arc::clone(&source),
+            Some("Second view".to_owned()),
+            &AppConfig::default(),
+        );
+
+        assert!(Arc::ptr_eq(&first.content, &second.content));
+        assert!(Arc::ptr_eq(&first.code_fragments, &second.code_fragments));
+        assert!(Arc::ptr_eq(
+            &first.line_first_fragment,
+            &second.line_first_fragment
+        ));
+        assert_eq!(first.language, "rs");
+        assert_eq!(second.language, "rs");
+        assert_ne!(first.title, second.title);
+
+        first.show_find = true;
+        first.find_query = "shared".to_owned();
+        first.scroll_to_line = Some(2);
+        first.code_selection = Some((0, 2));
+
+        assert!(!second.show_find);
+        assert!(second.find_query.is_empty());
+        assert_eq!(second.scroll_to_line, None);
+        assert_eq!(second.code_selection, None);
     }
 
     #[test]
