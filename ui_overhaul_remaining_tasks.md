@@ -626,7 +626,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - **Image Studio**
       - [x] **H2.3g14 [Primary] Verify Image Studio V selects View from Crop mode.** `unmodified_v_shortcut_selects_view_tool` sends an unmodified V through rendered `ImagePreviewState::render_ui`, confirms `active_mode` becomes View, and verifies the studio does not close. It covers this unfocused, no-modal path only; no external process or daemon is involved.
       - [x] **H2.3g15 [Primary] Verify Crop Enter applies the selected region.** `crop_enter_applies_selected_region_through_rendered_shortcut` sets a 0.1–0.6 by 0.2–0.7 normalized region on a generated 100×100 image, sends Enter through `ImagePreviewState::render_ui`, and confirms a 50×50 result, one undo entry, and no viewer close. No file, process, or daemon is involved.
-      - [ ] **H2.3g16 Verify Image Studio Redact Escape clears the active redaction stage.** Confirm no unrequested burn occurs.
+      - [x] **H2.3g16 [Primary] Verify Redact Escape deselects the active box without burning or closing.** `redact_escape_deselects_region_without_burning_or_closing` sends Escape through rendered `ImagePreviewState::render_ui` with one selected redaction, confirms the box remains but is deselected, pixels are unchanged, and the studio stays open. Uses an in-memory fixture only.
     - **Audio surfaces**
       - [ ] **H2.3g17 Verify Audio Inspect Space toggles playback.** Confirm the transport state changes.
       - [ ] **H2.3g18 Verify Audio HF Space yields to focused text input.** Confirm playback does not start while a text field owns focus.

@@ -2652,6 +2652,51 @@ mod tests {
     }
 
     #[test]
+    fn redact_escape_deselects_region_without_burning_or_closing() {
+        let mut state = image_state_from_png((100, 100), "Redact Escape fixture");
+        state.current_rgba = Arc::new(RgbaImage::from_pixel(
+            100,
+            100,
+            image::Rgba([80, 120, 160, 255]),
+        ));
+        state.active_mode = ImageToolMode::Redact;
+        state.redaction_state.boxes.push(RedactionBox {
+            normalized_rect: Rect::from_min_max(Pos2::new(0.1, 0.1), Pos2::new(0.8, 0.8)),
+        });
+        state.redaction_state.selected_idx = Some(0);
+        let pixels_before = state.current_rgba.clone();
+        let palette = AppPalette::default();
+        let mut close = false;
+
+        let _ = egui::Context::default().run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(960.0, 720.0))),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                });
+            },
+        );
+
+        assert_eq!(state.redaction_state.boxes.len(), 1);
+        assert!(state.redaction_state.selected_idx.is_none());
+        assert_eq!(state.current_rgba.as_ref(), pixels_before.as_ref());
+        assert!(
+            !close,
+            "Escape deselects the redaction without closing the studio"
+        );
+    }
+
+    #[test]
     fn save_dialogs_use_the_in_workbench_modal_and_keep_default_extensions() {
         let mut state = image_state_from_png((100, 100), "Test image");
         state.path = Some(PathBuf::from("/tmp/source.png"));
