@@ -506,6 +506,27 @@ impl MidiViewerState {
     }
 
     pub fn copy_selection(&mut self, now: f64) -> bool {
+        self.copy_selection_on(
+            now,
+            BackgroundJobs::global(),
+            midi_export_dir(),
+            handoff_midi_export,
+        )
+    }
+
+    fn copy_selection_on(
+        &mut self,
+        now: f64,
+        jobs: &BackgroundJobs,
+        export_dir: PathBuf,
+        handoff: impl FnOnce(
+            MidiExportArtifact,
+            &AtomicBool,
+            Instant,
+        ) -> Result<MidiExportArtifact, String>
+        + Send
+        + 'static,
+    ) -> bool {
         let (s, e, is_slice) = match self.selected_region {
             Some((a, b)) if (b - a).abs() > 0.05 => (a.min(b), a.max(b), true),
             _ => (0.0, self.data.duration_sec.max(0.1), false),
@@ -519,21 +540,20 @@ impl MidiViewerState {
         let solo_track = self.solo_track;
         let cancelled = Arc::new(AtomicBool::new(false));
         let job_cancelled = Arc::clone(&cancelled);
-        let (ticket, receiver) =
-            BackgroundJobs::global().submit(Duration::from_secs(60), move || {
-                let started = Instant::now();
-                let artifact = write_midi_export(
-                    &data,
-                    s,
-                    e,
-                    is_slice,
-                    solo_track,
-                    timestamp,
-                    midi_export_dir(),
-                    Arc::clone(&job_cancelled),
-                )?;
-                handoff_midi_export(artifact, &job_cancelled, started)
-            });
+        let (ticket, receiver) = jobs.submit(Duration::from_secs(60), move || {
+            let started = Instant::now();
+            let artifact = write_midi_export(
+                &data,
+                s,
+                e,
+                is_slice,
+                solo_track,
+                timestamp,
+                export_dir,
+                Arc::clone(&job_cancelled),
+            )?;
+            handoff(artifact, &job_cancelled, started)
+        });
         self.export_job = Some(MidiExportJob {
             ticket,
             cancelled,
@@ -718,6 +738,18 @@ impl MidiViewerState {
         palette: &little_clip_core::palette::AppPalette,
         close: &mut bool,
     ) {
+        self.render_ui_with_copy_dispatch(ui, palette, close, |state, now| {
+            state.copy_selection(now);
+        });
+    }
+
+    fn render_ui_with_copy_dispatch(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::palette::AppPalette,
+        close: &mut bool,
+        mut copy_dispatch: impl FnMut(&mut Self, f64),
+    ) {
         let now = ui.input(|input| input.time);
         self.poll_export(now, ui.ctx());
         self.update_playback();
@@ -758,7 +790,7 @@ impl MidiViewerState {
                 || ((i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::C))
         });
         if copy_requested {
-            self.copy_selection(now);
+            copy_dispatch(self, now);
         }
 
         // Handle + / - for keyboard zoom
@@ -979,7 +1011,7 @@ impl MidiViewerState {
                     self.stop();
                 }
                 if copy_clicked {
-                    self.copy_selection(now);
+                    copy_dispatch(self, now);
                 }
                 if clear_sel_clicked {
                     self.selected_region = None;
@@ -1965,6 +1997,87 @@ mod tests {
         assert!((parsed.notes[0].start_sec - 0.5).abs() < 0.01);
         drop(artifact);
         std::fs::remove_dir(test_dir).unwrap();
+    }
+
+    #[test]
+    fn midi_full_score_copy_uses_injected_job_directory_and_handoff() {
+        let data = MidiData {
+            title: "Injected full score".to_string(),
+            track_count: 1,
+            track_names: vec!["Piano".to_string()],
+            total_notes: 1,
+            duration_sec: 2.0,
+            bpm: 120.0,
+            min_key: 60,
+            max_key: 60,
+            notes: vec![MidiNote {
+                track: 0,
+                channel: 0,
+                program: 0,
+                key: 60,
+                velocity: 96,
+                start_sec: 0.25,
+                duration_sec: 0.5,
+            }],
+        };
+        let output_dir = tempfile::tempdir().unwrap();
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = MidiViewerState::from_data(data, None, "Injected full score".to_string());
+        let (request_tx, request_rx) = std::sync::mpsc::channel();
+
+        assert!(state.copy_selection_on(
+            1.0,
+            &jobs,
+            output_dir.path().to_owned(),
+            move |mut artifact, _cancelled, _started| {
+                let request = IpcRequest::PushFile {
+                    path: artifact.path.clone(),
+                    hand: HandSide::Left,
+                };
+                let bytes = std::fs::read(&artifact.path).map_err(|error| error.to_string())?;
+                request_tx
+                    .send((request, bytes))
+                    .map_err(|error| error.to_string())?;
+                artifact.retain();
+                Ok(artifact)
+            },
+        ));
+
+        let (request, bytes) = request_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("injected handoff callback should receive export");
+        let IpcRequest::PushFile { path, hand } = request else {
+            panic!("MIDI full-score handoff should request a file");
+        };
+        assert_eq!(hand, HandSide::Left);
+        assert_eq!(path.parent(), Some(output_dir.path()));
+        assert!(
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("midi_export_")
+        );
+        let parsed = MidiData::parse_bytes(&bytes, "injected round trip".to_string())
+            .expect("full-score export should be parseable MIDI");
+        assert_eq!(parsed.total_notes, 1);
+        assert_eq!(parsed.notes[0].key, 60);
+        assert!((parsed.notes[0].start_sec - 0.25).abs() < 0.01);
+        assert!((parsed.notes[0].duration_sec - 0.5).abs() < 0.01);
+
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while state.export_job.is_some() && Instant::now() < deadline {
+            state.poll_export(1.1, &ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            state.export_job.is_none(),
+            "injected export job did not resolve"
+        );
+        assert_eq!(
+            state.status_toast.message(1.1),
+            Some("Copied full MIDI (1 notes) to Clipboard & Left Hand!")
+        );
     }
 
     #[test]
