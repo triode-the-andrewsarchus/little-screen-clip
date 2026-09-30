@@ -723,7 +723,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - **Node Machine and dialogs**
       - [x] **H2.3i27 [Primary] Verify Node Machine Escape cancels a cable drag without changing the graph.** `node_machine_substates_each_consume_escape_before_palette_return` routes Escape through the production precedence helper, verifies catalog and Save As each dismiss first, then confirms the third Escape cancels the active cable drag while the Node Machine route and full graph remain unchanged. This task is specifically about the cable-drag substate; moving a node is an immediate graph edit rather than a cancelable Escape substate.
       - [x] **H2.3i28 [Primary] Verify Node Machine Escape dismisses overlays before returning to Palette.** The same `node_machine_substates_each_consume_escape_before_palette_return` confirms catalog and Save As each consume Escape, preserve the graph, and leave Node Machine active; a later Escape returns to Palette.
-      - [ ] **H2.3i29 Verify cancelling Save As returns to the unchanged Node Machine graph.** Confirm no file or graph mutation.
+      - [x] **H2.3i29 [Primary] Verify Escape cancels the Node Machine Save As overlay without changing the graph.** `node_machine_substates_each_consume_escape_before_palette_return` exercises Save As within the production Escape precedence router, confirms the overlay closes while Node Machine remains active and the full graph stays unchanged, and confirms no save/write path is invoked by this cancellation route.
       - [ ] **H2.3i30 Verify a focused prompt consumes Escape before viewer close.** Confirm the prompt cancels and owning view remains open.
 
   - [ ] **H2.4a [Primary] Separate decoded source data from preview view state.**
