@@ -734,7 +734,17 @@ impl ImagePreviewState {
         app: &str,
         launch: impl FnOnce(&str, &str, &std::path::Path) -> Result<String, String>,
     ) {
-        match self.ensure_disk_path() {
+        let file_path = self.ensure_disk_path();
+        self.launch_external_app_with_path(app, file_path, launch);
+    }
+
+    fn launch_external_app_with_path(
+        &mut self,
+        app: &str,
+        file_path: Result<PathBuf, String>,
+        launch: impl FnOnce(&str, &str, &std::path::Path) -> Result<String, String>,
+    ) {
+        match file_path {
             Ok(file_path) => {
                 match launch(app, app, &file_path) {
                     Ok(msg) => {
@@ -2279,6 +2289,47 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn assert_external_handoff_keeps_edited_session(
+        app: &str,
+        command: impl FnOnce(&AppConfig) -> String,
+    ) {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_path = temp_dir.path().join("edited-source.png");
+        RgbaImage::from_pixel(3, 2, image::Rgba([17, 83, 149, 255]))
+            .save(&source_path)
+            .unwrap();
+        let config = AppConfig::default();
+        let mut state = ImagePreviewState::from_path(source_path.clone(), &config).unwrap();
+        Arc::make_mut(&mut state.current_rgba).put_pixel(0, 0, image::Rgba([200, 30, 40, 255]));
+        state.undo_stack.push(Arc::clone(&state.original_rgba));
+        let edited_pixels = Arc::clone(&state.current_rgba);
+        let undo_len = state.undo_stack.len();
+        let command = command(&config);
+
+        state.launch_external_app_with_path(
+            &command,
+            Ok(source_path.clone()),
+            |app_name, target, path| {
+                assert_eq!(app_name, app);
+                assert_eq!(target, command);
+                assert_eq!(path, source_path);
+                Ok("Launched test editor".to_owned())
+            },
+        );
+
+        assert!(Arc::ptr_eq(&state.current_rgba, &edited_pixels));
+        assert_eq!(
+            state.current_rgba.get_pixel(0, 0),
+            &image::Rgba([200, 30, 40, 255])
+        );
+        assert_eq!(state.undo_stack.len(), undo_len);
+        assert!(matches!(
+            state.status_toast.as_ref(),
+            Some((message, _)) if message == "Launched test editor"
+        ));
+    }
+
+    #[cfg(unix)]
     fn assert_unavailable_configured_app_sets_failure_toast(
         executable_name: &str,
         configure: impl FnOnce(&mut AppConfig, &str),
@@ -2338,6 +2389,30 @@ mod tests {
     fn viewer_handoff_receives_current_source_image_file() {
         assert_configured_app_receives_source_image("fake-nomacs", |config, executable| {
             config.image.viewer = executable.to_owned();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn returning_from_krita_keeps_the_open_edited_image_session() {
+        assert_external_handoff_keeps_edited_session("krita", |config| {
+            config.image.external_editor.clone()
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn returning_from_inkscape_keeps_the_open_edited_image_session() {
+        assert_external_handoff_keeps_edited_session("inkscape", |config| {
+            config.image.svg_editor.clone()
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn returning_from_image_viewer_keeps_the_open_edited_image_session() {
+        assert_external_handoff_keeps_edited_session("nomacs", |config| {
+            config.image.viewer.clone()
         });
     }
 
