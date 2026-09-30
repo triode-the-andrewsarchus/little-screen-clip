@@ -263,7 +263,6 @@ pub struct BinaryDiffViewState {
     pub hovered_cell: Option<(usize, usize)>, // (row_idx, col_idx)
     pub status_toast: crate::ui_ext::StatusToast,
     pub selected_diff_block: Option<usize>,
-    pub current_scroll_offset_x: f32,
     pub current_scroll_offset_y: f32,
     pub last_scrolled_diff_id: Option<usize>,
     pub visible_row_count: usize,
@@ -372,7 +371,6 @@ impl BinaryDiffViewState {
             hovered_cell: None,
             status_toast: crate::ui_ext::StatusToast::with_duration(3.0),
             selected_diff_block: None,
-            current_scroll_offset_x: 0.0,
             current_scroll_offset_y: 0.0,
             last_scrolled_diff_id: None,
             visible_row_count: 30,
@@ -517,19 +515,36 @@ impl BinaryDiffViewState {
         self.scroll_target_row = self.nav.scroll_target_row;
     }
 
-    /// Keeps byte hit targets and row geometry in step with the readable monospace font.
-    /// Wider rows pan horizontally instead of shrinking their contents.
+    /// Fits the byte columns into the available width, shrinking their font when needed.
     /// Returns: (cell_w, cell_h, font_size, ascii_w, offset_w, row_height)
-    pub fn layout_metrics(&self) -> (f32, f32, f32, f32, f32, f32) {
-        let font_size = crate::ui_ext::MONO_FONT_SIZE;
+    pub fn layout_metrics(&self, available_width: f32) -> (f32, f32, f32, f32, f32, f32) {
+        let base_font_size = crate::ui_ext::MONO_FONT_SIZE;
+        let base_glyph_width = base_font_size * 0.6;
+        let bpr = self.bytes_per_row as f32;
+        let groups = if self.bytes_per_row == 8 {
+            1.0
+        } else {
+            (self.bytes_per_row / 8).saturating_sub(1) as f32
+        };
+        let base_cell_w = base_glyph_width * 2.0 + 6.0;
+        let base_ascii_w = base_glyph_width + 3.0;
+        let base_offset_w = base_glyph_width * 9.0 + 9.0;
+        // Group breaks add their own widget spacing on both sides of the explicit gap.
+        let hex_w = bpr * base_cell_w + (bpr - 1.0) * 2.0 + groups * 7.0;
+        let ascii_w = bpr * base_ascii_w + (bpr - 1.0) * 2.0;
+        let gaps = 42.0 + crate::ui_ext::SPACE_XS + crate::ui_ext::SPACE_SM * 2.0 + 18.0;
+        let natural_width = base_offset_w * 2.0 + hex_w * 2.0 + ascii_w * 2.0 + gaps;
+        // Reserve a small safety margin for egui's nested layout spacing and text galley rounding.
+        let scale = (available_width.max(1.0) / (natural_width * 1.12)).min(1.0);
+        let font_size = base_font_size * scale;
         let glyph_width = font_size * 0.6;
         (
-            glyph_width * 2.0 + 6.0,
-            font_size + 11.0,
+            glyph_width * 2.0 + 6.0 * scale,
+            font_size + 11.0 * scale,
             font_size,
-            glyph_width + 3.0,
-            glyph_width * 9.0 + 9.0,
-            font_size + 13.0,
+            glyph_width + 3.0 * scale,
+            glyph_width * 9.0 + 9.0 * scale,
+            font_size + 13.0 * scale,
         )
     }
 
@@ -1031,33 +1046,35 @@ impl BinaryDiffViewState {
         };
 
         let (cell_w, _cell_h, font_size, ascii_char_w, offset_w, row_height) =
-            self.layout_metrics();
+            self.layout_metrics(ui.available_width());
         let total_rows = res.rows.len();
         let bpr = res.bytes_per_row;
 
         let center_w = 42.0;
-        let hex_group_space = 5.0;
+        let scale = font_size / crate::ui_ext::MONO_FONT_SIZE;
+        let hex_group_space = 5.0 * scale;
         let num_gaps = if bpr == 8 {
             1
         } else {
             (bpr / 8).saturating_sub(1)
         };
         let hex_w = bpr as f32 * cell_w
-            + (bpr.saturating_sub(1) as f32 * 2.0)
-            + (num_gaps as f32 * hex_group_space);
-        let ascii_w = bpr as f32 * ascii_char_w;
+            + (bpr.saturating_sub(1) as f32 * 2.0 * scale)
+            + (num_gaps as f32 * (hex_group_space + 2.0 * scale));
+        let ascii_w = bpr as f32 * ascii_char_w + (bpr.saturating_sub(1) as f32 * 2.0 * scale);
 
         render_hex_table_header(
             ui,
             palette,
             res,
-            self.current_scroll_offset_x,
             HexHeaderColumns {
                 offset: offset_w,
                 hex: hex_w,
                 ascii: ascii_w,
                 diff: center_w,
             },
+            font_size,
+            scale,
         );
 
         ui.separator();
@@ -1066,12 +1083,11 @@ impl BinaryDiffViewState {
         let mut hovered = self.hovered_cell;
 
         let rem_h = ui.available_height();
-        let mut scroll_area = egui::ScrollArea::both()
+        let mut scroll_area = egui::ScrollArea::vertical()
             .id_source("binary_diff_hex_scroll")
             .auto_shrink([false, false])
             .max_height(rem_h)
-            // The minimap is the vertical navigator. Keep ScrollArea for wheel
-            // input and horizontal panning, but never expose its tiny native bar.
+            // Width is fitted by `layout_metrics`; the minimap remains the vertical navigator.
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
 
         if let Some(target) = scroll_target {
@@ -1140,8 +1156,8 @@ impl BinaryDiffViewState {
                 }
 
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
-                    ui.add_space(crate::ui_ext::SPACE_XS);
+                    ui.spacing_mut().item_spacing = Vec2::new(2.0 * scale, 0.0);
+                    ui.add_space(crate::ui_ext::SPACE_XS * scale);
 
                     // 1. Left Offset
                     let l_off_str = if let Some(off) = row.left_offset {
@@ -1204,7 +1220,7 @@ impl BinaryDiffViewState {
                         }
                     }
 
-                    ui.add_space(crate::ui_ext::SPACE_SM);
+                    ui.add_space(crate::ui_ext::SPACE_SM * scale);
 
                     // 3. Left ASCII
                     for (col_idx, cell) in row.left_cells.iter().enumerate() {
@@ -1300,7 +1316,7 @@ impl BinaryDiffViewState {
                         }
                     }
 
-                    ui.add_space(crate::ui_ext::SPACE_SM);
+                    ui.add_space(crate::ui_ext::SPACE_SM * scale);
 
                     // 6. Right ASCII
                     for (col_idx, cell) in row.right_cells.iter().enumerate() {
@@ -1354,7 +1370,6 @@ impl BinaryDiffViewState {
             }
         });
 
-        self.current_scroll_offset_x = output.state.offset.x;
         self.current_scroll_offset_y = output.state.offset.y;
         self.visible_row_count = (output.inner_rect.height() / row_height) as usize;
         self.hovered_cell = hovered;
@@ -1412,7 +1427,8 @@ impl BinaryDiffViewState {
         }
 
         // Viewport position indicator
-        let (_cell_w, _cell_h, _font_size, _ascii_w, _offset_w, row_height) = self.layout_metrics();
+        let (_cell_w, _cell_h, _font_size, _ascii_w, _offset_w, row_height) =
+            self.layout_metrics(ui.available_width());
         let total_height = (total_rows as f32 * row_height).max(1.0);
         let scroll_frac = (self.current_scroll_offset_y / total_height).clamp(0.0, 1.0);
         let visible_frac = (avail_h / total_height).clamp(0.03, 1.0);
@@ -1873,8 +1889,9 @@ fn render_hex_table_header(
     ui: &mut egui::Ui,
     palette: &AppPalette,
     res: &BinaryDiffResult,
-    scroll_x: f32,
     columns: HexHeaderColumns,
+    font_size: f32,
+    scale: f32,
 ) {
     // Table column headers
     let (header_rect, _) =
@@ -1884,19 +1901,24 @@ fn render_hex_table_header(
         Rounding::ZERO,
         hex_to_c32(&palette.colors.surface_recessed),
     );
-    let header_ui_rect = egui::Rect::from_min_max(
-        egui::pos2(header_rect.min.x + 4.0 - scroll_x, header_rect.min.y),
-        egui::pos2(
-            header_rect.min.x + 4.0 - scroll_x + 3500.0,
-            header_rect.max.y,
-        ),
+    let content_width = 4.0 * scale
+        + columns.offset * 2.0
+        + columns.hex * 2.0
+        + columns.ascii * 2.0
+        + columns.diff
+        + 6.0 * 2.0 * scale
+        + 2.0 * crate::ui_ext::SPACE_SM * scale;
+    let header_ui_rect = egui::Rect::from_min_size(
+        egui::pos2(header_rect.min.x, header_rect.min.y),
+        Vec2::new(content_width, header_rect.height()),
     );
     let mut child_ui = ui.child_ui(
         header_ui_rect,
         egui::Layout::left_to_right(egui::Align::Center),
     );
     child_ui.set_clip_rect(header_rect);
-    child_ui.spacing_mut().item_spacing = Vec2::new(2.0, 0.0);
+    child_ui.spacing_mut().item_spacing = Vec2::new(2.0 * scale, 0.0);
+    child_ui.add_space(4.0 * scale);
 
     let diff_header_color = crate::ui_ext::contrast_text_c32_on(
         hex_to_c32(&palette.colors.surface_recessed),
@@ -1951,7 +1973,7 @@ fn render_hex_table_header(
     ];
     for (label, width, color, gap_before) in headers {
         if gap_before {
-            child_ui.add_space(crate::ui_ext::SPACE_SM);
+            child_ui.add_space(crate::ui_ext::SPACE_SM * scale);
         }
         child_ui.allocate_ui_with_layout(
             Vec2::new(width, 28.0),
@@ -1959,7 +1981,7 @@ fn render_hex_table_header(
             |ui| {
                 ui.label(
                     egui::RichText::new(label)
-                        .font(FontId::monospace(crate::ui_ext::MONO_FONT_SIZE))
+                        .font(FontId::monospace(font_size))
                         .strong()
                         .color(hex_to_c32(color)),
                 );
@@ -3629,11 +3651,10 @@ mod tests {
     }
 
     #[test]
-    fn horizontal_pan_keeps_hex_header_offset_and_hover_targets_aligned() {
+    fn wide_rows_fit_without_horizontal_scrolling() {
         let left: Vec<u8> = (0x41..0x61).collect();
         let mut right = left.clone();
-        right[0] = b'Z';
-        right[20] ^= 0x20;
+        right[31] = b'z';
         let mut state = BinaryDiffViewState::new(
             "lhs.bin".into(),
             left.clone(),
@@ -3655,14 +3676,17 @@ mod tests {
         let palette = AppPalette::default();
         let ctx = egui::Context::default();
         let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(1100.0, 760.0));
+        let font_size = state.layout_metrics(1050.0).2;
+        assert!(font_size < crate::ui_ext::MONO_FONT_SIZE);
+
         let mut time = 0.0;
-        let mut render = |events: Vec<egui::Event>| {
+        let mut output = None;
+        for _ in 0..4 {
             time += 0.05;
-            let output = ctx.run(
+            output = Some(ctx.run(
                 egui::RawInput {
                     screen_rect: Some(screen_rect),
                     time: Some(time),
-                    events,
                     ..Default::default()
                 },
                 |ctx| {
@@ -3670,193 +3694,24 @@ mod tests {
                         state.render_ui(ui, ctx, &palette, &mut false);
                     });
                 },
-            );
-            (output, state.current_scroll_offset_x, state.hovered_cell)
-        };
-
-        let (initial, initial_scroll_x, _) = render(Vec::new());
-        let find_text_pos = |output: &egui::FullOutput, text: &str| {
-            output
-                .shapes
-                .iter()
-                .find_map(|clipped| match &clipped.shape {
-                    egui::Shape::Text(galley) if galley.galley.text() == text => {
-                        Some(galley.pos + galley.galley.size() * 0.5)
-                    }
-                    _ => None,
-                })
-        };
-        let find_header_pos = |output: &egui::FullOutput, text: &str| {
-            output
-                .shapes
-                .iter()
-                .filter_map(|clipped| match &clipped.shape {
-                    egui::Shape::Text(galley) if galley.galley.text() == text => Some(galley.pos),
-                    _ => None,
-                })
-                .min_by(|a, b| a.x.total_cmp(&b.x))
-        };
-        let initial_viewport = initial
+            ));
+        }
+        let output = output.unwrap();
+        assert!(
+            output.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Offset R" => clipped
+                    .clip_rect
+                    .contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size())),
+                _ => false,
+            }),
+            "the right offset header should fit beside the table data"
+        );
+        let final_byte = output
             .shapes
             .iter()
             .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text) if text.galley.text() == "41" => Some(clipped.clip_rect),
-                _ => None,
-            })
-            .expect("first hex byte should render in the table viewport");
-        let initial_hex_header = find_header_pos(&initial, "Hex Bytes (lhs.bin)")
-            .expect("left hex column header should render");
-        let initial_offset = initial
-            .shapes
-            .iter()
-            .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text) if text.galley.text().trim() == "00000000" => {
-                    Some(text.pos)
-                }
-                _ => None,
-            })
-            .expect("left row offset should render");
-        assert_eq!(initial_scroll_x, 0.0);
-
-        let pointer = initial_viewport.center();
-        let _ = render(vec![
-            egui::Event::PointerMoved(pointer),
-            egui::Event::Scroll(Vec2::new(-40.0, 0.0)),
-        ]);
-        let mut settled = None;
-        for _ in 0..10 {
-            settled = Some(render(Vec::new()));
-        }
-        let (hex_scrolled, hex_scroll_x, _) = settled.unwrap();
-        assert!(
-            hex_scroll_x > 10.0,
-            "horizontal scroll offset: {hex_scroll_x}"
-        );
-
-        let scrolled_hex_header = find_header_pos(&hex_scrolled, "Hex Bytes (lhs.bin)")
-            .expect("hex header should track the horizontal viewport");
-        let scrolled_offset = hex_scrolled
-            .shapes
-            .iter()
-            .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text) if text.galley.text().trim() == "00000000" => {
-                    Some(text.pos)
-                }
-                _ => None,
-            })
-            .expect("row offset text should pan with its byte row");
-        let scrolled_hex_cell = find_text_pos(&hex_scrolled, "55")
-            .expect("a later hex byte should remain visible during horizontal scrolling");
-        for (label, before, after) in [
-            ("hex header", initial_hex_header.x, scrolled_hex_header.x),
-            (
-                "later hex byte",
-                find_text_pos(&initial, "55").unwrap().x,
-                scrolled_hex_cell.x,
-            ),
-            ("row offset", initial_offset.x, scrolled_offset.x),
-        ] {
-            assert!(
-                ((after - before) + hex_scroll_x).abs() <= 3.0,
-                "{label} should move with the horizontal content: {before} -> {after}, offset {hex_scroll_x}"
-            );
-        }
-
-        let (hex_hovered_output, _, hex_hovered) =
-            render(vec![egui::Event::PointerMoved(scrolled_hex_cell)]);
-        assert_eq!(
-            hex_hovered,
-            Some((0, 20)),
-            "later hex hit target should map to byte 20"
-        );
-        assert!(hex_hovered_output.shapes.iter().any(|clipped| {
-            matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text().contains("LEFT: 0x55") && text.galley.text().contains("Off: 0x00000014"))
-        }), "inspection footer should report the hovered later hex byte and offset");
-
-        // Pan farther in a second stage so the right ASCII section enters the
-        // viewport while the earlier hex checks remain at their smaller offset.
-        let _ = render(vec![
-            egui::Event::PointerMoved(pointer),
-            egui::Event::Scroll(Vec2::new(-410.0, 0.0)),
-        ]);
-        let mut ascii_settled = None;
-        for _ in 0..10 {
-            ascii_settled = Some(render(Vec::new()));
-        }
-        let (ascii_scrolled, ascii_scroll_x, _) = ascii_settled.unwrap();
-
-        let ascii_headers = |output: &egui::FullOutput| {
-            let mut headers: Vec<_> = output
-                .shapes
-                .iter()
-                .filter_map(|clipped| match &clipped.shape {
-                    egui::Shape::Text(text) if text.galley.text() == "ASCII" => {
-                        Some((text.pos, text.galley.size(), clipped.clip_rect))
-                    }
-                    _ => None,
-                })
-                .collect();
-            headers.sort_by(|left, right| left.0.x.total_cmp(&right.0.x));
-            headers
-        };
-        let initial_ascii_headers = ascii_headers(&initial);
-        let scrolled_ascii_headers = ascii_headers(&ascii_scrolled);
-        assert_eq!(
-            initial_ascii_headers.len(),
-            2,
-            "both ASCII headers should be laid out"
-        );
-        assert!(
-            !scrolled_ascii_headers.is_empty(),
-            "right ASCII header should remain laid out after panning"
-        );
-        // At this scroll position the left ASCII header has moved offscreen; the
-        // surviving label belongs to the right ASCII block. Match it to the
-        // rightmost initial header's expected translated x, not by sorted index.
-        let initial_right_ascii_header = initial_ascii_headers[1];
-        let expected_right_header_x = initial_right_ascii_header.0.x - ascii_scroll_x;
-        let (right_ascii_header, header_size, header_clip) = scrolled_ascii_headers
-            .iter()
-            .copied()
-            .min_by(|left, right| {
-                (left.0.x - expected_right_header_x)
-                    .abs()
-                    .total_cmp(&(right.0.x - expected_right_header_x).abs())
-            })
-            .expect("right ASCII header should remain visible after panning");
-        assert!(
-            (right_ascii_header.x - expected_right_header_x).abs() <= 3.0,
-            "right ASCII header should move by -scroll_x: {} -> {}, offset {}",
-            initial_right_ascii_header.0.x,
-            right_ascii_header.x,
-            ascii_scroll_x
-        );
-        assert!(
-            header_clip.contains_rect(egui::Rect::from_min_size(right_ascii_header, header_size)),
-            "right ASCII header should be fully visible at x={}",
-            right_ascii_header.x
-        );
-
-        let initial_right_ascii_byte = initial
-            .shapes
-            .iter()
-            .filter_map(|clipped| match &clipped.shape {
                 egui::Shape::Text(text)
-                    if text.galley.text() == "F" && text.pos.x > initial_right_ascii_header.0.x =>
-                {
-                    Some((text.pos, text.galley.size()))
-                }
-                _ => None,
-            })
-            .min_by(|left, right| left.0.x.total_cmp(&right.0.x))
-            .expect("right ASCII byte F should be laid out initially");
-        let expected_byte_x = initial_right_ascii_byte.0.x - ascii_scroll_x;
-        let ascii_byte = ascii_scrolled
-            .shapes
-            .iter()
-            .filter_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text)
-                    if text.galley.text() == "F"
+                    if text.galley.text() == "z"
                         && clipped.clip_rect.contains_rect(egui::Rect::from_min_size(
                             text.pos,
                             text.galley.size(),
@@ -3866,41 +3721,40 @@ mod tests {
                 }
                 _ => None,
             })
-            .min_by(|left, right| {
-                (left.0.x - expected_byte_x)
-                    .abs()
-                    .total_cmp(&(right.0.x - expected_byte_x).abs())
-            })
-            .filter(|(pos, _)| (pos.x - expected_byte_x).abs() <= 3.0)
-            .map(|(pos, size)| pos + size * 0.5)
-            .expect(
-                "right ASCII byte F (column 5) should be fully visible in the intermediate view",
-            );
-        let (ascii_hovered_output, _, ascii_hovered) =
-            render(vec![egui::Event::PointerMoved(ascii_byte)]);
-        assert_eq!(
-            ascii_hovered,
-            Some((0, 5)),
-            "right ASCII hit target should map to row 0, byte 5"
+            .expect("the final right-file ASCII byte should fit in the viewport");
+        assert!(final_byte.0.x + final_byte.1.x <= screen_rect.max.x);
+        assert!(
+            output.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::Shape::Text(text)
+                    if text.galley.text() == "00000000"
+                        && text.pos.x > final_byte.0.x
+                        && clipped.clip_rect.contains_rect(egui::Rect::from_min_size(
+                            text.pos,
+                            text.galley.size(),
+                        )) =>
+                    true,
+                _ => false,
+            }),
+            "the right file's row offset should remain visible after its final byte"
         );
-        assert!(ascii_hovered_output.shapes.iter().any(|clipped| {
-            matches!(&clipped.shape, egui::Shape::Text(text) if text.galley.text().contains("RIGHT: 0x46") && text.galley.text().contains("Off: 0x00000005"))
-        }), "inspection footer should report the hovered right ASCII byte and offset");
     }
 
     #[test]
-    fn byte_density_does_not_shrink_text_or_hit_targets() {
+    fn byte_density_shrinks_to_fit_only_when_needed() {
         let mut state =
             BinaryDiffViewState::new("left".to_owned(), vec![0], "right".to_owned(), vec![1]);
         for bpr in [8, 16, 32] {
             state.bytes_per_row = bpr;
-            let (cell_w, _, font_size, ascii_w, offset_w, row_height) = state.layout_metrics();
+            let (cell_w, _, font_size, ascii_w, offset_w, row_height) =
+                state.layout_metrics(3600.0);
             assert_eq!(font_size, crate::ui_ext::MONO_FONT_SIZE);
             assert!(cell_w >= font_size * 1.2);
             assert!(ascii_w >= font_size * 0.6);
             assert!(offset_w >= font_size * 5.4);
             assert!(row_height >= font_size + 10.0);
         }
+        state.bytes_per_row = 32;
+        assert!(state.layout_metrics(1100.0).2 < crate::ui_ext::MONO_FONT_SIZE);
     }
 
     #[test]
