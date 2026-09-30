@@ -5460,6 +5460,8 @@ mod workbench_layout_tests {
         let mut app = test_workbench_app(None, VecDeque::new());
         app.view = WorkbenchView::NodeMachine;
         let originating_view = app.view;
+        app.selected_slots = vec![SlotId::RightHand, SlotId::LeftPrior1];
+        let originating_slots = app.selected_slots.clone();
         app.viewer = Some(ViewerSession::Model3d(Model3dViewerState::from_model(
             model, None,
         )));
@@ -5490,6 +5492,7 @@ mod workbench_layout_tests {
 
         assert!(app.viewer.is_none(), "Escape should close the ready viewer");
         assert_eq!(app.view, originating_view);
+        assert_eq!(app.selected_slots, originating_slots);
     }
 
     #[test]
