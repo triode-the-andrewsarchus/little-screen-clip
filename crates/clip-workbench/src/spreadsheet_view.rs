@@ -126,9 +126,13 @@ impl SpreadsheetViewerState {
             .map(|d| d.as_secs_f64())
             .unwrap_or(0.0);
 
-        // Escape hotkey to close
+        // Let Escape clear the filter before closing the spreadsheet viewer.
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            *close = true;
+            if self.search_query.is_empty() {
+                *close = true;
+            } else {
+                self.search_query.clear();
+            }
             return;
         }
 
@@ -710,6 +714,67 @@ impl SpreadsheetViewerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_clears_spreadsheet_search_before_closing_viewer() {
+        let data = SpreadsheetData {
+            title: "Escape filter fixture".into(),
+            sheets: vec![SpreadsheetSheet::new(
+                "Data".into(),
+                vec![vec!["Name".into()], vec!["Needle".into()]],
+            )],
+        };
+        let mut state = SpreadsheetViewerState::new(data, None);
+        state.search_query = "needle".into();
+        let palette = little_clip_core::palette::AppPalette::default();
+        let ctx = egui::Context::default();
+        let escape = || egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut close = false;
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(900.0, 620.0),
+                )),
+                events: vec![escape()],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                });
+            },
+        );
+        assert!(state.search_query.is_empty());
+        assert!(
+            !close,
+            "the first Escape clears the filter and keeps the viewer open"
+        );
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(900.0, 620.0),
+                )),
+                events: vec![escape()],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                });
+            },
+        );
+        assert!(close, "the next Escape closes with an empty filter");
+    }
 
     #[test]
     fn visible_range_tracks_scroll_with_bounded_overscan() {
