@@ -5428,6 +5428,54 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn image_studio_escape_closes_view_without_mutating_source_clipboard_item() {
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            3,
+            2,
+            image::Rgba([12, 34, 56, 255]),
+        ))
+        .write_to(
+            &mut std::io::Cursor::new(&mut bytes),
+            image::ImageFormat::Png,
+        )
+        .unwrap();
+        let item = ClipItem::from_image_bytes(bytes, "image/png".to_owned()).unwrap();
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.view = WorkbenchView::NodeMachine;
+        app.selected_slots = vec![SlotId::LeftHand];
+        app.state.left_hand = Some(item.clone());
+        let state_before = app.state.clone();
+
+        app.open_slot_preview_modal(&item);
+        wait_for_image_load(&mut app);
+        assert!(matches!(app.viewer, Some(ViewerSession::Image(_))));
+
+        let _ = egui::Context::default().run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![key_press_event(egui::Key::Escape)],
+                ..Default::default()
+            },
+            |ctx| assert!(app.render_modal_viewers(ctx)),
+        );
+
+        assert!(
+            app.viewer.is_none(),
+            "Escape closes the Image Studio viewer"
+        );
+        assert_eq!(app.view, WorkbenchView::NodeMachine);
+        assert_eq!(app.selected_slots, vec![SlotId::LeftHand]);
+        assert_eq!(
+            app.state, state_before,
+            "source clipboard item is unchanged"
+        );
+    }
+
+    #[test]
     fn text_file_preview_loads_on_worker_and_reports_read_errors() {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("sample.rs");
