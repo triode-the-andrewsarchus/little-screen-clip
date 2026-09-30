@@ -2841,8 +2841,9 @@ impl WorkbenchApp {
             ]);
         } else if ctx.input(|i| i.key_pressed(egui::Key::Num0)) {
             self.apply_quick_slot_selection(vec![SlotId::LeftHand]);
-        } else if (ctx.input(|i| i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::X)))
-            && self.selected_slots.len() == 2
+        } else if ctx.input(|i| {
+            i.modifiers.is_none() && (i.key_pressed(egui::Key::S) || i.key_pressed(egui::Key::X))
+        }) && self.selected_slots.len() == 2
         {
             self.swap_selected_slots();
         }
@@ -4104,6 +4105,61 @@ mod workbench_layout_tests {
             assert!(!app.dirty_mirror);
             assert_eq!(app.selected_action_index, 2);
             assert!(app.status_msg.is_none());
+        }
+    }
+
+    #[test]
+    fn modified_palette_swap_keys_do_not_swap_slots() {
+        let modified_keys = [
+            (egui::Key::S, egui::Modifiers::CTRL),
+            (egui::Key::S, egui::Modifiers::COMMAND),
+            (egui::Key::S, egui::Modifiers::MAC_CMD),
+            (egui::Key::S, egui::Modifiers::SHIFT),
+            (egui::Key::S, egui::Modifiers::ALT),
+            (egui::Key::X, egui::Modifiers::CTRL),
+            (egui::Key::X, egui::Modifiers::COMMAND),
+            (egui::Key::X, egui::Modifiers::MAC_CMD),
+            (egui::Key::X, egui::Modifiers::SHIFT),
+            (egui::Key::X, egui::Modifiers::ALT),
+        ];
+
+        for (key, modifiers) in modified_keys {
+            let mut app = test_workbench_app(None, VecDeque::new());
+            app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
+            app.state.left_hand = Some(ClipItem::from_text("left fixture".to_owned()));
+            app.state.right_hand = Some(ClipItem::from_text("right fixture".to_owned()));
+            let state_before = app.state.clone();
+            app.dirty_mirror = false;
+            app.search_query.clear();
+
+            let _ = egui::Context::default().run(
+                egui::RawInput {
+                    events: vec![egui::Event::Key {
+                        key,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers,
+                    }],
+                    modifiers,
+                    ..Default::default()
+                },
+                |ctx| app.handle_empty_search_shortcuts(ctx, false),
+            );
+
+            assert_eq!(
+                app.selected_slots,
+                vec![SlotId::LeftHand, SlotId::RightHand]
+            );
+            assert_eq!(
+                app.state, state_before,
+                "key {key:?}, modifiers {modifiers:?}"
+            );
+            assert!(!app.dirty_mirror, "key {key:?}, modifiers {modifiers:?}");
+            assert!(
+                app.status_msg.is_none(),
+                "key {key:?}, modifiers {modifiers:?}"
+            );
         }
     }
 

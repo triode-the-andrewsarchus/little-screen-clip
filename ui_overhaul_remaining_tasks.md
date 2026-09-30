@@ -614,6 +614,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H2.3g3 [Luna] Verify Palette Up/Down navigation wraps across filtered actions.** `palette_action_navigation_wraps_in_both_directions` uses a deterministic recipe pair to check next, Down wrap, and Up wrap.
     - [x] **H2.3g4 [Luna] Verify Auto Actions Escape returns to Palette.** `auto_actions_escape_returns_to_palette_and_requests_search_focus` checks the production Escape route and focus restoration request.
     - [x] **H2.3g5 [Luna] Keep the `swap` query when selection is not exactly two slots.** `palette_swap_prefix_stays_available_without_exactly_two_selected_slots` runs the production parser for one- and three-slot selections and verifies the query, selected slots, clipboard state, mirror state, action index, and status remain unchanged. It does not enter the IPC-backed swap path.
+    - [x] **H2.3g6 [Luna] Keep modified S/X shortcuts out of slot swapping.** `modified_palette_swap_keys_do_not_swap_slots` sends Ctrl/Command/Mac Command/Shift/Alt+S and +X through the production empty-search handler with two slots selected. Clipboard state, selection, mirror flag, and status remain unchanged; no daemon is contacted.
   - [ ] **H2.3h [Primary] Pass parity-ledger output scenarios.**
   - [ ] **H2.3i [Primary] Pass parity-ledger return-destination scenarios.**
 - **H2.4 Reusable preview hosting**
