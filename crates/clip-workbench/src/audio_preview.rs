@@ -3690,6 +3690,15 @@ impl AudioPreviewState {
     }
 
     fn handle_studio_shortcuts(&mut self, ctx: &egui::Context, close_requested: &mut bool) -> bool {
+        self.handle_studio_shortcuts_with_start(ctx, close_requested, Self::start_stem_separation)
+    }
+
+    fn handle_studio_shortcuts_with_start(
+        &mut self,
+        ctx: &egui::Context,
+        close_requested: &mut bool,
+        mut start_stem_separation: impl FnMut(&mut Self),
+    ) -> bool {
         let dialog_open = self.save_dialog_open || self.stem_separation.save_dialog_open;
         let tool_shortcuts_enabled = !dialog_open && !ctx.wants_keyboard_input();
         if tool_shortcuts_enabled {
@@ -3727,7 +3736,7 @@ impl AudioPreviewState {
             self.stem_separation.stems.is_empty(),
             self.stem_separation.in_progress,
         ) {
-            self.start_stem_separation();
+            start_stem_separation(self);
         }
         false
     }
@@ -4208,6 +4217,48 @@ mod tests {
     }
 
     #[test]
+    fn stem_space_dispatches_one_start_for_idle_empty_state() {
+        let (_temp_dir, path) = generate_fixture_wav("stem-space-start", 1.0);
+        let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
+        state.cancel_session_analysis();
+        state.active_mode = AudioToolMode::StemSeparation;
+        assert!(state.stem_separation.stems.is_empty());
+        assert!(!state.stem_separation.in_progress);
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let mut start_requests = 0;
+        let mut close_requested = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Space,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |_ui| {
+                    let closed =
+                        state.handle_studio_shortcuts_with_start(ctx, &mut close_requested, |_| {
+                            start_requests += 1
+                        });
+                    assert!(!closed);
+                });
+            },
+        );
+
+        assert_eq!(start_requests, 1);
+        assert!(!close_requested);
+        assert!(state.stem_separation.stems.is_empty());
+        assert!(!state.stem_separation.in_progress);
+    }
+
+    #[test]
     fn audio_studio_space_yields_to_focused_text_editor() {
         let ctx = egui::Context::default();
         let mut state = AudioPreviewState::new(
@@ -4225,6 +4276,7 @@ mod tests {
         assert!(ctx.wants_keyboard_input());
 
         let mut close_requested = false;
+        let mut start_requests = 0;
         let _ = ctx.run(
             egui::RawInput {
                 events: vec![egui::Event::Key {
@@ -4237,9 +4289,12 @@ mod tests {
                 ..Default::default()
             },
             |ctx| {
-                state.handle_studio_shortcuts(ctx, &mut close_requested);
+                state.handle_studio_shortcuts_with_start(ctx, &mut close_requested, |_| {
+                    start_requests += 1
+                });
             },
         );
+        assert_eq!(start_requests, 0);
         assert!(!state.stem_separation.in_progress);
         assert!(!close_requested);
     }

@@ -631,7 +631,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **H2.3g17a [Primary] Verify Audio Inspect Space stops an active transport.** `inspect_space_pauses_active_transport_with_player_disabled` sends Space through the rendered Inspect path with Player and sink disabled, then confirms playback stops and the playback start time clears. This covers pause only and cannot emit audio.
       - [ ] **H2.3g17b Verify Audio Inspect Space starts playback from idle.** Confirm the transport starts with a silent test player; do not use the live audio output.
       - [x] **H2.3g18 [Primary] Verify focused text input owns Space in Audio HF.** `hf_space_yields_to_focused_text_editor_with_player_disabled` sends Space through the rendered Audio HF workbench with a focused TextEdit and a seeded active transport; playback remains active, proving the shortcut does not pause it. Player and sink are disabled, so the test cannot emit audio. It does not verify starting playback from idle.
-      - [ ] **H2.3g19 Verify Stems Space starts separation only when eligible.** Confirm one job starts from idle empty state.
+      - [x] **H2.3g19 [Primary] Verify eligible Stems Space dispatches one start request.** `stem_space_dispatches_one_start_for_idle_empty_state` sends Space through the production shortcut handler with an idle empty Stems state and an injected counter callback; exactly one request is made. The callback does not launch a worker or job.
       - [ ] **H2.3g20 Verify Rolling Audio F5 refreshes the snapshot.** Confirm the displayed capture changes.
     - **Preview and comparison surfaces**
       - [ ] **H2.3g21 Verify Text Preview Command+F opens and focuses Find.** Confirm the query field owns focus.
