@@ -4063,6 +4063,139 @@ mod tests {
         assert!(first < second && second < third);
     }
 
+    fn write_stereo_pcm_fixture(path: &Path, left: &[i16], right: &[i16], sample_rate: u32) {
+        use std::io::Write;
+
+        assert_eq!(left.len(), right.len());
+        let data_len = (left.len() * 4) as u32;
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(b"RIFF").unwrap();
+        file.write_all(&(36_u32 + data_len).to_le_bytes()).unwrap();
+        file.write_all(b"WAVEfmt ").unwrap();
+        file.write_all(&16_u32.to_le_bytes()).unwrap();
+        file.write_all(&1_u16.to_le_bytes()).unwrap();
+        file.write_all(&2_u16.to_le_bytes()).unwrap();
+        file.write_all(&sample_rate.to_le_bytes()).unwrap();
+        file.write_all(&(sample_rate * 4).to_le_bytes()).unwrap();
+        file.write_all(&4_u16.to_le_bytes()).unwrap();
+        file.write_all(&16_u16.to_le_bytes()).unwrap();
+        file.write_all(b"data").unwrap();
+        file.write_all(&data_len.to_le_bytes()).unwrap();
+        for (&left_sample, &right_sample) in left.iter().zip(right) {
+            file.write_all(&left_sample.to_le_bytes()).unwrap();
+            file.write_all(&right_sample.to_le_bytes()).unwrap();
+        }
+    }
+
+    fn read_pcm16_wav(path: &Path) -> (u16, u32, Vec<i16>) {
+        let bytes = std::fs::read(path).unwrap();
+        assert_eq!(&bytes[..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        let mut channels = None;
+        let mut sample_rate = None;
+        let mut samples = None;
+        let mut offset = 12;
+        while offset + 8 <= bytes.len() {
+            let chunk_id = &bytes[offset..offset + 4];
+            let chunk_len =
+                u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+            let data_start = offset + 8;
+            let data_end = data_start + chunk_len;
+            assert!(data_end <= bytes.len(), "WAV chunk extends beyond file");
+            match chunk_id {
+                b"fmt " => {
+                    assert_eq!(
+                        u16::from_le_bytes(bytes[data_start..data_start + 2].try_into().unwrap()),
+                        1,
+                        "fixture output should be PCM"
+                    );
+                    channels = Some(u16::from_le_bytes(
+                        bytes[data_start + 2..data_start + 4].try_into().unwrap(),
+                    ));
+                    sample_rate = Some(u32::from_le_bytes(
+                        bytes[data_start + 4..data_start + 8].try_into().unwrap(),
+                    ));
+                    assert_eq!(
+                        u16::from_le_bytes(
+                            bytes[data_start + 14..data_start + 16].try_into().unwrap()
+                        ),
+                        16,
+                        "fixture output should be 16-bit PCM"
+                    );
+                }
+                b"data" => {
+                    samples = Some(
+                        bytes[data_start..data_end]
+                            .chunks_exact(2)
+                            .map(|sample| i16::from_le_bytes([sample[0], sample[1]]))
+                            .collect(),
+                    );
+                }
+                _ => {}
+            }
+            offset = data_end + (chunk_len % 2);
+        }
+        (
+            channels.expect("WAV fmt chunk"),
+            sample_rate.expect("WAV sample rate"),
+            samples.expect("WAV data chunk"),
+        )
+    }
+
+    #[test]
+    fn audio_inspect_left_copy_extracts_exact_mono_payload_for_left_hand() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("stereo-source.wav");
+        let sample_rate = 8_000;
+        let left_samples = (0..4_000).map(|sample| sample as i16).collect::<Vec<_>>();
+        let right_samples = (0..4_000)
+            .map(|sample| -(sample as i16) - 1)
+            .collect::<Vec<_>>();
+        write_stereo_pcm_fixture(&source, &left_samples, &right_samples, sample_rate);
+
+        let start = 0.125;
+        let end = 0.375;
+        let filter = AudioPreviewState::channel_edit_filter(
+            ChannelCopyMode::LeftOnly,
+            AudioRegionEdit::default(),
+        );
+        assert_eq!(filter.as_deref(), Some("pan=mono|c0=c0"));
+        let mut plan =
+            audio_slice_copy_plan(&source, start, end, ChannelCopyMode::LeftOnly, filter);
+        assert_eq!((plan.start, plan.end), (start, end));
+        plan.output = temp.path().join("selected-left.wav");
+
+        let first_sample = (start * sample_rate as f32) as usize;
+        let sample_count = ((end - start) * sample_rate as f32) as usize;
+        let expected_samples = left_samples[first_sample..first_sample + sample_count].to_vec();
+        let expected_output = plan.output.clone();
+        let mut sent_path = None;
+        let result = run_audio_slice_batch(
+            &[plan],
+            ChannelCopyMode::LeftOnly,
+            &AtomicBool::new(false),
+            extract_audio_slice_file,
+            |request| match request {
+                IpcRequest::PushFile { path, hand } => {
+                    assert_eq!(*hand, little_clip_core::HandSide::Left);
+                    assert_eq!(path, &expected_output);
+                    sent_path = Some(path.clone());
+                    let (channels, output_rate, output_samples) = read_pcm16_wav(path);
+                    assert_eq!(channels, 1);
+                    assert_eq!(output_rate, sample_rate);
+                    assert_eq!(output_samples, expected_samples);
+                    Ok(())
+                }
+                other => panic!("expected one PushFile request, got {other:?}"),
+            },
+            |_| panic!("clipboard fallback is skipped after fake daemon success"),
+        )
+        .expect("production FFmpeg extraction and fake handoff should succeed");
+        assert_eq!(sent_path.as_deref(), Some(expected_output.as_path()));
+        assert!(result.contains("LEFT (mono)"));
+        assert!(result.contains("to Left Hand"));
+    }
+
     #[test]
     fn audio_batch_copy_reports_mixed_and_total_failures() {
         let plans = [(0.0, 0.5), (1.0, 1.5), (2.0, 2.5)]
