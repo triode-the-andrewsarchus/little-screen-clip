@@ -621,7 +621,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **H2.3g9 [Primary] Verify Palette F3 opens Auto Actions.** `palette_f3_opens_auto_actions_through_global_shortcuts` sends F3 through `handle_global_shortcuts` from Palette and verifies the destination without mutating the canvas graph. No daemon is contacted.
       - [ ] **H2.3g10 Verify Palette F4 changes the shared appearance.** Confirm Light/Dark changes in both workbench and little-screen display.
       - [ ] **H2.3g11 Verify Palette F6 changes the shared appearance.** Confirm Light/Dark changes in both workbench and little-screen display.
-      - [ ] **H2.3g12 Verify Palette Enter activates the highlighted result.** Confirm the selected action's declared result or destination.
+      - [x] **H2.3g12 [Primary] Verify Palette Enter opens the selected recipe prompt while search is focused.** `quick_palette_enter_executes_prompt_recipe_while_search_is_focused` exercises production Enter handling and confirms the recipe prompt opens without running a daemon action.
       - [ ] **H2.3g13 Verify Palette shortcuts yield to a focused search field.** Confirm typed shortcut characters do not change slots or view.
     - **Image Studio**
       - [ ] **H2.3g14 Verify Image Studio V selects View.** Confirm the active tool indicator.
