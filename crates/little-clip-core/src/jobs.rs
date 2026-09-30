@@ -35,7 +35,10 @@ impl JobTicket {
     pub fn revision(&self) -> u64 {
         self.revision
     }
-    /// Prevents a queued or completed job from publishing its result.
+    /// Requests cancellation before a queued or running job publishes its result.
+    ///
+    /// Cancellation does not interrupt an operation that is already running, and
+    /// it cannot revoke a result that has already been sent to the receiver.
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::Release);
     }
@@ -78,6 +81,11 @@ impl BackgroundJobs {
     }
 
     /// Queues work and returns a cancellation ticket plus a single completion receiver.
+    ///
+    /// Admission is nonblocking: a full queue produces [`JobError::QueueFull`].
+    /// Cancellation is checked before starting the operation and after it returns;
+    /// operations that need prompt interruption must also check their own token.
+    /// The timeout is checked after the operation returns and does not interrupt it.
     pub fn submit<T, F>(
         &self,
         timeout: Duration,
@@ -114,5 +122,75 @@ impl BackgroundJobs {
             let _ = result_sender.send(Err(JobError::QueueFull));
         }
         (ticket, result_receiver)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BackgroundJobs, JobError};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+
+    #[test]
+    fn bounded_queue_rejects_excess_work_and_skips_cancelled_queued_work() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (running_ticket, running_result) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            1
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        let queued_runs = Arc::new(AtomicUsize::new(0));
+        let queued_counter = Arc::clone(&queued_runs);
+        let (queued_ticket, queued_result) = jobs.submit(Duration::MAX, move || {
+            queued_counter.fetch_add(1, Ordering::SeqCst);
+            2
+        });
+        queued_ticket.cancel();
+
+        let (_, rejected_result) = jobs.submit(Duration::MAX, || 3);
+        assert_eq!(
+            rejected_result
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap(),
+            Err(JobError::QueueFull)
+        );
+
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            running_result.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Ok(1)
+        );
+        assert_eq!(
+            queued_result.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Err(JobError::Cancelled)
+        );
+        assert_eq!(queued_runs.load(Ordering::SeqCst), 0);
+        drop(running_ticket);
+    }
+
+    #[test]
+    fn cancellation_while_running_suppresses_result_publication() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (ticket, result) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            "finished after cancellation"
+        });
+
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        ticket.cancel();
+        release_tx.send(()).unwrap();
+
+        assert_eq!(
+            result.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Err(JobError::Cancelled)
+        );
     }
 }

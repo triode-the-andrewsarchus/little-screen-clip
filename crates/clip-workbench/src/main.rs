@@ -3595,6 +3595,54 @@ mod workbench_layout_tests {
         }
     }
 
+    fn queued_job_behind_blocker<T: Send + 'static>(
+        operation: impl FnOnce() -> T + Send + 'static,
+    ) -> (
+        BackgroundJobs,
+        std::sync::mpsc::Sender<()>,
+        JobTicket,
+        Receiver<Result<T, JobError>>,
+    ) {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let (_blocker_ticket, _blocker_result) = jobs.submit(Duration::MAX, move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.recv();
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("executor blocker should start");
+        let (ticket, receiver) = jobs.submit(Duration::MAX, operation);
+        (jobs, release_tx, ticket, receiver)
+    }
+
+    fn release_blocker_and_wait_for_queue_to_drain(
+        jobs: &BackgroundJobs,
+        release: std::sync::mpsc::Sender<()>,
+    ) {
+        release
+            .send(())
+            .expect("executor blocker should be waiting");
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "executor queue did not drain before deadline"
+            );
+            let (_ticket, receiver) = jobs.submit(Duration::MAX, || ());
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match receiver.recv_timeout(remaining) {
+                Ok(Ok(())) => return,
+                Ok(Err(JobError::QueueFull)) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    panic!("admitted executor sentinel did not complete before deadline")
+                }
+                result => panic!("unexpected executor sentinel result: {result:?}"),
+            }
+        }
+    }
+
     fn click_text_smart_copy_action(source_text: &str, button_label: &str) -> String {
         fn frame(
             ctx: &egui::Context,
@@ -6469,6 +6517,79 @@ mod workbench_layout_tests {
             app.viewer,
             Some(ViewerSession::ComponentGallery(_))
         ));
+    }
+
+    #[test]
+    fn replacing_spreadsheet_load_cancels_queued_previous_job() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let worker_ran = Arc::clone(&ran);
+        let (jobs, release, ticket, receiver) = queued_job_behind_blocker(move || {
+            worker_ran.store(true, Ordering::Release);
+            Err::<(SpreadsheetData, Option<PathBuf>), String>("obsolete job ran".into())
+        });
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.spreadsheet_load_job = Some((ticket, receiver, None));
+
+        app.start_spreadsheet_load(SpreadsheetLoadSource::Text {
+            content: Arc::new("name,value\nclip,1".to_owned()),
+            title: "replacement table".to_owned(),
+        });
+        assert!(app.spreadsheet_load_job.is_some());
+
+        release_blocker_and_wait_for_queue_to_drain(&jobs, release);
+        assert!(!ran.load(Ordering::Acquire));
+        drop(app);
+    }
+
+    #[test]
+    fn replacing_midi_load_cancels_queued_previous_job() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let worker_ran = Arc::clone(&ran);
+        let (jobs, release, ticket, receiver) = queued_job_behind_blocker(move || {
+            worker_ran.store(true, Ordering::Release);
+            Err::<(MidiData, PathBuf), String>("obsolete job ran".into())
+        });
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.midi_load_job = Some((ticket, receiver));
+
+        app.start_midi_load(PathBuf::from("replacement.mid"));
+        assert!(app.midi_load_job.is_some());
+
+        release_blocker_and_wait_for_queue_to_drain(&jobs, release);
+        assert!(!ran.load(Ordering::Acquire));
+        drop(app);
+    }
+
+    #[test]
+    fn dropping_workbench_cancels_queued_spreadsheet_load() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let worker_ran = Arc::clone(&ran);
+        let (jobs, release, ticket, receiver) = queued_job_behind_blocker(move || {
+            worker_ran.store(true, Ordering::Release);
+            Err::<(SpreadsheetData, Option<PathBuf>), String>("obsolete job ran".into())
+        });
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.spreadsheet_load_job = Some((ticket, receiver, None));
+
+        drop(app);
+        release_blocker_and_wait_for_queue_to_drain(&jobs, release);
+        assert!(!ran.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn dropping_workbench_cancels_queued_midi_load() {
+        let ran = Arc::new(AtomicBool::new(false));
+        let worker_ran = Arc::clone(&ran);
+        let (jobs, release, ticket, receiver) = queued_job_behind_blocker(move || {
+            worker_ran.store(true, Ordering::Release);
+            Err::<(MidiData, PathBuf), String>("obsolete job ran".into())
+        });
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.midi_load_job = Some((ticket, receiver));
+
+        drop(app);
+        release_blocker_and_wait_for_queue_to_drain(&jobs, release);
+        assert!(!ran.load(Ordering::Acquire));
     }
 
     #[test]
