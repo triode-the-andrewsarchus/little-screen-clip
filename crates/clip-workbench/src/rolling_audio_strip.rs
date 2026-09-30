@@ -172,6 +172,35 @@ impl RollingAudioStripState {
         state
     }
 
+    #[cfg(test)]
+    pub(crate) fn empty_test_strip() -> Self {
+        Self {
+            path: None,
+            duration_sec: 0.0,
+            sample_rate: 48000,
+            channels: 2,
+            mono_samples: Vec::new(),
+            peaks_lvl0: Vec::new(),
+            peaks_lvl1: Vec::new(),
+            peaks_lvl2: Vec::new(),
+            is_loaded: false,
+            error_msg: None,
+            snapshot_job: None,
+            snapshot_feedback: false,
+            selected_region: None,
+            drag_start_time: None,
+            is_dragging: false,
+            _sink: None,
+            player: None,
+            is_playing: false,
+            playhead_sec: 0.0,
+            playback_start_instant: None,
+            playback_start_offset_sec: 0.0,
+            play_stop_time: None,
+            status_toast: None,
+        }
+    }
+
     pub fn max_amplitude(&self) -> f32 {
         let blocks = if !self.peaks_lvl2.is_empty() {
             &self.peaks_lvl2
@@ -1168,31 +1197,7 @@ mod tests {
     }
 
     fn empty_test_strip() -> RollingAudioStripState {
-        RollingAudioStripState {
-            path: None,
-            duration_sec: 0.0,
-            sample_rate: 48000,
-            channels: 2,
-            mono_samples: Vec::new(),
-            peaks_lvl0: Vec::new(),
-            peaks_lvl1: Vec::new(),
-            peaks_lvl2: Vec::new(),
-            is_loaded: false,
-            error_msg: None,
-            snapshot_job: None,
-            snapshot_feedback: false,
-            selected_region: None,
-            drag_start_time: None,
-            is_dragging: false,
-            _sink: None,
-            player: None,
-            is_playing: false,
-            playhead_sec: 0.0,
-            playback_start_instant: None,
-            playback_start_offset_sec: 0.0,
-            play_stop_time: None,
-            status_toast: None,
-        }
+        RollingAudioStripState::empty_test_strip()
     }
 
     #[test]

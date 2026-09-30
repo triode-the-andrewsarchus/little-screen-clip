@@ -2768,6 +2768,14 @@ impl WorkbenchApp {
     }
 
     fn handle_audio_strip_refresh(&mut self, ctx: &egui::Context) {
+        self.handle_audio_strip_refresh_with_load(ctx, RollingAudioStripState::load_snapshot);
+    }
+
+    fn handle_audio_strip_refresh_with_load(
+        &mut self,
+        ctx: &egui::Context,
+        mut load_snapshot: impl FnMut(&mut RollingAudioStripState),
+    ) {
         let refresh_pressed = ctx.input(|i| {
             i.key_pressed(egui::Key::F5) || (i.modifiers.command && i.key_pressed(egui::Key::R))
         });
@@ -2775,7 +2783,7 @@ impl WorkbenchApp {
             return;
         }
         if let Some(strip) = &mut self.rolling_audio_strip {
-            strip.load_snapshot();
+            load_snapshot(strip);
         }
     }
 
@@ -4275,6 +4283,39 @@ mod workbench_layout_tests {
         assert!(
             eligible,
             "an unfocused Space with a selected audio region routes to playback"
+        );
+    }
+
+    #[test]
+    fn rolling_audio_f5_dispatches_one_snapshot_refresh_request() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.rolling_audio_strip = Some(RollingAudioStripState::empty_test_strip());
+        let ctx = egui::Context::default();
+        let mut refresh_requests = 0;
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![key_press_event(egui::Key::F5)],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |_ui| {
+                    app.handle_audio_strip_refresh_with_load(ctx, |strip| {
+                        refresh_requests += 1;
+                        assert!(!strip.is_loaded);
+                    });
+                });
+            },
+        );
+
+        assert_eq!(refresh_requests, 1);
+        assert!(
+            app.rolling_audio_strip
+                .as_ref()
+                .is_some_and(|strip| !strip.is_loaded)
         );
     }
 
