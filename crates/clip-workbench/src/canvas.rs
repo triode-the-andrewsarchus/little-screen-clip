@@ -1848,6 +1848,121 @@ mod tests {
     }
 
     #[test]
+    fn rendered_save_as_dialog_writes_reloadable_recipe_in_private_directory() {
+        let source = instantiate_template(
+            little_clip_ops::pipeline::catalog::find_template("source_const_text").unwrap(),
+            [0.0, 0.0],
+        );
+        let sink = instantiate_template(
+            little_clip_ops::pipeline::catalog::find_template("sink_lh").unwrap(),
+            [300.0, 0.0],
+        );
+        let graph = NodeGraph {
+            nodes: vec![source.clone(), sink.clone()],
+            connections: vec![Connection {
+                from_node: source.id,
+                from_pin: "Text".to_owned(),
+                to_node: sink.id,
+                to_pin: "In".to_owned(),
+            }],
+            pan: [0.0, 0.0],
+            zoom: 1.0,
+        };
+        let mut canvas = NodeCanvasState {
+            graph: graph.clone(),
+            selected_node: None,
+            dragging_from: None,
+            node_previews: HashMap::new(),
+            catalog_open: false,
+            catalog_search: String::new(),
+            catalog_category: "All".to_owned(),
+            spawn_node_pos: None,
+            save_dialog_open: true,
+            save_name: "Private Save As Regression".to_owned(),
+            save_is_save_as: true,
+            current_recipe_file: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            config: AppConfig::default(),
+            status_message: None,
+            available_recipes: Vec::new(),
+            selected_recipe_name: "Original Recipe".to_owned(),
+            last_run_duration_ms: None,
+        };
+        let recipes_dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette = AppPalette::default();
+        let mut time = 0.0;
+        let mut render = |events: Vec<egui::Event>| {
+            time += 0.1;
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(900.0, 620.0))),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        canvas.render_save_window_in_dir(ui, &palette, recipes_dir.path());
+                    });
+                },
+            )
+        };
+
+        let _warmup = render(Vec::new());
+        let initial = render(Vec::new());
+        let save_position = initial
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Save" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("rendered Save action in recipe dialog");
+        render(vec![egui::Event::PointerMoved(save_position)]);
+        render(vec![
+            egui::Event::PointerMoved(save_position),
+            egui::Event::PointerButton {
+                pos: save_position,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        render(vec![
+            egui::Event::PointerMoved(save_position),
+            egui::Event::PointerButton {
+                pos: save_position,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        drop(render);
+
+        let saved_path = canvas
+            .current_recipe_file
+            .as_ref()
+            .expect("Save should store current recipe path");
+        assert_eq!(saved_path.parent(), Some(recipes_dir.path()));
+        assert_eq!(canvas.selected_recipe_name, "Private Save As Regression");
+        assert!(!canvas.save_dialog_open);
+        assert!(
+            canvas.available_recipes.iter().any(|recipe| {
+                recipe.name == canvas.selected_recipe_name && recipe.graph == graph
+            })
+        );
+        let serialized = std::fs::read_to_string(saved_path).unwrap();
+        let saved: Recipe = serde_yaml::from_str(&serialized).unwrap();
+        assert_eq!(saved.name, "Private Save As Regression");
+        assert_eq!(saved.graph, graph);
+    }
+
+    #[test]
     fn daemon_pipeline_response_restores_previews_and_output_status() {
         let mut canvas = NodeCanvasState::new();
         let node_id = canvas.graph.nodes[0].id;
