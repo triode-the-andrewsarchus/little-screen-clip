@@ -15,7 +15,7 @@ use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use regex::RegexBuilder;
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, mpsc::Receiver};
 use std::time::{Duration, Instant};
 use syntect::easy::HighlightLines;
@@ -103,6 +103,8 @@ const MINIMAP_NEUTRAL_COLOR: syntect::highlighting::Color = syntect::highlightin
     a: 255,
 };
 const CODE_ROW_HEIGHT_BLOCK_SIZE: usize = 32;
+#[allow(dead_code)]
+static NEXT_INLINE_TEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy)]
 struct CodeFragment {
@@ -117,6 +119,105 @@ pub struct TextPreviewData {
     is_markdown: bool,
     code_fragments: Arc<Vec<CodeFragment>>,
     line_first_fragment: Arc<Vec<usize>>,
+}
+
+/// Compact, virtualized text preview for embedding in another view.
+///
+/// Each instance has its own scroll identity while sharing immutable source
+/// data with sibling previews.
+#[allow(dead_code)]
+pub struct InlineTextPreview {
+    data: Arc<TextPreviewData>,
+    host_size: Vec2,
+    id: egui::Id,
+    scroll_offset: f32,
+}
+
+#[allow(dead_code)]
+impl InlineTextPreview {
+    /// Creates a compact preview with a fixed finite host size.
+    pub fn new(data: Arc<TextPreviewData>, host_size: Vec2) -> Self {
+        assert!(
+            host_size.x.is_finite()
+                && host_size.y.is_finite()
+                && host_size.x > 0.0
+                && host_size.y > 0.0,
+            "inline text preview requires a positive finite host size"
+        );
+        Self {
+            data,
+            host_size,
+            id: egui::Id::new((
+                "inline-text-preview",
+                NEXT_INLINE_TEXT_ID.fetch_add(1, Ordering::Relaxed),
+            )),
+            scroll_offset: 0.0,
+        }
+    }
+
+    /// Renders only visible bounded source fragments inside the allocated host.
+    pub fn show(&mut self, ui: &mut egui::Ui, palette: &AppPalette) -> egui::Response {
+        let (rect, response) = ui.allocate_exact_size(self.host_size, egui::Sense::hover());
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
+
+        let syntax = find_syntax(self.data.language);
+        let data = Arc::clone(&self.data);
+        let id = self.id;
+        let scroll_offset = self.scroll_offset;
+        let output = ui.allocate_ui_at_rect(rect, |ui| {
+            egui::Frame::none()
+                .fill(hex_to_c32(&palette.colors.surface_recessed))
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    hex_to_c32(&palette.colors.surface_panel),
+                ))
+                .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
+                .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
+                .show(ui, |ui| {
+                    let fragments = &data.code_fragments;
+                    let row_height =
+                        ui.fonts(|fonts| fonts.row_height(&FontId::monospace(MONO_FONT_SIZE)));
+                    let row_pitch = row_height + ui.spacing().item_spacing.y;
+                    // Fragments are single source lines. Keep a fixed row height and clip long
+                    // lines to the host width instead of wrapping them.
+                    let output = egui::ScrollArea::vertical()
+                        .id_source(id)
+                        .auto_shrink([false, false])
+                        .vertical_scroll_offset(scroll_offset)
+                        .show_rows(ui, row_height, fragments.len(), |ui, rows| {
+                            let viewport_origin = ui.max_rect().min;
+                            let row_width = ui.available_width();
+                            let first_row = rows.start;
+                            for row in rows {
+                                let fragment = fragments[row];
+                                let source = &data.content[fragment.start_byte..fragment.end_byte];
+                                let mut job =
+                                    build_highlighted_layout_job(source, syntax, palette, &[]);
+                                job.wrap.max_width = f32::INFINITY;
+                                let galley = ui.fonts(|fonts| fonts.layout_job(job));
+                                let row_rect = egui::Rect::from_min_size(
+                                    egui::pos2(
+                                        viewport_origin.x,
+                                        viewport_origin.y + (row - first_row) as f32 * row_pitch,
+                                    ),
+                                    Vec2::new(row_width, row_height),
+                                );
+                                ui.painter().with_clip_rect(row_rect).galley(
+                                    row_rect.min,
+                                    galley,
+                                    hex_to_c32(&palette.colors.text_primary),
+                                );
+                            }
+                        });
+                    output.state.offset.y
+                })
+                .inner
+        });
+        self.scroll_offset = output.inner;
+        response
+    }
 }
 
 impl TextPreviewData {
@@ -2548,6 +2649,156 @@ fn render_styled_code_block(ui: &mut egui::Ui, code: &str, lang: &str, palette: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_text_previews_share_source_with_independent_scroll_state() {
+        let data = TextPreviewData::from_text(Arc::new(
+            (0..400).map(|line| format!("row-{line:04}\n")).collect(),
+        ));
+        let mut first = InlineTextPreview::new(Arc::clone(&data), Vec2::new(180.0, 72.0));
+        let mut second = InlineTextPreview::new(Arc::clone(&data), Vec2::new(180.0, 72.0));
+        assert!(Arc::ptr_eq(&first.data, &second.data));
+        assert_ne!(first.id, second.id);
+
+        let ctx = egui::Context::default();
+        let palette = AppPalette::default();
+        let mut rects = [egui::Rect::NOTHING; 2];
+        let render_frame = |ctx: &egui::Context,
+                            first: &mut InlineTextPreview,
+                            second: &mut InlineTextPreview,
+                            events: Vec<egui::Event>,
+                            time: f64,
+                            rects: &mut [egui::Rect; 2]| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::new(420.0, 180.0),
+                    )),
+                    events,
+                    time: Some(time),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            rects[0] = first.show(ui, &palette).rect;
+                            rects[1] = second.show(ui, &palette).rect;
+                        });
+                    });
+                },
+            )
+        };
+        let initial = render_frame(&ctx, &mut first, &mut second, Vec::new(), 0.0, &mut rects);
+        assert!(initial.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.job.text == "row-0000")
+        }));
+        let initial_first_host_rows: Vec<_> = initial
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text)
+                    if rects[0].contains(text.pos) && text.galley.job.text.starts_with("row-") =>
+                {
+                    text.galley.job.text[4..].parse::<usize>().ok()
+                }
+                _ => None,
+            })
+            .collect();
+        let initial_first_host_max = *initial_first_host_rows.iter().max().unwrap();
+
+        render_frame(
+            &ctx,
+            &mut first,
+            &mut second,
+            vec![egui::Event::PointerMoved(rects[0].center())],
+            0.1,
+            &mut rects,
+        );
+        render_frame(
+            &ctx,
+            &mut first,
+            &mut second,
+            vec![
+                egui::Event::PointerMoved(rects[0].center()),
+                egui::Event::Scroll(Vec2::new(0.0, -260.0)),
+            ],
+            0.2,
+            &mut rects,
+        );
+        let scrolled = render_frame(&ctx, &mut first, &mut second, Vec::new(), 0.3, &mut rects);
+        assert!(first.scroll_offset > 0.0, "hovered host should scroll");
+        assert_eq!(second.scroll_offset, 0.0, "other host should stay at top");
+        assert!(scrolled.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::epaint::Shape::Text(text) if rects[1].contains(text.pos) && text.galley.job.text == "row-0000")
+        }), "unhovered host should still show its first row");
+
+        let row_height = ctx.fonts(|fonts| fonts.row_height(&FontId::monospace(MONO_FONT_SIZE)));
+        let mut first_host_rows: Vec<_> = scrolled
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text)
+                    if rects[0].contains(text.pos) && text.galley.job.text.starts_with("row-") =>
+                {
+                    Some((text.pos.y, text.galley.job.text.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            first_host_rows.iter().any(|(_, label)| {
+                label
+                    .strip_prefix("row-")
+                    .and_then(|index| index.parse::<usize>().ok())
+                    .is_some_and(|index| index > initial_first_host_max)
+            }),
+            "scrolled first host should render a row beyond its initial visible range: {first_host_rows:?}"
+        );
+        first_host_rows.sort_by(|left, right| left.0.total_cmp(&right.0));
+        assert!(
+            first_host_rows.len() >= 2,
+            "scrolled host should show multiple rows"
+        );
+        let row_pitch = row_height + ctx.style().spacing.item_spacing.y;
+        assert!(
+            ((first_host_rows[1].0 - first_host_rows[0].0) - row_pitch).abs() < 1.0,
+            "virtual row y positions must match measured row height: {first_host_rows:?}"
+        );
+        assert!(first.scroll_offset > 0.0);
+        assert_eq!(second.scroll_offset, 0.0);
+    }
+
+    #[test]
+    fn inline_text_preview_skips_layout_when_host_is_clipped() {
+        let data = TextPreviewData::from_text(Arc::new("visible only in source".repeat(500)));
+        let mut preview = InlineTextPreview::new(data, Vec2::new(180.0, 100.0));
+        let ctx = egui::Context::default();
+        let palette = AppPalette::default();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(300.0, 100.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add_space(200.0);
+                    preview.show(ui, &palette);
+                });
+            },
+        );
+        assert!(preview.scroll_offset.is_finite());
+        assert_eq!(preview.scroll_offset, 0.0);
+        assert!(
+            output
+                .shapes
+                .iter()
+                .all(|shape| { !matches!(&shape.shape, egui::epaint::Shape::Text(_)) })
+        );
+    }
 
     #[cfg(target_os = "linux")]
     fn open_spool_files_in(directory: &Path) -> usize {

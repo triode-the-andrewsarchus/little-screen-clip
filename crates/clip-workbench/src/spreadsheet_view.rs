@@ -7,9 +7,45 @@ use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::{BODY_FONT_SIZE, StatusToast};
 use eframe::egui::{self, FontId, Rounding, Stroke, TextStyle, Vec2};
 use little_clip_ops::spreadsheet::{SpreadsheetData, SpreadsheetSheet};
+use std::borrow::Cow;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+const INLINE_SPREADSHEET_COLUMN_WIDTH: f32 = 132.0;
+const INLINE_SPREADSHEET_ROW_HEIGHT: f32 = 28.0;
+const INLINE_SPREADSHEET_MAX_COLUMNS: usize = 32;
+static NEXT_INLINE_SPREADSHEET_ID: AtomicU64 = AtomicU64::new(1);
+
+const INLINE_SPREADSHEET_MAX_CELL_CHARS: usize = 160;
+const INLINE_SPREADSHEET_MAX_SHEET_LABEL_CHARS: usize = 40;
+
+fn inline_cell_display_text(value: &str) -> Cow<'_, str> {
+    let mut chars = value.chars();
+    let prefix: String = chars
+        .by_ref()
+        .take(INLINE_SPREADSHEET_MAX_CELL_CHARS)
+        .collect();
+    if chars.next().is_some() {
+        Cow::Owned(format!("{prefix}…"))
+    } else {
+        Cow::Borrowed(value)
+    }
+}
+
+fn inline_sheet_label(name: &str) -> String {
+    let mut chars = name.chars();
+    let prefix: String = chars
+        .by_ref()
+        .take(INLINE_SPREADSHEET_MAX_SHEET_LABEL_CHARS)
+        .collect();
+    if chars.next().is_some() {
+        format!("{prefix}…")
+    } else {
+        prefix
+    }
+}
 
 /// Interactive UI state for multi-sheet spreadsheet data tables and search filters.
 pub struct SpreadsheetViewerState {
@@ -26,6 +62,224 @@ pub struct SpreadsheetViewerState {
     filtered_rows: Vec<usize>,
     column_width_cache: Vec<Option<Vec<f32>>>,
     measured_font: Option<FontId>,
+}
+
+/// Compact virtualized spreadsheet preview for embedding in another view.
+///
+/// The workbook data is shared, while sheet selection, cell selection, and
+/// scroll offsets belong to each preview instance.
+#[allow(dead_code)]
+pub struct InlineSpreadsheetPreview {
+    data: Arc<SpreadsheetData>,
+    host_size: Vec2,
+    id: egui::Id,
+    active_sheet_idx: usize,
+    selected_cell: Option<(usize, usize)>,
+    scroll_offset: Vec2,
+}
+
+#[allow(dead_code)]
+impl InlineSpreadsheetPreview {
+    /// Creates a compact preview with a fixed finite host size.
+    pub fn new(data: Arc<SpreadsheetData>, host_size: Vec2) -> Self {
+        assert!(
+            host_size.x.is_finite()
+                && host_size.y.is_finite()
+                && host_size.x > 0.0
+                && host_size.y > 0.0,
+            "inline spreadsheet preview requires a positive finite host size"
+        );
+        Self {
+            data,
+            host_size,
+            id: egui::Id::new((
+                "inline-spreadsheet-preview",
+                NEXT_INLINE_SPREADSHEET_ID.fetch_add(1, Ordering::Relaxed),
+            )),
+            active_sheet_idx: 0,
+            selected_cell: None,
+            scroll_offset: Vec2::ZERO,
+        }
+    }
+
+    /// Renders only cells intersecting the visible rows and columns.
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::palette::AppPalette,
+    ) -> egui::Response {
+        let (rect, response) = ui.allocate_exact_size(self.host_size, egui::Sense::hover());
+        if !ui.is_rect_visible(rect) {
+            return response;
+        }
+
+        let data = Arc::clone(&self.data);
+        let id = self.id;
+        let mut active_sheet_idx = self
+            .active_sheet_idx
+            .min(data.sheets.len().saturating_sub(1));
+        let mut selected_cell = self.selected_cell;
+        let scroll_offset = self.scroll_offset;
+        let output = ui.allocate_ui_at_rect(rect, |ui| {
+            egui::Frame::none()
+                .fill(crate::hex_to_c32(&palette.colors.surface_recessed))
+                .stroke(Stroke::new(
+                    1.0_f32,
+                    crate::hex_to_c32(&palette.colors.surface_panel),
+                ))
+                .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS))
+                .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
+                .show(ui, |ui| {
+                    if data.sheets.len() > 1 {
+                        ui.push_id(id, |ui| {
+                            let label_width = (ui.available_width()
+                                - 2.0 * ui.spacing().interact_size.x
+                                - 4.0 * ui.spacing().item_spacing.x)
+                                .max(1.0);
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add_enabled(active_sheet_idx > 0, egui::Button::new("‹"))
+                                    .clicked()
+                                {
+                                    active_sheet_idx -= 1;
+                                    selected_cell = None;
+                                }
+                                let sheet = &data.sheets[active_sheet_idx];
+                                ui.add_sized(
+                                    Vec2::new(label_width, ui.spacing().interact_size.y),
+                                    egui::Label::new(format!(
+                                        "{}/{} · {}",
+                                        active_sheet_idx + 1,
+                                        data.sheets.len(),
+                                        inline_sheet_label(&sheet.name)
+                                    ))
+                                    .truncate(true),
+                                );
+                                if ui
+                                    .add_enabled(
+                                        active_sheet_idx + 1 < data.sheets.len(),
+                                        egui::Button::new("›"),
+                                    )
+                                    .clicked()
+                                {
+                                    active_sheet_idx += 1;
+                                    selected_cell = None;
+                                }
+                            });
+                        });
+                    }
+
+                    let Some(sheet) = data.sheets.get(active_sheet_idx) else {
+                        ui.label("No sheet data available.");
+                        return (Vec2::ZERO, active_sheet_idx, selected_cell);
+                    };
+                    if sheet.rows.is_empty() || sheet.total_cols == 0 {
+                        ui.label("Sheet is empty.");
+                        return (Vec2::ZERO, active_sheet_idx, selected_cell);
+                    }
+
+                    let preview_column_count = sheet.total_cols.min(INLINE_SPREADSHEET_MAX_COLUMNS);
+                    let column_widths = vec![INLINE_SPREADSHEET_COLUMN_WIDTH; preview_column_count];
+                    let col_offsets = column_offsets(&column_widths, 1.0);
+                    let total_width = *col_offsets.last().unwrap_or(&0.0);
+                    let row_stride = INLINE_SPREADSHEET_ROW_HEIGHT + 1.0;
+                    let total_height = (sheet.rows.len() as f32 * row_stride - 1.0).max(0.0);
+                    let mut clicked_cell = None;
+                    let output = egui::ScrollArea::both()
+                        .id_source(id)
+                        .auto_shrink([false, false])
+                        .scroll_offset(scroll_offset)
+                        .show_viewport(ui, |ui, viewport| {
+                            ui.set_min_size(Vec2::new(total_width, total_height));
+                            let rows = visible_row_range(
+                                viewport.min.y,
+                                viewport.height(),
+                                sheet.rows.len(),
+                                row_stride,
+                            );
+                            let columns = visible_column_range(
+                                viewport.min.x,
+                                viewport.width(),
+                                &col_offsets,
+                            );
+                            let origin = ui.max_rect().min;
+                            for row_idx in rows {
+                                let Some(row) = sheet.rows.get(row_idx) else {
+                                    continue;
+                                };
+                                let row_fill = if row_idx == 0 {
+                                    crate::hex_to_c32(&palette.colors.surface_panel)
+                                } else {
+                                    crate::hex_to_c32(&palette.colors.canvas)
+                                };
+                                for col_idx in columns.clone() {
+                                    let cell_rect = egui::Rect::from_min_size(
+                                        egui::pos2(
+                                            origin.x + col_offsets[col_idx],
+                                            origin.y + row_idx as f32 * row_stride,
+                                        ),
+                                        Vec2::new(
+                                            INLINE_SPREADSHEET_COLUMN_WIDTH,
+                                            INLINE_SPREADSHEET_ROW_HEIGHT,
+                                        ),
+                                    );
+                                    let visible_cell_rect = cell_rect.intersect(rect);
+                                    let cell_id = id.with(("cell", row_idx, col_idx));
+                                    let cell_response = ui.interact(
+                                        visible_cell_rect,
+                                        cell_id,
+                                        egui::Sense::click(),
+                                    );
+                                    if cell_response.clicked() {
+                                        clicked_cell = Some((row_idx, col_idx));
+                                    }
+                                    let is_selected = selected_cell == Some((row_idx, col_idx));
+                                    let fill = if is_selected {
+                                        crate::hex_to_c32(&palette.harmonies.base)
+                                    } else {
+                                        row_fill
+                                    };
+                                    let cell_painter =
+                                        ui.painter().with_clip_rect(visible_cell_rect);
+                                    cell_painter.rect_filled(cell_rect, Rounding::ZERO, fill);
+                                    cell_painter.rect_stroke(
+                                        cell_rect,
+                                        Rounding::ZERO,
+                                        Stroke::new(
+                                            0.5_f32,
+                                            crate::hex_to_c32(&palette.colors.surface_panel),
+                                        ),
+                                    );
+                                    let text_color = crate::contrast_text_c32(
+                                        fill,
+                                        Some(crate::hex_to_c32(&palette.colors.text_primary)),
+                                        palette,
+                                    );
+                                    cell_painter.text(
+                                        cell_rect.left_center() + egui::vec2(6.0, 0.0),
+                                        egui::Align2::LEFT_CENTER,
+                                        inline_cell_display_text(
+                                            row.get(col_idx).map(String::as_str).unwrap_or(""),
+                                        ),
+                                        FontId::proportional(BODY_FONT_SIZE),
+                                        text_color,
+                                    );
+                                }
+                            }
+                            clicked_cell
+                        });
+                    if output.inner.is_some() {
+                        selected_cell = output.inner;
+                    }
+                    (output.state.offset, active_sheet_idx, selected_cell)
+                })
+                .inner
+        });
+        self.scroll_offset = output.inner.0;
+        self.active_sheet_idx = output.inner.1;
+        self.selected_cell = output.inner.2;
+        response
+    }
 }
 
 fn visible_row_range(offset: f32, viewport_height: f32, total: usize, stride: f32) -> Range<usize> {
@@ -720,6 +974,292 @@ impl SpreadsheetViewerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn inline_preview_data() -> Arc<SpreadsheetData> {
+        let mut first_rows = vec![vec!["first-sheet".to_owned()]];
+        let mut second_rows = vec![vec!["choose-b".to_owned()]];
+        for row in 0..400 {
+            first_rows.push(vec![format!("A-row-{row:04}")]);
+            second_rows.push(vec![format!("B-row-{row:04}")]);
+        }
+        Arc::new(SpreadsheetData {
+            title: "Shared preview data".to_owned(),
+            sheets: vec![
+                SpreadsheetSheet::new("Sheet A".to_owned(), first_rows),
+                SpreadsheetSheet::new("Sheet B".to_owned(), second_rows),
+            ],
+        })
+    }
+
+    fn render_inline_pair(
+        ctx: &egui::Context,
+        first: &mut InlineSpreadsheetPreview,
+        second: &mut InlineSpreadsheetPreview,
+        events: Vec<egui::Event>,
+        time: f64,
+    ) -> (egui::FullOutput, [egui::Rect; 2]) {
+        let palette = little_clip_core::palette::AppPalette::default();
+        let mut rects = [egui::Rect::NOTHING; 2];
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(480.0, 210.0),
+                )),
+                events,
+                time: Some(time),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        rects[0] = first.show(ui, &palette).rect;
+                        rects[1] = second.show(ui, &palette).rect;
+                    });
+                });
+            },
+        );
+        (output, rects)
+    }
+
+    fn rendered_text_position(
+        output: &egui::FullOutput,
+        host: egui::Rect,
+        text: &str,
+    ) -> egui::Pos2 {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text_shape)
+                    if host.contains(text_shape.pos) && text_shape.galley.job.text == text =>
+                {
+                    Some(text_shape.pos)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("could not find rendered {text:?} in {host:?}"))
+    }
+
+    fn pointer_click_events(position: egui::Pos2, pressed: bool) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(position),
+            egui::Event::PointerButton {
+                pos: position,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]
+    }
+
+    #[test]
+    fn inline_spreadsheet_previews_share_data_with_independent_navigation() {
+        let data = inline_preview_data();
+        let mut first = InlineSpreadsheetPreview::new(Arc::clone(&data), Vec2::new(220.0, 124.0));
+        let mut second = InlineSpreadsheetPreview::new(Arc::clone(&data), Vec2::new(220.0, 124.0));
+        assert!(Arc::ptr_eq(&first.data, &second.data));
+        assert_ne!(first.id, second.id);
+
+        let ctx = egui::Context::default();
+        let (initial, rects) = render_inline_pair(&ctx, &mut first, &mut second, Vec::new(), 0.0);
+        let second_first_cell_clip = initial
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text)
+                    if rects[1].contains(text.pos) && text.galley.job.text == "first-sheet" =>
+                {
+                    Some(shape.clip_rect)
+                }
+                _ => None,
+            })
+            .expect("second preview should render its first cell");
+        assert!(second_first_cell_clip.intersects(rects[1]));
+        assert!(second_first_cell_clip.min.x >= rects[1].min.x);
+        assert!(second_first_cell_clip.max.x <= rects[1].max.x);
+        assert!(second_first_cell_clip.width() <= INLINE_SPREADSHEET_COLUMN_WIDTH + 1.0);
+        let next_position = rendered_text_position(&initial, rects[0], "›");
+        render_inline_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            pointer_click_events(next_position, true),
+            0.1,
+        );
+        let (after_tab_click, rects) = render_inline_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            pointer_click_events(next_position, false),
+            0.2,
+        );
+        assert_eq!(first.active_sheet_idx, 1);
+        assert_eq!(second.active_sheet_idx, 0);
+
+        let cell_position = rendered_text_position(&after_tab_click, rects[0], "choose-b");
+        render_inline_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            pointer_click_events(cell_position, true),
+            0.3,
+        );
+        render_inline_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            pointer_click_events(cell_position, false),
+            0.4,
+        );
+        assert_eq!(first.selected_cell, Some((0, 0)));
+        assert_eq!(second.selected_cell, None);
+
+        let wheel_position = egui::pos2(rects[0].center().x, rects[0].bottom() - 18.0);
+        let (scrolled, rects) = render_inline_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            vec![
+                egui::Event::PointerMoved(wheel_position),
+                egui::Event::Scroll(Vec2::new(0.0, -500.0)),
+            ],
+            0.5,
+        );
+        assert!(first.scroll_offset.y > 0.0);
+        assert_eq!(second.scroll_offset, Vec2::ZERO);
+        assert!(
+            scrolled.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::epaint::Shape::Text(text)
+                if rects[0].contains(text.pos)
+                    && text.galley.job.text.starts_with("B-row-00")
+                    && shape.clip_rect.intersects(rects[0])
+                    && shape.clip_rect.width() <= INLINE_SPREADSHEET_COLUMN_WIDTH + 1.0)
+            }),
+            "scrolling should reveal later rows whose text remains clipped to a cell inside the first host"
+        );
+        assert!(
+            scrolled.shapes.iter().any(|shape| {
+                matches!(&shape.shape, egui::epaint::Shape::Text(text)
+                if rects[1].contains(text.pos)
+                    && text.galley.job.text == "first-sheet"
+                    && shape.clip_rect.intersects(rects[1]))
+            }),
+            "the second preview should remain on the first sheet"
+        );
+    }
+
+    #[test]
+    fn clipped_inline_spreadsheet_preview_renders_no_cells() {
+        let data = inline_preview_data();
+        let mut preview = InlineSpreadsheetPreview::new(data, Vec2::new(220.0, 124.0));
+        let ctx = egui::Context::default();
+        let palette = little_clip_core::palette::AppPalette::default();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(300.0, 100.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add_space(200.0);
+                    preview.show(ui, &palette);
+                });
+            },
+        );
+        assert_eq!(preview.scroll_offset, Vec2::ZERO);
+        assert!(
+            output
+                .shapes
+                .iter()
+                .all(|shape| { !matches!(&shape.shape, egui::epaint::Shape::Text(_)) })
+        );
+    }
+
+    #[test]
+    fn inline_cell_display_text_caps_unicode_scalars_without_changing_source() {
+        let source = format!("{}終", "あ".repeat(INLINE_SPREADSHEET_MAX_CELL_CHARS));
+        let display = inline_cell_display_text(&source);
+        assert_eq!(
+            display.chars().count(),
+            INLINE_SPREADSHEET_MAX_CELL_CHARS + 1
+        );
+        assert!(display.ends_with('…'));
+        assert_eq!(
+            source.chars().count(),
+            INLINE_SPREADSHEET_MAX_CELL_CHARS + 1
+        );
+
+        let short = "short text";
+        assert!(matches!(inline_cell_display_text(short), Cow::Borrowed(value) if value == short));
+    }
+
+    #[test]
+    fn inline_spreadsheet_navigation_stays_one_row_for_many_sheets() {
+        let sheets = (0..200)
+            .map(|index| {
+                SpreadsheetSheet::new(
+                    format!("{}-{index}", "非常に長いシート名".repeat(8)),
+                    vec![vec![format!("sheet-{index}")]],
+                )
+            })
+            .collect();
+        let data = Arc::new(SpreadsheetData {
+            title: "Many sheets".to_owned(),
+            sheets,
+        });
+        let mut first = InlineSpreadsheetPreview::new(Arc::clone(&data), Vec2::new(220.0, 124.0));
+        let mut second = InlineSpreadsheetPreview::new(data, Vec2::new(220.0, 124.0));
+        let ctx = egui::Context::default();
+        let (output, rects) = render_inline_pair(&ctx, &mut first, &mut second, Vec::new(), 0.0);
+
+        let current_sheet_labels = output
+            .shapes
+            .iter()
+            .filter(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => {
+                    rects[0].contains(text.pos) && text.galley.job.text.starts_with("1/200 · ")
+                }
+                _ => false,
+            })
+            .count();
+        assert_eq!(
+            current_sheet_labels, 1,
+            "only one current-sheet label is shown"
+        );
+        let first_cell = rendered_text_position(&output, rects[0], "sheet-0");
+        assert!(
+            first_cell.y < rects[0].top() + 100.0,
+            "grid should remain visible below a single navigation row"
+        );
+
+        let next_position = rendered_text_position(&output, rects[0], "›");
+        render_inline_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            pointer_click_events(next_position, true),
+            0.1,
+        );
+        render_inline_pair(
+            &ctx,
+            &mut first,
+            &mut second,
+            pointer_click_events(next_position, false),
+            0.2,
+        );
+        assert_eq!(
+            first.active_sheet_idx, 1,
+            "next keeps every sheet one click away"
+        );
+        assert_eq!(
+            second.active_sheet_idx, 0,
+            "navigation state remains instance-local"
+        );
+    }
 
     #[test]
     fn independent_spreadsheet_views_share_data_and_keep_navigation_separate() {
