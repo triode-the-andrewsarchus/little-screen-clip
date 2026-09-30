@@ -6158,7 +6158,7 @@ mod workbench_layout_tests {
     }
 
     #[test]
-    fn audio_inspect_and_hf_escape_close_to_the_originating_workbench_route() {
+    fn idle_audio_mode_escape_closes_to_the_originating_workbench_route() {
         let temp_dir = tempfile::tempdir().unwrap();
         let wav_path = temp_dir.path().join("escape-audio.wav");
         let mut wav = Vec::with_capacity(44 + 16_000);
@@ -6180,6 +6180,7 @@ mod workbench_layout_tests {
         for mode in [
             audio_preview::AudioToolMode::Inspect,
             audio_preview::AudioToolMode::HfAnalysis,
+            audio_preview::AudioToolMode::StemSeparation,
         ] {
             let mut audio = AudioPreviewState::new(wav_path.clone(), "escape-audio.wav".into());
             audio.active_mode = mode;
