@@ -3654,6 +3654,60 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn idle_pdf_escape_returns_to_source_route_and_preserves_slots() {
+        let temp_dir = tempfile::tempdir().expect("private PDF fixture directory");
+        let path = temp_dir.path().join("missing-idle.pdf");
+        assert!(!path.exists());
+        let pdf = PdfEditorState::new(path.clone());
+        let mut app = test_workbench_app(Some(ViewerSession::Pdf(pdf)), VecDeque::new());
+        app.view = WorkbenchView::Palette;
+        app.selected_slots = vec![SlotId::RightHand, SlotId::LeftPrior1];
+        let original_slots = app.selected_slots.clone();
+        let Some(ViewerSession::Pdf(state)) = &app.viewer else {
+            panic!("PDF viewer should be active before Escape");
+        };
+        assert_eq!(state.path, path, "active PDF path belongs to this session");
+
+        let ctx = egui::Context::default();
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| assert!(app.render_modal_viewers(ctx)),
+        );
+
+        assert!(
+            app.viewer.is_none(),
+            "Escape should close only the PDF viewer"
+        );
+        assert_eq!(app.view, WorkbenchView::Palette);
+        assert_eq!(app.selected_slots, original_slots);
+        let close_commands = output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|output| {
+                output
+                    .commands
+                    .iter()
+                    .filter(|command| matches!(command, egui::ViewportCommand::Close))
+                    .count()
+            })
+            .unwrap_or_default();
+        assert_eq!(close_commands, 0, "viewer Escape must keep popup open");
+    }
+
+    #[test]
     fn palette_text_diff_opens_and_escape_returns_to_palette() {
         let mut app = test_workbench_app(None, VecDeque::new());
         *app.state.get_mut(SlotId::LeftHand).expect("left slot") =
