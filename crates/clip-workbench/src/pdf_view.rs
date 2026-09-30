@@ -13,8 +13,8 @@ use little_clip_core::pdf::{
 };
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel, sync_channel};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const PREVIEW_QUEUE_CAPACITY: usize = 3;
@@ -308,6 +308,8 @@ pub struct PdfEditorState {
         Receiver<Result<Result<PdfInfo, String>, JobError>>,
     )>,
     preview_rx: Option<Receiver<PdfPreviewMsg>>,
+    preview_job: Option<(JobTicket, Receiver<Result<(), JobError>>)>,
+    preview_cancel: Option<Arc<Mutex<bool>>>,
     previews_loading: bool,
     edit_rx: Option<Receiver<PdfEditMsg>>,
     edit_in_progress: bool,
@@ -347,6 +349,8 @@ impl PdfEditorState {
             dirty: false,
             info_job: None,
             preview_rx: None,
+            preview_job: None,
+            preview_cancel: None,
             previews_loading: false,
             edit_rx: None,
             edit_in_progress: false,
@@ -363,8 +367,7 @@ impl PdfEditorState {
         if let Some((ticket, _)) = self.info_job.take() {
             ticket.cancel();
         }
-        self.preview_rx = None;
-        self.previews_loading = false;
+        self.cancel_preview_worker();
         self.raster_cache = None;
         if let Some(job) = &mut self.decode_job {
             job.cancel();
@@ -427,6 +430,14 @@ impl PdfEditorState {
     }
 
     fn start_preview_worker(&mut self) {
+        self.start_preview_worker_on(BackgroundJobs::global(), render_pdf_page_preview);
+    }
+
+    fn start_preview_worker_on<F>(&mut self, jobs: &BackgroundJobs, render_page: F)
+    where
+        F: Fn(&Path, usize, u32) -> Result<(Vec<u8>, u32, u32), String> + Send + 'static,
+    {
+        self.cancel_preview_worker();
         let raster_cache = match tempfile::tempdir() {
             Ok(cache) => std::sync::Arc::new(cache),
             Err(error) => {
@@ -441,20 +452,35 @@ impl PdfEditorState {
         let path = self.path.clone();
         let page_count = self.page_count;
         let selected_page = self.selected_page.unwrap_or(1).min(page_count.max(1));
-        // Bound pending raster data if rendering outruns the UI. Dropping this
-        // receiver on a route change also stops the old worker at its next send;
-        // the worker can finish at most its current page render after that.
+        // Bound pending raster data if rendering outruns the UI. Cancellation
+        // drops this receiver to unblock a producer waiting to publish a page.
         let (tx, rx) = sync_channel(PREVIEW_QUEUE_CAPACITY);
-        self.preview_rx = Some(rx);
-        self.previews_loading = true;
-        drop(spawn_preview_worker(
+        let cancelled = Arc::new(Mutex::new(false));
+        let (ticket, job_rx) = spawn_preview_worker(
+            jobs,
             path,
             page_count,
             selected_page,
             raster_cache,
             tx,
-            render_pdf_page_preview,
-        ));
+            Arc::clone(&cancelled),
+            render_page,
+        );
+        self.preview_rx = Some(rx);
+        self.preview_job = Some((ticket, job_rx));
+        self.preview_cancel = Some(cancelled);
+        self.previews_loading = true;
+    }
+
+    fn cancel_preview_worker(&mut self) {
+        if let Some(cancelled) = self.preview_cancel.take() {
+            *cancelled.lock().expect("PDF preview cancel mutex poisoned") = true;
+        }
+        if let Some((ticket, _)) = self.preview_job.take() {
+            ticket.cancel();
+        }
+        self.preview_rx = None;
+        self.previews_loading = false;
     }
 
     fn poll_preview_worker(&mut self, ctx: &egui::Context) {
@@ -489,6 +515,34 @@ impl PdfEditorState {
         }
         if finished {
             self.preview_rx = None;
+        }
+        let completion = self
+            .preview_job
+            .as_ref()
+            .and_then(|(_, rx)| match rx.try_recv() {
+                Ok(Ok(())) => Some(Ok(())),
+                Ok(Err(error)) => Some(Err(error.to_string())),
+                Err(TryRecvError::Disconnected) => Some(Err(
+                    "PDF preview worker disconnected unexpectedly".to_owned(),
+                )),
+                Err(TryRecvError::Empty) => None,
+            });
+        if let Some(result) = completion {
+            self.preview_job = None;
+            self.preview_cancel = None;
+            self.preview_rx = None;
+            self.previews_loading = false;
+            if let Err(error) = result {
+                let message = format!("PDF previews unavailable: {error}");
+                for page in &mut self.pages {
+                    if page.raster.is_none() && page.error.is_none() {
+                        page.error = Some(message.clone());
+                    }
+                }
+                self.status_toast
+                    .set(message, ctx.input(|input| input.time));
+            }
+        } else if finished && self.preview_job.is_none() {
             self.previews_loading = false;
         } else if self.previews_loading {
             ctx.request_repaint_after(Duration::from_millis(50));
@@ -1226,32 +1280,45 @@ impl PdfEditorState {
 }
 
 fn spawn_preview_worker<F>(
+    jobs: &BackgroundJobs,
     path: PathBuf,
     page_count: usize,
     selected_page: usize,
     raster_cache: std::sync::Arc<tempfile::TempDir>,
     tx: std::sync::mpsc::SyncSender<PdfPreviewMsg>,
+    cancelled: Arc<Mutex<bool>>,
     render_page: F,
-) -> std::thread::JoinHandle<()>
+) -> (JobTicket, Receiver<Result<(), JobError>>)
 where
     F: Fn(&Path, usize, u32) -> Result<(Vec<u8>, u32, u32), String> + Send + 'static,
 {
-    std::thread::spawn(move || {
+    jobs.submit(Duration::MAX, move || {
         // A large selected-page raster arrives first; thumbnails then fill in
-        // incrementally. Dropping the receiver stops work at the next send.
+        // incrementally. An in-flight renderer may complete after cancellation,
+        // but its result must not be written or published.
         let mut order = Vec::with_capacity(page_count);
         if page_count > 0 {
             order.push(selected_page);
         }
         order.extend((1..=page_count).filter(|page| *page != selected_page));
         for page_num in order {
+            if *cancelled.lock().expect("PDF preview cancel mutex poisoned") {
+                break;
+            }
             let max_dim = if page_num == selected_page {
                 PAGE_RASTER_MAX_DIM
             } else {
                 360
             };
-            let result =
-                render_page(&path, page_num, max_dim).and_then(|(png_bytes, width, height)| {
+            let rendered = render_page(&path, page_num, max_dim);
+            let result = {
+                // Hold the cancellation gate through the file write. Once the
+                // owner cancels, a completed render cannot cache a stale page.
+                let cancelled = cancelled.lock().expect("PDF preview cancel mutex poisoned");
+                if *cancelled {
+                    break;
+                }
+                rendered.and_then(|(png_bytes, width, height)| {
                     let raster_path = raster_cache.path().join(format!("page-{page_num}.png"));
                     std::fs::write(&raster_path, png_bytes)
                         .map(|()| {
@@ -1264,7 +1331,11 @@ where
                             })
                         })
                         .map_err(|error| format!("Could not cache PDF page {page_num}: {error}"))
-                });
+                })
+            };
+            if *cancelled.lock().expect("PDF preview cancel mutex poisoned") {
+                break;
+            }
             if tx.send(PdfPreviewMsg { page_num, result }).is_err() {
                 break;
             }
@@ -1274,6 +1345,7 @@ where
 
 impl Drop for PdfEditorState {
     fn drop(&mut self) {
+        self.cancel_preview_worker();
         if let Some(job) = &mut self.decode_job {
             job.cancel();
         }
@@ -1374,6 +1446,8 @@ mod tests {
             dirty: false,
             info_job: None,
             preview_rx: None,
+            preview_job: None,
+            preview_cancel: None,
             previews_loading: false,
             edit_rx: None,
             edit_in_progress: false,
@@ -1768,13 +1842,17 @@ mod tests {
 
         let rendered = Arc::new(AtomicUsize::new(0));
         let render_count = Arc::clone(&rendered);
+        let jobs = BackgroundJobs::new(1, 1);
         let (tx, rx) = sync_channel(PREVIEW_QUEUE_CAPACITY);
-        let worker = spawn_preview_worker(
+        let cancelled = Arc::new(Mutex::new(false));
+        let (ticket, result_rx) = spawn_preview_worker(
+            &jobs,
             PathBuf::from("fixture.pdf"),
             100,
             1,
             Arc::new(tempfile::tempdir().unwrap()),
             tx,
+            Arc::clone(&cancelled),
             move |_, _, _| {
                 render_count.fetch_add(1, Ordering::SeqCst);
                 Ok((Vec::new(), 1, 1))
@@ -1788,11 +1866,180 @@ mod tests {
             std::thread::yield_now();
         }
         assert_eq!(rendered.load(Ordering::SeqCst), PREVIEW_QUEUE_CAPACITY + 1);
+        *cancelled.lock().unwrap() = true;
+        ticket.cancel();
         drop(rx);
-        worker
-            .join()
-            .expect("preview worker should exit when its receiver closes");
+        assert_eq!(
+            result_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Err(JobError::Cancelled)
+        );
         assert_eq!(rendered.load(Ordering::SeqCst), PREVIEW_QUEUE_CAPACITY + 1);
+    }
+
+    #[test]
+    fn saturated_preview_queue_reports_an_error_instead_of_loading_forever() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let (_, blocker_rx) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (_, queued_rx) = jobs.submit(Duration::MAX, || ());
+
+        let mut state = raster_state(2, 16);
+        for page in &mut state.pages {
+            page.raster = None;
+        }
+        state.start_preview_worker_on(&jobs, |_, _, _| panic!("full queue must not render"));
+        state.poll_preview_worker(&egui::Context::default());
+        assert!(!state.previews_loading);
+        assert!(state.preview_job.is_none());
+        assert!(state.pages.iter().all(|page| {
+            page.error
+                .as_deref()
+                .is_some_and(|error| error.contains("background job queue is full"))
+        }));
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        queued_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn dropping_editor_cancels_queued_preview_before_rendering() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let (_, blocker_rx) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let render_count = Arc::new(AtomicUsize::new(0));
+        let worker_count = Arc::clone(&render_count);
+        let mut state = raster_state(1, 16);
+        state.start_preview_worker_on(&jobs, move |_, _, _| {
+            worker_count.fetch_add(1, Ordering::SeqCst);
+            Ok((vec![1], 1, 1))
+        });
+        let cache_path = state.raster_cache.as_ref().unwrap().path().to_owned();
+        drop(state);
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        // A later job in the same single-worker queue proves the cancelled
+        // preview has been dequeued, without relying on a scheduling delay.
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let (_, rx) = jobs.submit(Duration::MAX, || ());
+            match rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+                Ok(()) => break,
+                Err(JobError::QueueFull) if std::time::Instant::now() < deadline => {
+                    std::thread::yield_now();
+                }
+                result => panic!("sentinel job failed: {result:?}"),
+            }
+        }
+        assert_eq!(render_count.load(Ordering::SeqCst), 0);
+        assert!(!cache_path.exists());
+    }
+
+    #[test]
+    fn active_preview_publishes_selected_page_before_remaining_pages() {
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut state = raster_state(3, 16);
+        state.selected_page = Some(3);
+        for page in &mut state.pages {
+            page.raster = None;
+        }
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        state.start_preview_worker_on(&jobs, move |_, page_num, max_dim| {
+            started_tx.send((page_num, max_dim)).unwrap();
+            if page_num == 1 {
+                release_rx.recv().unwrap();
+            }
+            Ok((vec![page_num as u8], 1, 1))
+        });
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            (3, PAGE_RASTER_MAX_DIM)
+        );
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while state.pages[2].raster.is_none() && std::time::Instant::now() < deadline {
+            state.poll_preview_worker(&ctx);
+            std::thread::yield_now();
+        }
+        assert!(state.pages[2].raster.is_some());
+        assert!(state.pages[0].raster.is_none());
+        assert!(state.pages[1].raster.is_none());
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            (1, 360)
+        );
+
+        release_tx.send(()).unwrap();
+        while state.previews_loading && std::time::Instant::now() < deadline {
+            state.poll_preview_worker(&ctx);
+            std::thread::yield_now();
+        }
+        assert!(!state.previews_loading);
+        assert_eq!(
+            started_rx.recv_timeout(Duration::from_secs(1)).unwrap(),
+            (2, 360)
+        );
+        assert!(state.pages.iter().all(|page| {
+            page.raster
+                .as_ref()
+                .is_some_and(|raster| raster.path().exists())
+        }));
+    }
+
+    #[test]
+    fn dropping_editor_during_render_prevents_stale_raster_write() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let jobs = BackgroundJobs::new(1, 1);
+        let rendered = Arc::new(AtomicUsize::new(0));
+        let render_count = Arc::clone(&rendered);
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let mut state = raster_state(2, 16);
+        state.start_preview_worker_on(&jobs, move |_, _, _| {
+            render_count.fetch_add(1, Ordering::SeqCst);
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok((vec![1], 1, 1))
+        });
+        let cache = Arc::clone(state.raster_cache.as_ref().unwrap());
+        let cache_path = cache.path().to_owned();
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        drop(state);
+        let (_, sentinel_rx) = jobs.submit(Duration::MAX, || ());
+        release_tx.send(()).unwrap();
+        sentinel_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(rendered.load(Ordering::SeqCst), 1);
+        assert!(!cache.path().join("page-1.png").exists());
+        drop(cache);
+        assert!(!cache_path.exists());
     }
 
     #[test]
@@ -1979,6 +2226,8 @@ mod tests {
                 dirty: false,
                 info_job: None,
                 preview_rx: None,
+                preview_job: None,
+                preview_cancel: None,
                 previews_loading: false,
                 edit_rx: None,
                 edit_in_progress: false,
