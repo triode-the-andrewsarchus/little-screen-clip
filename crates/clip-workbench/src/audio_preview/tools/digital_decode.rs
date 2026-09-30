@@ -12,9 +12,25 @@ use little_clip_ops::digital_decode::{
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, TryRecvError, channel};
+use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, sync_channel};
 use std::time::Duration;
 use std::time::Instant;
+
+/// Keep at most two progress messages queued while the UI is not polling.
+/// The scanner emits one batch per enabled protocol, so backpressure preserves
+/// every symbol batch without retaining a scan's full output in the channel.
+const DIGITAL_DECODE_PROGRESS_CAPACITY: usize = 2;
+
+fn digital_decode_progress_channel() -> (SyncSender<DigitalDecodeMsg>, Receiver<DigitalDecodeMsg>) {
+    sync_channel(DIGITAL_DECODE_PROGRESS_CAPACITY)
+}
+
+fn send_digital_decode_progress(
+    tx: &SyncSender<DigitalDecodeMsg>,
+    message: DigitalDecodeMsg,
+) -> bool {
+    tx.send(message).is_ok()
+}
 
 /// Active tab within the digital decode transcript inspector panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -121,7 +137,7 @@ impl AudioPreviewState {
 
         let cancel = Arc::new(AtomicBool::new(false));
         let cancel_thread = Arc::clone(&cancel);
-        let (tx, rx) = channel();
+        let (tx, rx) = digital_decode_progress_channel();
 
         self.digital_decode.in_progress = true;
         self.digital_decode.cancel_flag = Some(cancel);
@@ -143,7 +159,10 @@ impl AudioPreviewState {
             if cancel_thread.load(Ordering::Acquire) {
                 return;
             }
-            let _ = tx.send(DigitalDecodeMsg::Started);
+            if !send_digital_decode_progress(&tx, DigitalDecodeMsg::Started) {
+                cancel_thread.store(true, Ordering::Release);
+                return;
+            }
             let start = Instant::now();
             scan_digital_decode_channels_streaming_enabled(
                 &ch1_samples,
@@ -153,13 +172,15 @@ impl AudioPreviewState {
                 &enabled_protocols,
                 Some(Arc::clone(&cancel_thread)),
                 |batch| {
-                    let _ = tx.send(DigitalDecodeMsg::Batch(batch));
+                    if !send_digital_decode_progress(&tx, DigitalDecodeMsg::Batch(batch)) {
+                        cancel_thread.store(true, Ordering::Release);
+                    }
                 },
             );
 
             if !cancel_thread.load(Ordering::Acquire) {
                 let elapsed = start.elapsed().as_secs_f32();
-                let _ = tx.send(DigitalDecodeMsg::Done(elapsed));
+                let _ = send_digital_decode_progress(&tx, DigitalDecodeMsg::Done(elapsed));
             }
         });
         self.digital_decode.job_ticket = Some(ticket);
@@ -321,7 +342,6 @@ impl AudioPreviewState {
     ) {
         let now = ctx.input(|i| i.time);
         self.poll_audio_analysis(ctx, now);
-        self.poll_digital_decode(ctx);
 
         // Advance playhead if playing
         if self.is_playing {
@@ -1412,6 +1432,158 @@ impl AudioPreviewState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc::channel;
+    use std::thread;
+
+    fn batch(label: &str, time: f32) -> DigitalDecodeMsg {
+        DigitalDecodeMsg::Batch(vec![DecodedSymbol {
+            protocol: DecoderProtocol::Dtmf,
+            symbol: label.to_owned(),
+            start_sec: time,
+            end_sec: time + 0.1,
+            confidence: 1.0,
+            details: None,
+        }])
+    }
+
+    #[test]
+    fn bounded_progress_channel_backpressures_without_losing_fifo_results() {
+        let (tx, rx) = digital_decode_progress_channel();
+        assert!(send_digital_decode_progress(&tx, DigitalDecodeMsg::Started));
+        assert!(send_digital_decode_progress(&tx, batch("one", 1.0)));
+
+        let (attempt_tx, attempt_rx) = channel();
+        let (sent_tx, sent_rx) = channel();
+        let producer = thread::spawn(move || {
+            attempt_tx.send(()).unwrap();
+            let sent = send_digital_decode_progress(&tx, batch("two", 2.0));
+            sent_tx.send(sent).unwrap();
+        });
+
+        // The queue is full, so the producer cannot report completion until
+        // polling frees a slot.
+        attempt_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(sent_rx.try_recv(), Err(TryRecvError::Empty)));
+        assert!(matches!(rx.recv().unwrap(), DigitalDecodeMsg::Started));
+        assert!(sent_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        producer.join().unwrap();
+
+        let mut labels = Vec::new();
+        while let Ok(DigitalDecodeMsg::Batch(symbols)) = rx.try_recv() {
+            labels.extend(symbols.into_iter().map(|symbol| symbol.symbol));
+        }
+        assert_eq!(labels, ["one", "two"]);
+    }
+
+    #[test]
+    fn dropping_progress_receiver_unblocks_a_blocked_producer() {
+        let (tx, rx) = digital_decode_progress_channel();
+        assert!(send_digital_decode_progress(&tx, DigitalDecodeMsg::Started));
+        assert!(send_digital_decode_progress(&tx, batch("queued", 1.0)));
+
+        let (attempt_tx, attempt_rx) = channel();
+        let (result_tx, result_rx) = channel();
+        let producer = thread::spawn(move || {
+            attempt_tx.send(()).unwrap();
+            result_tx
+                .send(send_digital_decode_progress(&tx, batch("blocked", 2.0)))
+                .unwrap();
+        });
+        attempt_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(result_rx.try_recv(), Err(TryRecvError::Empty)));
+
+        // This is the receiver-drop action used by cancel_digital_decode.
+        drop(rx);
+        assert!(!result_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        producer.join().unwrap();
+    }
+
+    #[test]
+    fn switching_modes_keeps_bounded_decode_progress_draining() {
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut state = AudioPreviewState::new(
+            PathBuf::from("/__little_clip_missing_audio_decode_mode__.wav"),
+            "test.wav".to_owned(),
+        );
+        state.active_mode = AudioToolMode::DigitalDecode;
+        state.digital_decode.has_started_initial_scan = true;
+
+        let (tx, rx) = digital_decode_progress_channel();
+        state.digital_decode.rx = Some(rx);
+        state.digital_decode.in_progress = true;
+        assert!(send_digital_decode_progress(&tx, DigitalDecodeMsg::Started));
+        assert!(send_digital_decode_progress(&tx, batch("one", 1.0)));
+
+        let (attempt_tx, attempt_rx) = channel();
+        let (result_tx, result_rx) = channel();
+        let producer = thread::spawn(move || {
+            attempt_tx.send(()).unwrap();
+            for message in [
+                batch("two", 2.0),
+                batch("three", 3.0),
+                DigitalDecodeMsg::Done(0.1),
+            ] {
+                if !send_digital_decode_progress(&tx, message) {
+                    result_tx.send(false).unwrap();
+                    return;
+                }
+            }
+            result_tx.send(true).unwrap();
+        });
+        attempt_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(result_rx.try_recv(), Err(TryRecvError::Empty)));
+
+        let mut close_requested = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::I,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close_requested);
+                });
+            },
+        );
+        assert_eq!(state.active_mode, AudioToolMode::Inspect);
+        assert!(!close_requested);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while state.digital_decode.in_progress && Instant::now() < deadline {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close_requested);
+                });
+            });
+            thread::yield_now();
+        }
+        assert!(result_rx.recv_timeout(Duration::from_secs(1)).unwrap());
+        producer.join().unwrap();
+        assert!(!state.digital_decode.in_progress);
+        assert_eq!(state.active_mode, AudioToolMode::Inspect);
+        assert_eq!(
+            state
+                .digital_decode
+                .symbols
+                .iter()
+                .map(|symbol| symbol.symbol.as_str())
+                .collect::<Vec<_>>(),
+            ["one", "two", "three"]
+        );
+        assert_eq!(
+            state.digital_decode.status_msg.as_deref(),
+            Some("Decoded 3 symbols in 0.10s")
+        );
+    }
 
     fn composite(fill: Color32, surface: Color32) -> Color32 {
         let foreground = egui::Rgba::from(fill);

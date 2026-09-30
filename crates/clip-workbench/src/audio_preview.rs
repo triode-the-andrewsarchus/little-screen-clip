@@ -3995,6 +3995,7 @@ impl AudioPreviewState {
         let mode_before_frame = self.active_mode;
         self.poll_slice_copy_job(ctx, ctx.input(|input| input.time));
         self.poll_save_job(ctx, ctx.input(|input| input.time));
+        self.poll_digital_decode(ctx);
         if self.handle_studio_shortcuts(ctx, close_requested) {
             return;
         }
