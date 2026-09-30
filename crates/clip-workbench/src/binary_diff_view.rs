@@ -2985,6 +2985,106 @@ mod tests {
     }
 
     #[test]
+    fn rendered_binary_diff_summary_button_copies_exact_summary() {
+        let left = b"abc".to_vec();
+        let right = b"axc!".to_vec();
+        let mut state = BinaryDiffViewState::new(
+            "left.bin".to_owned(),
+            left.clone(),
+            "right.bin".to_owned(),
+            right.clone(),
+        );
+        if let Some(ticket) = state.compute_ticket.take() {
+            ticket.cancel();
+        }
+        state.receiver = None;
+        state.result = Some(compute_binary_diff(
+            "left.bin",
+            &left,
+            "right.bin",
+            &right,
+            BinaryDiffMode::Aligned,
+            8,
+        ));
+        state.is_computing = false;
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette = AppPalette::default();
+        let mut close = false;
+        let mut time = 0.0;
+        let mut render =
+            |state: &mut BinaryDiffViewState, time: &mut f64, events: Vec<egui::Event>| {
+                *time += 0.1;
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            Vec2::new(1200.0, 800.0),
+                        )),
+                        time: Some(*time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            state.render_ui(ui, ctx, &palette, &mut close);
+                        });
+                    },
+                )
+            };
+
+        let frame = render(&mut state, &mut time, Vec::new());
+        let summary_position = frame
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Summary" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("rendered Summary button label");
+        render(
+            &mut state,
+            &mut time,
+            vec![egui::Event::PointerMoved(summary_position)],
+        );
+        render(
+            &mut state,
+            &mut time,
+            vec![
+                egui::Event::PointerMoved(summary_position),
+                egui::Event::PointerButton {
+                    pos: summary_position,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        let copied = render(
+            &mut state,
+            &mut time,
+            vec![
+                egui::Event::PointerMoved(summary_position),
+                egui::Event::PointerButton {
+                    pos: summary_position,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+
+        assert_eq!(
+            copied.platform_output.copied_text,
+            "Binary Diff Summary:\nLeft: left.bin (3 bytes)\nRight: right.bin (4 bytes)\nSimilarity: 50.00%\nMatches: 2 B | Mismatches: 1 B | Insertions: 1 B | Deletions: 0 B\nMode: Aligned"
+        );
+        assert!(!close);
+    }
+
+    #[test]
     fn test_binary_diff_view_state_creation_and_recompute() {
         let mut state = BinaryDiffViewState::new(
             "file_a.bin".to_string(),
