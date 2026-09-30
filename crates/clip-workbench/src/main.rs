@@ -3537,6 +3537,66 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn midi_escape_after_region_clear_returns_to_source_view_and_preserves_slots() {
+        let data = MidiData {
+            title: "Synthetic MIDI".to_owned(),
+            track_count: 1,
+            track_names: vec!["Track".to_owned()],
+            total_notes: 0,
+            duration_sec: 4.0,
+            bpm: 120.0,
+            min_key: 60,
+            max_key: 60,
+            notes: Vec::new(),
+        };
+        let mut midi = MidiViewerState::from_parsed_file(PathBuf::from("synthetic.mid"), data);
+        midi.selected_region = Some((0.5, 2.5));
+        midi.play_stop_time = Some(2.5);
+        let mut app = test_workbench_app(Some(ViewerSession::Midi(midi)), VecDeque::new());
+        app.view = WorkbenchView::NodeMachine;
+        app.selected_slots = vec![SlotId::RightHand, SlotId::LeftPrior1];
+        let original_slots = app.selected_slots.clone();
+
+        let ctx = egui::Context::default();
+        let input = |events| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 700.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let escape = || egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        let _ = ctx.run(input(vec![escape()]), |ctx| {
+            assert!(app.render_modal_viewers(ctx));
+        });
+        let Some(ViewerSession::Midi(state)) = &app.viewer else {
+            panic!("first Escape should keep MIDI viewer open");
+        };
+        assert!(state.selected_region.is_none());
+        assert!(state.play_stop_time.is_none());
+        assert_eq!(app.view, WorkbenchView::NodeMachine);
+        assert_eq!(app.selected_slots, original_slots);
+
+        let _ = ctx.run(input(vec![escape()]), |ctx| {
+            assert!(app.render_modal_viewers(ctx));
+        });
+        assert!(
+            app.viewer.is_none(),
+            "second Escape should close MIDI viewer"
+        );
+        assert_eq!(app.view, WorkbenchView::NodeMachine);
+        assert_eq!(app.selected_slots, original_slots);
+    }
+
+    #[test]
     fn startup_pdf_queue_precedes_background_midi_entry() {
         let queued_pdf = ViewerSession::Pdf(PdfEditorState::new(PathBuf::from("queued.pdf")));
         let mut app = test_workbench_app(None, VecDeque::from([queued_pdf]));
