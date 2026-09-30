@@ -4477,6 +4477,7 @@ mod workbench_layout_tests {
         canvas.catalog_open = true;
         canvas.save_dialog_open = true;
         canvas.dragging_from = Some((uuid::Uuid::new_v4(), "Out".to_owned(), true));
+        let graph_before = canvas.graph.clone();
         let mut search_needs_focus = false;
 
         assert_eq!(
@@ -4486,6 +4487,7 @@ mod workbench_layout_tests {
         assert!(!canvas.catalog_open);
         assert!(canvas.save_dialog_open);
         assert!(canvas.dragging_from.is_some());
+        assert_eq!(canvas.graph, graph_before);
         assert_eq!(view, WorkbenchView::NodeMachine);
 
         assert_eq!(
@@ -4494,6 +4496,7 @@ mod workbench_layout_tests {
         );
         assert!(!canvas.save_dialog_open);
         assert!(canvas.dragging_from.is_some());
+        assert_eq!(canvas.graph, graph_before);
         assert_eq!(view, WorkbenchView::NodeMachine);
 
         assert_eq!(
@@ -4501,6 +4504,7 @@ mod workbench_layout_tests {
             WorkbenchEscapeRoute::Handled
         );
         assert!(canvas.dragging_from.is_none());
+        assert_eq!(canvas.graph, graph_before);
         assert_eq!(view, WorkbenchView::NodeMachine);
 
         assert_eq!(
