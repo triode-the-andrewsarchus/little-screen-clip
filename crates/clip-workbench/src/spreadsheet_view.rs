@@ -1490,16 +1490,20 @@ mod tests {
     fn rendered_copy_table_button_copies_active_sheet_as_exact_tsv() {
         let data = SpreadsheetData {
             title: "TSV copy fixture".into(),
-            sheets: vec![SpreadsheetSheet::new(
-                "Active".into(),
-                vec![
-                    vec!["Name".into(), "Count".into(), "Note".into()],
-                    vec!["alpha".into(), "1".into(), "日本語".into()],
-                    vec!["beta".into(), "2".into(), "✓".into()],
-                ],
-            )],
+            sheets: vec![
+                SpreadsheetSheet::new("Other".into(), vec![vec!["not copied".into()]]),
+                SpreadsheetSheet::new(
+                    "Active".into(),
+                    vec![
+                        vec!["Name".into(), "Count".into(), "Note".into()],
+                        vec!["alpha".into(), "1".into(), "日本語".into()],
+                        vec!["beta".into(), "2".into(), "✓".into()],
+                    ],
+                ),
+            ],
         };
         let mut state = SpreadsheetViewerState::new(data, None);
+        state.active_sheet_idx = 1;
         let palette = little_clip_core::palette::AppPalette::default();
         let ctx = egui::Context::default();
         let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(900.0, 620.0));
