@@ -2884,6 +2884,40 @@ mod tests {
     }
 
     #[test]
+    fn inline_text_source_seeds_independent_full_studios_without_loading_again() {
+        let source = TextPreviewData::from_text(Arc::new(
+            "fn gallery() {\n    println!(\"source\");\n}\n".to_owned(),
+        ));
+        let inline = InlineTextPreview::new(Arc::clone(&source), Vec2::new(180.0, 72.0));
+        let mut first = TextPreviewState::from_data(
+            Arc::clone(&source),
+            Some("First editor".to_owned()),
+            &AppConfig::default(),
+        );
+        let second = TextPreviewState::from_data(
+            Arc::clone(&source),
+            Some("Second editor".to_owned()),
+            &AppConfig::default(),
+        );
+
+        assert!(Arc::ptr_eq(&inline.data, &source));
+        assert!(Arc::ptr_eq(&first.content, &source.content));
+        assert!(Arc::ptr_eq(&second.content, &source.content));
+        assert!(Arc::ptr_eq(&first.code_fragments, &source.code_fragments));
+        assert!(!first.search_pending && first.search_job.is_none());
+        assert!(!second.search_pending && second.search_job.is_none());
+
+        first.show_find = true;
+        first.find_query = "source".to_owned();
+        first.scroll_to_line = Some(2);
+        first.code_selection = Some((0, 3));
+        assert!(!second.show_find);
+        assert!(second.find_query.is_empty());
+        assert_eq!(second.scroll_to_line, None);
+        assert_eq!(second.code_selection, None);
+    }
+
+    #[test]
     fn async_search_coalesces_queries_and_publishes_only_latest_revision() {
         let mut state = TextPreviewState::from_text(
             "old target; newest target; newest target".to_owned(),

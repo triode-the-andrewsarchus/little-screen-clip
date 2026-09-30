@@ -1998,6 +1998,33 @@ mod tests {
     }
 
     #[test]
+    fn inline_midi_source_seeds_independent_full_studios_without_parsing_or_synthesis() {
+        let source = inline_midi_data(12);
+        let inline = InlineMidiPreview::new(Arc::clone(&source), Vec2::new(220.0, 124.0));
+        let mut first =
+            MidiViewerState::from_shared(Arc::clone(&source), None, "First full score".to_owned());
+        let second =
+            MidiViewerState::from_shared(Arc::clone(&source), None, "Second full score".to_owned());
+
+        assert!(Arc::ptr_eq(&inline.data, &source));
+        assert!(Arc::ptr_eq(&first.data, &source));
+        assert!(Arc::ptr_eq(&second.data, &source));
+        assert!(!first.is_synthesizing && first.synth_rx.is_none() && first.synth_ticket.is_none());
+        assert!(
+            !second.is_synthesizing && second.synth_rx.is_none() && second.synth_ticket.is_none()
+        );
+
+        first.playhead_sec = 2.0;
+        first.selected_region = Some((1.0, 2.0));
+        first.view_start_sec = 1.5;
+        assert_eq!(second.playhead_sec, 0.0);
+        assert_eq!(second.selected_region, None);
+        assert_eq!(second.view_start_sec, 0.0);
+        assert_eq!(inline.playhead_sec, 0.0);
+        assert_eq!(inline.selected_note, None);
+    }
+
+    #[test]
     fn midi_space_runs_the_render_handler_and_sets_selected_region_bounds() {
         let data = MidiData {
             title: "Space test".to_string(),

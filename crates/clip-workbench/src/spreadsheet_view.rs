@@ -1285,6 +1285,33 @@ mod tests {
     }
 
     #[test]
+    fn inline_spreadsheet_source_seeds_independent_full_studios_without_loading_again() {
+        let source = Arc::new(SpreadsheetData {
+            title: "Gallery workbook".to_owned(),
+            sheets: vec![
+                SpreadsheetSheet::new("One".to_owned(), vec![vec!["one".to_owned()]]),
+                SpreadsheetSheet::new("Two".to_owned(), vec![vec!["two".to_owned()]]),
+            ],
+        });
+        let inline = InlineSpreadsheetPreview::new(Arc::clone(&source), Vec2::new(220.0, 120.0));
+        let mut first = SpreadsheetViewerState::from_shared(Arc::clone(&source), None);
+        let second = SpreadsheetViewerState::from_shared(Arc::clone(&source), None);
+
+        assert!(Arc::ptr_eq(&inline.data, &source));
+        assert!(Arc::ptr_eq(&first.data, &source));
+        assert!(Arc::ptr_eq(&second.data, &source));
+        first.active_sheet_idx = 1;
+        first.search_query = "two".to_owned();
+        first.selected_cell = Some((0, 0));
+        first.scroll_offset = Vec2::new(10.0, 20.0);
+        assert_eq!(second.active_sheet_idx, 0);
+        assert!(second.search_query.is_empty());
+        assert_eq!(second.selected_cell, None);
+        assert_eq!(second.scroll_offset, Vec2::ZERO);
+        // `from_shared` wraps already-parsed data directly and has no file/load job state.
+    }
+
+    #[test]
     fn escape_clears_spreadsheet_search_before_closing_viewer() {
         let data = SpreadsheetData {
             title: "Escape filter fixture".into(),

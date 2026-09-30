@@ -2364,6 +2364,51 @@ mod tests {
     }
 
     #[test]
+    fn inline_decoded_image_source_seeds_independent_full_studios() {
+        let image = RgbaImage::from_pixel(3, 2, image::Rgba([24, 80, 180, 255]));
+        let mut encoded = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut encoded),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let source =
+            Arc::new(DecodedImageData::from_bytes(encoded, "image/png".to_owned(), None).unwrap());
+        let inline = InlineImagePreview::new(Arc::clone(&source));
+        let mut first = ImagePreviewState::from_decoded(
+            (*source).clone(),
+            None,
+            "First editor".to_owned(),
+            &AppConfig::default(),
+        );
+        let second = ImagePreviewState::from_decoded(
+            (*source).clone(),
+            None,
+            "Second editor".to_owned(),
+            &AppConfig::default(),
+        );
+
+        assert!(Arc::ptr_eq(&inline.source, &source));
+        assert!(Arc::ptr_eq(&first.current_rgba, &source.original_rgba));
+        assert!(Arc::ptr_eq(&second.current_rgba, &source.original_rgba));
+        assert!(Arc::ptr_eq(&first.raw_bytes, &source.encoded_bytes));
+        assert!(first.palette_ticket.is_none());
+        assert!(first.palette_rx.is_none());
+        assert!(first.optimizer_rx.is_none());
+        assert!(first.optimizer_job_rx.is_none());
+
+        first.zoom = 2.0;
+        assert_eq!(second.zoom, 1.0);
+        Arc::make_mut(&mut first.current_rgba).put_pixel(0, 0, image::Rgba([240, 20, 40, 255]));
+        assert!(!Arc::ptr_eq(&first.current_rgba, &second.current_rgba));
+        assert_eq!(
+            *second.current_rgba.get_pixel(0, 0),
+            image::Rgba([24, 80, 180, 255])
+        );
+    }
+
+    #[test]
     fn inline_image_previews_render_shared_pixels_with_independent_zoom_state() {
         let image = RgbaImage::from_pixel(8, 4, image::Rgba([24, 80, 180, 255]));
         let mut encoded = Vec::new();

@@ -992,6 +992,31 @@ mod tests {
     }
 
     #[test]
+    fn inline_model_source_seeds_independent_full_studios_without_loading_again() {
+        let source = Arc::new(test_mesh());
+        let inline = InlineModel3dPreview::new(Arc::clone(&source), Vec2::new(180.0, 140.0));
+        let mut first = Model3dViewerState::from_shared_model(Arc::clone(&source), None);
+        let second = Model3dViewerState::from_shared_model(Arc::clone(&source), None);
+
+        assert!(Arc::ptr_eq(&inline.mesh, &source));
+        assert!(Arc::ptr_eq(first.mesh.as_ref().unwrap(), &source));
+        assert!(Arc::ptr_eq(second.mesh.as_ref().unwrap(), &source));
+        assert_eq!(first.status, ModelLoadingStatus::Ready);
+        assert!(first.rx.is_none() && first.load_ticket.is_none());
+        assert!(second.rx.is_none() && second.load_ticket.is_none());
+
+        first.pitch = 1.0;
+        first.yaw = -0.5;
+        first.zoom = 3.0;
+        first.wireframe = true;
+        assert_eq!(second.pitch, 0.4);
+        assert_eq!(second.yaw, 0.6);
+        assert_eq!(second.zoom, 1.0);
+        assert!(!second.wireframe);
+        assert_eq!((inline.pitch, inline.yaw, inline.zoom), (0.4, 0.6, 1.0));
+    }
+
+    #[test]
     fn file_and_byte_loaders_keep_distinct_source_identity() {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().join("cached_shape.stl");
