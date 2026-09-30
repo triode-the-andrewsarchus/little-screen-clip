@@ -13,6 +13,7 @@ use little_clip_core::pdf::{
 };
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel, sync_channel};
 use std::time::Duration;
 
@@ -29,7 +30,7 @@ const STAGED_PDF_FILENAME: &str = "edited.pdf";
 
 struct PdfPreviewMsg {
     page_num: usize,
-    result: Result<(PathBuf, u32, u32), String>,
+    result: Result<Arc<PdfPageRasterResource>, String>,
 }
 
 // One running/queued decode or completed ColorImage per editor (at most
@@ -81,15 +82,36 @@ struct PdfEditMsg {
     result: Result<(), String>,
 }
 
-/// Rendered raster thumbnail and metadata for a single PDF page.
+/// Immutable raster data whose temporary file remains alive while any view holds it.
+pub struct PdfPageRasterResource {
+    page_num: usize,
+    path: PathBuf,
+    width: u32,
+    height: u32,
+    _raster_directory: Arc<tempfile::TempDir>,
+}
+
+impl PdfPageRasterResource {
+    pub fn page_num(&self) -> usize {
+        self.page_num
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn dimensions(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+}
+
+/// Per-view page texture and status, plus an optional shareable raster resource.
 pub struct PdfPageItem {
     pub page_num: usize,
-    pub raster_path: Option<PathBuf>,
+    pub raster: Option<Arc<PdfPageRasterResource>>,
     pub texture: Option<egui::TextureHandle>,
     texture_last_used: u64,
     pub error: Option<String>,
-    pub width: u32,
-    pub height: u32,
     #[allow(dead_code)]
     pub rotation: u32,
 }
@@ -213,12 +235,10 @@ impl PdfEditorState {
         self.pages = (1..=self.page_count)
             .map(|page_num| PdfPageItem {
                 page_num,
-                raster_path: None,
+                raster: None,
                 texture: None,
                 texture_last_used: 0,
                 error: None,
-                width: 0,
-                height: 0,
                 rotation: 0,
             })
             .collect();
@@ -272,11 +292,9 @@ impl PdfEditorState {
                         }
                         if let Some(page) = self.pages.get_mut(message.page_num.saturating_sub(1)) {
                             match message.result {
-                                Ok((raster_path, width, height)) => {
+                                Ok(raster) => {
                                     page.texture = None;
-                                    page.raster_path = Some(raster_path);
-                                    page.width = width;
-                                    page.height = height;
+                                    page.raster = Some(raster);
                                     page.error = None;
                                 }
                                 Err(error) => page.error = Some(error),
@@ -309,11 +327,17 @@ impl PdfEditorState {
     ) -> Option<egui::TextureId> {
         let index = page_num.checked_sub(1)?;
         let page = self.pages.get_mut(index)?;
+        debug_assert!(
+            page.raster
+                .as_ref()
+                .is_none_or(|raster| raster.page_num() == page_num),
+            "page raster metadata must match its owning page"
+        );
         if let Some(texture) = &page.texture {
             page.texture_last_used = self.texture_frame;
             return Some(texture.id());
         }
-        if page.raster_path.is_none() || page.error.is_some() {
+        if page.raster.is_none() || page.error.is_some() {
             return None;
         }
         if !self.decode_requests.contains(&page_num) {
@@ -393,7 +417,7 @@ impl PdfEditorState {
                 selected != job.page_num
                     && self.decode_requests.contains(&selected)
                     && self.pages.get(selected - 1).is_some_and(|page| {
-                        page.texture.is_none() && page.error.is_none() && page.raster_path.is_some()
+                        page.texture.is_none() && page.error.is_none() && page.raster.is_some()
                     })
             });
             if !self.decode_requests.contains(&job.page_num) || selected_waiting {
@@ -412,21 +436,19 @@ impl PdfEditorState {
                 .find(|page_num| {
                     self.decode_requests.contains(page_num)
                         && self.pages.get(page_num - 1).is_some_and(|page| {
-                            page.texture.is_none()
-                                && page.error.is_none()
-                                && page.raster_path.is_some()
+                            page.texture.is_none() && page.error.is_none() && page.raster.is_some()
                         })
                 });
             if let Some(page_num) = candidate {
-                let raster_path = self.pages[page_num - 1]
-                    .raster_path
+                let raster = self.pages[page_num - 1]
+                    .raster
                     .as_ref()
                     .expect("decode candidates have cached rasters")
                     .clone();
                 let repaint = ctx.clone();
                 let (ticket, rx) =
                     BackgroundJobs::global().submit(Duration::from_secs(10), move || {
-                        let result = std::fs::read(raster_path)
+                        let result = std::fs::read(raster.path())
                             .map_err(|error| format!("Could not read cached PDF raster: {error}"))
                             .and_then(decode_page_png);
                         repaint.request_repaint();
@@ -828,10 +850,15 @@ impl PdfEditorState {
                                                     .pages
                                                     .iter()
                                                     .map(|p| {
+                                                        let (width, height) = p
+                                                            .raster
+                                                            .as_ref()
+                                                            .map(|raster| raster.dimensions())
+                                                            .unwrap_or_default();
                                                         (
                                                             p.page_num,
-                                                            p.width,
-                                                            p.height,
+                                                            width,
+                                                            height,
                                                             p.error.is_some(),
                                                         )
                                                     })
@@ -960,6 +987,11 @@ impl PdfEditorState {
                                         .and_then(|sel| self.pages.iter().find(|p| p.page_num == sel));
 
                                     if let Some(page) = selected_item {
+                                        let (page_width, page_height) = page
+                                            .raster
+                                            .as_ref()
+                                            .map(|raster| raster.dimensions())
+                                            .unwrap_or_default();
                                         // Header bar above preview
                                         ui.horizontal(|ui| {
                                             ui.label(
@@ -973,7 +1005,7 @@ impl PdfEditorState {
                                             ui.label(
                                                 egui::RichText::new(format!(
                                                     "• {} × {} px",
-                                                    page.width, page.height
+                                                    page_width, page_height
                                                 ))
                                                 .size(crate::ui_ext::BODY_FONT_SIZE)
                                                 .color(colors.text_muted),
@@ -989,8 +1021,8 @@ impl PdfEditorState {
                                         let max_w = (ui.available_width() - 16.0).max(50.0);
                                         let max_h = (ui.available_height() - 16.0).max(50.0);
 
-                                        let aspect = if page.height > 0 {
-                                            page.width as f32 / page.height as f32
+                                        let aspect = if page_height > 0 {
+                                            page_width as f32 / page_height as f32
                                         } else {
                                             0.707
                                         };
@@ -1076,7 +1108,15 @@ where
                 render_page(&path, page_num, max_dim).and_then(|(png_bytes, width, height)| {
                     let raster_path = raster_cache.path().join(format!("page-{page_num}.png"));
                     std::fs::write(&raster_path, png_bytes)
-                        .map(|()| (raster_path, width, height))
+                        .map(|()| {
+                            Arc::new(PdfPageRasterResource {
+                                page_num,
+                                path: raster_path,
+                                width,
+                                height,
+                                _raster_directory: Arc::clone(&raster_cache),
+                            })
+                        })
                         .map_err(|error| format!("Could not cache PDF page {page_num}: {error}"))
                 });
             if tx.send(PdfPreviewMsg { page_num, result }).is_err() {
@@ -1161,16 +1201,20 @@ mod tests {
             pages: (1..=page_count)
                 .map(|page_num| PdfPageItem {
                     page_num,
-                    raster_path: {
+                    raster: {
                         let path = raster_cache.path().join(format!("page-{page_num}.png"));
                         std::fs::write(&path, png.get_ref()).unwrap();
-                        Some(path)
+                        Some(test_page_raster(
+                            page_num,
+                            path,
+                            dimension,
+                            dimension,
+                            Arc::clone(&raster_cache),
+                        ))
                     },
                     texture: None,
                     texture_last_used: 0,
                     error: None,
-                    width: dimension,
-                    height: dimension,
                     rotation: 0,
                 })
                 .collect(),
@@ -1231,6 +1275,22 @@ mod tests {
             })
     }
 
+    fn test_page_raster(
+        page_num: usize,
+        path: PathBuf,
+        width: u32,
+        height: u32,
+        raster_directory: Arc<tempfile::TempDir>,
+    ) -> Arc<PdfPageRasterResource> {
+        Arc::new(PdfPageRasterResource {
+            page_num,
+            path,
+            width,
+            height,
+            _raster_directory: raster_directory,
+        })
+    }
+
     #[test]
     fn dropping_editor_releases_temporary_raster_cache() {
         let state = raster_state(2, 16);
@@ -1240,6 +1300,25 @@ mod tests {
         drop(state);
 
         assert!(!cache_path.exists());
+    }
+
+    #[test]
+    fn shared_page_raster_keeps_png_alive_until_last_resource_drops() {
+        let state = raster_state(1, 16);
+        let raster = Arc::clone(state.pages[0].raster.as_ref().unwrap());
+        let raster_path = raster.path().to_owned();
+        let raster_directory = raster_path.parent().unwrap().to_owned();
+        assert_eq!(raster.page_num(), 1);
+        assert_eq!(raster.dimensions(), (16, 16));
+
+        drop(state);
+
+        assert!(raster_directory.exists());
+        let decoded = decode_page_png(std::fs::read(&raster_path).unwrap()).unwrap();
+        assert_eq!(decoded.size, [16, 16]);
+
+        drop(raster);
+        assert!(!raster_directory.exists());
     }
 
     #[test]
@@ -1279,7 +1358,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut state = raster_state(1, 16);
         let malformed = b"not a PNG".to_vec();
-        let raster_path = state.pages[0].raster_path.as_ref().unwrap().clone();
+        let raster_path = state.pages[0].raster.as_ref().unwrap().path().to_owned();
         std::fs::write(&raster_path, &malformed).unwrap();
         wait_for_decode(&mut state, 1, &ctx);
         assert!(
@@ -1360,7 +1439,7 @@ mod tests {
     #[test]
     fn oversized_raster_decode_bounds_published_pixel_memory() {
         let state = raster_state(1, PAGE_RASTER_MAX_DIM + 1);
-        let raster_path = state.pages[0].raster_path.as_ref().unwrap();
+        let raster_path = state.pages[0].raster.as_ref().unwrap().path();
         let image = decode_page_png(std::fs::read(raster_path).unwrap()).unwrap();
         assert_eq!(image.size, [PAGE_RASTER_MAX_DIM as usize; 2]);
         assert_eq!(
@@ -1383,13 +1462,20 @@ mod tests {
             .path()
             .join("replacement.png");
         std::fs::copy(
-            state.pages[0].raster_path.as_ref().unwrap(),
+            state.pages[0].raster.as_ref().unwrap().path(),
             &replacement_path,
         )
         .unwrap();
+        let replacement = test_page_raster(
+            1,
+            replacement_path.clone(),
+            16,
+            16,
+            Arc::clone(state.raster_cache.as_ref().unwrap()),
+        );
         tx.send(PdfPreviewMsg {
             page_num: 1,
-            result: Ok((replacement_path.clone(), 16, 16)),
+            result: Ok(replacement),
         })
         .unwrap();
         state.poll_preview_worker(&ctx);
@@ -1398,7 +1484,10 @@ mod tests {
         wait_for_decode(&mut state, 1, &ctx);
         assert!(state.ensure_page_texture(1, &ctx).is_some());
         assert!(state.pages[0].error.is_none());
-        assert_eq!(state.pages[0].raster_path.as_ref(), Some(&replacement_path));
+        assert_eq!(
+            state.pages[0].raster.as_ref().unwrap().path(),
+            replacement_path
+        );
     }
 
     #[test]
@@ -1466,7 +1555,7 @@ mod tests {
         let mut state = raster_state(PAGE_TEXTURE_LIMIT + 2, 16);
         state.texture_frame += 1;
         let original_id = upload_page(&mut state, 2, &ctx);
-        let source_path = state.pages[1].raster_path.as_ref().unwrap().clone();
+        let source_path = state.pages[1].raster.as_ref().unwrap().path().to_owned();
         let source = std::fs::read(&source_path).unwrap();
         for page_num in 3..=state.page_count {
             state.texture_frame += 1;
@@ -1569,7 +1658,7 @@ mod tests {
         assert!(bytes <= PAGE_TEXTURE_BYTE_LIMIT);
         assert!(state.pages[99].texture.is_some());
         assert!(state.pages[50].texture.is_none());
-        assert!(state.pages.iter().all(|page| page.raster_path.is_some()));
+        assert!(state.pages.iter().all(|page| page.raster.is_some()));
     }
 
     #[test]
@@ -1679,8 +1768,14 @@ mod tests {
             let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
             let mut state = raster_state(2, 16);
             for page in &mut state.pages {
-                page.width = 1200;
-                page.height = 800;
+                let raster = page.raster.as_ref().unwrap();
+                page.raster = Some(test_page_raster(
+                    page.page_num,
+                    raster.path().to_owned(),
+                    1200,
+                    800,
+                    Arc::clone(state.raster_cache.as_ref().unwrap()),
+                ));
             }
             let texture = ctx.load_texture(
                 "pdf-preview-fit-test",
@@ -1887,12 +1982,10 @@ mod tests {
         state.page_count = 2;
         state.pages.push(PdfPageItem {
             page_num: 2,
-            raster_path: state.pages[0].raster_path.clone(),
+            raster: None,
             texture: None,
             texture_last_used: 0,
             error: None,
-            width: 1,
-            height: 1,
             rotation: 0,
         });
         state.selected_page = Some(2);
@@ -2159,12 +2252,10 @@ mod tests {
         state.previews_loading = true;
         state.pages.push(PdfPageItem {
             page_num: 1,
-            raster_path: None,
+            raster: None,
             texture: None,
             texture_last_used: 0,
             error: None,
-            width: 0,
-            height: 0,
             rotation: 0,
         });
         sender
