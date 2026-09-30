@@ -6798,6 +6798,7 @@ Separated track
     #[test]
     fn test_save_to_file_single_and_multi() {
         let (_dir, p) = generate_fixture_wav("test_track", 5.0);
+        let source_analysis = compute_full_audio_analysis(&p, 100).expect("analyze source fixture");
         let mut state = AudioPreviewState::new(p.clone(), "test_track.wav".to_string());
         let temp_dest =
             std::env::temp_dir().join(format!("little_clip_save_test_{}", uuid::Uuid::new_v4()));
@@ -6833,6 +6834,18 @@ Separated track
         let saved_single = temp_dest.join("test_track_00m01s000ms_01s500ms.wav");
         assert!(saved_single.exists());
         assert!(std::fs::metadata(&saved_single).unwrap().len() > 0);
+        let single_analysis =
+            compute_full_audio_analysis(&saved_single, 100).expect("decode saved single selection");
+        assert_eq!(single_analysis.channels, 2);
+        assert_eq!(single_analysis.sample_rate, 44100);
+        assert!((single_analysis.duration_ms as i64 - 1500).abs() <= 1);
+        assert!((single_analysis.total_frames as isize - 66_150).abs() <= 44);
+        for (saved, original) in single_analysis.ch1_samples[..100]
+            .iter()
+            .zip(&source_analysis.ch1_samples[44_100..44_200])
+        {
+            assert!((saved - original).abs() <= 0.0001);
+        }
 
         // 2. Multi-Selection Save
         state.set_selection_mode(SelectionMode::Multi);
