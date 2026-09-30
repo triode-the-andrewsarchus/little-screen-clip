@@ -1,3 +1,8 @@
+use crate::image_preview::{DecodedImageData, InlineImagePreview};
+use crate::midi_view::InlineMidiPreview;
+use crate::model3d_view::InlineModel3dPreview;
+use crate::spreadsheet_view::InlineSpreadsheetPreview;
+use crate::text_preview::{InlineTextPreview, TextPreviewData};
 use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext::BODY_FONT_SIZE;
 use crate::ui_ext::{
@@ -5,6 +10,10 @@ use crate::ui_ext::{
 };
 use eframe::egui::{self, Color32, RichText, Rounding, Stroke, Vec2};
 use little_clip_core::palette::AppPalette;
+use little_clip_core::presentation::midi::{MidiData, MidiNote};
+use little_clip_core::presentation::model3d::{Model3d, ModelFormat, Triangle, Vec3};
+use little_clip_core::presentation::spreadsheet::{SpreadsheetData, SpreadsheetSheet};
+use std::sync::Arc;
 
 /// Interactive samples of shared workbench components for visual review.
 pub struct ComponentGalleryState {
@@ -13,18 +22,123 @@ pub struct ComponentGalleryState {
     level: f32,
     selected_mode: usize,
     enabled: bool,
+    image_previews: [InlineImagePreview; 2],
+    text_previews: [InlineTextPreview; 2],
+    spreadsheet_previews: [InlineSpreadsheetPreview; 2],
+    midi_previews: [InlineMidiPreview; 2],
+    model3d_previews: [InlineModel3dPreview; 2],
 }
 
 impl Default for ComponentGalleryState {
     fn default() -> Self {
+        let image_source = gallery_image_source();
+        let text_source = TextPreviewData::from_text(Arc::new(
+            "gallery-line-alpha\ngallery-line-beta\ngallery-line-gamma\n".to_owned(),
+        ));
+        let spreadsheet_source = Arc::new(SpreadsheetData {
+            title: "Gallery workbook".to_owned(),
+            sheets: vec![SpreadsheetSheet::new(
+                "Gallery".to_owned(),
+                vec![
+                    vec!["gallery-cell-alpha".to_owned(), "42".to_owned()],
+                    vec!["gallery-cell-beta".to_owned(), "84".to_owned()],
+                ],
+            )],
+        });
+        let midi_source = Arc::new(MidiData {
+            title: "Gallery MIDI".to_owned(),
+            track_count: 1,
+            track_names: vec!["Gallery track".to_owned()],
+            total_notes: 4,
+            duration_sec: 4.0,
+            bpm: 120.0,
+            min_key: 60,
+            max_key: 67,
+            notes: (0..4)
+                .map(|index| MidiNote {
+                    track: 0,
+                    channel: 0,
+                    program: 0,
+                    key: 60 + index as u8,
+                    velocity: 96,
+                    start_sec: index as f32,
+                    duration_sec: 0.5,
+                })
+                .collect(),
+        });
+        let model3d_source = gallery_model3d_source();
         Self {
             query: "Sample text".to_owned(),
             notes: "Multiline fields should remain comfortable to read.".to_owned(),
             level: 0.62,
             selected_mode: 0,
             enabled: true,
+            image_previews: [
+                InlineImagePreview::new(Arc::clone(&image_source)),
+                InlineImagePreview::new(image_source),
+            ],
+            text_previews: [
+                InlineTextPreview::new(Arc::clone(&text_source), Vec2::new(190.0, 68.0)),
+                InlineTextPreview::new(text_source, Vec2::new(190.0, 68.0)),
+            ],
+            spreadsheet_previews: [
+                InlineSpreadsheetPreview::new(
+                    Arc::clone(&spreadsheet_source),
+                    Vec2::new(200.0, 84.0),
+                ),
+                InlineSpreadsheetPreview::new(spreadsheet_source, Vec2::new(200.0, 84.0)),
+            ],
+            midi_previews: [
+                InlineMidiPreview::new(Arc::clone(&midi_source), Vec2::new(190.0, 76.0)),
+                InlineMidiPreview::new(midi_source, Vec2::new(190.0, 76.0)),
+            ],
+            model3d_previews: [
+                InlineModel3dPreview::new(Arc::clone(&model3d_source), Vec2::new(150.0, 88.0)),
+                InlineModel3dPreview::new(model3d_source, Vec2::new(150.0, 88.0)),
+            ],
         }
     }
+}
+
+fn gallery_image_source() -> Arc<DecodedImageData> {
+    let image = image::RgbaImage::from_fn(24, 24, |x, y| {
+        if (x / 6 + y / 6) % 2 == 0 {
+            image::Rgba([255, 178, 112, 255])
+        } else {
+            image::Rgba([83, 151, 174, 255])
+        }
+    });
+    let mut encoded = Vec::new();
+    image
+        .write_to(
+            &mut std::io::Cursor::new(&mut encoded),
+            image::ImageFormat::Png,
+        )
+        .expect("gallery image fixture encodes");
+    Arc::new(
+        DecodedImageData::from_bytes(encoded, "image/png".to_owned(), None)
+            .expect("gallery image fixture decodes"),
+    )
+}
+
+fn gallery_model3d_source() -> Arc<Model3d> {
+    let triangle = Triangle::new(
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(-0.5, -0.5, 0.0),
+        Vec3::new(0.5, -0.5, 0.0),
+        Vec3::new(0.0, 0.5, 0.0),
+    );
+    Arc::new(Model3d {
+        name: "gallery-model.obj".to_owned(),
+        format: ModelFormat::Obj,
+        triangles: vec![triangle],
+        thumbnail_triangles: vec![triangle],
+        min_bounds: Vec3::new(-0.5, -0.5, 0.0),
+        max_bounds: Vec3::new(0.5, 0.5, 0.0),
+        center: Vec3::ZERO,
+        size: Vec3::new(1.0, 1.0, 0.0),
+        max_dimension: 1.0,
+    })
 }
 
 impl ComponentGalleryState {
@@ -59,6 +173,39 @@ impl ComponentGalleryState {
                             .color(colors.text_secondary),
                     );
                 });
+
+            ui.add_space(ui_ext::SPACE_MD);
+            render_section(ui, "Inline preview hosts", palette, |ui| {
+                ui.label("Inline Image Preview • shared decoded pixels");
+                ui.horizontal(|ui| {
+                    self.image_previews[0].show(ui, Vec2::new(150.0, 64.0));
+                    self.image_previews[1].show(ui, Vec2::new(150.0, 64.0));
+                });
+
+                ui.label("Inline Text Preview • bounded source fragments");
+                ui.horizontal(|ui| {
+                    self.text_previews[0].show(ui, palette);
+                    self.text_previews[1].show(ui, palette);
+                });
+
+                ui.label("Inline Spreadsheet Preview • virtual rows and columns");
+                ui.horizontal(|ui| {
+                    self.spreadsheet_previews[0].show(ui, palette);
+                    self.spreadsheet_previews[1].show(ui, palette);
+                });
+
+                ui.label("Inline MIDI Preview • local seek and selection");
+                ui.horizontal(|ui| {
+                    self.midi_previews[0].show(ui, palette);
+                    self.midi_previews[1].show(ui, palette);
+                });
+
+                ui.label("Inline Model3D Preview • independent camera state");
+                ui.horizontal(|ui| {
+                    self.model3d_previews[0].show(ui, palette);
+                    self.model3d_previews[1].show(ui, palette);
+                });
+            });
 
             ui.add_space(ui_ext::SPACE_MD);
             ui.columns(2, |columns| {
@@ -259,6 +406,70 @@ mod tests {
                     output.shapes.len() > 30,
                     "gallery rendered only {} shapes at {size:?}",
                     output.shapes.len()
+                );
+                let text_shapes: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) => Some(text),
+                        _ => None,
+                    })
+                    .collect();
+                for label in [
+                    "Inline Image Preview",
+                    "Inline Text Preview",
+                    "Inline Spreadsheet Preview",
+                    "Inline MIDI Preview",
+                    "Inline Model3D Preview",
+                ] {
+                    assert!(
+                        text_shapes
+                            .iter()
+                            .any(|text| text.galley.job.text.contains(label)),
+                        "{label} missing at {appearance:?} and {size:?}"
+                    );
+                }
+                assert!(
+                    text_shapes
+                        .iter()
+                        .filter(|text| text.galley.job.text.contains("gallery-line-"))
+                        .count()
+                        >= 2,
+                    "both text preview hosts should render at {appearance:?} and {size:?}"
+                );
+                assert!(
+                    text_shapes
+                        .iter()
+                        .filter(|text| text.galley.job.text.contains("gallery-cell-"))
+                        .count()
+                        >= 2,
+                    "both spreadsheet hosts should render at {appearance:?} and {size:?}"
+                );
+                assert!(
+                    output
+                        .shapes
+                        .iter()
+                        .filter(|shape| matches!(
+                            &shape.shape,
+                            egui::epaint::Shape::Mesh(mesh) if !mesh.vertices.is_empty()
+                        ))
+                        .count()
+                        >= 4,
+                    "both image and Model3D hosts should paint geometry at {appearance:?} and {size:?}"
+                );
+                let (note_r, note_g, note_b) = palette.midi_note_color(0, 0, 1, 60, 96);
+                let note_color = Color32::from_rgb(note_r, note_g, note_b);
+                assert!(
+                    output
+                        .shapes
+                        .iter()
+                        .filter(|shape| matches!(
+                            &shape.shape,
+                            egui::epaint::Shape::Rect(rect) if rect.fill == note_color
+                        ))
+                        .count()
+                        >= 2,
+                    "both MIDI hosts should render notes at {appearance:?} and {size:?}"
                 );
                 assert!(!close);
             }
