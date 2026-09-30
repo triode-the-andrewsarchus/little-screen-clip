@@ -819,6 +819,77 @@ impl WorkbenchApp {
         ctx.request_repaint();
     }
 
+    fn render_text_smart_preview_actions(&mut self, ui: &mut egui::Ui) {
+        let first_text_item = self.selected_slots.iter().find_map(|s| {
+            let item = self.state.get(*s)?;
+            match &item.payload {
+                ClipPayload::Text(text) | ClipPayload::Markdown(text) => {
+                    Some(std::borrow::Cow::Borrowed(text.as_str()))
+                }
+                _ => item.to_clipboard_text().map(std::borrow::Cow::Owned),
+            }
+        });
+        if let Some(text) =
+            first_text_item.filter(|text| text.len() <= MAX_INLINE_TEXT_ROUTING_BYTES)
+        {
+            let trimmed = text.trim();
+            if let Some(conv) = detect_unit_conversion(trimmed) {
+                ui.add_space(crate::ui_ext::SPACE_SM);
+                let label = conv.summary_line();
+                let btn =
+                    contextual_palette_action_button(Some(Icon::Swap), &label, &self.ui_palette);
+                if ui
+                    .add(btn)
+                    .on_hover_text("Click to copy converted unit")
+                    .clicked()
+                {
+                    ui.output_mut(|o| o.copied_text = conv.primary_conversion.clone());
+                    self.status_msg = Some(format!("Copied: {}", conv.primary_conversion));
+                }
+            } else if let Some(net) = detect_network_preview(trimmed) {
+                ui.add_space(crate::ui_ext::SPACE_SM);
+                let (label, net_icon) = match &net {
+                    NetworkPreview::Ip { ip, rfc_class, .. } => {
+                        (format!("{} ({})", ip, rfc_class), Icon::Link)
+                    }
+                    NetworkPreview::Mac {
+                        formatted, vendor, ..
+                    } => (format!("{} ({})", formatted, vendor), Icon::Zap),
+                };
+                let btn =
+                    contextual_palette_action_button(Some(net_icon), &label, &self.ui_palette);
+                if ui
+                    .add(btn)
+                    .on_hover_text("Network address info (Click to copy summary)")
+                    .clicked()
+                {
+                    let lines = net.summary_lines().join("\n");
+                    ui.output_mut(|o| o.copied_text = lines.clone());
+                    self.status_msg = Some("Copied network info".to_string());
+                }
+            } else if let Some(ts) = detect_timestamp(trimmed) {
+                ui.add_space(crate::ui_ext::SPACE_SM);
+                let label = format!("{} ({})", ts.human_readable, ts.relative);
+                let btn = contextual_palette_action_button(
+                    Some(Icon::Calendar),
+                    &label,
+                    &self.ui_palette,
+                );
+                if ui
+                    .add(btn)
+                    .on_hover_text(format!(
+                        "UTC: {}\nEpoch: {}\nClick to copy ISO 8601",
+                        ts.utc_iso, ts.epoch_sec
+                    ))
+                    .clicked()
+                {
+                    ui.output_mut(|o| o.copied_text = ts.utc_iso.clone());
+                    self.status_msg = Some(format!("Copied ISO 8601: {}", ts.utc_iso));
+                }
+            }
+        }
+    }
+
     fn render_workbench_header(&mut self, ctx: &egui::Context) {
         // Top Header Panel: Mirror of Trofeo Screen + Tabs
         let header_bg = hex_to_c32(&self.ui_palette.colors.canvas);
@@ -1634,59 +1705,7 @@ impl eframe::App for WorkbenchApp {
                         }
 
                         // Smart text previews: Unit conversions, Network (IP/MAC), and Timestamps
-                        let first_text_item = self.selected_slots.iter().find_map(|s| {
-                            let item = self.state.get(*s)?;
-                            match &item.payload {
-                                ClipPayload::Text(text) | ClipPayload::Markdown(text) => {
-                                    Some(std::borrow::Cow::Borrowed(text.as_str()))
-                                }
-                                _ => item.to_clipboard_text().map(std::borrow::Cow::Owned),
-                            }
-                        });
-                        if let Some(ref text) = first_text_item.filter(|text| text.len() <= MAX_INLINE_TEXT_ROUTING_BYTES) {
-                            let trimmed = text.trim();
-                            if let Some(conv) = detect_unit_conversion(trimmed) {
-                                ui.add_space(crate::ui_ext::SPACE_SM);
-                                let label = conv.summary_line();
-                                let btn = contextual_palette_action_button(
-                                    Some(Icon::Swap),
-                                    &label,
-                                    &self.ui_palette,
-                                );
-                                if ui.add(btn).on_hover_text("Click to copy converted unit").clicked() {
-                                    ui.output_mut(|o| o.copied_text = conv.primary_conversion.clone());
-                                    self.status_msg = Some(format!("Copied: {}", conv.primary_conversion));
-                                }
-                            } else if let Some(net) = detect_network_preview(trimmed) {
-                                ui.add_space(crate::ui_ext::SPACE_SM);
-                                let (label, net_icon) = match &net {
-                                    NetworkPreview::Ip { ip, rfc_class, .. } => (format!("{} ({})", ip, rfc_class), Icon::Link),
-                                    NetworkPreview::Mac { formatted, vendor, .. } => (format!("{} ({})", formatted, vendor), Icon::Zap),
-                                };
-                                let btn = contextual_palette_action_button(
-                                    Some(net_icon),
-                                    &label,
-                                    &self.ui_palette,
-                                );
-                                if ui.add(btn).on_hover_text("Network address info (Click to copy summary)").clicked() {
-                                    let lines = net.summary_lines().join("\n");
-                                    ui.output_mut(|o| o.copied_text = lines.clone());
-                                    self.status_msg = Some("Copied network info".to_string());
-                                }
-                            } else if let Some(ts) = detect_timestamp(trimmed) {
-                                ui.add_space(crate::ui_ext::SPACE_SM);
-                                let label = format!("{} ({})", ts.human_readable, ts.relative);
-                                let btn = contextual_palette_action_button(
-                                    Some(Icon::Calendar),
-                                    &label,
-                                    &self.ui_palette,
-                                );
-                                if ui.add(btn).on_hover_text(format!("UTC: {}\nEpoch: {}\nClick to copy ISO 8601", ts.utc_iso, ts.epoch_sec)).clicked() {
-                                    ui.output_mut(|o| o.copied_text = ts.utc_iso.clone());
-                                    self.status_msg = Some(format!("Copied ISO 8601: {}", ts.utc_iso));
-                                }
-                            }
-                        }
+                        self.render_text_smart_preview_actions(ui);
 
                         if let Some((slot, file_p, is_md)) = text_preview_action.clone() {
                             ui.add_space(crate::ui_ext::SPACE_SM);
@@ -3376,6 +3395,95 @@ mod workbench_layout_tests {
             config,
             appearance_applied: true,
         }
+    }
+
+    fn click_text_smart_copy_action(source_text: &str, button_label: &str) -> String {
+        fn frame(
+            ctx: &egui::Context,
+            app: &mut WorkbenchApp,
+            events: Vec<egui::Event>,
+        ) -> egui::FullOutput {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 700.0),
+                    )),
+                    time: Some(1.0),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        app.render_text_smart_preview_actions(ui);
+                    });
+                },
+            )
+        }
+
+        let mut app = test_workbench_app(None, VecDeque::new());
+        *app.state.get_mut(SlotId::LeftHand).expect("left slot") =
+            Some(ClipItem::from_text(source_text));
+        let ctx = egui::Context::default();
+        let rendered = frame(&ctx, &mut app, Vec::new());
+        let button_rect = rendered
+            .shapes
+            .iter()
+            .find_map(|shape| {
+                let egui::epaint::Shape::Text(text) = &shape.shape else {
+                    return None;
+                };
+                (text.galley.job.text == button_label)
+                    .then(|| text.galley.rect.translate(text.pos.to_vec2()))
+            })
+            .unwrap_or_else(|| panic!("smart preview button {button_label:?} did not render"));
+        let pos = button_rect.center();
+        let pointer_button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let _ = frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::PointerMoved(pos), pointer_button(true)],
+        );
+        let clicked = frame(
+            &ctx,
+            &mut app,
+            vec![egui::Event::PointerMoved(pos), pointer_button(false)],
+        );
+        clicked.platform_output.copied_text
+    }
+
+    #[test]
+    fn unit_preview_copy_button_copies_exact_primary_conversion() {
+        assert_eq!(
+            click_text_smart_copy_action("12 in", "12 in ➔ 30.5 cm (0.30 m)"),
+            "30.5 cm"
+        );
+    }
+
+    #[test]
+    fn network_preview_copy_button_copies_exact_mac_summary() {
+        assert_eq!(
+            click_text_smart_copy_action(
+                "02:00:00:00:00:01",
+                "02:00:00:00:00:01 (Randomized / Private)",
+            ),
+            "🔌 MAC: 02:00:00:00:00:01\n🏷 Vendor: Randomized / Private\n🔒 Type: Locally Administered (Private/Randomized MAC)"
+        );
+    }
+
+    #[test]
+    fn timestamp_preview_copy_button_copies_exact_iso_8601_value() {
+        let timestamp = detect_timestamp("1700000000").expect("epoch timestamp");
+        let button_label = format!("{} ({})", timestamp.human_readable, timestamp.relative);
+        assert_eq!(
+            click_text_smart_copy_action("1700000000", &button_label),
+            "2023-11-14T22:13:20+00:00"
+        );
     }
 
     fn viewport_close_command_count(output: &egui::FullOutput) -> usize {

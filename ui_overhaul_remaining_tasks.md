@@ -652,9 +652,9 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **H2.3g30 [Primary] Verify recipe-prompt Enter submits the focused value once and retains its route.** Existing `in_app_prompt_enter_submits_from_focused_editor_once` captures exactly one `ExecuteRecipeWithPrompt` request with the edited text, one popup-close command, and the retained Palette route. The response is controlled; no daemon or recipe action runs.
   - **H2.3h First-pass output and destination scenarios from the parity ledger (runtime acceptance remains open).** Each checkbox covers one surface-owned action; use scratch destinations and verify payload/path, source mutation, and errors as applicable. The ledger retains additional uncovered scenarios.
     - **Quick Palette**
-      - [ ] **H2.3h1 Verify the unit preview Copy action writes its displayed value to the clipboard.** Confirm exact text.
-      - [ ] **H2.3h2 Verify the Network preview Copy action writes its displayed address to the clipboard.** Confirm exact text.
-      - [ ] **H2.3h3 Verify the Timestamp preview Copy action writes its displayed timestamp to the clipboard.** Confirm exact text.
+      - [x] **H2.3h1 [Luna] Verify the unit preview Copy action writes its primary conversion to egui clipboard output.** `unit_preview_copy_button_copies_exact_primary_conversion` clicks the rendered smart-preview action for `12 in` and confirms the exact `30.5 cm` conversion. No system clipboard or daemon is used.
+      - [x] **H2.3h2 [Luna] Verify the Network preview Copy action writes its displayed MAC summary to egui clipboard output.** `network_preview_copy_button_copies_exact_mac_summary` clicks the rendered action for a locally administered MAC address and confirms all three exact summary lines. The MAC fixture avoids the IP path's asynchronous ping; no system clipboard or daemon is used.
+      - [x] **H2.3h3 [Luna] Verify the Timestamp preview Copy action writes its ISO 8601 value to egui clipboard output.** `timestamp_preview_copy_button_copies_exact_iso_8601_value` clicks the rendered action for epoch `1700000000` and confirms `2023-11-14T22:13:20+00:00`. No system clipboard or daemon is used.
       - [ ] **H2.3h4 Verify link cleaning writes the cleaned URL to the active hand.** Confirm the resulting slot payload.
       - [ ] **H2.3h5 Verify link cleaning preserves the original URL in Undo.** Confirm the Undo payload.
     - **Image Studio**
