@@ -1487,6 +1487,78 @@ mod tests {
     }
 
     #[test]
+    fn rendered_copy_table_button_copies_active_sheet_as_exact_tsv() {
+        let data = SpreadsheetData {
+            title: "TSV copy fixture".into(),
+            sheets: vec![SpreadsheetSheet::new(
+                "Active".into(),
+                vec![
+                    vec!["Name".into(), "Count".into(), "Note".into()],
+                    vec!["alpha".into(), "1".into(), "日本語".into()],
+                    vec!["beta".into(), "2".into(), "✓".into()],
+                ],
+            )],
+        };
+        let mut state = SpreadsheetViewerState::new(data, None);
+        let palette = little_clip_core::palette::AppPalette::default();
+        let ctx = egui::Context::default();
+        let screen_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, Vec2::new(900.0, 620.0));
+        let mut time = 0.0;
+        let mut render = |events: Vec<egui::Event>| {
+            time += 0.1;
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(screen_rect),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                },
+            )
+        };
+
+        let initial = render(Vec::new());
+        let copy_position = initial
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) if text.galley.text() == "Copy Table" => {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("rendered Copy Table toolbar label");
+        render(vec![egui::Event::PointerMoved(copy_position)]);
+        render(vec![
+            egui::Event::PointerMoved(copy_position),
+            egui::Event::PointerButton {
+                pos: copy_position,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let copied = render(vec![
+            egui::Event::PointerMoved(copy_position),
+            egui::Event::PointerButton {
+                pos: copy_position,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+
+        assert_eq!(
+            copied.platform_output.copied_text,
+            "Name\tCount\tNote\nalpha\t1\t日本語\nbeta\t2\t✓"
+        );
+    }
+
+    #[test]
     fn spreadsheet_header_controls_fit_compact_and_wide_hosts() {
         let data = SpreadsheetData {
             title: "Sheet overview".into(),
