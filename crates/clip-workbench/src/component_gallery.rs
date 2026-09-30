@@ -1,6 +1,8 @@
+use crate::audio_preview::InlineAudioWaveform;
 use crate::image_preview::{DecodedImageData, InlineImagePreview};
 use crate::midi_view::InlineMidiPreview;
 use crate::model3d_view::InlineModel3dPreview;
+use crate::pdf_view::{self, InlinePdfPagePreview, PdfPageRasterResource};
 use crate::spreadsheet_view::InlineSpreadsheetPreview;
 use crate::text_preview::{InlineTextPreview, TextPreviewData};
 use crate::ui_appearance::WorkbenchColors;
@@ -9,10 +11,12 @@ use crate::ui_ext::{
     self, action_button, badge_pill, mode_tab_button, secondary_button, themed_button,
 };
 use eframe::egui::{self, Color32, RichText, Rounding, Stroke, Vec2};
+use little_clip_core::audio::{FullAudioAnalysis, PeakBlock};
 use little_clip_core::palette::AppPalette;
 use little_clip_core::presentation::midi::{MidiData, MidiNote};
 use little_clip_core::presentation::model3d::{Model3d, ModelFormat, Triangle, Vec3};
 use little_clip_core::presentation::spreadsheet::{SpreadsheetData, SpreadsheetSheet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Interactive samples of shared workbench components for visual review.
@@ -27,12 +31,19 @@ pub struct ComponentGalleryState {
     spreadsheet_source: Arc<SpreadsheetData>,
     midi_source: Arc<MidiData>,
     model3d_source: Arc<Model3d>,
+    audio_source: Arc<FullAudioAnalysis>,
+    audio_source_path: PathBuf,
+    audio_file_guard: Option<tempfile::TempPath>,
+    pdf_source_path: PathBuf,
+    pdf_raster: Arc<PdfPageRasterResource>,
     pending_open: Option<GalleryPreviewKind>,
     image_previews: [InlineImagePreview; 2],
     text_previews: [InlineTextPreview; 2],
     spreadsheet_previews: [InlineSpreadsheetPreview; 2],
     midi_previews: [InlineMidiPreview; 2],
     model3d_previews: [InlineModel3dPreview; 2],
+    audio_preview: InlineAudioWaveform,
+    pdf_preview: InlinePdfPagePreview,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,6 +53,8 @@ pub(crate) enum GalleryPreviewKind {
     Spreadsheet,
     Midi,
     Model3d,
+    Audio,
+    Pdf,
 }
 
 pub(crate) enum GalleryOpenRequest {
@@ -50,6 +63,8 @@ pub(crate) enum GalleryOpenRequest {
     Spreadsheet(Arc<SpreadsheetData>),
     Midi(Arc<MidiData>),
     Model3d(Arc<Model3d>),
+    Audio(Arc<FullAudioAnalysis>, PathBuf, tempfile::TempPath),
+    Pdf(PathBuf, Arc<PdfPageRasterResource>),
 }
 
 impl Default for ComponentGalleryState {
@@ -90,6 +105,9 @@ impl Default for ComponentGalleryState {
                 .collect(),
         });
         let model3d_source = gallery_model3d_source();
+        let (audio_source, audio_source_path, audio_file_guard) = gallery_audio_source();
+        let (pdf_source_path, pdf_raster) =
+            pdf_view::gallery_pdf_page_source().expect("gallery PDF fixture encodes");
         Self {
             query: "Sample text".to_owned(),
             notes: "Multiline fields should remain comfortable to read.".to_owned(),
@@ -101,6 +119,11 @@ impl Default for ComponentGalleryState {
             spreadsheet_source: Arc::clone(&spreadsheet_source),
             midi_source: Arc::clone(&midi_source),
             model3d_source: Arc::clone(&model3d_source),
+            audio_source: Arc::clone(&audio_source),
+            audio_source_path,
+            audio_file_guard: Some(audio_file_guard),
+            pdf_source_path,
+            pdf_raster: Arc::clone(&pdf_raster),
             pending_open: None,
             image_previews: [
                 InlineImagePreview::new(Arc::clone(&image_source)),
@@ -125,6 +148,8 @@ impl Default for ComponentGalleryState {
                 InlineModel3dPreview::new(Arc::clone(&model3d_source), Vec2::new(150.0, 88.0)),
                 InlineModel3dPreview::new(model3d_source, Vec2::new(150.0, 88.0)),
             ],
+            audio_preview: InlineAudioWaveform::new(audio_source),
+            pdf_preview: InlinePdfPagePreview::new(pdf_raster),
         }
     }
 }
@@ -151,6 +176,15 @@ impl ComponentGalleryState {
             GalleryPreviewKind::Model3d => Some(GalleryOpenRequest::Model3d(Arc::clone(
                 &self.model3d_source,
             ))),
+            GalleryPreviewKind::Audio => Some(GalleryOpenRequest::Audio(
+                Arc::clone(&self.audio_source),
+                self.audio_source_path.clone(),
+                self.audio_file_guard.take()?,
+            )),
+            GalleryPreviewKind::Pdf => Some(GalleryOpenRequest::Pdf(
+                self.pdf_source_path.clone(),
+                Arc::clone(&self.pdf_raster),
+            )),
         }
     }
 }
@@ -194,6 +228,91 @@ fn gallery_model3d_source() -> Arc<Model3d> {
         size: Vec3::new(1.0, 1.0, 0.0),
         max_dimension: 1.0,
     })
+}
+
+fn gallery_audio_source() -> (Arc<FullAudioAnalysis>, PathBuf, tempfile::TempPath) {
+    use std::io::Write;
+
+    let sample_rate = 44_100_u32;
+    let samples: Vec<f32> = (0..sample_rate)
+        .map(|frame| {
+            (std::f32::consts::TAU * 440.0 * frame as f32 / sample_rate as f32).sin() * 0.45
+        })
+        .collect();
+    let mut file = tempfile::Builder::new()
+        .prefix("little-clip-gallery-")
+        .suffix(".wav")
+        .tempfile()
+        .expect("gallery audio fixture file creates");
+    let data_len = u32::try_from(samples.len() * 2).expect("one-second fixture fits a WAV chunk");
+    file.write_all(b"RIFF").unwrap();
+    file.write_all(&(36_u32 + data_len).to_le_bytes()).unwrap();
+    file.write_all(b"WAVEfmt ").unwrap();
+    file.write_all(&16_u32.to_le_bytes()).unwrap();
+    file.write_all(&1_u16.to_le_bytes()).unwrap();
+    file.write_all(&1_u16.to_le_bytes()).unwrap();
+    file.write_all(&sample_rate.to_le_bytes()).unwrap();
+    file.write_all(&(sample_rate * 2).to_le_bytes()).unwrap();
+    file.write_all(&2_u16.to_le_bytes()).unwrap();
+    file.write_all(&16_u16.to_le_bytes()).unwrap();
+    file.write_all(b"data").unwrap();
+    file.write_all(&data_len.to_le_bytes()).unwrap();
+    for sample in &samples {
+        let pcm = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
+        file.write_all(&pcm.to_le_bytes()).unwrap();
+    }
+    file.flush().unwrap();
+    let path = file.path().to_owned();
+    let file_guard = file.into_temp_path();
+
+    let peaks = samples
+        .chunks(64)
+        .map(|chunk| PeakBlock {
+            min: chunk.iter().copied().fold(f32::INFINITY, f32::min),
+            max: chunk.iter().copied().fold(f32::NEG_INFINITY, f32::max),
+            rgb: [72, 164, 202],
+        })
+        .collect();
+    let overview = samples
+        .chunks(344)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()))
+        })
+        .collect();
+    let source = Arc::new(FullAudioAnalysis {
+        channels: 1,
+        sample_rate,
+        duration_ms: 1000,
+        total_frames: samples.len(),
+        ch1_samples: Arc::from(samples),
+        ch2_samples: None,
+        overview_peaks1: overview,
+        overview_peaks2: None,
+        peaks_lvl0_ch1: peaks,
+        peaks_lvl0_ch2: None,
+        peaks_lvl1_ch1: Vec::new(),
+        peaks_lvl1_ch2: None,
+        peaks_lvl2_ch1: Vec::new(),
+        peaks_lvl2_ch2: None,
+        spectrogram_width: 0,
+        spectrogram_height: 0,
+        spectrogram_rgba: Vec::new(),
+        note_strip_width: 0,
+        note_strip_height: 0,
+        note_strip_rgba: Vec::new(),
+        note_strip_info: Vec::new(),
+        spectral_colors: Vec::new(),
+        transients: Vec::new(),
+        is_transients_ready: false,
+        is_spectrogram_ready: false,
+        ultrasonic_roi: Vec::new(),
+        ultrasonic_peak_times: Vec::new(),
+        is_truncated: false,
+        truncation_warning: None,
+    });
+    (source, path, file_guard)
 }
 
 impl ComponentGalleryState {
@@ -273,6 +392,25 @@ impl ComponentGalleryState {
                     self.model3d_previews[1].show(ui, palette);
                     if ui.button("Open Model3D Studio").clicked() {
                         self.request_open(GalleryPreviewKind::Model3d);
+                    }
+                });
+
+                ui.label("Inline Audio Waveform • completed shared analysis");
+                ui.horizontal(|ui| {
+                    ui.allocate_ui(Vec2::new(260.0, 48.0), |ui| {
+                        self.audio_preview.render(ui, palette);
+                    });
+                    if ui.button("Open Audio Studio").clicked() {
+                        self.request_open(GalleryPreviewKind::Audio);
+                    }
+                });
+
+                ui.label("Inline PDF Page • shared cached raster");
+                ui.horizontal(|ui| {
+                    let ctx = ui.ctx().clone();
+                    self.pdf_preview.show(ui, &ctx, Vec2::new(96.0, 128.0));
+                    if ui.button("Open PDF Editor").clicked() {
+                        self.request_open(GalleryPreviewKind::Pdf);
                     }
                 });
             });
@@ -452,16 +590,16 @@ mod tests {
     use little_clip_core::config::WorkbenchAppearance;
 
     #[test]
-    fn gallery_renders_in_light_and_dark_at_compact_and_wide_sizes() {
+    fn gallery_renders_in_light_and_dark_at_7_by_4_and_ultrawide_sizes() {
         for appearance in [WorkbenchAppearance::Light, WorkbenchAppearance::Dark] {
-            for size in [egui::vec2(900.0, 700.0), egui::vec2(1760.0, 1000.0)] {
+            for size in [egui::vec2(2240.0, 1280.0), egui::vec2(3440.0, 1440.0)] {
                 let ctx = egui::Context::default();
                 ui_ext::configure_workbench_style(&ctx);
                 let palette = ui_appearance::palette(appearance);
                 ui_appearance::apply_visuals(&ctx, &palette);
                 let mut gallery = ComponentGalleryState::default();
                 let mut close = false;
-                let output = ctx.run(
+                let mut outputs = vec![ctx.run(
                     egui::RawInput {
                         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
                         ..Default::default()
@@ -471,15 +609,49 @@ mod tests {
                             gallery.render_ui(ui, &palette, &mut close);
                         });
                     },
-                );
+                )];
+                for _ in 0..12 {
+                    let has_pdf_action = outputs.last().is_some_and(|output| {
+                        output.shapes.iter().any(|shape| {
+                            matches!(
+                                &shape.shape,
+                                egui::epaint::Shape::Text(text)
+                                    if text.galley.job.text.contains("Open PDF Editor")
+                            )
+                        })
+                    });
+                    if has_pdf_action {
+                        break;
+                    }
+                    outputs.push(ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                            events: vec![
+                                egui::Event::PointerMoved(egui::pos2(size.x * 0.5, size.y * 0.75)),
+                                egui::Event::MouseWheel {
+                                    unit: egui::MouseWheelUnit::Point,
+                                    delta: egui::vec2(0.0, -500.0),
+                                    modifiers: egui::Modifiers::NONE,
+                                },
+                            ],
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::CentralPanel::default().show(ctx, |ui| {
+                                gallery.render_ui(ui, &palette, &mut close);
+                            });
+                        },
+                    ));
+                }
+                let shape_count: usize = outputs.iter().map(|output| output.shapes.len()).sum();
                 assert!(
-                    output.shapes.len() > 30,
+                    shape_count > 30,
                     "gallery rendered only {} shapes at {size:?}",
-                    output.shapes.len()
+                    shape_count
                 );
-                let text_shapes: Vec<_> = output
-                    .shapes
+                let text_shapes: Vec<_> = outputs
                     .iter()
+                    .flat_map(|output| output.shapes.iter())
                     .filter_map(|shape| match &shape.shape {
                         egui::epaint::Shape::Text(text) => Some(text),
                         _ => None,
@@ -491,11 +663,15 @@ mod tests {
                     "Inline Spreadsheet Preview",
                     "Inline MIDI Preview",
                     "Inline Model3D Preview",
+                    "Inline Audio Waveform",
+                    "Inline PDF Page",
                     "Open Image Studio",
                     "Open Text Studio",
                     "Open Spreadsheet Studio",
                     "Open MIDI Studio",
                     "Open Model3D Studio",
+                    "Open Audio Studio",
+                    "Open PDF Editor",
                 ] {
                     assert!(
                         text_shapes
@@ -513,6 +689,18 @@ mod tests {
                     "both text preview hosts should render at {appearance:?} and {size:?}"
                 );
                 assert!(
+                    outputs
+                        .iter()
+                        .flat_map(|output| output.shapes.iter())
+                        .filter(|shape| matches!(
+                            &shape.shape,
+                            egui::epaint::Shape::LineSegment { .. }
+                        ))
+                        .count()
+                        >= 128,
+                    "audio waveform should render at {appearance:?} and {size:?}"
+                );
+                assert!(
                     text_shapes
                         .iter()
                         .filter(|text| text.galley.job.text.contains("gallery-cell-"))
@@ -521,9 +709,9 @@ mod tests {
                     "both spreadsheet hosts should render at {appearance:?} and {size:?}"
                 );
                 assert!(
-                    output
-                        .shapes
+                    outputs
                         .iter()
+                        .flat_map(|output| output.shapes.iter())
                         .filter(|shape| matches!(
                             &shape.shape,
                             egui::epaint::Shape::Mesh(mesh) if !mesh.vertices.is_empty()
@@ -535,9 +723,9 @@ mod tests {
                 let (note_r, note_g, note_b) = palette.midi_note_color(0, 0, 1, 60, 96);
                 let note_color = Color32::from_rgb(note_r, note_g, note_b);
                 assert!(
-                    output
-                        .shapes
+                    outputs
                         .iter()
+                        .flat_map(|output| output.shapes.iter())
                         .filter(|shape| matches!(
                             &shape.shape,
                             egui::epaint::Shape::Rect(rect) if rect.fill == note_color
@@ -549,5 +737,51 @@ mod tests {
                 assert!(!close);
             }
         }
+    }
+
+    #[test]
+    fn audio_gallery_source_is_shared_with_inline_and_completed_studio() {
+        let mut gallery = ComponentGalleryState::default();
+        assert!(Arc::ptr_eq(
+            gallery.audio_preview.source_analysis(),
+            &gallery.audio_source
+        ));
+        gallery.request_open(GalleryPreviewKind::Audio);
+        let GalleryOpenRequest::Audio(source, path, file_guard) =
+            gallery.take_pending_open().unwrap()
+        else {
+            panic!("audio request should return the retained completed analysis");
+        };
+        assert!(Arc::ptr_eq(&source, &gallery.audio_source));
+        assert!(path.is_file());
+        assert_eq!(&std::fs::read(&path).unwrap()[..4], b"RIFF");
+        assert!(
+            rodio::Decoder::new(std::io::BufReader::new(std::fs::File::open(&path).unwrap()))
+                .unwrap()
+                .next()
+                .is_some()
+        );
+        assert!(source.ch1_samples[11] != 0.0);
+        assert!(source.peaks_lvl0_ch1.iter().any(|peak| peak.max > 0.0));
+
+        let state = crate::audio_preview::AudioPreviewState::from_completed_source_with_file_guard(
+            path.clone(),
+            "Gallery audio".to_owned(),
+            None,
+            Arc::clone(&source),
+            file_guard,
+        );
+        assert!(Arc::ptr_eq(
+            state.completed_source_analysis().unwrap(),
+            &gallery.audio_source
+        ));
+        assert!(state.analysis_rx.is_none());
+        assert!(!state.is_loading_analysis);
+        assert!(state.path.is_file());
+
+        drop(gallery);
+        assert!(state.path.is_file());
+        drop(state);
+        assert!(!path.exists());
     }
 }

@@ -284,6 +284,65 @@ impl PdfPageRasterResource {
     }
 }
 
+/// Builds the gallery's tiny valid document and its already-rendered page raster.
+/// Both files stay alive for as long as either preview or editor retains the raster.
+pub(crate) fn gallery_pdf_page_source() -> Result<(PathBuf, Arc<PdfPageRasterResource>), String> {
+    let directory = Arc::new(tempfile::tempdir().map_err(|error| error.to_string())?);
+    let pdf_path = directory.path().join("gallery.pdf");
+    let raster_path = directory.path().join("gallery-page.png");
+
+    let stream = "0.149 0.357 0.6 rg\n16 16 64 96 re f\n";
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 96 128] /Resources << >> /Contents 4 0 R >>"
+            .to_owned(),
+        format!("<< /Length {} >>\nstream\n{stream}endstream", stream.len()),
+    ];
+    let mut pdf = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::with_capacity(objects.len() + 1);
+    offsets.push(0usize);
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{}\nendobj\n", index + 1, object).as_bytes());
+    }
+    let xref_offset = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n", objects.len() + 1).as_bytes());
+    pdf.extend_from_slice(b"0000000000 65535 f \n");
+    for offset in offsets.into_iter().skip(1) {
+        pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(
+        format!(
+            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF\n",
+            objects.len() + 1
+        )
+        .as_bytes(),
+    );
+    std::fs::write(&pdf_path, pdf).map_err(|error| error.to_string())?;
+
+    let mut image = image::RgbaImage::from_pixel(96, 128, image::Rgba([255, 255, 255, 255]));
+    for y in 16..112 {
+        for x in 16..80 {
+            image.put_pixel(x, y, image::Rgba([38, 91, 153, 255]));
+        }
+    }
+    image::DynamicImage::ImageRgba8(image)
+        .save_with_format(&raster_path, image::ImageFormat::Png)
+        .map_err(|error| error.to_string())?;
+
+    Ok((
+        pdf_path,
+        Arc::new(PdfPageRasterResource {
+            page_num: 1,
+            path: raster_path,
+            width: 96,
+            height: 128,
+            _raster_directory: directory,
+        }),
+    ))
+}
+
 /// Per-view page texture and status, plus an optional shareable raster resource.
 pub struct PdfPageItem {
     pub page_num: usize,
@@ -316,6 +375,9 @@ pub struct PdfEditorState {
     edit_ticket: Option<JobTicket>,
     edit_in_progress: bool,
     raster_cache: Option<std::sync::Arc<tempfile::TempDir>>,
+    // Gallery documents may live alongside their first raster; keep the PDF
+    // itself alive when a successful edit replaces that raster cache.
+    source_directory: Option<Arc<tempfile::TempDir>>,
     texture_frame: u64,
     decode_job: Option<PdfPageDecodeSlot>,
     decode_requests: Vec<usize>,
@@ -334,14 +396,13 @@ impl PdfEditorState {
             .with_file_name(format!("{stem}.{operation}.edited.pdf"))
     }
 
-    /// Starts loading page metadata and thumbnail previews for the given PDF file.
-    pub fn new(path: PathBuf) -> Self {
+    fn without_jobs(path: PathBuf) -> Self {
         let title = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "document.pdf".to_string());
 
-        let mut state = Self {
+        Self {
             path,
             title,
             page_count: 0,
@@ -358,11 +419,38 @@ impl PdfEditorState {
             edit_ticket: None,
             edit_in_progress: false,
             raster_cache: None,
+            source_directory: None,
             texture_frame: 0,
             decode_job: None,
             decode_requests: Vec::new(),
-        };
+        }
+    }
+
+    /// Starts loading page metadata and thumbnail previews for the given PDF file.
+    pub fn new(path: PathBuf) -> Self {
+        let mut state = Self::without_jobs(path);
         state.start_info_worker();
+        state
+    }
+
+    /// Opens a one-page document using a page raster already owned by another view.
+    pub(crate) fn from_shared_page_raster(
+        path: PathBuf,
+        raster: Arc<PdfPageRasterResource>,
+    ) -> Self {
+        let mut state = Self::without_jobs(path);
+        state.page_count = 1;
+        state.selected_page = Some(1);
+        state.raster_cache = Some(Arc::clone(&raster._raster_directory));
+        state.source_directory = Some(Arc::clone(&raster._raster_directory));
+        state.pages.push(PdfPageItem {
+            page_num: 1,
+            raster: Some(raster),
+            texture: None,
+            texture_last_used: 0,
+            error: None,
+            rotation: 0,
+        });
         state
     }
 
@@ -1490,6 +1578,7 @@ mod tests {
             edit_ticket: None,
             edit_in_progress: false,
             raster_cache: Some(raster_cache),
+            source_directory: None,
             texture_frame: 0,
             decode_job: None,
             decode_requests: Vec::new(),
@@ -1645,6 +1734,79 @@ mod tests {
         drop(editor_raster);
         drop(state);
         assert!(!raster_directory.exists());
+    }
+
+    #[test]
+    fn gallery_page_opens_editor_without_raster_workers_and_retains_source_files() {
+        let (pdf_path, raster) = gallery_pdf_page_source().unwrap();
+        let raster_path = raster.path().to_owned();
+        let directory = pdf_path.parent().unwrap().to_owned();
+        assert_eq!(get_pdf_info(&pdf_path).unwrap().page_count, 1);
+
+        let mut inline = InlinePdfPagePreview::new(Arc::clone(&raster));
+        let mut editor =
+            PdfEditorState::from_shared_page_raster(pdf_path.clone(), Arc::clone(&raster));
+        assert!(Arc::ptr_eq(
+            editor.pages[0].raster.as_ref().unwrap(),
+            &inline.raster
+        ));
+        assert!(editor.info_job.is_none());
+        assert!(editor.preview_job.is_none());
+        assert!(editor.preview_rx.is_none());
+        assert!(!editor.previews_loading);
+        assert_eq!(editor.selected_page, Some(1));
+
+        let ctx = egui::Context::default();
+        editor.ensure_page_texture(1, &ctx);
+        editor.schedule_page_decode(&ctx);
+        show_inline_frame(&ctx, &mut inline);
+        assert!(!std::ptr::eq(
+            editor.decode_job.as_ref().unwrap(),
+            inline.decode_slot.as_ref().unwrap()
+        ));
+        let editor_texture = upload_page(&mut editor, 1, &ctx);
+        wait_for_inline_texture(&ctx, &mut inline);
+        assert_ne!(editor_texture, inline.texture.as_ref().unwrap().id());
+
+        drop(raster);
+        drop(inline);
+        assert!(pdf_path.exists());
+        assert!(raster_path.exists());
+
+        // A successful edit reloads metadata and clears the original page
+        // raster. The adopted document must stay alive through that reload.
+        let output = editor.sibling_output_path("rotate");
+        let staging_dir = tempfile::tempdir_in(&directory).unwrap();
+        std::fs::copy(&pdf_path, staging_dir.path().join(STAGED_PDF_FILENAME)).unwrap();
+        let (sender, receiver) = channel();
+        editor.edit_rx = Some(receiver);
+        editor.edit_in_progress = true;
+        sender
+            .send(Ok(PdfEditMsg {
+                operation: "rotate",
+                page_num: 1,
+                output: output.clone(),
+                staging_dir,
+                result: Ok(()),
+            }))
+            .unwrap();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            editor.poll_edit_worker(ctx, 0.0)
+        });
+        assert_eq!(editor.path, output);
+        assert!(editor.path.is_file());
+        assert!(editor.info_job.is_some());
+        drop(editor);
+        assert!(!directory.exists());
+
+        let (pdf_path, raster) = gallery_pdf_page_source().unwrap();
+        let directory = pdf_path.parent().unwrap().to_owned();
+        let inline = InlinePdfPagePreview::new(Arc::clone(&raster));
+        let editor = PdfEditorState::from_shared_page_raster(pdf_path.clone(), raster);
+        drop(editor);
+        assert!(pdf_path.exists());
+        drop(inline);
+        assert!(!directory.exists());
     }
 
     #[test]
@@ -2277,6 +2439,7 @@ mod tests {
                 edit_ticket: None,
                 edit_in_progress: false,
                 raster_cache: None,
+                source_directory: None,
                 texture_frame: 0,
                 decode_job: None,
                 decode_requests: Vec::new(),

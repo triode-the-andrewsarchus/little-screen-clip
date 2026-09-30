@@ -590,6 +590,8 @@ struct AudioEditSnapshot {
 pub struct AudioPreviewState {
     pub path: PathBuf,
     pub title: String,
+    /// Optional backing-file owner for completed-source previews created from temporary fixtures.
+    _source_file_guard: Option<tempfile::TempPath>,
     pub active_mode: AudioToolMode,
     pub metadata: Option<AudioMetadata>,
     /// Progressive analysis stays session-owned until all stages have completed.
@@ -2064,6 +2066,21 @@ impl AudioPreviewState {
         )
     }
 
+    /// Creates a completed-source view that also owns the backing file's temporary-path guard.
+    /// This keeps file-based playback, export, and external-editor operations valid after the
+    /// gallery that created the fixture has closed.
+    pub fn from_completed_source_with_file_guard(
+        path: PathBuf,
+        title: String,
+        metadata: Option<AudioMetadata>,
+        source_analysis: Arc<FullAudioAnalysis>,
+        file_guard: tempfile::TempPath,
+    ) -> Self {
+        let mut state = Self::from_completed_source(path, title, metadata, source_analysis);
+        state._source_file_guard = Some(file_guard);
+        state
+    }
+
     fn with_source_analysis_on_jobs(
         path: PathBuf,
         title: String,
@@ -2107,6 +2124,7 @@ impl AudioPreviewState {
         Self {
             path,
             title,
+            _source_file_guard: None,
             active_mode: AudioToolMode::Inspect,
             metadata,
             analysis: source_analysis.clone(),
@@ -6492,6 +6510,31 @@ Separated track
         assert_eq!(second.track_gain_db, 0.0);
         assert!(second.region_gain_db.is_empty());
         assert!((source.ch1_samples[64] - 0.5).abs() < 0.000_01);
+    }
+
+    #[test]
+    fn completed_source_view_keeps_temporary_backing_file_alive() {
+        use std::io::Write;
+
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(b"fixture audio source").unwrap();
+        let path = file.path().to_owned();
+        let file_guard = file.into_temp_path();
+        let source = Arc::new(empty_audio_analysis());
+        let state = AudioPreviewState::from_completed_source_with_file_guard(
+            path.clone(),
+            "Gallery audio".to_owned(),
+            None,
+            source,
+            file_guard,
+        );
+
+        assert!(path.exists());
+        assert_eq!(state.path, path);
+        assert!(!state.is_loading_analysis);
+
+        drop(state);
+        assert!(!path.exists());
     }
 
     #[test]

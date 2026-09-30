@@ -300,6 +300,18 @@ fn gallery_request_to_viewer_session(
         component_gallery::GalleryOpenRequest::Model3d(source) => {
             ViewerSession::Model3d(Model3dViewerState::from_shared_model(source, None))
         }
+        component_gallery::GalleryOpenRequest::Audio(source, path, file_guard) => {
+            ViewerSession::Audio(AudioPreviewState::from_completed_source_with_file_guard(
+                path,
+                "Gallery audio".to_owned(),
+                None,
+                source,
+                file_guard,
+            ))
+        }
+        component_gallery::GalleryOpenRequest::Pdf(path, raster) => {
+            ViewerSession::Pdf(PdfEditorState::from_shared_page_raster(path, raster))
+        }
     }
 }
 
@@ -3641,6 +3653,8 @@ mod workbench_layout_tests {
             component_gallery::GalleryPreviewKind::Spreadsheet,
             component_gallery::GalleryPreviewKind::Midi,
             component_gallery::GalleryPreviewKind::Model3d,
+            component_gallery::GalleryPreviewKind::Audio,
+            component_gallery::GalleryPreviewKind::Pdf,
         ] {
             let mut gallery = component_gallery::ComponentGalleryState::default();
             gallery.request_open(kind);
@@ -3678,6 +3692,18 @@ mod workbench_layout_tests {
                     assert_eq!(state.mesh.as_ref().unwrap().name, "gallery-model.obj");
                     assert!(state.rx.is_none());
                 }
+                (component_gallery::GalleryPreviewKind::Audio, ViewerSession::Audio(state)) => {
+                    assert_eq!(state.title, "Gallery audio");
+                    assert!(!state.is_loading_analysis);
+                    assert!(state.analysis_rx.is_none());
+                    assert_eq!(state.completed_source_analysis().unwrap().duration_ms, 1000);
+                }
+                (component_gallery::GalleryPreviewKind::Pdf, ViewerSession::Pdf(state)) => {
+                    assert_eq!(state.title, "gallery.pdf");
+                    assert_eq!(state.page_count, 1);
+                    assert!(state.pages[0].raster.is_some());
+                    assert!(state.path.is_file());
+                }
                 _ => panic!("gallery request mapped to the wrong full viewer variant"),
             }
             assert!(gallery.take_pending_open().is_none());
@@ -3707,6 +3733,14 @@ mod workbench_layout_tests {
                 "Open Model3D Studio",
                 component_gallery::GalleryPreviewKind::Model3d,
             ),
+            (
+                "Open Audio Studio",
+                component_gallery::GalleryPreviewKind::Audio,
+            ),
+            (
+                "Open PDF Editor",
+                component_gallery::GalleryPreviewKind::Pdf,
+            ),
         ] {
             let viewer = ViewerSession::ComponentGallery(
                 component_gallery::ComponentGalleryState::default(),
@@ -3716,14 +3750,36 @@ mod workbench_layout_tests {
             let input = |events| egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(900.0, 700.0),
+                    egui::vec2(2240.0, 1280.0),
                 )),
                 events,
                 ..Default::default()
             };
-            let first_frame = ctx.run(input(Vec::new()), |ctx| {
+            let mut first_frame = ctx.run(input(Vec::new()), |ctx| {
                 assert!(app.render_modal_viewers(ctx));
             });
+            for _ in 0..12 {
+                let action_is_visible = first_frame.shapes.iter().any(|shape| {
+                    matches!(
+                        &shape.shape,
+                        egui::Shape::Text(text) if text.galley.job.text == label
+                    )
+                });
+                if action_is_visible {
+                    break;
+                }
+                first_frame = ctx.run(
+                    input(vec![
+                        egui::Event::PointerMoved(egui::pos2(640.0, 540.0)),
+                        egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(0.0, -500.0),
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ]),
+                    |ctx| assert!(app.render_modal_viewers(ctx)),
+                );
+            }
             let action_position = first_frame
                 .shapes
                 .iter()
@@ -3766,6 +3822,19 @@ mod workbench_layout_tests {
                     component_gallery::GalleryPreviewKind::Model3d,
                     Some(ViewerSession::Model3d(_)),
                 ) => true,
+                (
+                    component_gallery::GalleryPreviewKind::Audio,
+                    Some(ViewerSession::Audio(state)),
+                ) => {
+                    !state.is_loading_analysis
+                        && state.analysis_rx.is_none()
+                        && state
+                            .completed_source_analysis()
+                            .is_some_and(|source| source.duration_ms == 1000)
+                }
+                (component_gallery::GalleryPreviewKind::Pdf, Some(ViewerSession::Pdf(state))) => {
+                    state.page_count == 1 && state.path.is_file() && state.pages[0].raster.is_some()
+                }
                 _ => false,
             };
             assert!(opened_expected_studio, "{label} opened the wrong studio");
