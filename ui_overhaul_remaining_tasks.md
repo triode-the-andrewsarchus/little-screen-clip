@@ -685,8 +685,8 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **H2.3h33 Verify unavailable Image Studio viewer reports failure.** Confirm visible status when its executable is missing.
   - **H2.3i First-pass return-destination scenarios from the parity ledger (runtime acceptance remains open).** Tests and captures are scoped evidence, not full-view sign-off; the ledger retains additional uncovered scenarios beyond these route and state checks.
     - **Workbench and Quick Palette**
-      - [ ] **H2.3i1 Verify closing a startup viewer advances to the next queued viewer.** Confirm FIFO order.
-      - [ ] **H2.3i2 Verify closing the final queued viewer returns to the selected workbench view.** Confirm destination.
+      - [x] **H2.3i1 [Primary] Verify closing a foreground queued viewer advances to the next viewer.** `closing_startup_viewers_advances_fifo_then_returns_to_selected_workbench_view` constructs a foreground gallery and queued spreadsheet, closes the gallery, and confirms the spreadsheet is shown next. This does not launch a real startup queue.
+      - [x] **H2.3i2 [Primary] Verify closing the final queued viewer returns to Node Machine.** `closing_startup_viewers_advances_fifo_then_returns_to_selected_workbench_view` closes the constructed queued spreadsheet and confirms the selected Node Machine view is restored. This does not launch a real startup queue.
       - [ ] **H2.3i3 Verify recipe-prompt Escape returns to the same Palette query.** Confirm the query remains available.
       - [ ] **H2.3i4 Verify successful recipe-prompt submission returns to Palette.** Confirm the resulting view.
     - **Image and audio surfaces**
