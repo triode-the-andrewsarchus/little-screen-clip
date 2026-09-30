@@ -792,28 +792,33 @@ mod tests {
         let palette = ui_appearance::palette(WorkbenchAppearance::Dark);
         let mut gallery = ComponentGalleryState::default();
         let mut close = false;
-        let size = egui::vec2(3440.0, 1440.0);
+        let clipped_size = egui::vec2(1280.0, 720.0);
+        let visible_size = egui::vec2(2240.0, 1280.0);
         let audio_source = Arc::clone(&gallery.audio_source);
         let pdf_raster = Arc::clone(&gallery.pdf_raster);
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, clipped_size)),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    gallery.render_ui(ui, &palette, &mut close);
+                });
+            },
+        );
+        assert_eq!(
+            gallery.pdf_preview.decode_start_count_for_test(),
+            0,
+            "the clipped PDF page must not be decoded"
+        );
+
         let mut pdf_texture_id = None;
-        let mut pdf_row_visible = false;
         for frame in 0..200 {
-            let events = if !pdf_row_visible {
-                vec![
-                    egui::Event::PointerMoved(egui::pos2(size.x * 0.5, size.y * 0.75)),
-                    egui::Event::MouseWheel {
-                        unit: egui::MouseWheelUnit::Point,
-                        delta: egui::vec2(0.0, -500.0),
-                        modifiers: egui::Modifiers::NONE,
-                    },
-                ]
-            } else {
-                Vec::new()
-            };
             let output = ctx.run(
                 egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
-                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, visible_size)),
                     ..Default::default()
                 },
                 |ctx| {
@@ -829,17 +834,10 @@ mod tests {
             ));
             assert!(gallery.audio_file_guard.is_some());
 
-            pdf_row_visible |= output.shapes.iter().any(|shape| {
-                matches!(
-                    &shape.shape,
-                    egui::epaint::Shape::Text(text)
-                        if text.galley.job.text.contains("Open PDF Editor")
-                            && shape.clip_rect.intersects(egui::Rect::from_min_size(
-                                text.pos,
-                                text.galley.size(),
-                            ))
-                )
-            });
+            assert!(
+                gallery.pdf_preview.decode_start_count_for_test() <= 1,
+                "one inline host must admit at most one PDF decode"
+            );
 
             pdf_texture_id = output.shapes.iter().find_map(|shape| match &shape.shape {
                 egui::epaint::Shape::Mesh(mesh) => {
@@ -853,10 +851,15 @@ mod tests {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
-            assert!(frame < 199, "gallery PDF page should decode and upload");
+            assert!(
+                frame < 199,
+                "gallery PDF page should decode and upload (starts: {})",
+                gallery.pdf_preview.decode_start_count_for_test()
+            );
         }
 
         let pdf_texture_id = pdf_texture_id.expect("gallery PDF texture should be resident");
+        assert_eq!(gallery.pdf_preview.decode_start_count_for_test(), 1);
         let retained_raster_refs = Arc::strong_count(&pdf_raster);
         assert_eq!(
             retained_raster_refs, 3,
@@ -865,7 +868,7 @@ mod tests {
         for _ in 0..3 {
             let output = ctx.run(
                 egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, visible_size)),
                     ..Default::default()
                 },
                 |ctx| {
@@ -888,6 +891,7 @@ mod tests {
                 "a later gallery frame should reuse the uploaded PDF texture"
             );
             assert_eq!(Arc::strong_count(&pdf_raster), retained_raster_refs);
+            assert_eq!(gallery.pdf_preview.decode_start_count_for_test(), 1);
             assert!(Arc::ptr_eq(
                 gallery.audio_preview.source_analysis(),
                 &audio_source

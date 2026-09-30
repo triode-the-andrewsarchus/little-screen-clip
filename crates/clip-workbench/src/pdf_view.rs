@@ -115,6 +115,8 @@ pub struct InlinePdfPagePreview {
     texture: Option<egui::TextureHandle>,
     error: Option<String>,
     retry_at: Option<std::time::Instant>,
+    #[cfg(test)]
+    decode_start_count: usize,
 }
 
 #[allow(dead_code)] // Public rendering API is exercised by its in-module consumer test.
@@ -126,7 +128,14 @@ impl InlinePdfPagePreview {
             texture: None,
             error: None,
             retry_at: None,
+            #[cfg(test)]
+            decode_start_count: 0,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn decode_start_count_for_test(&self) -> usize {
+        self.decode_start_count
     }
 
     fn defer_retry(&mut self, ctx: &egui::Context) {
@@ -178,6 +187,10 @@ impl InlinePdfPagePreview {
                     }
                 }
                 if self.retry_at.is_none() {
+                    #[cfg(test)]
+                    {
+                        self.decode_start_count += 1;
+                    }
                     self.decode_slot =
                         Some(PdfPageDecodeSlot::start(Arc::clone(&self.raster), ctx));
                     ctx.request_repaint_after(Duration::from_millis(20));
