@@ -275,6 +275,34 @@ enum ViewerSession {
     ComponentGallery(component_gallery::ComponentGalleryState),
 }
 
+fn gallery_request_to_viewer_session(
+    request: component_gallery::GalleryOpenRequest,
+    config: &AppConfig,
+) -> ViewerSession {
+    match request {
+        component_gallery::GalleryOpenRequest::Image(source) => {
+            ViewerSession::Image(ImagePreviewState::from_decoded(
+                source.as_ref().clone(),
+                None,
+                "Gallery image".to_owned(),
+                config,
+            ))
+        }
+        component_gallery::GalleryOpenRequest::Text(source) => ViewerSession::Text(
+            TextPreviewState::from_data(source, Some("Gallery text".to_owned()), config),
+        ),
+        component_gallery::GalleryOpenRequest::Spreadsheet(source) => {
+            ViewerSession::Spreadsheet(SpreadsheetViewerState::from_shared(source, None))
+        }
+        component_gallery::GalleryOpenRequest::Midi(source) => ViewerSession::Midi(
+            MidiViewerState::from_shared(source, None, "Gallery MIDI".to_owned()),
+        ),
+        component_gallery::GalleryOpenRequest::Model3d(source) => {
+            ViewerSession::Model3d(Model3dViewerState::from_shared_model(source, None))
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ImageSessionKey {
     ClipboardItem(uuid::Uuid),
@@ -2022,6 +2050,7 @@ impl WorkbenchApp {
         };
         let mut close = self.pending_image_close;
         let mut pdf_dirty = false;
+        let mut gallery_open_request = None;
         match viewer {
             ViewerSession::Diff(state) => {
                 show_viewer_panel(ctx, |ui| {
@@ -2102,8 +2131,16 @@ impl WorkbenchApp {
                     show_viewer_panel(ctx, |ui| {
                         state.render_ui(ui, &self.ui_palette, &mut close);
                     });
+                    gallery_open_request = state.take_pending_open();
                 }
             }
+        }
+
+        if !close && let Some(request) = gallery_open_request {
+            self.viewer = Some(gallery_request_to_viewer_session(request, &self.config));
+            self.active_image_key = None;
+            ctx.request_repaint();
+            return true;
         }
 
         let image_loading = self.image_load_job.is_some();
@@ -3592,6 +3629,146 @@ mod workbench_layout_tests {
             dragging_slot: None,
             config,
             appearance_applied: true,
+        }
+    }
+
+    #[test]
+    fn gallery_requests_map_to_each_shared_source_full_viewer() {
+        let config = AppConfig::default();
+        for kind in [
+            component_gallery::GalleryPreviewKind::Image,
+            component_gallery::GalleryPreviewKind::Text,
+            component_gallery::GalleryPreviewKind::Spreadsheet,
+            component_gallery::GalleryPreviewKind::Midi,
+            component_gallery::GalleryPreviewKind::Model3d,
+        ] {
+            let mut gallery = component_gallery::ComponentGalleryState::default();
+            gallery.request_open(kind);
+            let request = gallery
+                .take_pending_open()
+                .expect("gallery action should produce one pending source request");
+            let viewer = gallery_request_to_viewer_session(request, &config);
+            match (kind, viewer) {
+                (component_gallery::GalleryPreviewKind::Image, ViewerSession::Image(state)) => {
+                    assert_eq!(state.title, "Gallery image");
+                    assert_eq!(state.original_width, 24);
+                    assert!(state.palette_ticket.is_none());
+                }
+                (component_gallery::GalleryPreviewKind::Text, ViewerSession::Text(state)) => {
+                    assert_eq!(state.title, "Gallery text");
+                    assert!(state.content.contains("gallery-line-alpha"));
+                }
+                (
+                    component_gallery::GalleryPreviewKind::Spreadsheet,
+                    ViewerSession::Spreadsheet(state),
+                ) => {
+                    assert_eq!(state.title, "Gallery workbook");
+                    assert_eq!(
+                        state.current_sheet().unwrap().rows[0][0],
+                        "gallery-cell-alpha"
+                    );
+                }
+                (component_gallery::GalleryPreviewKind::Midi, ViewerSession::Midi(state)) => {
+                    assert_eq!(state.title, "Gallery MIDI");
+                    assert_eq!(state.data.total_notes, 4);
+                    assert!(!state.is_synthesizing);
+                }
+                (component_gallery::GalleryPreviewKind::Model3d, ViewerSession::Model3d(state)) => {
+                    assert_eq!(state.status, model3d_view::ModelLoadingStatus::Ready);
+                    assert_eq!(state.mesh.as_ref().unwrap().name, "gallery-model.obj");
+                    assert!(state.rx.is_none());
+                }
+                _ => panic!("gallery request mapped to the wrong full viewer variant"),
+            }
+            assert!(gallery.take_pending_open().is_none());
+        }
+    }
+
+    #[test]
+    fn visible_gallery_actions_open_full_studios() {
+        for (label, kind) in [
+            (
+                "Open Image Studio",
+                component_gallery::GalleryPreviewKind::Image,
+            ),
+            (
+                "Open Text Studio",
+                component_gallery::GalleryPreviewKind::Text,
+            ),
+            (
+                "Open Spreadsheet Studio",
+                component_gallery::GalleryPreviewKind::Spreadsheet,
+            ),
+            (
+                "Open MIDI Studio",
+                component_gallery::GalleryPreviewKind::Midi,
+            ),
+            (
+                "Open Model3D Studio",
+                component_gallery::GalleryPreviewKind::Model3d,
+            ),
+        ] {
+            let viewer = ViewerSession::ComponentGallery(
+                component_gallery::ComponentGalleryState::default(),
+            );
+            let mut app = test_workbench_app(Some(viewer), VecDeque::new());
+            let ctx = egui::Context::default();
+            let input = |events| egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events,
+                ..Default::default()
+            };
+            let first_frame = ctx.run(input(Vec::new()), |ctx| {
+                assert!(app.render_modal_viewers(ctx));
+            });
+            let action_position = first_frame
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + text.galley.size() * 0.5)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{label} should be visible in the gallery"));
+            let pointer_event = |pressed| egui::Event::PointerButton {
+                pos: action_position,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            let _ = ctx.run(
+                input(vec![
+                    egui::Event::PointerMoved(action_position),
+                    pointer_event(true),
+                ]),
+                |ctx| assert!(app.render_modal_viewers(ctx)),
+            );
+            let _ = ctx.run(
+                input(vec![
+                    egui::Event::PointerMoved(action_position),
+                    pointer_event(false),
+                ]),
+                |ctx| assert!(app.render_modal_viewers(ctx)),
+            );
+            let opened_expected_studio = match (kind, app.viewer.as_ref()) {
+                (component_gallery::GalleryPreviewKind::Image, Some(ViewerSession::Image(_)))
+                | (component_gallery::GalleryPreviewKind::Text, Some(ViewerSession::Text(_)))
+                | (
+                    component_gallery::GalleryPreviewKind::Spreadsheet,
+                    Some(ViewerSession::Spreadsheet(_)),
+                )
+                | (component_gallery::GalleryPreviewKind::Midi, Some(ViewerSession::Midi(_)))
+                | (
+                    component_gallery::GalleryPreviewKind::Model3d,
+                    Some(ViewerSession::Model3d(_)),
+                ) => true,
+                _ => false,
+            };
+            assert!(opened_expected_studio, "{label} opened the wrong studio");
         }
     }
 

@@ -22,11 +22,34 @@ pub struct ComponentGalleryState {
     level: f32,
     selected_mode: usize,
     enabled: bool,
+    image_source: Arc<DecodedImageData>,
+    text_source: Arc<TextPreviewData>,
+    spreadsheet_source: Arc<SpreadsheetData>,
+    midi_source: Arc<MidiData>,
+    model3d_source: Arc<Model3d>,
+    pending_open: Option<GalleryPreviewKind>,
     image_previews: [InlineImagePreview; 2],
     text_previews: [InlineTextPreview; 2],
     spreadsheet_previews: [InlineSpreadsheetPreview; 2],
     midi_previews: [InlineMidiPreview; 2],
     model3d_previews: [InlineModel3dPreview; 2],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum GalleryPreviewKind {
+    Image,
+    Text,
+    Spreadsheet,
+    Midi,
+    Model3d,
+}
+
+pub(crate) enum GalleryOpenRequest {
+    Image(Arc<DecodedImageData>),
+    Text(Arc<TextPreviewData>),
+    Spreadsheet(Arc<SpreadsheetData>),
+    Midi(Arc<MidiData>),
+    Model3d(Arc<Model3d>),
 }
 
 impl Default for ComponentGalleryState {
@@ -73,6 +96,12 @@ impl Default for ComponentGalleryState {
             level: 0.62,
             selected_mode: 0,
             enabled: true,
+            image_source: Arc::clone(&image_source),
+            text_source: Arc::clone(&text_source),
+            spreadsheet_source: Arc::clone(&spreadsheet_source),
+            midi_source: Arc::clone(&midi_source),
+            model3d_source: Arc::clone(&model3d_source),
+            pending_open: None,
             image_previews: [
                 InlineImagePreview::new(Arc::clone(&image_source)),
                 InlineImagePreview::new(image_source),
@@ -96,6 +125,32 @@ impl Default for ComponentGalleryState {
                 InlineModel3dPreview::new(Arc::clone(&model3d_source), Vec2::new(150.0, 88.0)),
                 InlineModel3dPreview::new(model3d_source, Vec2::new(150.0, 88.0)),
             ],
+        }
+    }
+}
+
+impl ComponentGalleryState {
+    pub(crate) fn request_open(&mut self, kind: GalleryPreviewKind) {
+        self.pending_open = Some(kind);
+    }
+
+    pub(crate) fn take_pending_open(&mut self) -> Option<GalleryOpenRequest> {
+        match self.pending_open.take()? {
+            GalleryPreviewKind::Image => {
+                Some(GalleryOpenRequest::Image(Arc::clone(&self.image_source)))
+            }
+            GalleryPreviewKind::Text => {
+                Some(GalleryOpenRequest::Text(Arc::clone(&self.text_source)))
+            }
+            GalleryPreviewKind::Spreadsheet => Some(GalleryOpenRequest::Spreadsheet(Arc::clone(
+                &self.spreadsheet_source,
+            ))),
+            GalleryPreviewKind::Midi => {
+                Some(GalleryOpenRequest::Midi(Arc::clone(&self.midi_source)))
+            }
+            GalleryPreviewKind::Model3d => Some(GalleryOpenRequest::Model3d(Arc::clone(
+                &self.model3d_source,
+            ))),
         }
     }
 }
@@ -180,30 +235,45 @@ impl ComponentGalleryState {
                 ui.horizontal(|ui| {
                     self.image_previews[0].show(ui, Vec2::new(150.0, 64.0));
                     self.image_previews[1].show(ui, Vec2::new(150.0, 64.0));
+                    if ui.button("Open Image Studio").clicked() {
+                        self.request_open(GalleryPreviewKind::Image);
+                    }
                 });
 
                 ui.label("Inline Text Preview • bounded source fragments");
                 ui.horizontal(|ui| {
                     self.text_previews[0].show(ui, palette);
                     self.text_previews[1].show(ui, palette);
+                    if ui.button("Open Text Studio").clicked() {
+                        self.request_open(GalleryPreviewKind::Text);
+                    }
                 });
 
                 ui.label("Inline Spreadsheet Preview • virtual rows and columns");
                 ui.horizontal(|ui| {
                     self.spreadsheet_previews[0].show(ui, palette);
                     self.spreadsheet_previews[1].show(ui, palette);
+                    if ui.button("Open Spreadsheet Studio").clicked() {
+                        self.request_open(GalleryPreviewKind::Spreadsheet);
+                    }
                 });
 
                 ui.label("Inline MIDI Preview • local seek and selection");
                 ui.horizontal(|ui| {
                     self.midi_previews[0].show(ui, palette);
                     self.midi_previews[1].show(ui, palette);
+                    if ui.button("Open MIDI Studio").clicked() {
+                        self.request_open(GalleryPreviewKind::Midi);
+                    }
                 });
 
                 ui.label("Inline Model3D Preview • independent camera state");
                 ui.horizontal(|ui| {
                     self.model3d_previews[0].show(ui, palette);
                     self.model3d_previews[1].show(ui, palette);
+                    if ui.button("Open Model3D Studio").clicked() {
+                        self.request_open(GalleryPreviewKind::Model3d);
+                    }
                 });
             });
 
@@ -421,6 +491,11 @@ mod tests {
                     "Inline Spreadsheet Preview",
                     "Inline MIDI Preview",
                     "Inline Model3D Preview",
+                    "Open Image Studio",
+                    "Open Text Studio",
+                    "Open Spreadsheet Studio",
+                    "Open MIDI Studio",
+                    "Open Model3D Studio",
                 ] {
                     assert!(
                         text_shapes
