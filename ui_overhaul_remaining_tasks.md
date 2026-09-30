@@ -618,7 +618,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H2.3g7 [Primary] Verify eligible Palette S/X shortcuts each dispatch one swap callback.** `unmodified_palette_swap_shortcuts_request_one_slot_swap` verifies exactly one callback for S and one for X; it does not establish item-identity exchange or contact a daemon.
     - **Quick Palette and appearance**
       - [x] **H2.3g8 [Primary] Verify Palette F1 opens Node Machine.** `palette_f1_opens_node_machine_through_global_shortcuts` sends F1 through `handle_global_shortcuts` from Palette and verifies the view changes without mutating the canvas graph. No daemon is contacted.
-      - [ ] **H2.3g9 Verify Palette F3 opens Auto Actions.** Confirm the destination view.
+      - [x] **H2.3g9 [Primary] Verify Palette F3 opens Auto Actions.** `palette_f3_opens_auto_actions_through_global_shortcuts` sends F3 through `handle_global_shortcuts` from Palette and verifies the destination without mutating the canvas graph. No daemon is contacted.
       - [ ] **H2.3g10 Verify Palette F4 changes the shared appearance.** Confirm Light/Dark changes in both workbench and little-screen display.
       - [ ] **H2.3g11 Verify Palette F6 changes the shared appearance.** Confirm Light/Dark changes in both workbench and little-screen display.
       - [ ] **H2.3g12 Verify Palette Enter activates the highlighted result.** Confirm the selected action's declared result or destination.

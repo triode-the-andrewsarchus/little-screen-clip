@@ -4460,6 +4460,27 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn palette_f3_opens_auto_actions_through_global_shortcuts() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        assert_eq!(app.view, WorkbenchView::Palette);
+        let graph_before = serde_yaml::to_string(&app.canvas_state.graph).unwrap();
+
+        let _ = egui::Context::default().run(
+            egui::RawInput {
+                events: vec![key_press_event(egui::Key::F3)],
+                ..Default::default()
+            },
+            |ctx| app.handle_global_shortcuts(ctx),
+        );
+
+        assert_eq!(app.view, WorkbenchView::AutoActions);
+        assert_eq!(
+            serde_yaml::to_string(&app.canvas_state.graph).unwrap(),
+            graph_before
+        );
+    }
+
+    #[test]
     fn node_canvas_state_persists_across_palette_and_auto_actions_routes() {
         let mut app = test_workbench_app(None, VecDeque::new());
         app.view = WorkbenchView::NodeMachine;
