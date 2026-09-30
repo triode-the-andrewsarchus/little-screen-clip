@@ -12,7 +12,7 @@ use little_clip_core::JobTicket;
 use little_clip_core::palette::AppPalette;
 use little_clip_core::presentation::model3d::{Model3d, ModelFormat, Vec3};
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+use std::sync::{Arc, mpsc::Receiver};
 use std::time::Duration;
 
 /// Caps the number of facets submitted per frame for extreme high-poly meshes based on configured budget.
@@ -43,8 +43,8 @@ pub struct Model3dViewerState {
     pub path: Option<PathBuf>,
     pub title: String,
     pub status: ModelLoadingStatus,
-    pub mesh: Option<Model3d>,
-    pub rx: Option<Receiver<Result<Result<Model3d, String>, little_clip_core::JobError>>>,
+    pub mesh: Option<Arc<Model3d>>,
+    pub rx: Option<Receiver<Result<Result<Arc<Model3d>, String>, little_clip_core::JobError>>>,
     load_ticket: Option<JobTicket>,
     pub pitch: f32, // X rotation (radians)
     pub yaw: f32,   // Y rotation (radians)
@@ -80,7 +80,7 @@ impl Model3dViewerState {
         let load_path = path.clone();
         let (ticket, rx) = little_clip_core::BackgroundJobs::global()
             .submit(Duration::from_secs(30), move || {
-                Model3d::load_file(&load_path)
+                Model3d::load_file(&load_path).map(Arc::new)
             });
 
         Self {
@@ -110,6 +110,11 @@ impl Model3dViewerState {
 
     /// Constructs an immediate ready viewer from an already-parsed model.
     pub fn from_model(mesh: Model3d, path: Option<PathBuf>) -> Self {
+        Self::from_shared_model(Arc::new(mesh), path)
+    }
+
+    /// Constructs an immediate ready viewer from shared parsed model data.
+    pub fn from_shared_model(mesh: Arc<Model3d>, path: Option<PathBuf>) -> Self {
         let title = path
             .as_ref()
             .and_then(|p| p.file_name())
@@ -715,6 +720,60 @@ mod tests {
         }
     }
 
+    #[test]
+    fn independent_model_views_share_mesh_and_keep_camera_state_separate() {
+        let source = Arc::new(test_mesh());
+        let mut first = Model3dViewerState::from_shared_model(Arc::clone(&source), None);
+        let second = Model3dViewerState::from_shared_model(Arc::clone(&source), None);
+
+        assert!(Arc::ptr_eq(
+            first.mesh.as_ref().unwrap(),
+            second.mesh.as_ref().unwrap()
+        ));
+        assert!(Arc::ptr_eq(first.mesh.as_ref().unwrap(), &source));
+        first.pitch = 1.1;
+        first.yaw = -0.3;
+        first.zoom = 2.0;
+        first.pan_offset = Vec2::new(12.0, -8.0);
+        first.wireframe = true;
+
+        assert_eq!(second.pitch, 0.4);
+        assert_eq!(second.yaw, 0.6);
+        assert_eq!(second.zoom, 1.0);
+        assert_eq!(second.pan_offset, Vec2::ZERO);
+        assert!(!second.wireframe);
+    }
+
+    #[test]
+    fn file_and_byte_loaders_keep_distinct_source_identity() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().join("cached_shape.stl");
+        let bytes = br#"solid test_cache
+  facet normal 0 0 1
+    outer loop
+      vertex 0 0 0
+      vertex 1 0 0
+      vertex 0 1 0
+    endloop
+  endfacet
+endsolid test_cache
+"#;
+        std::fs::write(&path, bytes).unwrap();
+        let viewer = Model3dViewerState::from_file(path);
+        let loaded = viewer
+            .rx
+            .as_ref()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .expect("file loader should finish")
+            .expect("worker should not panic")
+            .expect("valid STL should load");
+        let from_bytes =
+            Arc::new(Model3d::load_bytes(bytes, "stl", "cached_shape".to_owned()).unwrap());
+        assert_eq!(loaded.name, "cached_shape");
+        assert!(!Arc::ptr_eq(&loaded, &from_bytes));
+    }
+
     fn render_text_at_width(
         viewer: &mut Model3dViewerState,
         width: f32,
@@ -874,7 +933,7 @@ mod tests {
         let parse_ran_worker = std::sync::Arc::clone(&parse_ran);
         let (ticket, rx) = jobs.submit(Duration::MAX, move || {
             parse_ran_worker.store(true, Ordering::SeqCst);
-            Ok(test_mesh())
+            Ok(Arc::new(test_mesh()))
         });
         let mut viewer = Model3dViewerState::from_model(test_mesh(), None);
         viewer.status = ModelLoadingStatus::Loading;

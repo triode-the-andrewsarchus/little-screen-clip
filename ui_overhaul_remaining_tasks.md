@@ -738,7 +738,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H2.4b2 Share parsed SpreadsheetData across independent spreadsheet previews.** `SpreadsheetViewerState::from_shared` retains an `Arc<SpreadsheetData>` while each view owns active sheet, filter/search, cell selection, measurements, and scroll. `independent_spreadsheet_views_share_data_and_keep_navigation_separate` verifies pointer identity and independent navigation state; full multi-host embedding remains under H2.4g.
   - **H2.4c [Luna] Reuse immutable MIDI and Model3D source data in viewers and previews.**
     - [x] **H2.4c1 Let independent MIDI views retain one `Arc<MidiData>` without sharing transport/selection state.** `MidiViewerState::from_shared` accepts the existing score Arc; `independent_midi_views_share_score_and_keep_transport_separate` verifies pointer identity and separate playback/selection state. Future inline-host wiring is checked under H2.4g.
-    - [ ] **H2.4c2 Let Model3dViewerState share `Arc<Model3d>` from file and byte-backed loaders.** Keep orbit, pan, zoom, display options, and loading ownership per viewer; content identity must distinguish byte sources from stale file-cache entries.
+    - [x] **H2.4c2 [Luna implementation; Sol review] Store file- and byte-loaded models in shareable `Arc<Model3d>` data.** `Model3dViewerState::from_shared_model` keeps camera/display state per viewer; the asynchronous file loader and byte loader both publish Arc-backed immutable meshes. File loading intentionally bypasses `Model3d::load_cached`: its metadata key omits external glTF `.bin` revisions, which can otherwise return stale geometry. Byte data never enters that path-keyed cache. Tests verify separate camera state, distinct file/byte identity, and successful file worker publication.
   - **H2.4d [Primary] Separate completed audio source analysis from playback, editing, and job state.**
     - [ ] **H2.4d1 Define immutable completed source-analysis data with Arc-backed large arrays.** Keep progressive jobs and readiness transitions session-owned; edited waveform results must not alias source analysis.
     - [ ] **H2.4d2 Prove an inline waveform and Audio Studio can share source analysis while keeping transport/edit state independent.**
@@ -747,6 +747,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [ ] **H2.4e2 Prove a PDF inline preview and editor share page raster data without invalid temp paths after either view closes.**
   - **H2.4f [Primary] Add revision-aware bounded preview data, job, and texture lifetimes.**
     - [ ] **H2.4f1 Bound decoded preview cache bytes and evict by source revision/visibility.**
+      - [ ] **H2.4f1a Include dependent-file revisions in cache identity before reusing file-backed models.** The existing Model3D path cache watches only the top-level file metadata, while glTF may reference external `.bin` geometry. Keep the workbench loader uncached until dependency-aware invalidation is defined.
     - [ ] **H2.4f2 Bound preview jobs and suppress publication after the last owner closes.**
   - **H2.4g Embedding reuse checks**
     - [ ] **H2.4g1 [Primary] Demonstrate independent image, text, spreadsheet, MIDI, and Model3D inline previews in the embedding harness.**
