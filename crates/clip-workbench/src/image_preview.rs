@@ -2619,6 +2619,39 @@ mod tests {
     }
 
     #[test]
+    fn crop_enter_applies_selected_region_through_rendered_shortcut() {
+        let mut state = image_state_from_png((100, 100), "Crop Enter fixture");
+        state.active_mode = ImageToolMode::Crop;
+        state.crop_state.normalized_rect =
+            Rect::from_min_max(Pos2::new(0.1, 0.2), Pos2::new(0.6, 0.7));
+        let palette = AppPalette::default();
+        let mut close = false;
+
+        let _ = egui::Context::default().run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(960.0, 720.0))),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                });
+            },
+        );
+
+        assert_eq!(state.current_rgba.dimensions(), (50, 50));
+        assert_eq!(state.undo_stack.len(), 1);
+        assert!(!close, "applying Crop must not close Image Studio");
+    }
+
+    #[test]
     fn save_dialogs_use_the_in_workbench_modal_and_keep_default_extensions() {
         let mut state = image_state_from_png((100, 100), "Test image");
         state.path = Some(PathBuf::from("/tmp/source.png"));

@@ -625,7 +625,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **H2.3g13 Verify Palette shortcuts yield to a focused search field.** Confirm typed shortcut characters do not change slots or view.
     - **Image Studio**
       - [x] **H2.3g14 [Primary] Verify Image Studio V selects View from Crop mode.** `unmodified_v_shortcut_selects_view_tool` sends an unmodified V through rendered `ImagePreviewState::render_ui`, confirms `active_mode` becomes View, and verifies the studio does not close. It covers this unfocused, no-modal path only; no external process or daemon is involved.
-      - [ ] **H2.3g15 Verify Image Studio Crop Enter applies the crop.** Confirm output dimensions match the selected region.
+      - [x] **H2.3g15 [Primary] Verify Crop Enter applies the selected region.** `crop_enter_applies_selected_region_through_rendered_shortcut` sets a 0.1–0.6 by 0.2–0.7 normalized region on a generated 100×100 image, sends Enter through `ImagePreviewState::render_ui`, and confirms a 50×50 result, one undo entry, and no viewer close. No file, process, or daemon is involved.
       - [ ] **H2.3g16 Verify Image Studio Redact Escape clears the active redaction stage.** Confirm no unrequested burn occurs.
     - **Audio surfaces**
       - [ ] **H2.3g17 Verify Audio Inspect Space toggles playback.** Confirm the transport state changes.
