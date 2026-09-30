@@ -5298,6 +5298,54 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn ready_idle_3d_viewer_escape_returns_to_originating_workbench_view() {
+        let model = little_clip_core::presentation::model3d::Model3d {
+            name: "ready synthetic.obj".to_owned(),
+            format: little_clip_core::presentation::model3d::ModelFormat::Obj,
+            triangles: Vec::new(),
+            thumbnail_triangles: Vec::new(),
+            min_bounds: little_clip_core::presentation::model3d::Vec3::ZERO,
+            max_bounds: little_clip_core::presentation::model3d::Vec3::ZERO,
+            center: little_clip_core::presentation::model3d::Vec3::ZERO,
+            size: little_clip_core::presentation::model3d::Vec3::ZERO,
+            max_dimension: 1.0,
+        };
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.view = WorkbenchView::NodeMachine;
+        let originating_view = app.view;
+        app.viewer = Some(ViewerSession::Model3d(Model3dViewerState::from_model(
+            model, None,
+        )));
+        let Some(ViewerSession::Model3d(state)) = app.viewer.as_ref() else {
+            panic!("synthetic model should open the 3D viewer");
+        };
+        assert_eq!(state.status, model3d_view::ModelLoadingStatus::Ready);
+        assert!(state.rx.is_none());
+
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| assert!(app.render_modal_viewers(ctx)),
+        );
+
+        assert!(app.viewer.is_none(), "Escape should close the ready viewer");
+        assert_eq!(app.view, originating_view);
+    }
+
+    #[test]
     fn malformed_image_preview_reports_cause_and_valid_preview_recovers() {
         let temp_dir = tempfile::tempdir().unwrap();
         let malformed_path = temp_dir.path().join("broken.png");
