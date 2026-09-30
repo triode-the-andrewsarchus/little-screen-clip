@@ -4679,6 +4679,58 @@ mod tests {
     }
 
     #[test]
+    fn hf_space_yields_to_focused_text_editor_with_player_disabled() {
+        let (_temp_dir, path) = generate_fixture_wav("hf-space-focus", 1.0);
+        let analysis = compute_full_audio_analysis(&path, 100).expect("fixture analysis");
+        let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
+        state.cancel_session_analysis();
+        state.analysis = Some(analysis);
+        state.duration_sec = 1.0;
+        state.view_duration_sec = 1.0;
+        state.is_loading_analysis = false;
+        state.active_mode = AudioToolMode::HfAnalysis;
+        state.player = None;
+        state._sink = None;
+        // An active transport makes an erroneously handled Space observable as a pause.
+        // With playback resources disabled, the test cannot emit audio.
+        state.is_playing = true;
+        state.playback_start_instant = None;
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut editor_text = String::new();
+        let mut close_requested = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Space,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut editor_text))
+                        .request_focus();
+                    assert!(ctx.wants_keyboard_input());
+                    state.render_ui(ui, ctx, &palette, &mut close_requested);
+                });
+            },
+        );
+
+        assert!(state.is_playing, "focused Space should not pause playback");
+        assert!(!close_requested);
+        assert!(state.player.is_none());
+        assert!(state._sink.is_none());
+    }
+
+    #[test]
     fn inspect_canvas_drag_selects_region_and_ruler_click_only_scrubs() {
         let (_temp_dir, path) = generate_fixture_wav("inspect-pointer", 5.0);
         let analysis = compute_full_audio_analysis(&path, 100).expect("fixture analysis");

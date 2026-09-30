@@ -630,7 +630,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - **Audio surfaces**
       - [x] **H2.3g17a [Primary] Verify Audio Inspect Space stops an active transport.** `inspect_space_pauses_active_transport_with_player_disabled` sends Space through the rendered Inspect path with Player and sink disabled, then confirms playback stops and the playback start time clears. This covers pause only and cannot emit audio.
       - [ ] **H2.3g17b Verify Audio Inspect Space starts playback from idle.** Confirm the transport starts with a silent test player; do not use the live audio output.
-      - [ ] **H2.3g18 Verify Audio HF Space yields to focused text input.** Confirm playback does not start while a text field owns focus.
+      - [x] **H2.3g18 [Primary] Verify focused text input owns Space in Audio HF.** `hf_space_yields_to_focused_text_editor_with_player_disabled` sends Space through the rendered Audio HF workbench with a focused TextEdit and a seeded active transport; playback remains active, proving the shortcut does not pause it. Player and sink are disabled, so the test cannot emit audio. It does not verify starting playback from idle.
       - [ ] **H2.3g19 Verify Stems Space starts separation only when eligible.** Confirm one job starts from idle empty state.
       - [ ] **H2.3g20 Verify Rolling Audio F5 refreshes the snapshot.** Confirm the displayed capture changes.
     - **Preview and comparison surfaces**
