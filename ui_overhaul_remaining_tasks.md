@@ -608,7 +608,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H2.3f3 [Primary implementation] Verify recipe prompt Escape cancellation.** `palette_prompt_escape_cancels_only_the_overlay` sends Escape through the modal-first `render_modal_viewers` route, verifies only `InAppPromptState` is cleared, keeps Palette active, and asserts no viewport-close command is emitted.
     - [x] **H2.3f4 [Luna] Verify prompt Enter submits captured input exactly once.** `in_app_prompt_enter_submits_from_focused_editor_once` captures one `ExecuteRecipeWithPrompt` carrying the edited input and returns controlled success through the shared result handler; the popup receives one close command. No daemon or recipe action runs.
     - [x] **H2.3f5 [Luna] Verify Auto Actions toggle request and failure feedback.** A rendered checkbox click emits one `SetAutoAction`; controlled success retains the enabled value, while transport failure restores the previous setting and shows status feedback. No daemon is contacted.
-  - **H2.3g Keyboard scenarios from the parity ledger (runtime acceptance remains open).** Source tests cover only their named routes; each checkbox below is a live, surface-owned action/result check.
+  - **H2.3g First-pass keyboard scenarios from the parity ledger (runtime acceptance remains open).** Source tests cover only their named routes; the ledger retains additional uncovered scenarios beyond these surface-owned checks.
     - [x] **H2.3g1 [Luna] Verify Palette digit shortcuts select the documented slot sets.** `palette_digit_shortcuts_select_exact_slot_sets` checks 0–3 through the production shortcut handler, including selected slots, mirror invalidation, and action-index reset.
     - [x] **H2.3g2 [Luna] Verify Palette search-prefix selection commands preserve the intended query.** `palette_search_prefixes_select_slots_and_keep_remaining_query` covers numeric/backtick prefixes and a leading-space Left+Right prefix through the production parser.
     - [x] **H2.3g3 [Luna] Verify Palette Up/Down navigation wraps across filtered actions.** `palette_action_navigation_wraps_in_both_directions` uses a deterministic recipe pair to check next, Down wrap, and Up wrap.
@@ -644,36 +644,36 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **H2.3g28 Verify Node Machine Tab returns to Palette.** Confirm the destination view.
       - [ ] **H2.3g29 Verify Node Machine Escape cancels its open modal.** Confirm the canvas remains open.
       - [ ] **H2.3g30 Verify recipe-prompt Enter submits the focused value once.** Confirm the prompt result and destination.
-  - **H2.3h Output and destination scenarios from the parity ledger (runtime acceptance remains open).** Each checkbox covers one surface-owned output action; use scratch destinations and verify payload/path, source mutation, and errors as applicable.
+  - **H2.3h First-pass output and destination scenarios from the parity ledger (runtime acceptance remains open).** Each checkbox covers one surface-owned action; use scratch destinations and verify payload/path, source mutation, and errors as applicable. The ledger retains additional uncovered scenarios.
     - **Quick Palette**
       - [ ] **H2.3h1 Verify the unit preview Copy action writes its displayed value to the clipboard.** Confirm exact text.
-      - [ ] **H2.3h2 Verify link cleaning writes the cleaned URL to the active hand.** Confirm the resulting slot payload.
-      - [ ] **H2.3h3 Verify link cleaning preserves the original URL in Undo.** Confirm the Undo payload.
+      - [ ] **H2.3h2 Verify the Network preview Copy action writes its displayed address to the clipboard.** Confirm exact text.
+      - [ ] **H2.3h3 Verify the Timestamp preview Copy action writes its displayed timestamp to the clipboard.** Confirm exact text.
+      - [ ] **H2.3h4 Verify link cleaning writes the cleaned URL to the active hand.** Confirm the resulting slot payload.
+      - [ ] **H2.3h5 Verify link cleaning preserves the original URL in Undo.** Confirm the Undo payload.
     - **Image Studio**
-      - [ ] **H2.3h4 Verify Pick Color Copy Hex writes the sampled hex value to the clipboard.** Confirm exact text.
-      - [ ] **H2.3h5 Verify Palette Export CSV writes the selected palette.** Confirm CSV fields and values.
-      - [ ] **H2.3h6 Verify Convert Save As writes the chosen format to the selected path.** Confirm encoding and source remains unchanged.
-      - [ ] **H2.3h7 Verify OCR Copy All writes recognized text to the clipboard.** Confirm exact text.
-      - [ ] **H2.3h8 Verify Barcode selected-payload Copy writes that code to the clipboard.** Confirm exact payload.
-      - [ ] **H2.3h9 Verify Background Removal Copy Left writes its result to Left Hand.** Confirm image payload.
-      - [ ] **H2.3h10 Verify Metadata Copy writes the selected fields to the clipboard.** Confirm exact text.
+      - [ ] **H2.3h6 Verify Pick Color Copy Hex writes the sampled hex value to the clipboard.** Confirm exact text.
+      - [ ] **H2.3h7 Verify Palette Export CSV writes the selected palette.** Confirm CSV fields and values.
+      - [ ] **H2.3h8 Verify Convert Save As writes the chosen format to the selected path.** Confirm encoding and source remains unchanged.
+      - [ ] **H2.3h9 Verify OCR Copy All writes recognized text to the clipboard.** Confirm exact text.
+      - [ ] **H2.3h10 Verify Barcode selected-payload Copy writes that code to the clipboard.** Confirm exact payload.
+      - [ ] **H2.3h11 Verify Background Removal Copy Left writes its result to Left Hand.** Confirm image payload.
+      - [ ] **H2.3h12 Verify Metadata Copy writes the selected fields to the clipboard.** Confirm exact text.
     - **Audio surfaces**
-      - [ ] **H2.3h11 Verify Audio Inspect copy-selected-left writes mono audio to the declared destination.** Confirm payload and slot/clipboard result.
-      - [ ] **H2.3h12 Verify Audio Inspect waveform image Copy writes an image payload.** Confirm MIME and rendered pixels.
-      - [ ] **H2.3h13 Verify Audio Inspect Save As writes the chosen audio file.** Confirm filename and contents.
-      - [ ] **H2.3h14 Verify Stems Save All writes every stem to the chosen directory.** Confirm declared filenames and contents.
-      - [ ] **H2.3h15 Verify Digital Decode Copy writes the transcript to the clipboard.** Confirm exact text.
-      - [ ] **H2.3h16 Verify Rolling Audio Copy writes the selected range to its declared destination.** Confirm payload and destination.
-      - [ ] **H2.3h17 Verify Audio HF produces no file output.** Confirm mode/display interaction does not create or claim an output file.
+      - [ ] **H2.3h13 Verify Audio Inspect copy-selected-left writes mono audio to the declared destination.** Confirm payload and slot/clipboard result.
+      - [ ] **H2.3h14 Verify Audio Inspect waveform image Copy writes an image payload.** Confirm MIME and rendered pixels.
+      - [ ] **H2.3h15 Verify Audio Inspect Save As writes the chosen audio file.** Confirm filename and contents.
+      - [ ] **H2.3h16 Verify Stems Save All writes every stem to the chosen directory.** Confirm declared filenames and contents.
+      - [ ] **H2.3h17 Verify Digital Decode Copy writes the transcript to the clipboard.** Confirm exact text.
+      - [ ] **H2.3h18 Verify Rolling Audio Copy writes the selected range to its declared destination.** Confirm payload and destination.
     - **Preview and comparison surfaces**
-      - [ ] **H2.3h18 Verify Text Preview Copy All writes the full source text.** Confirm exact clipboard payload.
-      - [ ] **H2.3h19 Verify Text/Image Diff text copy writes ANSI-stripped diff text.** Confirm clipboard contents.
-      - [ ] **H2.3h20 Verify Text/Image Diff image copy writes the generated mask.** Confirm image MIME and pixels.
-      - [ ] **H2.3h21 Verify Binary Diff Summary copies its displayed text.** Confirm clipboard contents.
-      - [ ] **H2.3h22 Verify PDF rotation writes the declared sibling file and adopts its path.** Confirm persisted page orientation and active path.
-      - [ ] **H2.3h23 Verify Spreadsheet Copy Table writes active-sheet TSV.** Confirm tabs, newlines, and paste fidelity.
-      - [ ] **H2.3h24 Verify MIDI full-score copy writes parseable MIDI to Left Hand.** Confirm the slot payload.
-      - [ ] **H2.3h25 Verify 3D viewing creates no file output.** Confirm inspection does not mutate or write the source model.
+      - [ ] **H2.3h19 Verify Text Preview Copy All writes the full source text.** Confirm exact clipboard payload.
+      - [ ] **H2.3h20 Verify Text/Image Diff text copy writes ANSI-stripped diff text.** Confirm clipboard contents.
+      - [ ] **H2.3h21 Verify Text/Image Diff image copy writes the generated mask.** Confirm image MIME and pixels.
+      - [ ] **H2.3h22 Verify Binary Diff Summary copies its displayed text.** Confirm clipboard contents.
+      - [ ] **H2.3h23 Verify PDF rotation writes the declared sibling file and adopts its path.** Confirm persisted page orientation and active path.
+      - [ ] **H2.3h24 Verify Spreadsheet Copy Table writes active-sheet TSV.** Confirm tabs, newlines, and paste fidelity.
+      - [ ] **H2.3h25 Verify MIDI full-score copy writes parseable MIDI to Left Hand.** Confirm the slot payload.
     - **Node Machine and external handoffs**
       - [ ] **H2.3h26 Verify Node Machine Save As writes a reloadable recipe.** Confirm file contents and graph round trip.
       - [ ] **H2.3h27 Verify Node Machine RUN publishes its declared output slot.** Confirm slot payload.
@@ -681,7 +681,9 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **H2.3h29 Verify Image Studio Inkscape handoff receives the current artifact.** Confirm launch arguments and file contents.
       - [ ] **H2.3h30 Verify Image Studio viewer handoff receives the current artifact.** Confirm launch arguments and file contents.
       - [ ] **H2.3h31 Verify unavailable Image Studio Krita reports failure.** Confirm visible status when its executable is missing.
-  - **H2.3i Return-destination scenarios from the parity ledger (runtime acceptance remains open).** Tests and captures are scoped evidence, not full-view sign-off; verify the actual route and retained state for each listed scenario.
+      - [ ] **H2.3h32 Verify unavailable Image Studio Inkscape reports failure.** Confirm visible status when its executable is missing.
+      - [ ] **H2.3h33 Verify unavailable Image Studio viewer reports failure.** Confirm visible status when its executable is missing.
+  - **H2.3i First-pass return-destination scenarios from the parity ledger (runtime acceptance remains open).** Tests and captures are scoped evidence, not full-view sign-off; the ledger retains additional uncovered scenarios beyond these route and state checks.
     - **Workbench and Quick Palette**
       - [ ] **H2.3i1 Verify closing a startup viewer advances to the next queued viewer.** Confirm FIFO order.
       - [ ] **H2.3i2 Verify closing the final queued viewer returns to the selected workbench view.** Confirm destination.
