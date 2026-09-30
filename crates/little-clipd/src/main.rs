@@ -4,8 +4,8 @@
 //! Wayland clipboard monitoring (`wl-paste`), and IPC communication with `clipctl` and `clip-workbench`.
 
 use little_clip_core::{
-    ClipItem, SlotId, SlotManager, copy_bytes_to_system_clipboard, copy_text_to_system_clipboard,
-    file_uri_list,
+    ClipItem, HandSide, SlotId, SlotManager, copy_bytes_to_system_clipboard,
+    copy_text_to_system_clipboard, file_uri_list,
     ipc::{IpcRequest, IpcResponse},
     rolling_audio::RollingAudioBuffer,
 };
@@ -629,6 +629,33 @@ async fn handle_execute_recipe(
     }
 }
 
+fn prepare_push_text(text: String, trim_tracking: bool) -> (ClipItem, Option<ClipItem>) {
+    if trim_tracking {
+        if let Some(cleaned) = little_clip_ops::clean_url_tracking(&text) {
+            (
+                ClipItem::from_text(cleaned),
+                Some(ClipItem::from_text(text)),
+            )
+        } else {
+            (ClipItem::from_text(text), None)
+        }
+    } else {
+        (ClipItem::from_text(text), None)
+    }
+}
+
+fn apply_prepared_push_text(
+    manager: &mut SlotManager,
+    item: ClipItem,
+    original: Option<ClipItem>,
+    hand: HandSide,
+) {
+    if let Some(original) = original {
+        manager.undo = Some(original);
+    }
+    manager.push_to_hand(item, hand);
+}
+
 async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
     info!("Client connected to IPC socket");
     let (reader, mut writer) = stream.into_split();
@@ -678,25 +705,12 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 ))
             }
             Ok(IpcRequest::PushText { text, hand }) => {
-                let (item, original) = if ctx.config.read().await.auto_actions.trim_link_tracking {
-                    if let Some(cleaned) = little_clip_ops::clean_url_tracking(&text) {
-                        (
-                            ClipItem::from_text(cleaned),
-                            Some(ClipItem::from_text(text)),
-                        )
-                    } else {
-                        (ClipItem::from_text(text), None)
-                    }
-                } else {
-                    (ClipItem::from_text(text), None)
-                };
+                let trim_tracking = ctx.config.read().await.auto_actions.trim_link_tracking;
+                let (item, original) = prepare_push_text(text, trim_tracking);
                 schedule_async_previews(&item, Arc::clone(&ctx));
                 {
                     let mut mgr = ctx.manager.write().await;
-                    if let Some(orig) = original {
-                        mgr.undo = Some(orig);
-                    }
-                    mgr.push_to_hand(item.clone(), hand);
+                    apply_prepared_push_text(&mut mgr, item.clone(), original, hand);
                 }
                 copy_to_os_clipboard(&item, &ctx).await;
                 ctx.refresh_display().await;
@@ -1736,6 +1750,49 @@ pub fn get_rolling_snapshot_dir() -> PathBuf {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    const TRACKED_URL: &str = "https://example.com/path?utm_source=newsletter&keep=value";
+    const CLEAN_URL: &str = "https://example.com/path?keep=value";
+
+    #[test]
+    fn push_text_cleans_tracking_url_into_requested_hand() {
+        let mut manager = SlotManager::default();
+        manager.push_left(ClipItem::from_text("previous left item"));
+
+        let (item, original) = prepare_push_text(TRACKED_URL.to_owned(), true);
+        apply_prepared_push_text(&mut manager, item, original, HandSide::Left);
+
+        assert_eq!(
+            manager
+                .left_hand()
+                .and_then(ClipItem::to_clipboard_text)
+                .as_deref(),
+            Some(CLEAN_URL)
+        );
+        assert_eq!(
+            manager
+                .get(SlotId::LeftPrior1)
+                .and_then(ClipItem::to_clipboard_text)
+                .as_deref(),
+            Some("previous left item")
+        );
+    }
+
+    #[test]
+    fn push_text_preserves_original_tracking_url_in_undo() {
+        let mut manager = SlotManager::default();
+
+        let (item, original) = prepare_push_text(TRACKED_URL.to_owned(), true);
+        apply_prepared_push_text(&mut manager, item, original, HandSide::Left);
+
+        assert_eq!(
+            manager
+                .undo_slot()
+                .and_then(ClipItem::to_clipboard_text)
+                .as_deref(),
+            Some(TRACKED_URL)
+        );
+    }
 
     #[tokio::test]
     async fn bounded_ipc_reader_preserves_line_boundaries() {
