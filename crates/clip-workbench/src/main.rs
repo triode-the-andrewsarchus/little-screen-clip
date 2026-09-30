@@ -861,6 +861,34 @@ impl WorkbenchApp {
     }
 
     fn toggle_appearance(&mut self, ctx: &egui::Context) {
+        self.toggle_appearance_with(ctx, |appearance| {
+            AppConfig::save_workbench_appearance_to_file(appearance)
+                .map_err(|error| error.to_string())
+        });
+    }
+
+    fn handle_appearance_shortcut(&mut self, ctx: &egui::Context) {
+        self.handle_appearance_shortcut_with(ctx, |appearance| {
+            AppConfig::save_workbench_appearance_to_file(appearance)
+                .map_err(|error| error.to_string())
+        });
+    }
+
+    fn handle_appearance_shortcut_with(
+        &mut self,
+        ctx: &egui::Context,
+        save: impl FnOnce(WorkbenchAppearance) -> Result<(), String>,
+    ) {
+        if ctx.input(|input| input.key_pressed(egui::Key::F4) || input.key_pressed(egui::Key::F6)) {
+            self.toggle_appearance_with(ctx, save);
+        }
+    }
+
+    fn toggle_appearance_with(
+        &mut self,
+        ctx: &egui::Context,
+        save: impl FnOnce(WorkbenchAppearance) -> Result<(), String>,
+    ) {
         self.appearance_sync.clear();
         let appearance = self.config.workbench.appearance.toggled();
         self.config.workbench.appearance = appearance;
@@ -868,7 +896,7 @@ impl WorkbenchApp {
         ui_appearance::apply_visuals(ctx, &self.ui_palette);
         self.renderer.set_config(self.config.clone());
         self.dirty_mirror = true;
-        match AppConfig::save_workbench_appearance_to_file(appearance) {
+        match save(appearance) {
             Ok(()) => {
                 self.appearance_sync.begin();
             }
@@ -1465,9 +1493,7 @@ impl eframe::App for WorkbenchApp {
             self.appearance_applied = true;
         }
 
-        if ctx.input(|input| input.key_pressed(egui::Key::F4) || input.key_pressed(egui::Key::F6)) {
-            self.toggle_appearance(ctx);
-        }
+        self.handle_appearance_shortcut(ctx);
 
         // Live state update from background daemon poller
         let mut state_changed = false;
@@ -4919,6 +4945,42 @@ mod workbench_layout_tests {
             serde_yaml::to_string(&app.canvas_state.graph).unwrap(),
             graph_before
         );
+    }
+
+    #[test]
+    fn palette_f4_and_f6_switch_workbench_and_display_palettes_together() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        let ctx = egui::Context::default();
+        let initial = app.config.workbench.appearance;
+        let mut saved = Vec::new();
+
+        for (key, expected) in [(egui::Key::F4, initial.toggled()), (egui::Key::F6, initial)] {
+            let _ = ctx.run(
+                egui::RawInput {
+                    events: vec![key_press_event(key)],
+                    ..Default::default()
+                },
+                |ctx| {
+                    app.handle_appearance_shortcut_with(ctx, |appearance| {
+                        saved.push(appearance);
+                        Ok(())
+                    });
+                },
+            );
+
+            let expected_palette = ui_appearance::palette(expected);
+            assert_eq!(app.config.workbench.appearance, expected);
+            assert_eq!(app.renderer.config.workbench.appearance, expected);
+            assert_eq!(app.renderer.palette.colors, expected_palette.colors);
+            assert_eq!(app.ui_palette.colors, expected_palette.colors);
+            assert!(
+                app.dirty_mirror,
+                "display mirror must be repainted on {key:?}"
+            );
+            app.dirty_mirror = false;
+        }
+
+        assert_eq!(saved, vec![initial.toggled(), initial]);
     }
 
     #[test]
