@@ -6119,7 +6119,12 @@ Separated track
             |silent_bytes, _| silent_png = Some(silent_bytes.to_vec()),
         )
         .expect("silent comparison waveform should render");
-        assert_ne!(bytes, silent_png.expect("comparison copy callback invoked"));
+        let silent_png = silent_png.expect("comparison copy callback invoked");
+        let silent_pixels =
+            image::load_from_memory_with_format(&silent_png, image::ImageFormat::Png)
+                .expect("silent comparison payload is a valid PNG")
+                .to_rgba8();
+        assert_ne!(decoded.to_rgba8().as_raw(), silent_pixels.as_raw());
     }
 
     #[test]
