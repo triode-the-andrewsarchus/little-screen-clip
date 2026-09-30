@@ -296,6 +296,88 @@ impl DecodedImageData {
     }
 }
 
+/// Lightweight image renderer for hosts that need a preview without the
+/// editor's mutation, history, or background-job state.
+#[allow(dead_code)] // Consumed by the upcoming component-gallery host wiring.
+pub(crate) struct InlineImagePreview {
+    source: Arc<DecodedImageData>,
+    texture: Option<egui::TextureHandle>,
+    zoom: f32,
+    pan: Vec2,
+    drag_origin_pan: Vec2,
+}
+
+#[allow(dead_code)] // Rendering API is exercised here before gallery integration.
+impl InlineImagePreview {
+    pub(crate) fn new(source: Arc<DecodedImageData>) -> Self {
+        Self {
+            source,
+            texture: None,
+            zoom: 1.0,
+            pan: Vec2::ZERO,
+            drag_origin_pan: Vec2::ZERO,
+        }
+    }
+
+    /// Render inside the space assigned by the host. Scroll zooms and dragging
+    /// pans this view only; the decoded source remains immutable and shared.
+    pub(crate) fn show(&mut self, ui: &mut egui::Ui, size: Vec2) -> egui::Response {
+        let size = size.max(Vec2::splat(1.0));
+        let (viewport, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+        if !ui.is_rect_visible(viewport) {
+            return response;
+        }
+
+        if self.texture.is_none() {
+            let pixels = self.source.original_rgba.as_ref();
+            let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                [pixels.width() as usize, pixels.height() as usize],
+                pixels.as_raw(),
+            );
+            self.texture = Some(ui.ctx().load_texture(
+                "inline_image_preview",
+                color_image,
+                egui::TextureOptions::LINEAR,
+            ));
+        }
+
+        if response.hovered() {
+            let scroll_y = ui.input(|input| input.raw_scroll_delta.y);
+            if scroll_y != 0.0 {
+                self.zoom = (self.zoom * (scroll_y / 240.0).exp()).clamp(0.25, 8.0);
+                ui.ctx().request_repaint();
+            }
+        }
+        if response.double_clicked() {
+            self.zoom = 1.0;
+            self.pan = Vec2::ZERO;
+        }
+        if response.drag_started() {
+            self.drag_origin_pan = self.pan;
+        }
+        if response.dragged() {
+            self.pan = self.drag_origin_pan + response.drag_delta();
+        }
+
+        let pixels = self.source.original_rgba.as_ref();
+        let fit = (viewport.width() / pixels.width() as f32)
+            .min(viewport.height() / pixels.height() as f32);
+        let image_size =
+            Vec2::new(pixels.width() as f32, pixels.height() as f32) * (fit * self.zoom);
+        let image_rect = egui::Rect::from_center_size(viewport.center() + self.pan, image_size);
+        if let Some(texture) = &self.texture {
+            ui.painter().with_clip_rect(viewport).image(
+                texture.id(),
+                image_rect,
+                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        }
+
+        response
+    }
+}
+
 fn compose_display_image(mut img: RgbaImage, stamp: &ImageInputStamp) -> RgbaImage {
     // Burn any pending redactions onto the output image
     if !stamp.redactions.is_empty() {
@@ -2279,6 +2361,191 @@ mod tests {
             image::Rgba([240, 20, 40, 255])
         );
         assert!(Arc::ptr_eq(&first.raw_bytes, &second.raw_bytes));
+    }
+
+    #[test]
+    fn inline_image_previews_render_shared_pixels_with_independent_zoom_state() {
+        let image = RgbaImage::from_pixel(8, 4, image::Rgba([24, 80, 180, 255]));
+        let mut encoded = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut encoded),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let source =
+            Arc::new(DecodedImageData::from_bytes(encoded, "image/png".to_string(), None).unwrap());
+        let mut first = InlineImagePreview::new(Arc::clone(&source));
+        let mut second = InlineImagePreview::new(Arc::clone(&source));
+        assert!(Arc::ptr_eq(&first.source, &second.source));
+
+        let ctx = egui::Context::default();
+        let viewport = egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(640.0, 420.0));
+        let mut first_rect = Rect::NOTHING;
+        let mut second_rect = Rect::NOTHING;
+        let render = |ctx: &egui::Context,
+                      first: &mut InlineImagePreview,
+                      second: &mut InlineImagePreview,
+                      events: Vec<egui::Event>,
+                      first_rect: &mut Rect,
+                      second_rect: &mut Rect| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(viewport),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.vertical(|ui| {
+                            *first_rect = first.show(ui, Vec2::new(300.0, 180.0)).rect;
+                            *second_rect = second.show(ui, Vec2::new(220.0, 120.0)).rect;
+                        });
+                    });
+                },
+            )
+        };
+
+        let first_frame = render(
+            &ctx,
+            &mut first,
+            &mut second,
+            Vec::new(),
+            &mut first_rect,
+            &mut second_rect,
+        );
+        let first_texture_id = first.texture.as_ref().unwrap().id();
+        let second_texture_id = second.texture.as_ref().unwrap().id();
+        for (texture_id, assigned_rect) in [
+            (first_texture_id, first_rect),
+            (second_texture_id, second_rect),
+        ] {
+            let mesh = first_frame
+                .shapes
+                .iter()
+                .find_map(|clipped| match &clipped.shape {
+                    egui::epaint::Shape::Mesh(mesh)
+                        if mesh.texture_id == texture_id && !mesh.vertices.is_empty() =>
+                    {
+                        Some(mesh)
+                    }
+                    _ => None,
+                })
+                .expect("each inline preview should draw a textured mesh");
+            for vertex in &mesh.vertices {
+                assert!(vertex.pos.x >= assigned_rect.min.x - 0.1);
+                assert!(vertex.pos.y >= assigned_rect.min.y - 0.1);
+                assert!(vertex.pos.x <= assigned_rect.max.x + 0.1);
+                assert!(vertex.pos.y <= assigned_rect.max.y + 0.1);
+            }
+        }
+
+        let second_frame = render(
+            &ctx,
+            &mut first,
+            &mut second,
+            vec![
+                egui::Event::PointerMoved(first_rect.center()),
+                egui::Event::Scroll(Vec2::new(0.0, 120.0)),
+            ],
+            &mut first_rect,
+            &mut second_rect,
+        );
+
+        assert!(first.zoom > 1.0);
+        assert_eq!(second.zoom, 1.0);
+        assert!(Arc::ptr_eq(
+            &source.original_rgba,
+            &first.source.original_rgba
+        ));
+        assert!(Arc::ptr_eq(
+            &source.original_rgba,
+            &second.source.original_rgba
+        ));
+        let preview_texture_ids = second_frame
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Mesh(mesh) if !mesh.vertices.is_empty() => {
+                    Some(mesh.texture_id)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(preview_texture_ids.len(), 2);
+        assert_ne!(preview_texture_ids[0], preview_texture_ids[1]);
+        for clipped in &second_frame.shapes {
+            let egui::epaint::Shape::Mesh(mesh) = &clipped.shape else {
+                continue;
+            };
+            let assigned_rect = if mesh.texture_id == first_texture_id {
+                Some(first_rect)
+            } else if mesh.texture_id == second_texture_id {
+                Some(second_rect)
+            } else {
+                None
+            };
+            if let Some(assigned_rect) = assigned_rect {
+                assert!(clipped.clip_rect.min.x >= assigned_rect.min.x - 0.1);
+                assert!(clipped.clip_rect.min.y >= assigned_rect.min.y - 0.1);
+                assert!(clipped.clip_rect.max.x <= assigned_rect.max.x + 0.1);
+                assert!(clipped.clip_rect.max.y <= assigned_rect.max.y + 0.1);
+            }
+        }
+    }
+
+    #[test]
+    fn clipped_inline_image_preview_defers_texture_upload() {
+        let image = RgbaImage::from_pixel(4, 3, image::Rgba([24, 80, 180, 255]));
+        let mut encoded = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut encoded),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        let source =
+            Arc::new(DecodedImageData::from_bytes(encoded, "image/png".to_string(), None).unwrap());
+        let mut preview = InlineImagePreview::new(source);
+        let ctx = egui::Context::default();
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(240.0, 100.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(60.0)
+                        .show(ui, |ui| {
+                            ui.add_space(240.0);
+                            preview.show(ui, Vec2::new(120.0, 80.0));
+                        });
+                });
+            },
+        );
+
+        assert!(preview.texture.is_none());
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(240.0, 500.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(400.0)
+                        .show(ui, |ui| {
+                            ui.add_space(240.0);
+                            preview.show(ui, Vec2::new(120.0, 80.0));
+                        });
+                });
+            },
+        );
+
+        assert!(preview.texture.is_some());
     }
 
     fn wait_for_dcs(state: &mut ImagePreviewState) {
