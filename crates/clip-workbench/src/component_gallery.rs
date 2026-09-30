@@ -784,4 +784,115 @@ mod tests {
         drop(state);
         assert!(!path.exists());
     }
+
+    #[test]
+    fn repeated_gallery_renders_keep_audio_source_and_pdf_texture_state() {
+        let ctx = egui::Context::default();
+        ui_ext::configure_workbench_style(&ctx);
+        let palette = ui_appearance::palette(WorkbenchAppearance::Dark);
+        let mut gallery = ComponentGalleryState::default();
+        let mut close = false;
+        let size = egui::vec2(3440.0, 1440.0);
+        let audio_source = Arc::clone(&gallery.audio_source);
+        let pdf_raster = Arc::clone(&gallery.pdf_raster);
+        let mut pdf_texture_id = None;
+        let mut pdf_row_visible = false;
+        for frame in 0..200 {
+            let events = if !pdf_row_visible {
+                vec![
+                    egui::Event::PointerMoved(egui::pos2(size.x * 0.5, size.y * 0.75)),
+                    egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Point,
+                        delta: egui::vec2(0.0, -500.0),
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ]
+            } else {
+                Vec::new()
+            };
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        gallery.render_ui(ui, &palette, &mut close);
+                    });
+                },
+            );
+
+            assert!(Arc::ptr_eq(
+                gallery.audio_preview.source_analysis(),
+                &audio_source
+            ));
+            assert!(gallery.audio_file_guard.is_some());
+
+            pdf_row_visible |= output.shapes.iter().any(|shape| {
+                matches!(
+                    &shape.shape,
+                    egui::epaint::Shape::Text(text)
+                        if text.galley.job.text.contains("Open PDF Editor")
+                            && shape.clip_rect.intersects(egui::Rect::from_min_size(
+                                text.pos,
+                                text.galley.size(),
+                            ))
+                )
+            });
+
+            pdf_texture_id = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Mesh(mesh) => {
+                    let bounds = mesh.calc_bounds();
+                    ((bounds.width() - 96.0).abs() < 1.0 && (bounds.height() - 128.0).abs() < 1.0)
+                        .then_some(mesh.texture_id)
+                }
+                _ => None,
+            });
+            if pdf_texture_id.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            assert!(frame < 199, "gallery PDF page should decode and upload");
+        }
+
+        let pdf_texture_id = pdf_texture_id.expect("gallery PDF texture should be resident");
+        let retained_raster_refs = Arc::strong_count(&pdf_raster);
+        assert_eq!(
+            retained_raster_refs, 3,
+            "gallery and inline widget retain one raster Arc each"
+        );
+        for _ in 0..3 {
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        gallery.render_ui(ui, &palette, &mut close);
+                    });
+                },
+            );
+            assert_eq!(
+                output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Mesh(mesh) => {
+                        let bounds = mesh.calc_bounds();
+                        ((bounds.width() - 96.0).abs() < 1.0
+                            && (bounds.height() - 128.0).abs() < 1.0)
+                            .then_some(mesh.texture_id)
+                    }
+                    _ => None,
+                }),
+                Some(pdf_texture_id),
+                "a later gallery frame should reuse the uploaded PDF texture"
+            );
+            assert_eq!(Arc::strong_count(&pdf_raster), retained_raster_refs);
+            assert!(Arc::ptr_eq(
+                gallery.audio_preview.source_analysis(),
+                &audio_source
+            ));
+            assert_eq!(Arc::strong_count(&audio_source), 3);
+        }
+    }
 }
