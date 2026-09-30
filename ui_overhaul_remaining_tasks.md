@@ -708,7 +708,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **H2.3i13 Verify Rolling Audio right-click opens the editor at the selected range.** Confirm range and source identity.
     - **Preview and comparison surfaces**
       - [x] **H2.3i14 [Primary] Verify idle Text Preview Escape returns to its source route.** `text_preview_escape_without_find_returns_to_source_route_and_slots` opens an in-memory `TextPreviewState` from Node Machine with Find closed and no focused widget, sends Escape through `render_modal_viewers`, and confirms the viewer closes while Node Machine and the selected slots remain unchanged.
-      - [ ] **H2.3i15 Verify Text Preview Escape with Find focused hides Find first.** Confirm the viewer remains open.
+      - [x] **H2.3i15 [Primary] Verify Text Preview Escape with Find focused hides Find first.** Existing `find_shortcut_focuses_search_and_escape_dismisses_only_find` opens Find with Command+F, verifies keyboard focus, then sends Escape and confirms `show_find` becomes false while the close flag remains false.
       - [ ] **H2.3i16 Verify returning from the text external editor restores the same source view.** Confirm path and search/scroll state.
       - [ ] **H2.3i17 Verify Text/Image Diff Escape returns to its originating view.** Confirm source operands remain selected.
       - [ ] **H2.3i18 Verify Binary Diff Escape with search focused follows documented focus precedence.** Confirm the first Escape is consumed by the focused search.
