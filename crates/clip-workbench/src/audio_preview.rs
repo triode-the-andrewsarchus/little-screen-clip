@@ -451,7 +451,122 @@ impl<S: Source> Source for EditedPreviewSource<S> {
     }
 }
 
-/// Interactive UI state for audio waveform preview, spectrogram analysis, and multi-slice editing.
+/// Read-only inline waveform view over a completed shared audio analysis.
+#[allow(dead_code)] // Its workbench host is wired under H2.4g.
+#[derive(Clone)]
+pub struct InlineAudioWaveform {
+    source_analysis: Arc<FullAudioAnalysis>,
+}
+
+const MAX_INLINE_WAVEFORM_COLUMNS: usize = 16_384;
+
+#[allow(dead_code)] // Its workbench host is wired under H2.4g.
+impl InlineAudioWaveform {
+    pub fn new(source_analysis: Arc<FullAudioAnalysis>) -> Self {
+        Self { source_analysis }
+    }
+
+    pub fn source_analysis(&self) -> &Arc<FullAudioAnalysis> {
+        &self.source_analysis
+    }
+
+    /// Draws one bar per visible pixel, querying the existing multi-resolution peak pyramid.
+    pub fn render(&self, ui: &mut egui::Ui, palette: &AppPalette) {
+        let clip_rect = ui.clip_rect();
+        let available_width = ui.available_width();
+        let width = if available_width.is_finite() {
+            available_width
+                .max(1.0)
+                .min(MAX_INLINE_WAVEFORM_COLUMNS as f32)
+        } else {
+            clip_rect
+                .width()
+                .max(1.0)
+                .min(MAX_INLINE_WAVEFORM_COLUMNS as f32)
+        };
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 44.0), egui::Sense::hover());
+        let visible_rect = rect.intersect(clip_rect);
+        if visible_rect.is_negative() || visible_rect.width() <= 0.0 || visible_rect.height() <= 0.0
+        {
+            return;
+        }
+
+        let canvas = hex_to_c32(&palette.colors.surface_recessed);
+        let accent = hex_to_c32(&palette.harmonies.base);
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, Rounding::same(4.0), canvas);
+
+        let frames = self.source_analysis.total_frames;
+        if frames == 0 {
+            painter.text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "No waveform data",
+                egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
+                hex_to_c32(&palette.colors.text_secondary),
+            );
+            return;
+        }
+
+        let columns = Self::visible_column_count(rect.width());
+        let Some(visible_columns) = Self::visible_column_range(rect, visible_rect, columns) else {
+            return;
+        };
+        let center_y = rect.center().y;
+        let amplitude = rect.height() * 0.42;
+        for column in visible_columns {
+            let frame_start = Self::frame_for_column(column, frames, columns);
+            let frame_end = Self::frame_for_column(column + 1, frames, columns)
+                .max(frame_start + 1)
+                .min(frames);
+            let (mut min, mut max, _) = self.source_analysis.query_peaks(0, frame_start, frame_end);
+            if self.source_analysis.channels > 1 {
+                let (right_min, right_max, _) =
+                    self.source_analysis.query_peaks(1, frame_start, frame_end);
+                min = (min + right_min) * 0.5;
+                max = (max + right_max) * 0.5;
+            }
+            let x = rect.min.x + (column as f32 + 0.5) * rect.width() / columns as f32;
+            painter.line_segment(
+                [
+                    Pos2::new(x, center_y - max.clamp(-1.0, 1.0) * amplitude),
+                    Pos2::new(x, center_y - min.clamp(-1.0, 1.0) * amplitude),
+                ],
+                Stroke::new(1.0_f32, accent),
+            );
+        }
+    }
+
+    fn visible_column_count(width: f32) -> usize {
+        if !width.is_finite() {
+            return MAX_INLINE_WAVEFORM_COLUMNS;
+        }
+        width.ceil().clamp(1.0, MAX_INLINE_WAVEFORM_COLUMNS as f32) as usize
+    }
+
+    fn visible_column_range(
+        rect: Rect,
+        visible_rect: Rect,
+        columns: usize,
+    ) -> Option<std::ops::Range<usize>> {
+        let width = rect.width();
+        if columns == 0 || !width.is_finite() || width <= 0.0 {
+            return None;
+        }
+        let first = (((visible_rect.min.x - rect.min.x) / width) * columns as f32)
+            .floor()
+            .clamp(0.0, columns as f32) as usize;
+        let end = (((visible_rect.max.x - rect.min.x) / width) * columns as f32)
+            .ceil()
+            .clamp(0.0, columns as f32) as usize;
+        (first < end).then_some(first..end)
+    }
+
+    fn frame_for_column(column: usize, frames: usize, columns: usize) -> usize {
+        ((column as u128 * frames as u128) / columns as u128) as usize
+    }
+}
+
 #[derive(Clone, PartialEq)]
 struct AudioEditSnapshot {
     path: PathBuf,
@@ -471,6 +586,7 @@ struct AudioEditSnapshot {
     region_high_pass_hz: Vec<Option<f32>>,
 }
 
+/// Interactive UI state for audio waveform preview, spectrogram analysis, and multi-slice editing.
 pub struct AudioPreviewState {
     pub path: PathBuf,
     pub title: String,
@@ -1926,18 +2042,59 @@ impl AudioPreviewState {
         metadata: Option<AudioMetadata>,
         jobs: &BackgroundJobs,
     ) -> Self {
+        Self::with_source_analysis_on_jobs(path, title, metadata, jobs, None)
+    }
+
+    /// Creates an independent Audio Studio view over a completed source analysis.
+    /// The source-analysis worker is skipped; playback, selection, edits, and later
+    /// edited-analysis jobs remain owned by this new viewer state.
+    #[allow(dead_code)] // Called when the inline host is wired under H2.4g.
+    pub fn from_completed_source(
+        path: PathBuf,
+        title: String,
+        metadata: Option<AudioMetadata>,
+        source_analysis: Arc<FullAudioAnalysis>,
+    ) -> Self {
+        Self::with_source_analysis_on_jobs(
+            path,
+            title,
+            metadata,
+            BackgroundJobs::global(),
+            Some(source_analysis),
+        )
+    }
+
+    fn with_source_analysis_on_jobs(
+        path: PathBuf,
+        title: String,
+        metadata: Option<AudioMetadata>,
+        jobs: &BackgroundJobs,
+        source_analysis: Option<Arc<FullAudioAnalysis>>,
+    ) -> Self {
         let default_save_dir = path
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| ".".to_string());
 
-        let duration_sec = metadata
+        let duration_sec = source_analysis
             .as_ref()
-            .map(|m| m.duration_ms as f32 / 1000.0)
+            .map(|analysis| analysis.duration_ms as f32 / 1000.0)
+            .or_else(|| {
+                metadata
+                    .as_ref()
+                    .map(|metadata| metadata.duration_ms as f32 / 1000.0)
+            })
             .unwrap_or(0.0);
+        let is_loading_analysis = source_analysis.is_none();
 
-        let (analysis_cancel, analysis_ticket, analysis_rx, analysis_job_rx) =
-            submit_session_analysis(path.clone(), jobs);
+        let (analysis_cancel, analysis_ticket, analysis_rx, analysis_job_rx) = if source_analysis
+            .is_some()
+        {
+            (None, None, None, None)
+        } else {
+            let (cancel, ticket, progress_rx, job_rx) = submit_session_analysis(path.clone(), jobs);
+            (Some(cancel), Some(ticket), Some(progress_rx), Some(job_rx))
+        };
 
         // Initialize rodio playback engine using shared application sink
         let player = crate::ui_ext::new_shared_audio_player();
@@ -1952,17 +2109,17 @@ impl AudioPreviewState {
             title,
             active_mode: AudioToolMode::Inspect,
             metadata,
-            analysis: None,
-            completed_source_analysis: None,
+            analysis: source_analysis.clone(),
+            completed_source_analysis: source_analysis,
             edited_waveform: None,
             session_transients: None,
-            analysis_rx: Some(analysis_rx),
-            analysis_job_rx: Some(analysis_job_rx),
-            analysis_ticket: Some(analysis_ticket),
-            analysis_cancel: Some(analysis_cancel),
+            analysis_rx,
+            analysis_job_rx,
+            analysis_ticket,
+            analysis_cancel,
             analysis_retry_at: None,
             analysis_progress_disconnected: false,
-            is_loading_analysis: true,
+            is_loading_analysis,
             loading_start_time: Instant::now(),
             duration_sec,
             edit_analysis_rx: None,
@@ -6270,6 +6427,97 @@ Separated track
         state.restart_session_analysis_on(&jobs);
         assert!(state.completed_source_analysis().is_none());
         state.cancel_session_analysis();
+    }
+
+    #[test]
+    fn inline_waveform_and_audio_views_share_analysis_but_keep_view_state_independent() {
+        let mut data = empty_audio_analysis();
+        data.channels = 1;
+        data.sample_rate = 44_100;
+        data.duration_ms = 6;
+        data.total_frames = 256;
+        data.ch1_samples = Arc::from(
+            (0..data.total_frames)
+                .map(|frame| ((frame as f32 / 256.0) * std::f32::consts::TAU).sin() * 0.5)
+                .collect::<Vec<_>>(),
+        );
+        let source = Arc::new(data);
+        let inline = InlineAudioWaveform::new(Arc::clone(&source));
+        let path = PathBuf::from("shared-source.wav");
+        let mut first = AudioPreviewState::from_completed_source(
+            path.clone(),
+            "First view".into(),
+            None,
+            Arc::clone(&source),
+        );
+        let second = AudioPreviewState::from_completed_source(
+            path,
+            "Second view".into(),
+            None,
+            Arc::clone(&source),
+        );
+
+        assert!(Arc::ptr_eq(inline.source_analysis(), &source));
+        assert!(Arc::ptr_eq(
+            first.completed_source_analysis().unwrap(),
+            &source
+        ));
+        assert!(Arc::ptr_eq(
+            second.completed_source_analysis().unwrap(),
+            &source
+        ));
+        assert_eq!(inline.source_analysis.total_frames, 256);
+        let palette = AppPalette::default();
+        let context = egui::Context::default();
+        let _ = context.run(Default::default(), |context| {
+            egui::CentralPanel::default().show(context, |ui| {
+                inline.render(ui, &palette);
+            });
+        });
+        for view in [&first, &second] {
+            assert!(view.analysis_rx.is_none());
+            assert!(view.analysis_job_rx.is_none());
+            assert!(view.analysis_ticket.is_none());
+            assert!(view.analysis_cancel.is_none());
+            assert!(!view.is_loading_analysis);
+        }
+
+        first.current_time_sec = 1.25;
+        first.selection = Some((0.25, 0.75));
+        first.track_gain_db = 3.0;
+        first.region_gain_db.push(-2.0);
+        assert_eq!(second.current_time_sec, 0.0);
+        assert_eq!(second.selection, None);
+        assert_eq!(second.track_gain_db, 0.0);
+        assert!(second.region_gain_db.is_empty());
+        assert!((source.ch1_samples[64] - 0.5).abs() < 0.000_01);
+    }
+
+    #[test]
+    fn inline_waveform_column_count_tracks_visible_width() {
+        assert_eq!(InlineAudioWaveform::visible_column_count(0.0), 1);
+        assert_eq!(InlineAudioWaveform::visible_column_count(96.0), 96);
+        assert_eq!(InlineAudioWaveform::visible_column_count(96.2), 97);
+        assert_eq!(
+            InlineAudioWaveform::visible_column_count(f32::INFINITY),
+            MAX_INLINE_WAVEFORM_COLUMNS
+        );
+        assert_eq!(
+            InlineAudioWaveform::visible_column_count(MAX_INLINE_WAVEFORM_COLUMNS as f32 * 2.0),
+            MAX_INLINE_WAVEFORM_COLUMNS
+        );
+
+        let rect = Rect::from_min_max(Pos2::ZERO, Pos2::new(1_000.0, 44.0));
+        let visible = Rect::from_min_max(Pos2::new(120.0, 0.0), Pos2::new(220.0, 44.0));
+        assert_eq!(
+            InlineAudioWaveform::visible_column_range(rect, visible, 1_000),
+            Some(120..220)
+        );
+        let outside = Rect::from_min_max(Pos2::new(1_100.0, 0.0), Pos2::new(1_200.0, 44.0));
+        assert_eq!(
+            InlineAudioWaveform::visible_column_range(rect, outside, 1_000),
+            None
+        );
     }
 
     #[test]
