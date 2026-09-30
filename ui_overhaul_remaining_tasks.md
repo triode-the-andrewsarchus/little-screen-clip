@@ -782,11 +782,11 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [ ] **H3.2a4 [Primary] Record fixed-size geometry for large and wide outputs (2560×1600, 3440×1440, and 3840×2160) at all documented scales and appearances.**
     - [ ] **H3.2a5 [Primary] Inspect one settled capture per logical output for clipping and containment in both appearances.**
   - **H3.2b Verify fixed, non-resizable, centered singleton popup behavior.**
+    - [ ] **H3.2b1 [Primary] Recheck repeated-launch reliability for the software-renderer matrix case that initially timed out.** Retain the original EGL allocation failure and successful serial retry.
     - [ ] **H3.2b2 [Primary] Verify initial min/max hints equal the expected client size on each matrix output.**
     - [ ] **H3.2b3 [Primary] Verify the popup remains floating and rejects resize/maximize requests.**
     - [ ] **H3.2b4 [Primary] Verify the first visible and settled popup frames remain centered without a top-left jump.**
     - [ ] **H3.2b5 [Primary] Verify a repeated launch focuses the existing popup and leaves exactly one instance.**
-  - [ ] **H3.2b1 [Primary] Recheck repeated-launch reliability for the software-renderer matrix case that initially timed out.** Retain the original EGL allocation failure and successful serial retry.
   - **H3.2c Verify the virtual/no-hardware workbench path.**
     - [ ] **H3.2c1 [Primary] Verify the popup opens and reports unavailable IPC when no daemon is running.**
     - [ ] **H3.2c2 [Primary] Verify the virtual little-screen renderer remains usable when no USB display is attached.**
@@ -811,14 +811,25 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [ ] **H3.2l3 [Primary] Verify an asynchronous preview completion refreshes the attached USB display while Workbench remains open.**
 - **H3.3 Reviewable delivery**
   - **H3.3a Verify feature reachability for every parity-ledger surface.** Use the ledger's individual actions and record any failure under H3.1 rather than treating source declarations as proof.
-    - [ ] **H3.3a1 [Primary] Verify Quick Palette and Node Machine actions remain reachable and return to the expected route.**
-    - [ ] **H3.3a2 [Primary] Verify Image Studio view, edit, extract, analyze, output, and external-handoff actions remain reachable.**
-    - [ ] **H3.3a3 [Primary] Verify Audio Inspect and Audio HF controls and output actions remain reachable.**
-    - [ ] **H3.3a4 [Primary] Verify Stems, Digital Decode, and Rolling Audio actions remain reachable.**
-    - [ ] **H3.3a5 [Primary] Verify Text, Spreadsheet, PDF, and Metadata actions remain reachable.**
-    - [ ] **H3.3a6 [Primary] Verify Text/Image Diff and Binary Diff actions remain reachable.**
-    - [ ] **H3.3a7 [Primary] Verify MIDI, Model 3D, and Film Look actions remain reachable.**
-    - [ ] **H3.3a8 [Primary] Verify the shared mirror and appearance controls remain reachable from Workbench.**
+    - [ ] **H3.3a1 [Primary] Verify Quick Palette actions remain reachable and return to the expected route.**
+    - [ ] **H3.3a2 [Primary] Verify Node Machine actions remain reachable and return to the expected route.**
+    - [ ] **H3.3a3 [Primary] Verify Image Studio actions remain reachable.**
+    - [ ] **H3.3a4 [Primary] Verify Audio Inspect controls and output actions remain reachable.**
+    - [ ] **H3.3a5 [Primary] Verify Audio HF controls and output actions remain reachable.**
+    - [ ] **H3.3a6 [Primary] Verify Stems actions remain reachable.**
+    - [ ] **H3.3a7 [Primary] Verify Digital Decode actions remain reachable.**
+    - [ ] **H3.3a8 [Primary] Verify Rolling Audio actions remain reachable.**
+    - [ ] **H3.3a9 [Primary] Verify Text Preview actions remain reachable.**
+    - [ ] **H3.3a10 [Primary] Verify Spreadsheet actions remain reachable.**
+    - [ ] **H3.3a11 [Primary] Verify PDF actions remain reachable.**
+    - [ ] **H3.3a12 [Primary] Verify Metadata actions remain reachable.**
+    - [ ] **H3.3a13 [Primary] Verify Text and Image Diff actions remain reachable.**
+    - [ ] **H3.3a14 [Primary] Verify Binary Diff actions remain reachable.**
+    - [ ] **H3.3a15 [Primary] Verify MIDI actions remain reachable.**
+    - [ ] **H3.3a16 [Primary] Verify Model 3D actions remain reachable.**
+    - [ ] **H3.3a17 [Primary] Verify Film Look actions remain reachable.**
+    - [ ] **H3.3a18 [Primary] Verify the shared little-screen mirror remains reachable from Workbench.**
+    - [ ] **H3.3a19 [Primary] Verify the shared appearance control remains reachable from Workbench.**
   - **H3.3b Verify readability in both appearance modes.**
     - [ ] **H3.3b1 [Primary] Verify Light appearance text, controls, statuses, and data surfaces remain readable.**
     - [ ] **H3.3b2 [Primary] Verify Dark appearance text, controls, statuses, and data surfaces remain readable.**
