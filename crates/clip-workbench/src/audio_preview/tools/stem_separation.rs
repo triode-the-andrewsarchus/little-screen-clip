@@ -1053,6 +1053,47 @@ printf '{"vocals":"%s/vocals.wav","drums":"%s/drums.wav","bass":"%s/bass.wav","o
     }
 
     #[test]
+    fn save_all_stems_copies_declared_files_and_closes_dialog() {
+        let directory = test_dir("save-all");
+        let destination = directory.join("chosen-output");
+        let mut state = test_state(&directory.join("source_clip.wav"));
+        state.stem_separation.save_destination_dir = destination.to_string_lossy().into_owned();
+        state.stem_separation.save_dialog_open = true;
+
+        let stems = [
+            ("vocals", b"synthetic vocals".as_slice()),
+            ("drums", b"synthetic drums".as_slice()),
+            ("bass", b"synthetic bass".as_slice()),
+            ("other", b"synthetic other".as_slice()),
+        ];
+        for (name, contents) in stems {
+            let source = directory.join(format!("{name}-source.wav"));
+            std::fs::write(&source, contents).unwrap();
+            state.stem_separation.stems.push(SeparatedStem {
+                name: name.to_owned(),
+                preview: test_state(&source),
+                group_player: None,
+                muted: false,
+            });
+        }
+
+        state.save_all_stems();
+
+        assert!(!state.stem_separation.save_dialog_open);
+        assert_eq!(
+            state.stem_separation.status.as_deref(),
+            Some("Saved all 4 stereo stems.")
+        );
+        assert!(state.stem_separation.error.is_none());
+        for (name, contents) in stems {
+            let output = destination.join(format!("source_clip_{name}.wav"));
+            assert_eq!(std::fs::read(output).unwrap(), contents);
+        }
+        drop(state);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn stem_job_queue_saturation_retries_and_imports_fake_manifest() {
         let directory = test_dir("queue");
         let jobs = BackgroundJobs::new(1, 1);
