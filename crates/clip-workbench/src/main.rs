@@ -5837,6 +5837,52 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn quick_palette_focused_search_receives_ordinary_text_without_changing_selection() {
+        let mut app = test_workbench_app(None, VecDeque::new());
+        app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
+        let original_slots = app.selected_slots.clone();
+        let ctx = egui::Context::default();
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut app.search_query))
+                        .request_focus();
+                });
+            },
+        );
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![egui::Event::Text("q".to_owned())],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.add(egui::TextEdit::singleline(&mut app.search_query));
+                    assert!(ctx.wants_keyboard_input());
+                    app.handle_global_shortcuts(ctx);
+                });
+            },
+        );
+
+        assert_eq!(app.search_query, "q");
+        assert_eq!(app.view, WorkbenchView::Palette);
+        assert_eq!(app.selected_slots, original_slots);
+    }
+
+    #[test]
     fn in_app_prompt_enter_submits_from_focused_editor_once() {
         let mut app = test_workbench_app(None, VecDeque::new());
         let recipe_name = "Prompt Enter Fixture";
