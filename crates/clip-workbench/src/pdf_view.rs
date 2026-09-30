@@ -645,8 +645,14 @@ impl PdfEditorState {
 
         // Hotkeys
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            *close = true;
-            return;
+            if self.edit_in_progress {
+                self.status_toast
+                    .set("PDF edit is still running; wait for it to finish", now);
+                ctx.request_repaint_after(Duration::from_millis(50));
+            } else {
+                *close = true;
+                return;
+            }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
             self.delete_current_page(now);
@@ -1892,6 +1898,126 @@ mod tests {
         );
         assert!(state.edit_in_progress);
         assert!(state.edit_rx.is_some());
+    }
+
+    #[test]
+    fn escape_during_pdf_edit_keeps_session_until_synthetic_result_arrives() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("source.pdf");
+        let mut state = action_guard_state(path.clone(), 0, None);
+        let (sender, receiver) = channel();
+        state.edit_rx = Some(receiver);
+        state.edit_in_progress = true;
+        let started_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        state.status_toast.set("Rotating page 1…", started_at);
+
+        let ctx = egui::Context::default();
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let escape = egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::default(),
+        };
+        let mut close = false;
+        let busy_output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(900.0, 600.0),
+                )),
+                events: vec![escape.clone()],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                });
+            },
+        );
+
+        assert!(!close, "Escape must not drop a running PDF edit");
+        assert_eq!(state.path, path);
+        assert!(state.edit_in_progress);
+        assert!(state.edit_rx.is_some());
+        assert!(
+            busy_output.shapes.iter().any(|clipped| {
+                matches!(
+                    &clipped.shape,
+                    egui::Shape::Text(text)
+                        if text.galley.text().contains("PDF edit is still running")
+                )
+            }),
+            "busy feedback should be rendered in the viewer footer"
+        );
+        let feedback_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        assert_eq!(
+            state.status_toast.message(feedback_time),
+            Some("PDF edit is still running; wait for it to finish")
+        );
+
+        sender
+            .send(PdfEditMsg {
+                operation: "rotate",
+                page_num: 1,
+                output: temp.path().join("source.rotate.edited.pdf"),
+                staging_dir: tempfile::tempdir_in(temp.path()).unwrap(),
+                result: Err("synthetic worker failure".to_owned()),
+            })
+            .unwrap();
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(900.0, 600.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                });
+            },
+        );
+        assert!(!state.edit_in_progress);
+        assert!(state.edit_rx.is_none());
+        assert_eq!(state.path, path, "failed edit keeps the source document");
+        let feedback_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        assert_eq!(
+            state.status_toast.message(feedback_time),
+            Some("Failed to rotate page: synthetic worker failure")
+        );
+
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    Vec2::new(900.0, 600.0),
+                )),
+                events: vec![escape],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                });
+            },
+        );
+        assert!(
+            close,
+            "Escape may close the session after the edit resolves"
+        );
     }
 
     #[test]
