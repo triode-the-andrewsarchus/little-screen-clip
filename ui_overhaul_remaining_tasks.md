@@ -635,7 +635,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **H2.3g20 Verify Rolling Audio F5 refreshes the snapshot.** Confirm the displayed capture changes.
     - **Preview and comparison surfaces**
       - [x] **H2.3g21 [Primary] Verify Text Preview Command+F opens and focuses Find.** Existing `find_shortcut_focuses_search_and_escape_dismisses_only_find` sends Command+F through `TextPreviewState::handle_shortcuts`, renders the Find toolbar, and asserts keyboard input focus is requested by the search editor. Its paired `find_shortcut_yields_to_focused_text_control` confirms an already focused text control retains ownership.
-      - [ ] **H2.3g22 Verify Text/Image Diff Tab changes the displayed mode.** Confirm the mode indicator.
+      - [x] **H2.3g22 [Primary] Verify Tab changes Text and Image Diff modes.** Existing `text_diff_tab_and_c_recompute_the_selected_mode` sends Tab through `DiffViewerState::handle_shortcuts`, waits for the new result, and confirms SideBySide; `image_diff_tab_and_c_cycle_modes_without_recomputing` confirms Tab advances the image presentation mode while retaining its result and not scheduling compute work.
       - [ ] **H2.3g23 Verify Binary Diff J selects the next difference.** Confirm the selected difference changes.
       - [ ] **H2.3g24 Verify PDF R rotates the selected page clockwise.** Confirm its orientation changes.
       - [ ] **H2.3g25 Verify Spreadsheet Escape follows filter-focus precedence.** Confirm whether filter or viewer closes first.
