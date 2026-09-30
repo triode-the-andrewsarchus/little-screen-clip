@@ -22,8 +22,108 @@ struct ModelCacheIdentity {
     dependencies: Vec<(PathBuf, FileRevision)>,
 }
 
-static MODEL_CACHE: Mutex<Option<HashMap<PathBuf, (ModelCacheIdentity, Arc<Model3d>)>>> =
-    Mutex::new(None);
+/// Keep the parsed card-preview cache below 128 MiB of model-owned memory.
+const MODEL_CACHE_MAX_BYTES: usize = 128 * 1024 * 1024;
+/// Bound the number of cached paths even when their meshes are tiny.
+const MODEL_CACHE_MAX_ENTRIES: usize = 16;
+
+#[derive(Debug)]
+struct ModelCacheEntry {
+    identity: ModelCacheIdentity,
+    model: Arc<Model3d>,
+    retained_bytes: usize,
+    last_access: u64,
+}
+
+#[derive(Debug, Default)]
+struct ModelCache {
+    entries: HashMap<PathBuf, ModelCacheEntry>,
+    retained_bytes: usize,
+    access_clock: u64,
+}
+
+impl ModelCache {
+    fn remove(&mut self, path: &Path) {
+        if let Some(entry) = self.entries.remove(path) {
+            self.retained_bytes = self.retained_bytes.saturating_sub(entry.retained_bytes);
+        }
+    }
+
+    fn get(&mut self, path: &Path, identity: &ModelCacheIdentity) -> Option<Arc<Model3d>> {
+        if !self
+            .entries
+            .get(path)
+            .is_some_and(|entry| &entry.identity == identity)
+        {
+            self.remove(path);
+            return None;
+        }
+        self.access_clock = self.access_clock.saturating_add(1);
+        let entry = self.entries.get_mut(path)?;
+        entry.last_access = self.access_clock;
+        Some(Arc::clone(&entry.model))
+    }
+
+    fn insert(
+        &mut self,
+        path: PathBuf,
+        identity: ModelCacheIdentity,
+        model: Arc<Model3d>,
+        max_bytes: usize,
+        max_entries: usize,
+    ) {
+        self.remove(&path);
+        let retained_bytes = model_retained_bytes(&model);
+        if retained_bytes > max_bytes || max_entries == 0 {
+            return;
+        }
+        while self.entries.len() >= max_entries
+            || self.retained_bytes.saturating_add(retained_bytes) > max_bytes
+        {
+            let Some(lru_path) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_access)
+                .map(|(path, _)| path.clone())
+            else {
+                break;
+            };
+            self.remove(&lru_path);
+        }
+        self.access_clock = self.access_clock.saturating_add(1);
+        self.retained_bytes = self.retained_bytes.saturating_add(retained_bytes);
+        self.entries.insert(
+            path,
+            ModelCacheEntry {
+                identity,
+                model,
+                retained_bytes,
+                last_access: self.access_clock,
+            },
+        );
+    }
+}
+
+static MODEL_CACHE: Mutex<Option<ModelCache>> = Mutex::new(None);
+
+/// Counts the cache-owned allocation footprint; callers' allocations and Arc
+/// reference counts are deliberately outside this cache budget.
+fn model_retained_bytes(model: &Model3d) -> usize {
+    std::mem::size_of::<Model3d>()
+        .saturating_add(model.name.capacity())
+        .saturating_add(
+            model
+                .triangles
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Triangle>()),
+        )
+        .saturating_add(
+            model
+                .thumbnail_triangles
+                .capacity()
+                .saturating_mul(std::mem::size_of::<Triangle>()),
+        )
+}
 
 fn file_revision(path: &Path) -> Option<FileRevision> {
     let metadata = std::fs::metadata(path).ok()?;
@@ -315,25 +415,28 @@ impl Model3d {
         let identity = model_cache_identity(path);
         {
             let mut guard = MODEL_CACHE.lock().unwrap_or_else(|p| p.into_inner());
-            let cache = guard.get_or_insert_with(HashMap::new);
-            if let (Some(identity), Some((cached_identity, cached_model))) =
-                (identity.as_ref(), cache.get(&path_buf))
-            {
-                if cached_identity == identity {
-                    return Ok(Arc::clone(cached_model));
+            let cache = guard.get_or_insert_with(ModelCache::default);
+            if let Some(identity) = identity.as_ref() {
+                if let Some(model) = cache.get(&path_buf, identity) {
+                    return Ok(model);
                 }
+            } else {
+                cache.remove(&path_buf);
             }
         }
 
         let model = Arc::new(Self::load_file(path)?);
         {
             let mut guard = MODEL_CACHE.lock().unwrap_or_else(|p| p.into_inner());
-            let cache = guard.get_or_insert_with(HashMap::new);
-            if cache.len() > 16 {
-                cache.clear();
-            }
+            let cache = guard.get_or_insert_with(ModelCache::default);
             if let Some(identity) = identity {
-                cache.insert(path_buf, (identity, Arc::clone(&model)));
+                cache.insert(
+                    path_buf,
+                    identity,
+                    Arc::clone(&model),
+                    MODEL_CACHE_MAX_BYTES,
+                    MODEL_CACHE_MAX_ENTRIES,
+                );
             } else {
                 cache.remove(&path_buf);
             }
@@ -555,6 +658,125 @@ fn geometry_to_triangles(geom: &scenix_mesh::Geometry, color: Option<[f32; 4]>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cache_identity(revision: u64) -> ModelCacheIdentity {
+        ModelCacheIdentity {
+            source: FileRevision {
+                modified: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(revision),
+                len: revision,
+            },
+            dependencies: Vec::new(),
+        }
+    }
+
+    fn cache_model(triangle_count: usize) -> Arc<Model3d> {
+        let triangle = Triangle::new(Vec3::ZERO, Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
+        Arc::new(Model3d {
+            name: "cache test model".to_owned(),
+            format: ModelFormat::Stl,
+            triangles: vec![triangle; triangle_count],
+            thumbnail_triangles: Vec::new(),
+            min_bounds: Vec3::ZERO,
+            max_bounds: Vec3::ZERO,
+            center: Vec3::ZERO,
+            size: Vec3::ZERO,
+            max_dimension: 0.0,
+        })
+    }
+
+    fn cache_has_path(cache: &ModelCache, path: &Path) -> bool {
+        cache.entries.contains_key(path)
+    }
+
+    #[test]
+    fn model_cache_byte_budget_evicts_entries_and_keeps_returned_arc_valid() {
+        let mut cache = ModelCache::default();
+        let first = cache_model(1);
+        let second = cache_model(1);
+        let entry_bytes = model_retained_bytes(&first);
+        cache.insert(
+            PathBuf::from("first.stl"),
+            cache_identity(1),
+            Arc::clone(&first),
+            entry_bytes * 2 - 1,
+            16,
+        );
+        cache.insert(
+            PathBuf::from("second.stl"),
+            cache_identity(2),
+            Arc::clone(&second),
+            entry_bytes * 2 - 1,
+            16,
+        );
+
+        assert!(!cache_has_path(&cache, Path::new("first.stl")));
+        assert!(cache_has_path(&cache, Path::new("second.stl")));
+        assert_eq!(cache.retained_bytes, model_retained_bytes(&second));
+        assert_eq!(first.triangles.len(), 1);
+    }
+
+    #[test]
+    fn model_cache_evicts_least_recently_used_entry() {
+        let mut cache = ModelCache::default();
+        let a = PathBuf::from("a.stl");
+        let b = PathBuf::from("b.stl");
+        let c = PathBuf::from("c.stl");
+        cache.insert(a.clone(), cache_identity(1), cache_model(1), usize::MAX, 2);
+        cache.insert(b.clone(), cache_identity(2), cache_model(1), usize::MAX, 2);
+        assert!(cache.get(&a, &cache_identity(1)).is_some());
+        cache.insert(c.clone(), cache_identity(3), cache_model(1), usize::MAX, 2);
+
+        assert!(cache_has_path(&cache, &a));
+        assert!(!cache_has_path(&cache, &b));
+        assert!(cache_has_path(&cache, &c));
+    }
+
+    #[test]
+    fn model_cache_replaces_stale_revision_for_same_path() {
+        let mut cache = ModelCache::default();
+        let path = PathBuf::from("revisioned.stl");
+        let old = cache_model(1);
+        let new = cache_model(2);
+        cache.insert(
+            path.clone(),
+            cache_identity(1),
+            Arc::clone(&old),
+            usize::MAX,
+            16,
+        );
+        assert!(cache.get(&path, &cache_identity(2)).is_none());
+        assert!(!cache_has_path(&cache, &path));
+
+        cache.insert(
+            path.clone(),
+            cache_identity(2),
+            Arc::clone(&new),
+            usize::MAX,
+            16,
+        );
+        let cached = cache.get(&path, &cache_identity(2)).unwrap();
+        assert!(Arc::ptr_eq(&cached, &new));
+        assert!(!Arc::ptr_eq(&cached, &old));
+        assert_eq!(cache.entries.len(), 1);
+    }
+
+    #[test]
+    fn model_cache_bypasses_entries_larger_than_budget() {
+        let mut cache = ModelCache::default();
+        let oversized = cache_model(10);
+        let bytes = model_retained_bytes(&oversized);
+        cache.insert(
+            PathBuf::from("large.stl"),
+            cache_identity(1),
+            Arc::clone(&oversized),
+            bytes - 1,
+            16,
+        );
+
+        assert!(cache.entries.is_empty());
+        assert_eq!(cache.retained_bytes, 0);
+        assert_eq!(oversized.triangles.len(), 10);
+    }
 
     #[test]
     fn test_ascii_stl_parsing() {
