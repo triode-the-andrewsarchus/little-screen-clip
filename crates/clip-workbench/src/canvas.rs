@@ -1807,6 +1807,29 @@ mod tests {
             canvas.status_message.as_ref(),
             Some((message, false)) if message == "Running pipeline…"
         ));
+
+        // Exercise the daemon's production graph executor and slot-result behavior in-process.
+        // This graph contains only a constant text node and the Left Hand sink, so no external
+        // command, daemon, clipboard, or display refresh is involved.
+        let mut slots = little_clip_core::SlotManager::new();
+        slots.push_left(little_clip_core::ClipItem::from_text("previous item"));
+        let execution = little_clip_ops::PipelineExecutor::new(&sent_graph, &slots)
+            .execute()
+            .expect("constant-text Left Hand graph should execute");
+        let output = execution
+            .left_hand_item
+            .expect("SetLeftHand should declare a Left Hand output");
+        assert_eq!(output.title, "once");
+        assert_eq!(output.to_clipboard_text().as_deref(), Some("once"));
+        slots.apply_op_result(output);
+        assert_eq!(
+            slots.left_hand().and_then(|item| item.to_clipboard_text()),
+            Some("once".to_owned())
+        );
+        assert_eq!(
+            slots.undo_slot().and_then(|item| item.to_clipboard_text()),
+            Some("previous item".to_owned())
+        );
     }
 
     #[test]

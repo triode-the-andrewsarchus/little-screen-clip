@@ -684,7 +684,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **H2.3h25c [Primary] Verify MIDI Copy button pointer activation in the private compositor.** Click the rendered full-score Copy MIDI button and verify a single Left Hand handoff. The headless egui harness did not produce a reliable pointer click; use the private Wayland/Niri runner rather than treating the shortcut test as pointer activation.
     - **Node Machine and external handoffs**
       - [ ] **H2.3h26 Verify Node Machine Save As writes a reloadable recipe.** Confirm file contents and graph round trip.
-      - [ ] **H2.3h27 Verify Node Machine RUN publishes its declared output slot.** Confirm slot payload.
+      - [x] **H2.3h27 [Luna] Verify Node Machine RUN publishes its declared output slot.** `run_pipeline_emits_graph_for_single_daemon_execution` parses the emitted request YAML for a constant-text→SetLeftHand graph, runs that graph through `PipelineExecutor`, then applies its result to an in-memory `SlotManager`; Left Hand contains exactly `once` with title `once`, and Undo retains the previous item. This exercises the production executor and slot mutation without daemon IPC, clipboard, display refresh, or external actions; the daemon wrapper is not invoked.
       - [ ] **H2.3h28 Verify Image Studio Krita handoff receives the current artifact.** Confirm launch arguments and file contents.
       - [ ] **H2.3h29 Verify Image Studio Inkscape handoff receives the current artifact.** Confirm launch arguments and file contents.
       - [ ] **H2.3h30 Verify Image Studio viewer handoff receives the current artifact.** Confirm launch arguments and file contents.
