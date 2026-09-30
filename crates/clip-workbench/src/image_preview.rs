@@ -2198,6 +2198,86 @@ mod tests {
         .unwrap()
     }
 
+    #[cfg(unix)]
+    fn assert_configured_app_receives_source_image(
+        executable_name: &str,
+        configure: impl FnOnce(&mut AppConfig, &str),
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let source_path = temp_dir.path().join("source.png");
+        RgbaImage::from_pixel(3, 2, image::Rgba([17, 83, 149, 255]))
+            .save(&source_path)
+            .unwrap();
+        let expected_bytes = std::fs::read(&source_path).unwrap();
+        let executable_path = temp_dir.path().join(executable_name);
+        let argument_capture = temp_dir.path().join(format!("{executable_name}.arg"));
+        let bytes_capture = temp_dir.path().join(format!("{executable_name}.bytes"));
+        let script = format!(
+            "#!/bin/sh\nprintf '%s' \"$1\" > '{}'\ncat \"$1\" > '{}'\n",
+            argument_capture.display(),
+            bytes_capture.display()
+        );
+        std::fs::write(&executable_path, script).unwrap();
+        let mut permissions = std::fs::metadata(&executable_path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable_path, permissions).unwrap();
+
+        let mut config = AppConfig::default();
+        configure(&mut config, executable_path.to_str().unwrap());
+        let mut state = ImagePreviewState::from_path(source_path.clone(), &config).unwrap();
+        let ctx = egui::Context::default();
+        let mut close = false;
+        let app = match executable_name {
+            "fake-krita" => state.external_editor.clone(),
+            "fake-inkscape" => state.svg_editor.clone(),
+            _ => state.viewer.clone(),
+        };
+        state.launch_external_app(&app, &ctx, &mut close);
+
+        assert!(matches!(
+            state.status_toast.as_ref(),
+            Some((message, _)) if message.contains("Launched")
+        ));
+        assert!(!close, "external handoff leaves Image Studio open");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while (!argument_capture.exists() || !bytes_capture.exists())
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(
+            std::fs::read_to_string(argument_capture).unwrap(),
+            source_path.to_string_lossy()
+        );
+        assert_eq!(std::fs::read(bytes_capture).unwrap(), expected_bytes);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn krita_handoff_receives_current_source_image_file() {
+        assert_configured_app_receives_source_image("fake-krita", |config, executable| {
+            config.image.external_editor = executable.to_owned();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inkscape_handoff_receives_current_source_image_file() {
+        assert_configured_app_receives_source_image("fake-inkscape", |config, executable| {
+            config.image.svg_editor = executable.to_owned();
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn viewer_handoff_receives_current_source_image_file() {
+        assert_configured_app_receives_source_image("fake-nomacs", |config, executable| {
+            config.image.viewer = executable.to_owned();
+        });
+    }
+
     #[test]
     fn composed_input_stamp_tracks_every_display_image_input() {
         let mut state = image_state_from_png((8, 8), "input stamp test");
