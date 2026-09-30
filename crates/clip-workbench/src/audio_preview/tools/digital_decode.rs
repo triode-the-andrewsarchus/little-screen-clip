@@ -49,9 +49,6 @@ pub(crate) enum DigitalDecodeMsg {
     Batch(Vec<DecodedSymbol>),
     /// Decoding across all enabled demodulators has completed.
     Done(f32),
-    /// An error encountered during audio preparation or decoding.
-    #[allow(dead_code)]
-    Error(String),
     /// The executor accepted the scan; prior results can now be replaced.
     Started,
 }
@@ -221,7 +218,6 @@ impl AudioPreviewState {
         }
         let mut new_batches = Vec::new();
         let mut done_time = None;
-        let mut error_msg = None;
         let mut started = false;
 
         if let Some(rx) = &self.digital_decode.rx {
@@ -241,9 +237,6 @@ impl AudioPreviewState {
                     DigitalDecodeMsg::Done(elapsed) => {
                         done_time = Some(elapsed);
                     }
-                    DigitalDecodeMsg::Error(err) => {
-                        error_msg = Some(err);
-                    }
                 }
             }
         }
@@ -262,13 +255,7 @@ impl AudioPreviewState {
             });
         }
 
-        if let Some(err) = error_msg {
-            self.digital_decode.in_progress = false;
-            self.digital_decode.rx = None;
-            self.digital_decode.job_rx = None;
-            self.digital_decode.job_ticket = None;
-            self.digital_decode.status_msg = Some(format!("Decoding error: {err}"));
-        } else if let Some(elapsed) = done_time {
+        if let Some(elapsed) = done_time {
             self.digital_decode.in_progress = false;
             self.digital_decode.rx = None;
             self.digital_decode.job_ticket = None;

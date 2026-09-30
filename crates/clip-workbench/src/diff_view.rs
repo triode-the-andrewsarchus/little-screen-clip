@@ -370,7 +370,7 @@ impl DiffViewerState {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn wait_for_completion(&mut self) {
         if let Some(rx) = self.image_receiver.take() {
             if let Ok(res) = rx.recv() {

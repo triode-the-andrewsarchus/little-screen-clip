@@ -27,7 +27,6 @@ static NEXT_INLINE_MIDI_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::At
 ///
 /// Playback is intentionally local to the preview: seeking only moves its
 /// playhead and never starts the full viewer's audio synthesis pipeline.
-#[allow(dead_code)]
 pub struct InlineMidiPreview {
     data: Arc<MidiData>,
     host_size: Vec2,
@@ -36,7 +35,6 @@ pub struct InlineMidiPreview {
     selected_note: Option<usize>,
 }
 
-#[allow(dead_code)]
 impl InlineMidiPreview {
     /// Creates a compact score preview with a positive finite host size.
     pub fn new(data: Arc<MidiData>, host_size: Vec2) -> Self {
@@ -200,7 +198,6 @@ impl InlineMidiPreview {
 
 /// Interactive UI state for piano roll inspection and MIDI playback.
 pub struct MidiViewerState {
-    #[allow(dead_code)]
     pub path: Option<PathBuf>,
     pub title: String,
     pub data: Arc<MidiData>,
@@ -214,8 +211,6 @@ pub struct MidiViewerState {
     pub view_start_sec: f32,
     pub view_duration_sec: f32,
     pub user_panned_during_playback: bool,
-    #[allow(dead_code)]
-    pub was_playing_before_drag: bool,
     pub hovered_note: Option<MidiNote>,
     pub status_toast: StatusToast,
     pub selected_region: Option<(f32, f32)>,
@@ -454,12 +449,6 @@ impl MidiViewerState {
         Self::from_data(data, Some(path), title)
     }
 
-    #[allow(dead_code)]
-    pub fn from_bytes(bytes: &[u8], title: String) -> Result<Self, String> {
-        let data = MidiData::parse_bytes(bytes, title.clone())?;
-        Ok(Self::from_data(data, None, title))
-    }
-
     fn from_data(data: MidiData, path: Option<PathBuf>, title: String) -> Self {
         Self::from_shared(Arc::new(data), path, title)
     }
@@ -480,7 +469,6 @@ impl MidiViewerState {
             view_start_sec: 0.0,
             view_duration_sec: total_dur,
             user_panned_during_playback: false,
-            was_playing_before_drag: false,
             hovered_note: None,
             status_toast: StatusToast::new(),
             selected_region: None,
@@ -2344,7 +2332,6 @@ mod tests {
             view_start_sec: 0.0,
             view_duration_sec: 5.0,
             user_panned_during_playback: false,
-            was_playing_before_drag: false,
             hovered_note: None,
             status_toast: StatusToast::new(),
             selected_region: None,
@@ -2760,7 +2747,6 @@ mod tests {
             view_start_sec: 0.0,
             view_duration_sec: 5.0,
             user_panned_during_playback: false,
-            was_playing_before_drag: false,
             hovered_note: None,
             status_toast: StatusToast::new(),
             selected_region: None,

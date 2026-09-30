@@ -91,15 +91,10 @@ pub struct ImagePreviewState {
     pub title: String,
     pub mime: String,
     pub file_size_bytes: usize,
-    #[allow(dead_code)]
-    pub original_width: u32,
-    #[allow(dead_code)]
-    pub original_height: u32,
     pub is_svg: bool,
     pub raw_bytes: Arc<Vec<u8>>,
 
     // Committed revisions are shared until an in-place edit calls Arc::make_mut.
-    #[allow(dead_code)]
     pub original_rgba: Arc<RgbaImage>,
     pub current_rgba: Arc<RgbaImage>,
     /// Increases whenever the committed pixel buffer changes.
@@ -243,8 +238,6 @@ pub(crate) struct DecodedImageData {
     mime: String,
     encoded_bytes: Arc<Vec<u8>>,
     original_rgba: Arc<RgbaImage>,
-    width: u32,
-    height: u32,
     is_svg: bool,
     metadata: Option<ImageMetadataSummary>,
 }
@@ -282,14 +275,11 @@ impl DecodedImageData {
                 .to_rgba8()
         };
 
-        let (width, height) = rgba.dimensions();
         let metadata = extract_image_metadata(&bytes);
         Ok(Self {
             mime,
             encoded_bytes: Arc::new(bytes),
             original_rgba: Arc::new(rgba),
-            width,
-            height,
             is_svg,
             metadata: metadata.has_any_metadata().then_some(metadata),
         })
@@ -298,7 +288,6 @@ impl DecodedImageData {
 
 /// Lightweight image renderer for hosts that need a preview without the
 /// editor's mutation, history, or background-job state.
-#[allow(dead_code)] // Consumed by the upcoming component-gallery host wiring.
 pub(crate) struct InlineImagePreview {
     source: Arc<DecodedImageData>,
     texture: Option<egui::TextureHandle>,
@@ -307,7 +296,6 @@ pub(crate) struct InlineImagePreview {
     drag_origin_pan: Vec2,
 }
 
-#[allow(dead_code)] // Rendering API is exercised here before gallery integration.
 impl InlineImagePreview {
     pub(crate) fn new(source: Arc<DecodedImageData>) -> Self {
         Self {
@@ -525,8 +513,6 @@ impl ImagePreviewState {
             mime,
             encoded_bytes,
             original_rgba,
-            width,
-            height,
             is_svg,
             metadata,
         } = source;
@@ -539,8 +525,6 @@ impl ImagePreviewState {
             title,
             mime,
             file_size_bytes,
-            original_width: width,
-            original_height: height,
             is_svg,
             raw_bytes: encoded_bytes,
             original_rgba: original_rgba.clone(),

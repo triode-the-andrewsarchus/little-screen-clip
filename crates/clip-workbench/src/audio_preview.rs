@@ -452,7 +452,6 @@ impl<S: Source> Source for EditedPreviewSource<S> {
 }
 
 /// Read-only inline waveform view over a completed shared audio analysis.
-#[allow(dead_code)] // Its workbench host is wired under H2.4g.
 #[derive(Clone)]
 pub struct InlineAudioWaveform {
     source_analysis: Arc<FullAudioAnalysis>,
@@ -460,12 +459,12 @@ pub struct InlineAudioWaveform {
 
 const MAX_INLINE_WAVEFORM_COLUMNS: usize = 16_384;
 
-#[allow(dead_code)] // Its workbench host is wired under H2.4g.
 impl InlineAudioWaveform {
     pub fn new(source_analysis: Arc<FullAudioAnalysis>) -> Self {
         Self { source_analysis }
     }
 
+    #[cfg(test)]
     pub fn source_analysis(&self) -> &Arc<FullAudioAnalysis> {
         &self.source_analysis
     }
@@ -1110,7 +1109,7 @@ fn plan_destination_name(path: &str) -> String {
 
 impl AudioPreviewState {
     /// Returns the immutable source snapshot once all progressive analysis stages finish.
-    #[allow(dead_code)] // Exposed for the follow-up inline-preview sharing task.
+    #[cfg(test)]
     pub fn completed_source_analysis(&self) -> Option<&Arc<FullAudioAnalysis>> {
         self.completed_source_analysis.as_ref()
     }
@@ -2050,7 +2049,6 @@ impl AudioPreviewState {
     /// Creates an independent Audio Studio view over a completed source analysis.
     /// The source-analysis worker is skipped; playback, selection, edits, and later
     /// edited-analysis jobs remain owned by this new viewer state.
-    #[allow(dead_code)] // Called when the inline host is wired under H2.4g.
     pub fn from_completed_source(
         path: PathBuf,
         title: String,

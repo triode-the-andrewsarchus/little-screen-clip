@@ -20,10 +20,8 @@ pub const GUTTER_WIDTH: f32 = 56.0;
 pub const MARGIN: f32 = 10.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum TextAlign {
     Left,
-    Center,
     Right,
 }
 
@@ -94,10 +92,6 @@ pub fn draw_text_skia(
     }
     match align {
         TextAlign::Left => {}
-        TextAlign::Center => {
-            let total_w = measure_text_skia(font, text, font_size);
-            start_x -= total_w * 0.5;
-        }
         TextAlign::Right => {
             let total_w = measure_text_skia(font, text, font_size);
             start_x -= total_w;

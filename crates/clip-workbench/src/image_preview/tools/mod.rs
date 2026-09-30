@@ -202,6 +202,7 @@ pub(super) use resize::PixelResizeJobState;
 pub(super) use resize::{
     FileSizeOptimizationResult, ResizeFilter, ResizeState, ResizeSubTab, TargetFormat,
 };
+#[cfg(test)]
 pub(super) use resize::{optimize_to_target_size, optimize_to_target_size_with_progress};
 mod transform;
 mod view;

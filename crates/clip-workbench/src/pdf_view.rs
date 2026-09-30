@@ -108,7 +108,6 @@ impl PdfPageDecodeSlot {
 }
 
 /// Read-only page preview with texture and decode state independent of the editor.
-#[allow(dead_code)] // Consumed by inline hosts added with cross-view routing.
 pub struct InlinePdfPagePreview {
     raster: Arc<PdfPageRasterResource>,
     decode_slot: Option<PdfPageDecodeSlot>,
@@ -119,7 +118,6 @@ pub struct InlinePdfPagePreview {
     decode_start_count: usize,
 }
 
-#[allow(dead_code)] // Public rendering API is exercised by its in-module consumer test.
 impl InlinePdfPagePreview {
     pub fn new(raster: Arc<PdfPageRasterResource>) -> Self {
         Self {
@@ -363,8 +361,6 @@ pub struct PdfPageItem {
     pub texture: Option<egui::TextureHandle>,
     texture_last_used: u64,
     pub error: Option<String>,
-    #[allow(dead_code)]
-    pub rotation: u32,
 }
 
 /// Interactive state for the multi-page PDF thumbnail grid editor.
@@ -462,7 +458,6 @@ impl PdfEditorState {
             texture: None,
             texture_last_used: 0,
             error: None,
-            rotation: 0,
         });
         state
     }
@@ -525,7 +520,6 @@ impl PdfEditorState {
                 texture: None,
                 texture_last_used: 0,
                 error: None,
-                rotation: 0,
             })
             .collect();
         self.selected_page =
@@ -1576,7 +1570,6 @@ mod tests {
                     texture: None,
                     texture_last_used: 0,
                     error: None,
-                    rotation: 0,
                 })
                 .collect(),
             selected_page: (page_count > 0).then_some(1),
@@ -2850,7 +2843,6 @@ mod tests {
             texture: None,
             texture_last_used: 0,
             error: None,
-            rotation: 0,
         });
         state.selected_page = Some(2);
         state.edit_rx = Some(receiver);
@@ -3120,7 +3112,6 @@ mod tests {
             texture: None,
             texture_last_used: 0,
             error: None,
-            rotation: 0,
         });
         sender
             .send(PdfPreviewMsg {

@@ -68,7 +68,6 @@ mod rolling_audio_strip;
 pub mod shell;
 mod spreadsheet_view;
 mod state_sync;
-mod stl_view;
 mod text_preview;
 mod ui_appearance;
 pub mod ui_ext;
@@ -3665,7 +3664,7 @@ mod workbench_layout_tests {
             match (kind, viewer) {
                 (component_gallery::GalleryPreviewKind::Image, ViewerSession::Image(state)) => {
                     assert_eq!(state.title, "Gallery image");
-                    assert_eq!(state.original_width, 24);
+                    assert_eq!(state.original_rgba.width(), 24);
                     assert!(state.palette_ticket.is_none());
                 }
                 (component_gallery::GalleryPreviewKind::Text, ViewerSession::Text(state)) => {

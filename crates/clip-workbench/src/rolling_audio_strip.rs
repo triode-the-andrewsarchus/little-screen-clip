@@ -429,15 +429,6 @@ impl RollingAudioStripState {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn pause(&mut self) {
-        if let Some(ref p) = self.player {
-            p.pause();
-        }
-        self.is_playing = false;
-        self.playback_start_instant = None;
-    }
-
     pub fn stop(&mut self) {
         if let Some(ref p) = self.player {
             p.pause();

@@ -2038,20 +2038,6 @@ impl ScreenRenderer {
         );
     }
 
-    #[allow(dead_code)]
-    fn draw_stl_card(
-        &self,
-        pixmap: &mut Pixmap,
-        mesh: &model3d::Model3d,
-        rx: f32,
-        ry: f32,
-        rw: f32,
-        rh: f32,
-        is_hero: bool,
-    ) {
-        self.draw_model3d_card(pixmap, mesh, rx, ry, rw, rh, is_hero);
-    }
-
     fn draw_model3d_card(
         &self,
         pixmap: &mut Pixmap,

@@ -103,7 +103,6 @@ const MINIMAP_NEUTRAL_COLOR: syntect::highlighting::Color = syntect::highlightin
     a: 255,
 };
 const CODE_ROW_HEIGHT_BLOCK_SIZE: usize = 32;
-#[allow(dead_code)]
 static NEXT_INLINE_TEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Clone, Copy)]
@@ -125,7 +124,6 @@ pub struct TextPreviewData {
 ///
 /// Each instance has its own scroll identity while sharing immutable source
 /// data with sibling previews.
-#[allow(dead_code)]
 pub struct InlineTextPreview {
     data: Arc<TextPreviewData>,
     host_size: Vec2,
@@ -133,7 +131,6 @@ pub struct InlineTextPreview {
     scroll_offset: f32,
 }
 
-#[allow(dead_code)]
 impl InlineTextPreview {
     /// Creates a compact preview with a fixed finite host size.
     pub fn new(data: Arc<TextPreviewData>, host_size: Vec2) -> Self {
@@ -1127,10 +1124,12 @@ impl TextPreviewState {
         self.search_error = Some(error);
     }
 
+    #[cfg(test)]
     pub fn match_count(&self) -> u64 {
         self.match_count
     }
 
+    #[cfg(test)]
     pub fn search_match(&mut self, index: u64) -> Option<SearchMatch> {
         self.search_match_at(index)
     }

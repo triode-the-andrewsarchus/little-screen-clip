@@ -1,6 +1,6 @@
 use super::super::*;
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn optimize_to_target_size(
     base_img: &RgbaImage,
     target_bytes: usize,
@@ -9,6 +9,7 @@ pub fn optimize_to_target_size(
     optimize_to_target_size_with_progress(base_img, target_bytes, format, None)
 }
 
+#[cfg(test)]
 pub fn optimize_to_target_size_with_progress(
     base_img: &RgbaImage,
     target_bytes: usize,
@@ -16,7 +17,7 @@ pub fn optimize_to_target_size_with_progress(
     progress: Option<&dyn Fn(String)>,
 ) -> FileSizeOptimizationResult {
     optimize_to_target_size_cancellable(base_img, target_bytes, format, progress, &|| false)
-        .expect("synchronous optimization cannot be cancelled")
+        .expect("synchronous test optimization cannot be cancelled")
 }
 
 fn optimize_to_target_size_cancellable(
@@ -563,7 +564,6 @@ pub struct ResizeState {
     pub last_result: Option<FileSizeOptimizationResult>,
     pub(crate) last_result_request_stamp: Option<OptimizerRequestStamp>,
     pub(crate) optimizer_request_stamp: Option<OptimizerRequestStamp>,
-    #[allow(dead_code)]
     pub is_optimizing: bool,
 }
 
@@ -1067,12 +1067,14 @@ mod input_stamp_tests {
         state.resize_state.target_size_unit_mb = false;
         state.resize_state.target_size_val = 1.0;
         let image = state.current_display_image();
-        let expected = optimize_to_target_size_with_progress(
+        let expected = optimize_to_target_size_cancellable(
             &image,
             state.resize_state.target_bytes(),
             TargetFormat::Png,
             None,
-        );
+            &|| false,
+        )
+        .expect("the test optimizer cannot be cancelled");
         let jobs = little_clip_core::BackgroundJobs::new(1, 1);
         state.active_mode = ImageToolMode::Resize;
         state.resize_state.sub_tab = ResizeSubTab::FileSize;

@@ -6,7 +6,9 @@ use crate::icons::Icon;
 use crate::shell::{EscapeHatch, EscapeHatchLauncher, StudioShell};
 use crate::ui_ext::{BODY_FONT_SIZE, StatusToast};
 use eframe::egui::{self, FontId, Rounding, Stroke, TextStyle, Vec2};
-use little_clip_ops::spreadsheet::{SpreadsheetData, SpreadsheetSheet};
+use little_clip_ops::spreadsheet::SpreadsheetData;
+#[cfg(test)]
+use little_clip_ops::spreadsheet::SpreadsheetSheet;
 use std::borrow::Cow;
 use std::ops::Range;
 use std::path::PathBuf;
@@ -68,7 +70,6 @@ pub struct SpreadsheetViewerState {
 ///
 /// The workbook data is shared, while sheet selection, cell selection, and
 /// scroll offsets belong to each preview instance.
-#[allow(dead_code)]
 pub struct InlineSpreadsheetPreview {
     data: Arc<SpreadsheetData>,
     host_size: Vec2,
@@ -78,7 +79,6 @@ pub struct InlineSpreadsheetPreview {
     scroll_offset: Vec2,
 }
 
-#[allow(dead_code)]
 impl InlineSpreadsheetPreview {
     /// Creates a compact preview with a fixed finite host size.
     pub fn new(data: Arc<SpreadsheetData>, host_size: Vec2) -> Self {
@@ -369,7 +369,7 @@ impl SpreadsheetViewerState {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn current_sheet(&self) -> Option<&SpreadsheetSheet> {
         self.data.sheets.get(self.active_sheet_idx)
     }

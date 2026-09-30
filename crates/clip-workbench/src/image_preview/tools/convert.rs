@@ -35,7 +35,6 @@ fn run_optipng_optimization(
     std::fs::read(&temp_path).map_err(|e| format!("Failed to read optipng output: {}", e))
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConvertTargetFormat {
     #[default]

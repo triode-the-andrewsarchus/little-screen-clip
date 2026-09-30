@@ -65,7 +65,6 @@ pub struct Model3dViewerState {
 ///
 /// Parsed geometry is shared across hosts; orbit, zoom, pan, and wireframe
 /// state belong to each preview instance.
-#[allow(dead_code)]
 pub struct InlineModel3dPreview {
     mesh: Arc<Model3d>,
     host_size: Vec2,
@@ -78,7 +77,6 @@ pub struct InlineModel3dPreview {
     wireframe: bool,
 }
 
-#[allow(dead_code)]
 impl InlineModel3dPreview {
     /// Creates a compact preview with a fixed finite host size.
     pub fn new(mesh: Arc<Model3d>, host_size: Vec2) -> Self {
@@ -216,7 +214,8 @@ impl Model3dViewerState {
         self
     }
 
-    /// Constructs an immediate ready viewer from an already-parsed model.
+    /// Constructs a ready viewer from parsed model data for in-module tests.
+    #[cfg(test)]
     pub fn from_model(mesh: Model3d, path: Option<PathBuf>) -> Self {
         Self::from_shared_model(Arc::new(mesh), path)
     }
@@ -253,21 +252,6 @@ impl Model3dViewerState {
             status_toast: StatusToast::new(),
             config: None,
         }
-    }
-
-    /// Parses raw bytes synchronously for a given extension.
-    #[allow(dead_code)]
-    pub fn from_bytes(bytes: &[u8], ext: &str, title: String) -> Result<Self, String> {
-        let mesh = Model3d::load_bytes(bytes, ext, title)?;
-        Ok(Self::from_model(mesh, None))
-    }
-
-    #[allow(dead_code)]
-    pub fn reset_view(&mut self) {
-        self.pitch = 0.4;
-        self.yaw = 0.6;
-        self.zoom = 1.0;
-        self.pan_offset = Vec2::ZERO;
     }
 
     fn poll_loader(&mut self) {

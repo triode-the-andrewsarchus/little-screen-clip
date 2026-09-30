@@ -122,11 +122,6 @@ pub fn step_badge_font_size(badge_radius_px: f32, number: u32) -> f32 {
 }
 
 impl MarkupShape {
-    #[allow(dead_code)]
-    pub fn bounding_rect(&self) -> Rect {
-        self.bounding_rect_norm(1000.0, 1000.0)
-    }
-
     pub fn bounding_rect_norm(&self, img_w: f32, img_h: f32) -> Rect {
         match self {
             Self::Arrow { start, end, .. } | Self::Line { start, end, .. } => {
@@ -187,7 +182,7 @@ impl MarkupShape {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn color(&self) -> Color32 {
         match self {
             Self::Arrow { color, .. }
@@ -214,7 +209,7 @@ impl MarkupShape {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn width(&self) -> Option<f32> {
         match self {
             Self::Arrow { width, .. }
@@ -234,21 +229,6 @@ impl MarkupShape {
                 *width = new_width;
             }
             _ => {}
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn radius(&self) -> Option<f32> {
-        match self {
-            Self::StepBadge { radius, .. } => Some(*radius),
-            _ => None,
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn set_radius(&mut self, new_radius: f32) {
-        if let Self::StepBadge { radius, .. } = self {
-            *radius = new_radius;
         }
     }
 
