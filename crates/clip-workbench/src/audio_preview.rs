@@ -4641,6 +4641,44 @@ mod tests {
     }
 
     #[test]
+    fn inspect_space_pauses_active_transport_with_player_disabled() {
+        let (_temp_dir, path) = generate_fixture_wav("inspect-space-pause", 1.0);
+        let analysis = compute_full_audio_analysis(&path, 100).expect("fixture analysis");
+        let mut state = AudioPreviewState::new(path, "fixture.wav".to_string());
+        state.cancel_session_analysis();
+        state.analysis = Some(analysis);
+        state.duration_sec = 1.0;
+        state.view_duration_sec = 1.0;
+        state.is_loading_analysis = false;
+        state.player = None;
+        state._sink = None;
+        // Model an already-active transport; with the player disabled, Space can
+        // only exercise the production pause transition and cannot emit sound.
+        state.is_playing = true;
+        state.playback_start_instant = Some(Instant::now());
+
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        render_inspect_frame(
+            &ctx,
+            &mut state,
+            0.0,
+            vec![egui::Event::Key {
+                key: egui::Key::Space,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+
+        assert!(!state.is_playing);
+        assert!(state.playback_start_instant.is_none());
+        assert!(state.player.is_none());
+        assert!(state._sink.is_none());
+    }
+
+    #[test]
     fn inspect_canvas_drag_selects_region_and_ruler_click_only_scrubs() {
         let (_temp_dir, path) = generate_fixture_wav("inspect-pointer", 5.0);
         let analysis = compute_full_audio_analysis(&path, 100).expect("fixture analysis");
