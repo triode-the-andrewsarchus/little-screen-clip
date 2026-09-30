@@ -608,16 +608,115 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
     - [x] **H2.3f3 [Primary implementation] Verify recipe prompt Escape cancellation.** `palette_prompt_escape_cancels_only_the_overlay` sends Escape through the modal-first `render_modal_viewers` route, verifies only `InAppPromptState` is cleared, keeps Palette active, and asserts no viewport-close command is emitted.
     - [x] **H2.3f4 [Luna] Verify prompt Enter submits captured input exactly once.** `in_app_prompt_enter_submits_from_focused_editor_once` captures one `ExecuteRecipeWithPrompt` carrying the edited input and returns controlled success through the shared result handler; the popup receives one close command. No daemon or recipe action runs.
     - [x] **H2.3f5 [Luna] Verify Auto Actions toggle request and failure feedback.** A rendered checkbox click emits one `SetAutoAction`; controlled success retains the enabled value, while transport failure restores the previous setting and shows status feedback. No daemon is contacted.
-  - [ ] **H2.3g [Primary] Pass parity-ledger keyboard scenarios.**
+  - **H2.3g Keyboard scenarios from the parity ledger (runtime acceptance remains open).** Source tests cover only their named routes; each checkbox below is a live, surface-owned action/result check.
     - [x] **H2.3g1 [Luna] Verify Palette digit shortcuts select the documented slot sets.** `palette_digit_shortcuts_select_exact_slot_sets` checks 0–3 through the production shortcut handler, including selected slots, mirror invalidation, and action-index reset.
     - [x] **H2.3g2 [Luna] Verify Palette search-prefix selection commands preserve the intended query.** `palette_search_prefixes_select_slots_and_keep_remaining_query` covers numeric/backtick prefixes and a leading-space Left+Right prefix through the production parser.
     - [x] **H2.3g3 [Luna] Verify Palette Up/Down navigation wraps across filtered actions.** `palette_action_navigation_wraps_in_both_directions` uses a deterministic recipe pair to check next, Down wrap, and Up wrap.
     - [x] **H2.3g4 [Luna] Verify Auto Actions Escape returns to Palette.** `auto_actions_escape_returns_to_palette_and_requests_search_focus` checks the production Escape route and focus restoration request.
     - [x] **H2.3g5 [Luna] Keep the `swap` query when selection is not exactly two slots.** `palette_swap_prefix_stays_available_without_exactly_two_selected_slots` runs the production parser for one- and three-slot selections and verifies the query, selected slots, clipboard state, mirror state, action index, and status remain unchanged. It does not enter the IPC-backed swap path.
-    - [x] **H2.3g6 [Luna] Keep modified S/X shortcuts out of slot swapping.** `modified_palette_swap_keys_do_not_swap_slots` sends Ctrl/Command/Mac Command/Shift/Alt+S and +X through the production empty-search handler with two slots selected, injecting a callback that asserts no swap is requested. Clipboard state, selection, mirror flag, and status remain unchanged; even a regression cannot contact a daemon from this test.
-  - [ ] **H2.3h [Primary] Pass parity-ledger output scenarios.**
-  - [ ] **H2.3i [Primary] Pass parity-ledger return-destination scenarios.**
-- **H2.4 Reusable preview hosting**
+    - [x] **H2.3g6 [Luna] Keep modified S/X shortcuts out of slot swapping.** `modified_palette_swap_keys_do_not_swap_slots` injects a callback that asserts Ctrl/Command/Mac Command/Shift/Alt+S and +X never request a swap. Clipboard state, selection, mirror flag, and status remain unchanged; even a regression cannot contact a daemon from this test.
+    - [x] **H2.3g7 [Primary] Verify eligible Palette S/X shortcuts each dispatch one swap callback.** `unmodified_palette_swap_shortcuts_request_one_slot_swap` verifies exactly one callback for S and one for X; it does not establish item-identity exchange or contact a daemon.
+    - **Quick Palette and appearance**
+      - [ ] **H2.3g8 Verify Palette F1 opens Node Machine.** Confirm the destination view.
+      - [ ] **H2.3g9 Verify Palette F3 opens Auto Actions.** Confirm the destination view.
+      - [ ] **H2.3g10 Verify Palette F4 changes the shared appearance.** Confirm Light/Dark changes in both workbench and little-screen display.
+      - [ ] **H2.3g11 Verify Palette F6 changes the shared appearance.** Confirm Light/Dark changes in both workbench and little-screen display.
+      - [ ] **H2.3g12 Verify Palette Enter activates the highlighted result.** Confirm the selected action's declared result or destination.
+      - [ ] **H2.3g13 Verify Palette shortcuts yield to a focused search field.** Confirm typed shortcut characters do not change slots or view.
+    - **Image Studio**
+      - [ ] **H2.3g14 Verify Image Studio V selects View.** Confirm the active tool indicator.
+      - [ ] **H2.3g15 Verify Image Studio Crop Enter applies the crop.** Confirm output dimensions match the selected region.
+      - [ ] **H2.3g16 Verify Image Studio Redact Escape clears the active redaction stage.** Confirm no unrequested burn occurs.
+    - **Audio surfaces**
+      - [ ] **H2.3g17 Verify Audio Inspect Space toggles playback.** Confirm the transport state changes.
+      - [ ] **H2.3g18 Verify Audio HF Space yields to focused text input.** Confirm playback does not start while a text field owns focus.
+      - [ ] **H2.3g19 Verify Stems Space starts separation only when eligible.** Confirm one job starts from idle empty state.
+      - [ ] **H2.3g20 Verify Rolling Audio F5 refreshes the snapshot.** Confirm the displayed capture changes.
+    - **Preview and comparison surfaces**
+      - [ ] **H2.3g21 Verify Text Preview Command+F opens and focuses Find.** Confirm the query field owns focus.
+      - [ ] **H2.3g22 Verify Text/Image Diff Tab changes the displayed mode.** Confirm the mode indicator.
+      - [ ] **H2.3g23 Verify Binary Diff J selects the next difference.** Confirm the selected difference changes.
+      - [ ] **H2.3g24 Verify PDF R rotates the selected page clockwise.** Confirm its orientation changes.
+      - [ ] **H2.3g25 Verify Spreadsheet Escape follows filter-focus precedence.** Confirm whether filter or viewer closes first.
+      - [ ] **H2.3g26 Verify MIDI Space toggles playback.** Confirm the transport state changes.
+      - [ ] **H2.3g27 Verify 3D Escape closes the viewer while idle.** Confirm return to the originating view.
+    - **Node Machine and prompts**
+      - [ ] **H2.3g28 Verify Node Machine Tab returns to Palette.** Confirm the destination view.
+      - [ ] **H2.3g29 Verify Node Machine Escape cancels its open modal.** Confirm the canvas remains open.
+      - [ ] **H2.3g30 Verify recipe-prompt Enter submits the focused value once.** Confirm the prompt result and destination.
+  - **H2.3h Output and destination scenarios from the parity ledger (runtime acceptance remains open).** Each checkbox covers one surface-owned output action; use scratch destinations and verify payload/path, source mutation, and errors as applicable.
+    - **Quick Palette**
+      - [ ] **H2.3h1 Verify the unit preview Copy action writes its displayed value to the clipboard.** Confirm exact text.
+      - [ ] **H2.3h2 Verify link cleaning writes the cleaned URL to the active hand.** Confirm the resulting slot payload.
+      - [ ] **H2.3h3 Verify link cleaning preserves the original URL in Undo.** Confirm the Undo payload.
+    - **Image Studio**
+      - [ ] **H2.3h4 Verify Pick Color Copy Hex writes the sampled hex value to the clipboard.** Confirm exact text.
+      - [ ] **H2.3h5 Verify Palette Export CSV writes the selected palette.** Confirm CSV fields and values.
+      - [ ] **H2.3h6 Verify Convert Save As writes the chosen format to the selected path.** Confirm encoding and source remains unchanged.
+      - [ ] **H2.3h7 Verify OCR Copy All writes recognized text to the clipboard.** Confirm exact text.
+      - [ ] **H2.3h8 Verify Barcode selected-payload Copy writes that code to the clipboard.** Confirm exact payload.
+      - [ ] **H2.3h9 Verify Background Removal Copy Left writes its result to Left Hand.** Confirm image payload.
+      - [ ] **H2.3h10 Verify Metadata Copy writes the selected fields to the clipboard.** Confirm exact text.
+    - **Audio surfaces**
+      - [ ] **H2.3h11 Verify Audio Inspect copy-selected-left writes mono audio to the declared destination.** Confirm payload and slot/clipboard result.
+      - [ ] **H2.3h12 Verify Audio Inspect waveform image Copy writes an image payload.** Confirm MIME and rendered pixels.
+      - [ ] **H2.3h13 Verify Audio Inspect Save As writes the chosen audio file.** Confirm filename and contents.
+      - [ ] **H2.3h14 Verify Stems Save All writes every stem to the chosen directory.** Confirm declared filenames and contents.
+      - [ ] **H2.3h15 Verify Digital Decode Copy writes the transcript to the clipboard.** Confirm exact text.
+      - [ ] **H2.3h16 Verify Rolling Audio Copy writes the selected range to its declared destination.** Confirm payload and destination.
+      - [ ] **H2.3h17 Verify Audio HF produces no file output.** Confirm mode/display interaction does not create or claim an output file.
+    - **Preview and comparison surfaces**
+      - [ ] **H2.3h18 Verify Text Preview Copy All writes the full source text.** Confirm exact clipboard payload.
+      - [ ] **H2.3h19 Verify Text/Image Diff text copy writes ANSI-stripped diff text.** Confirm clipboard contents.
+      - [ ] **H2.3h20 Verify Text/Image Diff image copy writes the generated mask.** Confirm image MIME and pixels.
+      - [ ] **H2.3h21 Verify Binary Diff Summary copies its displayed text.** Confirm clipboard contents.
+      - [ ] **H2.3h22 Verify PDF rotation writes the declared sibling file and adopts its path.** Confirm persisted page orientation and active path.
+      - [ ] **H2.3h23 Verify Spreadsheet Copy Table writes active-sheet TSV.** Confirm tabs, newlines, and paste fidelity.
+      - [ ] **H2.3h24 Verify MIDI full-score copy writes parseable MIDI to Left Hand.** Confirm the slot payload.
+      - [ ] **H2.3h25 Verify 3D viewing creates no file output.** Confirm inspection does not mutate or write the source model.
+    - **Node Machine and external handoffs**
+      - [ ] **H2.3h26 Verify Node Machine Save As writes a reloadable recipe.** Confirm file contents and graph round trip.
+      - [ ] **H2.3h27 Verify Node Machine RUN publishes its declared output slot.** Confirm slot payload.
+      - [ ] **H2.3h28 Verify Image Studio Krita handoff receives the current artifact.** Confirm launch arguments and file contents.
+      - [ ] **H2.3h29 Verify Image Studio Inkscape handoff receives the current artifact.** Confirm launch arguments and file contents.
+      - [ ] **H2.3h30 Verify Image Studio viewer handoff receives the current artifact.** Confirm launch arguments and file contents.
+      - [ ] **H2.3h31 Verify unavailable Image Studio Krita reports failure.** Confirm visible status when its executable is missing.
+  - **H2.3i Return-destination scenarios from the parity ledger (runtime acceptance remains open).** Tests and captures are scoped evidence, not full-view sign-off; verify the actual route and retained state for each listed scenario.
+    - **Workbench and Quick Palette**
+      - [ ] **H2.3i1 Verify closing a startup viewer advances to the next queued viewer.** Confirm FIFO order.
+      - [ ] **H2.3i2 Verify closing the final queued viewer returns to the selected workbench view.** Confirm destination.
+      - [ ] **H2.3i3 Verify recipe-prompt Escape returns to the same Palette query.** Confirm the query remains available.
+      - [ ] **H2.3i4 Verify successful recipe-prompt submission returns to Palette.** Confirm the resulting view.
+    - **Image and audio surfaces**
+      - [ ] **H2.3i5 Verify Image Studio Escape returns to its originating workbench state.** Confirm the same item and edit session remain available.
+      - [ ] **H2.3i6 Verify returning from Krita restores the same Image Studio edit session.** Confirm pixels and undo history.
+      - [ ] **H2.3i7 Verify returning from Inkscape restores the same Image Studio edit session.** Confirm pixels and undo history.
+      - [ ] **H2.3i8 Verify returning from the image viewer restores the same Image Studio edit session.** Confirm pixels and undo history.
+      - [ ] **H2.3i9 Verify Audio Inspect Escape stops playback and returns to Palette.** Confirm workbench route and selection.
+      - [ ] **H2.3i10 Verify Audio HF Escape stops playback and returns to Palette.** Confirm workbench route and selection.
+      - [ ] **H2.3i11 Verify Stems Escape while idle returns to its originating view.** Confirm session state remains available.
+      - [ ] **H2.3i12 Verify Stems Escape while running preserves a recoverable session.** Confirm job/session state.
+      - [ ] **H2.3i13 Verify Rolling Audio right-click opens the editor at the selected range.** Confirm range and source identity.
+    - **Preview and comparison surfaces**
+      - [ ] **H2.3i14 Verify Text Preview Escape with no field focused returns to its source view.** Confirm route and selected slots.
+      - [ ] **H2.3i15 Verify Text Preview Escape with Find focused hides Find first.** Confirm the viewer remains open.
+      - [ ] **H2.3i16 Verify returning from the text external editor restores the same source view.** Confirm path and search/scroll state.
+      - [ ] **H2.3i17 Verify Text/Image Diff Escape returns to its originating view.** Confirm source operands remain selected.
+      - [ ] **H2.3i18 Verify Binary Diff Escape with search focused follows documented focus precedence.** Confirm the first Escape is consumed by the focused search.
+      - [ ] **H2.3i19 Verify Binary Diff Escape after search focus clears returns to its source view.** Confirm source operands remain selected.
+      - [ ] **H2.3i20 Verify PDF Escape while idle returns to its source view.** Confirm the active edited path remains selected.
+      - [ ] **H2.3i21 Verify PDF Escape during an edit preserves the active document state.** Confirm completion/cancellation feedback.
+      - [ ] **H2.3i22 Verify Spreadsheet Escape with filter focused follows documented focus precedence.** Confirm the first Escape does not lose the viewer unexpectedly.
+      - [ ] **H2.3i23 Verify MIDI Escape clears selection before viewer close.** Confirm the first Escape retains the viewer.
+      - [ ] **H2.3i24 Verify MIDI Escape after selection clears returns to its source view.** Confirm route and selected slots.
+      - [ ] **H2.3i25 Verify 3D Escape while loading returns without stale viewer publication.** Confirm active route and session.
+      - [ ] **H2.3i26 Verify 3D Escape while idle returns to its source view.** Confirm route and selected slots.
+    - **Node Machine and dialogs**
+      - [ ] **H2.3i27 Verify Node Machine Escape during a node drag cancels the drag.** Confirm the node position remains unchanged.
+      - [ ] **H2.3i28 Verify Node Machine Escape from a modal returns to the canvas.** Confirm graph and route remain available.
+      - [ ] **H2.3i29 Verify cancelling Save As returns to the unchanged Node Machine graph.** Confirm no file or graph mutation.
+      - [ ] **H2.3i30 Verify a focused prompt consumes Escape before viewer close.** Confirm the prompt cancels and owning view remains open.
+
   - [ ] **H2.4a [Primary] Separate decoded source data from preview view state.**
   - [ ] **H2.4b [Primary] Separate editor state from decoded source data.**
   - [ ] **H2.4c [Primary] Render multiple independent inline previews from shared data where safe.**
