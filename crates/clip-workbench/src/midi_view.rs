@@ -1638,6 +1638,64 @@ mod tests {
     }
 
     #[test]
+    fn midi_escape_clears_selected_region_before_closing_viewer() {
+        let data = MidiData {
+            title: "Escape selection test".to_string(),
+            track_count: 1,
+            track_names: vec!["Track".to_string()],
+            total_notes: 0,
+            duration_sec: 4.0,
+            bpm: 120.0,
+            min_key: 60,
+            max_key: 60,
+            notes: Vec::new(),
+        };
+        let mut state = MidiViewerState::from_data(data, None, "Escape selection test".to_string());
+        state.selected_region = Some((0.5, 2.5));
+        state.play_stop_time = Some(2.5);
+        // Model an active transport without audio resources so an accidental stop
+        // transition is observable, while this regression cannot emit audio.
+        state.is_playing = true;
+        state.playback_start_instant = None;
+        state.player = None;
+        state._sink = None;
+
+        let palette = AppPalette::for_appearance(WorkbenchAppearance::Dark);
+        let mut close_requested = false;
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, &palette, &mut close_requested);
+                });
+            },
+        );
+
+        assert!(state.selected_region.is_none());
+        assert!(state.play_stop_time.is_none());
+        assert!(
+            !close_requested,
+            "first Escape clears the region, not viewer"
+        );
+        assert!(
+            state.is_playing,
+            "clearing selection must not stop transport"
+        );
+        assert!(state.player.is_none());
+        assert!(state._sink.is_none());
+    }
+
+    #[test]
     fn piano_roll_pitch_labels_thin_out_before_lanes_get_too_short() {
         let label_height = crate::ui_ext::MONO_FONT_SIZE;
         assert!(should_draw_pitch_label(

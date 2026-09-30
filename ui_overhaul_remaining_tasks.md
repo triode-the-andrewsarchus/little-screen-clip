@@ -716,7 +716,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [ ] **H2.3i20 Verify PDF Escape while idle returns to its source view.** Confirm the active edited path remains selected.
       - [ ] **H2.3i21 Verify PDF Escape during an edit preserves the active document state.** Confirm completion/cancellation feedback.
       - [ ] **H2.3i22 Verify Spreadsheet Escape with filter focused follows documented focus precedence.** Confirm the first Escape does not lose the viewer unexpectedly.
-      - [ ] **H2.3i23 Verify MIDI Escape clears selection before viewer close.** Confirm the first Escape retains the viewer.
+      - [x] **H2.3i23 [Primary] Verify MIDI Escape clears selected region before viewer close.** `midi_escape_clears_selected_region_before_closing_viewer` sends Escape through rendered `MidiViewerState` with a region and stop bound selected, confirms both clear while the close flag remains false, and verifies a synthetic active transport is unchanged with Player/sink disabled. No audio output is created; workbench return remains under i24.
       - [ ] **H2.3i24 Verify MIDI Escape after selection clears returns to its source view.** Confirm route and selected slots.
       - [ ] **H2.3i25 Verify 3D Escape while loading returns without stale viewer publication.** Confirm active route and session.
       - [ ] **H2.3i26 Verify 3D Escape while idle returns to its source view.** Confirm route and selected slots.
