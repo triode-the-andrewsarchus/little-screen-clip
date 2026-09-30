@@ -9,12 +9,13 @@ use eframe::egui::{self, FontId, Rounding, Stroke, TextStyle, Vec2};
 use little_clip_ops::spreadsheet::{SpreadsheetData, SpreadsheetSheet};
 use std::ops::Range;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// Interactive UI state for multi-sheet spreadsheet data tables and search filters.
 pub struct SpreadsheetViewerState {
     pub title: String,
     pub path: Option<PathBuf>,
-    pub data: SpreadsheetData,
+    pub data: Arc<SpreadsheetData>,
     pub active_sheet_idx: usize,
     pub search_query: String,
     pub selected_cell: Option<(usize, usize)>, // (row, col)
@@ -90,6 +91,11 @@ pub fn col_label(mut idx: usize) -> String {
 impl SpreadsheetViewerState {
     /// Creates a new spreadsheet viewer state from parsed spreadsheet data.
     pub fn new(data: SpreadsheetData, path: Option<PathBuf>) -> Self {
+        Self::from_shared(Arc::new(data), path)
+    }
+
+    /// Creates an independent viewer state from shared parsed workbook data.
+    pub fn from_shared(data: Arc<SpreadsheetData>, path: Option<PathBuf>) -> Self {
         let title = data.title.clone();
         let column_width_cache = vec![None; data.sheets.len()];
         Self {
@@ -714,6 +720,29 @@ impl SpreadsheetViewerState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn independent_spreadsheet_views_share_data_and_keep_navigation_separate() {
+        let source = Arc::new(SpreadsheetData {
+            title: "Shared workbook".into(),
+            sheets: vec![SpreadsheetSheet::new(
+                "Data".into(),
+                vec![vec!["Name".into()], vec!["Shared cell".into()]],
+            )],
+        });
+        let mut first = SpreadsheetViewerState::from_shared(Arc::clone(&source), None);
+        let second = SpreadsheetViewerState::from_shared(Arc::clone(&source), None);
+
+        assert!(Arc::ptr_eq(&first.data, &second.data));
+        assert!(Arc::ptr_eq(&first.data, &source));
+        first.search_query = "shared".into();
+        first.selected_cell = Some((1, 0));
+        first.scroll_offset = Vec2::new(40.0, 80.0);
+
+        assert!(second.search_query.is_empty());
+        assert_eq!(second.selected_cell, None);
+        assert_eq!(second.scroll_offset, Vec2::ZERO);
+    }
 
     #[test]
     fn escape_clears_spreadsheet_search_before_closing_viewer() {
