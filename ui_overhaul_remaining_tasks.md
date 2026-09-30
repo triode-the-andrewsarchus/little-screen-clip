@@ -624,7 +624,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **H2.3g12 [Primary] Verify Palette Enter opens the selected recipe prompt while search is focused.** `quick_palette_enter_executes_prompt_recipe_while_search_is_focused` exercises production Enter handling and confirms the recipe prompt opens without running a daemon action.
       - [ ] **H2.3g13 Verify Palette shortcuts yield to a focused search field.** Confirm typed shortcut characters do not change slots or view.
     - **Image Studio**
-      - [ ] **H2.3g14 Verify Image Studio V selects View.** Confirm the active tool indicator.
+      - [x] **H2.3g14 [Primary] Verify Image Studio V selects View from Crop mode.** `unmodified_v_shortcut_selects_view_tool` sends an unmodified V through rendered `ImagePreviewState::render_ui`, confirms `active_mode` becomes View, and verifies the studio does not close. It covers this unfocused, no-modal path only; no external process or daemon is involved.
       - [ ] **H2.3g15 Verify Image Studio Crop Enter applies the crop.** Confirm output dimensions match the selected region.
       - [ ] **H2.3g16 Verify Image Studio Redact Escape clears the active redaction stage.** Confirm no unrequested burn occurs.
     - **Audio surfaces**
