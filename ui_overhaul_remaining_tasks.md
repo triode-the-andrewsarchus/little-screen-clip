@@ -634,7 +634,7 @@ Status: open. Task tree reviewed 2026-09-27; E1 baseline inventory closed with t
       - [x] **H2.3g19 [Primary] Verify eligible Stems Space dispatches one start request.** `stem_space_dispatches_one_start_for_idle_empty_state` sends Space through the production shortcut handler with an idle empty Stems state and an injected counter callback; exactly one request is made. The callback does not launch a worker or job.
       - [ ] **H2.3g20 Verify Rolling Audio F5 refreshes the snapshot.** Confirm the displayed capture changes.
     - **Preview and comparison surfaces**
-      - [ ] **H2.3g21 Verify Text Preview Command+F opens and focuses Find.** Confirm the query field owns focus.
+      - [x] **H2.3g21 [Primary] Verify Text Preview Command+F opens and focuses Find.** Existing `find_shortcut_focuses_search_and_escape_dismisses_only_find` sends Command+F through `TextPreviewState::handle_shortcuts`, renders the Find toolbar, and asserts keyboard input focus is requested by the search editor. Its paired `find_shortcut_yields_to_focused_text_control` confirms an already focused text control retains ownership.
       - [ ] **H2.3g22 Verify Text/Image Diff Tab changes the displayed mode.** Confirm the mode indicator.
       - [ ] **H2.3g23 Verify Binary Diff J selects the next difference.** Confirm the selected difference changes.
       - [ ] **H2.3g24 Verify PDF R rotates the selected page clockwise.** Confirm its orientation changes.
