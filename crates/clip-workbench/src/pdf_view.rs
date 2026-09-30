@@ -15,7 +15,7 @@ use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, TryRecvError, channel, sync_channel};
+use std::sync::mpsc::{Receiver, TryRecvError, sync_channel};
 use std::time::Duration;
 
 const PREVIEW_QUEUE_CAPACITY: usize = 3;
@@ -312,7 +312,8 @@ pub struct PdfEditorState {
     preview_job: Option<(JobTicket, Receiver<Result<(), JobError>>)>,
     preview_cancel: Option<Arc<AtomicBool>>,
     previews_loading: bool,
-    edit_rx: Option<Receiver<PdfEditMsg>>,
+    edit_rx: Option<Receiver<Result<PdfEditMsg, JobError>>>,
+    edit_ticket: Option<JobTicket>,
     edit_in_progress: bool,
     raster_cache: Option<std::sync::Arc<tempfile::TempDir>>,
     texture_frame: u64,
@@ -354,6 +355,7 @@ impl PdfEditorState {
             preview_cancel: None,
             previews_loading: false,
             edit_rx: None,
+            edit_ticket: None,
             edit_in_progress: false,
             raster_cache: None,
             texture_frame: 0,
@@ -368,6 +370,7 @@ impl PdfEditorState {
         if let Some((ticket, _)) = self.info_job.take() {
             ticket.cancel();
         }
+        self.cancel_edit_worker();
         self.cancel_preview_worker();
         self.raster_cache = None;
         if let Some(job) = &mut self.decode_job {
@@ -729,6 +732,29 @@ impl PdfEditorState {
     }
 
     fn start_edit(&mut self, operation: &'static str, page_num: usize, degrees: u32, now: f64) {
+        self.start_edit_on(
+            BackgroundJobs::global(),
+            operation,
+            page_num,
+            now,
+            move |input, staged_output| match operation {
+                "delete" => delete_pdf_pages(input, &[page_num], staged_output),
+                "rotate" => rotate_pdf_page(input, page_num, degrees, staged_output),
+                _ => Err("Unknown PDF edit operation".to_string()),
+            },
+        );
+    }
+
+    fn start_edit_on<F>(
+        &mut self,
+        jobs: &BackgroundJobs,
+        operation: &'static str,
+        page_num: usize,
+        now: f64,
+        perform_edit: F,
+    ) where
+        F: FnOnce(&Path, &Path) -> Result<(), String> + Send + 'static,
+    {
         if self.edit_in_progress {
             self.status_toast
                 .set("A PDF edit is already in progress", now);
@@ -751,8 +777,31 @@ impl PdfEditorState {
         let expected_page_count = self
             .page_count
             .saturating_sub(usize::from(operation == "delete"));
-        let (tx, rx) = channel();
+        let (ticket, rx) = jobs.submit(Duration::MAX, move || {
+            let staged_output = staging_dir.path().join(STAGED_PDF_FILENAME);
+            let result = perform_edit(&input, &staged_output).and_then(|()| {
+                if !staged_output.is_file() {
+                    return Err("PDF operation produced no output file".to_string());
+                }
+                let info = get_pdf_info(&staged_output)?;
+                if info.page_count != expected_page_count {
+                    return Err(format!(
+                        "Edited PDF has {} pages; expected {}",
+                        info.page_count, expected_page_count
+                    ));
+                }
+                render_pdf_page_preview(&staged_output, 1, 64).map(|_| ())
+            });
+            PdfEditMsg {
+                operation,
+                page_num,
+                output,
+                staging_dir,
+                result,
+            }
+        });
         self.edit_in_progress = true;
+        self.edit_ticket = Some(ticket);
         self.edit_rx = Some(rx);
         self.status_toast.set(
             format!(
@@ -766,41 +815,30 @@ impl PdfEditorState {
             ),
             now,
         );
-        std::thread::spawn(move || {
-            let staged_output = staging_dir.path().join(STAGED_PDF_FILENAME);
-            let result = match operation {
-                "delete" => delete_pdf_pages(&input, &[page_num], &staged_output),
-                "rotate" => rotate_pdf_page(&input, page_num, degrees, &staged_output),
-                _ => Err("Unknown PDF edit operation".to_string()),
-            }
-            .and_then(|()| {
-                if !staged_output.is_file() {
-                    return Err("PDF operation produced no output file".to_string());
-                }
-                let info = get_pdf_info(&staged_output)?;
-                if info.page_count != expected_page_count {
-                    return Err(format!(
-                        "Edited PDF has {} pages; expected {}",
-                        info.page_count, expected_page_count
-                    ));
-                }
-                render_pdf_page_preview(&staged_output, 1, 64).map(|_| ())
-            });
-            let _ = tx.send(PdfEditMsg {
-                operation,
-                page_num,
-                output,
-                staging_dir,
-                result,
-            });
-        });
+    }
+
+    fn cancel_edit_worker(&mut self) {
+        if let Some(ticket) = self.edit_ticket.take() {
+            ticket.cancel();
+        }
+        self.edit_rx = None;
+        self.edit_in_progress = false;
     }
 
     fn poll_edit_worker(&mut self, ctx: &egui::Context, now: f64) {
         let message = match self.edit_rx.as_ref().map(|rx| rx.try_recv()) {
-            Some(Ok(message)) => Some(message),
+            Some(Ok(Ok(message))) => Some(message),
+            Some(Ok(Err(error))) => {
+                self.edit_rx = None;
+                self.edit_ticket = None;
+                self.edit_in_progress = false;
+                self.status_toast
+                    .set(format!("PDF edit unavailable: {error}"), now);
+                return;
+            }
             Some(Err(TryRecvError::Disconnected)) => {
                 self.edit_rx = None;
+                self.edit_ticket = None;
                 self.edit_in_progress = false;
                 self.status_toast.set("PDF edit worker disconnected", now);
                 return;
@@ -809,6 +847,7 @@ impl PdfEditorState {
         };
         if let Some(message) = message {
             self.edit_rx = None;
+            self.edit_ticket = None;
             self.edit_in_progress = false;
             let result = message.result.and_then(|()| {
                 std::fs::rename(
@@ -1341,6 +1380,7 @@ where
 
 impl Drop for PdfEditorState {
     fn drop(&mut self) {
+        self.cancel_edit_worker();
         self.cancel_preview_worker();
         if let Some(job) = &mut self.decode_job {
             job.cancel();
@@ -1354,6 +1394,7 @@ impl Drop for PdfEditorState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc::channel;
 
     fn action_guard_state(
         path: PathBuf,
@@ -1446,6 +1487,7 @@ mod tests {
             preview_cancel: None,
             previews_loading: false,
             edit_rx: None,
+            edit_ticket: None,
             edit_in_progress: false,
             raster_cache: Some(raster_cache),
             texture_frame: 0,
@@ -2232,6 +2274,7 @@ mod tests {
                 preview_cancel: None,
                 previews_loading: false,
                 edit_rx: None,
+                edit_ticket: None,
                 edit_in_progress: false,
                 raster_cache: None,
                 texture_frame: 0,
@@ -2393,6 +2436,129 @@ mod tests {
     }
 
     #[test]
+    fn saturated_pdf_edit_queue_reports_error_and_cleans_staging() {
+        let temp = tempfile::tempdir().unwrap();
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let (_, blocker_rx) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        let (_, queued_rx) = jobs.submit(Duration::MAX, || ());
+
+        let mut state = action_guard_state(temp.path().join("fixture.pdf"), 2, Some(1));
+        state.start_edit_on(&jobs, "rotate", 1, 1.0, |_, _| {
+            panic!("full queue must not run a PDF edit")
+        });
+        state.poll_edit_worker(&egui::Context::default(), 1.0);
+        assert!(!state.edit_in_progress);
+        assert!(state.edit_ticket.is_none());
+        assert!(state.edit_rx.is_none());
+        assert_eq!(
+            state.status_toast.message(1.0),
+            Some("PDF edit unavailable: background job queue is full")
+        );
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        queued_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+    }
+
+    #[test]
+    fn dropping_editor_cancels_queued_pdf_edit_before_dispatch() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let temp = tempfile::tempdir().unwrap();
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let (_, blocker_rx) = jobs.submit(Duration::MAX, move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let worker_calls = Arc::clone(&calls);
+        let mut state = action_guard_state(temp.path().join("fixture.pdf"), 2, Some(1));
+        state.start_edit_on(&jobs, "rotate", 1, 1.0, move |_, _| {
+            worker_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        });
+        assert!(state.edit_in_progress);
+        drop(state);
+
+        release_tx.send(()).unwrap();
+        blocker_rx
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            let (_, rx) = jobs.submit(Duration::MAX, || ());
+            match rx.recv_timeout(Duration::from_secs(1)).unwrap() {
+                Ok(()) => break,
+                Err(JobError::QueueFull) if std::time::Instant::now() < deadline => {
+                    std::thread::yield_now();
+                }
+                result => panic!("sentinel job failed: {result:?}"),
+            }
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        assert!(!temp.path().join("fixture.rotate.edited.pdf").exists());
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn closing_editor_during_active_pdf_edit_keeps_existing_sibling_output() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("fixture.pdf");
+        let output = temp.path().join("fixture.rotate.edited.pdf");
+        write_two_page_pdf(&source);
+        std::fs::write(&output, b"previous edit").unwrap();
+        let jobs = BackgroundJobs::new(1, 1);
+        let (started_tx, started_rx) = channel();
+        let (release_tx, release_rx) = channel();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let worker_calls = Arc::clone(&calls);
+        let mut state = action_guard_state(source.clone(), 2, Some(2));
+        state.start_edit_on(&jobs, "rotate", 2, 1.0, move |_, staged_output| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            worker_calls.fetch_add(1, Ordering::SeqCst);
+            write_two_page_pdf(staged_output);
+            Ok(())
+        });
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        drop(state);
+
+        let (_, sentinel_rx) = jobs.submit(Duration::MAX, || ());
+        release_tx.send(()).unwrap();
+        sentinel_rx
+            .recv_timeout(Duration::from_secs(15))
+            .unwrap()
+            .unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(std::fs::read(&output).unwrap(), b"previous edit");
+        assert!(
+            std::fs::read_dir(temp.path())
+                .unwrap()
+                .all(|entry| entry.unwrap().path().is_file())
+        );
+    }
+
+    #[test]
     fn pdf_delete_and_rotate_without_selection_do_not_dispatch_edits() {
         let temp = tempfile::tempdir().unwrap();
         let mut state = action_guard_state(temp.path().join("fixture.pdf"), 2, None);
@@ -2424,13 +2590,13 @@ mod tests {
         assert!(state.edit_rx.is_some());
         assert!(
             sender
-                .send(PdfEditMsg {
+                .send(Ok(PdfEditMsg {
                     operation: "sentinel",
                     page_num: 2,
                     output: temp.path().join("untouched.pdf"),
                     staging_dir,
                     result: Err("sentinel only".into()),
-                })
+                }))
                 .is_ok(),
             "the original edit receiver should remain connected"
         );
@@ -2688,13 +2854,13 @@ mod tests {
         );
 
         sender
-            .send(PdfEditMsg {
+            .send(Ok(PdfEditMsg {
                 operation: "rotate",
                 page_num: 1,
                 output: temp.path().join("source.rotate.edited.pdf"),
                 staging_dir: tempfile::tempdir_in(temp.path()).unwrap(),
                 result: Err("synthetic worker failure".to_owned()),
-            })
+            }))
             .unwrap();
         let _ = ctx.run(
             egui::RawInput {
@@ -2807,13 +2973,13 @@ mod tests {
         let (sender, receiver) = channel();
         state.edit_rx = Some(receiver);
         sender
-            .send(PdfEditMsg {
+            .send(Ok(PdfEditMsg {
                 operation: "rotate",
                 page_num: 1,
                 output: output.clone(),
                 staging_dir,
                 result: Ok(()),
-            })
+            }))
             .unwrap();
         drop(state);
 
@@ -2834,13 +3000,13 @@ mod tests {
         state.edit_rx = Some(receiver);
         state.edit_in_progress = true;
         sender
-            .send(PdfEditMsg {
+            .send(Ok(PdfEditMsg {
                 operation: "rotate",
                 page_num: 1,
                 output: output.clone(),
                 staging_dir,
                 result: Err("render failed".to_owned()),
-            })
+            }))
             .unwrap();
 
         let ctx = egui::Context::default();
@@ -2864,13 +3030,13 @@ mod tests {
         state.edit_rx = Some(receiver);
         state.edit_in_progress = true;
         sender
-            .send(PdfEditMsg {
+            .send(Ok(PdfEditMsg {
                 operation: "rotate",
                 page_num: 1,
                 output: output.clone(),
                 staging_dir,
                 result: Ok(()),
-            })
+            }))
             .unwrap();
 
         let ctx = egui::Context::default();
