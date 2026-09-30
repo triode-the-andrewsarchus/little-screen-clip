@@ -10,8 +10,87 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-static MODEL_CACHE: Mutex<Option<HashMap<PathBuf, (SystemTime, u64, Arc<Model3d>)>>> =
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileRevision {
+    modified: SystemTime,
+    len: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModelCacheIdentity {
+    source: FileRevision,
+    dependencies: Vec<(PathBuf, FileRevision)>,
+}
+
+static MODEL_CACHE: Mutex<Option<HashMap<PathBuf, (ModelCacheIdentity, Arc<Model3d>)>>> =
     Mutex::new(None);
+
+fn file_revision(path: &Path) -> Option<FileRevision> {
+    let metadata = std::fs::metadata(path).ok()?;
+    Some(FileRevision {
+        modified: metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH),
+        len: metadata.len(),
+    })
+}
+
+/// Returns the metadata revisions which affect a file-backed model. Unknown or
+/// non-local glTF buffer and image URIs disable caching so they cannot produce
+/// stale hits.
+fn model_cache_identity(path: &Path) -> Option<ModelCacheIdentity> {
+    let source = file_revision(path)?;
+    let mut dependencies = Vec::new();
+
+    let extension = path.extension().and_then(|ext| ext.to_str());
+    if extension.is_some_and(|ext| ext.eq_ignore_ascii_case("glb")) {
+        // GLB dependency URIs live in its JSON chunk; until that chunk is
+        // inspected, only caching by the container file can return stale data.
+        return None;
+    }
+
+    if extension.is_some_and(|ext| ext.eq_ignore_ascii_case("gltf")) {
+        let source_bytes = std::fs::read(path).ok()?;
+        let document: serde_json::Value = serde_json::from_slice(&source_bytes).ok()?;
+        let base_dir = path.parent().unwrap_or_else(|| Path::new("./"));
+        for dependency_group in ["buffers", "images"] {
+            let Some(entries) = document
+                .get(dependency_group)
+                .and_then(serde_json::Value::as_array)
+            else {
+                continue;
+            };
+            for entry in entries {
+                let Some(uri) = entry.get("uri").and_then(serde_json::Value::as_str) else {
+                    // Embedded buffers and bufferView-backed images have no
+                    // separate external revision; their data belongs to a
+                    // captured buffer or to the source GLB.
+                    continue;
+                };
+                if uri.starts_with("data:") {
+                    continue;
+                }
+                // The glTF importer percent-decodes relative URIs before
+                // joining them to the source directory. URL joining would
+                // instead treat '?' and '#' as query/fragment delimiters, and
+                // file: handling has separate semantics. Skip these unusual
+                // forms rather than fingerprinting a possibly different file.
+                if uri
+                    .chars()
+                    .any(|character| matches!(character, ':' | '?' | '#' | '%'))
+                {
+                    return None;
+                }
+                let dependency_path = base_dir.join(uri);
+                let revision = file_revision(&dependency_path)?;
+                dependencies.push((dependency_path, revision));
+            }
+        }
+    }
+
+    Some(ModelCacheIdentity {
+        source,
+        dependencies,
+    })
+}
 
 /// 3-dimensional single-precision floating point vector for 3D coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -232,16 +311,15 @@ impl Model3d {
     /// continuous animation / turntable rendering.
     pub fn load_cached<P: AsRef<Path>>(path: P) -> Result<Arc<Self>, String> {
         let path = path.as_ref();
-        let meta = std::fs::metadata(path).map_err(|e| e.to_string())?;
-        let mtime = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
-        let len = meta.len();
-
         let path_buf = path.to_path_buf();
+        let identity = model_cache_identity(path);
         {
             let mut guard = MODEL_CACHE.lock().unwrap_or_else(|p| p.into_inner());
             let cache = guard.get_or_insert_with(HashMap::new);
-            if let Some((cached_mtime, cached_len, cached_model)) = cache.get(&path_buf) {
-                if *cached_mtime == mtime && *cached_len == len {
+            if let (Some(identity), Some((cached_identity, cached_model))) =
+                (identity.as_ref(), cache.get(&path_buf))
+            {
+                if cached_identity == identity {
                     return Ok(Arc::clone(cached_model));
                 }
             }
@@ -254,7 +332,11 @@ impl Model3d {
             if cache.len() > 16 {
                 cache.clear();
             }
-            cache.insert(path_buf, (mtime, len, Arc::clone(&model)));
+            if let Some(identity) = identity {
+                cache.insert(path_buf, (identity, Arc::clone(&model)));
+            } else {
+                cache.remove(&path_buf);
+            }
         }
         Ok(model)
     }
@@ -622,6 +704,143 @@ endsolid test_cache
         assert!(std::sync::Arc::ptr_eq(&m1, &m2));
 
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn cached_gltf_reloads_when_external_buffer_revision_changes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let gltf_path = temp_dir.path().join("mesh.gltf");
+        let buffer_path = temp_dir.path().join("mesh.bin");
+        let gltf_json = r#"{
+  "asset": { "version": "2.0" },
+  "scenes": [{ "nodes": [0] }],
+  "nodes": [{ "mesh": 0 }],
+  "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 } }] }],
+  "buffers": [{ "uri": "mesh.bin", "byteLength": 36 }],
+  "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 36 }],
+  "accessors": [{
+    "bufferView": 0,
+    "componentType": 5126,
+    "count": 3,
+    "type": "VEC3",
+    "max": [1.0, 1.0, 0.0],
+    "min": [0.0, 0.0, 0.0]
+  }]
+}"#;
+        std::fs::write(&gltf_path, gltf_json).unwrap();
+
+        let write_triangle_buffer = |second_vertex_x: f32| {
+            let mut bytes = Vec::with_capacity(36);
+            for coordinate in [0.0_f32, 0.0, 0.0, second_vertex_x, 0.0, 0.0, 0.0, 1.0, 0.0] {
+                bytes.extend_from_slice(&coordinate.to_le_bytes());
+            }
+            std::fs::write(&buffer_path, bytes).unwrap();
+        };
+        write_triangle_buffer(1.0);
+
+        let first = Model3d::load_cached(&gltf_path).unwrap();
+        assert_eq!(first.triangles.len(), 1);
+        assert_eq!(first.triangles[0].v2.x, 1.0);
+        let cached = Model3d::load_cached(&gltf_path).unwrap();
+        assert!(Arc::ptr_eq(&first, &cached));
+
+        // Ensure the metadata revision changes even on filesystems with coarse
+        // modification-time granularity; the buffer size stays constant.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        write_triangle_buffer(2.0);
+
+        let updated = Model3d::load_cached(&gltf_path).unwrap();
+        assert!(!Arc::ptr_eq(&first, &updated));
+        assert_eq!(updated.triangles[0].v2.x, 2.0);
+    }
+
+    #[test]
+    fn cached_gltf_tracks_external_image_revision_and_bypasses_missing_images() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let gltf_path = temp_dir.path().join("mesh.gltf");
+        let image_path = temp_dir.path().join("texture.png");
+        let gltf_json = r#"{
+  "asset": { "version": "2.0" },
+  "scenes": [{ "nodes": [0] }],
+  "nodes": [{ "mesh": 0 }],
+  "meshes": [{ "primitives": [{ "attributes": { "POSITION": 0 } }] }],
+  "buffers": [{ "uri": "mesh.bin", "byteLength": 36 }],
+  "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 36 }],
+  "accessors": [{
+    "bufferView": 0,
+    "componentType": 5126,
+    "count": 3,
+    "type": "VEC3",
+    "max": [1.0, 1.0, 0.0],
+    "min": [0.0, 0.0, 0.0]
+  }],
+  "images": [{ "uri": "texture.png" }]
+}"#;
+        std::fs::write(&gltf_path, gltf_json).unwrap();
+        let mut buffer = Vec::with_capacity(36);
+        for coordinate in [0.0_f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0] {
+            buffer.extend_from_slice(&coordinate.to_le_bytes());
+        }
+        std::fs::write(temp_dir.path().join("mesh.bin"), buffer).unwrap();
+
+        let write_pixel = |rgba: [u8; 4]| {
+            let image = image::DynamicImage::ImageRgba8(
+                image::RgbaImage::from_raw(1, 1, rgba.to_vec()).unwrap(),
+            );
+            let mut encoded = std::io::Cursor::new(Vec::new());
+            image
+                .write_to(&mut encoded, image::ImageFormat::Png)
+                .unwrap();
+            std::fs::write(&image_path, encoded.into_inner()).unwrap();
+        };
+        write_pixel([255, 0, 0, 255]);
+        let initial_image_len = std::fs::metadata(&image_path).unwrap().len();
+
+        let first = Model3d::load_cached(&gltf_path).unwrap();
+        let cached = Model3d::load_cached(&gltf_path).unwrap();
+        assert!(Arc::ptr_eq(&first, &cached));
+
+        // Keep the image byte length constant while ensuring its metadata
+        // revision changes on filesystems with coarse timestamp granularity.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        write_pixel([0, 255, 0, 255]);
+        assert_eq!(
+            std::fs::metadata(&image_path).unwrap().len(),
+            initial_image_len
+        );
+
+        let updated = Model3d::load_cached(&gltf_path).unwrap();
+        assert!(!Arc::ptr_eq(&first, &updated));
+        assert_eq!(updated.triangles, first.triangles);
+
+        std::fs::remove_file(&image_path).unwrap();
+        assert!(Model3d::load_cached(&gltf_path).is_err());
+    }
+
+    #[test]
+    fn gltf_cache_bypasses_uri_forms_with_importer_specific_resolution() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let gltf_path = temp_dir.path().join("mesh.gltf");
+        std::fs::write(
+            &gltf_path,
+            r#"{
+  "asset": { "version": "2.0" },
+  "buffers": [],
+  "images": [{ "uri": "texture?.png" }]
+}"#,
+        )
+        .unwrap();
+
+        assert!(model_cache_identity(&gltf_path).is_none());
+    }
+
+    #[test]
+    fn glb_cache_identity_is_disabled_until_container_dependencies_are_scanned() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let glb_path = temp_dir.path().join("mesh.glb");
+        std::fs::write(&glb_path, b"glTF").unwrap();
+
+        assert!(model_cache_identity(&glb_path).is_none());
     }
 
     #[test]
