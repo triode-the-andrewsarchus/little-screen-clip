@@ -4179,6 +4179,25 @@ mod workbench_layout_tests {
     }
 
     #[test]
+    fn unmodified_palette_swap_shortcuts_request_one_slot_swap() {
+        for key in [egui::Key::S, egui::Key::X] {
+            let mut app = test_workbench_app(None, VecDeque::new());
+            app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
+            let mut swap_calls = 0;
+
+            let _ = egui::Context::default().run(
+                egui::RawInput {
+                    events: vec![key_press_event(key)],
+                    ..Default::default()
+                },
+                |ctx| app.handle_empty_search_shortcuts_with_swap(ctx, false, |_| swap_calls += 1),
+            );
+
+            assert_eq!(swap_calls, 1, "key {key:?}");
+        }
+    }
+
+    #[test]
     fn palette_action_navigation_wraps_in_both_directions() {
         let mut app = test_workbench_app(None, VecDeque::new());
         for name in ["Navigation Fixture A", "Navigation Fixture B"] {
