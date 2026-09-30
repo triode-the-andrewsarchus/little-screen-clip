@@ -2842,10 +2842,8 @@ impl AudioPreviewState {
             return;
         };
         let analysis = self.edited_waveform.as_ref().unwrap_or(source_analysis);
-        let (font_reg, _, _, font_mono) = little_clip_render::ScreenRenderer::load_fonts();
         let region_edits = self.region_edits();
-
-        match tools::render_waveform_image(
+        match Self::copy_waveform_image_on(
             analysis,
             source_analysis,
             &region_edits,
@@ -2853,27 +2851,23 @@ impl AudioPreviewState {
             self.view_duration_sec,
             self.duration_sec,
             palette,
-            font_mono.as_ref(),
-            font_reg.as_ref(),
-        ) {
-            Ok(png_bytes) => {
-                let req = IpcRequest::PushImage {
-                    bytes: png_bytes.clone(),
-                    mime: "image/png".to_string(),
-                    hand: little_clip_core::HandSide::Left,
-                };
-                let _ = crate::send_ipc_request(&req);
-
-                let bytes_for_cmd = png_bytes;
+            |request| {
+                let _ = crate::send_ipc_request(request);
+            },
+            |bytes, mime| {
+                let bytes_for_cmd = bytes.to_vec();
+                let mime_for_cmd = mime.to_string();
                 std::thread::spawn(move || {
                     if let Err(error) = little_clip_core::copy_bytes_to_system_clipboard(
                         &bytes_for_cmd,
-                        "image/png",
+                        &mime_for_cmd,
                     ) {
                         tracing::debug!(%error, "failed to copy waveform image to system clipboard");
                     }
                 });
-
+            },
+        ) {
+            Ok(()) => {
                 self.status_toast =
                     Some(("📋 Waveform image copied to clipboard".to_string(), now));
             }
@@ -2882,6 +2876,38 @@ impl AudioPreviewState {
                 self.status_toast = Some((format!("⚠️ Failed to render waveform: {err}"), now));
             }
         }
+    }
+
+    fn copy_waveform_image_on(
+        analysis: &FullAudioAnalysis,
+        source_analysis: &FullAudioAnalysis,
+        region_edits: &[AudioRegionEdit],
+        view_start_sec: f32,
+        view_duration_sec: f32,
+        duration_sec: f32,
+        palette: &AppPalette,
+        mut send: impl FnMut(&IpcRequest),
+        mut copy: impl FnMut(&[u8], &str),
+    ) -> Result<(), String> {
+        let (font_reg, _, _, font_mono) = little_clip_render::ScreenRenderer::load_fonts();
+        let png_bytes = tools::render_waveform_image(
+            analysis,
+            source_analysis,
+            region_edits,
+            view_start_sec,
+            view_duration_sec,
+            duration_sec,
+            palette,
+            font_mono.as_ref(),
+            font_reg.as_ref(),
+        )?;
+        send(&IpcRequest::PushImage {
+            bytes: png_bytes.clone(),
+            mime: "image/png".to_string(),
+            hand: little_clip_core::HandSide::Left,
+        });
+        copy(&png_bytes, "image/png");
+        Ok(())
     }
 
     pub fn copy_spectrum_image(&mut self, palette: &AppPalette, now: f64) {
@@ -6033,6 +6059,67 @@ Separated track
             is_truncated: false,
             truncation_warning: None,
         }
+    }
+
+    #[test]
+    fn waveform_image_delivery_captures_identical_left_png_and_clipboard_payloads() {
+        let mut analysis = empty_audio_analysis();
+        analysis.sample_rate = 4;
+        analysis.duration_ms = 1_000;
+        analysis.total_frames = 4;
+        analysis.ch1_samples = Arc::from([0.25, -0.5, 0.75, -0.25]);
+        analysis.ch2_samples = Some(Arc::from([-0.25, 0.5, -0.75, 0.25]));
+        let palette = AppPalette::default();
+        let mut sent = None;
+        let mut copied = None;
+
+        AudioPreviewState::copy_waveform_image_on(
+            &analysis,
+            &analysis,
+            &[],
+            0.0,
+            1.0,
+            1.0,
+            &palette,
+            |request| sent = Some(request.clone()),
+            |bytes, mime| copied = Some((bytes.to_vec(), mime.to_string())),
+        )
+        .expect("synthetic waveform should render and deliver");
+
+        let IpcRequest::PushImage { bytes, mime, hand } = sent.expect("image request sent") else {
+            panic!("waveform delivery should send an image");
+        };
+        let (copied_bytes, copied_mime) = copied.expect("clipboard callback invoked");
+        assert_eq!(hand, little_clip_core::HandSide::Left);
+        assert_eq!(mime, "image/png");
+        assert_eq!(copied_mime, "image/png");
+        assert_eq!(bytes, copied_bytes);
+
+        let decoded = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+            .expect("delivered payload is a valid PNG");
+        assert_eq!(decoded.width(), tools::export_image::EXPORT_IMAGE_WIDTH);
+        assert_eq!(decoded.height(), 340);
+        let (r, g, b, a) =
+            little_clip_core::color::parse_hex_color_rgba_or_white(&palette.colors.canvas);
+        assert_eq!(decoded.to_rgba8().get_pixel(0, 0).0, [r, g, b, a]);
+
+        let mut silent_analysis = analysis.clone();
+        silent_analysis.ch1_samples = Arc::from([0.0; 4]);
+        silent_analysis.ch2_samples = Some(Arc::from([0.0; 4]));
+        let mut silent_png = None;
+        AudioPreviewState::copy_waveform_image_on(
+            &silent_analysis,
+            &silent_analysis,
+            &[],
+            0.0,
+            1.0,
+            1.0,
+            &palette,
+            |_| {},
+            |silent_bytes, _| silent_png = Some(silent_bytes.to_vec()),
+        )
+        .expect("silent comparison waveform should render");
+        assert_ne!(bytes, silent_png.expect("comparison copy callback invoked"));
     }
 
     #[test]
