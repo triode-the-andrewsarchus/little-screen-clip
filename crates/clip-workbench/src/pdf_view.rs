@@ -36,19 +36,182 @@ struct PdfPreviewMsg {
 // One running/queued decode or completed ColorImage per editor (at most
 // 1200 * 1200 * 4 bytes of published pixels). Canceled jobs retain their slot
 // until acknowledged so rapid navigation cannot accumulate running decodes.
-struct PdfDecodeJob {
-    page_num: usize,
+struct PdfPageDecodeSlot {
+    raster: Arc<PdfPageRasterResource>,
     ticket: JobTicket,
     rx: Receiver<Result<Result<egui::ColorImage, String>, JobError>>,
     ready: Option<egui::ColorImage>,
     cancelled: bool,
 }
 
-impl PdfDecodeJob {
+enum PdfDecodePoll {
+    Pending,
+    Ready,
+    AlreadyReady,
+    Failed(String),
+    QueueFull,
+    Cancelled,
+}
+
+impl PdfPageDecodeSlot {
+    fn start(raster: Arc<PdfPageRasterResource>, ctx: &egui::Context) -> Self {
+        let worker_raster = Arc::clone(&raster);
+        let repaint = ctx.clone();
+        let (ticket, rx) = BackgroundJobs::global().submit(Duration::from_secs(10), move || {
+            let result = std::fs::read(worker_raster.path())
+                .map_err(|error| format!("Could not read cached PDF raster: {error}"))
+                .and_then(decode_page_png);
+            repaint.request_repaint();
+            result
+        });
+        Self {
+            raster,
+            ticket,
+            rx,
+            ready: None,
+            cancelled: false,
+        }
+    }
+
     fn cancel(&mut self) {
         self.ticket.cancel();
         self.cancelled = true;
         self.ready = None;
+    }
+
+    fn poll(&mut self, ctx: &egui::Context) -> PdfDecodePoll {
+        if self.ready.is_some() && !self.cancelled {
+            return PdfDecodePoll::AlreadyReady;
+        }
+        let result = match self.rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(20));
+                return PdfDecodePoll::Pending;
+            }
+            Err(TryRecvError::Disconnected) => Err(JobError::Cancelled),
+        };
+        if self.cancelled {
+            return PdfDecodePoll::Cancelled;
+        }
+        match result {
+            Ok(Ok(image)) => {
+                self.ready = Some(image);
+                PdfDecodePoll::Ready
+            }
+            Err(JobError::QueueFull) => PdfDecodePoll::QueueFull,
+            Err(error) => PdfDecodePoll::Failed(error.to_string()),
+            Ok(Err(error)) => PdfDecodePoll::Failed(error),
+        }
+    }
+}
+
+/// Read-only page preview with texture and decode state independent of the editor.
+#[allow(dead_code)] // Consumed by inline hosts added with cross-view routing.
+pub struct InlinePdfPagePreview {
+    raster: Arc<PdfPageRasterResource>,
+    decode_slot: Option<PdfPageDecodeSlot>,
+    texture: Option<egui::TextureHandle>,
+    error: Option<String>,
+    retry_at: Option<std::time::Instant>,
+}
+
+#[allow(dead_code)] // Public rendering API is exercised by its in-module consumer test.
+impl InlinePdfPagePreview {
+    pub fn new(raster: Arc<PdfPageRasterResource>) -> Self {
+        Self {
+            raster,
+            decode_slot: None,
+            texture: None,
+            error: None,
+            retry_at: None,
+        }
+    }
+
+    fn defer_retry(&mut self, ctx: &egui::Context) {
+        let delay = Duration::from_millis(50);
+        self.retry_at = Some(std::time::Instant::now() + delay);
+        ctx.request_repaint_after(delay);
+    }
+
+    /// Draw the page in a fixed-size region, decoding and uploading it on demand.
+    pub fn show(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, size: Vec2) {
+        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        let visible = ui.is_rect_visible(rect);
+        if self.texture.is_none() && self.error.is_none() {
+            if let Some(slot) = &mut self.decode_slot {
+                match slot.poll(ctx) {
+                    PdfDecodePoll::Pending => {}
+                    PdfDecodePoll::Ready | PdfDecodePoll::AlreadyReady => {
+                        let image = self
+                            .decode_slot
+                            .as_mut()
+                            .and_then(|slot| slot.ready.take())
+                            .expect("ready page decode has an image");
+                        self.decode_slot = None;
+                        self.texture = Some(ctx.load_texture(
+                            format!("pdf-inline-page-{}", self.raster.page_num()),
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                    }
+                    PdfDecodePoll::Failed(error) => {
+                        self.decode_slot = None;
+                        self.error = Some(error);
+                    }
+                    PdfDecodePoll::QueueFull => {
+                        self.decode_slot = None;
+                        self.defer_retry(ctx);
+                    }
+                    PdfDecodePoll::Cancelled => {
+                        self.decode_slot = None;
+                    }
+                }
+            } else if visible {
+                if let Some(retry_at) = self.retry_at {
+                    let now = std::time::Instant::now();
+                    if retry_at > now {
+                        ctx.request_repaint_after(retry_at - now);
+                    } else {
+                        self.retry_at = None;
+                    }
+                }
+                if self.retry_at.is_none() {
+                    self.decode_slot =
+                        Some(PdfPageDecodeSlot::start(Arc::clone(&self.raster), ctx));
+                    ctx.request_repaint_after(Duration::from_millis(20));
+                }
+            }
+        }
+
+        if let Some(texture) = &self.texture {
+            let image_rect = fitted_pdf_page_rect(rect, self.raster.dimensions());
+            ui.painter().image(
+                texture.id(),
+                image_rect,
+                egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                egui::Color32::WHITE,
+            );
+        } else if self.error.is_some() {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "Preview unavailable",
+                egui::FontId::default(),
+                ui.visuals().weak_text_color(),
+            );
+        } else {
+            ui.painter()
+                .rect_filled(rect, 0.0, ui.visuals().faint_bg_color);
+        }
+    }
+}
+
+impl Drop for InlinePdfPagePreview {
+    fn drop(&mut self) {
+        if let Some(slot) = &mut self.decode_slot {
+            slot.cancel();
+        }
     }
 }
 
@@ -69,6 +232,21 @@ fn decode_page_png(png: Vec<u8>) -> Result<egui::ColorImage, String> {
         [rgba.width() as usize, rgba.height() as usize],
         rgba.as_raw(),
     ))
+}
+
+fn fitted_pdf_page_rect(rect: egui::Rect, dimensions: (u32, u32)) -> egui::Rect {
+    let (width, height) = dimensions;
+    let aspect = if width > 0 && height > 0 {
+        width as f32 / height as f32
+    } else {
+        1.0
+    };
+    let fitted_size = if rect.width() / aspect <= rect.height() {
+        Vec2::new(rect.width(), rect.width() / aspect)
+    } else {
+        Vec2::new(rect.height() * aspect, rect.height())
+    };
+    egui::Rect::from_center_size(rect.center(), fitted_size)
 }
 
 /// Completion message for a potentially expensive, lossless PDF mutation.  PDF
@@ -135,7 +313,7 @@ pub struct PdfEditorState {
     edit_in_progress: bool,
     raster_cache: Option<std::sync::Arc<tempfile::TempDir>>,
     texture_frame: u64,
-    decode_job: Option<PdfDecodeJob>,
+    decode_job: Option<PdfPageDecodeSlot>,
     decode_requests: Vec<usize>,
 }
 
@@ -286,7 +464,7 @@ impl PdfEditorState {
                 match rx.try_recv() {
                     Ok(message) => {
                         if let Some(job) = &mut self.decode_job {
-                            if job.page_num == message.page_num {
+                            if job.raster.page_num() == message.page_num {
                                 job.cancel();
                             }
                         }
@@ -351,7 +529,7 @@ impl PdfEditorState {
             }
         }
         let job = self.decode_job.as_ref()?;
-        if job.page_num != page_num || job.cancelled {
+        if job.raster.page_num() != page_num || job.cancelled {
             return None;
         }
         let bytes = job.ready.as_ref()?.pixels.len() * 4;
@@ -376,34 +554,17 @@ impl PdfEditorState {
         let Some(job) = &mut self.decode_job else {
             return;
         };
-        if job.ready.is_some() {
-            return;
-        }
-        let result = match job.rx.try_recv() {
-            Ok(result) => result,
-            Err(TryRecvError::Empty) => {
-                ctx.request_repaint_after(Duration::from_millis(20));
-                return;
-            }
-            Err(TryRecvError::Disconnected) => Err(JobError::Cancelled),
-        };
-        if job.cancelled {
-            self.decode_job = None;
-        } else {
-            match result {
-                Ok(Ok(image)) => job.ready = Some(image),
-                Err(JobError::QueueFull) => self.decode_job = None,
-                failure => {
-                    let error = match failure {
-                        Ok(Err(error)) => error,
-                        Err(error) => error.to_string(),
-                        Ok(Ok(_)) => unreachable!(),
-                    };
-                    if let Some(page) = self.pages.get_mut(job.page_num - 1) {
-                        page.error = Some(format!("PDF preview decode failed: {error}"));
-                    }
-                    self.decode_job = None;
+        let page_num = job.raster.page_num();
+        match job.poll(ctx) {
+            PdfDecodePoll::Pending => return,
+            PdfDecodePoll::Ready => {}
+            PdfDecodePoll::AlreadyReady => return,
+            PdfDecodePoll::QueueFull | PdfDecodePoll::Cancelled => self.decode_job = None,
+            PdfDecodePoll::Failed(error) => {
+                if let Some(page) = self.pages.get_mut(page_num - 1) {
+                    page.error = Some(format!("PDF preview decode failed: {error}"));
                 }
+                self.decode_job = None;
             }
         }
         ctx.request_repaint();
@@ -414,13 +575,13 @@ impl PdfEditorState {
     fn schedule_page_decode(&mut self, ctx: &egui::Context) {
         if let Some(job) = &mut self.decode_job {
             let selected_waiting = self.selected_page.is_some_and(|selected| {
-                selected != job.page_num
+                selected != job.raster.page_num()
                     && self.decode_requests.contains(&selected)
                     && self.pages.get(selected - 1).is_some_and(|page| {
                         page.texture.is_none() && page.error.is_none() && page.raster.is_some()
                     })
             });
-            if !self.decode_requests.contains(&job.page_num) || selected_waiting {
+            if !self.decode_requests.contains(&job.raster.page_num()) || selected_waiting {
                 if job.ready.is_some() {
                     self.decode_job = None;
                 } else {
@@ -445,22 +606,7 @@ impl PdfEditorState {
                     .as_ref()
                     .expect("decode candidates have cached rasters")
                     .clone();
-                let repaint = ctx.clone();
-                let (ticket, rx) =
-                    BackgroundJobs::global().submit(Duration::from_secs(10), move || {
-                        let result = std::fs::read(raster.path())
-                            .map_err(|error| format!("Could not read cached PDF raster: {error}"))
-                            .and_then(decode_page_png);
-                        repaint.request_repaint();
-                        result
-                    });
-                self.decode_job = Some(PdfDecodeJob {
-                    page_num,
-                    ticket,
-                    rx,
-                    ready: None,
-                    cancelled: false,
-                });
+                self.decode_job = Some(PdfPageDecodeSlot::start(raster, ctx));
             }
         }
         if self.decode_job.is_some() {
@@ -1186,9 +1332,14 @@ mod tests {
     }
 
     fn raster_state(page_count: usize, dimension: u32) -> PdfEditorState {
+        raster_state_with_dimensions(page_count, (dimension, dimension))
+    }
+
+    fn raster_state_with_dimensions(page_count: usize, dimensions: (u32, u32)) -> PdfEditorState {
+        let (width, height) = dimensions;
         let image = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
-            dimension,
-            dimension,
+            width,
+            height,
             image::Rgba([23, 45, 67, 255]),
         ));
         let mut png = std::io::Cursor::new(Vec::new());
@@ -1207,8 +1358,8 @@ mod tests {
                         Some(test_page_raster(
                             page_num,
                             path,
-                            dimension,
-                            dimension,
+                            width,
+                            height,
                             Arc::clone(&raster_cache),
                         ))
                     },
@@ -1243,7 +1394,7 @@ mod tests {
             if state
                 .decode_job
                 .as_ref()
-                .is_some_and(|job| job.page_num == page_num && job.ready.is_some())
+                .is_some_and(|job| job.raster.page_num() == page_num && job.ready.is_some())
                 || state.pages[page_num - 1].error.is_some()
             {
                 return;
@@ -1251,6 +1402,34 @@ mod tests {
             assert!(
                 std::time::Instant::now() < deadline,
                 "decode did not complete"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn show_inline_frame(ctx: &egui::Context, preview: &mut InlinePdfPagePreview) {
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                preview.show(ui, ctx, Vec2::new(64.0, 64.0));
+            });
+        });
+    }
+
+    fn wait_for_inline_texture(ctx: &egui::Context, preview: &mut InlinePdfPagePreview) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            show_inline_frame(ctx, preview);
+            if preview.texture.is_some() || preview.error.is_some() {
+                assert!(
+                    preview.texture.is_some(),
+                    "inline PDF decode failed: {:?}",
+                    preview.error
+                );
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "inline PDF decode did not complete"
             );
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -1322,6 +1501,97 @@ mod tests {
     }
 
     #[test]
+    fn inline_and_editor_share_raster_with_independent_decode_and_texture_state() {
+        let ctx = egui::Context::default();
+        let mut state = raster_state(1, 16);
+        let editor_raster = Arc::clone(state.pages[0].raster.as_ref().unwrap());
+        let raster_path = editor_raster.path().to_owned();
+        let raster_directory = raster_path.parent().unwrap().to_owned();
+        let mut inline = InlinePdfPagePreview::new(Arc::clone(&editor_raster));
+        assert!(Arc::ptr_eq(
+            state.pages[0].raster.as_ref().unwrap(),
+            &inline.raster
+        ));
+
+        state.ensure_page_texture(1, &ctx);
+        state.schedule_page_decode(&ctx);
+        show_inline_frame(&ctx, &mut inline);
+        let editor_slot = state.decode_job.as_ref().unwrap();
+        let inline_slot = inline.decode_slot.as_ref().unwrap();
+        assert!(!std::ptr::eq(editor_slot, inline_slot));
+        assert!(Arc::ptr_eq(&editor_slot.raster, &inline_slot.raster));
+
+        let editor_texture = upload_page(&mut state, 1, &ctx);
+        wait_for_inline_texture(&ctx, &mut inline);
+        let inline_texture = inline.texture.as_ref().unwrap().id();
+        assert_ne!(editor_texture, inline_texture);
+
+        drop(inline);
+        assert!(raster_path.exists());
+        state.pages[0].texture = None;
+        upload_page(&mut state, 1, &ctx);
+        drop(editor_raster);
+        drop(state);
+        assert!(!raster_directory.exists());
+    }
+
+    #[test]
+    fn inline_preview_decodes_after_editor_drops_and_owns_raster_until_drop() {
+        let ctx = egui::Context::default();
+        let state = raster_state(1, 16);
+        let raster = Arc::clone(state.pages[0].raster.as_ref().unwrap());
+        let raster_path = raster.path().to_owned();
+        let raster_directory = raster_path.parent().unwrap().to_owned();
+        let mut inline = InlinePdfPagePreview::new(raster);
+        drop(state);
+
+        assert!(raster_path.exists());
+        wait_for_inline_texture(&ctx, &mut inline);
+        assert!(std::fs::read(&raster_path).is_ok());
+        assert!(inline.texture.is_some());
+
+        drop(inline);
+        assert!(!raster_directory.exists());
+    }
+
+    #[test]
+    fn inline_preview_fits_non_square_pdf_raster_without_distortion() {
+        let state = raster_state_with_dimensions(1, (100, 200));
+        let raster = state.pages[0].raster.as_ref().unwrap();
+        let region = egui::Rect::from_min_size(egui::Pos2::new(10.0, 20.0), Vec2::splat(100.0));
+
+        assert_eq!(raster.dimensions(), (100, 200));
+        let fitted = fitted_pdf_page_rect(region, raster.dimensions());
+        assert!((fitted.width() - 50.0).abs() < 0.001);
+        assert!((fitted.height() - 100.0).abs() < 0.001);
+        assert_eq!(fitted.center(), region.center());
+    }
+
+    #[test]
+    fn inline_preview_defers_retry_until_deadline_and_does_not_admit_hidden_page() {
+        let ctx = egui::Context::default();
+        let state = raster_state(1, 16);
+        let raster = Arc::clone(state.pages[0].raster.as_ref().unwrap());
+        let mut retrying = InlinePdfPagePreview::new(Arc::clone(&raster));
+        retrying.retry_at = Some(std::time::Instant::now() + Duration::from_secs(1));
+
+        for _ in 0..3 {
+            show_inline_frame(&ctx, &mut retrying);
+        }
+        assert!(retrying.decode_slot.is_none());
+
+        let mut hidden = InlinePdfPagePreview::new(raster);
+
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.set_clip_rect(egui::Rect::NOTHING);
+                hidden.show(ui, ctx, Vec2::new(64.0, 64.0));
+            });
+        });
+        assert!(hidden.decode_slot.is_none());
+    }
+
+    #[test]
     fn decode_requests_are_bounded_deduplicated_and_selected_first() {
         let ctx = egui::Context::default();
         let mut state = raster_state(100, 16);
@@ -1342,7 +1612,7 @@ mod tests {
         );
         state.schedule_page_decode(&ctx);
         let job = state.decode_job.as_ref().unwrap();
-        assert_eq!(job.page_num, 100);
+        assert_eq!(job.raster.page_num(), 100);
         let revision = job.ticket.revision();
         for _ in 0..10 {
             state.schedule_page_decode(&ctx);
@@ -1389,8 +1659,9 @@ mod tests {
             Err("obsolete decode error".to_owned())
         });
         start.recv_timeout(Duration::from_secs(2)).unwrap();
-        state.decode_job = Some(PdfDecodeJob {
-            page_num: 1,
+        let raster = Arc::clone(state.pages[0].raster.as_ref().unwrap());
+        state.decode_job = Some(PdfPageDecodeSlot {
+            raster,
             ticket: ticket.clone(),
             rx,
             ready: None,
