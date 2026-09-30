@@ -2081,6 +2081,124 @@ mod tests {
     }
 
     #[test]
+    fn rendered_full_score_copy_shortcut_exports_parseable_midi_to_left_hand() {
+        let data = MidiData {
+            title: "Rendered full score".to_string(),
+            track_count: 1,
+            track_names: vec!["Piano".to_string()],
+            total_notes: 1,
+            duration_sec: 2.0,
+            bpm: 120.0,
+            min_key: 60,
+            max_key: 60,
+            notes: vec![MidiNote {
+                track: 0,
+                channel: 0,
+                program: 0,
+                key: 60,
+                velocity: 96,
+                start_sec: 0.25,
+                duration_sec: 0.5,
+            }],
+        };
+        let expected_bytes = data.to_midi_bytes().expect("serialize fixture score");
+        let mut state = MidiViewerState::from_data(data, None, "Rendered full score".to_string());
+        let output_dir = tempfile::tempdir().unwrap();
+        let jobs = BackgroundJobs::new(1, 1);
+        let (request_tx, request_rx) = std::sync::mpsc::channel();
+        let ctx = egui::Context::default();
+        crate::ui_ext::configure_workbench_style(&ctx);
+        let palette = AppPalette::default();
+        let mut close = false;
+        let mut time = 0.0;
+        let output_dir_path = output_dir.path().to_owned();
+        let mut dispatch_count = 0;
+        let mut dispatch = |state: &mut MidiViewerState, now| {
+            dispatch_count += 1;
+            let request_tx = request_tx.clone();
+            state.copy_selection_on(
+                now,
+                &jobs,
+                output_dir_path.clone(),
+                move |mut artifact, _cancelled, _started| {
+                    let request = IpcRequest::PushFile {
+                        path: artifact.path.clone(),
+                        hand: HandSide::Left,
+                    };
+                    let bytes = std::fs::read(&artifact.path).map_err(|error| error.to_string())?;
+                    request_tx
+                        .send((request, bytes))
+                        .map_err(|error| error.to_string())?;
+                    artifact.retain();
+                    Ok(artifact)
+                },
+            );
+        };
+        let mut render = |state: &mut MidiViewerState, events: Vec<egui::Event>| {
+            time += 0.1;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1440.0, 900.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui_with_copy_dispatch(ui, &palette, &mut close, &mut dispatch);
+                    });
+                },
+            );
+            output
+        };
+
+        let initial = render(&mut state, Vec::new());
+        assert!(
+            initial.shapes.iter().any(|clipped| matches!(
+                &clipped.shape,
+                egui::Shape::Text(text) if text.galley.text() == "Copy MIDI [Ctrl+C]"
+            )),
+            "rendered full-score Copy MIDI button label"
+        );
+        render(&mut state, vec![egui::Event::Copy]);
+        drop(render);
+        assert_eq!(dispatch_count, 1, "rendered copy shortcut dispatch count");
+
+        let (request, bytes) = request_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("rendered copy action should dispatch one MIDI export");
+        let IpcRequest::PushFile { path, hand } = request else {
+            panic!("rendered MIDI copy should request a file");
+        };
+        assert_eq!(hand, HandSide::Left);
+        assert_eq!(path.parent(), Some(output_dir.path()));
+        assert_eq!(bytes, expected_bytes);
+        let parsed = MidiData::parse_bytes(&bytes, "rendered round trip".to_string())
+            .expect("rendered copy payload should be parseable MIDI");
+        assert_eq!(parsed.total_notes, 1);
+        assert_eq!(parsed.notes[0].key, 60);
+
+        assert!(!close);
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while state.export_job.is_some() && Instant::now() < deadline {
+            state.poll_export(time + 0.1, &ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            state.export_job.is_none(),
+            "rendered MIDI export did not finish"
+        );
+        assert_eq!(
+            state.status_toast.message(time + 0.1),
+            Some("Copied full MIDI (1 notes) to Clipboard & Left Hand!")
+        );
+    }
+
+    #[test]
     fn midi_export_worker_honors_cancellation_before_writing() {
         let data = MidiData {
             title: "Cancelled".to_string(),
