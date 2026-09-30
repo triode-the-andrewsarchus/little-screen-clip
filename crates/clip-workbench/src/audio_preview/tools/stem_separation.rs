@@ -1235,4 +1235,69 @@ printf '{"vocals":"%s/vocals.wav","drums":"%s/drums.wav","bass":"%s/bass.wav","o
         assert!(!workspace.join("descendant-finished").exists());
         std::fs::remove_dir_all(directory).unwrap();
     }
+
+    #[test]
+    fn escape_during_stem_separation_closes_and_cancels_worker_without_changing_source() {
+        let directory = test_dir("escape-running");
+        let source = directory.join("input.wav");
+        std::fs::write(&source, b"synthetic audio source").unwrap();
+        let jobs = BackgroundJobs::new(1, 1);
+        let script =
+            "(sleep 1; touch \"$2/descendant-finished\") &\necho $! > \"$2/descendant.pid\"\nwait";
+        let mut state = test_state(&source);
+        state.active_mode = AudioToolMode::StemSeparation;
+        state.start_stem_separation_on(&jobs, fake_worker(&directory, script));
+        let control = state
+            .stem_separation
+            .process_control
+            .as_ref()
+            .unwrap()
+            .clone();
+        let workspace = state.stem_separation.workspace.as_ref().unwrap().clone();
+        for _ in 0..200 {
+            if workspace.join("descendant.pid").exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(workspace.join("descendant.pid").exists());
+        let direct_pid = control.child_pid.load(Ordering::Acquire);
+        assert_ne!(direct_pid, 0);
+
+        let ctx = egui::Context::default();
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut close = false;
+        let _ = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 700.0),
+                )),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::Escape,
+                    physical_key: Some(egui::Key::Escape),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut close);
+                });
+            },
+        );
+        assert!(close, "Escape requests closing the running Stems viewer");
+        assert!(state.stem_separation.in_progress);
+
+        drop(state);
+        assert!(control.cancel.load(Ordering::Acquire));
+        wait_for_process_exit(direct_pid);
+        std::thread::sleep(Duration::from_millis(1100));
+        assert!(!workspace.join("descendant-finished").exists());
+        assert_eq!(std::fs::read(source).unwrap(), b"synthetic audio source");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 }
