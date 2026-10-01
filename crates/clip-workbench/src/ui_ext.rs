@@ -756,7 +756,11 @@ impl StatusToast {
         if let Some((msg, ts)) = toast {
             if now - ts < duration {
                 let color = WorkbenchColors::from_palette(palette).success;
-                ui.label(egui::RichText::new(msg).strong().color(color));
+                ui.add(
+                    egui::Label::new(egui::RichText::new(msg).size(14.0).strong().color(color))
+                        .truncate(true),
+                )
+                .on_hover_text(msg);
             }
         }
     }

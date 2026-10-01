@@ -727,25 +727,36 @@ impl<'a> StudioShell<'a> {
             .fill(colors.recessed)
             .inner_margin(egui::Margin::symmetric(PANEL_INSET, FOOTER_INSET_Y))
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
+                ui.horizontal(|ui| {
                     if let Some(hints) = self.footer_hints {
-                        ui.label(egui::RichText::new(hints).color(colors.text_muted));
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(hints).color(colors.text_muted))
+                                .wrap(true),
+                        );
                     }
 
                     if let Some(ref readout) = self.footer_readout {
                         ui.add_space(SPACE_MD);
-                        ui.label(
-                            egui::RichText::new(readout)
-                                .strong()
-                                .monospace()
-                                .color(colors.accent),
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(readout)
+                                    .strong()
+                                    .monospace()
+                                    .color(colors.accent),
+                            )
+                            .wrap(true),
                         );
                     }
 
                     // Status toast
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        StatusToast::render_opt(toast, 4.5, ui, palette, now);
-                    });
+                    ui.allocate_ui_with_layout(
+                        Vec2::new(
+                            ui.available_width(),
+                            ui.text_style_height(&egui::TextStyle::Body),
+                        ),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| StatusToast::render_opt(toast, 4.5, ui, palette, now),
+                    );
                 });
             });
     }
@@ -754,6 +765,57 @@ impl<'a> StudioShell<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn footer_toasts_do_not_increase_the_bar_height() {
+        for width in [760.0, 1200.0] {
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+            let mut close = false;
+            let mut normal_height = 0.0;
+            for message in [
+                None,
+                Some("🗑 Markup item deleted"),
+                Some(
+                    "❌ Failed to save image: a long error message that should remain on one line instead of increasing the footer height",
+                ),
+                None,
+            ] {
+                for _ in 0..3 {
+                    let mut height = 0.0;
+                    let _ = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                Vec2::new(width, 600.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            let panel = egui::TopBottomPanel::bottom("footer").show(ctx, |ui| {
+                                let shell = StudioShell::new("Image", None, &palette, &mut close)
+                                    .with_footer_hints(
+                                        "🖱 Drag: Draw shape | Del: Delete | Esc: Deselect",
+                                    );
+                                let toast = message.map(|message| (message.to_owned(), 0.0));
+                                shell.render_footer(ui, &toast, 1.0);
+                            });
+                            height = panel.response.rect.height();
+                        },
+                    );
+                    if normal_height == 0.0 {
+                        normal_height = height;
+                    }
+                    assert!(
+                        (height - normal_height).abs() < 0.5,
+                        "toast {message:?} changed the {width}-point footer from {normal_height} to {height}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn footer_readout_wraps_without_clipping_at_compact_width() {
