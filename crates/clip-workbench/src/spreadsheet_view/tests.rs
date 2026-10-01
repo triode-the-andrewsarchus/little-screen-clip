@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn inline_preview_data() -> Arc<SpreadsheetData> {
