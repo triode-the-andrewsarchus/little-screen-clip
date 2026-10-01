@@ -48,6 +48,8 @@ UI acceptance automation must use the private Weston/Niri runner. Its pointer in
 
 Image Studio tool controls belong in the shared left panel, with result panels on the right where needed; shared zoom controls belong in the center of the footer. View shows all metadata fields directly in that panel, and reserves it only when it has fields to display; metadata-free images use the full canvas.
 
+Film Look enables vendored filmr's `compute-gpu` feature; `gpu` alone does not enable compute rendering. Preserve the full-spectrum exposure and dye output model; the upstream GPU development shader uses a different model. GPU grain uses filmr's native density-space shader; CPU fallback retains output-space grain. Apply only one grain model per render. Keep GPU pipelines bound to one shared device, cancellation checks between GPU stages, and CPU fallback when no adapter is available. Validate acceleration with optimized end-to-end timings as well as GPU dispatch tests.
+
 Async preview completion updates an existing clipboard item in place. Keep `SlotStateSummary` sensitive to preview readiness so open workbenches rehydrate the affected slot and repaint the mirror; item ID and payload kind alone do not reveal these updates.
 
 Raster import uses core's `item::image_reader` to initialize HEIF/HEIC/AVIF decoder hooks once. Pass MIME hints through dimensions, thumbnails, and comparisons for formats without reliable signatures (TGA); reuse core image extension and MIME classification. HEIF EXIF extraction uses the existing `kamadak-exif` container reader.

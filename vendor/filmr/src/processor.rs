@@ -17,8 +17,7 @@ use tracing::{info, instrument};
 use crate::gpu::get_gpu_context;
 #[cfg(feature = "compute-gpu")]
 use crate::gpu_pipelines::{
-    get_gaussian_pipeline, get_halation_pipeline, get_light_leak_pipeline, get_linearize_pipeline,
-    read_gpu_buffer,
+    get_halation_pipeline, get_light_leak_pipeline, get_linearize_pipeline, read_gpu_buffer,
 };
 
 /// Simulation fidelity mode.
@@ -164,8 +163,8 @@ pub fn process_image_with_depth(
         .expect("uncancelled film processing cannot stop")
 }
 
-/// Runs the same CPU pipeline as `process_image`, stopping at cooperative checkpoints.
-/// Returns `None` only when `cancel` is set. GPU processing is not cancellable.
+/// Runs the same pipeline as `process_image`, stopping at cooperative checkpoints.
+/// GPU dispatches finish before cancellation is checked between stages.
 pub fn process_image_cancellable(
     input: &RgbImage,
     film: &FilmStock,
@@ -405,24 +404,51 @@ impl PipelineStage for AccurateDevelopStage {
             m
         };
 
-        // Pass 1: per-pixel spectral propagation → RGB exposure
-        image.par_chunks_mut(3).for_each(|pixel| {
-            if context.is_cancelled() {
-                return;
+        #[cfg(feature = "compute-gpu")]
+        let gpu_exposure = if config.use_gpu && !context.is_cancelled() {
+            use crate::gpu_pipelines::image_pass::ImagePassKind;
+            let mut matrix = [[0.0; 3]; 3];
+            for (channel, basis) in uplift_d65.iter().enumerate() {
+                let response = spectral_engine::integrate_exposure(
+                    &spectral_engine::propagate_fast(&fwd_coeffs, &bwd_coeffs, base_r, basis),
+                );
+                for row in 0..3 {
+                    matrix[row][channel] = response[row] * norm[row] * t_eff;
+                }
             }
-            // Inline uplift × D65 (3 multiplies + 2 adds per bin instead of full uplift)
-            let mut scaled = [0.0f32; crate::spectral::BINS];
-            let (r, g, b) = (pixel[0], pixel[1], pixel[2]);
-            for (i, s) in scaled.iter_mut().enumerate() {
-                *s = r * uplift_d65[0][i] + g * uplift_d65[1][i] + b * uplift_d65[2][i];
-            }
-            let exposure =
-                spectral_engine::propagate_fast(&fwd_coeffs, &bwd_coeffs, base_r, &scaled);
-            let rgb = spectral_engine::integrate_exposure(&exposure);
-            pixel[0] = rgb[0] * norm[0] * t_eff;
-            pixel[1] = rgb[1] * norm[1] * t_eff;
-            pixel[2] = rgb[2] * norm[2] * t_eff;
-        });
+            let parameters: Vec<f32> = matrix.into_iter().flatten().collect();
+            crate::gpu_pipelines::image_pass::process_image_pass(
+                ImagePassKind::Exposure,
+                image,
+                &parameters,
+            )
+        } else {
+            None
+        };
+        #[cfg(not(feature = "compute-gpu"))]
+        let gpu_exposure: Option<image::ImageBuffer<image::Rgb<f32>, Vec<f32>>> = None;
+        if let Some(exposure) = gpu_exposure {
+            *image = exposure;
+        } else {
+            // Pass 1: per-pixel spectral propagation → RGB exposure
+            image.par_chunks_mut(3).for_each(|pixel| {
+                if context.is_cancelled() {
+                    return;
+                }
+                // Inline uplift × D65 (3 multiplies + 2 adds per bin instead of full uplift)
+                let mut scaled = [0.0f32; crate::spectral::BINS];
+                let (r, g, b) = (pixel[0], pixel[1], pixel[2]);
+                for (i, s) in scaled.iter_mut().enumerate() {
+                    *s = r * uplift_d65[0][i] + g * uplift_d65[1][i] + b * uplift_d65[2][i];
+                }
+                let exposure =
+                    spectral_engine::propagate_fast(&fwd_coeffs, &bwd_coeffs, base_r, &scaled);
+                let rgb = spectral_engine::integrate_exposure(&exposure);
+                pixel[0] = rgb[0] * norm[0] * t_eff;
+                pixel[1] = rgb[1] * norm[1] * t_eff;
+                pixel[2] = rgb[2] * norm[2] * t_eff;
+            });
+        }
 
         // BW films: single emulsion layer only produces one channel of exposure.
         // Merge RGB→mono using the film's spectral response weights before
@@ -567,6 +593,28 @@ mod cancellation_tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+    #[cfg(feature = "compute-gpu")]
+    #[test]
+    #[ignore = "requires a working GPU compute adapter"]
+    fn gpu_preprocessing_stops_between_dispatches() {
+        assert!(get_gpu_context().is_some());
+        let stock = crate::presets::kodak::KODAK_PORTRA_400();
+        let config = SimulationConfig::default();
+        let cancel = AtomicBool::new(false);
+        let checks = AtomicUsize::new(0);
+        let context = PipelineContext {
+            film: &stock,
+            config: &config,
+            depth_map: None,
+            cancel: Some(&cancel),
+            cancel_after_checks: Some((&checks, 2)),
+        };
+        let image = RgbImage::from_pixel(32, 32, image::Rgb([100, 150, 200]));
+        assert!(process_gpu_pipeline(&context, &image, &stock, &config).is_none());
+        assert!(cancel.load(Ordering::Acquire));
+        assert_eq!(checks.load(Ordering::Acquire), 3);
+    }
+
     #[test]
     fn accurate_develop_stops_inside_pixel_pass() {
         let stock = crate::presets::kodak::KODAK_PORTRA_400();
@@ -601,77 +649,59 @@ mod cancellation_tests {
 
 #[cfg(feature = "compute-gpu")]
 fn process_gpu_pipeline(
-    _context: &PipelineContext,
+    context: &PipelineContext,
     input: &RgbImage,
     film: &FilmStock,
     config: &SimulationConfig,
 ) -> Option<image::ImageBuffer<image::Rgb<f32>, Vec<f32>>> {
     use crate::gpu::GpuBuffer;
 
+    if context.is_cancelled() {
+        return None;
+    }
     let gpu_ctx = get_gpu_context()?;
-    let mut gpu_buffer: Option<GpuBuffer>;
-
-    // Linearization
-    {
+    if context.is_cancelled() {
+        return None;
+    }
+    if !gpu_ctx.supports_rgb_image(input.width(), input.height()) {
+        info!("Image exceeds GPU compute limits; using CPU processing");
+        return None;
+    }
+    let mut gpu_buffer: GpuBuffer = {
         let _span = tracing::info_span!("GPU Linearization").entered();
         info!("Attempting GPU Linearization...");
-        let pipeline = get_linearize_pipeline(gpu_ctx);
-        gpu_buffer = pipeline.process_to_gpu_buffer(gpu_ctx, input);
+        get_linearize_pipeline(gpu_ctx).process_to_gpu_buffer(gpu_ctx, input)?
+    };
+    if context.is_cancelled() {
+        return None;
     }
 
-    gpu_buffer.as_ref()?;
-
-    // Light Leak
-    if let Some(ref mut buffer) = gpu_buffer {
+    {
         let _span = tracing::info_span!("GPU Light Leak").entered();
         info!("Applying Light Leak on GPU");
-        let pipeline = get_light_leak_pipeline(gpu_ctx);
-        pipeline.process(gpu_ctx, buffer, &config.light_leak);
+        get_light_leak_pipeline(gpu_ctx).process(gpu_ctx, &mut gpu_buffer, &config.light_leak);
+    }
+    if context.is_cancelled() {
+        return None;
     }
 
-    // Halation
-    if let Some(buffer) = gpu_buffer.take() {
-        if film.halation_strength > 0.0 {
-            let _span = tracing::info_span!("GPU Halation").entered();
-            info!("Applying Halation on GPU");
-            let pipeline = get_halation_pipeline(gpu_ctx);
-            if let Some(out_buffer) = pipeline.process(gpu_ctx, &buffer, film) {
-                gpu_buffer = Some(out_buffer);
-            } else {
-                gpu_buffer = Some(buffer);
-            }
-        } else {
-            gpu_buffer = Some(buffer);
+    if film.halation_strength > 0.0 {
+        let _span = tracing::info_span!("GPU Halation").entered();
+        info!("Applying Halation on GPU");
+        if let Some(output) = get_halation_pipeline(gpu_ctx).process(gpu_ctx, &gpu_buffer, film) {
+            gpu_buffer = output;
         }
     }
 
-    // MTF
-    if let Some(buffer) = gpu_buffer.take() {
-        let pixels_per_mm = buffer.width as f32 / 36.0;
-        let mtf_sigma = (0.5 / film.resolution_lp_mm) * pixels_per_mm;
-
-        if mtf_sigma > 0.5 {
-            let _span = tracing::info_span!("GPU MTF Blur").entered();
-            info!("Applying MTF Blur on GPU (sigma: {:.2})", mtf_sigma);
-            let pipeline = get_gaussian_pipeline(gpu_ctx);
-            if let Some(out_buffer) = pipeline.process(gpu_ctx, &buffer, mtf_sigma) {
-                gpu_buffer = Some(out_buffer);
-            } else {
-                gpu_buffer = Some(buffer);
-            }
-        } else {
-            gpu_buffer = Some(buffer);
-        }
+    // MTF runs once in the common pipeline, after motion and depth-of-field.
+    // Applying a uniform GPU blur here would also blur the center and then
+    // apply the radial MTF a second time.
+    if context.is_cancelled() {
+        return None;
     }
-
-    // Readback
-    if let Some(ref buffer) = gpu_buffer {
-        let _span = tracing::info_span!("GPU Readback").entered();
-        info!("Reading back from GPU pipeline");
-        crate::gpu::block_on(read_gpu_buffer(gpu_ctx, buffer))
-    } else {
-        None
-    }
+    let _span = tracing::info_span!("GPU Readback").entered();
+    info!("Reading back from GPU pipeline");
+    crate::gpu::block_on(read_gpu_buffer(gpu_ctx, &gpu_buffer))
 }
 
 /// Main processor function (Async).

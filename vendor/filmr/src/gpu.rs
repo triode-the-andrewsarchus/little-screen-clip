@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    pub adapter_info: wgpu::AdapterInfo,
 }
 
 #[cfg(feature = "compute-gpu")]
@@ -19,18 +20,15 @@ pub struct GpuBuffer {
 }
 
 #[cfg(all(feature = "compute-gpu", not(target_arch = "wasm32")))]
-static GPU_CONTEXT: OnceLock<GpuContext> = OnceLock::new();
+static GPU_CONTEXT: OnceLock<Option<GpuContext>> = OnceLock::new();
 
 #[cfg(all(feature = "compute-gpu", not(target_arch = "wasm32")))]
 pub fn get_gpu_context() -> Option<&'static GpuContext> {
-    if let Some(ctx) = GPU_CONTEXT.get() {
-        return Some(ctx);
-    }
-
-    // Initialize if not present
-    let ctx = block_on(GpuContext::new())?;
-    let _ = GPU_CONTEXT.set(ctx);
-    GPU_CONTEXT.get()
+    // Pipelines are cached for this device, so concurrent renders must share
+    // the same initialization, including a failed adapter lookup.
+    GPU_CONTEXT
+        .get_or_init(|| block_on(GpuContext::new()))
+        .as_ref()
 }
 
 // WASM Implementation using Unsafe Wrapper to bypass Send/Sync check
@@ -59,10 +57,24 @@ pub fn get_gpu_context() -> Option<&'static GpuContext> {
 
 #[cfg(feature = "compute-gpu")]
 impl GpuContext {
+    pub fn supports_rgb_image(&self, width: u32, height: u32) -> bool {
+        let limits = self.device.limits();
+        let size = u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|n| n.checked_mul(12));
+        size.is_some_and(|size| {
+            size > 0
+                && size <= u64::from(limits.max_storage_buffer_binding_size)
+                && size <= limits.max_buffer_size
+                && width.div_ceil(16) <= limits.max_compute_workgroups_per_dimension
+                && height.div_ceil(16) <= limits.max_compute_workgroups_per_dimension
+        })
+    }
+
     pub async fn new() -> Option<Self> {
         info!("Initializing WGPU context");
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
+            backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::all()),
             ..Default::default()
         });
 
@@ -74,7 +86,8 @@ impl GpuContext {
             .await
             .ok()?;
 
-        info!("Using GPU adapter: {:?}", adapter.get_info());
+        let adapter_info = adapter.get_info();
+        info!("Using GPU adapter: {:?}", adapter_info);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -88,7 +101,11 @@ impl GpuContext {
             .await
             .ok()?;
 
-        Some(Self { device, queue })
+        Some(Self {
+            device,
+            queue,
+            adapter_info,
+        })
     }
 }
 

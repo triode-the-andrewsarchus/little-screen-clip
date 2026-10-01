@@ -600,6 +600,221 @@ mod render_identity_tests {
     }
 
     #[test]
+    #[ignore = "requires a working GPU compute adapter"]
+    fn filmr_gpu_renders_and_matches_cpu_without_grain() {
+        let gpu = filmr::gpu::get_gpu_context().expect("GPU adapter and device available");
+        println!("GPU adapter: {:?}", gpu.adapter_info);
+        assert_ne!(
+            format!("{:?}", gpu.adapter_info.device_type),
+            "Cpu",
+            "hardware test must not use a software adapter"
+        );
+        let input = image::RgbImage::from_fn(33, 19, |x, y| {
+            image::Rgb([(x * 7) as u8, (y * 13) as u8, ((x + y) * 5) as u8])
+        });
+        let buffer = filmr::gpu_pipelines::get_linearize_pipeline(gpu)
+            .process_to_gpu_buffer(gpu, &input)
+            .expect("GPU linearization dispatched");
+        let linear = filmr::gpu::block_on(filmr::gpu_pipelines::read_gpu_buffer(gpu, &buffer))
+            .expect("GPU output read back");
+        let cpu_linear = filmr::pipeline::create_linear_image(&input);
+        assert_eq!(linear.dimensions(), input.dimensions());
+        for (gpu, cpu) in linear.as_raw().iter().zip(cpu_linear.as_raw()) {
+            assert!(
+                (gpu - cpu).abs() < 0.00001,
+                "GPU {gpu} differs from CPU {cpu}"
+            );
+        }
+        let mut stock = filmr::presets::kodak::KODAK_PORTRA_400();
+        stock.halation_strength = 0.0;
+        stock.halation_threshold = 0.1;
+        // Force MTF blur even on this small fixture to catch duplicate GPU blur.
+        stock.resolution_lp_mm = 0.2;
+        let mut config = filmr::processor::SimulationConfig {
+            enable_grain: false,
+            white_balance_mode: filmr::processor::WhiteBalanceMode::Off,
+            ..Default::default()
+        };
+        let cpu = super::process_film_image(&input, &stock, &config);
+        config.use_gpu = true;
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let rendered = super::process_film_image_inner(&input, &stock, &config, Some(&cancelled))
+            .expect("GPU film processing completed");
+        assert_eq!(rendered.dimensions(), input.dimensions());
+        let max_error = rendered
+            .as_raw()
+            .iter()
+            .zip(cpu.as_raw())
+            .map(|(a, b)| a.abs_diff(*b))
+            .max()
+            .unwrap();
+        assert!(max_error <= 1, "GPU/CPU maximum channel error: {max_error}");
+        stock.halation_strength = 1.0;
+        let halated = super::process_film_image_inner(&input, &stock, &config, Some(&cancelled))
+            .expect("GPU halation completed");
+        assert_ne!(halated, rendered, "halation must affect the output");
+        config.light_leak = filmr::light_leak::LightLeakConfig {
+            enabled: true,
+            leaks: vec![filmr::light_leak::LightLeak::default()],
+        };
+        let effects = super::process_film_image_inner(&input, &stock, &config, Some(&cancelled))
+            .expect("GPU halation and light leaks completed");
+        assert_eq!(effects.dimensions(), input.dimensions());
+        assert_ne!(effects, halated, "GPU light leaks must affect the output");
+        cancelled.store(true, std::sync::atomic::Ordering::Release);
+        assert!(
+            super::process_film_image_inner(&input, &stock, &config, Some(&cancelled)).is_none()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a working GPU compute adapter"]
+    fn filmr_accurate_gpu_matches_all_stock_outputs() {
+        assert!(filmr::gpu::get_gpu_context().is_some());
+        let input = image::RgbImage::from_fn(129, 97, |x, y| {
+            image::Rgb([
+                (x * 17 % 256) as u8,
+                (y * 23 % 256) as u8,
+                ((x + y) * 31 % 256) as u8,
+            ])
+        });
+        for entry in super::all_film_stocks() {
+            let mut stock = (entry.build)();
+            stock.halation_strength = 0.0;
+            stock.vignette_strength = 0.3;
+            let mut config = filmr::processor::SimulationConfig {
+                enable_grain: false,
+                white_balance_mode: filmr::processor::WhiteBalanceMode::Off,
+                warmth: 0.17,
+                saturation: 0.87,
+                exposure_time: 1.3,
+                ..Default::default()
+            };
+            let cpu = super::process_film_image(&input, &stock, &config);
+            config.use_gpu = true;
+            let gpu = super::process_film_image(&input, &stock, &config);
+            let max_error = cpu
+                .as_raw()
+                .iter()
+                .zip(gpu.as_raw())
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            assert!(max_error <= 1, "{} channel error: {max_error}", entry.name);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a working GPU compute adapter"]
+    fn filmr_native_gpu_grain_renders_stock_parameters() {
+        let gpu = filmr::gpu::get_gpu_context().expect("GPU adapter available");
+        let pipeline = filmr::gpu_pipelines::get_grain_pipeline(gpu);
+        let input = image::ImageBuffer::from_pixel(33, 19, image::Rgb([0.5f32; 3]));
+        let mut stock = filmr::presets::kodak::KODAK_PORTRA_400();
+        stock.grain_model.alpha = 0.0;
+        stock.grain_model.sigma_read = 0.0;
+        stock.grain_model.shadow_noise = 0.0;
+        assert_eq!(pipeline.process_image(gpu, &input, &stock).unwrap(), input);
+
+        // Shadow-only grain exercises the corrected uniforms and bypass condition.
+        stock.grain_model.shadow_noise = 0.1;
+        stock.grain_model.monochrome = true;
+        let mono = pipeline.process_image(gpu, &input, &stock).unwrap();
+        assert_ne!(mono, input);
+        for pixel in mono.pixels() {
+            assert!(pixel.0.iter().all(|v| v.is_finite() && *v >= 0.0));
+            assert_eq!(pixel[0], pixel[1]);
+            assert_eq!(pixel[1], pixel[2]);
+        }
+        assert_eq!(pipeline.process_image(gpu, &input, &stock).unwrap(), mono);
+
+        stock.grain_model.monochrome = false;
+        stock.grain_model.color_correlation = 0.0;
+        let color = pipeline.process_image(gpu, &input, &stock).unwrap();
+        assert!(color.pixels().any(|p| p[0] != p[1] || p[1] != p[2]));
+        stock.grain_model.color_correlation = 1.0;
+        let shared = pipeline.process_image(gpu, &input, &stock).unwrap();
+        for (a, b) in shared.as_raw().iter().zip(mono.as_raw()) {
+            assert!((a - b).abs() < 0.00001);
+        }
+        stock.grain_model.highlight_coarseness = 2.0;
+        assert_ne!(pipeline.process_image(gpu, &input, &stock).unwrap(), mono);
+
+        let input = image::RgbImage::from_fn(129, 97, |x, y| {
+            image::Rgb([(x * 17) as u8, (y * 23) as u8, ((x + y) * 31) as u8])
+        });
+        let mut config = filmr::processor::SimulationConfig {
+            use_gpu: true,
+            enable_grain: false,
+            ..Default::default()
+        };
+        let clean = super::process_film_image(&input, &stock, &config);
+        config.enable_grain = true;
+        let grained = super::process_film_image(&input, &stock, &config);
+        assert_eq!(grained.dimensions(), input.dimensions());
+        assert_ne!(grained, clean);
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        assert!(super::process_film_image_inner(&input, &stock, &config, Some(&cancel)).is_none());
+    }
+
+    #[test]
+    #[ignore = "GPU performance comparison; run in release mode with --nocapture"]
+    fn filmr_gpu_performance_comparison() {
+        assert!(filmr::gpu::get_gpu_context().is_some());
+        let mut stock = filmr::presets::kodak::KODAK_PORTRA_400();
+        stock.halation_strength = 0.0;
+        let mut config = filmr::processor::SimulationConfig {
+            white_balance_mode: filmr::processor::WhiteBalanceMode::Off,
+            use_gpu: true,
+            ..Default::default()
+        };
+        let _ = super::process_film_image(&image::RgbImage::new(128, 128), &stock, &config);
+        for (width, height) in [(1024, 768), (3840, 2160)] {
+            let input = image::RgbImage::from_fn(width, height, |x, y| {
+                image::Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
+            });
+            for grain in [false, true] {
+                config.enable_grain = grain;
+                for gpu in [false, true] {
+                    config.use_gpu = gpu;
+                    let mut durations = Vec::new();
+                    for _ in 0..3 {
+                        let start = std::time::Instant::now();
+                        let output = super::process_film_image(&input, &stock, &config);
+                        assert_eq!(output.dimensions(), input.dimensions());
+                        durations.push(start.elapsed());
+                    }
+                    durations.sort();
+                    println!(
+                        "{width}x{height} grain={grain} GPU={gpu} median: {:?}",
+                        durations[1]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires GPU adapters disabled (WGPU_BACKEND=vulkan VK_DRIVER_FILES=/dev/null)"]
+    fn filmr_gpu_unavailable_falls_back_to_cpu() {
+        assert!(filmr::gpu::get_gpu_context().is_none());
+        let input = image::RgbImage::from_pixel(17, 9, image::Rgb([180, 100, 60]));
+        let stock = filmr::presets::kodak::KODAK_PORTRA_400();
+        let mut config = filmr::processor::SimulationConfig {
+            enable_grain: false,
+            ..Default::default()
+        };
+        let cpu = super::process_film_image(&input, &stock, &config);
+        config.use_gpu = true;
+        let fallback = super::process_film_image(&input, &stock, &config);
+        assert_eq!(fallback, cpu);
+        config.enable_grain = true;
+        let grained = super::process_film_image(&input, &stock, &config);
+        assert_eq!(grained.dimensions(), input.dimensions());
+        assert_ne!(grained, fallback, "CPU fallback must still apply grain");
+    }
+
+    #[test]
     fn cancellable_filmr_preserves_pinned_pixels_and_honors_pre_cancel() {
         let image = image::RgbImage::from_fn(32, 24, |x, y| {
             image::Rgb([
@@ -841,6 +1056,7 @@ mod render_identity_tests {
         stock.halation_strength = state.film_sim_state.halation;
         stock.vignette_strength = state.film_sim_state.vignette;
         let config = filmr::processor::SimulationConfig {
+            use_gpu: true,
             exposure_time: state.film_sim_state.brightness,
             warmth: state.film_sim_state.warmth,
             saturation: state.film_sim_state.intensity,
@@ -1790,6 +2006,7 @@ impl ImagePreviewState {
         stock.vignette_strength = self.film_sim_state.vignette;
 
         let config = SimulationConfig {
+            use_gpu: true,
             exposure_time: self.film_sim_state.brightness,
             warmth: self.film_sim_state.warmth,
             saturation: self.film_sim_state.intensity,

@@ -122,6 +122,20 @@ impl PipelineStage for MicroMotionStage {
             amplitude
         );
 
+        #[cfg(feature = "compute-gpu")]
+        if _context.config.use_gpu && !_context.is_cancelled() {
+            use crate::gpu_pipelines::image_pass::{process_image_pass, ImagePassKind};
+            let params: Vec<f32> = traj
+                .points
+                .iter()
+                .flat_map(|&(x, y, w)| [x, y, w])
+                .collect();
+            if let Some(rendered) = process_image_pass(ImagePassKind::Motion, image, &params) {
+                *image = rendered;
+                return;
+            }
+        }
+
         // For each trajectory point, compute a shifted version and accumulate
         // In linear light space: bright pixels contribute more (physically correct)
         let src: Vec<f32> = image.as_flat_samples().as_slice().to_vec();
@@ -1115,6 +1129,24 @@ pub fn create_output_image(
     context: &PipelineContext,
 ) -> RgbImage {
     info!("Converting to final output image");
+    // The existing GPU grain model operates on developed film density.
+    // CPU fallback retains the original grain in linear output space.
+    #[cfg(feature = "compute-gpu")]
+    let gpu_grained = if context.config.use_gpu
+        && context.config.enable_grain
+        && !context.is_cancelled()
+    {
+        crate::gpu::get_gpu_context().and_then(|gpu| {
+            crate::gpu_pipelines::get_grain_pipeline(gpu).process_image(gpu, image, context.film)
+        })
+    } else {
+        None
+    };
+    #[cfg(not(feature = "compute-gpu"))]
+    let gpu_grained: Option<ImageBuffer<Rgb<f32>, Vec<f32>>> = None;
+    let rendered_grain_on_gpu = gpu_grained.is_some();
+    let image = gpu_grained.as_ref().unwrap_or(image);
+
     let width = image.width();
     let height = image.height();
     let film = context.film;
@@ -1217,85 +1249,118 @@ pub fn create_output_image(
         )
     });
 
+    #[cfg(feature = "compute-gpu")]
+    let gpu_linear = if config.use_gpu && !context.is_cancelled() {
+        spectral_output.as_ref().and_then(|sp| {
+            use crate::gpu_pipelines::image_pass::{process_image_pass, ImagePassKind};
+            let (yellow, magenta, cyan, dx, dy, dz, norm, matrix) = sp;
+            let invert = matches!(
+                film.film_type,
+                FilmType::ColorNegative | FilmType::BwNegative
+            );
+            let mut parameters = vec![
+                film.r_curve.d_min,
+                film.g_curve.d_min,
+                film.b_curve.d_min,
+                if invert { 1.0 } else { 0.0 },
+                config.saturation,
+                film.vignette_strength,
+                *norm,
+            ];
+            parameters.extend(matrix.iter().flatten());
+            for i in 0..crate::spectral::BINS {
+                parameters.extend([cyan[i], magenta[i], yellow[i], dx[i], dy[i], dz[i]]);
+            }
+            process_image_pass(ImagePassKind::SpectralOutput, image, &parameters)
+                .map(ImageBuffer::into_raw)
+        })
+    } else {
+        None
+    };
+    #[cfg(not(feature = "compute-gpu"))]
+    let gpu_linear: Option<Vec<f32>> = None;
+
     // First pass: compute linear RGB for all pixels
-    let mut linear_buf: Vec<f32> = vec![0.0; (width * height * 3) as usize];
-
-    linear_buf
-        .par_chunks_mut(3)
-        .enumerate()
-        .for_each(|(i, out)| {
-            if context.is_cancelled() {
-                return;
-            }
-            let x = (i as u32) % width;
-            let y = (i as u32) / width;
-            let d = image.get_pixel(x, y).0;
-
-            let (mut r_lin, mut g_lin, mut b_lin) = if let Some(ref sp) = spectral_output {
-                let (y_dye, m_dye, c_dye, d65_x, d65_y, d65_z, y_norm, xyz_to_srgb) = sp;
-                let net = [
-                    (d[0] - film.r_curve.d_min).max(0.0),
-                    (d[1] - film.g_curve.d_min).max(0.0),
-                    (d[2] - film.b_curve.d_min).max(0.0),
-                ];
-                let mut xyz = [0.0f32; 3];
-                for i in 0..crate::spectral::BINS {
-                    let od = net[0] * c_dye[i] + net[1] * m_dye[i] + net[2] * y_dye[i];
-                    let t = 10.0f32.powf(-od);
-                    xyz[0] += t * d65_x[i];
-                    xyz[1] += t * d65_y[i];
-                    xyz[2] += t * d65_z[i];
+    let rendered_on_gpu = gpu_linear.is_some();
+    let mut linear_buf = gpu_linear.unwrap_or_else(|| vec![0.0; (width * height * 3) as usize]);
+    if !rendered_on_gpu {
+        linear_buf
+            .par_chunks_mut(3)
+            .enumerate()
+            .for_each(|(i, out)| {
+                if context.is_cancelled() {
+                    return;
                 }
-                xyz[0] *= y_norm;
-                xyz[1] *= y_norm;
-                xyz[2] *= y_norm;
-                let mut r = xyz_to_srgb[0][0] * xyz[0]
-                    + xyz_to_srgb[0][1] * xyz[1]
-                    + xyz_to_srgb[0][2] * xyz[2];
-                let mut g = xyz_to_srgb[1][0] * xyz[0]
-                    + xyz_to_srgb[1][1] * xyz[1]
-                    + xyz_to_srgb[1][2] * xyz[2];
-                let mut b = xyz_to_srgb[2][0] * xyz[0]
-                    + xyz_to_srgb[2][1] * xyz[1]
-                    + xyz_to_srgb[2][2] * xyz[2];
-                if film.film_type == FilmType::ColorNegative
-                    || film.film_type == FilmType::BwNegative
-                {
-                    r = 1.0 - r;
-                    g = 1.0 - g;
-                    b = 1.0 - b;
+                let x = (i as u32) % width;
+                let y = (i as u32) / width;
+                let d = image.get_pixel(x, y).0;
+
+                let (mut r_lin, mut g_lin, mut b_lin) = if let Some(ref sp) = spectral_output {
+                    let (y_dye, m_dye, c_dye, d65_x, d65_y, d65_z, y_norm, xyz_to_srgb) = sp;
+                    let net = [
+                        (d[0] - film.r_curve.d_min).max(0.0),
+                        (d[1] - film.g_curve.d_min).max(0.0),
+                        (d[2] - film.b_curve.d_min).max(0.0),
+                    ];
+                    let mut xyz = [0.0f32; 3];
+                    for i in 0..crate::spectral::BINS {
+                        let od = net[0] * c_dye[i] + net[1] * m_dye[i] + net[2] * y_dye[i];
+                        let t = 10.0f32.powf(-od);
+                        xyz[0] += t * d65_x[i];
+                        xyz[1] += t * d65_y[i];
+                        xyz[2] += t * d65_z[i];
+                    }
+                    xyz[0] *= y_norm;
+                    xyz[1] *= y_norm;
+                    xyz[2] *= y_norm;
+                    let mut r = xyz_to_srgb[0][0] * xyz[0]
+                        + xyz_to_srgb[0][1] * xyz[1]
+                        + xyz_to_srgb[0][2] * xyz[2];
+                    let mut g = xyz_to_srgb[1][0] * xyz[0]
+                        + xyz_to_srgb[1][1] * xyz[1]
+                        + xyz_to_srgb[1][2] * xyz[2];
+                    let mut b = xyz_to_srgb[2][0] * xyz[0]
+                        + xyz_to_srgb[2][1] * xyz[1]
+                        + xyz_to_srgb[2][2] * xyz[2];
+                    if film.film_type == FilmType::ColorNegative
+                        || film.film_type == FilmType::BwNegative
+                    {
+                        r = 1.0 - r;
+                        g = 1.0 - g;
+                        b = 1.0 - b;
+                    }
+                    (r, g, b)
+                } else {
+                    map_densities(d)
+                };
+
+                if config.saturation != 1.0 {
+                    let lum = 0.2126 * r_lin + 0.7152 * g_lin + 0.0722 * b_lin;
+                    r_lin = lum + (r_lin - lum) * config.saturation;
+                    g_lin = lum + (g_lin - lum) * config.saturation;
+                    b_lin = lum + (b_lin - lum) * config.saturation;
                 }
-                (r, g, b)
-            } else {
-                map_densities(d)
-            };
 
-            if config.saturation != 1.0 {
-                let lum = 0.2126 * r_lin + 0.7152 * g_lin + 0.0722 * b_lin;
-                r_lin = lum + (r_lin - lum) * config.saturation;
-                g_lin = lum + (g_lin - lum) * config.saturation;
-                b_lin = lum + (b_lin - lum) * config.saturation;
-            }
+                let v_str = film.vignette_strength;
+                if v_str > 0.0 {
+                    let px = i as u32 % width;
+                    let py = i as u32 / width;
+                    let dx = (px as f32 + 0.5) / width as f32 - 0.5;
+                    let dy = (py as f32 + 0.5) / height as f32 - 0.5;
+                    let r2 = dx * dx + dy * dy;
+                    let f2 = 0.2;
+                    let cos4 = 1.0 / (1.0 + r2 / f2).powi(2);
+                    let factor = 1.0 - v_str * (1.0 - cos4);
+                    r_lin *= factor;
+                    g_lin *= factor;
+                    b_lin *= factor;
+                }
 
-            let v_str = film.vignette_strength;
-            if v_str > 0.0 {
-                let px = i as u32 % width;
-                let py = i as u32 / width;
-                let dx = (px as f32 + 0.5) / width as f32 - 0.5;
-                let dy = (py as f32 + 0.5) / height as f32 - 0.5;
-                let r2 = dx * dx + dy * dy;
-                let f2 = 0.2;
-                let cos4 = 1.0 / (1.0 + r2 / f2).powi(2);
-                let factor = 1.0 - v_str * (1.0 - cos4);
-                r_lin *= factor;
-                g_lin *= factor;
-                b_lin *= factor;
-            }
-
-            out[0] = r_lin;
-            out[1] = g_lin;
-            out[2] = b_lin;
-        });
+                out[0] = r_lin;
+                out[1] = g_lin;
+                out[2] = b_lin;
+            });
+    }
 
     // Auto Levels in linear f32 space (no banding)
     if config.auto_levels {
@@ -1328,7 +1393,7 @@ pub fn create_output_image(
     }
 
     // Grain in linear output space (after tone mapping, before sRGB)
-    if config.enable_grain {
+    if config.enable_grain && !rendered_grain_on_gpu {
         let gm = &film.grain_model;
         let pixels_per_mm = width as f32 / 36.0;
         let grain_sigma = (gm.blur_radius * 0.05 * pixels_per_mm).max(0.8);

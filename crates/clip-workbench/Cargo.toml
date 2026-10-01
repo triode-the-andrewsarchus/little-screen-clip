@@ -30,7 +30,7 @@ webp = "0.3.1"
 libwebp-sys = "0.9.6"
 tempfile = "3.10"
 libc = "0.2"
-filmr = { path = "../../vendor/filmr", default-features = false }
+filmr = { path = "../../vendor/filmr", default-features = false, features = ["compute-gpu"] }
 
 [dev-dependencies]
 rxing = { version = "0.9.3", default-features = false, features = ["client_support", "serde", "encoding_rs", "encoders", "decoders", "full_barcode_format_support", "multi_barcode_readers"] }

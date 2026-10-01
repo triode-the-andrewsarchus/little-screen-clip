@@ -13,7 +13,9 @@ pub struct GrainUniforms {
     pub sigma_read: f32,
     pub roughness: f32,
     pub monochrome: u32,
-    pub _pad: f32,
+    pub color_correlation: f32,
+    pub shadow_noise: f32,
+    pub highlight_coarseness: f32,
 }
 unsafe impl bytemuck::Zeroable for GrainUniforms {}
 unsafe impl bytemuck::Pod for GrainUniforms {}
@@ -26,6 +28,33 @@ pub struct GrainPipeline {
 
 #[cfg(feature = "compute-gpu")]
 impl GrainPipeline {
+    pub fn process_image(
+        &self,
+        context: &GpuContext,
+        image: &image::ImageBuffer<image::Rgb<f32>, Vec<f32>>,
+        film: &crate::FilmStock,
+    ) -> Option<image::ImageBuffer<image::Rgb<f32>, Vec<f32>>> {
+        let (width, height) = image.dimensions();
+        if !context.supports_rgb_image(width, height) {
+            return None;
+        }
+        let buffer = context
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Grain Input"),
+                contents: bytemuck::cast_slice(image.as_raw()),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            });
+        let input = GpuBuffer {
+            buffer,
+            width,
+            height,
+            size: image.as_raw().len() as u64 * 4,
+        };
+        let output = self.process(context, &input, film)?;
+        crate::gpu::block_on(super::read_gpu_buffer(context, &output))
+    }
+
     pub fn new(context: &GpuContext) -> Self {
         let shader = context
             .device
@@ -109,7 +138,10 @@ impl GrainPipeline {
         let height = input.height;
         let size = input.size;
 
-        if film.grain_model.alpha <= 0.0 && film.grain_model.sigma_read <= 0.0 {
+        if film.grain_model.alpha <= 0.0
+            && film.grain_model.sigma_read <= 0.0
+            && film.grain_model.shadow_noise <= 0.0
+        {
             let output_buffer = context.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Grain Output Buffer (Copy)"),
                 size,
@@ -159,7 +191,9 @@ impl GrainPipeline {
             sigma_read: sigma_read_scaled,
             roughness: film.grain_model.roughness,
             monochrome: if film.grain_model.monochrome { 1 } else { 0 },
-            _pad: 0.0,
+            color_correlation: film.grain_model.color_correlation,
+            shadow_noise: film.grain_model.shadow_noise,
+            highlight_coarseness: film.grain_model.highlight_coarseness,
         };
 
         let uniform_buffer = context

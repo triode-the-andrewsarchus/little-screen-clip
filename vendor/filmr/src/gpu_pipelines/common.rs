@@ -58,7 +58,7 @@ pub async fn read_gpu_buffer(
 
     let (sender, mut receiver) = oneshot::channel();
     buffer_slice.map_async(wgpu::MapMode::Read, move |v| {
-        sender.send(v).unwrap();
+        let _ = sender.send(v);
     });
 
     // Wait for the copy to finish and the map callback to fire
@@ -66,8 +66,14 @@ pub async fn read_gpu_buffer(
     // Note: We need to loop because sometimes the callback fires on the *next* poll after completion?
     // But let's try strict wait first.
     loop {
-        let _ = context.device.poll(wgpu::PollType::Poll);
-        if let Ok(Some(result)) = receiver.try_recv() {
+        if context.device.poll(wgpu::PollType::Poll).is_err() {
+            return None;
+        }
+        let received = match receiver.try_recv() {
+            Ok(result) => result,
+            Err(_) => return None,
+        };
+        if let Some(result) = received {
             if result.is_ok() {
                 let data = buffer_slice.get_mapped_range();
                 let result: Vec<f32> = bytemuck::cast_slice(&data).to_vec();

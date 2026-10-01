@@ -8,6 +8,8 @@ pub mod develop;
 pub mod gaussian;
 pub mod grain;
 pub mod halation;
+#[cfg(feature = "compute-gpu")]
+pub mod image_pass;
 pub mod light_leak;
 pub mod linearize;
 
