@@ -631,6 +631,39 @@ mod tests {
     }
 
     #[test]
+    fn text_file_cards_render_contents_for_file_batches_and_text_paths() {
+        let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let content = "These are the file contents.\nA second line of plain text.";
+
+        for extension in ["txt", "TXT", "text", "rs"] {
+            let path = temp_dir.path().join(format!("notes.{extension}"));
+            std::fs::write(&path, content).unwrap();
+            let mut item = ClipItem::from_files(vec![path.clone()]);
+            let mut manager = SlotManager::new();
+
+            item.payload = ClipPayload::Text(content.to_owned());
+            manager.push_left(item.clone());
+            let expected = renderer.render_pixmap(&manager).unwrap();
+
+            for payload in [
+                ClipPayload::FileBatch(vec![path.clone()]),
+                ClipPayload::Text(path.to_str().unwrap().to_owned()),
+            ] {
+                item.payload = payload;
+                let mut manager = SlotManager::new();
+                manager.push_left(item.clone());
+                let actual = renderer.render_pixmap(&manager).unwrap();
+                assert_eq!(
+                    actual.data(),
+                    expected.data(),
+                    "{extension} file preview should render its contents"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_render_multi_image() {
         use little_clip_core::ImageThumbnail;
         use std::path::PathBuf;

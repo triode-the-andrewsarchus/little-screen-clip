@@ -209,10 +209,7 @@ impl ScreenRenderer {
                 let (preview_text, effective_hint) = {
                     let trimmed = text.trim();
                     let p = Path::new(trimmed);
-                    if p.is_file()
-                        && (little_clip_core::syntax::is_code_file(p)
-                            || little_clip_core::syntax::is_code_file(p))
-                    {
+                    if p.is_file() && little_clip_core::syntax::is_code_file(p) {
                         if let Ok(file_content) = std::fs::read_to_string(p) {
                             let clean_content = file_content
                                 .trim_start_matches(is_zero_width_or_bom)
@@ -419,9 +416,7 @@ impl ScreenRenderer {
                             return;
                         }
                     }
-                    if little_clip_core::syntax::is_code_file(p)
-                        || (p.is_file() && little_clip_core::syntax::is_code_file(p))
-                    {
+                    if p.is_file() && little_clip_core::syntax::is_code_file(p) {
                         if let Ok(file_content) = std::fs::read_to_string(p) {
                             let clean_content = file_content
                                 .trim_start_matches(is_zero_width_or_bom)

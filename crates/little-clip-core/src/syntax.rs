@@ -40,13 +40,7 @@ pub fn detect_language(content: &str, ext_hint: Option<&str>) -> &'static str {
 fn check_extension_hint(ext_hint: Option<&str>) -> Option<&'static str> {
     let ext = ext_hint?;
     let clean = ext.trim().trim_start_matches('.').to_lowercase();
-    if clean == "txt" || clean == "text" {
-        Some("txt")
-    } else if !clean.is_empty() {
-        map_extension_to_language(&clean)
-    } else {
-        None
-    }
+    map_extension_to_language(&clean)
 }
 
 fn check_shebang(trimmed: &str) -> Option<&'static str> {
@@ -355,6 +349,7 @@ fn check_snippet_fallback(trimmed: &str) -> Option<&'static str> {
 /// Maps standard file extensions to syntect language identifiers
 pub fn map_extension_to_language(ext: &str) -> Option<&'static str> {
     match ext.to_lowercase().as_str() {
+        "txt" | "text" => Some("txt"),
         "rs" => Some("rs"),
         "py" | "pyw" | "python" => Some("py"),
         "c" | "h" => Some("c"),
@@ -410,7 +405,7 @@ pub fn language_display_name(lang: &str) -> &'static str {
     }
 }
 
-/// Checks if a file path has an extension associated with code or markup
+/// Checks if a file path has an extension associated with plain text, code, or markup.
 pub fn is_code_file(path: &Path) -> bool {
     path.extension()
         .and_then(|s| s.to_str())
@@ -550,6 +545,12 @@ mod tests {
         assert_eq!(detect_language("", Some("java")), "java");
         assert_eq!(detect_language("", Some("sh")), "sh");
         assert_eq!(detect_language("", Some("json")), "json");
+        assert_eq!(detect_language("fn main() {}", Some(".TXT")), "txt");
+        assert_eq!(detect_language("fn main() {}", Some("text")), "txt");
+        assert!(is_code_file(Path::new("notes.txt")));
+        assert!(is_code_file(Path::new("notes.TXT")));
+        assert!(is_code_file(Path::new("notes.text")));
+        assert!(!is_code_file(Path::new("photo.png")));
     }
 
     #[test]
