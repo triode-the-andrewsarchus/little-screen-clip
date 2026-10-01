@@ -272,227 +272,167 @@ impl ImagePreviewState {
         let f_med = hex_to_c32(&palette.colors.text_secondary);
         let f_low = hex_to_c32(&palette.colors.text_muted);
 
-        egui::Frame::none()
-            .fill(b_low)
-            .inner_margin(egui::Margin::symmetric(
-                crate::ui_ext::PANEL_INSET,
-                crate::ui_ext::CONTROL_GROUP_INSET_Y,
-            ))
+        ui.vertical(|ui| {
+            let rescan_fg = contrast_text_c32(base_c, None, palette);
+            let rescan_btn = egui::Button::new(
+                egui::RichText::new(if self.barcode_state.is_scanning {
+                    "Scanning…"
+                } else {
+                    "Rescan (Enter)"
+                })
+                .size(crate::ui_ext::BODY_FONT_SIZE)
+                .strong()
+                .color(rescan_fg),
+            )
+            .fill(base_c)
             .stroke(Stroke::new(1.0_f32, b_med))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let rescan_fg = contrast_text_c32(base_c, None, palette);
-                    let rescan_btn = egui::Button::new(
-                        egui::RichText::new(if self.barcode_state.is_scanning {
-                            "Scanning…"
-                        } else {
-                            "Rescan (Enter)"
-                        })
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .strong()
-                        .color(rescan_fg),
+            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+
+            if ui
+                .add_enabled(!self.barcode_state.is_scanning, rescan_btn)
+                .on_hover_text("Scan current image for QR codes, Data Matrix, and barcodes (Enter)")
+                .clicked()
+            {
+                self.run_barcode_scan();
+            }
+
+            ui.add_space(crate::ui_ext::SPACE_SM);
+            let count = self.barcode_state.detections.len();
+            let (badge_txt, fg, bg) = if self.barcode_state.is_scanning {
+                ("Scanning image…".to_string(), base_c, b_low)
+            } else if let Some(status) = self.barcode_queue_status.as_ref() {
+                (status.clone(), f_med, b_low)
+            } else if count > 0 {
+                (
+                    format!(
+                        "{} Codes Detected ({}ms)",
+                        count, self.barcode_state.last_scan_duration_ms
+                    ),
+                    base_c,
+                    b_low,
+                )
+            } else if self.barcode_state.has_scanned {
+                ("No Barcodes Detected".to_string(), f_med, b_low)
+            } else {
+                ("Ready to Scan".to_string(), f_med, b_low)
+            };
+            chip_badge(ui, &badge_txt, fg, bg);
+
+            ui.add_space(crate::ui_ext::SPACE_SM);
+            ui.label(
+                egui::RichText::new("QR • DataMatrix • Aztec • PDF417 • Code 128 • EAN-13")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(f_low),
+            );
+
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                if !self.barcode_state.detections.is_empty() {
+                    let copy_fg = contrast_text_c32(b_med, Some(f_med), palette);
+                    let copy_all_btn = egui::Button::new(
+                        egui::RichText::new("📋 Copy All")
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                            .color(copy_fg),
                     )
-                    .fill(base_c)
-                    .stroke(Stroke::new(1.0_f32, b_med))
-                    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+                    .fill(b_med)
+                    .stroke(Stroke::new(1.0_f32, b_low))
+                    .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
                     .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
-                    if ui
-                        .add_enabled(!self.barcode_state.is_scanning, rescan_btn)
-                        .on_hover_text(
-                            "Scan current image for QR codes, Data Matrix, and barcodes (Enter)",
-                        )
-                        .clicked()
-                    {
-                        self.run_barcode_scan();
+                    if ui.add(copy_all_btn).clicked() {
+                        let combined: Vec<String> = self
+                            .barcode_state
+                            .detections
+                            .iter()
+                            .map(|d| d.text.clone())
+                            .collect();
+                        ctx.output_mut(|o| o.copied_text = combined.join("\n"));
+                        self.show_toast("📋 Copied all barcode payloads to clipboard!");
                     }
+                }
+            });
+        });
 
-                    ui.add_space(crate::ui_ext::SPACE_SM);
-                    let count = self.barcode_state.detections.len();
-                    let (badge_txt, fg, bg) = if self.barcode_state.is_scanning {
-                        ("Scanning image…".to_string(), base_c, b_low)
-                    } else if let Some(status) = self.barcode_queue_status.as_ref() {
-                        (status.clone(), f_med, b_low)
-                    } else if count > 0 {
-                        (
-                            format!(
-                                "{} Codes Detected ({}ms)",
-                                count, self.barcode_state.last_scan_duration_ms
-                            ),
-                            base_c,
-                            b_low,
-                        )
-                    } else if self.barcode_state.has_scanned {
-                        ("No Barcodes Detected".to_string(), f_med, b_low)
-                    } else {
-                        ("Ready to Scan".to_string(), f_med, b_low)
-                    };
-                    chip_badge(ui, &badge_txt, fg, bg);
+        if !self.barcode_state.detections.is_empty() {
+            ui.add_space(crate::ui_ext::SPACE_XS);
 
-                    ui.add_space(crate::ui_ext::SPACE_SM);
-                    ui.label(
-                        egui::RichText::new("QR • DataMatrix • Aztec • PDF417 • Code 128 • EAN-13")
-                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .color(f_low),
-                    );
+            ui.vertical(|ui| {
+                for (idx, det) in self.barcode_state.detections.clone().iter().enumerate() {
+                    let is_selected = self.barcode_state.selected_idx == Some(idx);
+                    let card_border = if is_selected { diff_mod } else { b_med };
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if !self.barcode_state.detections.is_empty() {
-                            let copy_fg = contrast_text_c32(b_med, Some(f_med), palette);
-                            let copy_all_btn = egui::Button::new(
-                                egui::RichText::new("📋 Copy All")
-                                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                                    .color(copy_fg),
-                            )
-                            .fill(b_med)
-                            .stroke(Stroke::new(1.0_f32, b_low))
-                            .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
-                            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
-
-                            if ui.add(copy_all_btn).clicked() {
-                                let combined: Vec<String> = self
-                                    .barcode_state
-                                    .detections
-                                    .iter()
-                                    .map(|d| d.text.clone())
-                                    .collect();
-                                ctx.output_mut(|o| o.copied_text = combined.join("\n"));
-                                self.show_toast("📋 Copied all barcode payloads to clipboard!");
-                            }
-                        }
-                    });
-                });
-
-                if !self.barcode_state.detections.is_empty() {
-                    ui.add_space(crate::ui_ext::SPACE_XS);
-                    egui::ScrollArea::horizontal()
-                        .max_height(75.0)
+                    egui::Frame::none()
+                        .fill(b_low)
+                        .inner_margin(egui::Margin::symmetric(
+                            crate::ui_ext::SPACE_SM,
+                            crate::ui_ext::SPACE_XS,
+                        ))
+                        .stroke(Stroke::new(1.0_f32, card_border))
+                        .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                         .show(ui, |ui| {
-                            ui.horizontal(|ui| {
-                                for (idx, det) in
-                                    self.barcode_state.detections.clone().iter().enumerate()
+                            ui.horizontal_wrapped(|ui| {
+                                chip_badge(ui, &det.format, base_c, b_low);
+
+                                let display_text = if det.text.chars().count() > 36 {
+                                    format!("{}…", det.text.chars().take(36).collect::<String>())
+                                } else {
+                                    det.text.clone()
+                                };
+                                let text_fg = contrast_text_c32(b_low, Some(f_high), palette);
+                                ui.label(
+                                    egui::RichText::new(&display_text)
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                                        .monospace()
+                                        .color(text_fg),
+                                )
+                                .on_hover_text(&det.text);
+
+                                if det.is_url {
+                                    let url_fg = contrast_text_c32(b_med, Some(base_c), palette);
+                                    let url_btn = egui::Button::new(
+                                        egui::RichText::new("🌐 Open")
+                                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                                            .color(url_fg),
+                                    )
+                                    .fill(b_med)
+                                    .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
+                                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                                    if ui.add(url_btn).clicked() {
+                                        ctx.open_url(egui::output::OpenUrl::new_tab(
+                                            det.text.clone(),
+                                        ));
+                                    }
+                                }
+
+                                let copy_btn = crate::secondary_button("📋", b_med, palette)
+                                    .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS));
+                                if ui.add(copy_btn).on_hover_text("Copy this code").clicked() {
+                                    ctx.output_mut(|o| o.copied_text = det.text.clone());
+                                    self.show_toast("📋 Copied code payload to clipboard!");
+                                }
+
+                                let rh_fg = contrast_text_c32(b_low, Some(diff_add), palette);
+                                let push_btn = egui::Button::new(
+                                    egui::RichText::new("RH")
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                                        .color(rh_fg),
+                                )
+                                .fill(b_low)
+                                .stroke(Stroke::new(1.0_f32, diff_add))
+                                .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
+                                .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                                if ui
+                                    .add(push_btn)
+                                    .on_hover_text("Push to Right Hand slot")
+                                    .clicked()
                                 {
-                                    let is_selected = self.barcode_state.selected_idx == Some(idx);
-                                    let card_border = if is_selected { diff_mod } else { b_med };
-
-                                    egui::Frame::none()
-                                        .fill(b_low)
-                                        .inner_margin(egui::Margin::symmetric(
-                                            crate::ui_ext::SPACE_SM,
-                                            crate::ui_ext::SPACE_XS,
-                                        ))
-                                        .stroke(Stroke::new(1.0_f32, card_border))
-                                        .rounding(Rounding::same(
-                                            crate::ui_ext::CONTROL_CORNER_RADIUS,
-                                        ))
-                                        .show(ui, |ui| {
-                                            ui.horizontal_wrapped(|ui| {
-                                                chip_badge(ui, &det.format, base_c, b_low);
-
-                                                let display_text = if det.text.chars().count() > 36
-                                                {
-                                                    format!(
-                                                        "{}…",
-                                                        det.text
-                                                            .chars()
-                                                            .take(36)
-                                                            .collect::<String>()
-                                                    )
-                                                } else {
-                                                    det.text.clone()
-                                                };
-                                                let text_fg =
-                                                    contrast_text_c32(b_low, Some(f_high), palette);
-                                                ui.label(
-                                                    egui::RichText::new(&display_text)
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .monospace()
-                                                        .color(text_fg),
-                                                )
-                                                .on_hover_text(&det.text);
-
-                                                if det.is_url {
-                                                    let url_fg = contrast_text_c32(
-                                                        b_med,
-                                                        Some(base_c),
-                                                        palette,
-                                                    );
-                                                    let url_btn = egui::Button::new(
-                                                        egui::RichText::new("🌐 Open")
-                                                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                            .color(url_fg),
-                                                    )
-                                                    .fill(b_med)
-                                                    .rounding(Rounding::same(
-                                                        crate::ui_ext::BADGE_CORNER_RADIUS,
-                                                    ))
-                                                    .min_size(Vec2::new(
-                                                        0.0,
-                                                        crate::ui_ext::CONTROL_HEIGHT,
-                                                    ));
-                                                    if ui.add(url_btn).clicked() {
-                                                        ctx.open_url(
-                                                            egui::output::OpenUrl::new_tab(
-                                                                det.text.clone(),
-                                                            ),
-                                                        );
-                                                    }
-                                                }
-
-                                                let copy_btn =
-                                                    crate::secondary_button("📋", b_med, palette)
-                                                        .rounding(Rounding::same(
-                                                            crate::ui_ext::BADGE_CORNER_RADIUS,
-                                                        ));
-                                                if ui
-                                                    .add(copy_btn)
-                                                    .on_hover_text("Copy this code")
-                                                    .clicked()
-                                                {
-                                                    ctx.output_mut(|o| {
-                                                        o.copied_text = det.text.clone()
-                                                    });
-                                                    self.show_toast(
-                                                        "📋 Copied code payload to clipboard!",
-                                                    );
-                                                }
-
-                                                let rh_fg = contrast_text_c32(
-                                                    b_low,
-                                                    Some(diff_add),
-                                                    palette,
-                                                );
-                                                let push_btn = egui::Button::new(
-                                                    egui::RichText::new("RH")
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(rh_fg),
-                                                )
-                                                .fill(b_low)
-                                                .stroke(Stroke::new(1.0_f32, diff_add))
-                                                .rounding(Rounding::same(
-                                                    crate::ui_ext::BADGE_CORNER_RADIUS,
-                                                ))
-                                                .min_size(Vec2::new(
-                                                    0.0,
-                                                    crate::ui_ext::CONTROL_HEIGHT,
-                                                ));
-                                                if ui
-                                                    .add(push_btn)
-                                                    .on_hover_text("Push to Right Hand slot")
-                                                    .clicked()
-                                                {
-                                                    self.push_text_to_hand_slot(
-                                                        HandSide::Right,
-                                                        det.text.clone(),
-                                                    );
-                                                }
-                                            });
-                                        });
+                                    self.push_text_to_hand_slot(HandSide::Right, det.text.clone());
                                 }
                             });
                         });
                 }
             });
+        }
     }
 
     pub(crate) fn render_barcode_overlay(

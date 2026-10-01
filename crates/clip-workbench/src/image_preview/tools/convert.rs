@@ -1037,8 +1037,9 @@ impl ImagePreviewState {
             (ConvertTargetFormat::Jpeg, "JPEG"),
             (ConvertTargetFormat::Webp, "WebP"),
         ];
-        let format_width = ((ui.available_width() - 8.0) / 3.0).max(54.0);
-        ui.horizontal(|ui| {
+        let format_width =
+            crate::ui_ext::wrapped_equal_button_width(ui, &["PNG", "JPEG", "WebP"], false, 3);
+        ui.horizontal_wrapped(|ui| {
             for (format, label) in formats {
                 let active = self.convert_state.target_format == format;
                 let fill = if active { accent } else { surface };
@@ -1329,8 +1330,9 @@ impl ImagePreviewState {
                 .color(text),
         );
         ui.add_space(crate::ui_ext::SPACE_XS);
-        let slot_width = ((ui.available_width() - 6.0) * 0.5).max(70.0);
-        ui.horizontal(|ui| {
+        let slot_width =
+            crate::ui_ext::wrapped_equal_button_width(ui, &["Left hand", "Right hand"], false, 2);
+        ui.horizontal_wrapped(|ui| {
             let left = crate::secondary_button("Left hand", surface, palette);
             if ui
                 .add_sized([slot_width, crate::ui_ext::CONTROL_HEIGHT], left)

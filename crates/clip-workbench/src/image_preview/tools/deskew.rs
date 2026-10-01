@@ -151,165 +151,154 @@ impl ImagePreviewState {
         _ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        let frame_bg = hex_to_c32(&palette.colors.surface_recessed);
-        let frame_stroke = hex_to_c32(&palette.colors.surface_panel);
         let btn_bg = hex_to_c32(&palette.colors.surface_panel);
         let btn_border = hex_to_c32(&palette.colors.surface_recessed);
 
-        egui::Frame::none()
-            .fill(frame_bg)
-            .inner_margin(egui::Margin::symmetric(
-                crate::ui_ext::PANEL_INSET,
-                crate::ui_ext::CONTROL_GROUP_INSET_Y,
-            ))
-            .stroke(Stroke::new(1.0_f32, frame_stroke))
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        egui::RichText::new("4-Point Deskew:")
-                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .strong()
-                            .color(hex_to_c32(&palette.harmonies.base)),
-                    );
+        ui.vertical(|ui| {
+            ui.label(
+                egui::RichText::new("4-Point Deskew:")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .strong()
+                    .color(hex_to_c32(&palette.harmonies.base)),
+            );
 
-                    ui.add_space(crate::ui_ext::SPACE_XS);
+            ui.add_space(crate::ui_ext::SPACE_XS);
 
-                    // 1. Click 4 Points toggle button
-                    let is_placing = self.deskew_state.is_clicking_points;
-                    let click_lbl = if is_placing {
-                        format!("Placing ({}/4)...", self.deskew_state.placed_points.len())
-                    } else {
-                        "Click 4 Points".to_string()
-                    };
-                    let click_btn = crate::ui_ext::mode_tab_button_icon(
-                        Some(Icon::Crosshair),
-                        &click_lbl,
-                        is_placing,
-                        palette,
-                    )
-                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
-                    if ui.add(click_btn)
-                        .on_hover_text("Click 4 corners directly on the image: Top-Left → Top-Right → Bottom-Right → Bottom-Left")
-                        .clicked()
-                    {
-                        if is_placing {
-                            self.deskew_state.cancel_clicking_points();
-                        } else {
-                            self.deskew_state.start_clicking_points();
-                            self.show_toast("Click 4 corners: TL → TR → BR → BL");
-                        }
-                    }
+            // 1. Click 4 Points toggle button
+            let is_placing = self.deskew_state.is_clicking_points;
+            let click_lbl = if is_placing {
+                format!("Placing ({}/4)...", self.deskew_state.placed_points.len())
+            } else {
+                "Click 4 Points".to_string()
+            };
+            let click_btn = crate::ui_ext::mode_tab_button_icon(
+                Some(Icon::Crosshair),
+                &click_lbl,
+                is_placing,
+                palette,
+            )
+            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+            if ui.add(click_btn)
+                .on_hover_text("Click 4 corners directly on the image: Top-Left → Top-Right → Bottom-Right → Bottom-Left")
+                .clicked()
+            {
+                if is_placing {
+                    self.deskew_state.cancel_clicking_points();
+                } else {
+                    self.deskew_state.start_clicking_points();
+                    self.show_toast("Click 4 corners: TL → TR → BR → BL");
+                }
+            }
 
-                    ui.add_space(crate::ui_ext::SPACE_SM);
-                    ui.separator();
-                    ui.add_space(crate::ui_ext::SPACE_XS);
+            ui.add_space(crate::ui_ext::SPACE_SM);
+            ui.separator();
+            ui.add_space(crate::ui_ext::SPACE_XS);
 
-                    // 2. Cropping mode buttons (Crop to Quad vs Minimal Crop)
-                    ui.label(
-                        egui::RichText::new("Cropping:")
-                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .color(hex_to_c32(&palette.colors.text_secondary)),
-                    );
+            // 2. Cropping mode buttons (Crop to Quad vs Minimal Crop)
+            ui.label(
+                egui::RichText::new("Cropping:")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(hex_to_c32(&palette.colors.text_secondary)),
+            );
 
-                    let is_crop_to_quad = self.deskew_state.crop_mode == DeskewCropMode::CropToQuad;
-                    let crop_quad_btn = crate::ui_ext::mode_tab_button_icon(
-                        Some(Icon::Crop),
-                        "Crop to Quad",
-                        is_crop_to_quad,
-                        palette,
-                    )
-                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
-                    if ui.add(crop_quad_btn)
-                        .on_hover_text("Crop tightly to the 4-point quadrilateral")
-                        .clicked()
-                    {
-                        self.deskew_state.crop_mode = DeskewCropMode::CropToQuad;
-                    }
+            let is_crop_to_quad = self.deskew_state.crop_mode == DeskewCropMode::CropToQuad;
+            let crop_quad_btn = crate::ui_ext::mode_tab_button_icon(
+                Some(Icon::Crop),
+                "Crop to Quad",
+                is_crop_to_quad,
+                palette,
+            )
+            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+            if ui.add(crop_quad_btn)
+                .on_hover_text("Crop tightly to the 4-point quadrilateral")
+                .clicked()
+            {
+                self.deskew_state.crop_mode = DeskewCropMode::CropToQuad;
+            }
 
-                    let is_minimal_crop = self.deskew_state.crop_mode == DeskewCropMode::MinimalCrop;
-                    let minimal_crop_btn = crate::ui_ext::mode_tab_button_icon(
-                        Some(Icon::Image),
-                        "Minimal Crop",
-                        is_minimal_crop,
-                        palette,
-                    )
-                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
-                    if ui.add(minimal_crop_btn)
-                        .on_hover_text("Preserve the entire rectified image, cropping only as strictly necessary")
-                        .clicked()
-                    {
-                        self.deskew_state.crop_mode = DeskewCropMode::MinimalCrop;
-                    }
+            let is_minimal_crop = self.deskew_state.crop_mode == DeskewCropMode::MinimalCrop;
+            let minimal_crop_btn = crate::ui_ext::mode_tab_button_icon(
+                Some(Icon::Image),
+                "Minimal Crop",
+                is_minimal_crop,
+                palette,
+            )
+            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+            if ui.add(minimal_crop_btn)
+                .on_hover_text("Preserve the entire rectified image, cropping only as strictly necessary")
+                .clicked()
+            {
+                self.deskew_state.crop_mode = DeskewCropMode::MinimalCrop;
+            }
 
-                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
+            ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
-                    // 3. Target dimensions calculation preview
-                    let w_f = self.current_rgba.width() as f32;
-                    let h_f = self.current_rgba.height() as f32;
-                    let c = self.deskew_state.corners;
-                    let quad = QuadCorners::new(
-                        [c[0].x * w_f, c[0].y * h_f],
-                        [c[1].x * w_f, c[1].y * h_f],
-                        [c[2].x * w_f, c[2].y * h_f],
-                        [c[3].x * w_f, c[3].y * h_f],
-                    );
-                    let (est_w, est_h) = quad.estimate_dimensions();
-                    let (disp_w, disp_h) = match self.deskew_state.crop_mode {
-                        DeskewCropMode::CropToQuad => (est_w, est_h),
-                        DeskewCropMode::MinimalCrop => quad.estimate_minimal_crop_dimensions(
-                            self.current_rgba.width(),
-                            self.current_rgba.height(),
-                            est_w,
-                            est_h,
-                        ),
-                    };
+            // 3. Target dimensions calculation preview
+            let w_f = self.current_rgba.width() as f32;
+            let h_f = self.current_rgba.height() as f32;
+            let c = self.deskew_state.corners;
+            let quad = QuadCorners::new(
+                [c[0].x * w_f, c[0].y * h_f],
+                [c[1].x * w_f, c[1].y * h_f],
+                [c[2].x * w_f, c[2].y * h_f],
+                [c[3].x * w_f, c[3].y * h_f],
+            );
+            let (est_w, est_h) = quad.estimate_dimensions();
+            let (disp_w, disp_h) = match self.deskew_state.crop_mode {
+                DeskewCropMode::CropToQuad => (est_w, est_h),
+                DeskewCropMode::MinimalCrop => quad.estimate_minimal_crop_dimensions(
+                    self.current_rgba.width(),
+                    self.current_rgba.height(),
+                    est_w,
+                    est_h,
+                ),
+            };
 
-                    crate::ui_ext::badge_pill(
-                        ui,
-                        &format!("Output: ~{}×{} px", disp_w, disp_h),
-                        Some(hex_to_c32(&palette.harmonies.split_comp_1)),
-                        palette,
-                    );
+            crate::ui_ext::badge_pill(
+                ui,
+                &format!("Output: ~{}×{} px", disp_w, disp_h),
+                Some(hex_to_c32(&palette.harmonies.split_comp_1)),
+                palette,
+            );
 
-                    ui.add_space(crate::ui_ext::SPACE_SM);
+            ui.add_space(crate::ui_ext::SPACE_SM);
 
-                    // 4. Apply Deskew button
-                    let apply_bg = hex_to_c32(&palette.diff_add);
-                    let apply_btn = crate::ui_ext::action_button_icon(
-                        Some(Icon::Check),
-                        "Apply Deskew (Enter)",
-                        apply_bg,
-                        palette,
-                    )
-                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+            // 4. Apply Deskew button
+            let apply_bg = hex_to_c32(&palette.diff_add);
+            let apply_btn = crate::ui_ext::action_button_icon(
+                Some(Icon::Check),
+                "Apply Deskew (Enter)",
+                apply_bg,
+                palette,
+            )
+            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
-                    if ui.add(apply_btn).on_hover_text("Rectify quad perspective into rectangular output (Enter)").clicked() {
-                        self.apply_deskew();
-                    }
+            if ui.add(apply_btn).on_hover_text("Rectify quad perspective into rectangular output (Enter)").clicked() {
+                self.apply_deskew();
+            }
 
-                    // 5. Reset button
-                    let reset_fg = contrast_text_c32(btn_bg, Some(hex_to_c32(&palette.colors.text_secondary)), palette);
-                    let reset_btn = egui::Button::new(
-                        egui::RichText::new("⟲ Reset Quad").size(crate::ui_ext::BODY_FONT_SIZE).color(reset_fg),
-                    )
-                    .fill(btn_bg)
-                    .stroke(Stroke::new(1.0_f32, btn_border))
-                    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+            // 5. Reset button
+            let reset_fg = contrast_text_c32(btn_bg, Some(hex_to_c32(&palette.colors.text_secondary)), palette);
+            let reset_btn = egui::Button::new(
+                egui::RichText::new("⟲ Reset Quad").size(crate::ui_ext::BODY_FONT_SIZE).color(reset_fg),
+            )
+            .fill(btn_bg)
+            .stroke(Stroke::new(1.0_f32, btn_border))
+            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
 
-                    if ui.add(reset_btn).on_hover_text("Reset corner handles to default positions").clicked() {
-                        self.deskew_state.reset_quad();
-                    }
+            if ui.add(reset_btn).on_hover_text("Reset corner handles to default positions").clicked() {
+                self.deskew_state.reset_quad();
+            }
 
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new("Click 4 points or drag handles")
-                                .size(crate::ui_ext::BODY_FONT_SIZE)
-                                .color(hex_to_c32(&palette.colors.text_muted)),
-                        );
-                    });
-                });
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.label(
+                    egui::RichText::new("Click 4 points or drag handles")
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(hex_to_c32(&palette.colors.text_muted)),
+                );
             });
+        });
     }
 
     pub(crate) fn render_deskew_overlay(

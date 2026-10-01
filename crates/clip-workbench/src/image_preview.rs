@@ -225,7 +225,6 @@ pub struct ImagePreviewState {
 
     // EXIF & Image Metadata Inspector
     pub metadata: Option<ImageMetadataSummary>,
-    pub show_metadata_drawer: bool,
 
     // 4-Point Perspective Deskew
     pub deskew_state: DeskewState,
@@ -615,7 +614,6 @@ impl ImagePreviewState {
             film_sim_state: FilmSimState::default(),
             creative_fx_state: CreativeFxState::default(),
             metadata,
-            show_metadata_drawer: false,
             deskew_state: DeskewState::default(),
         }
     }
@@ -1434,9 +1432,6 @@ impl ImagePreviewState {
                 // 2. TOOLBAR (Mode selection & Viewport controls)
                 self.render_toolbar(ui, palette);
 
-                // Tool modules own their compact or panel-based controls.
-                self.render_active_tool_controls(ui, ctx, palette);
-
                 ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // 3. MAIN INTERACTIVE VIEWPORT
@@ -1995,7 +1990,7 @@ impl ImagePreviewState {
 fn image_studio_footer_hint(mode: ImageToolMode) -> &'static str {
     match mode {
         ImageToolMode::View => {
-            "🖱 Scroll: Zoom | Drag: Pan | ▼ EXIF Details | Ctrl+C: Copy Slot | Ctrl+S: Save As | 0: Fit"
+            "🖱 Scroll: Zoom | Drag: Pan | Ctrl+C: Copy Slot | Ctrl+S: Save As | 0: Fit"
         }
         ImageToolMode::Crop => {
             "🖱 Drag crop box/handles | Enter: Apply | Ctrl+C: Copy Slot | Ctrl+S: Save As | Esc: Cancel"
@@ -2004,7 +1999,7 @@ fn image_studio_footer_hint(mode: ImageToolMode) -> &'static str {
             "🎯 Click 4 points (TL → TR → BR → BL) | 🖱 Drag handles | Enter: Apply | Esc: Close"
         }
         ImageToolMode::Transform => {
-            "🖱 Rotate / Flip buttons above | Ctrl+Z: Undo | Ctrl+C: Copy Slot | Ctrl+S: Save As"
+            "🖱 Rotate / Flip buttons in the left panel | Ctrl+Z: Undo | Ctrl+C: Copy Slot | Ctrl+S: Save As"
         }
         ImageToolMode::Redact => {
             "🖱 Drag on image: Place black bar | 🛡️ Strip EXIF | Del: Remove | Enter: Burn/Apply | Ctrl+C: Copy Slot"

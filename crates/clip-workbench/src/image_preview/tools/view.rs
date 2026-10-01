@@ -1,327 +1,102 @@
 use super::super::*;
 
 impl ImagePreviewState {
+    pub(crate) fn has_view_metadata(&self) -> bool {
+        self.metadata.as_ref().is_some_and(|meta| {
+            [
+                &meta.make,
+                &meta.model,
+                &meta.lens_model,
+                &meta.date_time,
+                &meta.exposure_time,
+                &meta.software,
+            ]
+            .iter()
+            .any(|value| value.as_ref().is_some_and(|value| !value.trim().is_empty()))
+                || meta.iso.is_some()
+                || meta.f_number.is_some()
+                || meta.focal_length.is_some()
+                || meta.has_gps()
+                || meta.gps_altitude.is_some()
+        })
+    }
+
     pub(crate) fn render_view_toolbar(
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         palette: &AppPalette,
     ) {
-        let frame_bg = hex_to_c32(&palette.colors.surface_recessed);
-        let frame_stroke = hex_to_c32(&palette.colors.surface_panel);
+        if !self.has_view_metadata() {
+            return;
+        }
+        let Some(meta) = &self.metadata else {
+            return;
+        };
+        let text = hex_to_c32(&palette.colors.text_secondary);
+        let accent = hex_to_c32(&palette.harmonies.base);
         let btn_bg = hex_to_c32(&palette.colors.surface_panel);
-        let _btn_border = hex_to_c32(&palette.colors.surface_recessed);
-
-        egui::Frame::none()
-            .fill(frame_bg)
-            .inner_margin(egui::Margin::symmetric(
-                crate::ui_ext::PANEL_INSET,
-                crate::ui_ext::CONTROL_GROUP_INSET_Y,
-            ))
-            .stroke(Stroke::new(1.0_f32, frame_stroke))
-            .show(ui, |ui| {
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("Inspector:")
-                                .strong()
-                                .size(crate::ui_ext::BODY_FONT_SIZE)
-                                .color(hex_to_c32(&palette.harmonies.base)),
-                        );
-
-                        if let Some(meta) = &self.metadata {
-                            if let Some(cam) = meta.camera_summary() {
-                                crate::ui_ext::badge_pill(
-                                    ui,
-                                    &cam,
-                                    Some(hex_to_c32(&palette.harmonies.split_comp_1)),
-                                    palette,
-                                );
-                            }
-                            if let Some(exp) = meta.exposure_summary() {
-                                crate::ui_ext::badge_pill(
-                                    ui,
-                                    &exp,
-                                    Some(hex_to_c32(&palette.diff_mod)),
-                                    palette,
-                                );
-                            }
-                            if let Some(dt) = &meta.date_time {
-                                crate::ui_ext::badge_pill(
-                                    ui,
-                                    dt,
-                                    Some(hex_to_c32(&palette.colors.text_secondary)),
-                                    palette,
-                                );
-                            }
-                            if let Some(gps) = meta.gps_display() {
-                                crate::ui_ext::badge_pill(
-                                    ui,
-                                    &gps,
-                                    Some(hex_to_c32(&palette.diff_add)),
-                                    palette,
-                                );
-                                if let Some(osm) = meta.osm_url() {
-                                    let map_btn = crate::ui_ext::secondary_button_icon(
-                                        Some(Icon::Search),
-                                        "Map",
-                                        btn_bg,
-                                        palette,
-                                    );
-                                    if ui
-                                        .add(map_btn)
-                                        .on_hover_text("Open GPS location in OpenStreetMap")
-                                        .clicked()
-                                    {
-                                        ctx.open_url(egui::output::OpenUrl::new_tab(osm));
-                                    }
-                                }
-                            }
-
-                            // Drawer toggle button
-                            let (toggle_txt, toggle_icon) = if self.show_metadata_drawer {
-                                ("Hide Details", Icon::ArrowUp)
-                            } else {
-                                ("EXIF Details", Icon::ArrowDown)
-                            };
-                            let toggle_btn = crate::ui_ext::secondary_button_icon(
-                                Some(toggle_icon),
-                                toggle_txt,
-                                btn_bg,
-                                palette,
-                            );
-                            if ui.add(toggle_btn).clicked() {
-                                self.show_metadata_drawer = !self.show_metadata_drawer;
-                            }
-                        } else {
-                            ui.label(
-                                egui::RichText::new(
-                                    "Clean Image (No EXIF or metadata tags detected)",
-                                )
-                                .size(crate::ui_ext::BODY_FONT_SIZE)
-                                .color(hex_to_c32(&palette.colors.text_secondary)),
-                            );
-                        }
-
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let dim_str = format!(
-                                "{} × {} px",
-                                self.current_rgba.width(),
-                                self.current_rgba.height()
-                            );
-                            ui.label(
-                                egui::RichText::new(dim_str)
-                                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                                    .color(hex_to_c32(&palette.colors.text_muted)),
-                            );
-                        });
-                    });
-
-                    // Expanded Metadata Drawer
-                    if self.show_metadata_drawer {
-                        if let Some(meta) = &self.metadata {
-                            ui.add_space(crate::ui_ext::SPACE_XS);
-                            ui.separator();
-                            ui.add_space(crate::ui_ext::SPACE_XS);
-
-                            egui::ScrollArea::vertical()
-                                .max_height(140.0)
-                                .show(ui, |ui| {
-                                    egui::Grid::new("exif_metadata_grid")
-                                        .striped(true)
-                                        .spacing(Vec2::new(16.0, 4.0))
-                                        .show(ui, |ui| {
-                                            if let Some(m) = &meta.make {
-                                                ui.label(
-                                                    egui::RichText::new("Camera Make:")
-                                                        .strong()
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(
-                                                            &palette.colors.text_secondary,
-                                                        )),
-                                                );
-                                                ui.label(
-                                                    egui::RichText::new(m)
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                                                );
-                                                ui.end_row();
-                                            }
-                                            if let Some(m) = &meta.model {
-                                                ui.label(
-                                                    egui::RichText::new("Camera Model:")
-                                                        .strong()
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(
-                                                            &palette.colors.text_secondary,
-                                                        )),
-                                                );
-                                                ui.label(
-                                                    egui::RichText::new(m)
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                                                );
-                                                ui.end_row();
-                                            }
-                                            if let Some(l) = &meta.lens_model {
-                                                ui.label(
-                                                    egui::RichText::new("Lens:")
-                                                        .strong()
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(
-                                                            &palette.colors.text_secondary,
-                                                        )),
-                                                );
-                                                ui.label(
-                                                    egui::RichText::new(l)
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                                                );
-                                                ui.end_row();
-                                            }
-                                            if let Some(s) = &meta.software {
-                                                ui.label(
-                                                    egui::RichText::new("Software:")
-                                                        .strong()
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(
-                                                            &palette.colors.text_secondary,
-                                                        )),
-                                                );
-                                                ui.label(
-                                                    egui::RichText::new(s)
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                                                );
-                                                ui.end_row();
-                                            }
-                                            if let Some(dt) = &meta.date_time {
-                                                ui.label(
-                                                    egui::RichText::new("Timestamp:")
-                                                        .strong()
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(
-                                                            &palette.colors.text_secondary,
-                                                        )),
-                                                );
-                                                ui.label(
-                                                    egui::RichText::new(dt)
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                                                );
-                                                ui.end_row();
-                                            }
-                                            if let Some(iso) = meta.iso {
-                                                ui.label(
-                                                    egui::RichText::new("ISO Speed:")
-                                                        .strong()
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(
-                                                            &palette.colors.text_secondary,
-                                                        )),
-                                                );
-                                                ui.label(
-                                                    egui::RichText::new(iso.to_string())
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                                                );
-                                                ui.end_row();
-                                            }
-                                            if let Some(f) = meta.f_number {
-                                                ui.label(
-                                                    egui::RichText::new("Aperture:")
-                                                        .strong()
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(
-                                                            &palette.colors.text_secondary,
-                                                        )),
-                                                );
-                                                ui.label(
-                                                    egui::RichText::new(format!("f/{:.1}", f))
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                                                );
-                                                ui.end_row();
-                                            }
-                                            if let Some(exp) = &meta.exposure_time {
-                                                ui.label(
-                                                    egui::RichText::new("Shutter Speed:")
-                                                        .strong()
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(
-                                                            &palette.colors.text_secondary,
-                                                        )),
-                                                );
-                                                ui.label(
-                                                    egui::RichText::new(exp)
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                                                );
-                                                ui.end_row();
-                                            }
-                                            if let Some(fl) = meta.focal_length {
-                                                ui.label(
-                                                    egui::RichText::new("Focal Length:")
-                                                        .strong()
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(
-                                                            &palette.colors.text_secondary,
-                                                        )),
-                                                );
-                                                ui.label(
-                                                    egui::RichText::new(format!("{:.1} mm", fl))
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                                                );
-                                                ui.end_row();
-                                            }
-                                            if let (Some(lat), Some(lon)) =
-                                                (meta.gps_latitude, meta.gps_longitude)
-                                            {
-                                                ui.label(
-                                                    egui::RichText::new("GPS Coordinates:")
-                                                        .strong()
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(
-                                                            &palette.colors.text_secondary,
-                                                        )),
-                                                );
-                                                ui.horizontal(|ui| {
-                                                    ui.label(
-                                                        egui::RichText::new(format!(
-                                                            "{:.6}, {:.6}",
-                                                            lat, lon
-                                                        ))
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                                                    );
-                                                    let copy_btn =
-                                                        crate::ui_ext::secondary_button_icon(
-                                                            Some(Icon::Copy),
-                                                            "Copy",
-                                                            btn_bg,
-                                                            palette,
-                                                        );
-                                                    if ui.add(copy_btn).clicked() {
-                                                        ctx.output_mut(|o| {
-                                                            o.copied_text =
-                                                                format!("{:.6}, {:.6}", lat, lon)
-                                                        });
-                                                    }
-                                                });
-                                                ui.end_row();
-                                            }
-                                            if let Some(alt) = meta.gps_altitude {
-                                                ui.label(
-                                                    egui::RichText::new("GPS Altitude:")
-                                                        .strong()
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(hex_to_c32(
-                                                            &palette.colors.text_secondary,
-                                                        )),
-                                                );
-                                                ui.label(
-                                                    egui::RichText::new(format!("{:.1} m", alt))
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                                                );
-                                                ui.end_row();
-                                            }
-                                        });
-                                });
-                        }
-                    }
-                });
-            });
+        ui.label(egui::RichText::new("Metadata").strong().color(accent));
+        for summary in [
+            meta.camera_summary(),
+            meta.exposure_summary(),
+            meta.date_time.clone(),
+            meta.gps_display(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            ui.label(egui::RichText::new(summary).color(text));
+        }
+        if let Some(osm) = meta.osm_url() {
+            let map =
+                crate::ui_ext::secondary_button_icon(Some(Icon::Search), "Map", btn_bg, palette);
+            if ui
+                .add(map)
+                .on_hover_text("Open GPS location in OpenStreetMap")
+                .clicked()
+            {
+                ctx.open_url(egui::output::OpenUrl::new_tab(osm));
+            }
+        }
+        ui.add_space(crate::ui_ext::SPACE_SM);
+        ui.separator();
+        for (label, value) in [
+            ("Camera Make", meta.make.clone()),
+            ("Camera Model", meta.model.clone()),
+            ("Lens", meta.lens_model.clone()),
+            ("Date / Time", meta.date_time.clone()),
+            ("ISO", meta.iso.map(|value| value.to_string())),
+            (
+                "Aperture",
+                meta.f_number.map(|value| format!("f/{value:.1}")),
+            ),
+            ("Exposure", meta.exposure_time.clone()),
+            (
+                "Focal Length",
+                meta.focal_length.map(|value| format!("{value:.1} mm")),
+            ),
+            ("Software", meta.software.clone()),
+            (
+                "GPS Altitude",
+                meta.gps_altitude.map(|value| format!("{value:.1} m")),
+            ),
+        ] {
+            if let Some(value) = value.filter(|value| !value.trim().is_empty()) {
+                ui.label(egui::RichText::new(label).strong().color(text));
+                ui.label(value);
+                ui.add_space(crate::ui_ext::SPACE_XS);
+            }
+        }
+        if let (Some(lat), Some(lon)) = (meta.gps_latitude, meta.gps_longitude) {
+            ui.label(egui::RichText::new("GPS Coordinates").strong().color(text));
+            ui.label(format!("{lat:.6}, {lon:.6}"));
+            let copy =
+                crate::ui_ext::secondary_button_icon(Some(Icon::Copy), "Copy", btn_bg, palette);
+            if ui.add(copy).clicked() {
+                ctx.output_mut(|output| output.copied_text = format!("{lat:.6}, {lon:.6}"));
+            }
+        }
     }
 }
 
@@ -353,7 +128,6 @@ mod tests {
             gps_longitude: Some(-122.5),
             ..Default::default()
         });
-        state.show_metadata_drawer = true;
 
         let ctx = egui::Context::default();
         crate::ui_ext::configure_workbench_style(&ctx);

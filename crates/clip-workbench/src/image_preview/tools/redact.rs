@@ -79,125 +79,123 @@ impl ImagePreviewState {
     /// Strips all EXIF, GPS, camera metadata, and timestamps by cleanly re-encoding pristine pixels.
 
     pub(crate) fn render_redact_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
-        let frame_bg = hex_to_c32(&palette.colors.surface_recessed);
-        let frame_stroke = hex_to_c32(&palette.colors.surface_panel);
         let btn_bg = hex_to_c32(&palette.colors.surface_panel);
         let btn_border = hex_to_c32(&palette.colors.surface_recessed);
 
-        egui::Frame::none()
-            .fill(frame_bg)
-            .inner_margin(egui::Margin::symmetric(
-                crate::ui_ext::PANEL_INSET,
-                crate::ui_ext::CONTROL_GROUP_INSET_Y,
-            ))
-            .stroke(Stroke::new(1.0_f32, frame_stroke))
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(
-                        egui::RichText::new("Privacy Redaction:")
+        ui.vertical(|ui| {
+            ui.label(
+                egui::RichText::new("Privacy Redaction:")
+                    .strong()
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(hex_to_c32(&palette.diff_del)),
+            );
+
+            let box_count = self.redaction_state.boxes.len();
+            let count_str = if box_count == 0 {
+                "Drag on image to draw black bar".to_string()
+            } else if box_count == 1 {
+                "1 bar placed".to_string()
+            } else {
+                format!("{} bars placed", box_count)
+            };
+            ui.label(
+                egui::RichText::new(count_str)
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(hex_to_c32(&palette.colors.text_secondary)),
+            );
+
+            ui.add_space(crate::ui_ext::SPACE_SM);
+
+            // Burn / Apply Redactions button
+            let has_boxes = !self.redaction_state.boxes.is_empty();
+            let burn_bg = if has_boxes {
+                hex_to_c32(&palette.diff_del)
+            } else {
+                btn_bg
+            };
+            let burn_btn = crate::ui_ext::action_button_icon(
+                Some(Icon::Check),
+                "Burn / Apply (Enter)",
+                burn_bg,
+                palette,
+            );
+
+            if ui
+                .add_enabled(has_boxes, burn_btn)
+                .on_hover_text("Permanently rasterize black bars into image pixels (Enter)")
+                .clicked()
+            {
+                self.apply_redactions();
+            }
+
+            // Delete Selected button
+            let has_selection = self.redaction_state.selected_idx.is_some();
+            let del_btn = crate::ui_ext::danger_button_icon(
+                Some(Icon::Trash),
+                "Delete Selected (Del)",
+                btn_bg,
+                palette,
+            );
+
+            if ui.add_enabled(has_selection, del_btn).clicked() {
+                self.delete_selected_redaction();
+            }
+
+            // Clear All button
+            let clear_btn = crate::ui_ext::secondary_button_icon(
+                Some(Icon::Close),
+                "Clear All",
+                btn_bg,
+                palette,
+            );
+
+            if ui.add_enabled(has_boxes, clear_btn).clicked() {
+                self.clear_all_redactions();
+            }
+
+            ui.add_space(crate::ui_ext::SPACE_SM);
+
+            // Strip Metadata / EXIF button
+            let has_meta = self.metadata.is_some();
+            let strip_btn = crate::ui_ext::secondary_button_icon(
+                Some(Icon::Shield),
+                "Strip Metadata / EXIF",
+                btn_bg,
+                palette,
+            );
+
+            if ui
+                .add(strip_btn)
+                .on_hover_text(if has_meta {
+                    "Permanently remove camera, GPS, timestamps, and all EXIF tags from this image"
+                } else {
+                    "Image is already clean (No EXIF metadata detected)"
+                })
+                .clicked()
+            {
+                self.strip_metadata();
+            }
+
+            ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                if !self.undo_stack.is_empty() {
+                    let undo_fg =
+                        contrast_text_c32(btn_bg, Some(hex_to_c32(&palette.diff_mod)), palette);
+                    let undo_btn = egui::Button::new(
+                        egui::RichText::new("⟲ Undo (Ctrl+Z)")
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
                             .strong()
-                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .color(hex_to_c32(&palette.diff_del)),
-                    );
-
-                    let box_count = self.redaction_state.boxes.len();
-                    let count_str = if box_count == 0 {
-                        "Drag on image to draw black bar".to_string()
-                    } else if box_count == 1 {
-                        "1 bar placed".to_string()
-                    } else {
-                        format!("{} bars placed", box_count)
-                    };
-                    ui.label(
-                        egui::RichText::new(count_str)
-                            .size(crate::ui_ext::BODY_FONT_SIZE)
-                            .color(hex_to_c32(&palette.colors.text_secondary)),
-                    );
-
-                    ui.add_space(crate::ui_ext::SPACE_SM);
-
-                    // Burn / Apply Redactions button
-                    let has_boxes = !self.redaction_state.boxes.is_empty();
-                    let burn_bg = if has_boxes {
-                        hex_to_c32(&palette.diff_del)
-                    } else {
-                        btn_bg
-                    };
-                    let burn_btn = crate::ui_ext::action_button_icon(
-                        Some(Icon::Check),
-                        "Burn / Apply (Enter)",
-                        burn_bg,
-                        palette,
-                    );
-
-                    if ui.add_enabled(has_boxes, burn_btn).on_hover_text("Permanently rasterize black bars into image pixels (Enter)").clicked() {
-                        self.apply_redactions();
+                            .color(undo_fg),
+                    )
+                    .fill(btn_bg)
+                    .stroke(Stroke::new(1.0_f32, btn_border))
+                    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+                    .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                    if ui.add(undo_btn).clicked() {
+                        self.undo();
                     }
-
-                    // Delete Selected button
-                    let has_selection = self.redaction_state.selected_idx.is_some();
-                    let del_btn = crate::ui_ext::danger_button_icon(
-                        Some(Icon::Trash),
-                        "Delete Selected (Del)",
-                        btn_bg,
-                        palette,
-                    );
-
-                    if ui.add_enabled(has_selection, del_btn).clicked() {
-                        self.delete_selected_redaction();
-                    }
-
-                    // Clear All button
-                    let clear_btn = crate::ui_ext::secondary_button_icon(
-                        Some(Icon::Close),
-                        "Clear All",
-                        btn_bg,
-                        palette,
-                    );
-
-                    if ui.add_enabled(has_boxes, clear_btn).clicked() {
-                        self.clear_all_redactions();
-                    }
-
-                    ui.add_space(crate::ui_ext::SPACE_SM);
-
-                    // Strip Metadata / EXIF button
-                    let has_meta = self.metadata.is_some();
-                    let strip_btn = crate::ui_ext::secondary_button_icon(
-                        Some(Icon::Shield),
-                        "Strip Metadata / EXIF",
-                        btn_bg,
-                        palette,
-                    );
-
-                    if ui.add(strip_btn)
-                        .on_hover_text(if has_meta {
-                            "Permanently remove camera, GPS, timestamps, and all EXIF tags from this image"
-                        } else {
-                            "Image is already clean (No EXIF metadata detected)"
-                        })
-                        .clicked()
-                    {
-                        self.strip_metadata();
-                    }
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if !self.undo_stack.is_empty() {
-                            let undo_fg = contrast_text_c32(btn_bg, Some(hex_to_c32(&palette.diff_mod)), palette);
-                            let undo_btn = egui::Button::new(
-                                egui::RichText::new("⟲ Undo (Ctrl+Z)").size(crate::ui_ext::BODY_FONT_SIZE).strong().color(undo_fg),
-                            )
-                            .fill(btn_bg)
-                            .stroke(Stroke::new(1.0_f32, btn_border))
-                            .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                            .min_size(Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
-                            if ui.add(undo_btn).clicked() {
-                                self.undo();
-                            }
-                        }
-                    });
-                });
+                }
             });
+        });
     }
 
     pub(crate) fn render_redact_overlay(
