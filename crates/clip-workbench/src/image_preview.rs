@@ -270,7 +270,8 @@ impl DecodedImageData {
                 return Err("Failed to rasterize SVG via rsvg-convert. Ensure librsvg / rsvg-convert is installed.".to_string());
             }
         } else {
-            image::load_from_memory(&bytes)
+            little_clip_core::item::image_reader(&bytes, Some(&mime))
+                .and_then(|reader| reader.decode())
                 .map_err(|error| format!("Failed to decode image bytes: {error}"))?
                 .to_rgba8()
         };
@@ -2303,6 +2304,18 @@ fn render_svg_to_png(bytes: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heic_studio_import_preserves_encoded_exif_and_decodes_pixels() {
+        let bytes = include_bytes!("../../little-clip-core/tests/fixtures/gradient.heic").to_vec();
+        let source =
+            DecodedImageData::from_bytes(bytes.clone(), "image/heic".to_string(), None).unwrap();
+        assert_eq!(source.original_rgba.dimensions(), (8, 6));
+        assert_eq!(source.encoded_bytes.as_ref(), &bytes);
+        let metadata = source.metadata.as_ref().unwrap();
+        assert_eq!(metadata.make.as_deref(), Some("LittleScreenClip"));
+        assert_eq!(metadata.model.as_deref(), Some("CodecFixture"));
+    }
 
     #[test]
     fn decoded_image_data_is_shared_across_independent_editor_states() {

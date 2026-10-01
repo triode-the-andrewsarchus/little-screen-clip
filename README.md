@@ -90,6 +90,7 @@ them on a shared account if clipboard contents or recipe scripts are sensitive.
   - `wtype` — Wayland virtual keyboard simulation (for synthetic copy/paste).
   - `wl-clipboard` (`wl-copy`, `wl-paste`) — Wayland clipboard protocol tools.
   - `pipewire` / `pipewire-pulse` — for rolling system audio buffer capture (`pw-record`).
+- **Image codecs**: `pkg-config` and `libheif` >= 1.17 development headers, with HEVC (e.g. libde265) and AV1 decoder plugins for HEIF/HEIC and AVIF. All standard `image` crate formats and Rayon acceleration are enabled.
 - **Rust Toolchain**: Rust edition 2024 (`cargo`, `rustc`).
 - **Optional Tools for Pipeline Recipes & Picture Studio**:
   - `difftastic` (`difft`) — Structural semantic code diffing.

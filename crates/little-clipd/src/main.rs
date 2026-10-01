@@ -1169,16 +1169,21 @@ fn schedule_thumbnail_generation(item: &ClipItem, ctx: Arc<DaemonContext>) {
     if let little_clip_core::ClipPayload::Image {
         ref bytes,
         ref thumbnail,
+        ref mime,
         ..
     } = item.payload
     {
         if thumbnail.is_none() {
             let item_id = item.id;
             let bytes = bytes.clone();
+            let mime = mime.clone();
             tokio::task::spawn_blocking(move || {
-                if let Some(thumb) =
-                    little_clip_core::item::ImageThumbnail::generate(&bytes, 320, 220)
-                {
+                if let Some(thumb) = little_clip_core::item::ImageThumbnail::generate_with_mime(
+                    &bytes,
+                    Some(&mime),
+                    320,
+                    220,
+                ) {
                     tokio::spawn(async move {
                         let updated = {
                             let mut mgr = ctx.manager.write().await;
@@ -1354,7 +1359,12 @@ fn schedule_multi_image_thumbnail_generation(item: &ClipItem, ctx: Arc<DaemonCon
                 for path in paths_subset {
                     if let Ok(bytes) = std::fs::read(&path) {
                         if let Some(thumb) =
-                            little_clip_core::item::ImageThumbnail::generate(&bytes, 200, 160)
+                            little_clip_core::item::ImageThumbnail::generate_with_mime(
+                                &bytes,
+                                Some(&little_clip_core::item::guess_image_mime(&path)),
+                                200,
+                                160,
+                            )
                         {
                             thumbs.push(thumb);
                         }
@@ -1399,24 +1409,27 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
             .output()
             .await;
 
-        let has_image_mime = if let Ok(ref out) = types_output {
-            if out.status.success() {
-                let types_str = String::from_utf8_lossy(&out.stdout);
-                types_str
-                    .lines()
-                    .any(|l| l.trim() == "image/png" || l.trim() == "image/jpeg")
-            } else {
-                false
-            }
-        } else {
-            false
-        };
+        let image_mime = types_output
+            .ok()
+            .filter(|out| out.status.success())
+            .and_then(|out| {
+                let types = String::from_utf8_lossy(&out.stdout);
+                let mut supported = types.lines().map(str::trim).filter(|mime| {
+                    little_clip_core::item::image_extension_for_mime(mime).is_some()
+                });
+                // Prefer PNG when offered, but request the actual advertised format.
+                supported
+                    .clone()
+                    .find(|mime| *mime == "image/png")
+                    .or_else(|| supported.next())
+                    .map(str::to_owned)
+            });
 
-        if has_image_mime {
+        if let Some(image_mime) = image_mime {
             // Attempt reading raw image bytes
             if let Ok(img_out) = tokio::process::Command::new("wl-paste")
                 .arg("-t")
-                .arg("image/png")
+                .arg(&image_mime)
                 .output()
                 .await
             {
@@ -1437,7 +1450,7 @@ async fn run_clipboard_poller(ctx: Arc<DaemonContext>) {
 
                         let (target_hand, restore_os) = ctx.take_route_override().await;
 
-                        if let Some(item) = ClipItem::from_image_bytes(img_out.stdout, "image/png")
+                        if let Some(item) = ClipItem::from_image_bytes(img_out.stdout, &image_mime)
                         {
                             info!(
                                 "Captured clipboard image to {:?}: {} ({})",
@@ -1615,15 +1628,7 @@ async fn copy_cleaned_clipboard_text(text: String) {
 }
 
 fn is_image_file_path(p: &std::path::Path) -> bool {
-    let ext = p
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    matches!(
-        ext.as_str(),
-        "png" | "jpg" | "jpeg" | "webp" | "svg" | "gif" | "bmp"
-    )
+    little_clip_core::item::is_image_path(p)
 }
 
 async fn copy_to_os_clipboard(item: &ClipItem, ctx: &DaemonContext) {
@@ -1665,17 +1670,8 @@ async fn copy_image_file(path: &std::path::Path, ctx: &DaemonContext) {
         warn!(path = %path.display(), "failed to read image file for clipboard copy");
         return;
     };
-    let mime = match path.extension().and_then(|extension| extension.to_str()) {
-        Some(extension)
-            if extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg") =>
-        {
-            "image/jpeg"
-        }
-        Some(extension) if extension.eq_ignore_ascii_case("webp") => "image/webp",
-        Some(extension) if extension.eq_ignore_ascii_case("svg") => "image/svg+xml",
-        _ => "image/png",
-    };
-    copy_image(&bytes, mime, ctx).await;
+    let mime = little_clip_core::item::guess_image_mime(path);
+    copy_image(&bytes, &mime, ctx).await;
 }
 
 async fn copy_text(text: &str, description: &str, ctx: &DaemonContext) {

@@ -50,10 +50,20 @@ pub struct ImageThumbnail {
 impl ImageThumbnail {
     /// Generates a downscaled thumbnail from raw image bytes, fitting within `(max_w, max_h)`.
     ///
-    /// Supports standard raster formats (PNG, JPEG, WebP, BMP, GIF) and falls back to
+    /// Supports enabled raster formats, including HEIF/HEIC and AVIF, and falls back to
     /// SVG conversion via `rsvg-convert` if the payload contains vector markup.
     pub fn generate(bytes: &[u8], max_w: u32, max_h: u32) -> Option<Self> {
-        if let Ok(dyn_img) = image::load_from_memory(bytes) {
+        Self::generate_with_mime(bytes, None, max_w, max_h)
+    }
+
+    /// Generates a thumbnail with a MIME hint for formats such as TGA.
+    pub fn generate_with_mime(
+        bytes: &[u8],
+        mime: Option<&str>,
+        max_w: u32,
+        max_h: u32,
+    ) -> Option<Self> {
+        if let Ok(dyn_img) = image_reader(bytes, mime).and_then(|reader| reader.decode()) {
             let thumb = dyn_img.thumbnail(max_w, max_h);
             let (tw, th) = thumb.dimensions();
             let rgba = thumb.to_rgba8();
@@ -173,13 +183,59 @@ pub fn read_svg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
+/// Returns a supported image file extension for a MIME type.
+pub fn image_extension_for_mime(mime: &str) -> Option<&'static str> {
+    match mime {
+        "image/svg+xml" => Some("svg"),
+        "image/heif" => Some("heif"),
+        "image/heic" => Some("heic"),
+        "image/x-farbfeld" => Some("ff"),
+        "image/jpg" => Some("jpg"),
+        _ => image::ImageFormat::from_mime_type(mime)
+            .filter(|format| format.reading_enabled() || *format == image::ImageFormat::Avif)
+            .map(|format| format.extensions_str()[0]),
+    }
+}
+
+/// Creates a raster reader with HEIF/HEIC/AVIF decoding and an optional format hint.
+///
+/// Byte signatures take precedence over the hint. TGA has no reliable signature,
+/// so callers reading files should supply their MIME type.
+///
+/// # Errors
+///
+/// Returns an error if reading the format signature fails. Unsupported formats
+/// and invalid image data are reported when decoding or inspecting dimensions.
+pub fn image_reader<'a>(
+    bytes: &'a [u8],
+    mime: Option<&str>,
+) -> image::ImageResult<image::ImageReader<std::io::Cursor<&'a [u8]>>> {
+    static CODECS: std::sync::Once = std::sync::Once::new();
+    CODECS.call_once(libheif_rs::integration::image::register_all_decoding_hooks);
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes));
+    let mime = match mime {
+        Some("image/jpg") => Some("image/jpeg"),
+        Some("image/x-farbfeld") => {
+            reader.set_format(image::ImageFormat::Farbfeld);
+            None
+        }
+        other => other,
+    };
+    if let Some(format) = mime.and_then(image::ImageFormat::from_mime_type) {
+        reader.set_format(format);
+    }
+    Ok(reader.with_guessed_format()?)
+}
+
 /// Fast header-only image dimension reader for raster and vector formats (~0.05ms, skips pixel decode).
 pub fn read_image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
-    use std::io::Cursor;
-    if let Ok(reader) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format() {
-        if let Ok(dims) = reader.into_dimensions() {
-            return Some(dims);
-        }
+    read_image_dimensions_with_mime(bytes, None)
+}
+
+/// Reads raster or SVG dimensions, using a MIME hint for formats such as TGA.
+pub fn read_image_dimensions_with_mime(bytes: &[u8], mime: Option<&str>) -> Option<(u32, u32)> {
+    if let Ok(dims) = image_reader(bytes, mime).and_then(|reader| reader.into_dimensions()) {
+        return Some(dims);
     }
     if is_svg_bytes(bytes) {
         return read_svg_dimensions(bytes);
@@ -192,23 +248,25 @@ fn image_mime_matches_bytes(mime: &str, bytes: &[u8]) -> bool {
         return is_svg_bytes(bytes);
     }
 
+    if matches!(mime, "image/heif" | "image/heic") {
+        return bytes.get(4..8) == Some(b"ftyp")
+            && image_reader(bytes, None)
+                .and_then(|reader| reader.into_dimensions())
+                .is_ok();
+    }
+    if matches!(mime, "image/x-tga" | "image/x-targa") {
+        return image_reader(bytes, Some(mime))
+            .and_then(|reader| reader.into_dimensions())
+            .is_ok();
+    }
     let Ok(format) = image::guess_format(bytes) else {
         return false;
     };
-    matches!(
-        (mime, format),
-        ("image/png", image::ImageFormat::Png)
-            | ("image/jpeg" | "image/jpg", image::ImageFormat::Jpeg)
-            | ("image/webp", image::ImageFormat::WebP)
-            | ("image/gif", image::ImageFormat::Gif)
-            | ("image/bmp", image::ImageFormat::Bmp)
-            | ("image/tiff", image::ImageFormat::Tiff)
-            | (
-                "image/x-icon" | "image/vnd.microsoft.icon",
-                image::ImageFormat::Ico
-            )
-            | ("image/avif", image::ImageFormat::Avif)
-    )
+    match mime {
+        "image/jpg" => format == image::ImageFormat::Jpeg,
+        "image/x-farbfeld" => format == image::ImageFormat::Farbfeld,
+        _ => image::ImageFormat::from_mime_type(mime) == Some(format),
+    }
 }
 
 /// Concrete typed payload data contained within a clipboard item.
@@ -353,7 +411,8 @@ impl ClipItem {
             return None;
         }
         // Fast header-only dimension extraction in ~0.05ms (does NOT decode pixels)
-        let (width, height) = read_image_dimensions(&bytes).unwrap_or((0, 0));
+        let (width, height) =
+            read_image_dimensions_with_mime(&bytes, Some(&mime)).unwrap_or((0, 0));
         let size_kb = bytes.len() as f64 / 1024.0;
         let title = if width > 0 && height > 0 {
             format!("Image ({}×{})", width, height)
@@ -366,17 +425,7 @@ impl ClipItem {
             mime.replace("image/", "").to_uppercase()
         );
 
-        let ext = if mime.contains("png") {
-            "png"
-        } else if mime.contains("jpeg") || mime.contains("jpg") {
-            "jpg"
-        } else if mime.contains("webp") {
-            "webp"
-        } else if mime.contains("svg") {
-            "svg"
-        } else {
-            "png"
-        };
+        let ext = image_extension_for_mime(&mime).unwrap_or("png");
         let staging_path = crate::staging::ArtifactStore::new()
             .and_then(|store| store.stage_bytes("clipboard", "img", ext, &bytes))
             .ok();
@@ -514,7 +563,8 @@ impl ClipItem {
 
     fn from_image_file(path: &Path) -> Option<Self> {
         let bytes = std::fs::read(path).ok()?;
-        let (w, h) = read_image_dimensions(&bytes).unwrap_or((0, 0));
+        let mime = guess_image_mime(path);
+        let (w, h) = read_image_dimensions_with_mime(&bytes, Some(&mime)).unwrap_or((0, 0));
         let size_kb = bytes.len() as f64 / 1024.0;
         let file_name = path
             .file_name()
@@ -537,16 +587,11 @@ impl ClipItem {
             format!("{:.1} KB • {}", size_kb, ext)
         };
 
-        let thumbnail = ImageThumbnail::generate(&bytes, 320, 220);
+        let thumbnail = ImageThumbnail::generate_with_mime(&bytes, Some(&mime), 320, 220);
         let handler_tag = if ext == "SVG" {
             "SVG (VECTOR)".to_string()
         } else {
             "IMAGE (FILE)".to_string()
-        };
-        let mime = if ext == "SVG" {
-            "image/svg+xml".to_string()
-        } else {
-            format!("image/{}", ext.to_lowercase())
         };
 
         Some(Self {
@@ -853,17 +898,7 @@ impl ClipItem {
         let title = format!("{}×{}", width, height);
         let subtitle = format!("{:.1} KB • {}", size_kb, mime);
 
-        let ext = if mime.contains("png") {
-            "png"
-        } else if mime.contains("jpeg") || mime.contains("jpg") {
-            "jpg"
-        } else if mime.contains("webp") {
-            "webp"
-        } else if mime.contains("svg") {
-            "svg"
-        } else {
-            "png"
-        };
+        let ext = image_extension_for_mime(&mime).unwrap_or("png");
         let staging_path = crate::staging::ArtifactStore::new()
             .and_then(|store| store.stage_bytes("clipboard", "img", ext, &bytes))
             .ok();
@@ -1051,20 +1086,7 @@ impl ClipItem {
     pub fn from_single_file(p: &Path) -> Self {
         if is_image_path(p) {
             if let Ok(bytes) = std::fs::read(p) {
-                let ext = p
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("png")
-                    .to_lowercase();
-                let mime = if ext == "jpg" || ext == "jpeg" {
-                    "image/jpeg"
-                } else if ext == "webp" {
-                    "image/webp"
-                } else if ext == "svg" {
-                    "image/svg+xml"
-                } else {
-                    "image/png"
-                };
+                let mime = guess_image_mime(p);
                 if let Some(mut item) = Self::from_image_bytes(bytes, mime) {
                     let name = p
                         .file_name()
@@ -1304,10 +1326,10 @@ impl ClipItem {
 /// Returns `true` if the path has a standard raster or vector image extension.
 pub fn is_image_path(p: &Path) -> bool {
     if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-        matches!(
-            ext.to_lowercase().as_str(),
-            "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "svg" | "tiff" | "ico" | "avif"
-        )
+        matches!(ext.to_lowercase().as_str(), "svg" | "heif" | "heic")
+            || image::ImageFormat::from_extension(ext).is_some_and(|format| {
+                format.reading_enabled() || format == image::ImageFormat::Avif
+            })
     } else {
         false
     }
@@ -1315,21 +1337,20 @@ pub fn is_image_path(p: &Path) -> bool {
 
 /// Guesses the MIME type string from a file path's extension.
 pub fn guess_image_mime(p: &Path) -> String {
-    if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
-        match ext.to_lowercase().as_str() {
-            "png" => "image/png".to_string(),
-            "jpg" | "jpeg" => "image/jpeg".to_string(),
-            "webp" => "image/webp".to_string(),
-            "bmp" => "image/bmp".to_string(),
-            "svg" => "image/svg+xml".to_string(),
-            "gif" => "image/gif".to_string(),
-            "tiff" | "tif" => "image/tiff".to_string(),
-            "ico" => "image/x-icon".to_string(),
-            "avif" => "image/avif".to_string(),
-            _ => "image/png".to_string(),
-        }
-    } else {
-        "image/png".to_string()
+    let ext = p
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "svg" => "image/svg+xml".to_string(),
+        "heif" => "image/heif".to_string(),
+        "heic" => "image/heic".to_string(),
+        "ff" => "image/x-farbfeld".to_string(),
+        _ => image::ImageFormat::from_extension(&ext)
+            .map(|format| format.to_mime_type())
+            .unwrap_or("image/png")
+            .to_string(),
     }
 }
 

@@ -438,11 +438,17 @@ fn is_pixel_different_fast(b: &[u8], c: &[u8], threshold_sq: f32) -> bool {
 
 /// Decodes image bytes into an `RgbaImage`, supporting SVG rendering via rsvg-convert fallback.
 pub fn load_rgba_from_bytes(bytes: &[u8]) -> Result<RgbaImage, ImageDiffError> {
+    load_rgba_with_mime(bytes, None)
+}
+
+fn load_rgba_with_mime(bytes: &[u8], mime: Option<&str>) -> Result<RgbaImage, ImageDiffError> {
     if bytes.is_empty() {
         return Err(ImageDiffError::EmptyData);
     }
 
-    if let Ok(dyn_img) = image::load_from_memory(bytes) {
+    if let Ok(dyn_img) =
+        little_clip_core::item::image_reader(bytes, mime).and_then(|reader| reader.decode())
+    {
         return Ok(dyn_img.to_rgba8());
     }
 
@@ -470,7 +476,8 @@ pub fn load_rgba_from_bytes(bytes: &[u8]) -> Result<RgbaImage, ImageDiffError> {
 pub fn load_rgba_from_path(path: &Path) -> Result<RgbaImage, ImageDiffError> {
     let bytes =
         std::fs::read(path).map_err(|e| ImageDiffError::IoError(path.display().to_string(), e))?;
-    load_rgba_from_bytes(&bytes)
+    let mime = little_clip_core::item::guess_image_mime(path);
+    load_rgba_with_mime(&bytes, Some(&mime))
 }
 
 /// Compares two images provided as byte slices (PNG, JPEG, WebP, BMP, SVG).
@@ -479,14 +486,25 @@ pub fn compare_image_bytes(
     comp_bytes: &[u8],
     options: &ImageDiffOptions,
 ) -> Result<ImageDiffResult, ImageDiffError> {
+    compare_image_bytes_with_mime(base_bytes, None, comp_bytes, None, options)
+}
+
+/// Compares images with MIME hints for formats without signatures, such as TGA.
+pub fn compare_image_bytes_with_mime(
+    base_bytes: &[u8],
+    base_mime: Option<&str>,
+    comp_bytes: &[u8],
+    comp_mime: Option<&str>,
+    options: &ImageDiffOptions,
+) -> Result<ImageDiffResult, ImageDiffError> {
     if base_bytes.is_empty() || comp_bytes.is_empty() {
         return Err(ImageDiffError::EmptyData);
     }
 
     // Decode base and comp concurrently across threads
     let (base_res, comp_res) = std::thread::scope(|s| {
-        let h1 = s.spawn(|| load_rgba_from_bytes(base_bytes));
-        let h2 = s.spawn(|| load_rgba_from_bytes(comp_bytes));
+        let h1 = s.spawn(|| load_rgba_with_mime(base_bytes, base_mime));
+        let h2 = s.spawn(|| load_rgba_with_mime(comp_bytes, comp_mime));
         (h1.join().unwrap(), h2.join().unwrap())
     });
 

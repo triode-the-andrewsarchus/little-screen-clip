@@ -204,11 +204,19 @@ fn spawn_image_diff_worker(
             return (None, None, Some(err));
         }
 
+        let mime1 = lhs.image_mime().map(str::to_owned);
+        let mime2 = rhs.image_mime().map(str::to_owned);
         let b1_vec = b1.to_vec();
         let b2_vec = b2.to_vec();
         let (ticket, rx) = jobs.submit(std::time::Duration::MAX, move || {
-            little_clip_ops::image_diff::compare_image_bytes(&b1_vec, &b2_vec, &options)
-                .map_err(|e| e.to_string())
+            little_clip_ops::image_diff::compare_image_bytes_with_mime(
+                &b1_vec,
+                mime1.as_deref(),
+                &b2_vec,
+                mime2.as_deref(),
+                &options,
+            )
+            .map_err(|e| e.to_string())
         });
 
         (Some(ticket), Some(rx), None)

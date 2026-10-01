@@ -6,7 +6,7 @@ use crate::binary_diff::{
     BinaryDiffMode, compute_binary_diff, get_item_binary_bytes, resolve_two_files_from_single_item,
 };
 use crate::diff::{DiffDisplayMode, compute_diff, resolve_diff_pair, resolve_diff_target};
-use crate::image_diff::{ImageDiffOptions, compare_image_bytes};
+use crate::image_diff::{ImageDiffOptions, compare_image_bytes_with_mime};
 use base64::Engine;
 use little_clip_core::{ClipItem, ClipPayload};
 use std::collections::HashSet;
@@ -623,8 +623,9 @@ fn op_diff_unary(item: &ClipItem) -> Result<ClipItem, OpError> {
             let b2 = rhs
                 .image_bytes()
                 .ok_or_else(|| OpError::ExecutionFailed("Right image bytes missing".to_string()))?;
-            let res = compare_image_bytes(b1, b2, &options)
-                .map_err(|e| OpError::ExecutionFailed(format!("Picture diff failed: {}", e)))?;
+            let res =
+                compare_image_bytes_with_mime(b1, lhs.image_mime(), b2, rhs.image_mime(), &options)
+                    .map_err(|e| OpError::ExecutionFailed(format!("Picture diff failed: {}", e)))?;
             let mask_png = res.encode_mask_png().map_err(|e| {
                 OpError::ExecutionFailed(format!("Encoding diff mask PNG failed: {}", e))
             })?;
@@ -1054,8 +1055,9 @@ fn op_diff(hand: &ClipItem, slot: &ClipItem) -> Result<ClipItem, OpError> {
         let options = ImageDiffOptions::default();
         let b1 = lhs.image_bytes().unwrap();
         let b2 = rhs.image_bytes().unwrap();
-        let res = compare_image_bytes(b1, b2, &options)
-            .map_err(|e| OpError::ExecutionFailed(format!("Picture diff failed: {}", e)))?;
+        let res =
+            compare_image_bytes_with_mime(b1, lhs.image_mime(), b2, rhs.image_mime(), &options)
+                .map_err(|e| OpError::ExecutionFailed(format!("Picture diff failed: {}", e)))?;
         let mask_png = res.encode_mask_png().map_err(|e| {
             OpError::ExecutionFailed(format!("Encoding diff mask PNG failed: {}", e))
         })?;

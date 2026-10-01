@@ -48,6 +48,8 @@ UI acceptance automation must use the private Weston/Niri runner. Its pointer in
 
 Async preview completion updates an existing clipboard item in place. Keep `SlotStateSummary` sensitive to preview readiness so open workbenches rehydrate the affected slot and repaint the mirror; item ID and payload kind alone do not reveal these updates.
 
+Raster import uses core's `item::image_reader` to initialize HEIF/HEIC/AVIF decoder hooks once. Pass MIME hints through dimensions, thumbnails, and comparisons for formats without reliable signatures (TGA); reuse core image extension and MIME classification. HEIF EXIF extraction uses the existing `kamadak-exif` container reader.
+
 Image Studio committed pixels and original/undo/redo revisions use `Arc<RgbaImage>`. Wrap replacement results in a new `Arc`, and use `Arc::make_mut` for in-place edits so background readers and history keep their original pixels.
 
 PDF page rasters belong in a viewer-owned temporary directory. Keep only raster paths in page state and read one compressed page at a time in the bounded decode worker, preserving re-selection after texture eviction without document-sized RAM retention.

@@ -149,17 +149,7 @@ impl PortValue {
                 ..
             } => {
                 // Memory-only images need a materialized pipeline input file.
-                let ext = if mime.contains("png") {
-                    "png"
-                } else if mime.contains("jpeg") || mime.contains("jpg") {
-                    "jpg"
-                } else if mime.contains("webp") {
-                    "webp"
-                } else if mime.contains("svg") {
-                    "svg"
-                } else {
-                    "bin"
-                };
+                let ext = little_clip_core::item::image_extension_for_mime(mime).unwrap_or("bin");
                 let path =
                     ArtifactStore::new()?.stage_bytes("pipeline-input", "image", ext, bytes)?;
                 PortValue::ImagePath(path)
@@ -173,20 +163,7 @@ impl PortValue {
             PortValue::Text(text) => ClipItem::from_text(text),
             PortValue::ImagePath(path) => {
                 if let Ok(bytes) = std::fs::read(&path) {
-                    let ext = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("png")
-                        .to_lowercase();
-                    let mime = if ext == "jpg" || ext == "jpeg" {
-                        "image/jpeg"
-                    } else if ext == "webp" {
-                        "image/webp"
-                    } else if ext == "svg" {
-                        "image/svg+xml"
-                    } else {
-                        "image/png"
-                    };
+                    let mime = little_clip_core::item::guess_image_mime(&path);
                     if let Some(mut item) = ClipItem::from_image_bytes(bytes, mime) {
                         let file_name = path
                             .file_name()
@@ -202,26 +179,8 @@ impl PortValue {
                 .unwrap_or_else(|| ClipItem::from_single_file(&path)),
             PortValue::FilePath(path) => {
                 if let Ok(bytes) = std::fs::read(&path) {
-                    let ext = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
-                    if ext == "png"
-                        || ext == "jpg"
-                        || ext == "jpeg"
-                        || ext == "webp"
-                        || ext == "svg"
-                    {
-                        let mime = if ext == "jpg" || ext == "jpeg" {
-                            "image/jpeg"
-                        } else if ext == "webp" {
-                            "image/webp"
-                        } else if ext == "svg" {
-                            "image/svg+xml"
-                        } else {
-                            "image/png"
-                        };
+                    if little_clip_core::item::is_image_path(&path) {
+                        let mime = little_clip_core::item::guess_image_mime(&path);
                         if let Some(mut item) = ClipItem::from_image_bytes(bytes, mime) {
                             let file_name = path
                                 .file_name()

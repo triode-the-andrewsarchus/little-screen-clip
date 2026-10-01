@@ -30,3 +30,4 @@ scenix-mesh = "1.5.0"
 tempfile = "3.10"
 regex.workspace = true
 wait-timeout = "0.2"
+libheif-rs = { version = "3.0", default-features = false, features = ["v1_17", "image"] }

@@ -97,6 +97,14 @@ impl DiffTarget {
         matches!(self, DiffTarget::Image { .. })
     }
 
+    /// Returns the encoded image MIME type.
+    pub fn image_mime(&self) -> Option<&str> {
+        match self {
+            Self::Image { mime, .. } => Some(mime),
+            _ => None,
+        }
+    }
+
     /// Returns the raw image bytes if this is an image target.
     pub fn image_bytes(&self) -> Option<&[u8]> {
         match self {
@@ -238,33 +246,12 @@ pub fn guess_extension_from_content(content: &str) -> Option<&'static str> {
 
 /// Returns `true` if the path has a known image file extension.
 pub fn is_image_path(p: &Path) -> bool {
-    let ext = p
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    matches!(
-        ext.as_str(),
-        "png" | "jpg" | "jpeg" | "webp" | "bmp" | "svg" | "gif" | "tiff" | "tif"
-    )
+    little_clip_core::item::is_image_path(p)
 }
 
 /// Infers the MIME type for an image file path based on its extension.
 pub fn guess_image_mime(p: &Path) -> String {
-    let ext = p
-        .extension()
-        .and_then(|s| s.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    match ext.as_str() {
-        "png" => "image/png".to_string(),
-        "jpg" | "jpeg" => "image/jpeg".to_string(),
-        "webp" => "image/webp".to_string(),
-        "bmp" => "image/bmp".to_string(),
-        "svg" => "image/svg+xml".to_string(),
-        "gif" => "image/gif".to_string(),
-        _ => "image/png".to_string(),
-    }
+    little_clip_core::item::guess_image_mime(p)
 }
 
 /// Constructs a `DiffTarget` from a filesystem path if the file exists.
@@ -275,9 +262,10 @@ pub fn resolve_diff_target_from_path(p: &Path) -> Option<DiffTarget> {
 
     if is_image_path(p) {
         if let Ok(bytes) = std::fs::read(p) {
-            let (width, height) =
-                little_clip_core::item::read_image_dimensions(&bytes).unwrap_or((0, 0));
             let mime = guess_image_mime(p);
+            let (width, height) =
+                little_clip_core::item::read_image_dimensions_with_mime(&bytes, Some(&mime))
+                    .unwrap_or((0, 0));
             let label = p
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -371,7 +359,8 @@ pub fn resolve_diff_target(item: &ClipItem) -> Option<DiffTarget> {
             let (actual_w, actual_h) = if *width > 0 && *height > 0 {
                 (*width, *height)
             } else if !actual_bytes.is_empty() {
-                little_clip_core::item::read_image_dimensions(&actual_bytes).unwrap_or((0, 0))
+                little_clip_core::item::read_image_dimensions_with_mime(&actual_bytes, Some(mime))
+                    .unwrap_or((0, 0))
             } else {
                 (0, 0)
             };
@@ -403,9 +392,13 @@ pub fn resolve_diff_target(item: &ClipItem) -> Option<DiffTarget> {
             if path_candidate.is_file() {
                 if is_image_path(path_candidate) {
                     if let Ok(bytes) = std::fs::read(path_candidate) {
-                        let (width, height) =
-                            little_clip_core::item::read_image_dimensions(&bytes).unwrap_or((0, 0));
                         let mime = guess_image_mime(path_candidate);
+                        let (width, height) =
+                            little_clip_core::item::read_image_dimensions_with_mime(
+                                &bytes,
+                                Some(&mime),
+                            )
+                            .unwrap_or((0, 0));
                         let label = path_candidate
                             .file_name()
                             .map(|n| n.to_string_lossy().to_string())
