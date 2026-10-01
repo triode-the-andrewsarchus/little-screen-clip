@@ -1,0 +1,223 @@
+use super::*;
+
+impl ImagePreviewState {
+    pub(super) fn render_cmyk_halftone_controls(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &AppPalette,
+        slider_w: f32,
+    ) {
+        let base_c = hex_to_c32(&palette.harmonies.base);
+        let b_med = hex_to_c32(&palette.colors.surface_panel);
+        let f_med = hex_to_c32(&palette.colors.text_secondary);
+        // Dot Size: 2..=16 px
+        if render_context_slider(
+            ui,
+            "🔘 Dot Screen Size",
+            &mut self.creative_fx_state.cmyk_params.dot_size,
+            2.0..=16.0,
+            5.0,
+            "px",
+            slider_w,
+            palette,
+        ) {
+            self.creative_fx_state.selected_preset_name = "Custom".to_string();
+            self.creative_fx_state.mark_dirty();
+        }
+        ui.add_space(3.0);
+
+        // Dot Gain: 0.5..=2.0
+        if render_context_slider(
+            ui,
+            "📈 Dot Gain (Ink Bleed)",
+            &mut self.creative_fx_state.cmyk_params.dot_gain,
+            0.50..=2.00,
+            1.10,
+            "×",
+            slider_w,
+            palette,
+        ) {
+            self.creative_fx_state.selected_preset_name = "Custom".to_string();
+            self.creative_fx_state.mark_dirty();
+        }
+        ui.add_space(crate::ui_ext::SPACE_XS);
+
+        // Paper Tint
+        ui.label(
+            egui::RichText::new("Paper Substrate Tint")
+                .size(crate::ui_ext::BODY_FONT_SIZE)
+                .color(f_med),
+        );
+        ui.horizontal_wrapped(|ui| {
+            for tint in PaperTint::all() {
+                let sel = self.creative_fx_state.cmyk_params.paper_tint == *tint;
+                let (b_bg, b_fg) = if sel {
+                    (base_c, contrast_text_c32(base_c, None, palette))
+                } else {
+                    (b_med, f_med)
+                };
+                let btn = egui::Button::new(
+                    egui::RichText::new(tint.label())
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .strong()
+                        .color(b_fg),
+                )
+                .fill(b_bg)
+                .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
+                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS));
+                if ui.add(btn).clicked() && !sel {
+                    self.creative_fx_state.cmyk_params.paper_tint = *tint;
+                    self.creative_fx_state.selected_preset_name = "Custom".to_string();
+                    self.creative_fx_state.mark_dirty();
+                }
+            }
+        });
+        ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
+        ui.separator();
+        ui.add_space(crate::ui_ext::SPACE_XS);
+
+        // Plate Misregistration Offsets
+        ui.label(
+            egui::RichText::new("🗞 Plate Misregistration Offsets")
+                .size(crate::ui_ext::BODY_FONT_SIZE)
+                .strong()
+                .color(base_c),
+        );
+        ui.add_space(3.0);
+
+        // Cyan plate
+        ui.label(
+            egui::RichText::new("Cyan Plate Offset")
+                .size(crate::ui_ext::BODY_FONT_SIZE)
+                .color(f_med),
+        );
+        if render_context_slider(
+            ui,
+            "↔ Cyan X",
+            &mut self.creative_fx_state.cmyk_params.cyan_offset[0],
+            -10.0..=10.0,
+            -1.5,
+            "px",
+            slider_w,
+            palette,
+        ) {
+            self.creative_fx_state.selected_preset_name = "Custom".to_string();
+            self.creative_fx_state.mark_dirty();
+        }
+        if render_context_slider(
+            ui,
+            "↕ Cyan Y",
+            &mut self.creative_fx_state.cmyk_params.cyan_offset[1],
+            -10.0..=10.0,
+            0.5,
+            "px",
+            slider_w,
+            palette,
+        ) {
+            self.creative_fx_state.selected_preset_name = "Custom".to_string();
+            self.creative_fx_state.mark_dirty();
+        }
+        ui.add_space(3.0);
+
+        // Magenta plate
+        ui.label(
+            egui::RichText::new("Magenta Plate Offset")
+                .size(crate::ui_ext::BODY_FONT_SIZE)
+                .color(f_med),
+        );
+        if render_context_slider(
+            ui,
+            "↔ Magenta X",
+            &mut self.creative_fx_state.cmyk_params.magenta_offset[0],
+            -10.0..=10.0,
+            1.0,
+            "px",
+            slider_w,
+            palette,
+        ) {
+            self.creative_fx_state.selected_preset_name = "Custom".to_string();
+            self.creative_fx_state.mark_dirty();
+        }
+        if render_context_slider(
+            ui,
+            "↕ Magenta Y",
+            &mut self.creative_fx_state.cmyk_params.magenta_offset[1],
+            -10.0..=10.0,
+            -1.0,
+            "px",
+            slider_w,
+            palette,
+        ) {
+            self.creative_fx_state.selected_preset_name = "Custom".to_string();
+            self.creative_fx_state.mark_dirty();
+        }
+        ui.add_space(3.0);
+
+        // Yellow plate
+        ui.label(
+            egui::RichText::new("Yellow Plate Offset")
+                .size(crate::ui_ext::BODY_FONT_SIZE)
+                .color(f_med),
+        );
+        if render_context_slider(
+            ui,
+            "↔ Yellow X",
+            &mut self.creative_fx_state.cmyk_params.yellow_offset[0],
+            -10.0..=10.0,
+            0.0,
+            "px",
+            slider_w,
+            palette,
+        ) {
+            self.creative_fx_state.selected_preset_name = "Custom".to_string();
+            self.creative_fx_state.mark_dirty();
+        }
+        if render_context_slider(
+            ui,
+            "↕ Yellow Y",
+            &mut self.creative_fx_state.cmyk_params.yellow_offset[1],
+            -10.0..=10.0,
+            1.5,
+            "px",
+            slider_w,
+            palette,
+        ) {
+            self.creative_fx_state.selected_preset_name = "Custom".to_string();
+            self.creative_fx_state.mark_dirty();
+        }
+        ui.add_space(3.0);
+
+        // Black (Key) plate
+        ui.label(
+            egui::RichText::new("Black (Key) Plate Offset")
+                .size(crate::ui_ext::BODY_FONT_SIZE)
+                .color(f_med),
+        );
+        if render_context_slider(
+            ui,
+            "↔ Black X",
+            &mut self.creative_fx_state.cmyk_params.black_offset[0],
+            -10.0..=10.0,
+            0.0,
+            "px",
+            slider_w,
+            palette,
+        ) {
+            self.creative_fx_state.selected_preset_name = "Custom".to_string();
+            self.creative_fx_state.mark_dirty();
+        }
+        if render_context_slider(
+            ui,
+            "↕ Black Y",
+            &mut self.creative_fx_state.cmyk_params.black_offset[1],
+            -10.0..=10.0,
+            0.0,
+            "px",
+            slider_w,
+            palette,
+        ) {
+            self.creative_fx_state.selected_preset_name = "Custom".to_string();
+            self.creative_fx_state.mark_dirty();
+        }
+    }
+}
