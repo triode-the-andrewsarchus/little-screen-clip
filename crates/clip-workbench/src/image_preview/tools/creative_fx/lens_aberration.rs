@@ -18,8 +18,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
         ui.add_space(crate::ui_ext::SPACE_XS);
 
@@ -34,8 +33,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
         ui.add_space(crate::ui_ext::SPACE_XS);
 
@@ -50,8 +48,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
     }
 }

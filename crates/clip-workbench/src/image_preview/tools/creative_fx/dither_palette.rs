@@ -7,8 +7,6 @@ impl ImagePreviewState {
         palette: &AppPalette,
         slider_w: f32,
     ) {
-        let base_c = hex_to_c32(&palette.harmonies.base);
-        let b_med = hex_to_c32(&palette.colors.surface_panel);
         let f_med = hex_to_c32(&palette.colors.text_secondary);
         // Palette selection
         ui.label(
@@ -19,24 +17,13 @@ impl ImagePreviewState {
         ui.horizontal_wrapped(|ui| {
             for pal in RetroPalette::all() {
                 let sel = self.creative_fx_state.dither_params.palette == *pal;
-                let (b_bg, b_fg) = if sel {
-                    (base_c, contrast_text_c32(base_c, None, palette))
-                } else {
-                    (b_med, f_med)
-                };
-                let btn = egui::Button::new(
-                    egui::RichText::new(pal.label())
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .strong()
-                        .color(b_fg),
-                )
-                .fill(b_bg)
-                .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
-                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS));
-                if ui.add(btn).clicked() && !sel {
+                if ui
+                    .add(creative_fx_choice_button(pal.label(), sel, palette))
+                    .clicked()
+                    && !sel
+                {
                     self.creative_fx_state.dither_params.palette = *pal;
-                    self.creative_fx_state.selected_preset_name = "Custom".to_string();
-                    self.creative_fx_state.mark_dirty();
+                    self.creative_fx_state.mark_custom();
                 }
             }
         });
@@ -51,24 +38,13 @@ impl ImagePreviewState {
         ui.horizontal_wrapped(|ui| {
             for method in DitherMethod::all() {
                 let sel = self.creative_fx_state.dither_params.method == *method;
-                let (b_bg, b_fg) = if sel {
-                    (base_c, contrast_text_c32(base_c, None, palette))
-                } else {
-                    (b_med, f_med)
-                };
-                let btn = egui::Button::new(
-                    egui::RichText::new(method.label())
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .strong()
-                        .color(b_fg),
-                )
-                .fill(b_bg)
-                .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
-                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS));
-                if ui.add(btn).clicked() && !sel {
+                if ui
+                    .add(creative_fx_choice_button(method.label(), sel, palette))
+                    .clicked()
+                    && !sel
+                {
                     self.creative_fx_state.dither_params.method = *method;
-                    self.creative_fx_state.selected_preset_name = "Custom".to_string();
-                    self.creative_fx_state.mark_dirty();
+                    self.creative_fx_state.mark_custom();
                 }
             }
         });
@@ -83,25 +59,17 @@ impl ImagePreviewState {
         ui.horizontal_wrapped(|ui| {
             for scale in [1u32, 2, 3, 4] {
                 let sel = self.creative_fx_state.dither_params.pixel_scale == scale;
-                let (b_bg, b_fg) = if sel {
-                    (base_c, contrast_text_c32(base_c, None, palette))
-                } else {
-                    (b_med, f_med)
-                };
-                let btn = egui::Button::new(
-                    egui::RichText::new(format!("{}×", scale))
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .strong()
-                        .color(b_fg),
-                )
-                .fill(b_bg)
-                .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
-                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-                .min_size(Vec2::new(32.0, 20.0));
-                if ui.add(btn).clicked() && !sel {
+                if ui
+                    .add(creative_fx_choice_button(
+                        format!("{}×", scale),
+                        sel,
+                        palette,
+                    ))
+                    .clicked()
+                    && !sel
+                {
                     self.creative_fx_state.dither_params.pixel_scale = scale;
-                    self.creative_fx_state.selected_preset_name = "Custom".to_string();
-                    self.creative_fx_state.mark_dirty();
+                    self.creative_fx_state.mark_custom();
                 }
             }
         });
@@ -118,8 +86,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
         ui.add_space(3.0);
 
@@ -134,8 +101,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
     }
 }

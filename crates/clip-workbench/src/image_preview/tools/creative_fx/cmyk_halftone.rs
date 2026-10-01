@@ -8,7 +8,6 @@ impl ImagePreviewState {
         slider_w: f32,
     ) {
         let base_c = hex_to_c32(&palette.harmonies.base);
-        let b_med = hex_to_c32(&palette.colors.surface_panel);
         let f_med = hex_to_c32(&palette.colors.text_secondary);
         // Dot Size: 2..=16 px
         if render_context_slider(
@@ -21,8 +20,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
         ui.add_space(3.0);
 
@@ -37,8 +35,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
         ui.add_space(crate::ui_ext::SPACE_XS);
 
@@ -51,24 +48,13 @@ impl ImagePreviewState {
         ui.horizontal_wrapped(|ui| {
             for tint in PaperTint::all() {
                 let sel = self.creative_fx_state.cmyk_params.paper_tint == *tint;
-                let (b_bg, b_fg) = if sel {
-                    (base_c, contrast_text_c32(base_c, None, palette))
-                } else {
-                    (b_med, f_med)
-                };
-                let btn = egui::Button::new(
-                    egui::RichText::new(tint.label())
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .strong()
-                        .color(b_fg),
-                )
-                .fill(b_bg)
-                .stroke(Stroke::new(1.0_f32, if sel { base_c } else { b_med }))
-                .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS));
-                if ui.add(btn).clicked() && !sel {
+                if ui
+                    .add(creative_fx_choice_button(tint.label(), sel, palette))
+                    .clicked()
+                    && !sel
+                {
                     self.creative_fx_state.cmyk_params.paper_tint = *tint;
-                    self.creative_fx_state.selected_preset_name = "Custom".to_string();
-                    self.creative_fx_state.mark_dirty();
+                    self.creative_fx_state.mark_custom();
                 }
             }
         });
@@ -101,8 +87,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
         if render_context_slider(
             ui,
@@ -114,8 +99,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
         ui.add_space(3.0);
 
@@ -135,8 +119,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
         if render_context_slider(
             ui,
@@ -148,8 +131,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
         ui.add_space(3.0);
 
@@ -169,8 +151,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
         if render_context_slider(
             ui,
@@ -182,8 +163,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
         ui.add_space(3.0);
 
@@ -203,8 +183,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
         if render_context_slider(
             ui,
@@ -216,8 +195,7 @@ impl ImagePreviewState {
             slider_w,
             palette,
         ) {
-            self.creative_fx_state.selected_preset_name = "Custom".to_string();
-            self.creative_fx_state.mark_dirty();
+            self.creative_fx_state.mark_custom();
         }
     }
 }

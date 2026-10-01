@@ -81,6 +81,32 @@ pub struct CreativeFxThumbnailMsg {
     pub rgba: RgbaImage,
 }
 
+fn creative_fx_choice_button(
+    label: impl Into<String>,
+    selected: bool,
+    palette: &AppPalette,
+) -> egui::Button<'static> {
+    let fill = if selected {
+        hex_to_c32(&palette.harmonies.base)
+    } else {
+        hex_to_c32(&palette.colors.surface_panel)
+    };
+    let foreground = if selected {
+        contrast_text_c32(fill, None, palette)
+    } else {
+        hex_to_c32(&palette.colors.text_secondary)
+    };
+    egui::Button::new(
+        egui::RichText::new(label)
+            .size(crate::ui_ext::BODY_FONT_SIZE)
+            .strong()
+            .color(foreground),
+    )
+    .fill(fill)
+    .stroke(Stroke::new(1.0_f32, fill))
+    .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
+}
+
 fn render_creative_fx_mask_loading(ui: &mut egui::Ui, label: &str, color: Color32) {
     ui.horizontal(|ui| {
         ui.add(
@@ -281,6 +307,11 @@ impl Default for CreativeFxState {
 }
 
 impl CreativeFxState {
+    fn mark_custom(&mut self) {
+        self.selected_preset_name = "Custom".to_string();
+        self.mark_dirty();
+    }
+
     pub fn mark_dirty(&mut self) {
         self.cancel_render();
         self.params_dirty_at = Some(std::time::Instant::now());
