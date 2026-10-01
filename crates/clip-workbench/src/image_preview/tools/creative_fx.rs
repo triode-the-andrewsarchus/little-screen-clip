@@ -3321,12 +3321,14 @@ impl ImagePreviewState {
                             self.creative_fx_state.preview_texture = Some(ctx.load_texture(
                                 "creative_fx_preview_tex",
                                 ci,
-                                egui::TextureOptions::LINEAR,
+                                image_texture_options(rgba),
                             ));
                         }
                         self.creative_fx_state.dirty_preview_texture = false;
                     }
 
+                    self.viewport_size = Vec2::new(center_w, main_h);
+                    self.zoom = self.zoom.min(self.maximum_zoom(self.viewport_size));
                     let (response, painter) = ui.allocate_painter(
                         Vec2::new(center_w, main_h),
                         egui::Sense::click_and_drag(),
@@ -3374,7 +3376,8 @@ impl ImagePreviewState {
                         if scroll_delta.abs() > 0.0 {
                             let zoom_factor = (scroll_delta * 0.002).exp();
                             let old_zoom = self.zoom;
-                            let new_zoom = (old_zoom * zoom_factor).clamp(0.05, 5.0);
+                            let new_zoom = (old_zoom * zoom_factor)
+                                .clamp(0.05, self.maximum_zoom(self.viewport_size));
                             if let Some(ptr_pos) = response.hover_pos() {
                                 let center = canvas_rect.center() + self.pan;
                                 let to_ptr = ptr_pos - center;

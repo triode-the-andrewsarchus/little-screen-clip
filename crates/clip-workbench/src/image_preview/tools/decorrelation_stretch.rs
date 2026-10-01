@@ -988,7 +988,7 @@ impl ImagePreviewState {
                 self.dcs_state.stretched_texture = Some(ctx.load_texture(
                     "decorrelation_stretch_preview_tex",
                     color_img,
-                    egui::TextureOptions::LINEAR,
+                    image_texture_options(dcs_rgba),
                 ));
                 self.dcs_state.dirty_texture = false;
             }

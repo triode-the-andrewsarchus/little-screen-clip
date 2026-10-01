@@ -720,6 +720,17 @@ impl<'a> StudioShell<'a> {
 
     /// Renders Zone 4 (Status & Shortcut Help Footer).
     pub fn render_footer(&self, ui: &mut egui::Ui, toast: &Option<(String, f64)>, now: f64) {
+        self.render_footer_with_center(ui, toast, now, 0.0, |_| {});
+    }
+
+    pub fn render_footer_with_center(
+        &self,
+        ui: &mut egui::Ui,
+        toast: &Option<(String, f64)>,
+        now: f64,
+        center_width: f32,
+        render_center: impl FnOnce(&mut egui::Ui),
+    ) {
         let palette = self.palette;
         let colors = WorkbenchColors::from_palette(palette);
 
@@ -728,24 +739,55 @@ impl<'a> StudioShell<'a> {
             .inner_margin(egui::Margin::symmetric(PANEL_INSET, FOOTER_INSET_Y))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if let Some(hints) = self.footer_hints {
-                        ui.add(
-                            egui::Label::new(egui::RichText::new(hints).color(colors.text_muted))
-                                .wrap(true),
-                        );
-                    }
-
-                    if let Some(ref readout) = self.footer_readout {
-                        ui.add_space(SPACE_MD);
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(readout)
-                                    .strong()
-                                    .monospace()
-                                    .color(colors.accent),
+                    let render_status = |ui: &mut egui::Ui| {
+                        if let Some(hints) = self.footer_hints {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(hints).color(colors.text_muted),
+                                )
+                                .wrap(center_width == 0.0)
+                                .truncate(center_width > 0.0),
                             )
-                            .wrap(true),
+                            .on_hover_text(hints);
+                        }
+
+                        if let Some(ref readout) = self.footer_readout {
+                            ui.add_space(SPACE_MD);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(readout)
+                                        .strong()
+                                        .monospace()
+                                        .color(colors.accent),
+                                )
+                                .wrap(true),
+                            );
+                        }
+                    };
+                    if center_width > 0.0 {
+                        let side_width = ((ui.available_width()
+                            - center_width
+                            - 2.0 * ui.spacing().item_spacing.x)
+                            / 2.0)
+                            .max(0.0);
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(side_width, 24.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_width(side_width);
+                                render_status(ui);
+                            },
                         );
+                        ui.allocate_ui_with_layout(
+                            Vec2::new(center_width, 24.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_width(center_width);
+                                render_center(ui);
+                            },
+                        );
+                    } else {
+                        render_status(ui);
                     }
 
                     // Status toast
@@ -768,7 +810,8 @@ mod tests {
 
     #[test]
     fn footer_toasts_do_not_increase_the_bar_height() {
-        for width in [760.0, 1200.0] {
+        for (width, center_width) in [(760.0, 0.0), (1200.0, 0.0), (760.0, 184.0), (1200.0, 184.0)]
+        {
             let ctx = egui::Context::default();
             crate::ui_ext::configure_workbench_style(&ctx);
             let palette =
@@ -800,7 +843,18 @@ mod tests {
                                         "🖱 Drag: Draw shape | Del: Delete | Esc: Deselect",
                                     );
                                 let toast = message.map(|message| (message.to_owned(), 0.0));
-                                shell.render_footer(ui, &toast, 1.0);
+                                shell.render_footer_with_center(
+                                    ui,
+                                    &toast,
+                                    1.0,
+                                    center_width,
+                                    |ui| {
+                                        ui.add_sized(
+                                            Vec2::new(center_width, 24.0),
+                                            egui::Label::new("100%"),
+                                        );
+                                    },
+                                );
                             });
                             height = panel.response.rect.height();
                         },

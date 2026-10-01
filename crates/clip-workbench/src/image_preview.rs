@@ -136,6 +136,7 @@ pub struct ImagePreviewState {
     // Viewport Navigation
     pub pan: Vec2,
     pub zoom: f32,
+    viewport_size: Vec2,
     pub auto_fitted: bool,
 
     // Active Tool Mode
@@ -325,7 +326,7 @@ impl InlineImagePreview {
             self.texture = Some(ui.ctx().load_texture(
                 "inline_image_preview",
                 color_image,
-                egui::TextureOptions::LINEAR,
+                image_texture_options(pixels),
             ));
         }
 
@@ -549,6 +550,7 @@ impl ImagePreviewState {
             palette_results_count: None,
             pan: Vec2::ZERO,
             zoom: 1.0,
+            viewport_size: Vec2::ZERO,
             auto_fitted: false,
             active_mode: ImageToolMode::View,
             panel_state: crate::shell::PanelState {
@@ -912,7 +914,7 @@ impl ImagePreviewState {
             self.texture = Some(ctx.load_texture(
                 "image_preview_tex",
                 color_image,
-                egui::TextureOptions::LINEAR,
+                image_texture_options(&self.current_rgba),
             ));
             self.dirty_texture = false;
         }
@@ -1182,13 +1184,13 @@ impl ImagePreviewState {
                 }
             }
             if ui.input(|i| i.key_pressed(egui::Key::Num0)) {
-                self.fit_to_view(ui.available_size());
+                self.fit_to_view(self.viewport_size);
             }
             if ui.input(|i| i.key_pressed(egui::Key::Equals) || i.key_pressed(egui::Key::Plus)) {
-                self.zoom = (self.zoom * 1.25).clamp(0.05, 5.0);
+                self.zoom = (self.zoom * 1.25).clamp(0.05, self.maximum_zoom(self.viewport_size));
             }
             if ui.input(|i| i.key_pressed(egui::Key::Minus)) {
-                self.zoom = (self.zoom / 1.25).clamp(0.05, 5.0);
+                self.zoom = (self.zoom / 1.25).clamp(0.05, self.maximum_zoom(self.viewport_size));
             }
 
             // Unmodified single-key tool selection shortcuts
@@ -1418,18 +1420,23 @@ impl ImagePreviewState {
         egui::Frame::none()
             .fill(hex_to_c32(&palette.colors.canvas))
             .show(ui, |ui| {
+                let toast = self.status_toast.clone();
                 let mut shell = self.create_studio_shell(palette, close);
                 egui::TopBottomPanel::bottom(ui.make_persistent_id("image_studio_footer"))
                     .frame(egui::Frame::none())
                     .resizable(false)
-                    .show_inside(ui, |ui| shell.render_footer(ui, &self.status_toast, now));
+                    .show_inside(ui, |ui| {
+                        shell.render_footer_with_center(ui, &toast, now, 184.0, |ui| {
+                            self.render_zoom_controls(ui)
+                        });
+                    });
 
                 // 1. TOP HEADER & ESCAPE HATCHES
                 self.render_header(ui, ctx, palette, &mut shell);
 
                 ui.add_space(crate::ui_ext::SPACE_XS);
 
-                // 2. TOOLBAR (Mode selection & Viewport controls)
+                // 2. TOOLBAR (Mode selection)
                 self.render_toolbar(ui, palette);
 
                 ui.add_space(crate::ui_ext::SPACE_XS);
@@ -1719,90 +1726,13 @@ impl ImagePreviewState {
                         }
                     }
                 });
-
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        // Reset View
-                        let reset_btn = crate::ui_ext::secondary_button_icon(
-                            Some(Icon::RotateCcw),
-                            "Reset",
-                            hex_to_c32(&palette.colors.surface_panel),
-                            palette,
-                        );
-                        if ui
-                            .add(reset_btn)
-                            .on_hover_text("Reset zoom and pan")
-                            .clicked()
-                        {
-                            self.zoom = 1.0;
-                            self.pan = Vec2::ZERO;
-                        }
-
-                        // 1:1 Pixel Zoom
-                        let pixel_btn = crate::secondary_button(
-                            "1:1",
-                            hex_to_c32(&palette.colors.surface_panel),
-                            palette,
-                        );
-                        if ui
-                            .add(pixel_btn)
-                            .on_hover_text("100% actual pixel size (1)")
-                            .clicked()
-                        {
-                            self.zoom = 1.0;
-                        }
-
-                        // Fit to window
-                        let fit_btn = crate::ui_ext::secondary_button_icon(
-                            Some(Icon::ZoomFit),
-                            "Fit",
-                            hex_to_c32(&palette.colors.surface_panel),
-                            palette,
-                        );
-                        if ui
-                            .add(fit_btn)
-                            .on_hover_text("Fit entire image into window (0 / F)")
-                            .clicked()
-                        {
-                            self.fit_to_view(ui.available_size());
-                        }
-
-                        // Zoom In (+)
-                        let plus_btn = crate::themed_button(
-                            "+",
-                            hex_to_c32(&palette.colors.surface_panel),
-                            Some(hex_to_c32(&palette.colors.text_primary)),
-                            palette,
-                        );
-                        if ui.add(plus_btn).clicked() {
-                            self.zoom = (self.zoom * 1.25).clamp(0.05, 5.0);
-                        }
-
-                        // Zoom percentage readout
-                        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
-                        ui.label(
-                            egui::RichText::new(format!("{:.0}%", self.zoom * 100.0))
-                                .size(crate::ui_ext::BODY_FONT_SIZE)
-                                .color(colors.text_secondary),
-                        );
-
-                        // Zoom Out (-)
-                        let minus_btn = crate::themed_button(
-                            "-",
-                            hex_to_c32(&palette.colors.surface_panel),
-                            Some(hex_to_c32(&palette.colors.text_primary)),
-                            palette,
-                        );
-                        if ui.add(minus_btn).clicked() {
-                            self.zoom = (self.zoom / 1.25).clamp(0.05, 5.0);
-                        }
-                    });
-                });
             });
     }
 
     fn render_viewport(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, palette: &AppPalette) {
         let avail_size = ui.available_size();
+        self.viewport_size = avail_size;
+        self.zoom = self.zoom.min(self.maximum_zoom(avail_size));
         if !self.auto_fitted && avail_size.x > 50.0 && avail_size.y > 50.0 {
             self.fit_to_view(avail_size);
             self.auto_fitted = true;
@@ -1845,7 +1775,8 @@ impl ImagePreviewState {
             if scroll_delta.abs() > 0.0 {
                 let zoom_factor = (scroll_delta * 0.002).exp();
                 let old_zoom = self.zoom;
-                let new_zoom = (old_zoom * zoom_factor).clamp(0.05, 5.0);
+                let new_zoom =
+                    (old_zoom * zoom_factor).clamp(0.05, self.maximum_zoom(self.viewport_size));
 
                 if let Some(ptr_pos) = response.hover_pos() {
                     let center = canvas_rect.center() + self.pan;
@@ -1964,10 +1895,39 @@ impl ImagePreviewState {
         }
     }
 
-    // ─── Film Simulation Methods ───────────────────────────────────────────────────
+    // Permit five times the fitted scale, keeping maximum magnification within 500–5000%.
+    fn maximum_zoom(&self, canvas_size: Vec2) -> f32 {
+        let image_size = Vec2::new(
+            self.current_rgba.width() as f32,
+            self.current_rgba.height() as f32,
+        );
+        let available = (canvas_size - Vec2::splat(40.0)).max(Vec2::splat(10.0));
+        let fit = (available.x / image_size.x.max(1.0)).min(available.y / image_size.y.max(1.0));
+        (fit * 5.0).clamp(5.0, 50.0)
+    }
 
-    /// Spawn a background thread that runs filmr's process_image() on the current
-    /// image with the current FilmSimState parameters, then sends the result back.
+    fn render_zoom_controls(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(4.0);
+        if ui
+            .add_sized(Vec2::new(56.0, 24.0), egui::Button::new("Reset").small())
+            .on_hover_text("Fit and center the image (0)")
+            .clicked()
+        {
+            self.fit_to_view(self.viewport_size);
+        }
+        if ui
+            .add_sized(Vec2::new(40.0, 24.0), egui::Button::new("1:1").small())
+            .on_hover_text("100% actual pixel size (1)")
+            .clicked()
+        {
+            self.zoom = 1.0;
+            self.pan = Vec2::ZERO;
+        }
+        ui.add_sized(
+            Vec2::new(64.0, 24.0),
+            egui::Label::new(format!("{:.0}%", self.zoom * 100.0)),
+        );
+    }
 
     fn fit_to_view(&mut self, canvas_size: Vec2) {
         let img_w = self.current_rgba.width() as f32;
@@ -1982,8 +1942,18 @@ impl ImagePreviewState {
 
         let scale_x = avail_w / img_w;
         let scale_y = avail_h / img_h;
-        self.zoom = scale_x.min(scale_y).clamp(0.01, 5.0);
+        self.zoom = scale_x
+            .min(scale_y)
+            .clamp(0.01, self.maximum_zoom(canvas_size));
         self.pan = Vec2::ZERO;
+    }
+}
+
+fn image_texture_options(pixels: &RgbaImage) -> egui::TextureOptions {
+    if pixels.width() < 500 && pixels.height() < 500 {
+        egui::TextureOptions::NEAREST
+    } else {
+        egui::TextureOptions::LINEAR
     }
 }
 
@@ -3043,6 +3013,73 @@ mod tests {
     }
 
     #[test]
+    fn image_texture_sampling_changes_when_edits_cross_the_pixel_art_threshold() {
+        let ctx = egui::Context::default();
+        let palette = AppPalette::default();
+        let mut state = image_state_from_png((8, 8), "Pixel sampling");
+        let mut close = false;
+        for (size, expected) in [
+            ((8, 8), egui::TextureOptions::NEAREST),
+            ((499, 499), egui::TextureOptions::NEAREST),
+            ((500, 100), egui::TextureOptions::LINEAR),
+            ((100, 500), egui::TextureOptions::LINEAR),
+            ((64, 64), egui::TextureOptions::NEAREST),
+        ] {
+            state.current_rgba = Arc::new(RgbaImage::new(size.0, size.1));
+            state.dirty_texture = true;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(960.0, 720.0))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut close);
+                    });
+                },
+            );
+            let id = state
+                .texture
+                .as_ref()
+                .expect("canvas texture uploaded")
+                .id();
+            let (_, uploaded) = output
+                .textures_delta
+                .set
+                .iter()
+                .find(|(texture_id, _)| *texture_id == id)
+                .expect("updated canvas texture sent to renderer");
+            assert_eq!(uploaded.options, expected, "sampling for {size:?}");
+        }
+    }
+
+    #[test]
+    fn maximum_zoom_scales_with_image_and_canvas_size_within_limits() {
+        let mut state = image_state_from_png((8, 6), "Zoom limits");
+        let canvas = Vec2::new(1040.0, 640.0);
+        for (size, expected) in [
+            ((8, 6), 50.0),
+            ((100, 100), 30.0),
+            ((200, 100), 25.0),
+            ((4000, 3000), 5.0),
+        ] {
+            state.current_rgba = Arc::new(RgbaImage::new(size.0, size.1));
+            assert_eq!(state.maximum_zoom(canvas), expected);
+        }
+        state.current_rgba = Arc::new(RgbaImage::new(200, 100));
+        assert_eq!(state.maximum_zoom(Vec2::new(240.0, 140.0)), 5.0);
+        state.current_rgba = Arc::new(RgbaImage::new(100, 100));
+        state.fit_to_view(canvas);
+        assert_eq!(
+            state.zoom, 6.0,
+            "small images must be able to fit above 500%"
+        );
+        state.current_rgba = Arc::new(RgbaImage::new(1, 1));
+        state.fit_to_view(canvas);
+        assert_eq!(state.zoom, 50.0, "fitting must respect the 5000% ceiling");
+    }
+
+    #[test]
     fn image_studio_footer_stays_inside_root_and_below_workspace_at_multiple_scales() {
         for (size, zoom, mode) in [
             (Vec2::new(820.0, 600.0), 1.0, ImageToolMode::View),
@@ -3098,6 +3135,36 @@ mod tests {
                 })
                 .expect("viewport canvas should paint");
             assert!(root.contains(footer.min) && root.contains(footer.max));
+            let control_bounds = |label: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|clipped| match &clipped.shape {
+                        egui::epaint::Shape::Text(text) if text.galley.text() == label => {
+                            Some(text.galley.rect.translate(text.pos.to_vec2()))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("missing footer control {label}"))
+            };
+            let reset = control_bounds("Reset");
+            let pixel = control_bounds("1:1");
+            let percentage = control_bounds("100%");
+            for bounds in [reset, pixel, percentage] {
+                assert!(root.contains(bounds.min) && root.contains(bounds.max));
+                assert!(
+                    bounds.top() >= viewport.bottom(),
+                    "zoom controls belong below the canvas"
+                );
+            }
+            let controls = reset.union(pixel).union(percentage);
+            assert!(
+                (controls.center().x - root.center().x).abs() < 12.0,
+                "zoom controls must be centered: {controls:?} in {root:?}"
+            );
+            assert!(!output.shapes.iter().any(|clipped| matches!(&clipped.shape,
+                egui::epaint::Shape::Text(text) if matches!(text.galley.text(), "Fit" | "+" | "-"))));
+
             assert!(root.contains(viewport.min) && root.contains(viewport.max));
             assert!(viewport.max.y < footer.min.y);
         }

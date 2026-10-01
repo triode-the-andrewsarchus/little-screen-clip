@@ -46,7 +46,7 @@ The workbench must remain a non-resizable, centered, single-instance popup for N
 
 UI acceptance automation must use the private Weston/Niri runner. Its pointer injection is scoped to that run's private Wayland and Niri sockets; do not send test input through host `/dev/uinput` or the user's interactive compositor.
 
-Image Studio tool controls belong in the shared left panel, with result panels on the right where needed. View shows all metadata fields directly in that panel, and reserves it only when it has fields to display; metadata-free images use the full canvas.
+Image Studio tool controls belong in the shared left panel, with result panels on the right where needed; shared zoom controls belong in the center of the footer. View shows all metadata fields directly in that panel, and reserves it only when it has fields to display; metadata-free images use the full canvas.
 
 Async preview completion updates an existing clipboard item in place. Keep `SlotStateSummary` sensitive to preview readiness so open workbenches rehydrate the affected slot and repaint the mirror; item ID and payload kind alone do not reveal these updates.
 

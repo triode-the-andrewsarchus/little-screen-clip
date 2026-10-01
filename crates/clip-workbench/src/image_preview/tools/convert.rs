@@ -1392,7 +1392,7 @@ impl ImagePreviewState {
                 self.convert_state.converted_texture = Some(ctx.load_texture(
                     "converted_preview_tex",
                     color_img,
-                    egui::TextureOptions::LINEAR,
+                    image_texture_options(conv_rgba),
                 ));
                 self.convert_state.dirty_texture = false;
             }
