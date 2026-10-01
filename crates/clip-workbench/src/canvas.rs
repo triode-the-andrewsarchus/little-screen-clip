@@ -7,7 +7,6 @@ use crate::icons::Icon;
 use crate::ui_ext::{BODY_FONT_SIZE, CONTROL_HEIGHT};
 use crate::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui::{self, Color32, Id, Pos2, Rect, Rounding, Stroke, Vec2};
-use little_clip_core::config::AppConfig;
 use little_clip_core::palette::AppPalette;
 use little_clip_ops::pipeline::catalog::{instantiate_template, search_templates};
 use little_clip_ops::pipeline::recipes::{
@@ -30,6 +29,7 @@ pub enum CanvasAction {
 
 /// Interactive state for the visual node pipeline graph editor canvas.
 pub struct NodeCanvasState {
+    pub script_editors: HashMap<Uuid, crate::script_editor::ScriptEditor>,
     pub graph: NodeGraph,
     pub selected_node: Option<Uuid>,
     pub dragging_from: Option<(Uuid, String, bool)>, // (node_id, pin_name, is_output)
@@ -44,7 +44,6 @@ pub struct NodeCanvasState {
     pub current_recipe_file: Option<PathBuf>,
     pub undo_stack: Vec<NodeGraph>,
     pub redo_stack: Vec<NodeGraph>,
-    pub config: AppConfig,
     pub status_message: Option<(String, bool)>, // (text, is_error)
     pub available_recipes: Vec<Recipe>,
     pub selected_recipe_name: String,
@@ -52,13 +51,8 @@ pub struct NodeCanvasState {
 }
 
 impl NodeCanvasState {
-    /// Creates a default canvas state initialized with default configuration.
+    /// Creates a canvas state initialized from the available recipes.
     pub fn new() -> Self {
-        Self::with_config(AppConfig::load())
-    }
-
-    /// Creates a canvas state with customized application configuration.
-    pub fn with_config(config: AppConfig) -> Self {
         let recipes = load_all_recipes();
         let default_recipe = recipes
             .iter()
@@ -84,6 +78,7 @@ impl NodeCanvasState {
 
         Self {
             graph,
+            script_editors: HashMap::new(),
             selected_node: None,
             dragging_from: None,
             node_previews: HashMap::new(),
@@ -97,11 +92,29 @@ impl NodeCanvasState {
             current_recipe_file,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-            config,
             status_message: None,
             available_recipes: recipes,
             selected_recipe_name: sel_name,
             last_run_duration_ms: None,
+        }
+    }
+
+    fn save_script_drafts(&mut self) -> Result<(), String> {
+        for node in &mut self.graph.nodes {
+            if let Some(editor) = self.script_editors.get_mut(&node.id)
+                && editor.dirty()
+            {
+                editor.save(node)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn refresh_saved_script_editors(&mut self) {
+        for node in &self.graph.nodes {
+            if let Some(editor) = self.script_editors.get_mut(&node.id) {
+                editor.refresh_after_recipe_save(node);
+            }
         }
     }
 
@@ -138,6 +151,10 @@ impl NodeCanvasState {
     }
 
     fn run_pipeline_action(&mut self) -> Option<CanvasAction> {
+        if let Err(error) = self.save_script_drafts() {
+            self.status_message = Some((error, true));
+            return None;
+        }
         match serde_yaml::to_string(&self.graph) {
             Ok(yaml) => {
                 self.status_message = Some(("Running pipeline…".to_owned(), false));
@@ -210,9 +227,10 @@ impl NodeCanvasState {
 
         ui.separator();
 
+        let canvas_size = self.render_script_editor(ui, palette);
         // Main Canvas Interactive Area
         let (canvas_rect, response) =
-            ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+            ui.allocate_exact_size(canvas_size, egui::Sense::click_and_drag());
 
         // Canvas Pan & Zoom
         if response.dragged_by(egui::PointerButton::Secondary)
@@ -289,7 +307,7 @@ impl NodeCanvasState {
         let mut node_to_delete = None;
         let mut connection_to_add = None;
         let mut socket_to_disconnect = None;
-        let mut script_to_open = None;
+        let mut script_to_edit = None;
         let mut node_drag_started = false;
 
         let zoom = self.graph.zoom;
@@ -317,12 +335,7 @@ impl NodeCanvasState {
             if matches!(node.kind, NodeKind::PythonScript | NodeKind::BashCommand)
                 && node_resp.double_clicked()
             {
-                let script_file = node.props.get("script_file").cloned().unwrap_or_else(|| {
-                    let is_py = matches!(node.kind, NodeKind::PythonScript);
-                    let ext = if is_py { "py" } else { "sh" };
-                    format!("script_{}.{}", &node.id.to_string()[..8], ext)
-                });
-                script_to_open = Some(script_file);
+                script_to_edit = Some(node_id);
             }
 
             // Render Card Frame
@@ -332,7 +345,7 @@ impl NodeCanvasState {
                 &self.node_previews,
                 &mut self.dragging_from,
                 &mut socket_to_disconnect,
-                &mut script_to_open,
+                &mut script_to_edit,
                 ui,
                 &painter,
                 node,
@@ -512,42 +525,8 @@ impl NodeCanvasState {
             }
         }
 
-        // Open external script in editor if requested
-        if let Some(ref fname) = script_to_open {
-            let editor = self.config.workbench.resolve_editor();
-            let recipes_dir = get_recipes_dir();
-            let script_path = recipes_dir.join(fname);
-
-            if !script_path.exists() {
-                let is_py = fname.ends_with(".py");
-                let _ = create_script_file_scaffold(&self.selected_recipe_name, is_py);
-            }
-
-            match std::process::Command::new(&editor)
-                .arg(&script_path)
-                .spawn()
-            {
-                Ok(_) => {
-                    self.status_message = Some((format!("Opened {} in {}", fname, editor), false));
-                }
-                Err(e) => {
-                    if editor != "xdg-open" {
-                        let _ = std::process::Command::new("xdg-open")
-                            .arg(&script_path)
-                            .spawn();
-                        self.status_message = Some((
-                            format!(
-                                "Opened {} via xdg-open (failed to launch '{}': {})",
-                                fname, editor, e
-                            ),
-                            false,
-                        ));
-                    } else {
-                        self.status_message =
-                            Some((format!("Error launching editor '{}': {}", editor, e), true));
-                    }
-                }
-            }
+        if let Some(id) = script_to_edit {
+            self.selected_node = Some(id);
         }
 
         // Catalog Modal / Popup
@@ -561,6 +540,44 @@ impl NodeCanvasState {
         }
 
         action
+    }
+
+    /// Render the selected script beside the graph and return the remaining canvas size.
+    fn render_script_editor(&mut self, ui: &mut egui::Ui, palette: &AppPalette) -> Vec2 {
+        // Reserve a side editor only for a selected script node.
+        let editor_node = self.selected_node.and_then(|id| {
+            self.graph.nodes.iter().position(|node| {
+                node.id == id && matches!(node.kind, NodeKind::PythonScript | NodeKind::BashCommand)
+            })
+        });
+        let mut canvas_size = ui.available_size();
+        if let Some(index) = editor_node {
+            let editor_width = (canvas_size.x * 0.46)
+                .clamp(300.0, 650.0)
+                .min(canvas_size.x * 0.6);
+            canvas_size.x -= editor_width + 8.0;
+            let full_rect = ui.available_rect_before_wrap();
+            let editor_rect = Rect::from_min_max(
+                Pos2::new(full_rect.min.x + canvas_size.x + 8.0, full_rect.min.y),
+                full_rect.max,
+            );
+            let mut editor_ui = ui.child_ui(editor_rect, egui::Layout::top_down(egui::Align::Min));
+            editor_ui.set_clip_rect(editor_rect.intersect(ui.clip_rect()));
+            let node = &mut self.graph.nodes[index];
+            if self
+                .script_editors
+                .get(&node.id)
+                .is_some_and(|editor| !editor.matches_source(node))
+            {
+                self.script_editors.remove(&node.id);
+            }
+            let editor = self
+                .script_editors
+                .entry(node.id)
+                .or_insert_with(|| crate::script_editor::ScriptEditor::load(node));
+            editor.ui(&mut editor_ui, node, palette);
+        }
+        canvas_size
     }
 
     fn render_toolbar(
@@ -660,6 +677,10 @@ impl NodeCanvasState {
                 .on_hover_text("Save changes to this recipe")
                 .clicked()
             {
+                if let Err(error) = self.save_script_drafts() {
+                    self.status_message = Some((error, true));
+                    return;
+                }
                 if self.current_recipe_file.is_some()
                     && self.selected_recipe_name != "Untitled Recipe"
                 {
@@ -668,6 +689,7 @@ impl NodeCanvasState {
                         &self.selected_recipe_name,
                         false,
                     );
+                    self.refresh_saved_script_editors();
                     let recipe = Recipe {
                         name: self.selected_recipe_name.clone(),
                         description: "Custom user recipe".to_string(),
@@ -706,6 +728,10 @@ impl NodeCanvasState {
                 .on_hover_text("Save copy under a new recipe name")
                 .clicked()
             {
+                if let Err(error) = self.save_script_drafts() {
+                    self.status_message = Some((error, true));
+                    return;
+                }
                 self.save_is_save_as = true;
                 self.save_name = format!("{} Copy", self.selected_recipe_name);
                 self.save_dialog_open = true;
@@ -1046,6 +1072,10 @@ impl NodeCanvasState {
                         .add_enabled(!self.save_name.trim().is_empty(), save_btn)
                         .clicked()
                     {
+                        if let Err(error) = self.save_script_drafts() {
+                            self.status_message = Some((error, true));
+                            return;
+                        }
                         let new_name = self.save_name.trim().to_string();
                         let duplicate_scripts = self.save_is_save_as;
                         let _ = sync_recipe_script_headers_in_dir(
@@ -1055,6 +1085,7 @@ impl NodeCanvasState {
                             recipes_dir,
                         );
 
+                        self.refresh_saved_script_editors();
                         let recipe = Recipe {
                             name: new_name.clone(),
                             description: "Custom user recipe".to_string(),
@@ -1359,7 +1390,7 @@ fn render_node_card(
     node_previews: &HashMap<Uuid, String>,
     dragging_from: &mut Option<(Uuid, String, bool)>,
     socket_to_disconnect: &mut Option<(Uuid, String, bool)>,
-    script_to_open: &mut Option<String>,
+    script_to_edit: &mut Option<Uuid>,
     ui: &mut egui::Ui,
     painter: &egui::Painter,
     node: &mut NodeInstance,
@@ -1532,8 +1563,12 @@ fn render_node_card(
         if is_script_node {
             let script_file = node.props.get("script_file").cloned().unwrap_or_else(|| {
                 let is_py = matches!(node.kind, NodeKind::PythonScript);
-                let ext = if is_py { "py" } else { "sh" };
-                format!("script_{}.{}", &node.id.to_string()[..8], ext)
+                if is_py {
+                    "Inline Python"
+                } else {
+                    "Inline Bash"
+                }
+                .to_owned()
             });
 
             child_ui.horizontal(|ui| {
@@ -1552,10 +1587,10 @@ fn render_node_card(
 
                 if ui
                     .add(file_btn)
-                    .on_hover_text("Click to open script in text editor")
+                    .on_hover_text("Edit script in the side panel")
                     .clicked()
                 {
-                    *script_to_open = Some(script_file.clone());
+                    *script_to_edit = Some(node.id);
                 }
             });
 
@@ -1563,14 +1598,14 @@ fn render_node_card(
 
             let edit_btn = crate::ui_ext::action_button_icon(
                 Some(Icon::Pencil),
-                "Open in Editor",
+                "Edit Script",
                 hex_to_c32(&palette.harmonies.base),
                 palette,
             )
             .min_size(Vec2::new(child_ui.available_width(), 20.0 * zoom));
 
             if child_ui.add(edit_btn).clicked() {
-                *script_to_open = Some(script_file);
+                *script_to_edit = Some(node.id);
             }
         } else {
             for (key, val) in node.props.iter_mut() {
@@ -1787,6 +1822,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pipeline_run_saves_drafts_for_unselected_script_nodes() {
+        let mut canvas = NodeCanvasState::new();
+        let mut node = instantiate_template(
+            little_clip_ops::pipeline::catalog::find_template("script_python").unwrap(),
+            [0.0, 0.0],
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("run.py");
+        std::fs::write(&path, "print('before')").unwrap();
+        node.props
+            .insert("script_file".to_owned(), path.display().to_string());
+        let mut editor = crate::script_editor::ScriptEditor::load(&node);
+        editor.text = "print('after')".to_owned();
+        canvas.script_editors.insert(node.id, editor);
+        canvas.graph.nodes = vec![node];
+        canvas.selected_node = None;
+        assert!(canvas.run_pipeline_action().is_some());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "print('after')");
+        std::fs::write(&path, "external").unwrap();
+        canvas.script_editors.values_mut().next().unwrap().text = "draft".to_owned();
+        assert!(canvas.run_pipeline_action().is_none());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "external");
+        assert!(canvas.status_message.as_ref().unwrap().1);
+    }
+
+    #[test]
     fn run_pipeline_emits_graph_for_single_daemon_execution() {
         let mut canvas = NodeCanvasState::new();
         let source = instantiate_template(
@@ -1870,6 +1931,7 @@ mod tests {
         };
         let mut canvas = NodeCanvasState {
             graph: graph.clone(),
+            script_editors: HashMap::new(),
             selected_node: None,
             dragging_from: None,
             node_previews: HashMap::new(),
@@ -1883,7 +1945,6 @@ mod tests {
             current_recipe_file: None,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
-            config: AppConfig::default(),
             status_message: None,
             available_recipes: Vec::new(),
             selected_recipe_name: "Original Recipe".to_owned(),
@@ -1986,7 +2047,7 @@ mod tests {
     #[test]
     fn node_machine_history_and_delete_shortcuts_yield_to_focused_text_input() {
         fn test_canvas() -> NodeCanvasState {
-            let mut canvas = NodeCanvasState::with_config(AppConfig::default());
+            let mut canvas = NodeCanvasState::new();
             let node = instantiate_template(
                 little_clip_ops::pipeline::catalog::find_template("source_const_text").unwrap(),
                 [0.0, 0.0],
@@ -2105,7 +2166,7 @@ mod tests {
             crate::ui_ext::configure_workbench_style(&ctx);
             let palette =
                 crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-            let mut canvas = NodeCanvasState::with_config(AppConfig::default());
+            let mut canvas = NodeCanvasState::new();
             canvas.status_message = Some(("Pipeline complete".to_string(), false));
             let mut action = None;
             let output = ctx.run(
@@ -2189,7 +2250,7 @@ mod tests {
         crate::ui_ext::configure_workbench_style(&ctx);
         let palette =
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-        let mut canvas = NodeCanvasState::with_config(AppConfig::default());
+        let mut canvas = NodeCanvasState::new();
         let mut script = canvas.graph.nodes[0].clone();
         script.kind = NodeKind::PythonScript;
         script.title = "Python Transform".to_owned();
@@ -2213,8 +2274,7 @@ mod tests {
             },
             |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    // Compact host after a reduced, still-interactive mirror and shared footer.
-                    // The production canvas receives this remaining vertical budget.
+                    // Exercise a constrained internal canvas without resizing the host window.
                     let allocated = ui.allocate_ui(Vec2::new(ui.available_width(), 270.0), |ui| {
                         canvas.ui(ui, &palette);
                     });
@@ -2224,7 +2284,7 @@ mod tests {
         );
         let footer_top = canvas_bounds.expect("compact canvas allocation").bottom();
 
-        let required = ["Python Transform", "transform.py", "Open in Editor"];
+        let required = ["Python Transform", "transform.py", "Edit Script"];
         let texts: Vec<_> = output
             .shapes
             .iter()

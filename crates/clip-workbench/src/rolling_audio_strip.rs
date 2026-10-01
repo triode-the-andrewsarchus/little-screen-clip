@@ -543,70 +543,74 @@ impl RollingAudioStripState {
     fn render_header(&mut self, ui: &mut egui::Ui, palette: &AppPalette, total_dur: f32) {
         // Header Row: Badge & Status / Selection info
         let canvas = hex_to_c32(&palette.colors.canvas);
-        ui.horizontal_wrapped(|ui| {
-            let accent_text = crate::ui_ext::contrast_text_c32_on(
-                canvas,
-                canvas,
-                Some(hex_to_c32(&palette.harmonies.base)),
-                palette,
-            );
-            Icon::Microphone.ui(ui, 13.0, accent_text);
-            ui.label(
-                egui::RichText::new("ROLLING AUDIO")
-                    .color(accent_text)
-                    .strong()
-                    .size(crate::ui_ext::BODY_FONT_SIZE),
-            );
-            ui.label(
-                egui::RichText::new(format!("({:.0}s snapshot)", total_dur))
-                    .color(hex_to_c32(&palette.colors.text_secondary))
-                    .size(crate::ui_ext::BODY_FONT_SIZE),
-            );
-
-            // Refresh Snapshot button
-            let refresh_label = if self.snapshot_job.is_some() {
-                "Refreshing…"
-            } else {
-                "Refresh"
-            };
-            let refresh_btn = ui.add_enabled(
-                self.snapshot_job.is_none(),
-                crate::ui_ext::secondary_button_icon(
-                    Some(Icon::RotateCw),
-                    refresh_label,
-                    hex_to_c32(&palette.colors.surface_recessed),
+        ui.scope(|ui| {
+            ui.spacing_mut().interact_size.y = crate::ui_ext::CONTROL_HEIGHT;
+            // Treat each label as one wrapped-row item. egui's flowing-label
+            // layout can place its glyphs above the row after a short icon.
+            ui.style_mut().wrap = Some(false);
+            ui.horizontal_wrapped(|ui| {
+                let accent_text = crate::ui_ext::contrast_text_c32_on(
+                    canvas,
+                    canvas,
+                    Some(hex_to_c32(&palette.harmonies.base)),
                     palette,
-                )
-                .stroke(Stroke::new(
-                    1.0_f32,
-                    hex_to_c32(&palette.colors.surface_panel),
-                )),
-            );
-            if refresh_btn.clicked() {
-                self.load_snapshot();
-            }
-            refresh_btn.on_hover_text("Reload latest rolling audio buffer from daemon (F5)");
-
-            if self.snapshot_job.is_some() && !self.is_loaded {
+                );
+                Icon::Microphone.ui(ui, 13.0, accent_text);
                 ui.label(
-                    egui::RichText::new("Loading audio snapshot…")
+                    egui::RichText::new("ROLLING AUDIO")
+                        .color(accent_text)
+                        .strong()
+                        .size(crate::ui_ext::BODY_FONT_SIZE),
+                );
+                ui.label(
+                    egui::RichText::new(format!("({:.0}s snapshot)", total_dur))
                         .color(hex_to_c32(&palette.colors.text_secondary))
                         .size(crate::ui_ext::BODY_FONT_SIZE),
                 );
-            } else if let Some(error) = &self.error_msg {
-                ui.label(
-                    egui::RichText::new("Refresh failed — retry")
-                        .color(crate::ui_ext::contrast_text_c32_on(
-                            canvas,
-                            canvas,
-                            Some(hex_to_c32(&palette.diff_del)),
-                            palette,
-                        ))
-                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                )
-                .on_hover_text(error);
-            } else if self.is_silent() {
-                ui.horizontal_wrapped(|ui| {
+
+                // Refresh Snapshot button
+                let refresh_label = if self.snapshot_job.is_some() {
+                    "Refreshing…"
+                } else {
+                    "Refresh"
+                };
+                let refresh_btn = ui.add_enabled(
+                    self.snapshot_job.is_none(),
+                    crate::ui_ext::secondary_button_icon(
+                        Some(Icon::RotateCw),
+                        refresh_label,
+                        hex_to_c32(&palette.colors.surface_recessed),
+                        palette,
+                    )
+                    .stroke(Stroke::new(
+                        1.0_f32,
+                        hex_to_c32(&palette.colors.surface_panel),
+                    )),
+                );
+                if refresh_btn.clicked() {
+                    self.load_snapshot();
+                }
+                refresh_btn.on_hover_text("Reload latest rolling audio buffer from daemon (F5)");
+
+                if self.snapshot_job.is_some() && !self.is_loaded {
+                    ui.label(
+                        egui::RichText::new("Loading audio snapshot…")
+                            .color(hex_to_c32(&palette.colors.text_secondary))
+                            .size(crate::ui_ext::BODY_FONT_SIZE),
+                    );
+                } else if let Some(error) = &self.error_msg {
+                    ui.label(
+                        egui::RichText::new("Refresh failed — retry")
+                            .color(crate::ui_ext::contrast_text_c32_on(
+                                canvas,
+                                canvas,
+                                Some(hex_to_c32(&palette.diff_del)),
+                                palette,
+                            ))
+                            .size(crate::ui_ext::BODY_FONT_SIZE),
+                    )
+                    .on_hover_text(error);
+                } else if self.is_silent() {
                     Icon::Alert.ui(ui, 12.0, hex_to_c32(&palette.diff_mod));
                     ui.label(
                         egui::RichText::new("Buffer is silence (play audio to capture)")
@@ -618,52 +622,51 @@ impl RollingAudioStripState {
                             ))
                             .size(crate::ui_ext::BODY_FONT_SIZE),
                     );
-                });
-            } else if let Some((s, e)) = self.selected_region {
-                let sel_dur = (e - s).abs();
-                let s_rel = s - total_dur;
-                let e_rel = e - total_dur;
-                ui.label(
-                    egui::RichText::new(format!(
-                        "• Selected: {:.1}s to {:.1}s ({:.2}s)",
-                        s_rel, e_rel, sel_dur
-                    ))
-                    .color(accent_text)
-                    .strong()
-                    .size(crate::ui_ext::BODY_FONT_SIZE),
-                );
-                ui.label(
-                    egui::RichText::new("[Space] Play  [Ctrl+C] Copy  [Esc] Clear")
-                        .color(hex_to_c32(&palette.colors.text_secondary))
-                        .size(crate::ui_ext::BODY_FONT_SIZE),
-                );
-            } else {
-                ui.label(
-                    egui::RichText::new(
-                        "• Drag on waveform to select  |  Right-click: Full Editor",
-                    )
-                    .color(hex_to_c32(&palette.colors.text_muted))
-                    .size(crate::ui_ext::BODY_FONT_SIZE),
-                );
-            }
-
-            if let Some((ref msg, _)) = self.status_toast {
-                if self.error_msg.as_deref() != Some(msg.as_str()) {
+                } else if let Some((s, e)) = self.selected_region {
+                    let sel_dur = (e - s).abs();
+                    let s_rel = s - total_dur;
+                    let e_rel = e - total_dur;
                     ui.label(
-                        egui::RichText::new(msg)
-                            .color(crate::ui_ext::contrast_text_c32_on(
-                                canvas,
-                                canvas,
-                                Some(hex_to_c32(&palette.diff_add)),
-                                palette,
-                            ))
-                            .strong()
+                        egui::RichText::new(format!(
+                            "• Selected: {:.1}s to {:.1}s ({:.2}s)",
+                            s_rel, e_rel, sel_dur
+                        ))
+                        .color(accent_text)
+                        .strong()
+                        .size(crate::ui_ext::BODY_FONT_SIZE),
+                    );
+                    ui.label(
+                        egui::RichText::new("[Space] Play  [Ctrl+C] Copy  [Esc] Clear")
+                            .color(hex_to_c32(&palette.colors.text_secondary))
                             .size(crate::ui_ext::BODY_FONT_SIZE),
                     );
+                } else {
+                    ui.label(
+                        egui::RichText::new(
+                            "• Drag on waveform to select  |  Right-click: Full Editor",
+                        )
+                        .color(hex_to_c32(&palette.colors.text_muted))
+                        .size(crate::ui_ext::BODY_FONT_SIZE),
+                    );
                 }
-            }
-        });
 
+                if let Some((ref msg, _)) = self.status_toast {
+                    if self.error_msg.as_deref() != Some(msg.as_str()) {
+                        ui.label(
+                            egui::RichText::new(msg)
+                                .color(crate::ui_ext::contrast_text_c32_on(
+                                    canvas,
+                                    canvas,
+                                    Some(hex_to_c32(&palette.diff_add)),
+                                    palette,
+                                ))
+                                .strong()
+                                .size(crate::ui_ext::BODY_FONT_SIZE),
+                        );
+                    }
+                }
+            });
+        });
         ui.add_space(2.0);
     }
 
@@ -1082,6 +1085,58 @@ mod tests {
     use little_clip_core::rolling_audio::RollingAudioBuffer;
 
     #[test]
+    fn header_glyphs_are_fully_visible_in_bottom_panel() {
+        for appearance in [
+            little_clip_core::config::WorkbenchAppearance::Dark,
+            little_clip_core::config::WorkbenchAppearance::Light,
+        ] {
+            for width in [960.0, 1184.0] {
+                let ctx = egui::Context::default();
+                crate::ui_ext::configure_workbench_style(&ctx);
+                let palette = crate::ui_appearance::palette(appearance);
+                let mut strip = empty_test_strip();
+                for _ in 0..3 {
+                    let output = ctx.run(
+                        egui::RawInput {
+                            screen_rect: Some(Rect::from_min_size(
+                                Pos2::ZERO,
+                                Vec2::new(width, 662.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ctx| {
+                            egui::TopBottomPanel::bottom("audio-test")
+                                .min_height(100.0)
+                                .show(ctx, |ui| {
+                                    strip.render_ui(ui, ctx, &palette, &mut None);
+                                });
+                        },
+                    );
+                    let mut header_found = false;
+                    for shape in output.shapes {
+                        if let egui::epaint::Shape::Text(text) = shape.shape {
+                            if text.galley.job.text.contains("ROLLING AUDIO") {
+                                header_found = true;
+                            }
+                            // All header labels must retain their complete glyphs.
+                            if text.pos.y < 610.0 {
+                                let bounds = text.galley.mesh_bounds.translate(text.pos.to_vec2());
+                                assert!(
+                                    shape.clip_rect.expand(0.5).contains_rect(bounds),
+                                    "clipped {:?}: {bounds:?} outside {:?}",
+                                    text.galley.job.text,
+                                    shape.clip_rect
+                                );
+                            }
+                        }
+                    }
+                    assert!(header_found);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn rolling_audio_status_labels_meet_contrast_in_both_appearances() {
         for appearance in [
             little_clip_core::config::WorkbenchAppearance::Dark,
@@ -1294,9 +1349,6 @@ mod tests {
                 let egui::epaint::Shape::Text(shape) = clipped_shape.shape else {
                     continue;
                 };
-                if shape.pos.y > 100.0 {
-                    continue;
-                }
                 let bounds = shape.galley.rect.translate(shape.pos.to_vec2());
                 assert!(
                     bounds.left() >= clipped_shape.clip_rect.left() - 0.5,

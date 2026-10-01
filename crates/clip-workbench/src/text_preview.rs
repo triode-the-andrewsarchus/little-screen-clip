@@ -2106,7 +2106,7 @@ fn render_markdown_element(
 }
 
 /// Helper to find syntax definition for language string.
-fn find_syntax(lang: &str) -> &'static SyntaxReference {
+pub(crate) fn find_syntax(lang: &str) -> &'static SyntaxReference {
     let ps = &*SYNTAX_SET;
     ps.find_syntax_by_token(lang)
         .or_else(|| ps.find_syntax_by_extension(lang))
@@ -2512,7 +2512,7 @@ fn append_highlighted_token(
 }
 
 /// Builds syntax highlighting with exact, precomputed search ranges.
-fn build_highlighted_layout_job(
+pub(crate) fn build_highlighted_layout_job(
     text: &str,
     syntax: &SyntaxReference,
     palette: &AppPalette,

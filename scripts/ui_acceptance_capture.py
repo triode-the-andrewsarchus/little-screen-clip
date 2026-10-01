@@ -53,6 +53,8 @@ IMAGE_TOOL_KEYS = {
 IMAGE_ACTION_KEYS = {"enter": "Return"}
 KEY_ACTIONS = {
     "ctrl-z": ["-M", "ctrl", "-k", "z", "-m", "ctrl"],
+    "ctrl-s": ["-M", "ctrl", "-k", "s", "-m", "ctrl"],
+    "ctrl-shift-z": ["-M", "ctrl", "-M", "shift", "-k", "z", "-m", "shift", "-m", "ctrl"],
     "ctrl-y": ["-M", "ctrl", "-k", "y", "-m", "ctrl"],
     "enter": ["-k", "Return"],
     "f3": ["-k", "F3"],
@@ -1048,6 +1050,18 @@ graph:
       outputs:
         - name: Out
           port_type: Text
+    - id: 00000000-0000-4000-8000-000000000002
+      kind: BashCommand
+      title: Bash Transform
+      pos: [20.0, 210.0]
+      props:
+        script_file: transform.sh
+      inputs:
+        - name: In
+          port_type: Text
+      outputs:
+        - name: Out
+          port_type: Text
   connections: []
   pan: [0.0, 0.0]
   zoom: 1.0
@@ -1056,6 +1070,9 @@ graph:
         )
         (recipes_dir / "transform.py").write_text(
             "def transform(value):\n    return value\n", encoding="utf-8"
+        )
+        (recipes_dir / "transform.sh").write_text(
+            '#!/usr/bin/env bash\n# Pass input through\ncat\n', encoding="utf-8"
         )
     niri_config = output / "niri.kdl"
     niri_config.write_text(
@@ -1819,17 +1836,18 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         if not (
             (all(action in {"f3", "f6"} for action in args.key_action))
             or (args.fake_text_preview and all(action in {"f3", "ctrl-f"} for action in args.key_action))
+            or (args.fake_node_machine and all(action in {"ctrl-f", "ctrl-s", "ctrl-z", "ctrl-y", "ctrl-shift-z", "enter"} for action in args.key_action))
             or (args.fake_pdf_preview and all(action == "r" for action in args.key_action))
             or ((args.fake_diff_preview or args.fake_image_diff_preview)
                 and all(action == "enter" for action in args.key_action))
         ):
             raise SystemExit(
                 "only --key-action f3 may be used without an image fixture, "
-                "except in a fake text preview run"
+                "except for supported fake fixture actions"
             )
     if args.type_text and not (
         args.fake_text_preview or args.fake_pdf_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
-        or args.fake_diff_preview or args.fake_image_diff_preview or args.fake_model3d
+        or args.fake_diff_preview or args.fake_image_diff_preview or args.fake_model3d or args.fake_node_machine
     ):
         raise SystemExit("--type-text requires a fake text preview route")
     if (

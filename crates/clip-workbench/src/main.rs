@@ -65,6 +65,7 @@ mod model3d_view;
 mod pdf_view;
 mod popup;
 mod rolling_audio_strip;
+mod script_editor;
 pub mod shell;
 mod spreadsheet_view;
 mod state_sync;
@@ -1122,33 +1123,20 @@ impl WorkbenchApp {
                     }
                 });
 
-                ui.add_space(crate::ui_ext::SPACE_SM);
-
-                // Re-render mirror if dirty
-                if self.dirty_mirror || self.mirror_texture.is_none() {
-                    self.update_mirror_texture(ctx);
+                if self.view == WorkbenchView::Palette {
+                    ui.add_space(crate::ui_ext::SPACE_SM);
+                    if self.dirty_mirror || self.mirror_texture.is_none() {
+                        self.update_mirror_texture(ctx);
+                    }
+                    let mirror_action = ScreenMirrorWidget::new(
+                        self.mirror_texture.as_ref(),
+                        self.config.slots.left_priors,
+                        &mut self.dragging_slot,
+                        &self.selected_slots,
+                    )
+                    .show(ui, &self.ui_palette);
+                    self.handle_mirror_action(mirror_action);
                 }
-
-                let mirror_action = ScreenMirrorWidget::new(
-                    self.mirror_texture.as_ref(),
-                    self.config.slots.left_priors,
-                    &mut self.dragging_slot,
-                    &self.selected_slots,
-                )
-                // Node properties need a usable canvas alongside the always-visible mirror.
-                // Keep the same fitted aspect/width logic, with a smaller height cap only here.
-                .with_height_scale(
-                    if self.view == WorkbenchView::NodeMachine
-                        && ctx.screen_rect().height() <= 800.0
-                    {
-                        0.5
-                    } else {
-                        1.0
-                    },
-                )
-                .show(ui, &self.ui_palette);
-
-                self.handle_mirror_action(mirror_action);
             });
     }
 
@@ -1608,8 +1596,11 @@ impl eframe::App for WorkbenchApp {
 
         let mut host_action = None;
 
-        if let Some(strip) = &mut self.rolling_audio_strip {
+        if self.view == WorkbenchView::Palette
+            && let Some(strip) = &mut self.rolling_audio_strip
+        {
             egui::TopBottomPanel::bottom("rolling_audio_strip_panel")
+                .min_height(100.0)
                 .frame(
                     egui::Frame::none()
                         .fill(crate::hex_to_c32(&self.ui_palette.colors.canvas))
@@ -2026,9 +2017,11 @@ impl eframe::App for WorkbenchApp {
 
 impl WorkbenchApp {
     pub fn is_audio_region_active(&self) -> bool {
-        self.rolling_audio_strip
-            .as_ref()
-            .map_or(false, |s| s.selected_region.is_some())
+        self.view == WorkbenchView::Palette
+            && self
+                .rolling_audio_strip
+                .as_ref()
+                .map_or(false, |s| s.selected_region.is_some())
     }
 
     fn render_modal_viewers(&mut self, ctx: &egui::Context) -> bool {
@@ -2995,6 +2988,9 @@ impl WorkbenchApp {
     }
 
     fn handle_audio_strip_shortcuts(&mut self, ctx: &egui::Context, audio_region_active: bool) {
+        if self.view != WorkbenchView::Palette {
+            return;
+        }
         self.handle_audio_strip_playback(ctx, audio_region_active);
         self.handle_audio_strip_copy(ctx, audio_region_active);
         self.handle_audio_strip_refresh(ctx);
@@ -5153,7 +5149,7 @@ mod workbench_layout_tests {
     #[test]
     fn node_machine_substates_each_consume_escape_before_palette_return() {
         let mut view = WorkbenchView::NodeMachine;
-        let mut canvas = NodeCanvasState::with_config(AppConfig::default());
+        let mut canvas = NodeCanvasState::new();
         canvas.catalog_open = true;
         canvas.save_dialog_open = true;
         canvas.dragging_from = Some((uuid::Uuid::new_v4(), "Out".to_owned(), true));
@@ -5198,7 +5194,7 @@ mod workbench_layout_tests {
     #[test]
     fn auto_actions_escape_returns_to_palette_and_requests_search_focus() {
         let mut view = WorkbenchView::AutoActions;
-        let mut canvas = NodeCanvasState::with_config(AppConfig::default());
+        let mut canvas = NodeCanvasState::new();
         let mut search_needs_focus = false;
 
         assert_eq!(
