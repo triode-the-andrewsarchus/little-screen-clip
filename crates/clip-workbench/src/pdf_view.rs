@@ -25,8 +25,9 @@ const PAGE_DECODE_REQUEST_LIMIT: usize = 32;
 // Backend frees follow drawing; frame turnover can temporarily use twice these
 // limits, because textures uploaded in this frame cannot be evicted until the next.
 const PAGE_TEXTURE_LIMIT: usize = 32;
-const PAGE_TEXTURE_BYTE_LIMIT: usize = 32 * 1024 * 1024;
+const PAGE_TEXTURE_BYTE_LIMIT: usize = 96 * 1024 * 1024;
 const PAGE_RASTER_MAX_DIM: u32 = 1200;
+const PAGE_DETAIL_MAX_DIM: u32 = 4096;
 const STAGED_PDF_FILENAME: &str = "edited.pdf";
 
 struct PdfPreviewMsg {
@@ -35,12 +36,12 @@ struct PdfPreviewMsg {
 }
 
 // One running/queued decode or completed ColorImage per editor (at most
-// 1200 * 1200 * 4 bytes of published pixels). Canceled jobs retain their slot
+// 4096 * 4096 * 4 bytes of published pixels). Canceled jobs retain their slot
 // until acknowledged so rapid navigation cannot accumulate running decodes.
 struct PdfPageDecodeSlot {
     raster: Arc<PdfPageRasterResource>,
     ticket: JobTicket,
-    rx: Receiver<Result<Result<egui::ColorImage, String>, JobError>>,
+    rx: Receiver<Result<Result<(Arc<PdfPageRasterResource>, egui::ColorImage), String>, JobError>>,
     ready: Option<egui::ColorImage>,
     cancelled: bool,
 }
@@ -55,13 +56,42 @@ enum PdfDecodePoll {
 }
 
 impl PdfPageDecodeSlot {
-    fn start(raster: Arc<PdfPageRasterResource>, ctx: &egui::Context) -> Self {
+    fn start(
+        raster: Arc<PdfPageRasterResource>,
+        source: Option<(PathBuf, u32)>,
+        ctx: &egui::Context,
+    ) -> Self {
         let worker_raster = Arc::clone(&raster);
         let repaint = ctx.clone();
+        let decode_limit = ctx
+            .input(|input| input.max_texture_side)
+            .min(PAGE_DETAIL_MAX_DIM as usize) as u32;
         let (ticket, rx) = BackgroundJobs::global().submit(Duration::from_secs(10), move || {
-            let result = std::fs::read(worker_raster.path())
-                .map_err(|error| format!("Could not read cached PDF raster: {error}"))
-                .and_then(decode_page_png);
+            let result = (|| {
+                let raster = if let Some((source, render_width)) = source {
+                    let (png, width, height) =
+                        render_pdf_page_preview(&source, worker_raster.page_num(), render_width)?;
+                    let path = worker_raster._raster_directory.path().join(format!(
+                        "page-{}-{render_width}px.png",
+                        worker_raster.page_num()
+                    ));
+                    std::fs::write(&path, png).map_err(|error| error.to_string())?;
+                    Arc::new(PdfPageRasterResource {
+                        page_num: worker_raster.page_num(),
+                        path,
+                        width,
+                        height,
+                        render_width,
+                        _raster_directory: Arc::clone(&worker_raster._raster_directory),
+                    })
+                } else {
+                    worker_raster
+                };
+                let image = std::fs::read(raster.path())
+                    .map_err(|error| format!("Could not read cached PDF raster: {error}"))
+                    .and_then(|png| decode_page_png(png, decode_limit))?;
+                Ok((raster, image))
+            })();
             repaint.request_repaint();
             result
         });
@@ -96,7 +126,8 @@ impl PdfPageDecodeSlot {
             return PdfDecodePoll::Cancelled;
         }
         match result {
-            Ok(Ok(image)) => {
+            Ok(Ok((raster, image))) => {
+                self.raster = raster;
                 self.ready = Some(image);
                 PdfDecodePoll::Ready
             }
@@ -189,8 +220,11 @@ impl InlinePdfPagePreview {
                     {
                         self.decode_start_count += 1;
                     }
-                    self.decode_slot =
-                        Some(PdfPageDecodeSlot::start(Arc::clone(&self.raster), ctx));
+                    self.decode_slot = Some(PdfPageDecodeSlot::start(
+                        Arc::clone(&self.raster),
+                        None,
+                        ctx,
+                    ));
                     ctx.request_repaint_after(Duration::from_millis(20));
                 }
             }
@@ -227,15 +261,15 @@ impl Drop for InlinePdfPagePreview {
     }
 }
 
-fn decode_page_png(png: Vec<u8>) -> Result<egui::ColorImage, String> {
+fn decode_page_png(png: Vec<u8>, max_dim: u32) -> Result<egui::ColorImage, String> {
     let mut reader =
         image::ImageReader::with_format(std::io::Cursor::new(png), image::ImageFormat::Png);
     let mut limits = image::Limits::default();
-    limits.max_alloc = Some(64 * 1024 * 1024);
+    limits.max_alloc = Some(128 * 1024 * 1024);
     reader.limits(limits);
     let image = reader.decode().map_err(|error| error.to_string())?;
-    let image = if image.width().max(image.height()) > PAGE_RASTER_MAX_DIM {
-        image.thumbnail(PAGE_RASTER_MAX_DIM, PAGE_RASTER_MAX_DIM)
+    let image = if image.width().max(image.height()) > max_dim {
+        image.resize(max_dim, max_dim, image::imageops::FilterType::Lanczos3)
     } else {
         image
     };
@@ -261,6 +295,112 @@ fn fitted_pdf_page_rect(rect: egui::Rect, dimensions: (u32, u32)) -> egui::Rect 
     egui::Rect::from_center_size(rect.center(), fitted_size)
 }
 
+/// View-local navigation of the selected page, relative to its fitted size.
+struct PdfPageViewport {
+    page_num: Option<usize>,
+    zoom: f32,
+    pan: Vec2,
+    render_width: u32,
+}
+
+impl Default for PdfPageViewport {
+    fn default() -> Self {
+        Self {
+            page_num: None,
+            zoom: 1.0,
+            pan: Vec2::ZERO,
+            render_width: PAGE_RASTER_MAX_DIM,
+        }
+    }
+}
+
+impl PdfPageViewport {
+    fn select_page(&mut self, page_num: usize) {
+        if self.page_num != Some(page_num) {
+            *self = Self {
+                page_num: Some(page_num),
+                ..Self::default()
+            };
+        }
+    }
+
+    fn page_rect(&mut self, viewport: egui::Rect, dimensions: (u32, u32)) -> egui::Rect {
+        let size = fitted_pdf_page_rect(viewport, dimensions).size() * self.zoom;
+        let overflow = ((size - viewport.size()) * 0.5).max(Vec2::ZERO);
+        self.pan.x = self.pan.x.clamp(-overflow.x, overflow.x);
+        self.pan.y = self.pan.y.clamp(-overflow.y, overflow.y);
+        egui::Rect::from_center_size(viewport.center() + self.pan, size)
+    }
+
+    fn update_render_width(
+        &mut self,
+        page_size: Vec2,
+        pixels_per_point: f32,
+        max_texture_side: usize,
+    ) {
+        // Supersample text, then let the GPU reduce it to physical display pixels.
+        // Width buckets avoid launching a renderer for every wheel increment.
+        let aspect = page_size.x / page_size.y.max(1.0);
+        let max_dim = max_texture_side.min(PAGE_DETAIL_MAX_DIM as usize) as f32;
+        let width_limit = (max_dim * aspect.min(1.0)).floor().max(1.0) as u32;
+        let physical_width = page_size.x * pixels_per_point * 1.5;
+        let requested = (physical_width / 256.0).ceil().max(1.0) as u32 * 256;
+        self.render_width = requested.min(width_limit);
+    }
+
+    fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        texture: egui::TextureId,
+        dimensions: (u32, u32),
+    ) -> egui::Response {
+        let (viewport, response) = ui.allocate_exact_size(
+            ui.available_size().max(Vec2::splat(1.0)),
+            egui::Sense::click_and_drag(),
+        );
+        // Clamp before interaction as well, since the host or page aspect may change.
+        self.page_rect(viewport, dimensions);
+        if response.hovered() {
+            let scroll = ui.input(|input| input.raw_scroll_delta.y);
+            if scroll != 0.0 {
+                let old_zoom = self.zoom;
+                self.zoom = (old_zoom * (scroll * 0.002).exp()).clamp(0.25, 8.0);
+                if let Some(pointer) = response.hover_pos() {
+                    self.pan +=
+                        (pointer - viewport.center() - self.pan) * (1.0 - self.zoom / old_zoom);
+                }
+            }
+        }
+        if response.dragged() {
+            self.pan += response.drag_delta();
+        }
+        if response.double_clicked() {
+            self.zoom = 1.0;
+            self.pan = Vec2::ZERO;
+        }
+        let page_rect = self.page_rect(viewport, dimensions);
+        self.update_render_width(
+            page_rect.size(),
+            ui.ctx().pixels_per_point(),
+            ui.input(|input| input.max_texture_side),
+        );
+        if page_rect.width() > viewport.width() || page_rect.height() > viewport.height() {
+            response.clone().on_hover_cursor(if response.dragged() {
+                egui::CursorIcon::Grabbing
+            } else {
+                egui::CursorIcon::Grab
+            });
+        }
+        ui.painter_at(viewport).image(
+            texture,
+            page_rect,
+            egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+        response.on_hover_text("Scroll to zoom • Drag to pan • Double-click to fit")
+    }
+}
+
 /// Completion message for a potentially expensive, lossless PDF mutation.  PDF
 /// parsing and saving can take seconds for large manuals, so this must never
 /// run from egui's frame callback.
@@ -278,10 +418,17 @@ pub struct PdfPageRasterResource {
     path: PathBuf,
     width: u32,
     height: u32,
+    // Requested raster width distinguishes thumbnails from full page renders.
+    render_width: u32,
     _raster_directory: Arc<tempfile::TempDir>,
 }
 
 impl PdfPageRasterResource {
+    fn needs_render(&self, requested_width: u32) -> bool {
+        // Very large retained rasters alias when minified without GPU mipmaps.
+        self.render_width < requested_width || self.render_width > requested_width.saturating_mul(2)
+    }
+
     pub fn page_num(&self) -> usize {
         self.page_num
     }
@@ -349,6 +496,7 @@ pub(crate) fn gallery_pdf_page_source() -> Result<(PathBuf, Arc<PdfPageRasterRes
             path: raster_path,
             width: 96,
             height: 128,
+            render_width: 96,
             _raster_directory: directory,
         }),
     ))
@@ -390,6 +538,7 @@ pub struct PdfEditorState {
     texture_frame: u64,
     decode_job: Option<PdfPageDecodeSlot>,
     decode_requests: Vec<usize>,
+    viewport: PdfPageViewport,
 }
 
 impl PdfEditorState {
@@ -432,6 +581,7 @@ impl PdfEditorState {
             texture_frame: 0,
             decode_job: None,
             decode_requests: Vec::new(),
+            viewport: PdfPageViewport::default(),
         }
     }
 
@@ -473,6 +623,7 @@ impl PdfEditorState {
             job.cancel();
         }
         self.decode_requests.clear();
+        self.viewport = PdfPageViewport::default();
         self.pages.clear();
         self.page_count = 0;
         let path = self.path.clone();
@@ -648,6 +799,14 @@ impl PdfEditorState {
         }
     }
 
+    fn page_render_width(&self, page_num: usize) -> u32 {
+        if self.viewport.page_num == Some(page_num) {
+            self.viewport.render_width
+        } else {
+            PAGE_RASTER_MAX_DIM
+        }
+    }
+
     /// Upload on demand and evict least recently used pages. The selected page
     /// and any texture already referenced by this frame's paint shapes are
     /// protected, so eviction cannot leave a dangling image in the draw list.
@@ -656,6 +815,7 @@ impl PdfEditorState {
         page_num: usize,
         ctx: &egui::Context,
     ) -> Option<egui::TextureId> {
+        let requested_width = self.page_render_width(page_num);
         let index = page_num.checked_sub(1)?;
         let page = self.pages.get_mut(index)?;
         debug_assert!(
@@ -664,9 +824,19 @@ impl PdfEditorState {
                 .is_none_or(|raster| raster.page_num() == page_num),
             "page raster metadata must match its owning page"
         );
+        let upgrade = self.selected_page == Some(page_num)
+            && page
+                .raster
+                .as_ref()
+                .is_some_and(|raster| raster.needs_render(requested_width));
+        let ready = self.decode_job.as_ref().is_some_and(|job| {
+            job.raster.page_num() == page_num && !job.cancelled && job.ready.is_some()
+        });
         if let Some(texture) = &page.texture {
-            page.texture_last_used = self.texture_frame;
-            return Some(texture.id());
+            if (!upgrade || page.error.is_some()) && !ready {
+                page.texture_last_used = self.texture_frame;
+                return Some(texture.id());
+            }
         }
         if page.raster.is_none() || page.error.is_some() {
             return None;
@@ -681,16 +851,24 @@ impl PdfEditorState {
                 self.decode_requests.push(page_num);
             }
         }
-        let job = self.decode_job.as_ref()?;
-        if job.raster.page_num() != page_num || job.cancelled {
-            return None;
+        let page = &mut self.pages[index];
+        if page.texture.is_some() {
+            page.texture_last_used = self.texture_frame;
         }
+        let current_texture = page.texture.as_ref().map(|texture| texture.id());
+        let Some(job) = self.decode_job.as_ref().filter(|job| {
+            job.raster.page_num() == page_num && !job.cancelled && job.ready.is_some()
+        }) else {
+            return current_texture;
+        };
         let bytes = job.ready.as_ref()?.pixels.len() * 4;
-        if !self.make_texture_room(bytes) {
+        if !self.make_texture_room(bytes, page_num) {
             ctx.request_repaint();
-            return None;
+            return current_texture;
         }
-        let color_image = self.decode_job.take()?.ready?;
+        let job = self.decode_job.take()?;
+        let color_image = job.ready?;
+        self.pages[index].raster = Some(job.raster);
         let page = &mut self.pages[index];
         let texture = ctx.load_texture(
             format!("pdf_page_{page_num}"),
@@ -726,12 +904,19 @@ impl PdfEditorState {
     // Called after painting, when the complete visible demand is known. No
     // pixel work runs here; one job is submitted, selected page first.
     fn schedule_page_decode(&mut self, ctx: &egui::Context) {
+        let selected_width = self.selected_page.map(|page| self.page_render_width(page));
         if let Some(job) = &mut self.decode_job {
             let selected_waiting = self.selected_page.is_some_and(|selected| {
                 selected != job.raster.page_num()
                     && self.decode_requests.contains(&selected)
                     && self.pages.get(selected - 1).is_some_and(|page| {
-                        page.texture.is_none() && page.error.is_none() && page.raster.is_some()
+                        page.error.is_none()
+                            && page.raster.is_some()
+                            && (page.texture.is_none()
+                                || page.raster.as_ref().is_some_and(|raster| {
+                                    raster
+                                        .needs_render(selected_width.unwrap_or(PAGE_RASTER_MAX_DIM))
+                                }))
                     })
             });
             if !self.decode_requests.contains(&job.raster.page_num()) || selected_waiting {
@@ -750,7 +935,13 @@ impl PdfEditorState {
                 .find(|page_num| {
                     self.decode_requests.contains(page_num)
                         && self.pages.get(page_num - 1).is_some_and(|page| {
-                            page.texture.is_none() && page.error.is_none() && page.raster.is_some()
+                            page.error.is_none()
+                                && page.raster.is_some()
+                                && (page.texture.is_none()
+                                    || (self.selected_page == Some(*page_num)
+                                        && page.raster.as_ref().is_some_and(|raster| {
+                                            raster.needs_render(self.page_render_width(*page_num))
+                                        })))
                         })
                 });
             if let Some(page_num) = candidate {
@@ -759,7 +950,11 @@ impl PdfEditorState {
                     .as_ref()
                     .expect("decode candidates have cached rasters")
                     .clone();
-                self.decode_job = Some(PdfPageDecodeSlot::start(raster, ctx));
+                let requested_width = self.page_render_width(page_num);
+                let source = (self.selected_page == Some(page_num)
+                    && raster.needs_render(requested_width))
+                .then(|| (self.path.clone(), requested_width));
+                self.decode_job = Some(PdfPageDecodeSlot::start(raster, source, ctx));
             }
         }
         if self.decode_job.is_some() {
@@ -767,10 +962,11 @@ impl PdfEditorState {
         }
     }
 
-    fn make_texture_room(&mut self, additional_bytes: usize) -> bool {
+    fn make_texture_room(&mut self, additional_bytes: usize, replacing_page: usize) -> bool {
         let (mut count, mut bytes) = self
             .pages
             .iter()
+            .filter(|page| page.page_num != replacing_page)
             .filter_map(|page| page.texture.as_ref())
             .fold((0, 0), |(count, bytes), texture| {
                 (count + 1, bytes + texture.byte_size())
@@ -1055,7 +1251,7 @@ impl PdfEditorState {
                         "okular",
                         "Open PDF in external viewer (Okular / Evince)",
                     ).with_icon(Icon::Pdf))
-                    .with_footer_hints("Click thumbnail: Select page | [R] Rotate 90° | [Del] Delete page | Esc: Close");
+                    .with_footer_hints("Scroll: Zoom | Drag: Pan | Double-click: Fit | [R] Rotate | [Del] Delete | Esc: Close");
 
                 if let Some(cur) = self.selected_page.filter(|_| !metadata_loading) {
                     shell = shell.with_footer_readout(format!("Selected: Page {} of {}", cur, page_count));
@@ -1327,8 +1523,9 @@ impl PdfEditorState {
                                             .as_ref()
                                             .map(|raster| raster.dimensions())
                                             .unwrap_or_default();
+                                        self.viewport.select_page(page.page_num);
                                         // Header bar above preview
-                                        ui.horizontal(|ui| {
+                                        ui.horizontal_wrapped(|ui| {
                                             ui.label(
                                                 egui::RichText::new(format!(
                                                     "Page {} of {}",
@@ -1345,50 +1542,37 @@ impl PdfEditorState {
                                                 .size(crate::ui_ext::BODY_FONT_SIZE)
                                                 .color(colors.text_muted),
                                             );
-
+                                            if ui.button("Fit").on_hover_text("Fit page and reset pan").clicked() {
+                                                self.viewport.zoom = 1.0;
+                                                self.viewport.pan = Vec2::ZERO;
+                                            }
+                                            ui.label(format!("{:.0}%", self.viewport.zoom * 100.0));
                                         });
 
                                         ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
                                         ui.separator();
                                         ui.add_space(crate::ui_ext::SPACE_SM);
 
-                                        // Large page preview image fitted to right pane
-                                        let max_w = (ui.available_width() - 16.0).max(50.0);
-                                        let max_h = (ui.available_height() - 16.0).max(50.0);
-
-                                        let aspect = if page_height > 0 {
-                                            page_width as f32 / page_height as f32
+                                        if let Some(ref tex) = page.texture {
+                                            self.viewport.show(ui, tex.id(), (page_width, page_height));
                                         } else {
-                                            0.707
-                                        };
-
-                                        let (draw_w, draw_h) = if max_w / aspect <= max_h {
-                                            (max_w, max_w / aspect)
-                                        } else {
-                                            (max_h * aspect, max_h)
-                                        };
-
-                                        ui.centered_and_justified(|ui| {
-                                            if let Some(ref tex) = page.texture {
-                                                ui.image(egui::load::SizedTexture::new(
-                                                    tex.id(),
-                                                    Vec2::new(draw_w, draw_h),
-                                                ));
-                                            } else if let Some(error) = &page.error {
-                                                ui.label(
-                                                    egui::RichText::new(error)
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .color(crate::ui_ext::contrast_text_c32_on(
-                                                            colors.recessed,
-                                                            colors.recessed,
-                                                            Some(colors.danger),
-                                                            palette,
-                                                        )),
-                                                );
-                                            } else {
-                                                ui.spinner();
-                                            }
-                                        });
+                                            ui.centered_and_justified(|ui| {
+                                                if let Some(error) = &page.error {
+                                                    ui.label(
+                                                        egui::RichText::new(error)
+                                                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                                                            .color(crate::ui_ext::contrast_text_c32_on(
+                                                                colors.recessed,
+                                                                colors.recessed,
+                                                                Some(colors.danger),
+                                                                palette,
+                                                            )),
+                                                    );
+                                                } else {
+                                                    ui.spinner();
+                                                }
+                                            });
+                                        }
                                     } else {
                                         ui.centered_and_justified(|ui| {
                                             ui.label(
@@ -1410,6 +1594,9 @@ impl PdfEditorState {
                 let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
                 shell.render_footer(ui, &toast_tuple, now);
             });
+        if let Some(page_num) = self.selected_page {
+            self.ensure_page_texture(page_num, ctx);
+        }
         self.schedule_page_decode(ctx);
     }
 }
@@ -1458,6 +1645,7 @@ where
                             path: raster_path,
                             width,
                             height,
+                            render_width: max_dim,
                             _raster_directory: Arc::clone(&raster_cache),
                         })
                     })
@@ -1588,6 +1776,7 @@ mod tests {
             texture_frame: 0,
             decode_job: None,
             decode_requests: Vec::new(),
+            viewport: PdfPageViewport::default(),
         }
     }
 
@@ -1673,6 +1862,7 @@ mod tests {
             path,
             width,
             height,
+            render_width: PAGE_RASTER_MAX_DIM,
             _raster_directory: raster_directory,
         })
     }
@@ -1700,7 +1890,8 @@ mod tests {
         drop(state);
 
         assert!(raster_directory.exists());
-        let decoded = decode_page_png(std::fs::read(&raster_path).unwrap()).unwrap();
+        let decoded =
+            decode_page_png(std::fs::read(&raster_path).unwrap(), PAGE_DETAIL_MAX_DIM).unwrap();
         assert_eq!(decoded.size, [16, 16]);
 
         drop(raster);
@@ -1989,13 +2180,14 @@ mod tests {
 
     #[test]
     fn oversized_raster_decode_bounds_published_pixel_memory() {
-        let state = raster_state(1, PAGE_RASTER_MAX_DIM + 1);
+        let state = raster_state(1, PAGE_DETAIL_MAX_DIM + 1);
         let raster_path = state.pages[0].raster.as_ref().unwrap().path();
-        let image = decode_page_png(std::fs::read(raster_path).unwrap()).unwrap();
-        assert_eq!(image.size, [PAGE_RASTER_MAX_DIM as usize; 2]);
+        let image =
+            decode_page_png(std::fs::read(raster_path).unwrap(), PAGE_DETAIL_MAX_DIM).unwrap();
+        assert_eq!(image.size, [PAGE_DETAIL_MAX_DIM as usize; 2]);
         assert_eq!(
             image.pixels.len() * 4,
-            PAGE_RASTER_MAX_DIM as usize * PAGE_RASTER_MAX_DIM as usize * 4
+            PAGE_DETAIL_MAX_DIM as usize * PAGE_DETAIL_MAX_DIM as usize * 4
         );
     }
 
@@ -2280,6 +2472,46 @@ mod tests {
     }
 
     #[test]
+    fn selecting_thumbnail_renders_full_page_and_reuses_it_after_eviction() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("selection.pdf");
+        write_two_page_pdf(&source);
+        let mut state = raster_state(2, 16);
+        state.path = source;
+        let ctx = egui::Context::default();
+        // Page two initially has only the raster and texture used by the grid.
+        Arc::get_mut(state.pages[1].raster.as_mut().unwrap())
+            .unwrap()
+            .render_width = 360;
+        let thumbnail_path = state.pages[1].raster.as_ref().unwrap().path().to_owned();
+        let thumbnail_id = upload_page(&mut state, 2, &ctx);
+        assert_eq!(state.pages[1].texture.as_ref().unwrap().size(), [16, 16]);
+
+        state.selected_page = Some(2);
+        assert_eq!(state.ensure_page_texture(2, &ctx), Some(thumbnail_id));
+        let full_id = upload_page(&mut state, 2, &ctx);
+        assert_ne!(thumbnail_id, full_id);
+        let full_raster = Arc::clone(state.pages[1].raster.as_ref().unwrap());
+        assert_eq!(full_raster.render_width, PAGE_RASTER_MAX_DIM);
+        assert_eq!(full_raster.dimensions(), (1200, 400));
+        assert_eq!(state.pages[1].texture.as_ref().unwrap().size(), [1200, 400]);
+        assert_ne!(full_raster.path(), thumbnail_path);
+        assert!(thumbnail_path.exists());
+        assert!(resident_textures(&state).1 <= PAGE_TEXTURE_BYTE_LIMIT);
+
+        state.pages[1].texture = None;
+        // Cached full-page pixels must survive eviction without another PDF render.
+        std::fs::remove_file(&state.path).unwrap();
+        let reloaded_id = upload_page(&mut state, 2, &ctx);
+        assert_ne!(full_id, reloaded_id);
+        assert!(Arc::ptr_eq(
+            state.pages[1].raster.as_ref().unwrap(),
+            &full_raster
+        ));
+        assert_eq!(state.pages[1].texture.as_ref().unwrap().size(), [1200, 400]);
+    }
+
+    #[test]
     fn evicted_page_reselection_reuploads_original_raster() {
         let ctx = egui::Context::default();
         let mut state = raster_state(PAGE_TEXTURE_LIMIT + 2, 16);
@@ -2449,6 +2681,7 @@ mod tests {
                 texture_frame: 0,
                 decode_job: None,
                 decode_requests: Vec::new(),
+                viewport: PdfPageViewport::default(),
             };
             let host = egui::Rect::from_min_size(egui::Pos2::ZERO, host_size);
             let mut panes = Vec::new();
@@ -2574,6 +2807,246 @@ mod tests {
                 "selected page preview escapes its pane at {host_size:?}: page={preview_rect:?}, pane={preview_pane:?}"
             );
         }
+    }
+
+    #[test]
+    fn pdf_detail_resolution_tracks_physical_size_and_stays_bounded() {
+        let mut viewport = PdfPageViewport::default();
+        viewport.update_render_width(egui::vec2(300.0, 600.0), 1.0, PAGE_DETAIL_MAX_DIM as usize);
+        assert_eq!(viewport.render_width, 512);
+        viewport.update_render_width(egui::vec2(300.0, 600.0), 2.0, PAGE_DETAIL_MAX_DIM as usize);
+        assert_eq!(viewport.render_width, 1024);
+        viewport.update_render_width(egui::vec2(600.0, 1200.0), 2.0, PAGE_DETAIL_MAX_DIM as usize);
+        assert_eq!(viewport.render_width, 2048);
+        viewport.update_render_width(
+            egui::vec2(8000.0, 16000.0),
+            2.0,
+            PAGE_DETAIL_MAX_DIM as usize,
+        );
+        assert_eq!(viewport.render_width, PAGE_DETAIL_MAX_DIM / 2);
+        viewport.update_render_width(
+            egui::vec2(16000.0, 8000.0),
+            2.0,
+            PAGE_DETAIL_MAX_DIM as usize,
+        );
+        assert_eq!(viewport.render_width, PAGE_DETAIL_MAX_DIM);
+    }
+
+    #[test]
+    fn zoom_detail_replaces_texture_without_blanking_or_resampling_pdf_text() {
+        let (source, raster) = gallery_pdf_page_source().unwrap();
+        let mut state = PdfEditorState::from_shared_page_raster(source, raster);
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                max_texture_side: Some(4096),
+                ..Default::default()
+            },
+            |_| {},
+        );
+        let base_id = upload_page(&mut state, 1, &ctx);
+        // The portrait raster must retain its native height instead of being reduced to 1200.
+        assert_eq!(
+            state.pages[0].texture.as_ref().unwrap().size(),
+            [1200, 1600]
+        );
+        let base_raster = Arc::clone(state.pages[0].raster.as_ref().unwrap());
+
+        state.viewport.select_page(1);
+        state.viewport.zoom = 2.0;
+        state.viewport.pan = egui::vec2(30.0, 50.0);
+        state.viewport.update_render_width(
+            egui::vec2(750.0, 1000.0),
+            2.0,
+            PAGE_DETAIL_MAX_DIM as usize,
+        );
+        assert_eq!(state.viewport.render_width, 2304);
+        assert_eq!(state.ensure_page_texture(1, &ctx), Some(base_id));
+        let detail_id = upload_page(&mut state, 1, &ctx);
+        assert_ne!(base_id, detail_id);
+        assert_eq!(
+            state.pages[0].texture.as_ref().unwrap().size(),
+            [2304, 3072]
+        );
+        let detail_raster = Arc::clone(state.pages[0].raster.as_ref().unwrap());
+        assert_eq!(detail_raster.render_width, 2304);
+        assert_ne!(base_raster.path(), detail_raster.path());
+        assert!(
+            base_raster.path().exists(),
+            "replacement must preserve readers' original pixels"
+        );
+        assert_eq!(state.viewport.zoom, 2.0);
+        assert_eq!(state.viewport.pan, egui::vec2(30.0, 50.0));
+        assert!(resident_textures(&state).1 <= PAGE_TEXTURE_BYTE_LIMIT);
+
+        state.viewport.update_render_width(
+            egui::vec2(250.0, 1000.0 / 3.0),
+            1.0,
+            PAGE_DETAIL_MAX_DIM as usize,
+        );
+        assert_eq!(state.ensure_page_texture(1, &ctx), Some(detail_id));
+        let reduced_id = upload_page(&mut state, 1, &ctx);
+        assert_ne!(detail_id, reduced_id);
+        assert_eq!(state.pages[0].raster.as_ref().unwrap().render_width, 512);
+        assert_eq!(state.pages[0].texture.as_ref().unwrap().size(), [512, 683]);
+
+        // A failed quality upgrade must preserve the usable texture and stop retrying.
+        std::fs::remove_file(&state.path).unwrap();
+        state.viewport.update_render_width(
+            egui::vec2(750.0, 1000.0),
+            2.0,
+            PAGE_DETAIL_MAX_DIM as usize,
+        );
+        assert_eq!(state.ensure_page_texture(1, &ctx), Some(reduced_id));
+        wait_for_decode(&mut state, 1, &ctx);
+        assert!(state.pages[0].error.is_some());
+        assert_eq!(state.ensure_page_texture(1, &ctx), Some(reduced_id));
+        state.schedule_page_decode(&ctx);
+        assert!(state.decode_job.is_none());
+    }
+
+    #[test]
+    fn page_pan_is_limited_to_overflowing_axes_and_cleared_when_zoomed_out() {
+        let viewport = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), Vec2::splat(400.0));
+        for (dimensions, zoom, axes) in [
+            ((200, 400), 0.5, (false, false)),
+            ((200, 400), 1.0, (false, false)),
+            ((200, 400), 1.5, (false, true)),
+            ((400, 200), 1.5, (true, false)),
+            ((200, 400), 4.0, (true, true)),
+            ((400, 200), 4.0, (true, true)),
+        ] {
+            for direction in [-1.0, 1.0] {
+                let mut view = PdfPageViewport {
+                    zoom,
+                    pan: Vec2::splat(direction * 10_000.0),
+                    ..Default::default()
+                };
+                let page = view.page_rect(viewport, dimensions);
+                assert_eq!(view.pan.x != 0.0, axes.0, "{dimensions:?} at {zoom}");
+                assert_eq!(view.pan.y != 0.0, axes.1, "{dimensions:?} at {zoom}");
+                // An overflowing axis always covers the viewport, even at the pan limit.
+                if axes.0 {
+                    assert!(page.left() <= viewport.left() && page.right() >= viewport.right());
+                }
+                if axes.1 {
+                    assert!(page.top() <= viewport.top() && page.bottom() >= viewport.bottom());
+                }
+                view.zoom = 0.5;
+                let page = view.page_rect(viewport, dimensions);
+                assert_eq!(view.pan, Vec2::ZERO);
+                assert!(viewport.contains_rect(page));
+            }
+        }
+    }
+
+    #[test]
+    fn pdf_viewport_wheel_zoom_drag_and_double_click_use_constrained_canvas() {
+        let ctx = egui::Context::default();
+        let texture = ctx.load_texture(
+            "pdf-navigation",
+            egui::ColorImage::example(),
+            Default::default(),
+        );
+        let mut view = PdfPageViewport::default();
+        let mut time = 0.0;
+        let mut frame = |view: &mut PdfPageViewport, events| {
+            time += 0.05;
+            let mut rect = egui::Rect::NOTHING;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        Vec2::splat(400.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        rect = view.show(ui, texture.id(), (200, 400)).rect;
+                    });
+                },
+            );
+            (rect, output)
+        };
+        let (rect, _) = frame(&mut view, vec![]);
+        let center = rect.center();
+        // Zoom around the center to overflow only vertically.
+        frame(
+            &mut view,
+            vec![
+                egui::Event::PointerMoved(center),
+                egui::Event::Scroll(egui::vec2(0.0, 200.0)),
+            ],
+        );
+        assert!(view.zoom > 1.0 && view.zoom < 2.0);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        frame(&mut view, vec![button(center, true)]);
+        let (rect, output) = frame(
+            &mut view,
+            vec![egui::Event::PointerMoved(center + egui::vec2(40.0, 40.0))],
+        );
+        assert_eq!(view.pan.x, 0.0);
+        assert!(view.pan.y > 0.0);
+        // The zoomed page is painted inside a fixed viewport clip.
+        let image = output
+            .shapes
+            .iter()
+            .find(|shape| {
+                matches!(&shape.shape,
+            egui::Shape::Mesh(mesh) if mesh.texture_id == texture.id())
+            })
+            .unwrap();
+        assert!(rect.contains_rect(image.clip_rect));
+        let end = center + egui::vec2(40.0, 40.0);
+        frame(&mut view, vec![button(end, false)]);
+        frame(&mut view, vec![button(end, true)]);
+        frame(&mut view, vec![button(end, false)]);
+        frame(&mut view, vec![button(end, true)]);
+        frame(&mut view, vec![button(end, false)]);
+        assert_eq!(view.zoom, 1.0);
+        assert_eq!(view.pan, Vec2::ZERO);
+
+        // With both axes available, wheel zoom preserves the page point under the pointer.
+        view.zoom = 3.0;
+        let pointer = center + egui::vec2(20.0, -30.0);
+        let before = view.page_rect(rect, (200, 400));
+        let source_point = (pointer - before.min) / before.size();
+        frame(
+            &mut view,
+            vec![
+                egui::Event::PointerMoved(pointer),
+                egui::Event::Scroll(egui::vec2(0.0, 100.0)),
+            ],
+        );
+        let after = view.page_rect(rect, (200, 400));
+        assert!(((pointer - after.min) / after.size() - source_point).length() < 0.0001);
+        frame(
+            &mut view,
+            vec![egui::Event::Scroll(egui::vec2(0.0, -2000.0))],
+        );
+        assert_eq!(view.zoom, 0.25);
+        assert_eq!(view.pan, Vec2::ZERO);
+    }
+
+    #[test]
+    fn selecting_another_page_resets_pdf_zoom_and_pan() {
+        let mut view = PdfPageViewport::default();
+        view.select_page(1);
+        view.zoom = 3.0;
+        view.pan = egui::vec2(30.0, 50.0);
+        view.select_page(1);
+        assert_eq!(view.zoom, 3.0);
+        view.select_page(2);
+        assert_eq!(view.zoom, 1.0);
+        assert_eq!(view.pan, Vec2::ZERO);
     }
 
     #[test]

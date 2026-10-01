@@ -141,11 +141,10 @@ pub fn render_pdf_page_preview(
     cleanup_preview_outputs(&temp_prefix);
     let png_bytes = png_bytes?;
 
-    let (w, h) = if let Ok(dyn_img) = image::load_from_memory(&png_bytes) {
-        (dyn_img.width(), dyn_img.height())
-    } else {
-        (max_dim, (max_dim as f32 * 1.414) as u32)
-    };
+    let (w, h) =
+        image::ImageReader::with_format(std::io::Cursor::new(&png_bytes), image::ImageFormat::Png)
+            .into_dimensions()
+            .map_err(|error| format!("Could not read rendered PDF dimensions: {error}"))?;
 
     Ok((png_bytes, w, h))
 }
