@@ -1889,7 +1889,13 @@ impl TextPreviewState {
                                 if released {
                                     self.code_selection_dragging = false;
                                 }
-                                ui.set_min_height(self.code_rows.total_height());
+                                // `put` advances the layout cursor to the visible
+                                // rows. Reserve the document from its origin,
+                                // rather than adding its height after that cursor.
+                                ui.expand_to_include_rect(egui::Rect::from_min_size(
+                                    origin,
+                                    egui::vec2(0.0, self.code_rows.total_height()),
+                                ));
                             });
                             self.code_scroll_offset = output.state.offset.y;
                             self.minimap_fraction = (output.state.offset.y
@@ -2266,6 +2272,11 @@ fn build_minimap_lines(
             }
             line_buffer.push_str(&source[copy_cursor..copy_end]);
             copy_cursor = copy_end;
+        }
+        if next_cursor > line_end {
+            // The syntax set uses newline-aware grammars. Python comments and
+            // other line scopes need the source newline to terminate.
+            line_buffer.push('\n');
         }
         cursor = next_cursor;
         // Syntect needs a complete logical line to preserve grammar state. Do
@@ -4315,7 +4326,12 @@ mod tests {
         );
 
         state.scroll_to_line = Some(first_row);
-        let frame = render(&mut state, &mut time, Vec::new());
+        let mut frame = render(&mut state, &mut time, Vec::new());
+        // This row is near EOF. Let egui clamp the requested top row to
+        // the final viewport before capturing positions for pointer input.
+        for _ in 0..3 {
+            frame = render(&mut state, &mut time, Vec::new());
+        }
         let previous = state.code_fragments[first_row - 1];
         let line_start = previous.end_byte - 3;
         let line_end = first.start_byte + 9;
@@ -4353,6 +4369,94 @@ mod tests {
                 .copied_text,
             content[line_start..line_end]
         );
+    }
+
+    #[test]
+    fn minimap_scroll_extent_stays_at_document_height_at_end_of_file() {
+        for wrap in [false, true] {
+            let ctx = egui::Context::default();
+            let content = (0..100)
+                .map(|line| format!("LINE_{line:03} {}\n", "word ".repeat(25)))
+                .collect::<String>();
+            let mut state = TextPreviewState::from_text(content, None, &AppConfig::default());
+            state.wrap_lines = wrap;
+            let render = |state: &mut TextPreviewState, events: Vec<egui::Event>| {
+                ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(480.0, 400.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            state.render_raw_code_view(ui, &AppPalette::default())
+                        });
+                    },
+                )
+            };
+            for _ in 0..30 {
+                let _ = render(&mut state, Vec::new());
+            }
+            let frame = render(&mut state, Vec::new());
+            let map = frame
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if (rect.rect.width() - MINIMAP_WIDTH).abs() < 0.1 => {
+                        Some(rect.rect)
+                    }
+                    _ => None,
+                })
+                .expect("overflowing file should paint a minimap");
+            let click = egui::pos2(map.center().x, map.bottom() - 4.0);
+            for pressed in [true, false] {
+                let _ = render(
+                    &mut state,
+                    vec![
+                        egui::Event::PointerMoved(click),
+                        egui::Event::PointerButton {
+                            pos: click,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert!(
+                state.scroll_to_offset.is_some(),
+                "minimap click should request navigation"
+            );
+            for _ in 0..5 {
+                let frame = render(&mut state, Vec::new());
+                assert!(
+                    (state.minimap_content_height - state.code_rows.total_height()).abs() < 1.0,
+                    "scroll extent {} must match document height {} (wrap={wrap})",
+                    state.minimap_content_height,
+                    state.code_rows.total_height()
+                );
+                assert!(
+                    (state.code_scroll_offset
+                        - (state.code_rows.total_height() - state.minimap_viewport_height)
+                            .max(0.0))
+                    .abs()
+                        < 1.0,
+                    "clicking at the bottom should reach the final viewport"
+                );
+                assert!(frame.shapes.iter().any(|shape| matches!(
+                    &shape.shape, egui::Shape::Text(text) if text.galley.job.text.contains("LINE_099")
+                )), "the final source line should remain visible after a bottom minimap click");
+                assert!(
+                    state.code_scroll_offset
+                        <= (state.code_rows.total_height() - state.minimap_viewport_height)
+                            .max(0.0)
+                            + 1.0
+                );
+            }
+        }
     }
 
     #[test]
@@ -4962,6 +5066,35 @@ mod tests {
         assert!(!state.is_markdown);
         assert_eq!(state.view_mode, TextViewMode::Raw);
         assert!(state.show_line_numbers);
+    }
+
+    #[test]
+    fn python_minimap_ends_comment_scope_at_each_source_newline() {
+        let text = Arc::new(
+            "# module comment\nimport os\ndef greet(name):\n    return \"hello\"\n".to_owned(),
+        );
+        let syntax = find_syntax("py");
+        let MinimapResult::Lines(lines) =
+            build_minimap_lines(&Arc::downgrade(&text), syntax, &AtomicBool::new(false))
+        else {
+            panic!("Python minimap should complete")
+        };
+        let mut highlighter =
+            HighlightLines::new(syntax, &THEME_SET.themes["base16-eighties.dark"]);
+        for ((_, actual), source) in lines.iter().zip(text.split_inclusive('\n')) {
+            let expected = build_minimap_line(source, &mut highlighter);
+            assert_eq!(actual.segments.len(), expected.segments.len());
+            for (actual, expected) in actual.segments.iter().zip(&expected.segments) {
+                assert_eq!(actual.color, expected.color, "syntax colors for {source:?}");
+            }
+        }
+        assert!(
+            lines[1]
+                .1
+                .segments
+                .iter()
+                .any(|segment| segment.color != lines[0].1.segments[0].color)
+        );
     }
 
     #[test]

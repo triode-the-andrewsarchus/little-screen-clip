@@ -2281,6 +2281,13 @@ impl ScreenRenderer {
         let p = Path::new(trimmed);
         let spreadsheet_opt = if p.is_file() && spreadsheet::is_spreadsheet_file(p) {
             spreadsheet::load_spreadsheet(p).ok()
+        } else if ext_hint
+            .and_then(little_clip_core::syntax::map_extension_to_language)
+            .is_some()
+        {
+            // Known text/code files follow the same extension-based route as
+            // the workbench. Source delimiters are not evidence of a table.
+            None
         } else {
             spreadsheet::detect_csv_text(trimmed)
         };
@@ -2413,5 +2420,48 @@ impl ScreenRenderer {
 
             line_y += line_height;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use little_clip_core::config::AppConfig;
+
+    #[test]
+    fn code_file_extension_takes_precedence_over_spreadsheet_heuristics() {
+        let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
+        // Semicolons in consecutive imports satisfy the table shape heuristic.
+        let source = "use crate::one;\nuse crate::two;\nuse crate::three;";
+        assert!(spreadsheet::detect_csv_text(source).is_some());
+        let mut code = Pixmap::new(500, 400).unwrap();
+        let mut table = code.clone();
+        renderer.draw_text_preview(
+            &mut code,
+            source,
+            Some("rs"),
+            0.0,
+            0.0,
+            500.0,
+            400.0,
+            true,
+            Color::WHITE,
+        );
+        renderer.draw_text_preview(
+            &mut table,
+            source,
+            None,
+            0.0,
+            0.0,
+            500.0,
+            400.0,
+            true,
+            Color::WHITE,
+        );
+        assert_ne!(
+            code.data(),
+            table.data(),
+            "Rust source must use the code preview"
+        );
     }
 }
