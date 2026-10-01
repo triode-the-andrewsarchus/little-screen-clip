@@ -4,6 +4,8 @@
 //! composition belongs in `shell::StudioPanelLayout`, not in individual tools.
 #![allow(unused_imports)] // Re-exports preserve the parent module's API and test surface.
 
+mod lifecycle;
+
 use crate::icons::Icon;
 
 /// Process a thumbnail batch in order, checking its per-run cancellation token
