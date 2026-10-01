@@ -2128,11 +2128,9 @@ fn build_minimap_line(line: &str, highlighter: &mut HighlightLines<'static>) -> 
         .unwrap_or_default()
     {
         let token_width = token.chars().count();
-        let leading_space = token.len() - token.trim_start().len();
-        let trailing_space = token.len() - token.trim_end().len();
-        let visible_start = column + token[..leading_space].chars().count();
-        let visible_end =
-            column + token_width.saturating_sub(token[..trailing_space].chars().count());
+        let leading_space = token.chars().take_while(|ch| ch.is_whitespace()).count();
+        let visible_start = column + leading_space;
+        let visible_end = column + token.trim_end().chars().count();
         if visible_start < visible_end && visible_start < MINIMAP_COLUMNS {
             segments.push(MinimapSegment {
                 start_column: visible_start,
@@ -5095,6 +5093,43 @@ mod tests {
                 .iter()
                 .any(|segment| segment.color != lines[0].1.segments[0].color)
         );
+    }
+
+    #[test]
+    fn rust_minimap_handles_unicode_before_line_ending_whitespace() {
+        let text = Arc::new("//界\n/*\n界\n*/\nfn main() {}\n".to_owned());
+        let MinimapResult::Lines(lines) = build_minimap_lines(
+            &Arc::downgrade(&text),
+            find_syntax("rs"),
+            &AtomicBool::new(false),
+        ) else {
+            panic!("Unicode Rust minimap should complete")
+        };
+        for index in [0, 1, 2, 3, 4] {
+            assert!(
+                !lines[index].1.segments.is_empty(),
+                "source line {index} needs visible blocks"
+            );
+        }
+        assert_eq!(lines[2].1.segments[0].start_column, 0);
+        assert_eq!(lines[2].1.segments[0].end_column, 1);
+
+        // A worker panic disconnects the receiver and leaves only the scrollbar.
+        // Verify that this source reaches the published cache as well.
+        let jobs = BackgroundJobs::new(1, 1);
+        let mut cache = MinimapCache::default();
+        cache.start(Arc::clone(&text), "rs".to_owned(), &jobs);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !cache.poll() {
+            assert!(
+                Instant::now() < deadline,
+                "Unicode minimap worker did not finish"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(cache.ready);
+        assert!(!cache.failed);
+        assert_eq!(cache.lines[2].1.segments, lines[2].1.segments);
     }
 
     #[test]
