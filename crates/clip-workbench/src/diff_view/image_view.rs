@@ -78,17 +78,14 @@ impl DiffViewerState {
             .show(ui, |ui| {
                 ui.set_min_height(CONTROL_HEIGHT);
                 ui.horizontal(|ui| {
-                    for mode in &[
+                    let tabs: Vec<_> = [
                         ImageDiffViewMode::ThreeUp,
                         ImageDiffViewMode::Overlay,
                         ImageDiffViewMode::MaskOnly,
                         ImageDiffViewMode::Split,
-                    ] {
-                        let is_active = self.image_mode == *mode;
-                        let btn = crate::ui_ext::mode_tab_button_icon(Some(mode.icon()), mode.label(), is_active, palette);
-                        if ui.add(btn).clicked() {
-                            self.image_mode = *mode;
-                        }
+                    ].iter().map(|&mode| crate::ui_tabs::Tab::new(mode, mode.label()).icon(mode.icon())).collect();
+                    if let Some(mode) = crate::ui_tabs::TabBar::new("image_diff_views", self.image_mode, &tabs, palette).show(ui) {
+                        self.image_mode = mode;
                     }
 
                     ui.add_space(crate::ui_ext::SPACE_SM);

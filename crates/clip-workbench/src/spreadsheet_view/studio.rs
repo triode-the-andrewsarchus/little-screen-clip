@@ -139,23 +139,25 @@ impl SpreadsheetViewerState {
 
                 // 2. Sheet Tabs
                 if sheet_count > 1 {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            egui::RichText::new("Sheets:")
-                                .size(BODY_FONT_SIZE)
-                                .color(f_low),
-                        );
-                        for (idx, sheet) in self.data.sheets.iter().enumerate() {
-                            let is_active = idx == self.active_sheet_idx;
-                            let tab_btn = crate::mode_tab_button(&sheet.name, is_active, palette);
-
-                            if ui.add(tab_btn).clicked() {
-                                self.active_sheet_idx = idx;
-                                self.selected_cell = None;
-                                self.scroll_offset = Vec2::ZERO;
-                            }
-                        }
-                    });
+                    let tabs: Vec<_> = self
+                        .data
+                        .sheets
+                        .iter()
+                        .enumerate()
+                        .map(|(index, sheet)| crate::ui_tabs::Tab::new(index, &sheet.name))
+                        .collect();
+                    if let Some(index) = crate::ui_tabs::TabBar::new(
+                        "spreadsheet_sheets",
+                        self.active_sheet_idx,
+                        &tabs,
+                        palette,
+                    )
+                    .show(ui)
+                    {
+                        self.active_sheet_idx = index;
+                        self.selected_cell = None;
+                        self.scroll_offset = Vec2::ZERO;
+                    }
                     ui.add_space(crate::ui_ext::SPACE_XS);
                 }
 

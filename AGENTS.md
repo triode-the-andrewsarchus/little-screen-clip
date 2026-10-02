@@ -44,6 +44,8 @@ Do not commit personal display, compositor, or desktop settings. Keep `config.to
 
 The workbench must remain a non-resizable, centered, single-instance popup for Niri's fixed-size floating behavior. Screen-adaptive sizing must be resolved before the window opens, with fixed-size hints in place at mapping; do not enable window resizing/maximizing or resize a visible window to fit. Internal panels may resize independently. Repeated `launch.sh ui` calls should focus the existing popup without requiring a Niri keybinding change.
 
+Use the shared `ui_tabs::TabBar` for workspace, tool, viewer-mode, and sheet navigation. Keep parameter choices and on/off controls as buttons. Re-selecting an active tab is a no-op; selection changes must preserve existing entry/exit hooks.
+
 UI acceptance automation must use the private Weston/Niri runner. Its pointer injection is scoped to that run's private Wayland and Niri sockets; do not send test input through host `/dev/uinput` or the user's interactive compositor.
 
 The little screen mirror and rolling audio strip belong only to Quick Palette. Auto Actions and Big Node Machine use their own canvas space. Script-node selection opens the built-in side editor; keep script undo history separate from graph undo, and save drafts before pipeline execution or recipe saving.

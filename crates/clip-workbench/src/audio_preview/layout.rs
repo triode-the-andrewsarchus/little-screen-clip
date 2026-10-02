@@ -371,25 +371,16 @@ fn render_audio_tool_tabs(
     active_mode: &mut AudioToolMode,
     palette: &AppPalette,
 ) {
-    let labels = AudioToolMode::ALL
+    let tabs: Vec<_> = AudioToolMode::ALL
         .iter()
-        .map(|mode| mode.label())
-        .collect::<Vec<_>>();
-    let width = crate::ui_ext::wrapped_equal_button_width(ui, &labels, true, labels.len());
-    ui.horizontal_wrapped(|ui| {
-        for &mode in AudioToolMode::ALL {
-            let button = crate::ui_ext::mode_tab_button_icon(
-                Some(mode.icon()),
-                mode.label(),
-                *active_mode == mode,
-                palette,
-            )
-            .min_size(Vec2::new(width, AudioWorkspace::BUTTON_HEIGHT));
-            if ui.add(button).clicked() {
-                *active_mode = mode;
-            }
-        }
-    });
+        .map(|&mode| crate::ui_tabs::Tab::new(mode, mode.label()).icon(mode.icon()))
+        .collect();
+    if let Some(mode) = crate::ui_tabs::TabBar::new("audio_tools", *active_mode, &tabs, palette)
+        .equal_widths()
+        .show(ui)
+    {
+        *active_mode = mode;
+    }
 }
 
 #[cfg(test)]
@@ -513,7 +504,7 @@ mod tests {
                 .filter_map(|shape| match &shape.shape {
                     egui::epaint::Shape::Rect(rect)
                         if (rect.rect.height() - crate::ui_ext::CONTROL_HEIGHT).abs() < 0.1
-                            && (rect.fill == colors.accent || rect.fill == colors.panel) =>
+                            && (rect.fill == colors.recessed || rect.fill == colors.panel) =>
                     {
                         Some(rect.rect)
                     }

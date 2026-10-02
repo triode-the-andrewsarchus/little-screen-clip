@@ -219,19 +219,16 @@ impl BinaryDiffViewState {
             .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    // Mode selector
-                    let mode_lbl = match self.mode {
-                        BinaryDiffMode::Aligned => "Aligned",
-                        BinaryDiffMode::Raw => "Raw",
-                    };
-                    let mode_btn =
-                        crate::mode_tab_button(format!("Mode: {} [Tab]", mode_lbl), true, palette);
-                    if ui
-                        .add(mode_btn)
-                        .on_hover_text("Toggle LCS aligned / Raw view (Tab)")
-                        .clicked()
+                    let tabs = [
+                        crate::ui_tabs::Tab::new(BinaryDiffMode::Aligned, "Aligned [Tab]"),
+                        crate::ui_tabs::Tab::new(BinaryDiffMode::Raw, "Raw"),
+                    ];
+                    if let Some(mode) =
+                        crate::ui_tabs::TabBar::new("binary_diff_views", self.mode, &tabs, palette)
+                            .show(ui)
                     {
-                        self.toggle_mode();
+                        self.mode = mode;
+                        self.recompute();
                     }
 
                     // Width selector
@@ -248,16 +245,19 @@ impl BinaryDiffViewState {
                         }
                     }
 
-                    // Color mode
-                    for &(mode, label) in &[
-                        (ByteColorMode::Digits, "Digits"),
-                        (ByteColorMode::Background, "Bg"),
-                    ] {
-                        let is_active = self.color_mode == mode;
-                        let btn = crate::mode_tab_button(label, is_active, palette);
-                        if ui.add(btn).clicked() && self.color_mode != mode {
-                            self.color_mode = mode;
-                        }
+                    let color_tabs = [
+                        crate::ui_tabs::Tab::new(ByteColorMode::Digits, "Digits"),
+                        crate::ui_tabs::Tab::new(ByteColorMode::Background, "Bg"),
+                    ];
+                    if let Some(mode) = crate::ui_tabs::TabBar::new(
+                        "binary_color_modes",
+                        self.color_mode,
+                        &color_tabs,
+                        palette,
+                    )
+                    .show(ui)
+                    {
+                        self.color_mode = mode;
                     }
 
                     ui.add_space(crate::ui_ext::SPACE_SM);

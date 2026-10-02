@@ -119,44 +119,24 @@ impl WorkbenchApp {
                 });
 
                 // All workbench sections remain one click away on compact screens.
-                ui.horizontal_wrapped(|ui| {
-                    let is_auto = self.view == WorkbenchView::AutoActions;
-                    let auto_btn = ui_ext::mode_tab_button_icon(
-                        Some(Icon::Settings),
-                        "Auto-Actions [F3]",
-                        is_auto,
-                        &self.ui_palette,
-                    );
-                    if ui.add(auto_btn).clicked() {
-                        self.view = if is_auto {
-                            WorkbenchView::Palette
-                        } else {
-                            WorkbenchView::AutoActions
-                        };
-                    }
-
-                    let is_pal = self.view == WorkbenchView::Palette;
-                    let pal_tab = ui_ext::mode_tab_button_icon(
-                        Some(Icon::Search),
-                        "Quick Palette [F2]",
-                        is_pal,
-                        &self.ui_palette,
-                    );
-                    if ui.add(pal_tab).clicked() {
-                        self.view = WorkbenchView::Palette;
-                    }
-
-                    let is_node = self.view == WorkbenchView::NodeMachine;
-                    let node_tab = ui_ext::mode_tab_button_icon(
-                        Some(Icon::NodeTree),
-                        "Big Node Machine [F1]",
-                        is_node,
-                        &self.ui_palette,
-                    );
-                    if ui.add(node_tab).clicked() {
-                        self.view = WorkbenchView::NodeMachine;
-                    }
-                });
+                let tabs = [
+                    crate::ui_tabs::Tab::new(WorkbenchView::AutoActions, "Auto-Actions [F3]")
+                        .icon(Icon::Settings),
+                    crate::ui_tabs::Tab::new(WorkbenchView::Palette, "Quick Palette [F2]")
+                        .icon(Icon::Search),
+                    crate::ui_tabs::Tab::new(WorkbenchView::NodeMachine, "Big Node Machine [F1]")
+                        .icon(Icon::NodeTree),
+                ];
+                if let Some(view) = crate::ui_tabs::TabBar::new(
+                    "workbench_views",
+                    self.view,
+                    &tabs,
+                    &self.ui_palette,
+                )
+                .show(ui)
+                {
+                    self.view = view;
+                }
 
                 if self.view == WorkbenchView::Palette {
                     ui.add_space(crate::ui_ext::SPACE_SM);

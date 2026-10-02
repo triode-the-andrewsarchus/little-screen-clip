@@ -258,25 +258,16 @@ impl TextPreviewState {
         }
 
         if self.is_markdown {
-            let (mode_label, mode_icon) = match self.view_mode {
-                TextViewMode::RenderedMarkdown => ("Rendered MD", Icon::Book),
-                TextViewMode::Raw => ("Raw / Code", Icon::Code),
-            };
-            let mode_btn = crate::ui_ext::mode_tab_button_icon(
-                Some(mode_icon),
-                mode_label,
-                self.view_mode == TextViewMode::RenderedMarkdown,
-                palette,
-            );
-            if ui
-                .add(mode_btn)
-                .on_hover_text("Switch between Rendered Markdown and Raw Code view")
-                .clicked()
+            let tabs = [
+                crate::ui_tabs::Tab::new(TextViewMode::RenderedMarkdown, "Rendered MD")
+                    .icon(Icon::Book),
+                crate::ui_tabs::Tab::new(TextViewMode::Raw, "Raw / Code").icon(Icon::Code),
+            ];
+            if let Some(mode) =
+                crate::ui_tabs::TabBar::new("markdown_views", self.view_mode, &tabs, palette)
+                    .show(ui)
             {
-                self.view_mode = match self.view_mode {
-                    TextViewMode::RenderedMarkdown => TextViewMode::Raw,
-                    TextViewMode::Raw => TextViewMode::RenderedMarkdown,
-                };
+                self.view_mode = mode;
             }
         }
     }

@@ -815,7 +815,7 @@ impl ImagePreviewState {
                 hex_to_c32(&palette.colors.surface_panel),
             ))
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
+                {
                     // Tool Modes
                     let modes = [
                         ImageToolMode::View,
@@ -836,21 +836,22 @@ impl ImagePreviewState {
                         ImageToolMode::CreativeFx,
                     ];
 
-                    for mode in modes {
-                        let selected = self.active_mode == mode
-                            || (mode == ImageToolMode::PickColor
-                                && self.active_mode == ImageToolMode::Palette);
-                        let button = crate::ui_ext::mode_tab_button_icon(
-                            Some(mode.icon()),
-                            mode.label(),
-                            selected,
-                            palette,
-                        );
-                        if ui.add(button).clicked() {
-                            self.set_tool_mode(mode);
-                        }
+                    let tabs: Vec<_> = modes
+                        .iter()
+                        .map(|&mode| crate::ui_tabs::Tab::new(mode, mode.label()).icon(mode.icon()))
+                        .collect();
+                    let selected = if self.active_mode == ImageToolMode::Palette {
+                        ImageToolMode::PickColor
+                    } else {
+                        self.active_mode
+                    };
+                    if let Some(mode) =
+                        crate::ui_tabs::TabBar::new("image_tools", selected, &tabs, palette)
+                            .show(ui)
+                    {
+                        self.set_tool_mode(mode);
                     }
-                });
+                }
             });
     }
 }

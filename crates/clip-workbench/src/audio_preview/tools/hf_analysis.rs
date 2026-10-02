@@ -359,33 +359,25 @@ impl AudioPreviewState {
             // Playback Mode selection
             ui.horizontal_wrapped(|ui| {
                 layout::AudioWorkspace::inline_label(ui, "Mode:", text_f_med);
-                let mode_width = crate::ui_ext::equal_button_width(
-                    ui,
-                    &["Normal (1.0x)", "Time Expansion", "Pitch Shift"],
-                    false,
-                );
-                for mode in [
+                let tabs: Vec<_> = [
                     HfPlaybackMode::Normal,
                     HfPlaybackMode::TimeExpansion,
                     HfPlaybackMode::PitchShift,
-                ] {
-                    let is_sel = self.hf_analysis.mode == mode;
-                    if ui
-                        .add(
-                            layout::AudioWorkspace::toggle_button_icon(
-                                None,
-                                mode.label(),
-                                is_sel,
-                                palette,
-                            )
-                            .min_size(egui::Vec2::new(mode_width, crate::ui_ext::CONTROL_HEIGHT)),
-                        )
-                        .clicked()
-                    {
-                        self.hf_analysis.mode = mode;
-                        if self.is_playing {
-                            self.play_hf_audio_at(self.current_time_sec);
-                        }
+                ]
+                .iter()
+                .map(|&mode| crate::ui_tabs::Tab::new(mode, mode.label()))
+                .collect();
+                if let Some(mode) = crate::ui_tabs::TabBar::new(
+                    "hf_playback_modes",
+                    self.hf_analysis.mode,
+                    &tabs,
+                    palette,
+                )
+                .show(ui)
+                {
+                    self.hf_analysis.mode = mode;
+                    if self.is_playing {
+                        self.play_hf_audio_at(self.current_time_sec);
                     }
                 }
             });

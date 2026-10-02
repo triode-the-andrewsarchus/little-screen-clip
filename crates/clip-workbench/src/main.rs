@@ -74,6 +74,7 @@ mod state_sync;
 mod text_preview;
 mod ui_appearance;
 pub mod ui_ext;
+pub mod ui_tabs;
 
 use appearance_sync::AppearanceSync;
 use icons::Icon;

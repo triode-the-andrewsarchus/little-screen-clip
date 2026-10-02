@@ -42,18 +42,14 @@ impl ImagePreviewState {
                 MarkupToolType::Text,
             ];
 
-            for tool in tools {
-                let is_active = self.markup_state.active_tool == tool;
-                let btn = crate::ui_ext::mode_tab_button_icon(Some(tool.icon()), tool.label(), is_active, palette)
-                    .min_size(Vec2::new(ui.available_width(), crate::ui_ext::CONTROL_HEIGHT));
-
-                if ui.add(btn).clicked() {
-                    self.markup_state.active_tool = tool;
-                    if tool != MarkupToolType::Text {
-                        self.markup_state.editing_text_idx = None;
-                    }
+            let tabs: Vec<_> = tools.iter().map(|&tool| {
+                crate::ui_tabs::Tab::new(tool, tool.label()).icon(tool.icon())
+            }).collect();
+            if let Some(tool) = crate::ui_tabs::TabBar::new("markup_tools", self.markup_state.active_tool, &tabs, palette).vertical().show(ui) {
+                self.markup_state.active_tool = tool;
+                if tool != MarkupToolType::Text {
+                    self.markup_state.editing_text_idx = None;
                 }
-                ui.add_space(2.0);
             }
 
             ui.add_space(14.0);

@@ -58,27 +58,18 @@ impl DiffViewerState {
             .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
             .show(ui, |ui| {
                 ui.set_min_height(CONTROL_HEIGHT);
-                ui.horizontal(|ui| {
-                    let is_side = self.mode == DiffDisplayMode::SideBySide;
-                    let (mode_label, mode_icon) = if is_side {
-                        ("Side-by-Side", Icon::Layers)
-                    } else {
-                        ("Unified", Icon::Text)
-                    };
-                    let btn = crate::ui_ext::mode_tab_button_icon(
-                        Some(mode_icon),
-                        mode_label,
-                        true,
-                        palette,
-                    );
-                    if ui
-                        .add(btn)
-                        .on_hover_text("Toggle text diff display mode (Tab / C)")
-                        .clicked()
-                    {
-                        self.toggle_mode();
-                    }
-                });
+                let tabs = [
+                    crate::ui_tabs::Tab::new(DiffDisplayMode::SideBySide, "Side-by-Side")
+                        .icon(Icon::Layers),
+                    crate::ui_tabs::Tab::new(DiffDisplayMode::Inline, "Unified").icon(Icon::Text),
+                ];
+                if let Some(mode) =
+                    crate::ui_tabs::TabBar::new("text_diff_views", self.mode, &tabs, palette)
+                        .show(ui)
+                {
+                    self.mode = mode;
+                    self.recompute();
+                }
             });
     }
 }

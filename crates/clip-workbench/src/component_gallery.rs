@@ -7,9 +7,7 @@ use crate::spreadsheet_view::InlineSpreadsheetPreview;
 use crate::text_preview::{InlineTextPreview, TextPreviewData};
 use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext::BODY_FONT_SIZE;
-use crate::ui_ext::{
-    self, action_button, badge_pill, mode_tab_button, secondary_button, themed_button,
-};
+use crate::ui_ext::{self, action_button, badge_pill, secondary_button, themed_button};
 use eframe::egui::{self, Color32, RichText, Rounding, Stroke, Vec2};
 use little_clip_core::audio::{FullAudioAnalysis, PeakBlock};
 use little_clip_core::palette::AppPalette;
@@ -434,20 +432,21 @@ impl ComponentGalleryState {
                             palette,
                         ));
                     });
-                    ui.horizontal_wrapped(|ui| {
-                        for (index, label) in ["Normal", "Alternate", "Expert"].iter().enumerate() {
-                            if ui
-                                .add(mode_tab_button(
-                                    *label,
-                                    self.selected_mode == index,
-                                    palette,
-                                ))
-                                .clicked()
-                            {
-                                self.selected_mode = index;
-                            }
-                        }
-                    });
+                    let tabs = [
+                        crate::ui_tabs::Tab::new(0, "Normal"),
+                        crate::ui_tabs::Tab::new(1, "Alternate"),
+                        crate::ui_tabs::Tab::new(2, "Expert"),
+                    ];
+                    if let Some(mode) = crate::ui_tabs::TabBar::new(
+                        "gallery_modes",
+                        self.selected_mode,
+                        &tabs,
+                        palette,
+                    )
+                    .show(ui)
+                    {
+                        self.selected_mode = mode;
+                    }
                     ui.horizontal_wrapped(|ui| {
                         badge_pill(ui, "Ready", Some(colors.success), palette);
                         badge_pill(ui, "Working", Some(colors.warning), palette);

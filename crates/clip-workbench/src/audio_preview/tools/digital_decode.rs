@@ -1117,16 +1117,23 @@ impl AudioPreviewState {
 
         // Transcript Panel Tabs & Filter Bar
         ui.horizontal_wrapped(|ui| {
-            ui.selectable_value(
-                &mut self.digital_decode.transcript_tab,
-                TranscriptTab::Plaintext,
-                egui::RichText::new("Plaintext Transcript").strong(),
-            );
-            ui.selectable_value(
-                &mut self.digital_decode.transcript_tab,
-                TranscriptTab::StructuredEvents,
-                egui::RichText::new("Structured Events Table").strong(),
-            );
+            let tabs = [
+                crate::ui_tabs::Tab::new(TranscriptTab::Plaintext, "Plaintext Transcript"),
+                crate::ui_tabs::Tab::new(
+                    TranscriptTab::StructuredEvents,
+                    "Structured Events Table",
+                ),
+            ];
+            if let Some(tab) = crate::ui_tabs::TabBar::new(
+                "decode_transcript",
+                self.digital_decode.transcript_tab,
+                &tabs,
+                palette,
+            )
+            .show(ui)
+            {
+                self.digital_decode.transcript_tab = tab;
+            }
 
             ui.add_space(16.0);
             ui.label(egui::RichText::new("Filter:").color(text_f_med));

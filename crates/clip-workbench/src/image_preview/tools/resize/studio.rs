@@ -30,40 +30,20 @@ impl ImagePreviewState {
         ui.label(egui::RichText::new("Resize").strong().color(accent));
         ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
 
-        // Stable, equal-width mode selector at the top of the rail.
-        let mode_button_width = ((ui.available_width() - 6.0) * 0.5).max(70.0);
-        ui.horizontal(|ui| {
-            let dimensions = crate::mode_tab_button(
-                "Dimensions",
-                self.resize_state.sub_tab == ResizeSubTab::Pixels,
-                palette,
-            );
-            if ui
-                .add_sized(
-                    [mode_button_width, crate::ui_ext::CONTROL_HEIGHT],
-                    dimensions,
-                )
-                .clicked()
-            {
-                self.resize_state.sub_tab = ResizeSubTab::Pixels;
+        let tabs = [
+            crate::ui_tabs::Tab::new(ResizeSubTab::Pixels, "Dimensions"),
+            crate::ui_tabs::Tab::new(ResizeSubTab::FileSize, "File size"),
+        ];
+        if let Some(mode) =
+            crate::ui_tabs::TabBar::new("resize_modes", self.resize_state.sub_tab, &tabs, palette)
+                .equal_widths()
+                .show(ui)
+        {
+            self.resize_state.sub_tab = mode;
+            if mode == ResizeSubTab::Pixels {
                 self.resize_state.sync_from_image(&self.current_rgba);
             }
-
-            let file_size = crate::mode_tab_button(
-                "File size",
-                self.resize_state.sub_tab == ResizeSubTab::FileSize,
-                palette,
-            );
-            if ui
-                .add_sized(
-                    [mode_button_width, crate::ui_ext::CONTROL_HEIGHT],
-                    file_size,
-                )
-                .clicked()
-            {
-                self.resize_state.sub_tab = ResizeSubTab::FileSize;
-            }
-        });
+        }
 
         ui.add_space(crate::ui_ext::SPACE_SM);
         ui.separator();

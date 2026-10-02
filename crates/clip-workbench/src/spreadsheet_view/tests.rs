@@ -1210,7 +1210,6 @@ fn spreadsheet_header_controls_fit_compact_and_wide_hosts() {
             "Filter cells...",
             "Calc",
             "Close (Esc)",
-            "Sheets:",
             "Overview",
             "Archive",
         ];
