@@ -534,7 +534,10 @@ impl AudioPreviewState {
                     stem.preview.stop();
                 }
                 self.status_toast = Some((
-                    format!("🚀 Opened stems in {}", editor),
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::ArrowRight,
+                        format!("Opened stems in {}", editor),
+                    ),
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()

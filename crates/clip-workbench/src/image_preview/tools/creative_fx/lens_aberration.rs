@@ -10,7 +10,7 @@ impl ImagePreviewState {
         // Strength: 0..100
         if render_context_slider(
             ui,
-            "⚡ Strength",
+            (crate::icons::Icon::Zap, "Strength"),
             &mut self.creative_fx_state.lens_params.strength,
             0.0..=100.0,
             25.0,
@@ -25,7 +25,10 @@ impl ImagePreviewState {
         // Falloff: 0..100 (0: entire image, 100: edges only)
         if render_context_slider(
             ui,
-            "🔘 Falloff (0: All, 100: Edges)",
+            (
+                crate::icons::Icon::ShapeCircle,
+                "Falloff (0: All, 100: Edges)",
+            ),
             &mut self.creative_fx_state.lens_params.falloff,
             0.0..=100.0,
             50.0,
@@ -40,7 +43,10 @@ impl ImagePreviewState {
         // Color Balance: -50..+50 (-50: red/blue, +50: blue/yellow)
         if render_context_slider(
             ui,
-            "🎨 Color Balance (-50: Red/Blue, +50: Blue/Yellow)",
+            (
+                crate::icons::Icon::Palette,
+                "Color Balance (-50: Red/Blue, +50: Blue/Yellow)",
+            ),
             &mut self.creative_fx_state.lens_params.color_balance,
             -50.0..=50.0,
             0.0,

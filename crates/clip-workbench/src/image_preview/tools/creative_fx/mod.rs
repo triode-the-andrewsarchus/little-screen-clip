@@ -107,6 +107,19 @@ fn creative_fx_choice_button(
     .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
 }
 
+fn creative_fx_icon(effect: CreativeFxType) -> crate::icons::Icon {
+    use crate::icons::Icon;
+    match effect {
+        CreativeFxType::LensAberration => Icon::Search,
+        CreativeFxType::Trichromatic => Icon::Camera,
+        CreativeFxType::PixelSort => Icon::Zap,
+        CreativeFxType::CmykHalftone => Icon::Layers,
+        CreativeFxType::DitherPalette => Icon::Grid,
+        CreativeFxType::Ntsc => Icon::Tv,
+        CreativeFxType::Structure => Icon::ShapeRect,
+    }
+}
+
 fn render_creative_fx_mask_loading(ui: &mut egui::Ui, label: &str, color: Color32) {
     ui.horizontal(|ui| {
         ui.add(
@@ -124,8 +137,10 @@ fn render_creative_fx_mask_loading(ui: &mut egui::Ui, label: &str, color: Color3
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_creative_fx_mask_button(
     ui: &mut egui::Ui,
+    icon: crate::icons::Icon,
     label: &str,
     active: bool,
     loading: bool,
@@ -142,7 +157,8 @@ fn render_creative_fx_mask_button(
         Some(hex_to_c32(&palette.colors.text_primary)),
         palette,
     );
-    let button = egui::Button::new(
+    let button = egui::Button::image_and_text(
+        icon.image_tinted(crate::ui_ext::CONTROL_ICON_SIZE, foreground),
         egui::RichText::new(label)
             .size(crate::ui_ext::BODY_FONT_SIZE)
             .strong()

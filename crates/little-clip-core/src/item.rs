@@ -1588,7 +1588,7 @@ mod tests {
                 // 1. Header Toolbar
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("📊")
+                        egui::RichText::new("Table")
                             .size(24.0),
                     );
                     ui.label(
@@ -1608,7 +1608,7 @@ mod tests {
 
                     // Search box
                     ui.add_space(16.0);
-                    ui.label(egui::RichText::new("🔍").small());
+                    ui.label(egui::RichText::new("Search").small());
                     ui.add(
                         egui::TextEdit::singleline(&mut self.search_query)
                             .hint_text("Filter cells...")

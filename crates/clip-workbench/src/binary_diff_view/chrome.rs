@@ -27,16 +27,26 @@ impl BinaryDiffViewState {
                     }
                     Ok(Ok(_)) => {}
                     Ok(Err(error)) => {
-                        self.status_toast
-                            .set(format!("❌ Binary diff failed: {error}"), now);
+                        self.status_toast.set(
+                            crate::ui_ext::StatusMessage::new(
+                                crate::icons::Icon::Close,
+                                format!("Binary diff failed: {error}"),
+                            ),
+                            now,
+                        );
                         self.is_computing = false;
                         self.receiver = None;
                         self.compute_ticket = None;
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {}
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        self.status_toast
-                            .set("❌ Binary diff worker disconnected", now);
+                        self.status_toast.set(
+                            crate::ui_ext::StatusMessage::new(
+                                crate::icons::Icon::Close,
+                                "Binary diff worker disconnected",
+                            ),
+                            now,
+                        );
                         self.is_computing = false;
                         self.receiver = None;
                         self.compute_ticket = None;
@@ -181,7 +191,7 @@ impl BinaryDiffViewState {
 
                 // Zone 5: Footer & Cell Inspection
                 self.render_footer_inspection(ui, palette);
-                let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
+                let toast_tuple = self.status_toast.active(now).cloned();
                 shell.render_footer(ui, &toast_tuple, now);
             });
     }

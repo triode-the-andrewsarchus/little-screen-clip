@@ -236,28 +236,26 @@ impl AudioPreviewState {
                         self.active_multi_index = Some(idx);
                         if self.loop_selection {
                             self.play_slice_preview_loop(s, e);
-                            self.status_toast = Some((
-                                format!(
-                                    "🔁 Looping slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
+                            self.status_toast = Some((crate::ui_ext::StatusMessage::new(crate::icons::Icon::Repeat, format!(
+                                    "Looping slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
                                     idx + 1,
                                     (s / 60.0) as u32,
                                     s % 60.0,
                                     (e / 60.0) as u32,
                                     e % 60.0
-                                ),
+                                )),
                                 now,
                             ));
                         } else {
                             self.play_slice_preview(s, e);
-                            self.status_toast = Some((
-                                format!(
-                                    "▶ Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
+                            self.status_toast = Some((crate::ui_ext::StatusMessage::new(crate::icons::Icon::Play, format!(
+                                    "Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
                                     idx + 1,
                                     (s / 60.0) as u32,
                                     s % 60.0,
                                     (e / 60.0) as u32,
                                     e % 60.0
-                                ),
+                                )),
                                 now,
                             ));
                         }

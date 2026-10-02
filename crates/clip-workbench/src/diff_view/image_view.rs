@@ -393,10 +393,8 @@ impl DiffViewerState {
         if let Some(res) = &self.image_result {
             if let Ok(req) = image_mask_push_request(res) {
                 let _ = send_ipc_request(&req);
-                self.status_toast = Some((
-                    "Diff Mask copied to Left Hand & clipboard!".to_string(),
-                    now,
-                ));
+                self.status_toast =
+                    Some(("Diff Mask copied to Left Hand & clipboard!".into(), now));
             }
         }
     }

@@ -363,17 +363,22 @@ impl ImagePreviewState {
             self.dirty_texture = true;
             self.crop_state.normalized_rect =
                 Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
-            self.show_toast(format!("✂ Cropped to {}×{}", px_w, px_h));
+            self.show_toast(crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Scissors,
+                format!("Cropped to {}×{}", px_w, px_h),
+            ));
         }
     }
 
     pub(crate) fn render_crop_toolbar(&mut self, ui: &mut egui::Ui, palette: &AppPalette) {
         ui.vertical(|ui| {
-            ui.label(
-                egui::RichText::new("✂ Crop Mode:")
-                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                    .strong()
-                    .color(hex_to_c32(&palette.harmonies.base)),
+            ui.add(
+                crate::icons::Icon::Scissors.label(
+                    egui::RichText::new("Crop Mode:")
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .strong()
+                        .color(hex_to_c32(&palette.harmonies.base)),
+                ),
             );
 
             ui.add_space(crate::ui_ext::SPACE_SM);
@@ -406,8 +411,9 @@ impl ImagePreviewState {
 
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                 // Apply Crop Button
-                let apply_btn = crate::action_button(
-                    "✓ Apply Crop (Enter)",
+                let apply_btn = crate::action_button_icon(
+                    Some(crate::icons::Icon::Check),
+                    "Apply Crop (Enter)",
                     hex_to_c32(&palette.diff_add),
                     palette,
                 )
@@ -418,8 +424,9 @@ impl ImagePreviewState {
                 }
 
                 // Reset Crop Button
-                let reset_crop_btn = crate::secondary_button(
-                    "✕ Full Image",
+                let reset_crop_btn = crate::secondary_button_icon(
+                    Some(crate::icons::Icon::Close),
+                    "Full Image",
                     hex_to_c32(&palette.colors.surface_panel),
                     palette,
                 )

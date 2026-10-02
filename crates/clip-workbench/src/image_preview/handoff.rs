@@ -64,7 +64,10 @@ impl ImagePreviewState {
             Ok(file_path) => {
                 match launch(app, app, &file_path) {
                     Ok(msg) => {
-                        self.show_toast(msg);
+                        self.show_toast(crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::ArrowRight,
+                            msg,
+                        ));
                         // Workbench remains open so the user does not lose their session
                     }
                     Err(e) => {
@@ -73,7 +76,10 @@ impl ImagePreviewState {
                 }
             }
             Err(e) => {
-                self.show_toast(format!("⚠️ File error: {}", e));
+                self.show_toast(crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Alert,
+                    format!("File error: {}", e),
+                ));
             }
         }
     }

@@ -225,10 +225,11 @@ pub fn paint_spectrogram_surface(
         painter.image(tex.id(), spec_rect, uv, Color32::WHITE);
     } else {
         painter.rect_filled(spec_rect, Rounding::ZERO, bg_frame);
-        painter.text(
+        crate::icons::Icon::Hourglass.paint_text(
+            painter,
             spec_rect.center(),
             egui::Align2::CENTER_CENTER,
-            "⏳ Generating Spectrogram Heatmap...",
+            "Generating Spectrogram Heatmap...",
             egui::FontId::proportional(12.0),
             placeholder_text_color,
         );

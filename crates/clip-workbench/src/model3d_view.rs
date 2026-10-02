@@ -598,7 +598,7 @@ impl Model3dViewerState {
                 ui.separator();
                 ui.add_space(crate::ui_ext::SPACE_XS);
 
-                let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
+                let toast_tuple = self.status_toast.active(now).cloned();
                 // Place the footer first in a bottom-up region. Its actual wrapped height is
                 // reserved before allocating the canvas, so narrow hosts do not clip it and
                 // wide hosts keep the extra height for the model.

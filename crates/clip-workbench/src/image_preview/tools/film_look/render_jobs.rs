@@ -262,6 +262,9 @@ impl ImagePreviewState {
         self.film_sim_state.stock_thumbnails.clear();
         self.film_sim_state.pending_thumbnails.clear();
         self.run_thumbnail_batch();
-        self.show_toast("🎞 Film simulation applied");
+        self.show_toast(crate::ui_ext::StatusMessage::new(
+            crate::icons::Icon::Film,
+            "Film simulation applied",
+        ));
     }
 }

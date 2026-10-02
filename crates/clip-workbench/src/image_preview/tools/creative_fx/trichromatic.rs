@@ -52,7 +52,10 @@ impl ImagePreviewState {
             // Offset X
             if render_context_slider(
                 ui,
-                &format!("↔ X Offset (Ch {})", i + 1),
+                (
+                    crate::icons::Icon::FlipHorizontal,
+                    format!("X Offset (Ch {})", i + 1),
+                ),
                 &mut self.creative_fx_state.trichromatic_params.channels[i].offset_x,
                 -50.0..=50.0,
                 0.0,
@@ -67,7 +70,10 @@ impl ImagePreviewState {
             // Offset Y
             if render_context_slider(
                 ui,
-                &format!("↕ Y Offset (Ch {})", i + 1),
+                (
+                    crate::icons::Icon::FlipVertical,
+                    format!("Y Offset (Ch {})", i + 1),
+                ),
                 &mut self.creative_fx_state.trichromatic_params.channels[i].offset_y,
                 -50.0..=50.0,
                 0.0,
@@ -82,7 +88,7 @@ impl ImagePreviewState {
             // Zoom
             if render_context_slider(
                 ui,
-                &format!("🔍 Zoom (Ch {})", i + 1),
+                (crate::icons::Icon::Search, format!("Zoom (Ch {})", i + 1)),
                 &mut self.creative_fx_state.trichromatic_params.channels[i].zoom,
                 0.80..=1.20,
                 1.00,
@@ -102,11 +108,13 @@ impl ImagePreviewState {
             &self.creative_fx_state.trichromatic_params.channels,
         );
         ui.add_space(2.0);
-        ui.label(
-            egui::RichText::new(format!("✂ Crop Window: {} × {} px", cw, ch))
-                .monospace()
-                .size(crate::ui_ext::BODY_FONT_SIZE)
-                .color(f_med),
+        ui.add(
+            crate::icons::Icon::Scissors.label(
+                egui::RichText::new(format!("Crop Window: {} × {} px", cw, ch))
+                    .monospace()
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .color(f_med),
+            ),
         );
         ui.label(
             egui::RichText::new("(auto-cropped to 3-channel overlap)")

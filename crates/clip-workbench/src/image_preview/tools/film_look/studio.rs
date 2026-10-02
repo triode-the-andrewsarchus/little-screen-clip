@@ -334,10 +334,11 @@ impl ImagePreviewState {
                             Rounding::same(8.0),
                             Stroke::new(1.0_f32, b_med),
                         );
-                        painter.text(
+                        crate::icons::Icon::Hourglass.paint_text(
+                            &painter,
                             spinner_pos,
                             egui::Align2::CENTER_CENTER,
-                            "⏳ Rendering film simulation…",
+                            "Rendering film simulation…",
                             egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                             f_med,
                         );
@@ -346,10 +347,11 @@ impl ImagePreviewState {
                     // Error overlay
                     if let Some(ref err) = self.film_sim_state.render_error.clone() {
                         let err_pos = Pos2::new(canvas_rect.min.x + 10.0, canvas_rect.min.y + 10.0);
-                        painter.text(
+                        crate::icons::Icon::Alert.paint_text(
+                            &painter,
                             err_pos,
                             egui::Align2::LEFT_TOP,
-                            format!("⚠ {}", err),
+                            err.to_string(),
                             egui::FontId::proportional(crate::ui_ext::BODY_FONT_SIZE),
                             hex_to_c32(&palette.diff_del),
                         );
@@ -596,13 +598,16 @@ impl ImagePreviewState {
 
                             if self.film_sim_state.last_render_duration_ms > 0 {
                                 ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "⏱ {:.2}s",
-                                        self.film_sim_state.last_render_duration_ms as f64 / 1000.0
-                                    ))
-                                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                                    .color(f_low),
+                                ui.add(
+                                    crate::icons::Icon::Clock.label(
+                                        egui::RichText::new(format!(
+                                            "{:.2}s",
+                                            self.film_sim_state.last_render_duration_ms as f64
+                                                / 1000.0
+                                        ))
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                                        .color(f_low),
+                                    ),
                                 );
                             }
                         });
@@ -983,10 +988,10 @@ impl ImagePreviewState {
             .selected_stock_idx
             .min(stocks.len().saturating_sub(1));
         let sim_label = if self.film_sim_state.is_rendering {
-            "⏳ Rendering…".to_string()
+            "Rendering…".to_string()
         } else {
             format!(
-                "🎞 {} ({:.1}s)",
+                "{} ({:.1}s)",
                 stocks[idx].name,
                 self.film_sim_state.last_render_duration_ms as f64 / 1000.0
             )
@@ -995,14 +1000,20 @@ impl ImagePreviewState {
             .layout_no_wrap(sim_label.clone(), badge_font.clone(), base_c)
             .size()
             .x
-            + 20.0;
+            + 38.0;
         let sim_rect = Rect::from_min_size(
             Pos2::new(img_rect.max.x - sim_badge_w - 10.0, img_rect.min.y + 10.0),
             Vec2::new(sim_badge_w, crate::ui_ext::CONTROL_HEIGHT),
         );
         painter.rect_filled(sim_rect, Rounding::same(4.0), badge_bg);
         painter.rect_stroke(sim_rect, Rounding::same(4.0), Stroke::new(1.0_f32, base_c));
-        painter.text(
+        let badge_icon = if self.film_sim_state.is_rendering {
+            crate::icons::Icon::Hourglass
+        } else {
+            crate::icons::Icon::Film
+        };
+        badge_icon.paint_text(
+            painter,
             sim_rect.center(),
             egui::Align2::CENTER_CENTER,
             sim_label,

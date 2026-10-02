@@ -543,14 +543,20 @@ impl ImagePreviewState {
             self.palette_state.is_extracted = false;
 
             let elapsed = duration_ms as f64 / 1000.0;
-            self.show_toast(match operation {
-                BgRemovalOperation::BackgroundRemoval => {
-                    format!("✨ Background removed in {elapsed:.2}s!")
-                }
-                BgRemovalOperation::DepthMap => {
-                    format!("🌊 Depth map generated in {elapsed:.2}s!")
-                }
-            });
+            self.show_toast(crate::ui_ext::StatusMessage::new(
+                match operation {
+                    BgRemovalOperation::BackgroundRemoval => crate::icons::Icon::Sparkles,
+                    BgRemovalOperation::DepthMap => crate::icons::Icon::Waves,
+                },
+                match operation {
+                    BgRemovalOperation::BackgroundRemoval => {
+                        format!("Background removed in {elapsed:.2}s!")
+                    }
+                    BgRemovalOperation::DepthMap => {
+                        format!("Depth map generated in {elapsed:.2}s!")
+                    }
+                },
+            ));
         } else if let Some(err) = error_msg {
             self.bg_removal_in_progress = false;
             self.bg_removal_status = None;

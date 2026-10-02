@@ -262,7 +262,10 @@ impl ImagePreviewState {
                             self.markup_state.items.remove(sel);
                             self.markup_state.selected_idx = None;
                             self.markup_state.sync_next_badge_number();
-                            self.show_toast("🗑 Markup item deleted");
+                            self.show_toast(crate::ui_ext::StatusMessage::new(
+                                crate::icons::Icon::Trash,
+                                "Markup item deleted",
+                            ));
                         }
                     }
                 }
@@ -622,6 +625,7 @@ impl ImagePreviewState {
                 .with_primary(false)
                 .with_icon(Icon::Eye),
         )
+        .with_footer_hint_icon(crate::icons::Icon::Mouse)
         .with_footer_hints(image_studio_footer_hint(self.active_mode))
     }
 

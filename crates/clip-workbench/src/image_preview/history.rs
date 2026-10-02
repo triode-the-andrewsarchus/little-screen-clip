@@ -40,7 +40,10 @@ impl ImagePreviewState {
             self.crop_state.normalized_rect =
                 Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
             self.dcs_state.stretched_rgba = None;
-            self.show_toast("↺ Reverted to original image");
+            self.show_toast(crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Undo,
+                "Reverted to original image",
+            ));
         }
     }
 }

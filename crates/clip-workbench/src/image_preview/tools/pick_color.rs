@@ -42,7 +42,10 @@ impl ImagePreviewState {
             }
         }
 
-        self.show_toast(format!("💉 Copied {} to clipboard!", hex));
+        self.show_toast(crate::ui_ext::StatusMessage::new(
+            crate::icons::Icon::Eyedropper,
+            format!("Copied {} to clipboard!", hex),
+        ));
     }
 
     /// Records a picked swatch without changing the system clipboard. Clipboard

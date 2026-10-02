@@ -267,7 +267,8 @@ impl AudioPreviewState {
             format!(
                 "Normalized track to {:.1} dBFS (gain {gain_db:+.1} dB)",
                 Self::NORMALIZE_TARGET_DBFS
-            ),
+            )
+            .into(),
             now,
         ));
     }
@@ -311,7 +312,8 @@ impl AudioPreviewState {
             format!(
                 "Normalized {label} to {:.1} dBFS (region gain {gain_db:+.1} dB)",
                 Self::NORMALIZE_TARGET_DBFS
-            ),
+            )
+            .into(),
             now,
         ));
     }
@@ -835,7 +837,13 @@ impl AudioPreviewState {
     /// Trims leading and trailing silence on both sides by detecting signal boundaries and setting the active selection.
     pub fn trim_silence(&mut self, threshold_db: f32, now: f64) {
         let Some(ref analysis) = self.analysis else {
-            self.status_toast = Some(("⚠️ Audio analysis still loading...".to_string(), now));
+            self.status_toast = Some((
+                crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Alert,
+                    "Audio analysis still loading...".to_string(),
+                ),
+                now,
+            ));
             return;
         };
         if let Some((start_sec, end_sec)) = analysis.detect_silence_bounds(threshold_db) {
@@ -845,17 +853,23 @@ impl AudioPreviewState {
             self.clear_single_region_effects();
             self.current_time_sec = start_sec;
             self.status_toast = Some((
-                format!(
-                    "✂ Trimmed silence: {:.2}s - {:.2}s ({:.2}s duration)",
-                    start_sec, end_sec, dur
+                crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Scissors,
+                    format!(
+                        "Trimmed silence: {:.2}s - {:.2}s ({:.2}s duration)",
+                        start_sec, end_sec, dur
+                    ),
                 ),
                 now,
             ));
         } else {
             self.status_toast = Some((
-                format!(
-                    "⚠️ No audio signal detected above silence threshold ({:.0}dB)",
-                    threshold_db
+                crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Alert,
+                    format!(
+                        "No audio signal detected above silence threshold ({:.0}dB)",
+                        threshold_db
+                    ),
                 ),
                 now,
             ));
@@ -941,7 +955,7 @@ impl AudioPreviewState {
         self.restart_session_analysis();
         self.record_edit(before);
         self.status_toast = Some((
-            format!("Deleted {:.2}s; waveform recomputing", end - start),
+            format!("Deleted {:.2}s; waveform recomputing", end - start).into(),
             now,
         ));
     }

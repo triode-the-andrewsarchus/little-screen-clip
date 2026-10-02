@@ -44,6 +44,8 @@ Do not commit personal display, compositor, or desktop settings. Keep `config.to
 
 The workbench must remain a non-resizable, centered, single-instance popup for Niri's fixed-size floating behavior. Screen-adaptive sizing must be resolved before the window opens, with fixed-size hints in place at mapping; do not enable window resizing/maximizing or resize a visible window to fit. Internal panels may resize independently. Repeated `launch.sh ui` calls should focus the existing popup without requiring a Niri keybinding change.
 
+Shared display/workbench SVG assets live in `little-clip-render/assets/icons`. Use embedded SVG icons for application chrome, controls, and notifications; do not use emoji glyphs as icons. Keep notification icons separate from their text. Copied summaries and terminal output use plain text; preserve emoji in user content and Unicode rendering fixtures.
+
 Use the shared `ui_tabs::TabBar` for workspace, tool, viewer-mode, and sheet navigation. Keep parameter choices and on/off controls as buttons. Re-selecting an active tab is a no-op; selection changes must preserve existing entry/exit hooks.
 
 UI acceptance automation must use the private Weston/Niri runner. Its pointer injection is scoped to that run's private Wayland and Niri sockets; do not send test input through host `/dev/uinput` or the user's interactive compositor.

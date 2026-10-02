@@ -105,11 +105,12 @@ impl AudioPreviewState {
 
         if self.is_loading_analysis || self.analysis.is_none() {
             let elapsed = self.loading_start_time.elapsed().as_secs_f32();
-            painter.text(
+            crate::icons::Icon::Hourglass.paint_text(
+                &painter,
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
                 format!(
-                    "⏳ Decoding audio track & building waveform... ({:.1}s)",
+                    "Decoding audio track & building waveform... ({:.1}s)",
                     elapsed
                 ),
                 egui::FontId::proportional(15.0),
@@ -328,12 +329,15 @@ impl AudioPreviewState {
                     let (s, e) = hold.target_range;
                     self.play_slice_preview_loop(s, e);
                     self.status_toast = Some((
-                        format!(
-                            "🔁 Looping slice ({:02}:{:04.1} - {:02}:{:04.1}) [Hold]",
-                            (s / 60.0) as u32,
-                            s % 60.0,
-                            (e / 60.0) as u32,
-                            e % 60.0
+                        crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Repeat,
+                            format!(
+                                "Looping slice ({:02}:{:04.1} - {:02}:{:04.1}) [Hold]",
+                                (s / 60.0) as u32,
+                                s % 60.0,
+                                (e / 60.0) as u32,
+                                e % 60.0
+                            ),
                         ),
                         now,
                     ));
@@ -346,7 +350,13 @@ impl AudioPreviewState {
             if let Some(hold) = self.right_click_hold.take() {
                 if hold.started_looping {
                     self.pause();
-                    self.status_toast = Some(("⏹ Stopped loop preview".to_string(), now));
+                    self.status_toast = Some((
+                        crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Stop,
+                            "Stopped loop preview".to_string(),
+                        ),
+                        now,
+                    ));
                 } else {
                     if let Some(idx) = hold.slice_index {
                         self.active_multi_index = Some(idx);
@@ -355,24 +365,30 @@ impl AudioPreviewState {
                     if self.loop_selection {
                         self.play_slice_preview_loop(s, e);
                         self.status_toast = Some((
-                            format!(
-                                "🔁 Looping slice ({:02}:{:04.1} - {:02}:{:04.1})",
-                                (s / 60.0) as u32,
-                                s % 60.0,
-                                (e / 60.0) as u32,
-                                e % 60.0
+                            crate::ui_ext::StatusMessage::new(
+                                crate::icons::Icon::Repeat,
+                                format!(
+                                    "Looping slice ({:02}:{:04.1} - {:02}:{:04.1})",
+                                    (s / 60.0) as u32,
+                                    s % 60.0,
+                                    (e / 60.0) as u32,
+                                    e % 60.0
+                                ),
                             ),
                             now,
                         ));
                     } else {
                         self.play_slice_preview(s, e);
                         self.status_toast = Some((
-                            format!(
-                                "▶ Previewing slice ({:02}:{:04.1} - {:02}:{:04.1})",
-                                (s / 60.0) as u32,
-                                s % 60.0,
-                                (e / 60.0) as u32,
-                                e % 60.0
+                            crate::ui_ext::StatusMessage::new(
+                                crate::icons::Icon::Play,
+                                format!(
+                                    "Previewing slice ({:02}:{:04.1} - {:02}:{:04.1})",
+                                    (s / 60.0) as u32,
+                                    s % 60.0,
+                                    (e / 60.0) as u32,
+                                    e % 60.0
+                                ),
                             ),
                             now,
                         ));
@@ -695,7 +711,7 @@ impl AudioPreviewState {
                             if let Some((idx, _, _)) = clicked_slice {
                                 self.remove_multi_region(idx);
                                 self.status_toast =
-                                    Some((format!("Removed slice #{}", idx + 1), now));
+                                    Some((format!("Removed slice #{}", idx + 1).into(), now));
                             }
                         }
                         SelectionMode::Single => {
@@ -705,8 +721,7 @@ impl AudioPreviewState {
                                 if is_inside {
                                     self.selection = None;
                                     self.clear_single_region_effects();
-                                    self.status_toast =
-                                        Some(("Cleared selection".to_string(), now));
+                                    self.status_toast = Some(("Cleared selection".into(), now));
                                 }
                             }
                         }
@@ -1161,10 +1176,11 @@ impl AudioPreviewState {
         );
 
         // 4. VIEW 3: COLORCHORD 2-D MULTI-NOTE CHROMATIC RIBBON
-        painter.text(
+        crate::icons::Icon::Audio.paint_text(
+            &painter,
             Pos2::new(track_min_x - 8.0, strip_rect.center().y),
             egui::Align2::RIGHT_CENTER,
-            "♫ Chord",
+            "Chord",
             egui::FontId::proportional(10.0),
             text_f_med,
         );
@@ -1179,10 +1195,11 @@ impl AudioPreviewState {
             painter.image(tex.id(), strip_rect, uv, Color32::WHITE);
         } else {
             painter.rect_filled(strip_rect, Rounding::ZERO, bg_frame);
-            painter.text(
+            crate::icons::Icon::Hourglass.paint_text(
+                &painter,
                 strip_rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "⏳ Analyzing Multi-Note Chords...",
+                "Analyzing Multi-Note Chords...",
                 egui::FontId::proportional(12.0),
                 text_f_low,
             );
@@ -1211,13 +1228,13 @@ impl AudioPreviewState {
                                 .collect::<Vec<_>>()
                                 .join(" + ");
                             format!(
-                                "🎵 Detected Chord: {} • Energy: {:.0}%",
+                                "Detected Chord: {} • Energy: {:.0}%",
                                 names,
                                 info.amplitude * 100.0
                             )
                         } else {
                             format!(
-                                "🎵 Musical Note: {} ({:.1} Hz) • Energy: {:.0}%",
+                                "Musical Note: {} ({:.1} Hz) • Energy: {:.0}%",
                                 info.note_name,
                                 info.frequency_hz,
                                 info.amplitude * 100.0
@@ -1225,19 +1242,21 @@ impl AudioPreviewState {
                         }
                     } else if info.active {
                         format!(
-                            "🎵 Musical Note: {} ({:.1} Hz) • Energy: {:.0}%",
+                            "Musical Note: {} ({:.1} Hz) • Energy: {:.0}%",
                             info.note_name,
                             info.frequency_hz,
                             info.amplitude * 100.0
                         )
                     } else {
-                        "🎵 Musical Note: — (Silence / Below Threshold)".to_string()
+                        "Musical Note: — (Silence / Below Threshold)".to_string()
                     };
                     egui::show_tooltip(ui.ctx(), response.id.with("note_tt"), |ui| {
-                        ui.label(
-                            egui::RichText::new(text)
-                                .strong()
-                                .color(crate::hex_to_c32(&palette.colors.text_primary)),
+                        ui.add(
+                            crate::icons::Icon::Audio.label(
+                                egui::RichText::new(text)
+                                    .strong()
+                                    .color(crate::hex_to_c32(&palette.colors.text_primary)),
+                            ),
                         );
                     });
                 }

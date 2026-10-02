@@ -385,12 +385,7 @@ impl ScreenRenderer {
         bg_color: Color,
         clip_right: f32,
     ) {
-        // Strip emojis that lack font glyphs to prevent missing glyph open boxes (▯)
-        let clean_text = badge_text
-            .trim_start_matches(|c: char| {
-                !c.is_ascii_alphanumeric() && c != '[' && c != '(' && c != '#'
-            })
-            .trim();
+        let clean_text = badge_text.trim();
         let font_size = size;
         let pad_x = 8.0;
         let pad_y = 3.0;

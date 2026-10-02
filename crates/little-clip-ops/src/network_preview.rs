@@ -37,7 +37,7 @@ pub enum NetworkPreview {
 }
 
 impl NetworkPreview {
-    /// Formats the network entity into human-readable detail lines with emoji icons.
+    /// Formats the network entity into human-readable detail lines suitable for clipboard text.
     pub fn summary_lines(&self) -> Vec<String> {
         match self {
             NetworkPreview::Ip {
@@ -47,13 +47,13 @@ impl NetworkPreview {
                 ping_status,
             } => {
                 let mut lines = Vec::new();
-                lines.push(format!("🌐 IP: {}", ip));
-                lines.push(format!("📋 {}", rfc_class));
+                lines.push(format!("IP: {}", ip));
+                lines.push(format!("{}", rfc_class));
                 if let Some(desc) = description {
-                    lines.push(format!("ℹ️ {}", desc));
+                    lines.push(format!("{}", desc));
                 }
                 if let Some(ping) = ping_status {
-                    lines.push(format!("⚡ Ping: {}", ping));
+                    lines.push(format!("Ping: {}", ping));
                 }
                 lines
             }
@@ -63,9 +63,9 @@ impl NetworkPreview {
                 mac_type,
             } => {
                 vec![
-                    format!("🔌 MAC: {}", formatted),
-                    format!("🏷 Vendor: {}", vendor),
-                    format!("🔒 Type: {}", mac_type),
+                    format!("MAC: {}", formatted),
+                    format!("Vendor: {}", vendor),
+                    format!("Type: {}", mac_type),
                 ]
             }
         }

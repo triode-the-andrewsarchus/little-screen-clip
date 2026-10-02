@@ -401,10 +401,11 @@ impl AudioPreviewState {
 
         if self.is_loading_analysis || self.analysis.is_none() {
             let elapsed = self.loading_start_time.elapsed().as_secs_f32();
-            painter.text(
+            crate::icons::Icon::Hourglass.paint_text(
+                &painter,
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                format!("⏳ Decoding audio buffer... ({:.1}s)", elapsed),
+                format!("Decoding audio buffer... ({:.1}s)", elapsed),
                 egui::FontId::proportional(15.0),
                 text_f_med,
             );
@@ -864,10 +865,11 @@ impl AudioPreviewState {
             let uv = Rect::from_min_max(Pos2::new(u_start, 0.0), Pos2::new(u_end, 1.0));
             painter.image(tex.id(), spec_rect, uv, Color32::WHITE);
         } else {
-            painter.text(
+            crate::icons::Icon::Hourglass.paint_text(
+                &painter,
                 spec_rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "⏳ Generating Spectrogram Heatmap...",
+                "Generating Spectrogram Heatmap...",
                 egui::FontId::proportional(12.0),
                 text_f_low,
             );
@@ -1185,7 +1187,10 @@ impl AudioPreviewState {
                     }
                     ui.output_mut(|o| o.copied_text = transcript_text);
                     self.status_toast = Some((
-                        "📋 Copied decoded transcript to clipboard".to_string(),
+                        crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Copy,
+                            "Copied decoded transcript to clipboard".to_string(),
+                        ),
                         ui.input(|i| i.time),
                     ));
                 }

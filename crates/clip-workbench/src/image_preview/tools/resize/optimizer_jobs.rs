@@ -280,11 +280,14 @@ impl ImagePreviewState {
         self.resize_state.sync_from_image(&self.current_rgba);
         self.palette_state.is_extracted = false;
 
-        self.show_toast(format!(
-            "✔ Applied optimized {}×{} image ({})",
-            res.width,
-            res.height,
-            format_bytes_size(res.achieved_bytes)
+        self.show_toast(crate::ui_ext::StatusMessage::new(
+            crate::icons::Icon::Check,
+            format!(
+                "Applied optimized {}×{} image ({})",
+                res.width,
+                res.height,
+                format_bytes_size(res.achieved_bytes)
+            ),
         ));
     }
 

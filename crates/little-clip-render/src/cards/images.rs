@@ -1,5 +1,21 @@
 use super::*;
 
+// The display and workbench share the same play SVG. Rasterize it once at badge size.
+static PLAY_ICON: std::sync::LazyLock<Option<Pixmap>> = std::sync::LazyLock::new(|| {
+    use resvg::usvg::TreeParsing;
+    let tree = resvg::usvg::Tree::from_data(
+        include_bytes!("../../assets/icons/play.svg"),
+        &resvg::usvg::Options::default(),
+    )
+    .ok()?;
+    let mut icon = Pixmap::new(14, 14)?;
+    resvg::Tree::from_usvg(&tree).render(
+        Transform::from_scale(14.0 / 24.0, 14.0 / 24.0),
+        &mut icon.as_mut(),
+    );
+    Some(icon)
+});
+
 impl ScreenRenderer {
     pub(super) fn draw_image_thumbnail(
         &self,
@@ -348,8 +364,7 @@ impl ScreenRenderer {
                         );
 
                         // Looping badge in top-left of box
-                        let badge =
-                            format!("▶ {} [{}/{}]", format, frame_idx + 1, thumb.frame_count);
+                        let badge = format!("{} [{}/{}]", format, frame_idx + 1, thumb.frame_count);
                         let badge_bg = self.color_from_hex(&self.palette.colors.surface_recessed);
                         let badge_fg = self.contrast_color(
                             badge_bg,
@@ -358,13 +373,43 @@ impl ScreenRenderer {
                         self.draw_pill_badge(
                             pixmap,
                             &badge,
-                            rx + 18.0,
+                            rx + 36.0,
                             target_top + 18.0,
                             14.0,
                             badge_fg,
                             badge_bg,
                             clip_right,
                         );
+                        if let Some(icon) = PLAY_ICON.as_ref() {
+                            if let Some(background) =
+                                Rect::from_xywh(rx + 18.0, target_top + 18.0, 18.0, 22.0)
+                            {
+                                let mut paint = Paint::default();
+                                paint.set_color(badge_bg);
+                                pixmap.fill_rect(background, &paint, Transform::identity(), None);
+                            }
+                            let mut tinted = icon.clone();
+                            let tint = badge_fg.to_color_u8();
+                            for pixel in tinted.pixels_mut() {
+                                let alpha = pixel.alpha();
+                                if let Some(color) = tiny_skia::PremultipliedColorU8::from_rgba(
+                                    (u16::from(tint.red()) * u16::from(alpha) / 255) as u8,
+                                    (u16::from(tint.green()) * u16::from(alpha) / 255) as u8,
+                                    (u16::from(tint.blue()) * u16::from(alpha) / 255) as u8,
+                                    alpha,
+                                ) {
+                                    *pixel = color;
+                                }
+                            }
+                            pixmap.draw_pixmap(
+                                (rx + 20.0) as i32,
+                                (target_top + 22.0) as i32,
+                                tinted.as_ref(),
+                                &PixmapPaint::default(),
+                                Transform::identity(),
+                                None,
+                            );
+                        }
                     }
                 }
             }
@@ -423,5 +468,17 @@ impl ScreenRenderer {
             false,
             clip_right,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_play_svg_rasterizes_for_display_badges() {
+        let icon = PLAY_ICON.as_ref().expect("shared play SVG must decode");
+        assert_eq!((icon.width(), icon.height()), (14, 14));
+        assert!(icon.pixels().iter().any(|pixel| pixel.alpha() > 0));
     }
 }

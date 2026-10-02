@@ -61,18 +61,6 @@ impl CreativeFxType {
         }
     }
 
-    pub fn icon(&self) -> &'static str {
-        match self {
-            Self::LensAberration => "🔍",
-            Self::Trichromatic => "📷",
-            Self::PixelSort => "⚡",
-            Self::CmykHalftone => "🗞",
-            Self::DitherPalette => "👾",
-            Self::Ntsc => "📺",
-            Self::Structure => "🧱",
-        }
-    }
-
     pub fn description(&self) -> &'static str {
         match self {
             Self::LensAberration => {

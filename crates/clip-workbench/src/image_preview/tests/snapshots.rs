@@ -143,7 +143,7 @@ fn background_worker_applies_unchanged_input_and_clears_baked_overlays() {
     );
     assert_eq!(
         state.status_toast.as_ref().unwrap().0,
-        "✨ Background removed in 0.01s!"
+        "Background removed in 0.01s!"
     );
     assert!(!state.bg_removal_in_progress);
     assert!(state.bg_removal_rx.is_none());
@@ -166,7 +166,7 @@ fn depth_map_completion_uses_a_depth_specific_toast() {
     state.poll_bg_removal();
 
     let toast = state.status_toast.as_ref().unwrap();
-    assert_eq!(toast.0, "🌊 Depth map generated in 1.25s!");
+    assert_eq!(toast.0, "Depth map generated in 1.25s!");
     assert_eq!(
         state.bg_removal_operation,
         BgRemovalOperation::BackgroundRemoval

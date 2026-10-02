@@ -162,7 +162,13 @@ impl AudioPreviewState {
                     self.preview_is_looping = self.loop_selection;
                 }
                 let status = if self.loop_selection { "ON" } else { "OFF" };
-                self.status_toast = Some((format!("🔁 Selection Looping: {}", status), now));
+                self.status_toast = Some((
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Repeat,
+                        format!("Selection Looping: {}", status),
+                    ),
+                    now,
+                ));
             }
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
@@ -265,10 +271,22 @@ impl AudioPreviewState {
                 if has_sel {
                     self.snap_active_selection_to_zero_crossings(now);
                 } else {
-                    self.status_toast = Some((format!("∿ Snap to Zero-Crossing: {}", status), now));
+                    self.status_toast = Some((
+                        crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Waves,
+                            format!("Snap to Zero-Crossing: {}", status),
+                        ),
+                        now,
+                    ));
                 }
             } else {
-                self.status_toast = Some((format!("∿ Snap to Zero-Crossing: {}", status), now));
+                self.status_toast = Some((
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Waves,
+                        format!("Snap to Zero-Crossing: {}", status),
+                    ),
+                    now,
+                ));
             }
         }
 
@@ -291,7 +309,13 @@ impl AudioPreviewState {
                 } else {
                     "OFF"
                 };
-                self.status_toast = Some((format!("⚡ Transients: {}", status), now));
+                self.status_toast = Some((
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Zap,
+                        format!("Transients: {}", status),
+                    ),
+                    now,
+                ));
             }
         }
 
@@ -333,13 +357,16 @@ impl AudioPreviewState {
                         self.active_multi_index = Some(idx);
                         self.play_slice_preview(s, e);
                         self.status_toast = Some((
-                            format!(
-                                "▶ Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
-                                idx + 1,
-                                (s / 60.0) as u32,
-                                s % 60.0,
-                                (e / 60.0) as u32,
-                                e % 60.0
+                            crate::ui_ext::StatusMessage::new(
+                                crate::icons::Icon::Play,
+                                format!(
+                                    "Previewing slice #{} ({:02}:{:04.1} - {:02}:{:04.1})",
+                                    idx + 1,
+                                    (s / 60.0) as u32,
+                                    s % 60.0,
+                                    (e / 60.0) as u32,
+                                    e % 60.0
+                                ),
                             ),
                             now,
                         ));
@@ -413,8 +440,7 @@ impl AudioPreviewState {
                         self.preview_is_looping = self.loop_selection;
                     }
                     let status = if self.loop_selection { "ON" } else { "OFF" };
-                    self.status_toast = Some((
-                        format!("🔁 Selection Looping: {}", status),
+                    self.status_toast = Some((crate::ui_ext::StatusMessage::new(crate::icons::Icon::Repeat, format!("Selection Looping: {}", status)),
                         now,
                     ));
                 }
@@ -494,8 +520,7 @@ impl AudioPreviewState {
                     if ui.add(trans_btn).on_hover_text("Toggle transient marks and magnetic snapping for selections. Press [T] to toggle.").clicked() {
                         self.show_transients = !self.show_transients;
                         let status = if self.show_transients { "ON (Snapping Enabled)" } else { "OFF" };
-                        self.status_toast = Some((
-                            format!("Transients: {}", status),
+                        self.status_toast = Some((format!("Transients: {}", status).into(),
                             now,
                         ));
                     }

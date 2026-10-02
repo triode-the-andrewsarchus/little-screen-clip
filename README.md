@@ -1,4 +1,4 @@
-# Little Screen Clip 🖥️📎
+# Little Screen Clip <img src="docs/assets/screen-clip.svg" width="48" alt="Screen and clipboard">
 
 An ambient, hardware-driven clipboard companion, dual-buffer workbench, and visual data pipeline engine designed for Linux Wayland desktops and dedicated secondary USB displays.
 
@@ -167,7 +167,7 @@ uv venv --python /usr/bin/python3 --system-site-packages ~/.local/share/little-s
 uv pip install --python ~/.local/share/little-screen-clip/nobg-venv/bin/python nobg
 ```
 
-*(Note: If `nobg` is not installed, the workbench UI detects it gracefully and offers a 1-click `[📋 Copy Install Cmd]` button).*
+*(Note: If `nobg` is not installed, the workbench UI detects it gracefully and offers a 1-click <img src="docs/assets/copy.svg" width="16" alt="Copy"> `Copy Install Cmd` button).*
 
 ---
 

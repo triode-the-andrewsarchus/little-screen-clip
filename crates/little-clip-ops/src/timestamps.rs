@@ -41,10 +41,10 @@ impl TimestampPreview {
     /// Formats the timestamp metadata into display lines with emoji icons.
     pub fn summary_lines(&self) -> Vec<String> {
         vec![
-            format!("📅 {}", self.human_readable),
-            format!("🌐 UTC: {}", self.utc_iso),
-            format!("⏱ Relative: {}", self.relative),
-            format!("🔢 Epoch: {} ({})", self.epoch_sec, self.day_info),
+            format!("{}", self.human_readable),
+            format!("UTC: {}", self.utc_iso),
+            format!("Relative: {}", self.relative),
+            format!("Epoch: {} ({})", self.epoch_sec, self.day_info),
         ]
     }
 }

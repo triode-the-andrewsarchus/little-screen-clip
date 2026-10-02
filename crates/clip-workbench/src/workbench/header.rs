@@ -32,11 +32,11 @@ impl WorkbenchApp {
                 ui.add_space(crate::ui_ext::SPACE_SM);
                 let (label, net_icon) = match &net {
                     NetworkPreview::Ip { ip, rfc_class, .. } => {
-                        (format!("{} ({})", ip, rfc_class), Icon::Link)
+                        (format!("{} ({})", ip, rfc_class), Icon::Globe)
                     }
                     NetworkPreview::Mac {
                         formatted, vendor, ..
-                    } => (format!("{} ({})", formatted, vendor), Icon::Zap),
+                    } => (format!("{} ({})", formatted, vendor), Icon::Plug),
                 };
                 let btn =
                     contextual_palette_action_button(Some(net_icon), &label, &self.ui_palette);

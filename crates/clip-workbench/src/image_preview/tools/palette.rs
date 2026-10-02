@@ -233,8 +233,9 @@ impl ImagePreviewState {
                 self.palette_state.error = None;
                 self.palette_ticket = None;
                 self.palette_rx = None;
-                self.show_toast(format!(
-                    "🎨 Extracted {count} dominant colors ({total_sampled} sampled px)"
+                self.show_toast(crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Palette,
+                    format!("Extracted {count} dominant colors ({total_sampled} sampled px)"),
                 ));
             }
             Ok(Err(error)) => {

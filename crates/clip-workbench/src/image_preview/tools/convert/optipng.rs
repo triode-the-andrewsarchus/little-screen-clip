@@ -27,13 +27,19 @@ impl ImagePreviewState {
             return;
         }
         if self.convert_state.target_format != ConvertTargetFormat::Png {
-            self.show_toast("⚠ OptiPNG is only applicable for PNG format");
+            self.show_toast(crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Alert,
+                "OptiPNG is only applicable for PNG format",
+            ));
             return;
         }
 
         let original_bytes = self.convert_state.encoded_bytes.clone();
         if original_bytes.is_empty() {
-            self.show_toast("⚠ No PNG bytes available to optimize");
+            self.show_toast(crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Alert,
+                "No PNG bytes available to optimize",
+            ));
             return;
         }
 
@@ -156,9 +162,15 @@ impl ImagePreviewState {
                             } else {
                                 0.0
                             };
-                        self.show_toast(format!("✔ OptiPNG complete! Saved {:.1}%", pct));
+                        self.show_toast(crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Check,
+                            format!("OptiPNG complete! Saved {:.1}%", pct),
+                        ));
                     }
-                    Err(error) => self.show_toast(format!("❌ OptiPNG error: {}", error)),
+                    Err(error) => self.show_toast(crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Close,
+                        format!("OptiPNG error: {}", error),
+                    )),
                 }
             }
             Ok(Err(JobError::QueueFull)) => {
@@ -189,7 +201,10 @@ impl ImagePreviewState {
                 if self.convert_state.target_format == ConvertTargetFormat::Png
                     && self.convert_state.output_matches(&current_stamp)
                 {
-                    self.show_toast(format!("❌ OptiPNG error: {error}"));
+                    self.show_toast(crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Close,
+                        format!("OptiPNG error: {error}"),
+                    ));
                 }
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -204,7 +219,10 @@ impl ImagePreviewState {
                 if self.convert_state.target_format == ConvertTargetFormat::Png
                     && self.convert_state.output_matches(&current_stamp)
                 {
-                    self.show_toast("❌ OptiPNG error: worker stopped");
+                    self.show_toast(crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Close,
+                        "OptiPNG error: worker stopped",
+                    ));
                 }
             }
         }

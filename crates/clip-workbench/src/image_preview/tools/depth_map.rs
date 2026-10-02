@@ -162,7 +162,7 @@ mod cancellation_tests {
                 .as_ref()
                 .unwrap()
                 .0
-                .starts_with("🌊 Depth map generated")
+                .starts_with("Depth map generated")
         );
     }
 
@@ -333,7 +333,7 @@ mod cancellation_tests {
                 .as_ref()
                 .unwrap()
                 .0
-                .starts_with("🌊 Depth map generated")
+                .starts_with("Depth map generated")
         );
 
         let mut failure = state();
@@ -453,12 +453,10 @@ impl ImagePreviewState {
                 );
             } else {
                 let depth_fg = contrast_text_c32(base_c, None, palette);
-                let depth_btn = egui::Button::new(
-                    egui::RichText::new("🌊 Generate Depth Map (Enter)")
+                let depth_btn = egui::Button::image_and_text(crate::icons::Icon::Waves.image_tinted(crate::ui_ext::CONTROL_ICON_SIZE, ui.visuals().text_color()), egui::RichText::new("Generate Depth Map (Enter)")
                         .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
-                        .color(depth_fg),
-                )
+                        .color(depth_fg))
                 .fill(base_c)
                 .stroke(Stroke::new(1.0_f32, b_med))
                 .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
@@ -478,12 +476,10 @@ impl ImagePreviewState {
 
             if let Some(err) = &self.bg_removal_error {
                 ui.add_space(crate::ui_ext::SPACE_SM);
-                ui.label(
-                    egui::RichText::new(format!("⚠ {}", err))
+                ui.add(crate::icons::Icon::Alert.label(egui::RichText::new(err.to_string())
                         .size(crate::ui_ext::BODY_FONT_SIZE)
                         .strong()
-                        .color(diff_del),
-                );
+                        .color(diff_del)));
             }
 
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
@@ -502,9 +498,7 @@ impl ImagePreviewState {
 
                 // Direct Slot Push buttons
                 let rh_fg = contrast_text_c32(b_low, Some(diff_add), palette);
-                let push_rh = egui::Button::new(
-                    egui::RichText::new("📋 Slot: Right Hand").size(crate::ui_ext::BODY_FONT_SIZE).color(rh_fg),
-                )
+                let push_rh = egui::Button::image_and_text(crate::icons::Icon::Copy.image_tinted(crate::ui_ext::CONTROL_ICON_SIZE, ui.visuals().text_color()), egui::RichText::new("Slot: Right Hand").size(crate::ui_ext::BODY_FONT_SIZE).color(rh_fg))
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, diff_add))
                 .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))
@@ -514,9 +508,7 @@ impl ImagePreviewState {
                 }
 
                 let lh_fg = contrast_text_c32(b_low, Some(base_c), palette);
-                let push_lh = egui::Button::new(
-                    egui::RichText::new("📋 Slot: Left Hand").size(crate::ui_ext::BODY_FONT_SIZE).color(lh_fg),
-                )
+                let push_lh = egui::Button::image_and_text(crate::icons::Icon::Copy.image_tinted(crate::ui_ext::CONTROL_ICON_SIZE, ui.visuals().text_color()), egui::RichText::new("Slot: Left Hand").size(crate::ui_ext::BODY_FONT_SIZE).color(lh_fg))
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, base_c))
                 .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS))

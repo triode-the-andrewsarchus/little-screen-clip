@@ -7,7 +7,7 @@ use little_clip_core::palette::AppPalette;
 #[allow(clippy::too_many_arguments)]
 pub fn render_context_slider(
     ui: &mut egui::Ui,
-    label: &str,
+    label: impl Into<crate::icons::IconLabel>,
     value: &mut f32,
     range: std::ops::RangeInclusive<f32>,
     default_val: f32,
@@ -15,11 +15,12 @@ pub fn render_context_slider(
     slider_width: f32,
     palette: &AppPalette,
 ) -> bool {
+    let label = label.into();
     let mut changed = false;
     let colors = WorkbenchColors::from_palette(palette);
 
     ui.vertical(|ui| {
-        ui.label(egui::RichText::new(label).color(colors.text_secondary));
+        label.show(ui, colors.text_secondary);
 
         ui.spacing_mut().slider_width = slider_width;
         let mut cur_val = *value;

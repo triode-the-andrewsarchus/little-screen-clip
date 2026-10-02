@@ -9,12 +9,12 @@ impl ImagePreviewState {
         let base_accent = hex_to_c32(&palette.harmonies.base);
 
         ui.vertical(|ui| {
-            ui.heading(
-                egui::RichText::new("✏ Markup Tools")
+            ui.add(crate::icons::Icon::Pencil.label(
+                egui::RichText::new("Markup Tools")
                     .strong()
                     .size(15.0)
                     .color(f_high),
-            );
+            ));
             ui.label(
                 egui::RichText::new("Vector screenshot markup tools")
                     .size(crate::ui_ext::BODY_FONT_SIZE)

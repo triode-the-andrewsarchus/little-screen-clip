@@ -359,7 +359,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  No recipes found in ~/.config/little-screen-clip/recipes/");
                 } else {
                     for r in recipes {
-                        println!("  {} {}", "★".magenta(), r.bold());
+                        println!("  {} {}", "*".magenta(), r.bold());
                     }
                 }
             }

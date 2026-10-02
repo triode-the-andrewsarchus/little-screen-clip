@@ -251,7 +251,7 @@ fn network_preview_copy_button_copies_exact_mac_summary() {
             "02:00:00:00:00:01",
             "02:00:00:00:00:01 (Randomized / Private)",
         ),
-        "🔌 MAC: 02:00:00:00:00:01\n🏷 Vendor: Randomized / Private\n🔒 Type: Locally Administered (Private/Randomized MAC)"
+        "MAC: 02:00:00:00:00:01\nVendor: Randomized / Private\nType: Locally Administered (Private/Randomized MAC)"
     );
 }
 

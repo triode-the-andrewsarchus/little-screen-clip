@@ -267,6 +267,9 @@ impl ImagePreviewState {
         self.creative_fx_state.pending_thumbnails.clear();
         self.creative_fx_state.thumbnail_pixel_revision = None;
         self.run_creative_fx_thumbnail_batch();
-        self.show_toast(format!("✨ {} applied", fx_name));
+        self.show_toast(crate::ui_ext::StatusMessage::new(
+            crate::icons::Icon::Sparkles,
+            format!("{} applied", fx_name),
+        ));
     }
 }

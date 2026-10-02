@@ -681,7 +681,7 @@ pub struct AudioPreviewState {
     last_seek_reload: Option<Instant>,
 
     // Toast Notification
-    pub status_toast: Option<(String, f64)>,
+    pub status_toast: Option<(crate::ui_ext::StatusMessage, f64)>,
 
     // Save to Disk Dialog
     pub save_dialog_open: bool,

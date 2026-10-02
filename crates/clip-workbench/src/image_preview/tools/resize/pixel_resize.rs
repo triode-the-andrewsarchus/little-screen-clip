@@ -150,11 +150,14 @@ impl ImagePreviewState {
                         self.dirty_texture = true;
                         self.resize_state.sync_from_image(&self.current_rgba);
                         self.palette_state.is_extracted = false;
-                        self.show_toast(format!(
-                            "↔ Resized to {}×{} px ({})",
-                            message.stamp.width,
-                            message.stamp.height,
-                            message.stamp.filter.label()
+                        self.show_toast(crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::FlipHorizontal,
+                            format!(
+                                "Resized to {}×{} px ({})",
+                                message.stamp.width,
+                                message.stamp.height,
+                                message.stamp.filter.label()
+                            ),
                         ));
                     }
                     Err(error) => {

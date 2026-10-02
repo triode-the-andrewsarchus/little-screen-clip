@@ -288,7 +288,10 @@ impl ImagePreviewState {
             self.resize_state.sync_from_image(&self.current_rgba);
             self.palette_state.is_extracted = false;
             self.schedule_conversion();
-            self.show_toast("✔ Applied converted image to canvas");
+            self.show_toast(crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Check,
+                "Applied converted image to canvas",
+            ));
         }
     }
 }

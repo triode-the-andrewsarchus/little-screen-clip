@@ -329,8 +329,12 @@ impl ImagePreviewState {
             ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
                 if !self.barcode_state.detections.is_empty() {
                     let copy_fg = contrast_text_c32(b_med, Some(f_med), palette);
-                    let copy_all_btn = egui::Button::new(
-                        egui::RichText::new("📋 Copy All")
+                    let copy_all_btn = egui::Button::image_and_text(
+                        crate::icons::Icon::Copy.image_tinted(
+                            crate::ui_ext::CONTROL_ICON_SIZE,
+                            ui.visuals().text_color(),
+                        ),
+                        egui::RichText::new("Copy All")
                             .size(crate::ui_ext::BODY_FONT_SIZE)
                             .color(copy_fg),
                     )
@@ -347,7 +351,10 @@ impl ImagePreviewState {
                             .map(|d| d.text.clone())
                             .collect();
                         ctx.output_mut(|o| o.copied_text = combined.join("\n"));
-                        self.show_toast("📋 Copied all barcode payloads to clipboard!");
+                        self.show_toast(crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Copy,
+                            "Copied all barcode payloads to clipboard!",
+                        ));
                     }
                 }
             });
@@ -389,8 +396,12 @@ impl ImagePreviewState {
 
                                 if det.is_url {
                                     let url_fg = contrast_text_c32(b_med, Some(base_c), palette);
-                                    let url_btn = egui::Button::new(
-                                        egui::RichText::new("🌐 Open")
+                                    let url_btn = egui::Button::image_and_text(
+                                        crate::icons::Icon::Globe.image_tinted(
+                                            crate::ui_ext::CONTROL_ICON_SIZE,
+                                            ui.visuals().text_color(),
+                                        ),
+                                        egui::RichText::new("Open")
                                             .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .color(url_fg),
                                     )
@@ -404,11 +415,19 @@ impl ImagePreviewState {
                                     }
                                 }
 
-                                let copy_btn = crate::secondary_button("📋", b_med, palette)
-                                    .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS));
+                                let copy_btn = crate::secondary_button_icon(
+                                    Some(crate::icons::Icon::Copy),
+                                    "Copy",
+                                    b_med,
+                                    palette,
+                                )
+                                .rounding(Rounding::same(crate::ui_ext::BADGE_CORNER_RADIUS));
                                 if ui.add(copy_btn).on_hover_text("Copy this code").clicked() {
                                     ctx.output_mut(|o| o.copied_text = det.text.clone());
-                                    self.show_toast("📋 Copied code payload to clipboard!");
+                                    self.show_toast(crate::ui_ext::StatusMessage::new(
+                                        crate::icons::Icon::Copy,
+                                        "Copied code payload to clipboard!",
+                                    ));
                                 }
 
                                 let rh_fg = contrast_text_c32(b_low, Some(diff_add), palette);
@@ -536,10 +555,12 @@ impl ImagePreviewState {
                         ui.label(egui::RichText::new(&det.text).monospace());
                         if det.is_url {
                             let triadic_1 = hex_to_c32(&palette.harmonies.triadic_1);
-                            ui.label(
-                                egui::RichText::new("🌐 Click in toolbar to open URL")
-                                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                                    .color(triadic_1),
+                            ui.add(
+                                crate::icons::Icon::Globe.label(
+                                    egui::RichText::new("Click in toolbar to open URL")
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                                        .color(triadic_1),
+                                ),
                             );
                         }
                     },

@@ -10,7 +10,10 @@ impl ImagePreviewState {
         // Structure Amount: -100..+100
         if render_context_slider(
             ui,
-            "⚡ Structure Amount (-100: Soften, +100: Enhance)",
+            (
+                crate::icons::Icon::Zap,
+                "Structure Amount (-100: Soften, +100: Enhance)",
+            ),
             &mut self.creative_fx_state.structure_params.amount,
             -100.0..=100.0,
             35.0,
@@ -25,7 +28,10 @@ impl ImagePreviewState {
         // Detail Scale: -50..+50
         if render_context_slider(
             ui,
-            "🔍 Detail Scale (-50: Fine, +50: Coarse)",
+            (
+                crate::icons::Icon::Search,
+                "Detail Scale (-50: Fine, +50: Coarse)",
+            ),
             &mut self.creative_fx_state.structure_params.detail_scale,
             -50.0..=50.0,
             0.0,
@@ -40,7 +46,10 @@ impl ImagePreviewState {
         // Edge Protection: 0..100
         if render_context_slider(
             ui,
-            "🛡 Edge Protection (0: Off, 100: Strict)",
+            (
+                crate::icons::Icon::Shield,
+                "Edge Protection (0: Off, 100: Strict)",
+            ),
             &mut self.creative_fx_state.structure_params.edge_protection,
             0.0..=100.0,
             50.0,

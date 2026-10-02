@@ -411,7 +411,7 @@ impl PdfEditorState {
                 });
 
                 // Footer
-                let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
+                let toast_tuple = self.status_toast.active(now).cloned();
                 shell.render_footer(ui, &toast_tuple, now);
             });
         if let Some(page_num) = self.selected_page {

@@ -525,9 +525,15 @@ impl AudioPreviewState {
 
             if ui
                 .add(
-                    egui::Button::new(egui::RichText::new("↺ Reset").color(text_f_med))
-                        .fill(hex_to_c32(&palette.colors.surface_recessed))
-                        .rounding(4.0_f32),
+                    egui::Button::image_and_text(
+                        crate::icons::Icon::Undo.image_tinted(
+                            crate::ui_ext::CONTROL_ICON_SIZE,
+                            ui.visuals().text_color(),
+                        ),
+                        egui::RichText::new("Reset").color(text_f_med),
+                    )
+                    .fill(hex_to_c32(&palette.colors.surface_recessed))
+                    .rounding(4.0_f32),
                 )
                 .on_hover_text("Reset FFT and intensity settings to defaults")
                 .clicked()

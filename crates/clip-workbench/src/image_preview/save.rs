@@ -320,14 +320,14 @@ where
     )?;
     match (ipc_result, clipboard_result) {
         (Ok(()), Ok(())) => Ok(format!(
-            "📋 Copied image to {} Hand slot & OS Clipboard",
+            "Copied image to {} Hand slot & OS Clipboard",
             hand_slot_label(hand)
         )),
         (Ok(()), Err(error)) => Ok(format!(
-            "📋 Copied image to {} Hand slot; OS clipboard failed: {error}",
+            "Copied image to {} Hand slot; OS clipboard failed: {error}",
             hand_slot_label(hand)
         )),
-        (Err(_), Ok(())) => Ok("📋 Copied image to OS Clipboard (daemon unavailable)".into()),
+        (Err(_), Ok(())) => Ok("Copied image to OS Clipboard (daemon unavailable)".into()),
         (Err(ipc), Err(clipboard)) => Err(format!(
             "Could not copy image to clipboard: daemon: {ipc}; OS clipboard: {clipboard}"
         )),
@@ -513,8 +513,8 @@ impl ImagePreviewState {
         self.copy_job = Some(ImageCopyJob::start_encoded(
             bytes,
             mime.to_owned(),
-            format!("📋 Copied optimized {description} to Clipboard Slot (LH)"),
-            format!("📋 Copied optimized {description} to OS Clipboard"),
+            format!("Copied optimized {description} to Clipboard Slot (LH)"),
+            format!("Copied optimized {description} to OS Clipboard"),
             jobs,
         ));
         self.show_toast("Copying optimized image to clipboard…");
@@ -564,14 +564,20 @@ impl ImagePreviewState {
         if let Some(completion) = completion {
             self.copy_job = None;
             match completion {
-                Ok(message) => self.show_toast(message),
+                Ok(message) => self.show_toast(crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Copy,
+                    message,
+                )),
                 Err(error)
                     if error == "job was cancelled"
                         || error == "Image clipboard copy cancelled" =>
                 {
                     self.show_toast("Image clipboard copy cancelled")
                 }
-                Err(error) => self.show_toast(format!("❌ Failed to copy image: {error}")),
+                Err(error) => self.show_toast(crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Close,
+                    format!("Failed to copy image: {error}"),
+                )),
             }
         }
         if restored_now && self.copy_job.is_some() {
@@ -727,17 +733,26 @@ impl ImagePreviewState {
                         self.title = name.clone();
                         self.file_size_bytes = result.file_size;
                         self.mime = little_clip_core::item::guess_image_mime(&result.path);
-                        self.show_toast(format!("💾 Saved image to {name}"));
+                        self.show_toast(crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Save,
+                            format!("Saved image to {name}"),
+                        ));
                     } else {
-                        self.show_toast(format!(
-                            "💾 Saved earlier image snapshot to {name}; current edits are unsaved"
+                        self.show_toast(crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Save,
+                            format!(
+                                "Saved earlier image snapshot to {name}; current edits are unsaved"
+                            ),
                         ));
                     }
                 }
                 Err(error) if error == "job was cancelled" || error == "Image save cancelled" => {
                     self.show_toast("Image save cancelled");
                 }
-                Err(error) => self.show_toast(format!("❌ Failed to save: {error}")),
+                Err(error) => self.show_toast(crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Close,
+                    format!("Failed to save: {error}"),
+                )),
             }
         }
     }

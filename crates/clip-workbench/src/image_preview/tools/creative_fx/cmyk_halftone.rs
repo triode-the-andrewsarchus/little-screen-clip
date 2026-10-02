@@ -12,7 +12,7 @@ impl ImagePreviewState {
         // Dot Size: 2..=16 px
         if render_context_slider(
             ui,
-            "🔘 Dot Screen Size",
+            (crate::icons::Icon::ShapeCircle, "Dot Screen Size"),
             &mut self.creative_fx_state.cmyk_params.dot_size,
             2.0..=16.0,
             5.0,
@@ -27,7 +27,7 @@ impl ImagePreviewState {
         // Dot Gain: 0.5..=2.0
         if render_context_slider(
             ui,
-            "📈 Dot Gain (Ink Bleed)",
+            (crate::icons::Icon::Chart, "Dot Gain (Ink Bleed)"),
             &mut self.creative_fx_state.cmyk_params.dot_gain,
             0.50..=2.00,
             1.10,
@@ -63,11 +63,13 @@ impl ImagePreviewState {
         ui.add_space(crate::ui_ext::SPACE_XS);
 
         // Plate Misregistration Offsets
-        ui.label(
-            egui::RichText::new("🗞 Plate Misregistration Offsets")
-                .size(crate::ui_ext::BODY_FONT_SIZE)
-                .strong()
-                .color(base_c),
+        ui.add(
+            crate::icons::Icon::Layers.label(
+                egui::RichText::new("Plate Misregistration Offsets")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .strong()
+                    .color(base_c),
+            ),
         );
         ui.add_space(3.0);
 
@@ -79,7 +81,7 @@ impl ImagePreviewState {
         );
         if render_context_slider(
             ui,
-            "↔ Cyan X",
+            (crate::icons::Icon::FlipHorizontal, "Cyan X"),
             &mut self.creative_fx_state.cmyk_params.cyan_offset[0],
             -10.0..=10.0,
             -1.5,
@@ -91,7 +93,7 @@ impl ImagePreviewState {
         }
         if render_context_slider(
             ui,
-            "↕ Cyan Y",
+            (crate::icons::Icon::FlipVertical, "Cyan Y"),
             &mut self.creative_fx_state.cmyk_params.cyan_offset[1],
             -10.0..=10.0,
             0.5,
@@ -111,7 +113,7 @@ impl ImagePreviewState {
         );
         if render_context_slider(
             ui,
-            "↔ Magenta X",
+            (crate::icons::Icon::FlipHorizontal, "Magenta X"),
             &mut self.creative_fx_state.cmyk_params.magenta_offset[0],
             -10.0..=10.0,
             1.0,
@@ -123,7 +125,7 @@ impl ImagePreviewState {
         }
         if render_context_slider(
             ui,
-            "↕ Magenta Y",
+            (crate::icons::Icon::FlipVertical, "Magenta Y"),
             &mut self.creative_fx_state.cmyk_params.magenta_offset[1],
             -10.0..=10.0,
             -1.0,
@@ -143,7 +145,7 @@ impl ImagePreviewState {
         );
         if render_context_slider(
             ui,
-            "↔ Yellow X",
+            (crate::icons::Icon::FlipHorizontal, "Yellow X"),
             &mut self.creative_fx_state.cmyk_params.yellow_offset[0],
             -10.0..=10.0,
             0.0,
@@ -155,7 +157,7 @@ impl ImagePreviewState {
         }
         if render_context_slider(
             ui,
-            "↕ Yellow Y",
+            (crate::icons::Icon::FlipVertical, "Yellow Y"),
             &mut self.creative_fx_state.cmyk_params.yellow_offset[1],
             -10.0..=10.0,
             1.5,
@@ -175,7 +177,7 @@ impl ImagePreviewState {
         );
         if render_context_slider(
             ui,
-            "↔ Black X",
+            (crate::icons::Icon::FlipHorizontal, "Black X"),
             &mut self.creative_fx_state.cmyk_params.black_offset[0],
             -10.0..=10.0,
             0.0,
@@ -187,7 +189,7 @@ impl ImagePreviewState {
         }
         if render_context_slider(
             ui,
-            "↕ Black Y",
+            (crate::icons::Icon::FlipVertical, "Black Y"),
             &mut self.creative_fx_state.cmyk_params.black_offset[1],
             -10.0..=10.0,
             0.0,

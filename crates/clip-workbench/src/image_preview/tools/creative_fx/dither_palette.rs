@@ -78,7 +78,7 @@ impl ImagePreviewState {
         // Dither Strength
         if render_context_slider(
             ui,
-            "⚡ Dither Strength",
+            (crate::icons::Icon::Zap, "Dither Strength"),
             &mut self.creative_fx_state.dither_params.dither_strength,
             0.0..=1.0,
             0.80,
@@ -93,7 +93,7 @@ impl ImagePreviewState {
         // Pre-dither Contrast
         if render_context_slider(
             ui,
-            "🌓 Contrast Boost",
+            (crate::icons::Icon::Contrast, "Contrast Boost"),
             &mut self.creative_fx_state.dither_params.contrast,
             -50.0..=50.0,
             0.0,

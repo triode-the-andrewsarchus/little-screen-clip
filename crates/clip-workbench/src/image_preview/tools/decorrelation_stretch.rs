@@ -322,7 +322,10 @@ impl ImagePreviewState {
             self.resize_state.sync_from_image(&self.current_rgba);
             self.palette_state.is_extracted = false;
             self.update_decorrelation_stretch();
-            self.show_toast("✔ Applied decorrelation stretch to canvas");
+            self.show_toast(crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Check,
+                "Applied decorrelation stretch to canvas",
+            ));
         }
     }
 
@@ -959,10 +962,12 @@ impl ImagePreviewState {
                     .color(diff_del),
             );
             for warning in &transform.warnings {
-                ui.label(
-                    egui::RichText::new(format!("⚠ {}", warning))
-                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                        .color(diff_del),
+                ui.add(
+                    crate::icons::Icon::Alert.label(
+                        egui::RichText::new(warning.to_string())
+                            .size(crate::ui_ext::BODY_FONT_SIZE)
+                            .color(diff_del),
+                    ),
                 );
             }
         }

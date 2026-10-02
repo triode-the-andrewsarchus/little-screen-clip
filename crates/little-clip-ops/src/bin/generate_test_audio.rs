@@ -402,11 +402,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             let status = if !decode_summary.contains("(no") {
-                "✔ DECODED"
+                "DECODED"
             } else if *variant_name == "very_noisy" {
-                "⚠ NOISE FLOOR"
+                "NOISE FLOOR"
             } else {
-                "✖ MISSED"
+                "MISSED"
             };
 
             println!(

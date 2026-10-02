@@ -164,7 +164,7 @@ impl TextPreviewState {
                 ui.add_space(crate::ui_ext::SPACE_XS);
 
                 // Zone 5: Footer
-                let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
+                let toast_tuple = self.status_toast.active(now).cloned();
                 shell.render_footer(ui, &toast_tuple, now);
             });
     }

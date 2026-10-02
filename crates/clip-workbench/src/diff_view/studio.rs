@@ -128,7 +128,7 @@ impl DiffViewerState {
                 self.copy_image_diff_to_clipboard(now);
             } else {
                 ctx.output_mut(|o| o.copied_text = strip_ansi_codes(&self.result.raw_ansi));
-                self.status_toast = Some(("Diff text copied to clipboard!".to_string(), now));
+                self.status_toast = Some(("Diff text copied to clipboard!".into(), now));
             }
         }
 
@@ -226,7 +226,7 @@ impl DiffViewerState {
                                 o.copied_text = strip_ansi_codes(&self.result.raw_ansi)
                             });
                             self.status_toast =
-                                Some(("Diff text copied to clipboard!".to_string(), now));
+                                Some(("Diff text copied to clipboard!".into(), now));
                         }
                     }
                 });

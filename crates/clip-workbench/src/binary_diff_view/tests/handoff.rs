@@ -295,7 +295,7 @@ fn binary_handoff_cleans_staged_files_unless_an_opener_needs_them() {
             .recv_timeout(Duration::from_secs(1))
             .unwrap()
             .unwrap(),
-        Ok("⚠️ Neither ImHex nor xdg-open is installed".to_string())
+        Ok("Neither ImHex nor xdg-open is installed".to_string())
     );
     drop(ticket);
     assert_staged_bytes_cleaned(&left_bytes);
@@ -397,7 +397,7 @@ fn binary_handoff_cleans_staged_files_unless_an_opener_needs_them() {
             .recv_timeout(Duration::from_secs(1))
             .unwrap()
             .unwrap(),
-        Ok("🚀 Launched ImHex hex editor".to_string())
+        Ok("Launched ImHex hex editor".to_string())
     );
     let (imhex_left_path, imhex_right_path) =
         imhex_paths_rx.recv_timeout(Duration::from_secs(1)).unwrap();
@@ -429,7 +429,7 @@ fn binary_handoff_cleans_staged_files_unless_an_opener_needs_them() {
             .recv_timeout(Duration::from_secs(1))
             .unwrap()
             .unwrap(),
-        Ok("🚀 Opened left binary file with system default".to_string())
+        Ok("Opened left binary file with system default".to_string())
     );
     let (xdg_left_path, xdg_received_only_left) =
         xdg_left_rx.recv_timeout(Duration::from_secs(1)).unwrap();

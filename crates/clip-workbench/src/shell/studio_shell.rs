@@ -462,6 +462,7 @@ pub struct StudioShell<'a> {
     pub badges: Vec<HeaderBadge>,
     pub escape_hatches: Vec<EscapeHatch>,
     pub footer_hints: Option<&'a str>,
+    pub footer_hint_icon: Option<crate::icons::Icon>,
     pub footer_readout: Option<String>,
 }
 
@@ -482,6 +483,7 @@ impl<'a> StudioShell<'a> {
             badges: Vec::new(),
             escape_hatches: Vec::new(),
             footer_hints: None,
+            footer_hint_icon: None,
             footer_readout: None,
         }
     }
@@ -505,6 +507,11 @@ impl<'a> StudioShell<'a> {
 
     pub fn with_escape_hatch(mut self, hatch: EscapeHatch) -> Self {
         self.escape_hatches.push(hatch);
+        self
+    }
+
+    pub fn with_footer_hint_icon(mut self, icon: crate::icons::Icon) -> Self {
+        self.footer_hint_icon = Some(icon);
         self
     }
 
@@ -752,14 +759,19 @@ impl<'a> StudioShell<'a> {
     }
 
     /// Renders Zone 4 (Status & Shortcut Help Footer).
-    pub fn render_footer(&self, ui: &mut egui::Ui, toast: &Option<(String, f64)>, now: f64) {
+    pub fn render_footer(
+        &self,
+        ui: &mut egui::Ui,
+        toast: &Option<(crate::ui_ext::StatusMessage, f64)>,
+        now: f64,
+    ) {
         self.render_footer_with_center(ui, toast, now, 0.0, |_| {});
     }
 
     pub fn render_footer_with_center(
         &self,
         ui: &mut egui::Ui,
-        toast: &Option<(String, f64)>,
+        toast: &Option<(crate::ui_ext::StatusMessage, f64)>,
         now: f64,
         center_width: f32,
         render_center: impl FnOnce(&mut egui::Ui),
@@ -774,6 +786,9 @@ impl<'a> StudioShell<'a> {
                 ui.horizontal(|ui| {
                     let render_status = |ui: &mut egui::Ui| {
                         if let Some(hints) = self.footer_hints {
+                            if let Some(icon) = self.footer_hint_icon {
+                                icon.ui(ui, crate::ui_ext::CONTROL_ICON_SIZE, colors.text_muted);
+                            }
                             ui.add(
                                 egui::Label::new(
                                     egui::RichText::new(hints).color(colors.text_muted),
@@ -932,9 +947,9 @@ mod tests {
             let mut normal_height = 0.0;
             for message in [
                 None,
-                Some("🗑 Markup item deleted"),
+                Some("Markup item deleted"),
                 Some(
-                    "❌ Failed to save image: a long error message that should remain on one line instead of increasing the footer height",
+                    "Failed to save image: a long error message that should remain on one line instead of increasing the footer height",
                 ),
                 None,
             ] {
@@ -952,9 +967,9 @@ mod tests {
                             let panel = egui::TopBottomPanel::bottom("footer").show(ctx, |ui| {
                                 let shell = StudioShell::new("Image", None, &palette, &mut close)
                                     .with_footer_hints(
-                                        "🖱 Drag: Draw shape | Del: Delete | Esc: Deselect",
+                                        "Drag: Draw shape | Del: Delete | Esc: Deselect",
                                     );
-                                let toast = message.map(|message| (message.to_owned(), 0.0));
+                                let toast = message.map(|message| (message.into(), 0.0));
                                 shell.render_footer_with_center(
                                     ui,
                                     &toast,

@@ -420,10 +420,13 @@ impl ImagePreviewState {
                         self.ocr_retry_at = None;
                         self.ocr_ticket = None;
                         self.ocr_job_rx = None;
-                        self.show_toast(format!(
-                            "✔ OCR complete with {} in {:.2}s",
-                            engine,
-                            duration_ms as f64 / 1000.0
+                        self.show_toast(crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Check,
+                            format!(
+                                "OCR complete with {} in {:.2}s",
+                                engine,
+                                duration_ms as f64 / 1000.0
+                            ),
                         ));
                         break;
                     }
@@ -465,7 +468,10 @@ impl ImagePreviewState {
             self.ocr_rx = None;
             self.ocr_input_stamp = None;
             if show_toast {
-                self.show_toast("⏹ OCR process cancelled");
+                self.show_toast(crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Stop,
+                    "OCR process cancelled",
+                ));
             }
         }
     }
@@ -497,12 +503,15 @@ impl ImagePreviewState {
                 tracing::debug!(%error, "failed to copy OCR text to system clipboard");
             }
         });
-        self.show_toast(format!(
-            "📋 Pushed to {} Hand slot",
-            match hand {
-                HandSide::Left => "Left",
-                HandSide::Right => "Right",
-            }
+        self.show_toast(crate::ui_ext::StatusMessage::new(
+            crate::icons::Icon::Copy,
+            format!(
+                "Pushed to {} Hand slot",
+                match hand {
+                    HandSide::Left => "Left",
+                    HandSide::Right => "Right",
+                }
+            ),
         ));
     }
 

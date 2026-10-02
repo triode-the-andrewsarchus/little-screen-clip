@@ -167,14 +167,14 @@ impl SpreadsheetViewerState {
                 // 3. Scrollable 2D X/Y Spreadsheet Table with Sticky Headers
                 let Some(sheet) = self.data.sheets.get(self.active_sheet_idx) else {
                     ui.label("No sheet data available.");
-                    let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
+                    let toast_tuple = self.status_toast.active(now).cloned();
                     shell.render_footer(ui, &toast_tuple, now);
                     return;
                 };
 
                 if sheet.rows.is_empty() {
                     ui.label("Sheet is empty.");
-                    let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
+                    let toast_tuple = self.status_toast.active(now).cloned();
                     shell.render_footer(ui, &toast_tuple, now);
                     return;
                 }
@@ -594,7 +594,7 @@ impl SpreadsheetViewerState {
                 }
 
                 // 4. Footer
-                let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
+                let toast_tuple = self.status_toast.active(now).cloned();
                 shell.render_footer(ui, &toast_tuple, now);
             });
     }

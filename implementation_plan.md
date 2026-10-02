@@ -29,8 +29,8 @@ Transition **Little Screen Clip** from an ambient clipboard manager into an inte
 >    We will automatically create `~/.config/little-screen-clip/recipes/` on first launch with the canonical recipe from Section 7.1 of `idea.md` (`pad_and_caption.yaml`: LH Image + RH Text Caption $\rightarrow$ Frame $\rightarrow$ Set in LH), along with `normalize_audio.yaml` and `clean_and_slugify.yaml`.
 > 2. **Workbench View Switching:**  
 >    We propose providing a dual-mode header in the Workbench modal:
->    - `[ 📋 Quick Palette ]` (Default fast fuzzy search action view)
->    - `[ ★ Big Node Machine ]` (Interactive Visual Node Canvas)
+>    - `[ Quick Palette ]` (Default fast fuzzy search action view)
+>    - `[ Big Node Machine ]` (Interactive Visual Node Canvas)
 >    Switchable with `F2`, `Tab` (when search is empty), or direct mouse click.
 
 ---
@@ -152,11 +152,11 @@ crates/
   - Sockets with tooltip previews of current/last value.
   - Catalog search palette modal with tag filtering (`#image`, `#text`, `#audio`, etc.).
   - Interactive `[▶ Run Pipeline]` button with live timer and status feedback.
-  - Recipe loader dropdown and `[💾 Save Recipe]` dialog.
+  - Recipe loader dropdown and `[Save Recipe]` dialog.
 
 #### [MODIFY] [crates/clip-workbench/src/main.rs](file:///home/vega/Documents/git/local/little-screen-clip/crates/clip-workbench/src/main.rs)
 - Add view state: `enum WorkbenchView { Palette, NodeMachine }`.
-- Header view tabs: `[ 📋 Quick Palette ]` vs `[ ★ Big Node Machine ]`.
+- Header view tabs: `[ Quick Palette ]` vs `[ Big Node Machine ]`.
 - Shortcut switching (`F2` or `Tab`).
 - Include discovered recipes in the Quick Palette search results (e.g. typing `/pad` or `/caption` executes the recipe directly).
 
@@ -191,14 +191,14 @@ crates/
    - Push caption text to Right Hand: `./target/debug/clipctl push --hand right "Nixie Tube Clock v2"`
 2. **Workbench Visual Canvas:**
    - Launch Workbench: `./launch.sh ui`
-   - Press `F2` or click `[★ Big Node Machine]`.
+   - Press `F2` or click `[Big Node Machine]`.
    - Verify node canvas renders with pan/zoom and nodes.
    - Load the `pad_and_caption` recipe.
    - Click `[▶ Run Pipeline]`.
    - Verify success status notification.
    - Verify Left Hand on both the main monitor mirror and Trofeo screen updates to the framed & captioned image!
 3. **Fuzzy Palette Recipe Execution:**
-   - Switch back to `[ 📋 Quick Palette ]`.
+   - Switch back to `[ Quick Palette ]`.
    - Type `/pad` in the action input.
    - Verify `pad_and_caption` appears with `[Recipe]` tag.
    - Press `Enter` and verify it runs directly.

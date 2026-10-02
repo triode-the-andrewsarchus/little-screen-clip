@@ -10,11 +10,13 @@ impl ImagePreviewState {
         let base_c = hex_to_c32(&palette.harmonies.base);
         let f_med = hex_to_c32(&palette.colors.text_secondary);
         // ── 1. Broadcast RF & Filtering ──
-        ui.label(
-            egui::RichText::new("📡 Signal & Filtering")
-                .size(crate::ui_ext::BODY_FONT_SIZE)
-                .strong()
-                .color(base_c),
+        ui.add(
+            crate::icons::Icon::Signal.label(
+                egui::RichText::new("Signal & Filtering")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .strong()
+                    .color(base_c),
+            ),
         );
         ui.add_space(2.0);
 
@@ -125,12 +127,16 @@ impl ImagePreviewState {
 
         let mut scanlines = self.creative_fx_state.ntsc_params.scanlines;
         if ui
-            .checkbox(
-                &mut scanlines,
-                egui::RichText::new("📺 CRT Interlaced Scanlines")
-                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                    .color(f_med),
-            )
+            .horizontal(|ui| {
+                crate::icons::Icon::Tv.ui(ui, crate::ui_ext::CONTROL_ICON_SIZE, f_med);
+                ui.checkbox(
+                    &mut scanlines,
+                    egui::RichText::new("CRT Interlaced Scanlines")
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(f_med),
+                )
+            })
+            .inner
             .changed()
         {
             self.creative_fx_state.ntsc_params.scanlines = scanlines;
@@ -141,17 +147,22 @@ impl ImagePreviewState {
         // ── 2. Chrominance & YIQ ──
         ui.separator();
         ui.add_space(3.0);
-        ui.label(
-            egui::RichText::new("🎨 Chrominance & Color")
-                .size(crate::ui_ext::BODY_FONT_SIZE)
-                .strong()
-                .color(base_c),
+        ui.add(
+            crate::icons::Icon::Palette.label(
+                egui::RichText::new("Chrominance & Color")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .strong()
+                    .color(base_c),
+            ),
         );
         ui.add_space(2.0);
 
         if render_context_slider(
             ui,
-            "↔ Chroma Horizontal Bleed",
+            (
+                crate::icons::Icon::FlipHorizontal,
+                "Chroma Horizontal Bleed",
+            ),
             &mut self.creative_fx_state.ntsc_params.chroma_delay_x,
             -8.0..=8.0,
             1.0,
@@ -166,7 +177,7 @@ impl ImagePreviewState {
         let mut delay_y = self.creative_fx_state.ntsc_params.chroma_delay_y as f32;
         if render_context_slider(
             ui,
-            "↕ Chroma Vertical Shift",
+            (crate::icons::Icon::FlipVertical, "Chroma Vertical Shift"),
             &mut delay_y,
             -4.0..=4.0,
             0.0,
@@ -196,7 +207,10 @@ impl ImagePreviewState {
 
         if render_context_slider(
             ui,
-            "🎨 Global Tint / Hue Shift (0: Normal)",
+            (
+                crate::icons::Icon::Palette,
+                "Global Tint / Hue Shift (0: Normal)",
+            ),
             &mut self.creative_fx_state.ntsc_params.chroma_phase_error,
             0.0..=1.0,
             0.0,
@@ -210,7 +224,7 @@ impl ImagePreviewState {
 
         if render_context_slider(
             ui,
-            "〰 Chroma Phase Jitter",
+            (crate::icons::Icon::Waves, "Chroma Phase Jitter"),
             &mut self.creative_fx_state.ntsc_params.chroma_phase_noise,
             0.0..=0.10,
             0.005,
@@ -224,7 +238,7 @@ impl ImagePreviewState {
 
         if render_context_slider(
             ui,
-            "🌈 Color Grain / Chroma Noise",
+            (crate::icons::Icon::Palette, "Color Grain / Chroma Noise"),
             &mut self.creative_fx_state.ntsc_params.chroma_noise,
             0.0..=0.50,
             0.05,
@@ -239,11 +253,13 @@ impl ImagePreviewState {
         // ── 3. Noise & Static ──
         ui.separator();
         ui.add_space(3.0);
-        ui.label(
-            egui::RichText::new("❄ Noise & Static")
-                .size(crate::ui_ext::BODY_FONT_SIZE)
-                .strong()
-                .color(base_c),
+        ui.add(
+            crate::icons::Icon::Snowflake.label(
+                egui::RichText::new("Noise & Static")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .strong()
+                    .color(base_c),
+            ),
         );
         ui.add_space(2.0);
 
@@ -317,11 +333,13 @@ impl ImagePreviewState {
         // ── 4. VHS Magnetic Tape Simulation ──
         ui.separator();
         ui.add_space(3.0);
-        ui.label(
-            egui::RichText::new("📼 VHS Tape Emulation")
-                .size(crate::ui_ext::BODY_FONT_SIZE)
-                .strong()
-                .color(base_c),
+        ui.add(
+            crate::icons::Icon::Tape.label(
+                egui::RichText::new("VHS Tape Emulation")
+                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                    .strong()
+                    .color(base_c),
+            ),
         );
         ui.add_space(2.0);
 
@@ -363,7 +381,7 @@ impl ImagePreviewState {
 
             if render_context_slider(
                 ui,
-                "〰 Tape Wobble / Jitter",
+                (crate::icons::Icon::Waves, "Tape Wobble / Jitter"),
                 &mut self.creative_fx_state.ntsc_params.edge_wave,
                 0.0..=2.0,
                 0.5,
@@ -377,7 +395,7 @@ impl ImagePreviewState {
 
             if render_context_slider(
                 ui,
-                "📶 Tracking Noise Bar",
+                (crate::icons::Icon::Signal, "Tracking Noise Bar"),
                 &mut self.creative_fx_state.ntsc_params.tracking_noise,
                 0.0..=1.0,
                 0.0,
@@ -436,10 +454,12 @@ impl ImagePreviewState {
         ui.separator();
         ui.add_space(2.0);
         ui.vertical(|ui| {
-            ui.label(
-                egui::RichText::new("🎲 Noise Random Seed")
-                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                    .color(f_med),
+            ui.add(
+                crate::icons::Icon::Dice.label(
+                    egui::RichText::new("Noise Random Seed")
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(f_med),
+                ),
             );
             ui.spacing_mut().slider_width = slider_w;
             let mut seed = self.creative_fx_state.ntsc_params.random_seed;

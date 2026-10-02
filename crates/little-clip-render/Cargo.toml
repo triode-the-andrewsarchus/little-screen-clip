@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 little-clip-core = { path = "../little-clip-core" }
 tiny-skia.workspace = true
+resvg = { version = "0.37", default-features = false }
 fontdue.workspace = true
 image.workspace = true
 thiserror.workspace = true

@@ -39,7 +39,7 @@ impl DiffViewerState {
         let (ticket, receiver) = jobs.submit(std::time::Duration::from_secs(30), move || {
             run_diff_handoff_with(left, right, &job_cancelled, available, spawn)
         });
-        self.status_toast = Some(("Preparing comparison for external tool…".to_string(), now));
+        self.status_toast = Some(("Preparing comparison for external tool…".into(), now));
         self.handoff = Some((ticket, receiver));
         self.handoff_cancel = Some(HandoffCancelGuard(cancelled));
     }
@@ -50,19 +50,34 @@ impl DiffViewerState {
         };
         match rx.try_recv() {
             Ok(Ok(Ok(message))) => {
-                self.status_toast = Some((message, now));
+                self.status_toast = Some((message.into(), now));
                 self.handoff = None;
             }
             Ok(Ok(Err(error))) => {
-                self.status_toast = Some((format!("❌ {error}"), now));
+                self.status_toast = Some((
+                    crate::ui_ext::StatusMessage::new(crate::icons::Icon::Close, error.to_string()),
+                    now,
+                ));
                 self.handoff = None;
             }
             Ok(Err(error)) => {
-                self.status_toast = Some((format!("❌ External handoff failed: {error}"), now));
+                self.status_toast = Some((
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Close,
+                        format!("External handoff failed: {error}"),
+                    ),
+                    now,
+                ));
                 self.handoff = None;
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.status_toast = Some(("❌ External handoff was cancelled".to_string(), now));
+                self.status_toast = Some((
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Close,
+                        "External handoff was cancelled".to_string(),
+                    ),
+                    now,
+                ));
                 self.handoff = None;
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -80,8 +95,8 @@ pub(super) fn launch_diff_tool_with(
 ) -> Result<Option<String>, String> {
     let mut launch_failures = Vec::new();
     for (command, success_message) in [
-        ("meld", "🚀 Launched Meld comparison"),
-        ("kdiff3", "🚀 Launched KDiff3 comparison"),
+        ("meld", "Launched Meld comparison"),
+        ("kdiff3", "Launched KDiff3 comparison"),
     ] {
         if cancelled.load(std::sync::atomic::Ordering::Acquire) {
             return Err("External handoff cancelled".to_string());
@@ -130,6 +145,6 @@ pub(super) fn run_diff_handoff_with(
             right_path.preserve_for_external_tool();
             Ok(message)
         }
-        None => Ok("⚠️ Neither Meld nor KDiff3 is installed".to_string()),
+        None => Ok("Neither Meld nor KDiff3 is installed".to_string()),
     }
 }

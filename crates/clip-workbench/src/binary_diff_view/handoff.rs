@@ -82,15 +82,13 @@ pub(super) fn run_binary_handoff_with(
         BinaryToolLaunch::ImHex => {
             left_path.preserve_for_external_tool();
             right_path.preserve_for_external_tool();
-            Ok("🚀 Launched ImHex hex editor".to_string())
+            Ok("Launched ImHex hex editor".to_string())
         }
         BinaryToolLaunch::XdgOpen => {
             left_path.preserve_for_external_tool();
-            Ok("🚀 Opened left binary file with system default".to_string())
+            Ok("Opened left binary file with system default".to_string())
         }
-        BinaryToolLaunch::Unavailable => {
-            Ok("⚠️ Neither ImHex nor xdg-open is installed".to_string())
-        }
+        BinaryToolLaunch::Unavailable => Ok("Neither ImHex nor xdg-open is installed".to_string()),
     }
 }
 
@@ -204,17 +202,30 @@ impl BinaryDiffViewState {
                 self.handoff = None;
             }
             Ok(Ok(Err(error))) => {
-                self.status_toast.set(format!("❌ {error}"), now);
+                self.status_toast.set(
+                    crate::ui_ext::StatusMessage::new(crate::icons::Icon::Close, error.to_string()),
+                    now,
+                );
                 self.handoff = None;
             }
             Ok(Err(error)) => {
-                self.status_toast
-                    .set(format!("❌ External handoff failed: {error}"), now);
+                self.status_toast.set(
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Close,
+                        format!("External handoff failed: {error}"),
+                    ),
+                    now,
+                );
                 self.handoff = None;
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                self.status_toast
-                    .set("❌ External handoff was cancelled", now);
+                self.status_toast.set(
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Close,
+                        "External handoff was cancelled",
+                    ),
+                    now,
+                );
                 self.handoff = None;
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {

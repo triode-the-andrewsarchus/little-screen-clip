@@ -1,7 +1,7 @@
 //! Vector SVG icon system for `clip-workbench`.
 //!
 //! Provides resolution-independent vector icons embedded directly into the binary
-//! that dynamically adapt to Hundred Rabbits themes and contrast requirements via
+//! that adapt to the fixed Light/Dark palette and contrast requirements via
 //! `egui_extras` SVG loader and `egui::Image::tint`.
 
 use eframe::egui::{self, Color32, Response, Ui, Vec2};
@@ -90,6 +90,19 @@ pub enum Icon {
     ArrowLeft,
     Bat,
     Teapot,
+    Plug,
+    Clipboard,
+    Chart,
+    Contrast,
+    Tag,
+    Dice,
+    Tape,
+    Snowflake,
+    Signal,
+    Clock,
+    Globe,
+    Mouse,
+    Hourglass,
 }
 
 impl Icon {
@@ -178,6 +191,19 @@ impl Icon {
             Self::ArrowLeft => "arrow_left",
             Self::Bat => "bat",
             Self::Teapot => "teapot",
+            Self::Plug => "plug",
+            Self::Clipboard => "clipboard",
+            Self::Chart => "chart",
+            Self::Contrast => "contrast",
+            Self::Tag => "tag",
+            Self::Dice => "dice",
+            Self::Tape => "tape",
+            Self::Snowflake => "snowflake",
+            Self::Signal => "signal",
+            Self::Clock => "clock",
+            Self::Globe => "globe",
+            Self::Mouse => "mouse",
+            Self::Hourglass => "hourglass",
         }
     }
 
@@ -266,6 +292,19 @@ impl Icon {
             Self::ArrowLeft => "bytes://icons/arrow_left.svg",
             Self::Bat => "bytes://icons/bat.svg",
             Self::Teapot => "bytes://icons/teapot.svg",
+            Self::Plug => "bytes://icons/plug.svg",
+            Self::Clipboard => "bytes://icons/clipboard.svg",
+            Self::Chart => "bytes://icons/chart.svg",
+            Self::Contrast => "bytes://icons/contrast.svg",
+            Self::Tag => "bytes://icons/tag.svg",
+            Self::Dice => "bytes://icons/dice.svg",
+            Self::Tape => "bytes://icons/tape.svg",
+            Self::Snowflake => "bytes://icons/snowflake.svg",
+            Self::Signal => "bytes://icons/signal.svg",
+            Self::Clock => "bytes://icons/clock.svg",
+            Self::Globe => "bytes://icons/globe.svg",
+            Self::Mouse => "bytes://icons/mouse.svg",
+            Self::Hourglass => "bytes://icons/hourglass.svg",
         }
     }
 
@@ -289,7 +328,7 @@ impl Icon {
             Self::Search => include_bytes!("../assets/icons/search.svg"),
             Self::Book => include_bytes!("../assets/icons/book.svg"),
             Self::Code => include_bytes!("../assets/icons/code.svg"),
-            Self::Play => include_bytes!("../assets/icons/play.svg"),
+            Self::Play => include_bytes!("../../little-clip-render/assets/icons/play.svg"),
             Self::Pause => include_bytes!("../assets/icons/pause.svg"),
             Self::Stop => include_bytes!("../assets/icons/stop.svg"),
             Self::Repeat => include_bytes!("../assets/icons/repeat.svg"),
@@ -354,6 +393,19 @@ impl Icon {
             Self::ArrowLeft => include_bytes!("../assets/icons/arrow_left.svg"),
             Self::Bat => include_bytes!("../assets/icons/bat.svg"),
             Self::Teapot => include_bytes!("../assets/icons/teapot.svg"),
+            Self::Plug => include_bytes!("../assets/icons/plug.svg"),
+            Self::Clipboard => include_bytes!("../assets/icons/clipboard.svg"),
+            Self::Chart => include_bytes!("../assets/icons/chart.svg"),
+            Self::Contrast => include_bytes!("../assets/icons/contrast.svg"),
+            Self::Tag => include_bytes!("../assets/icons/tag.svg"),
+            Self::Dice => include_bytes!("../assets/icons/dice.svg"),
+            Self::Tape => include_bytes!("../assets/icons/tape.svg"),
+            Self::Snowflake => include_bytes!("../assets/icons/snowflake.svg"),
+            Self::Signal => include_bytes!("../assets/icons/signal.svg"),
+            Self::Clock => include_bytes!("../assets/icons/clock.svg"),
+            Self::Globe => include_bytes!("../assets/icons/globe.svg"),
+            Self::Mouse => include_bytes!("../assets/icons/mouse.svg"),
+            Self::Hourglass => include_bytes!("../assets/icons/hourglass.svg"),
         }
     }
 
@@ -370,6 +422,84 @@ impl Icon {
     /// Directly renders the tinted icon onto `ui`.
     pub fn ui(&self, ui: &mut Ui, size: f32, tint: Color32) -> Response {
         ui.add(self.image_tinted(size, tint))
+    }
+
+    /// Paints an SVG into an existing canvas without creating a widget.
+    pub fn paint(self, painter: &egui::Painter, rect: egui::Rect, color: Color32) {
+        match self
+            .image(rect.width())
+            .load_for_size(painter.ctx(), rect.size())
+        {
+            Ok(egui::load::TexturePoll::Ready { texture }) => {
+                painter.image(
+                    texture.id,
+                    rect,
+                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
+                    color,
+                );
+            }
+            Ok(egui::load::TexturePoll::Pending { .. }) => painter.ctx().request_repaint(),
+            Err(error) => tracing::warn!(?self, %error, "Unable to load SVG icon"),
+        }
+    }
+
+    /// Paints an SVG beside canvas text, aligning the complete group at `pos`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn paint_text(
+        self,
+        painter: &egui::Painter,
+        pos: egui::Pos2,
+        align: egui::Align2,
+        text: impl ToString,
+        font: egui::FontId,
+        color: Color32,
+    ) {
+        let size = font.size;
+        let galley = painter.layout_no_wrap(text.to_string(), font, color);
+        let gap = crate::ui_ext::SPACE_XS;
+        let bounds = align.anchor_rect(egui::Rect::from_min_size(
+            pos,
+            Vec2::new(size + gap + galley.size().x, size.max(galley.size().y)),
+        ));
+        self.paint(
+            painter,
+            egui::Rect::from_center_size(
+                egui::pos2(bounds.min.x + size * 0.5, bounds.center().y),
+                Vec2::splat(size),
+            ),
+            color,
+        );
+        painter.galley(
+            egui::pos2(
+                bounds.min.x + size + gap,
+                bounds.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+            color,
+        );
+    }
+
+    /// A label with a vector icon, keeping the caller's text styling.
+    pub fn label(self, text: impl Into<egui::WidgetText>) -> impl egui::Widget {
+        let text = text.into();
+        move |ui: &mut Ui| {
+            ui.horizontal(|ui| {
+                let job = text.clone().into_layout_job(
+                    ui.style(),
+                    egui::TextStyle::Body.into(),
+                    egui::Align::Center,
+                );
+                let tint = job
+                    .sections
+                    .first()
+                    .map(|section| section.format.color)
+                    .filter(|color| *color != Color32::PLACEHOLDER)
+                    .unwrap_or_else(|| ui.visuals().text_color());
+                self.ui(ui, crate::ui_ext::CONTROL_ICON_SIZE, tint);
+                ui.label(text)
+            })
+            .inner
+        }
     }
 
     /// Slice of all available icon variants for testing and validation.
@@ -455,7 +585,67 @@ impl Icon {
         Self::ArrowLeft,
         Self::Bat,
         Self::Teapot,
+        Self::Plug,
+        Self::Clipboard,
+        Self::Chart,
+        Self::Contrast,
+        Self::Tag,
+        Self::Dice,
+        Self::Tape,
+        Self::Snowflake,
+        Self::Signal,
+        Self::Clock,
+        Self::Globe,
+        Self::Mouse,
+        Self::Hourglass,
     ];
+}
+
+/// A parameter label with an optional SVG icon.
+pub struct IconLabel {
+    icon: Option<Icon>,
+    text: String,
+}
+
+impl IconLabel {
+    pub fn show(self, ui: &mut Ui, color: Color32) {
+        let text = egui::RichText::new(self.text).color(color);
+        if let Some(icon) = self.icon {
+            ui.add(icon.label(text));
+        } else {
+            ui.label(text);
+        }
+    }
+}
+
+impl From<&str> for IconLabel {
+    fn from(text: &str) -> Self {
+        Self {
+            icon: None,
+            text: text.into(),
+        }
+    }
+}
+
+impl From<String> for IconLabel {
+    fn from(text: String) -> Self {
+        Self { icon: None, text }
+    }
+}
+
+impl From<&String> for IconLabel {
+    fn from(text: &String) -> Self {
+        Self::from(text.as_str())
+    }
+}
+
+impl<T: Into<String>> From<(Icon, T)> for IconLabel {
+    fn from((icon, text): (Icon, T)) -> Self {
+        Self {
+            icon: Some(icon),
+            text: text.into(),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -149,7 +149,7 @@ pub struct DiffViewerState {
     pub overlay_texture: Option<egui::TextureHandle>,
     pub textures_loaded: bool,
     pub decode_error: Option<String>,
-    pub status_toast: Option<(String, f64)>, // (text, timestamp)
+    pub status_toast: Option<(crate::ui_ext::StatusMessage, f64)>, // (text, timestamp)
     pub image_receiver: Option<
         std::sync::mpsc::Receiver<
             Result<Result<ImageDiffResult, String>, little_clip_core::JobError>,

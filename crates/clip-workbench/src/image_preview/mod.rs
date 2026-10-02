@@ -159,7 +159,7 @@ pub struct ImagePreviewState {
     pub viewer: String,
 
     // Status Toast (message, timestamp)
-    pub status_toast: Option<(String, f64)>,
+    pub status_toast: Option<(crate::ui_ext::StatusMessage, f64)>,
 
     // File Dialog & Save-As
     save_job: Option<save::ImageSaveJob>,
@@ -630,7 +630,7 @@ impl ImagePreviewState {
         }
     }
 
-    pub fn show_toast(&mut self, msg: impl Into<String>) {
+    pub fn show_toast(&mut self, msg: impl Into<crate::ui_ext::StatusMessage>) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs_f64())
@@ -694,10 +694,16 @@ impl ImagePreviewState {
                 self.raw_bytes = Arc::new(clean_bytes);
                 self.file_size_bytes = self.raw_bytes.len();
                 self.metadata = None;
-                self.show_toast("✔ Stripped all EXIF & location metadata");
+                self.show_toast(crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Check,
+                    "Stripped all EXIF & location metadata",
+                ));
             }
             Err(e) => {
-                self.show_toast(format!("⚠ Failed to strip metadata: {}", e));
+                self.show_toast(crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Alert,
+                    format!("Failed to strip metadata: {}", e),
+                ));
             }
         }
     }

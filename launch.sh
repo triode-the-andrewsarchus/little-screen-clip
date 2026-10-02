@@ -113,11 +113,11 @@ function start_daemon() {
     done
 
     if kill -0 "$daemon_pid" 2>/dev/null; then
-        echo -e "${GREEN}✓ little-clipd started successfully!${NC} (PID: $daemon_pid)"
+        echo -e "${GREEN}little-clipd started successfully!${NC} (PID: $daemon_pid)"
         echo -e "  Logs: ${CYAN}$LOG_FILE${NC}"
         echo -e "  IPC:  ${CYAN}$SOCKET_PATH${NC}"
     else
-        echo -e "${RED}✗ little-clipd failed to stay alive.${NC} Check logs:"
+        echo -e "${RED}little-clipd failed to stay alive.${NC} Check logs:"
         tail -n 15 "$LOG_FILE"
         rm -f "$PID_FILE"
         return 1
@@ -157,7 +157,7 @@ function stop_daemon() {
     fi
 
     rm -f "$PID_FILE" "$SOCKET_PATH"
-    echo -e "${GREEN}✓ little-clipd stopped.${NC}"
+    echo -e "${GREEN}little-clipd stopped.${NC}"
 }
 
 function status_daemon() {
@@ -234,7 +234,7 @@ function install_service() {
 
     systemctl --user daemon-reload
     systemctl --user enable "$SYSTEMD_SERVICE_NAME"
-    echo -e "${GREEN}✓ Systemd service installed and enabled!${NC}"
+    echo -e "${GREEN}Systemd service installed and enabled!${NC}"
     echo -e "  To start:  ${CYAN}systemctl --user start $SYSTEMD_SERVICE_NAME${NC} or ${CYAN}./launch.sh service start${NC}"
     echo -e "  To status: ${CYAN}systemctl --user status $SYSTEMD_SERVICE_NAME${NC} or ${CYAN}./launch.sh service status${NC}"
 }
@@ -293,7 +293,7 @@ if total_freed > 0:
 else:
     print('Incremental cache is clean (no sessions beyond retention threshold).')
 " 2>/dev/null || true
-    echo -e "${GREEN}✓ Target sweep completed!${NC}"
+    echo -e "${GREEN}Target sweep completed!${NC}"
 }
 
 # Subcommand routing

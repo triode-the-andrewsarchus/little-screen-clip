@@ -145,19 +145,18 @@ pub fn paint_split_handle(painter: &egui::Painter, center: Pos2, palette: &AppPa
         Some(hex_to_c32(&palette.colors.text_primary)),
         palette,
     );
-    let galley = painter.layout_no_wrap(
-        "◀ ▶".to_owned(),
-        FontId::monospace(MONO_FONT_SIZE),
-        foreground,
-    );
-    let radius = (CONTROL_HEIGHT * 0.5).max(galley.size().length() * 0.5 + 3.0);
+    let radius = CONTROL_HEIGHT * 0.5;
     painter.circle(
         center,
         radius,
         background,
         Stroke::new(2.0_f32, hex_to_c32(&palette.harmonies.base)),
     );
-    painter.galley(center - galley.size() * 0.5, galley, foreground);
+    Icon::Swap.paint(
+        painter,
+        Rect::from_center_size(center, Vec2::splat(CONTROL_ICON_SIZE)),
+        foreground,
+    );
     radius
 }
 
@@ -696,10 +695,66 @@ impl UiThemedExt for Ui {
     }
 }
 
+/// Notification text and its SVG icon are kept separate from clipboard content.
+#[derive(Debug, Clone)]
+pub struct StatusMessage {
+    pub icon: Icon,
+    pub text: String,
+}
+
+impl StatusMessage {
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+    pub fn new(icon: Icon, text: impl Into<String>) -> Self {
+        Self {
+            icon,
+            text: text.into(),
+        }
+    }
+}
+
+impl From<String> for StatusMessage {
+    fn from(text: String) -> Self {
+        Self::new(Icon::Info, text)
+    }
+}
+
+impl From<&str> for StatusMessage {
+    fn from(text: &str) -> Self {
+        Self::new(Icon::Info, text)
+    }
+}
+
+impl std::ops::Deref for StatusMessage {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.text
+    }
+}
+
+impl PartialEq<str> for StatusMessage {
+    fn eq(&self, other: &str) -> bool {
+        self.text == other
+    }
+}
+
+impl PartialEq<&str> for StatusMessage {
+    fn eq(&self, other: &&str) -> bool {
+        self.text == *other
+    }
+}
+
+impl PartialEq<String> for StatusMessage {
+    fn eq(&self, other: &String) -> bool {
+        self.text == *other
+    }
+}
+
 /// Unified status toast manager with automatic time-based dismissal.
 #[derive(Debug, Clone)]
 pub struct StatusToast {
-    toast: Option<(String, f64)>,
+    toast: Option<(StatusMessage, f64)>,
     duration: f64,
 }
 
@@ -724,7 +779,7 @@ impl StatusToast {
         }
     }
 
-    pub fn set(&mut self, msg: impl Into<String>, now: f64) {
+    pub fn set(&mut self, msg: impl Into<StatusMessage>, now: f64) {
         self.toast = Some((msg.into(), now));
     }
 
@@ -739,15 +794,21 @@ impl StatusToast {
         }
     }
 
+    pub fn active(&self, now: f64) -> Option<&(StatusMessage, f64)> {
+        self.toast
+            .as_ref()
+            .filter(|(_, timestamp)| now - timestamp < self.duration)
+    }
+
     pub fn message(&self, now: f64) -> Option<&str> {
         match &self.toast {
-            Some((msg, timestamp)) if now - *timestamp < self.duration => Some(msg.as_str()),
+            Some((msg, timestamp)) if now - *timestamp < self.duration => Some(msg.text.as_str()),
             _ => None,
         }
     }
 
     pub fn render_opt(
-        toast: &Option<(String, f64)>,
+        toast: &Option<(StatusMessage, f64)>,
         duration: f64,
         ui: &mut egui::Ui,
         palette: &AppPalette,
@@ -756,11 +817,17 @@ impl StatusToast {
         if let Some((msg, ts)) = toast {
             if now - ts < duration {
                 let color = WorkbenchColors::from_palette(palette).success;
+                msg.icon.ui(ui, CONTROL_ICON_SIZE, color);
                 ui.add(
-                    egui::Label::new(egui::RichText::new(msg).size(14.0).strong().color(color))
-                        .truncate(true),
+                    egui::Label::new(
+                        egui::RichText::new(&msg.text)
+                            .size(14.0)
+                            .strong()
+                            .color(color),
+                    )
+                    .truncate(true),
                 )
-                .on_hover_text(msg);
+                .on_hover_text(&msg.text);
             }
         }
     }
@@ -777,7 +844,12 @@ impl StatusToast {
                 .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
                 .inner_margin(egui::Margin::symmetric(SPACE_SM, SPACE_XS))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new(msg).color(fg));
+                    if let Some((message, _)) = &self.toast {
+                        ui.horizontal(|ui| {
+                            message.icon.ui(ui, CONTROL_ICON_SIZE, fg);
+                            ui.label(egui::RichText::new(msg).color(fg));
+                        });
+                    }
                 });
         }
     }
@@ -792,7 +864,12 @@ impl StatusToast {
                 .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
                 .inner_margin(egui::Margin::symmetric(BUTTON_PADDING_X, SPACE_XS))
                 .show(ui, |ui| {
-                    ui.label(egui::RichText::new(msg).strong().color(fg));
+                    if let Some((message, _)) = &self.toast {
+                        ui.horizontal(|ui| {
+                            message.icon.ui(ui, CONTROL_ICON_SIZE, fg);
+                            ui.label(egui::RichText::new(msg).strong().color(fg));
+                        });
+                    }
                 });
         }
     }
@@ -1132,6 +1209,7 @@ mod tests {
     #[test]
     fn split_handle_hit_radius_contains_the_readable_icon() {
         let ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&ctx);
         let mut radius = 0.0;
         let center = Pos2::new(100.0, 100.0);
         let output = ctx.run(egui::RawInput::default(), |ctx| {
@@ -1143,13 +1221,15 @@ mod tests {
             .shapes
             .iter()
             .find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text() == "◀ ▶" => Some(text),
+                egui::Shape::Mesh(mesh) if mesh.texture_id != egui::TextureId::default() => {
+                    Some(mesh)
+                }
                 _ => None,
             })
-            .unwrap();
-        let icon_rect = Rect::from_min_size(icon.pos, icon.galley.size());
-        assert!(icon_rect.left_top().distance(center) <= radius);
-        assert!(icon_rect.right_bottom().distance(center) <= radius);
+            .expect("SVG handle icon was painted");
+        for vertex in &icon.vertices {
+            assert!(vertex.pos.distance(center) <= radius);
+        }
         assert!(radius >= CONTROL_HEIGHT * 0.5);
         let image = Rect::from_min_size(Pos2::new(20.0, 20.0), Vec2::splat(160.0));
         assert!(split_handle_hit_test(
@@ -1344,13 +1424,15 @@ mod tests {
         assert!(!toast.is_active(10.0));
         assert_eq!(toast.message(10.0), None);
 
-        toast.set("Copied item!", 10.0);
+        toast.set(StatusMessage::new(Icon::Copy, "Copied item!"), 10.0);
         assert!(toast.is_active(12.0));
         assert_eq!(toast.message(12.0), Some("Copied item!"));
+        assert_eq!(toast.active(12.0).unwrap().0.icon, Icon::Copy);
 
         // After 4s duration, it expires
         assert!(!toast.is_active(14.5));
         assert_eq!(toast.message(14.5), None);
+        assert!(toast.active(14.5).is_none());
 
         // Manual clear
         toast.set("New toast", 20.0);

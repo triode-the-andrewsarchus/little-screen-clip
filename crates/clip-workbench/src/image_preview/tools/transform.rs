@@ -31,7 +31,10 @@ impl ImagePreviewState {
         self.dirty_texture = true;
         self.crop_state.normalized_rect =
             Rect::from_min_max(Pos2::new(0.0, 0.0), Pos2::new(1.0, 1.0));
-        self.show_toast("🔄 Rotated 180°");
+        self.show_toast(crate::ui_ext::StatusMessage::new(
+            crate::icons::Icon::RotateCw,
+            "Rotated 180°",
+        ));
     }
 
     pub fn flip_horizontal(&mut self) {

@@ -141,7 +141,7 @@ impl AudioPreviewState {
         let handoff_path = match self.editor_handoff_path() {
             Ok(path) => path,
             Err(error) => {
-                self.status_toast = Some((error, _ctx.input(|i| i.time)));
+                self.status_toast = Some((error.into(), _ctx.input(|i| i.time)));
                 return;
             }
         };
@@ -155,7 +155,10 @@ impl AudioPreviewState {
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "file".to_string());
                 self.status_toast = Some((
-                    format!("🚀 Opened {} in {}", filename, editor),
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::ArrowRight,
+                        format!("Opened {} in {}", filename, editor),
+                    ),
                     std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
@@ -171,7 +174,10 @@ impl AudioPreviewState {
                     .is_ok()
                 {
                     self.status_toast = Some((
-                        "🚀 Opened audio in default application via xdg-open".to_string(),
+                        crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::ArrowRight,
+                            "Opened audio in default application via xdg-open".to_string(),
+                        ),
                         std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap()
@@ -180,7 +186,10 @@ impl AudioPreviewState {
                     self.stop();
                 } else {
                     self.status_toast = Some((
-                        format!("⚠️ Failed to launch '{}': {}", editor, e),
+                        crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Alert,
+                            format!("Failed to launch '{}': {}", editor, e),
+                        ),
                         std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap()
@@ -215,8 +224,13 @@ impl AudioPreviewState {
             Self::channel_edit_filter(mode, region),
         );
         if self.slice_copy_job.is_some() {
-            self.status_toast =
-                Some(("📋 Audio slice copy is already in progress".to_owned(), now));
+            self.status_toast = Some((
+                crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Copy,
+                    "Audio slice copy is already in progress".to_owned(),
+                ),
+                now,
+            ));
             return;
         }
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -237,7 +251,13 @@ impl AudioPreviewState {
             cancelled,
             receiver,
         });
-        self.status_toast = Some(("📋 Preparing audio slice for clipboard…".to_owned(), now));
+        self.status_toast = Some((
+            crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Copy,
+                "Preparing audio slice for clipboard…".to_owned(),
+            ),
+            now,
+        ));
     }
 
     pub(super) fn poll_slice_copy_job(&mut self, ctx: &egui::Context, now: f64) {
@@ -252,10 +272,16 @@ impl AudioPreviewState {
         };
         self.slice_copy_job = None;
         let message = match result {
-            Ok(Ok(message)) => message,
-            Ok(Err(error)) => format!("⚠️ {error}"),
-            Err(JobError::Cancelled) => "⚠️ Audio slice copy was cancelled".to_owned(),
-            Err(error) => format!("⚠️ Audio slice copy failed: {error}"),
+            Ok(Ok(message)) => crate::ui_ext::StatusMessage::new(crate::icons::Icon::Copy, message),
+            Ok(Err(error)) => crate::ui_ext::StatusMessage::new(crate::icons::Icon::Alert, error),
+            Err(JobError::Cancelled) => crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Alert,
+                "Audio slice copy was cancelled",
+            ),
+            Err(error) => crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Alert,
+                format!("Audio slice copy failed: {error}"),
+            ),
         };
         self.status_toast = Some((message, now));
         ctx.request_repaint();
@@ -267,8 +293,13 @@ impl AudioPreviewState {
             return;
         }
         if self.slice_copy_job.is_some() {
-            self.status_toast =
-                Some(("📋 Audio slice copy is already in progress".to_owned(), now));
+            self.status_toast = Some((
+                crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Copy,
+                    "Audio slice copy is already in progress".to_owned(),
+                ),
+                now,
+            ));
             return;
         }
         let plans = self
@@ -327,9 +358,12 @@ impl AudioPreviewState {
             receiver,
         });
         self.status_toast = Some((
-            format!(
-                "📋 Preparing {} audio slices for clipboard…",
-                self.multi_selections.len()
+            crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Copy,
+                format!(
+                    "Preparing {} audio slices for clipboard…",
+                    self.multi_selections.len()
+                ),
             ),
             now,
         ));
@@ -337,7 +371,13 @@ impl AudioPreviewState {
 
     pub fn copy_waveform_image(&mut self, palette: &AppPalette, now: f64) {
         let Some(ref source_analysis) = self.analysis else {
-            self.status_toast = Some(("⚠️ Waveform analysis not yet available".to_string(), now));
+            self.status_toast = Some((
+                crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Alert,
+                    "Waveform analysis not yet available".to_string(),
+                ),
+                now,
+            ));
             return;
         };
         let analysis = self.edited_waveform.as_ref().unwrap_or(source_analysis);
@@ -367,12 +407,23 @@ impl AudioPreviewState {
             },
         ) {
             Ok(()) => {
-                self.status_toast =
-                    Some(("📋 Waveform image copied to clipboard".to_string(), now));
+                self.status_toast = Some((
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Copy,
+                        "Waveform image copied to clipboard".to_string(),
+                    ),
+                    now,
+                ));
             }
             Err(err) => {
                 tracing::warn!("Failed to render waveform image: {err}");
-                self.status_toast = Some((format!("⚠️ Failed to render waveform: {err}"), now));
+                self.status_toast = Some((
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Alert,
+                        format!("Failed to render waveform: {err}"),
+                    ),
+                    now,
+                ));
             }
         }
     }
@@ -411,7 +462,13 @@ impl AudioPreviewState {
 
     pub fn copy_spectrum_image(&mut self, palette: &AppPalette, now: f64) {
         let Some(ref source_analysis) = self.analysis else {
-            self.status_toast = Some(("⚠️ Spectrum analysis not yet available".to_string(), now));
+            self.status_toast = Some((
+                crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Alert,
+                    "Spectrum analysis not yet available".to_string(),
+                ),
+                now,
+            ));
             return;
         };
         let analysis = self.edited_waveform.as_ref().unwrap_or(source_analysis);
@@ -444,12 +501,23 @@ impl AudioPreviewState {
                     }
                 });
 
-                self.status_toast =
-                    Some(("📋 Spectrum image copied to clipboard".to_string(), now));
+                self.status_toast = Some((
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Copy,
+                        "Spectrum image copied to clipboard".to_string(),
+                    ),
+                    now,
+                ));
             }
             Err(err) => {
                 tracing::warn!("Failed to render spectrum image: {err}");
-                self.status_toast = Some((format!("⚠️ Failed to render spectrum: {err}"), now));
+                self.status_toast = Some((
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Alert,
+                        format!("Failed to render spectrum: {err}"),
+                    ),
+                    now,
+                ));
             }
         }
     }
@@ -519,7 +587,10 @@ impl AudioPreviewState {
     pub fn start_browse_directory(&mut self, now: f64) {
         if !crate::ui_ext::is_zenity_available() {
             self.status_toast = Some((
-                "⚠️ Zenity not found; enter destination path directly".to_string(),
+                crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Alert,
+                    "Zenity not found; enter destination path directly".to_string(),
+                ),
                 now,
             ));
             return;
@@ -636,7 +707,13 @@ impl AudioPreviewState {
             receiver,
             destination_name,
         });
-        self.status_toast = Some(("💾 Saving audio file(s)…".to_owned(), now));
+        self.status_toast = Some((
+            crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Save,
+                "Saving audio file(s)…".to_owned(),
+            ),
+            now,
+        ));
         Ok(())
     }
 
@@ -656,20 +733,29 @@ impl AudioPreviewState {
             Ok(Ok(outcome)) => {
                 self.save_dialog_open = false;
                 if outcome.failures.is_empty() {
-                    format!(
-                        "💾 Saved {} file(s) to {destination_name}/",
-                        outcome.saved_count
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Save,
+                        format!(
+                            "Saved {} file(s) to {destination_name}/",
+                            outcome.saved_count
+                        ),
                     )
                 } else {
-                    format!(
-                        "⚠️ Saved {} file(s) to {destination_name}; failed: {}",
-                        outcome.saved_count,
-                        outcome.failures.join(", ")
+                    crate::ui_ext::StatusMessage::new(
+                        crate::icons::Icon::Alert,
+                        format!(
+                            "Saved {} file(s) to {destination_name}; failed: {}",
+                            outcome.saved_count,
+                            outcome.failures.join(", ")
+                        ),
                     )
                 }
             }
-            Ok(Err(error)) => format!("⚠️ {error}"),
-            Err(error) => format!("⚠️ Audio save failed: {error}"),
+            Ok(Err(error)) => crate::ui_ext::StatusMessage::new(crate::icons::Icon::Alert, error),
+            Err(error) => crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Alert,
+                format!("Audio save failed: {error}"),
+            ),
         };
         self.status_toast = Some((message, now));
         ctx.request_repaint();
@@ -705,7 +791,7 @@ impl AudioPreviewState {
         let mut close_dialog = false;
         let mut trigger_save = false;
 
-        egui::Window::new("💾 Save Audio Selection to File(s)")
+        egui::Window::new("Save Audio Selection to File(s)")
             .collapsible(false)
             .resizable(true)
             .default_size(Vec2::new(580.0, 360.0))
@@ -729,11 +815,9 @@ impl AudioPreviewState {
 
                 // 1. Destination Directory
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("📁 Destination:")
+                    ui.add(crate::icons::Icon::Folder.label(egui::RichText::new("Destination:")
                             .strong()
-                            .color(hex_to_c32(&palette.colors.text_primary)),
-                    );
+                            .color(hex_to_c32(&palette.colors.text_primary))));
                     let text_width = (ui.available_width() - 90.0).max(100.0);
                     ui.add_sized(
                         [text_width, crate::ui_ext::CONTROL_HEIGHT],
@@ -751,13 +835,11 @@ impl AudioPreviewState {
                 // 2. Filenames list
                 let slice_count = self.save_filenames.len();
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!("📄 Files to Save ({}):", slice_count))
+                    ui.add(crate::icons::Icon::Text.label(egui::RichText::new(format!("Files to Save ({}):", slice_count))
                             .strong()
-                            .color(hex_to_c32(&palette.colors.text_primary)),
-                    );
+                            .color(hex_to_c32(&palette.colors.text_primary))));
                     ui.add_space(crate::ui_ext::SPACE_SM);
-                    if ui.add(layout::AudioWorkspace::secondary_button("↺ Reset Names", hex_to_c32(&palette.colors.surface_recessed), palette))
+                    if ui.add(crate::ui_ext::secondary_button_icon(Some(crate::icons::Icon::Undo), "Reset Names", hex_to_c32(&palette.colors.surface_recessed), palette))
                         .on_hover_text("Reset filenames to default original_name + timestamp + duration").clicked() {
                         self.reset_save_filenames();
                     }
@@ -799,11 +881,11 @@ impl AudioPreviewState {
 
                 ui.horizontal(|ui| {
                     let btn_text = if slice_count == 1 {
-                        "💾 Save File [Enter]".to_string()
+                        "Save File [Enter]".to_string()
                     } else {
-                        format!("💾 Save All {} Files [Enter]", slice_count)
+                        format!("Save All {} Files [Enter]", slice_count)
                     };
-                    let save_btn = layout::AudioWorkspace::primary_button(btn_text, hex_to_c32(&palette.diff_add), palette)
+                    let save_btn = crate::ui_ext::action_button_icon(Some(crate::icons::Icon::Save), btn_text, hex_to_c32(&palette.diff_add), palette)
                         .rounding(Rounding::same(crate::ui_ext::PANEL_CORNER_RADIUS));
 
                     let is_enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -1023,7 +1105,7 @@ pub(super) fn run_audio_slice_batch(
         ChannelCopyMode::RightOnly => " RIGHT (mono)",
     };
     Ok(format!(
-        "📋 Copied {}/{} audio{mode} slices to {delivery}; completed: {}{partial_failures}",
+        "Copied {}/{} audio{mode} slices to {delivery}; completed: {}{partial_failures}",
         paths.len(),
         plans.len(),
         completed.join(", ")
@@ -1042,7 +1124,7 @@ pub(super) fn audio_slice_copy_status(
         AudioSliceDelivery::SystemClipboard => "system clipboard fallback",
     };
     format!(
-        "📋 Copied {description} ({:02}:{:04.1} - {:02}:{:04.1}, {:.3}s) to {delivery}",
+        "Copied {description} ({:02}:{:04.1} - {:02}:{:04.1}, {:.3}s) to {delivery}",
         (start / 60.0) as u32,
         start % 60.0,
         (end / 60.0) as u32,

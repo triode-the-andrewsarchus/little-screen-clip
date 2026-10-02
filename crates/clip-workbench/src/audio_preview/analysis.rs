@@ -118,7 +118,7 @@ impl AudioPreviewState {
                         break;
                     }
                     AudioAnalysisProgress::Failed(error) => {
-                        self.status_toast = Some((error, now));
+                        self.status_toast = Some((error.into(), now));
                         self.is_loading_analysis = false;
                         finished = true;
                         break;
@@ -137,7 +137,7 @@ impl AudioPreviewState {
                     if self.analysis_progress_disconnected {
                         self.is_loading_analysis = false;
                         self.status_toast = Some((
-                            "Audio analysis worker stopped before completing".to_owned(),
+                            "Audio analysis worker stopped before completing".into(),
                             now,
                         ));
                     }
@@ -151,8 +151,7 @@ impl AudioPreviewState {
                     self.analysis_progress_disconnected = false;
                     self.analysis_retry_at = Some(Instant::now() + Duration::from_millis(500));
                     self.status_toast = Some((
-                        "Audio analysis is waiting for background workers; retrying shortly"
-                            .to_owned(),
+                        "Audio analysis is waiting for background workers; retrying shortly".into(),
                         now,
                     ));
                     ctx.request_repaint_after(Duration::from_millis(500));
@@ -163,7 +162,8 @@ impl AudioPreviewState {
                     self.analysis_rx = None;
                     self.is_loading_analysis = false;
                     self.analysis_progress_disconnected = false;
-                    self.status_toast = Some((format!("Audio analysis failed: {error}"), now));
+                    self.status_toast =
+                        Some((format!("Audio analysis failed: {error}").into(), now));
                 }
                 Err(TryRecvError::Empty) => self.analysis_job_rx = Some(rx),
                 Err(TryRecvError::Disconnected) => {
@@ -173,7 +173,7 @@ impl AudioPreviewState {
                     self.is_loading_analysis = false;
                     self.analysis_progress_disconnected = false;
                     self.status_toast = Some((
-                        "Audio analysis worker disconnected unexpectedly".to_owned(),
+                        "Audio analysis worker disconnected unexpectedly".into(),
                         now,
                     ));
                 }
@@ -334,7 +334,7 @@ impl AudioPreviewState {
                         break;
                     }
                     AudioAnalysisProgress::Failed(error) => {
-                        self.status_toast = Some((error, now));
+                        self.status_toast = Some((error.into(), now));
                         self.edit_analysis_displayed = self.edit_analysis_inflight.clone();
                         finished = true;
                         break;
@@ -356,7 +356,7 @@ impl AudioPreviewState {
                     {
                         self.edit_analysis_displayed = self.edit_analysis_inflight.clone();
                         self.status_toast = Some((
-                            "Edited audio analysis worker stopped before completing".to_owned(),
+                            "Edited audio analysis worker stopped before completing".into(),
                             now,
                         ));
                     }
@@ -370,7 +370,7 @@ impl AudioPreviewState {
                     self.edit_analysis_retry_at = Some(Instant::now() + Duration::from_millis(500));
                     self.status_toast = Some((
                         "Edited audio analysis is waiting for background workers; retrying shortly"
-                            .to_owned(),
+                            .into(),
                         now,
                     ));
                     ctx.request_repaint_after(Duration::from_millis(500));
@@ -380,7 +380,8 @@ impl AudioPreviewState {
                     self.edit_analysis_cancel = None;
                     self.edit_analysis_rx = None;
                     self.edit_analysis_displayed = self.edit_analysis_inflight.clone();
-                    self.status_toast = Some((format!("Edited analysis failed: {error}"), now));
+                    self.status_toast =
+                        Some((format!("Edited analysis failed: {error}").into(), now));
                     self.edit_analysis_progress_disconnected = false;
                 }
                 Err(TryRecvError::Empty) => self.edit_analysis_job_rx = Some(rx),
@@ -391,7 +392,7 @@ impl AudioPreviewState {
                     if self.edit_analysis_inflight == self.edit_analysis_observed {
                         self.edit_analysis_displayed = self.edit_analysis_inflight.clone();
                         self.status_toast = Some((
-                            "Edited audio analysis worker disconnected unexpectedly".to_owned(),
+                            "Edited audio analysis worker disconnected unexpectedly".into(),
                             now,
                         ));
                     }

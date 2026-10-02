@@ -104,7 +104,10 @@ impl ImagePreviewState {
         );
 
         if self.deskew_state.is_clicking_points {
-            self.show_toast("⚠ Place all 4 points first, or press Esc to cancel");
+            self.show_toast(crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Alert,
+                "Place all 4 points first, or press Esc to cancel",
+            ));
             return;
         }
 
@@ -131,13 +134,19 @@ impl ImagePreviewState {
                     DeskewCropMode::CropToQuad => "cropped to quad",
                     DeskewCropMode::MinimalCrop => "minimal crop",
                 };
-                self.show_toast(format!(
-                    "📐 Deskewed perspective ({}): {}×{} px",
-                    mode_str, out_w, out_h
+                self.show_toast(crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Resize,
+                    format!(
+                        "Deskewed perspective ({}): {}×{} px",
+                        mode_str, out_w, out_h
+                    ),
                 ));
             }
             Err(e) => {
-                self.show_toast(format!("⚠ Deskew failed: {}", e));
+                self.show_toast(crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Alert,
+                    format!("Deskew failed: {}", e),
+                ));
             }
         }
     }
@@ -367,8 +376,7 @@ impl ImagePreviewState {
 
                     // Floating guide badge following pointer
                     let next_name = corner_names.get(n).copied().unwrap_or("Next");
-                    let badge_text =
-                        format!("🎯 Click {next_idx}/4: {next_name}", next_idx = n + 1);
+                    let badge_text = format!("Click {next_idx}/4: {next_name}", next_idx = n + 1);
                     let b_low = hex_to_c32(&palette.colors.surface_recessed);
                     let badge_fg = contrast_text_c32(
                         b_low,
@@ -382,7 +390,7 @@ impl ImagePreviewState {
                     );
                     let badge_rect = crate::ui_ext::clamp_overlay_rect(
                         ptr_pos + Vec2::splat(16.0),
-                        galley.size() + Vec2::new(12.0, 6.0),
+                        galley.size() + Vec2::new(30.0, 6.0),
                         overlay_bounds,
                     );
                     painter.rect_filled(badge_rect, Rounding::same(4.0), b_low);
@@ -391,14 +399,22 @@ impl ImagePreviewState {
                         Rounding::same(4.0),
                         Stroke::new(1.0_f32, hex_to_c32(&palette.diff_add)),
                     );
-                    painter.galley(badge_rect.min + Vec2::new(6.0, 3.0), galley, badge_fg);
+                    crate::icons::Icon::Crosshair.paint(
+                        painter,
+                        Rect::from_min_size(
+                            badge_rect.min + Vec2::new(6.0, 3.0),
+                            Vec2::splat(14.0),
+                        ),
+                        badge_fg,
+                    );
+                    painter.galley(badge_rect.min + Vec2::new(24.0, 3.0), galley, badge_fg);
                 }
             }
 
             // Top banner instruction
             let top_banner_pos = Pos2::new(img_rect.center().x, img_rect.min.y + 18.0);
             let next_name = corner_names.get(n).copied().unwrap_or("");
-            let banner_text = format!("🎯 Place corner {}/4: {} | Esc cancels", n + 1, next_name);
+            let banner_text = format!("Place corner {}/4: {} | Esc cancels", n + 1, next_name);
             let b_low = hex_to_c32(&palette.colors.surface_recessed);
             let b_fg = contrast_text_c32(
                 b_low,
@@ -411,7 +427,7 @@ impl ImagePreviewState {
                 b_fg,
                 (overlay_bounds.width() - 20.0).max(20.0),
             );
-            let banner_size = banner_galley.size() + Vec2::new(16.0, 6.0);
+            let banner_size = banner_galley.size() + Vec2::new(34.0, 6.0);
             let banner_rect = crate::ui_ext::clamp_overlay_rect(
                 top_banner_pos - banner_size * 0.5,
                 banner_size,
@@ -423,7 +439,12 @@ impl ImagePreviewState {
                 Rounding::same(4.0),
                 Stroke::new(1.0_f32, hex_to_c32(&palette.harmonies.base)),
             );
-            painter.galley(banner_rect.min + Vec2::new(8.0, 3.0), banner_galley, b_fg);
+            crate::icons::Icon::Crosshair.paint(
+                painter,
+                Rect::from_min_size(banner_rect.min + Vec2::new(8.0, 3.0), Vec2::splat(14.0)),
+                b_fg,
+            );
+            painter.galley(banner_rect.min + Vec2::new(26.0, 3.0), banner_galley, b_fg);
 
             // Register point placement on click
             if response.clicked() {
@@ -447,9 +468,10 @@ impl ImagePreviewState {
                             self.deskew_state.is_clicking_points = false;
                             self.deskew_state.placed_points.clear();
                             self.deskew_state.corners_adjusted = true;
-                            self.show_toast(
-                                "✓ 4 points set! Drag handles to fine-tune, Enter to apply.",
-                            );
+                            self.show_toast(crate::ui_ext::StatusMessage::new(
+                                crate::icons::Icon::Check,
+                                "4 points set! Drag handles to fine-tune, Enter to apply.",
+                            ));
                         }
                     }
                 }
@@ -532,7 +554,7 @@ impl ImagePreviewState {
                 palette,
             );
             let badge_str = if !self.deskew_state.corners_adjusted {
-                "🎯 Click 4 Points or drag corners • Enter to apply"
+                "Click 4 Points or drag corners • Enter to apply"
             } else {
                 "Drag corners • Enter or double-click to apply"
             };
@@ -542,7 +564,7 @@ impl ImagePreviewState {
                 badge_fg,
                 (overlay_bounds.width() - 20.0).max(20.0),
             );
-            let badge_size = galley.size() + Vec2::new(14.0, 6.0);
+            let badge_size = galley.size() + Vec2::new(32.0, 6.0);
             let badge_rect = crate::ui_ext::clamp_overlay_rect(
                 centroid - badge_size * 0.5,
                 badge_size,
@@ -554,7 +576,12 @@ impl ImagePreviewState {
                 Rounding::same(4.0),
                 Stroke::new(1.0_f32, hex_to_c32(&palette.harmonies.base)),
             );
-            painter.galley(badge_rect.min + Vec2::new(7.0, 3.0), galley, badge_fg);
+            crate::icons::Icon::Crosshair.paint(
+                painter,
+                Rect::from_min_size(badge_rect.min + Vec2::new(7.0, 3.0), Vec2::splat(14.0)),
+                badge_fg,
+            );
+            painter.galley(badge_rect.min + Vec2::new(25.0, 3.0), galley, badge_fg);
 
             // 5. Interaction Logic
             let hit_dist = 16.0;
@@ -580,7 +607,7 @@ impl ImagePreviewState {
                     ui.output_mut(|o| o.cursor_icon = egui::CursorIcon::Crosshair);
                     // If corners haven't been adjusted yet, hint to the user that clicking sets point 1
                     if !self.deskew_state.corners_adjusted {
-                        let hint_text = "🎯 Place top-left corner";
+                        let hint_text = "Place top-left corner";
                         let b_low = hex_to_c32(&palette.colors.surface_recessed);
                         let h_fg = contrast_text_c32(
                             b_low,
@@ -594,7 +621,7 @@ impl ImagePreviewState {
                         );
                         let h_rect = crate::ui_ext::clamp_overlay_rect(
                             ptr_pos + Vec2::splat(14.0),
-                            h_galley.size() + Vec2::new(10.0, 4.0),
+                            h_galley.size() + Vec2::new(28.0, 4.0),
                             overlay_bounds,
                         );
                         painter.rect_filled(h_rect, Rounding::same(3.0), b_low);
@@ -603,7 +630,15 @@ impl ImagePreviewState {
                             Rounding::same(3.0),
                             Stroke::new(1.0_f32, hex_to_c32(&palette.colors.surface_panel)),
                         );
-                        painter.galley(h_rect.min + Vec2::new(5.0, 2.0), h_galley, h_fg);
+                        crate::icons::Icon::Crosshair.paint(
+                            painter,
+                            Rect::from_min_size(
+                                h_rect.min + Vec2::new(5.0, 2.0),
+                                Vec2::splat(14.0),
+                            ),
+                            h_fg,
+                        );
+                        painter.galley(h_rect.min + Vec2::new(23.0, 2.0), h_galley, h_fg);
                     }
                 }
             }

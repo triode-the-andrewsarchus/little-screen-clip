@@ -92,7 +92,7 @@ impl EscapeHatchLauncher {
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_else(|| "file".to_string());
-                Ok(format!("🚀 Launched {} with {}", app_name, file_name))
+                Ok(format!("Launched {} with {}", app_name, file_name))
             }
             Err(_) => {
                 // Try xdg-open fallback
@@ -101,10 +101,10 @@ impl EscapeHatchLauncher {
                     .spawn()
                     .is_ok()
                 {
-                    Ok("🚀 Opened in default application via xdg-open".to_string())
+                    Ok("Opened in default application via xdg-open".to_string())
                 } else {
                     Err(format!(
-                        "⚠️ Failed to launch '{}' (tool not installed)",
+                        "Failed to launch '{}' (tool not installed)",
                         command
                     ))
                 }
@@ -127,11 +127,14 @@ impl EscapeHatchLauncher {
     ) -> bool {
         match Self::spawn_with_fallback(app_name, command, file_path) {
             Ok(msg) => {
-                toast.set(msg, now);
+                toast.set(
+                    crate::ui_ext::StatusMessage::new(Icon::ArrowRight, msg),
+                    now,
+                );
                 true
             }
             Err(msg) => {
-                toast.set(msg, now);
+                toast.set(crate::ui_ext::StatusMessage::new(Icon::Alert, msg), now);
                 false
             }
         }
@@ -165,10 +168,7 @@ mod tests {
             "/bin/false",
         );
 
-        assert_eq!(
-            result,
-            Ok("🚀 Launched Test Viewer with sample.test".into())
-        );
+        assert_eq!(result, Ok("Launched Test Viewer with sample.test".into()));
     }
 
     #[test]
@@ -182,7 +182,7 @@ mod tests {
 
         assert_eq!(
             result,
-            Ok("🚀 Opened in default application via xdg-open".into())
+            Ok("Opened in default application via xdg-open".into())
         );
     }
 
@@ -197,9 +197,7 @@ mod tests {
 
         assert_eq!(
             result,
-            Err(
-                "⚠️ Failed to launch '/missing/test-viewer-executable' (tool not installed)".into()
-            )
+            Err("Failed to launch '/missing/test-viewer-executable' (tool not installed)".into())
         );
     }
 }

@@ -748,14 +748,15 @@ impl ImagePreviewState {
         }
 
         let depth_label = if depth_active {
-            "🌊 Depth Mask: ON"
+            "Depth Mask: ON"
         } else if has_depth {
-            "🌊 Depth map • cached"
+            "Depth map • cached"
         } else {
-            "🌊 Use depth map as mask"
+            "Use depth map as mask"
         };
         if render_creative_fx_mask_button(
             ui,
+            crate::icons::Icon::Waves,
             depth_label,
             depth_active,
             mask_loading,
@@ -770,14 +771,15 @@ impl ImagePreviewState {
 
         ui.add_space(3.0);
         let alpha_label = if alpha_active {
-            "✂ Removal Alpha: ON"
+            "Removal Alpha: ON"
         } else if has_alpha {
-            "✂ Removal alpha • cached"
+            "Removal alpha • cached"
         } else {
-            "✂ Use removal alpha as mask"
+            "Use removal alpha as mask"
         };
         if render_creative_fx_mask_button(
             ui,
+            crate::icons::Icon::Scissors,
             alpha_label,
             alpha_active,
             mask_loading,
@@ -792,18 +794,22 @@ impl ImagePreviewState {
 
         if let Some(error) = &self.creative_fx_state.depth_estimation_error {
             ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new(format!("⚠ {}", error))
-                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                    .color(diff_del),
+            ui.add(
+                crate::icons::Icon::Alert.label(
+                    egui::RichText::new(error.to_string())
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(diff_del),
+                ),
             );
         }
         if let Some(error) = &self.creative_fx_state.alpha_mask_error {
             ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new(format!("⚠ {}", error))
-                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                    .color(diff_del),
+            ui.add(
+                crate::icons::Icon::Alert.label(
+                    egui::RichText::new(error.to_string())
+                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                        .color(diff_del),
+                ),
             );
         }
     }

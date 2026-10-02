@@ -176,7 +176,7 @@ pub(super) fn assert_unavailable_configured_app_sets_failure_toast(
     });
 
     let expected = format!(
-        "⚠️ Failed to launch '{}' (tool not installed)",
+        "Failed to launch '{}' (tool not installed)",
         missing_app.display()
     );
     assert!(matches!(

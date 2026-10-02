@@ -174,11 +174,11 @@ impl MidiViewerState {
                                 }
                             } else {
                                 let play_label = if self.is_synthesizing {
-                                    "⏳ Synthesizing…"
+                                    "Synthesizing…"
                                 } else {
                                     "Play [Space]"
                                 };
-                                let play_btn = crate::ui_ext::action_button_icon(Some(Icon::Play), play_label, success_color, palette);
+                                let play_btn = crate::ui_ext::action_button_icon(Some(if self.is_synthesizing { Icon::Hourglass } else { Icon::Play }), play_label, success_color, palette);
                                 if ui.add(play_btn).clicked() {
                                     play_clicked = true;
                                 }
@@ -237,7 +237,7 @@ impl MidiViewerState {
                                             .strong()
                                             .color(accent),
                                     );
-                                    let x_btn = egui::Button::new(egui::RichText::new("✕").size(crate::ui_ext::BODY_FONT_SIZE))
+                                    let x_btn = egui::Button::image_and_text(crate::icons::Icon::Close.image_tinted(crate::ui_ext::CONTROL_ICON_SIZE, ui.visuals().text_color()), egui::RichText::new("").size(crate::ui_ext::BODY_FONT_SIZE))
                                         .min_size(egui::Vec2::new(crate::ui_ext::CONTROL_HEIGHT, crate::ui_ext::CONTROL_HEIGHT));
                                     if ui.add(x_btn).on_hover_text("Clear selection [Esc]").clicked() {
                                         clear_sel_clicked = true;
@@ -809,7 +809,7 @@ impl MidiViewerState {
                 }
 
                 // 4. Footer
-                let toast_tuple = self.status_toast.message(now).map(|m| (m.to_string(), now));
+                let toast_tuple = self.status_toast.active(now).cloned();
                 shell.render_footer(ui, &toast_tuple, now);
             });
     }

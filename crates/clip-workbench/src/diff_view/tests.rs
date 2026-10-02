@@ -511,7 +511,7 @@ fn diff_external_tool_prefers_meld_then_falls_back_to_kdiff3() {
             true
         },
     );
-    assert_eq!(result, Ok(Some("🚀 Launched Meld comparison".to_string())));
+    assert_eq!(result, Ok(Some("Launched Meld comparison".to_string())));
     assert_eq!(lookups, vec!["meld"]);
     assert_eq!(
         launches,
@@ -537,10 +537,7 @@ fn diff_external_tool_prefers_meld_then_falls_back_to_kdiff3() {
             true
         },
     );
-    assert_eq!(
-        result,
-        Ok(Some("🚀 Launched KDiff3 comparison".to_string()))
-    );
+    assert_eq!(result, Ok(Some("Launched KDiff3 comparison".to_string())));
     assert_eq!(lookups, vec!["meld", "kdiff3"]);
     assert_eq!(
         launches,
@@ -559,10 +556,7 @@ fn diff_external_tool_prefers_meld_then_falls_back_to_kdiff3() {
             app.file_name().is_some_and(|name| name == "kdiff3")
         },
     );
-    assert_eq!(
-        result,
-        Ok(Some("🚀 Launched KDiff3 comparison".to_string()))
-    );
+    assert_eq!(result, Ok(Some("Launched KDiff3 comparison".to_string())));
     assert_eq!(launches, vec!["meld", "kdiff3"]);
 }
 
@@ -605,7 +599,7 @@ fn external_handoff_reports_unavailable_launch_and_staging_outcomes() {
         .unwrap();
     assert_eq!(
         unavailable,
-        Ok("⚠️ Neither Meld nor KDiff3 is installed".to_string())
+        Ok("Neither Meld nor KDiff3 is installed".to_string())
     );
     assert_eq!(*unavailable_lookups.lock().unwrap(), vec!["meld", "kdiff3"]);
     drop(ticket);
@@ -768,7 +762,7 @@ fn handoff_failure_and_running_cancellation_remove_owned_staging_files() {
     });
     assert_eq!(
         rx.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(),
-        Ok("🚀 Launched Meld comparison".to_string())
+        Ok("Launched Meld comparison".to_string())
     );
     let (left_path, right_path) = paths_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     assert_eq!(std::fs::read(&left_path).unwrap(), success_left_bytes);

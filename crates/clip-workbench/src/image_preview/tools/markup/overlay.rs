@@ -23,9 +23,9 @@ impl ImagePreviewState {
         self.markup_state.sync_next_badge_number();
         self.dirty_texture = true;
 
-        self.show_toast(format!(
-            "🔥 Flattened {} markup layers into image pixels",
-            count
+        self.show_toast(crate::ui_ext::StatusMessage::new(
+            crate::icons::Icon::Flame,
+            format!("Flattened {} markup layers into image pixels", count),
         ));
     }
 

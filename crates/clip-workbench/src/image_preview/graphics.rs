@@ -11,40 +11,40 @@ pub(super) fn image_texture_options(pixels: &RgbaImage) -> egui::TextureOptions 
 pub(super) fn image_studio_footer_hint(mode: ImageToolMode) -> &'static str {
     match mode {
         ImageToolMode::View => {
-            "🖱 Scroll: Zoom | Drag: Pan | Ctrl+C: Copy Slot | Ctrl+S: Save As | 0: Fit"
+            "Scroll: Zoom | Drag: Pan | Ctrl+C: Copy Slot | Ctrl+S: Save As | 0: Fit"
         }
         ImageToolMode::Crop => {
-            "🖱 Drag crop box/handles | Enter: Apply | Ctrl+C: Copy Slot | Ctrl+S: Save As | Esc: Cancel"
+            "Drag crop box/handles | Enter: Apply | Ctrl+C: Copy Slot | Ctrl+S: Save As | Esc: Cancel"
         }
         ImageToolMode::Deskew => {
-            "🎯 Click 4 points (TL → TR → BR → BL) | 🖱 Drag handles | Enter: Apply | Esc: Close"
+            "Click 4 points (TL → TR → BR → BL) | Drag handles | Enter: Apply | Esc: Close"
         }
         ImageToolMode::Transform => {
-            "🖱 Rotate / Flip buttons in the left panel | Ctrl+Z: Undo | Ctrl+C: Copy Slot | Ctrl+S: Save As"
+            "Rotate / Flip buttons in the left panel | Ctrl+Z: Undo | Ctrl+C: Copy Slot | Ctrl+S: Save As"
         }
         ImageToolMode::Redact => {
-            "🖱 Drag on image: Place black bar | 🛡️ Strip EXIF | Del: Remove | Enter: Burn/Apply | Ctrl+C: Copy Slot"
+            "Drag on image: Place black bar | Strip EXIF | Del: Remove | Enter: Burn/Apply | Ctrl+C: Copy Slot"
         }
         ImageToolMode::Markup => {
-            "🖱 Drag: Draw shape | 1-8: Tools | Del: Delete | Esc: Deselect | Enter: Flatten Layers | Ctrl+C: Copy Slot"
+            "Drag: Draw shape | 1-8: Tools | Del: Delete | Esc: Deselect | Enter: Flatten Layers | Ctrl+C: Copy Slot"
         }
         ImageToolMode::PickColor => {
-            "🖱 Hover: Magnifying loupe | Click: Copy Hex code to clipboard | Ctrl+C: Copy Slot"
+            "Hover: Magnifying loupe | Click: Copy Hex code to clipboard | Ctrl+C: Copy Slot"
         }
         ImageToolMode::Convert => {
-            "🖱 Drag vertical divider: Before/After comparison | Enter: Apply to Canvas | Ctrl+S: Save As"
+            "Drag vertical divider: Before/After comparison | Enter: Apply to Canvas | Ctrl+S: Save As"
         }
         ImageToolMode::Ocr => {
-            "🖱 Choose engine and prompt on the left | Enter: Run OCR | Results appear on the right"
+            "Choose engine and prompt on the left | Enter: Run OCR | Results appear on the right"
         }
         ImageToolMode::Barcode => {
-            "🖱 Click code card or box to inspect | Enter: Rescan | 🌐 Open Link | 📋 Copy Payload"
+            "Click code card or box to inspect | Enter: Rescan | Open Link | Copy Payload"
         }
         ImageToolMode::CreativeFx => {
-            "🖱 Split slider: Before/After comparison | Double-click: Fit | Sliders: Double-click to reset"
+            "Split slider: Before/After comparison | Double-click: Fit | Sliders: Double-click to reset"
         }
         _ => {
-            "🖱 Scroll: Zoom | Drag: Pan | Ctrl+C: Copy to Slot | Ctrl+S: Save As | 0: Fit | Esc: Close"
+            "Scroll: Zoom | Drag: Pan | Ctrl+C: Copy to Slot | Ctrl+S: Save As | 0: Fit | Esc: Close"
         }
     }
 }

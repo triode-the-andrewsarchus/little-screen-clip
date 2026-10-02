@@ -340,10 +340,7 @@ fn binary_diff_queue_saturation_is_visible_and_recovers() {
     assert!(output.shapes.iter().any(|shape| {
         matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains(expected))
     }));
-    assert_eq!(
-        state.status_toast.message(0.0),
-        Some(&format!("❌ {expected}")[..])
-    );
+    assert_eq!(state.status_toast.message(0.0), Some(expected));
 
     let _ = release_tx.send(());
 }

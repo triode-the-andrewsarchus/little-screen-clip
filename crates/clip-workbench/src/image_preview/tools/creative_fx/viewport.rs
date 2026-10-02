@@ -76,11 +76,13 @@ impl ImagePreviewState {
                     ui.set_height((left_h - 16.0).max(1.0));
 
                     ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("✨ Creative FX")
-                                .strong()
-                                .size(crate::ui_ext::BODY_FONT_SIZE)
-                                .color(base_c),
+                        ui.add(
+                            crate::icons::Icon::Sparkles.label(
+                                egui::RichText::new("Creative FX")
+                                    .strong()
+                                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                                    .color(base_c),
+                            ),
                         );
                         ui.label(
                             egui::RichText::new(format!("({})", CreativeFxType::all().len()))
@@ -88,10 +90,12 @@ impl ImagePreviewState {
                                 .color(f_low),
                         );
                         if self.creative_fx_state.is_generating_thumbnails {
-                            ui.label(
-                                egui::RichText::new("⏳")
-                                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                                    .color(f_low),
+                            ui.add(
+                                crate::icons::Icon::Hourglass.label(
+                                    egui::RichText::new("")
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                                        .color(f_low),
+                                ),
                             )
                             .on_hover_text("Generating preview thumbnails…");
                         }
@@ -317,10 +321,11 @@ impl ImagePreviewState {
                             Rounding::same(8.0),
                             Stroke::new(1.0_f32, b_med),
                         );
-                        painter.text(
+                        crate::icons::Icon::Hourglass.paint_text(
+                            &painter,
                             spinner_pos,
                             egui::Align2::CENTER_CENTER,
-                            "⏳ Processing Creative FX…",
+                            "Processing Creative FX…",
                             egui::FontId::proportional(12.0),
                             f_med,
                         );
@@ -329,10 +334,11 @@ impl ImagePreviewState {
                     // Error overlay
                     if let Some(ref err) = self.creative_fx_state.render_error.clone() {
                         let err_pos = Pos2::new(canvas_rect.min.x + 10.0, canvas_rect.min.y + 10.0);
-                        painter.text(
+                        crate::icons::Icon::Alert.paint_text(
+                            &painter,
                             err_pos,
                             egui::Align2::LEFT_TOP,
-                            format!("⚠ {}", err),
+                            err.to_string(),
                             egui::FontId::proportional(11.0),
                             hex_to_c32(&palette.diff_del),
                         );
@@ -361,7 +367,7 @@ impl ImagePreviewState {
 
                             // Header
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new(cur_fx.icon()).size(16.0));
+                                creative_fx_icon(cur_fx).ui(ui, 16.0, base_c);
                                 ui.label(egui::RichText::new(cur_fx.name()).strong().color(base_c));
                             });
                             ui.add_space(2.0);
@@ -375,11 +381,13 @@ impl ImagePreviewState {
                             ui.add_space(crate::ui_ext::SPACE_XS);
 
                             // ── Presets Selector ──
-                            ui.label(
-                                egui::RichText::new("🏷 Presets")
-                                    .strong()
-                                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                                    .color(base_c),
+                            ui.add(
+                                crate::icons::Icon::Tag.label(
+                                    egui::RichText::new("Presets")
+                                        .strong()
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                                        .color(base_c),
+                                ),
                             );
                             ui.add_space(3.0);
                             let presets = presets_for_fx(cur_fx);
@@ -438,11 +446,13 @@ impl ImagePreviewState {
                             ui.add_space(crate::ui_ext::SPACE_XS);
 
                             // ── Parameter Controls ──
-                            ui.label(
-                                egui::RichText::new("🎛 Controls")
-                                    .strong()
-                                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                                    .color(base_c),
+                            ui.add(
+                                crate::icons::Icon::Settings.label(
+                                    egui::RichText::new("Controls")
+                                        .strong()
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                                        .color(base_c),
+                                ),
                             );
                             ui.add_space(crate::ui_ext::SPACE_XS);
 
@@ -485,8 +495,12 @@ impl ImagePreviewState {
 
                             // ── Action Buttons ──
                             let apply_fg = contrast_text_c32(diff_add, Some(f_high), palette);
-                            let apply_btn = egui::Button::new(
-                                egui::RichText::new("✓ Apply to Image")
+                            let apply_btn = egui::Button::image_and_text(
+                                crate::icons::Icon::Check.image_tinted(
+                                    crate::ui_ext::CONTROL_ICON_SIZE,
+                                    ui.visuals().text_color(),
+                                ),
+                                egui::RichText::new("Apply to Image")
                                     .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .strong()
                                     .color(apply_fg),
@@ -564,14 +578,16 @@ impl ImagePreviewState {
 
                             if self.creative_fx_state.last_render_duration_ms > 0 {
                                 ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "⏱ {:.2}s",
-                                        self.creative_fx_state.last_render_duration_ms as f64
-                                            / 1000.0
-                                    ))
-                                    .size(crate::ui_ext::BODY_FONT_SIZE)
-                                    .color(f_low),
+                                ui.add(
+                                    crate::icons::Icon::Clock.label(
+                                        egui::RichText::new(format!(
+                                            "{:.2}s",
+                                            self.creative_fx_state.last_render_duration_ms as f64
+                                                / 1000.0
+                                        ))
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                                        .color(f_low),
+                                    ),
                                 );
                             }
                         });
@@ -637,23 +653,28 @@ impl ImagePreviewState {
 
         let cur_fx = self.creative_fx_state.selected_fx;
         let fx_label = if self.creative_fx_state.is_rendering {
-            "⏳ Processing…".to_string()
+            "Processing…".to_string()
         } else {
             format!(
-                "{} {} ({:.1}s)",
-                cur_fx.icon(),
+                "{} ({:.1}s)",
                 cur_fx.name(),
                 self.creative_fx_state.last_render_duration_ms as f64 / 1000.0
             )
         };
-        let fx_badge_w = (fx_label.len() as f32 * 6.5).max(130.0);
+        let fx_badge_w = (fx_label.len() as f32 * 6.5 + 18.0).max(130.0);
         let fx_rect = Rect::from_min_size(
             Pos2::new(img_rect.max.x - fx_badge_w - 10.0, img_rect.min.y + 10.0),
             Vec2::new(fx_badge_w, 22.0),
         );
         painter.rect_filled(fx_rect, Rounding::same(4.0), badge_bg);
         painter.rect_stroke(fx_rect, Rounding::same(4.0), Stroke::new(1.0_f32, base_c));
-        painter.text(
+        let badge_icon = if self.creative_fx_state.is_rendering {
+            crate::icons::Icon::Hourglass
+        } else {
+            creative_fx_icon(cur_fx)
+        };
+        badge_icon.paint_text(
+            painter,
             fx_rect.center(),
             egui::Align2::CENTER_CENTER,
             fx_label,

@@ -74,9 +74,12 @@ impl AudioPreviewState {
                     let (s_new, e_new) = (s_snapped.min(e_snapped), s_snapped.max(e_snapped));
                     self.selection = Some((s_new, e_new));
                     self.status_toast = Some((
-                        format!(
-                            "∿ Snapped selection to 0-crossings: {:.4}s - {:.4}s",
-                            s_new, e_new
+                        crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Waves,
+                            format!(
+                                "Snapped selection to 0-crossings: {:.4}s - {:.4}s",
+                                s_new, e_new
+                            ),
                         ),
                         now,
                     ));
@@ -91,11 +94,14 @@ impl AudioPreviewState {
                         let (s_new, e_new) = (s_snapped.min(e_snapped), s_snapped.max(e_snapped));
                         self.multi_selections[idx] = (s_new, e_new);
                         self.status_toast = Some((
-                            format!(
-                                "∿ Snapped region #{} to 0-crossings: {:.4}s - {:.4}s",
-                                idx + 1,
-                                s_new,
-                                e_new
+                            crate::ui_ext::StatusMessage::new(
+                                crate::icons::Icon::Waves,
+                                format!(
+                                    "Snapped region #{} to 0-crossings: {:.4}s - {:.4}s",
+                                    idx + 1,
+                                    s_new,
+                                    e_new
+                                ),
                             ),
                             now,
                         ));
@@ -107,9 +113,12 @@ impl AudioPreviewState {
                         *region = (s_snapped.min(e_snapped), s_snapped.max(e_snapped));
                     }
                     self.status_toast = Some((
-                        format!(
-                            "∿ Snapped all {} regions to 0-crossings",
-                            self.multi_selections.len()
+                        crate::ui_ext::StatusMessage::new(
+                            crate::icons::Icon::Waves,
+                            format!(
+                                "Snapped all {} regions to 0-crossings",
+                                self.multi_selections.len()
+                            ),
                         ),
                         now,
                     ));

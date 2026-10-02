@@ -59,7 +59,10 @@ impl ImagePreviewState {
                 self.redaction_state.boxes.remove(idx);
                 self.redaction_state.selected_idx = None;
                 self.redaction_state.active_drag = None;
-                self.show_toast("🗑 Redaction bar removed");
+                self.show_toast(crate::ui_ext::StatusMessage::new(
+                    crate::icons::Icon::Trash,
+                    "Redaction bar removed",
+                ));
             }
         }
     }
@@ -72,7 +75,10 @@ impl ImagePreviewState {
             self.redaction_state.boxes.clear();
             self.redaction_state.selected_idx = None;
             self.redaction_state.active_drag = None;
-            self.show_toast(format!("✕ Cleared {} pending redaction bars", count));
+            self.show_toast(crate::ui_ext::StatusMessage::new(
+                crate::icons::Icon::Close,
+                format!("Cleared {} pending redaction bars", count),
+            ));
         }
     }
 
