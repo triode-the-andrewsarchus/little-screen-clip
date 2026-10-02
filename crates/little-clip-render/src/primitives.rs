@@ -68,22 +68,16 @@ impl ScreenRenderer {
     }
 
     pub fn measure_text_width_styled(&self, text: &str, size: f32, style: FontStyle) -> f32 {
-        let font = match style {
-            FontStyle::Regular => self.font_regular.as_ref().or(self.font_bold.as_ref()),
-            FontStyle::Bold => self.font_bold.as_ref().or(self.font_regular.as_ref()),
-            FontStyle::Italic => self.font_italic.as_ref().or(self.font_regular.as_ref()),
-            FontStyle::BoldItalic => self
-                .font_bold
-                .as_ref()
-                .or(self.font_italic.as_ref())
-                .or(self.font_regular.as_ref()),
-            FontStyle::Mono => self.font_mono.as_ref().or(self.font_regular.as_ref()),
-        };
+        let font = self.font_for_style(style);
 
         if let Some(font) = font {
             text.chars()
                 .filter(|&ch| !is_zero_width_or_bom(ch))
-                .map(|ch| font.metrics(ch, size).advance_width)
+                .map(|ch| {
+                    self.font_for_character(font, ch)
+                        .metrics(ch, size)
+                        .advance_width
+                })
                 .sum()
         } else {
             text.chars().filter(|&ch| !is_zero_width_or_bom(ch)).count() as f32 * size * 0.6
@@ -205,17 +199,7 @@ impl ScreenRenderer {
         style: FontStyle,
         clip_right: f32,
     ) -> f32 {
-        let font = match style {
-            FontStyle::Regular => self.font_regular.as_ref().or(self.font_bold.as_ref()),
-            FontStyle::Bold => self.font_bold.as_ref().or(self.font_regular.as_ref()),
-            FontStyle::Italic => self.font_italic.as_ref().or(self.font_regular.as_ref()),
-            FontStyle::BoldItalic => self
-                .font_bold
-                .as_ref()
-                .or(self.font_italic.as_ref())
-                .or(self.font_regular.as_ref()),
-            FontStyle::Mono => self.font_mono.as_ref().or(self.font_regular.as_ref()),
-        };
+        let font = self.font_for_style(style);
 
         if let Some(font) = font {
             let mut curr_x = x;
@@ -236,7 +220,7 @@ impl ScreenRenderer {
                     break;
                 }
 
-                let (metrics, bitmap) = font.rasterize(ch, size);
+                let (metrics, bitmap) = self.font_for_character(font, ch).rasterize(ch, size);
                 if metrics.width > 0 && metrics.height > 0 {
                     let gx = curr_x + metrics.xmin as f32;
                     let gy = y + size - metrics.height as f32 - metrics.ymin as f32;

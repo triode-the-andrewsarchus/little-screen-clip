@@ -198,12 +198,12 @@ pub fn configure_workbench_style(ctx: &egui::Context) {
     let fallback = "Noto Sans CJK JP";
     fonts.font_data.insert(
         fallback.to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/fonts/NotoSansCJK-JP-Regular.ttf")),
+        egui::FontData::from_static(little_clip_render::CJK_FONT_BYTES),
     );
     let emoji_fallback = "Noto Emoji Full";
     fonts.font_data.insert(
         emoji_fallback.to_owned(),
-        egui::FontData::from_static(include_bytes!("../assets/fonts/NotoEmoji-Regular.ttf")),
+        egui::FontData::from_static(little_clip_render::EMOJI_FONT_BYTES),
     );
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
         let fonts_for_family = fonts.families.entry(family).or_default();

@@ -66,6 +66,8 @@ Runtime Hundred Rabbits themes and per-color overrides are retired, including on
 
 The comparison text viewport uses one dark `console_surface` in both appearances so terminal ANSI colors remain readable. Keep this surface in the central palette; ANSI escape colors represent data, not workbench chrome.
 
+Bundled CJK and monochrome emoji font assets live in `little-clip-render` and are shared with the workbench. Screen text measurement and drawing must use the same glyph fallback selection; prefer the requested system font wherever it has the glyph.
+
 Raw text preview selection spans virtual 4 KiB source fragments. Store its endpoints as absolute UTF-8 source byte offsets and copy from the original content; egui's cross-Label selection inserts layout-dependent separators and drops endpoints that scroll out of view.
 
 ## Agent Maintenance & Self-Correction

@@ -375,9 +375,11 @@ impl ScreenRenderer {
 }
 
 mod cards;
+mod fonts;
 pub mod primitives;
 
 pub use fontdue;
+pub use fonts::{CJK_FONT_BYTES, EMOJI_FONT_BYTES};
 pub use primitives::ElidedText;
 pub use tiny_skia;
 
@@ -855,6 +857,83 @@ mod tests {
         let pixmap = renderer.render_pixmap(&manager).unwrap();
         assert_eq!(pixmap.width(), SCREEN_WIDTH);
         assert_eq!(pixmap.height(), SCREEN_HEIGHT);
+    }
+
+    #[test]
+    fn unicode_screen_glyphs_are_not_missing_glyph_boxes_and_measure_as_drawn() {
+        let renderer = ScreenRenderer::new(AppConfig::default()).unwrap();
+        for style in [
+            FontStyle::Regular,
+            FontStyle::Bold,
+            FontStyle::Italic,
+            FontStyle::BoldItalic,
+            FontStyle::Mono,
+        ] {
+            let primary = renderer.font_for_style(style).unwrap();
+            let latin = "Latin clipboard 123";
+            let original_width: f32 = latin
+                .chars()
+                .map(|ch| primary.metrics(ch, 28.0).advance_width)
+                .sum();
+            assert_eq!(
+                renderer.measure_text_width_styled(latin, 28.0, style),
+                original_width
+            );
+            for character in ['界', '語', '한', '🦀', '🫠'] {
+                let mut actual = Pixmap::new(100, 70).unwrap();
+                let mut missing = actual.clone();
+                let end = renderer.draw_text_styled_clipped(
+                    &mut actual,
+                    &character.to_string(),
+                    5.0,
+                    5.0,
+                    28.0,
+                    Color::WHITE,
+                    style,
+                    100.0,
+                );
+                renderer.draw_text_styled_clipped(
+                    &mut missing,
+                    "\u{10ffff}",
+                    5.0,
+                    5.0,
+                    28.0,
+                    Color::WHITE,
+                    style,
+                    100.0,
+                );
+                assert!(
+                    actual.data().iter().any(|byte| *byte != 0),
+                    "{character} should have pixels"
+                );
+                assert!(
+                    actual.data() != missing.data(),
+                    "{character} rendered as tofu in {style:?}"
+                );
+                let width = renderer.measure_text_width_styled(&character.to_string(), 28.0, style);
+                assert!(
+                    (end - 5.0 - width).abs() < 0.001,
+                    "glyph measurement and drawing must agree"
+                );
+            }
+            let mut clipped = Pixmap::new(100, 70).unwrap();
+            renderer.draw_text_styled_clipped(
+                &mut clipped,
+                "A界🦀語",
+                5.0,
+                5.0,
+                28.0,
+                Color::WHITE,
+                style,
+                40.0,
+            );
+            assert!(
+                clipped
+                    .pixels()
+                    .chunks(100)
+                    .all(|row| row[40..].iter().all(|pixel| pixel.alpha() == 0))
+            );
+        }
     }
 
     #[test]

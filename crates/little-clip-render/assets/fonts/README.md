@@ -1,4 +1,9 @@
-# Workbench font fallbacks
+# Shared screen and workbench font fallbacks
+
+These assets live in `little-clip-render` and are exported as font bytes for
+the workbench. The screen renderer uses them only when its selected system
+font lacks a glyph, with the same selection used for measurement and drawing.
+Parsed fallback fonts are shared across renderers and loaded on first use.
 
 `NotoSansCJK-JP-Regular.ttf` is the JP regular face extracted from Google's
 Noto Sans CJK collection distributed in Arch's `noto-fonts-cjk` 20240730
@@ -18,7 +23,7 @@ including modern monochrome emoji. SHA-256:
 `8f685aeeef29fd7ab230e1b9aafda3bbc0e3c35c19553038e95d12e468338f07`.
 License: `NotoEmoji-OFL.txt` (SIL OFL 1.1).
 
-Together the bundled assets add about 16.6 MiB to the executable. They do not
+Together the bundled assets add about 16.6 MiB to each executable using them. They do not
 cover every Unicode script or uncommon ideograph. Egui 0.27 renders glyph
 outlines as monochrome; it cannot render Noto Color Emoji's bitmap strikes or
 compose multi-codepoint emoji sequences such as family, flag, or skin-tone
