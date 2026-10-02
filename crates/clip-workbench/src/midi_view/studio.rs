@@ -245,22 +245,6 @@ impl MidiViewerState {
                                 }
                             }
 
-                            if let Some(st) = self.solo_track {
-                                ui.add_space(crate::ui_ext::SPACE_XS);
-                                let st_name = self.data.track_names.get(st).cloned().unwrap_or_else(|| format!("Track {}", st + 1));
-                                ui.label(
-                                    egui::RichText::new(format!("Solo: {st_name}"))
-                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                        .strong()
-                                        .color(pause_color),
-                                );
-                                let unsolo_btn = egui::Button::new(egui::RichText::new("Unsolo").size(crate::ui_ext::BODY_FONT_SIZE))
-                                    .min_size(egui::Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
-                                if ui.add(unsolo_btn).on_hover_text("Unsolo and preview/copy all tracks").clicked() {
-                                    clear_solo_clicked = true;
-                                }
-                            }
-
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 zoom_action = ui_ext::zoom_control_bar(ui, zoom_pct, palette);
                             });
@@ -304,15 +288,19 @@ impl MidiViewerState {
                                 .strong()
                                 .color(f_low),
                         );
-                        if self.solo_track.is_some() {
-                            let all_btn = egui::Button::new(egui::RichText::new("All Tracks").size(crate::ui_ext::BODY_FONT_SIZE).strong())
-                                .fill(b_med)
-                                .min_size(egui::Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
-                            if ui.add(all_btn).on_hover_text("Clear solo and show/copy all tracks").clicked() {
-                                clear_solo_clicked = true;
-                            }
-                            ui.add_space(crate::ui_ext::SPACE_XS);
+                        let all_tracks_selected = self.solo_track.is_none();
+                        let all_btn = egui::Button::new(
+                            egui::RichText::new("All Tracks")
+                                .size(crate::ui_ext::BODY_FONT_SIZE)
+                                .strong()
+                                .color(if all_tracks_selected { bg } else { f_high }),
+                        )
+                        .fill(if all_tracks_selected { pause_color } else { b_med })
+                        .min_size(egui::Vec2::new(0.0, crate::ui_ext::CONTROL_HEIGHT));
+                        if ui.add(all_btn).on_hover_text("Clear solo and show/copy all tracks").clicked() {
+                            clear_solo_clicked = true;
                         }
+                        ui.add_space(crate::ui_ext::SPACE_XS);
                         for t_idx in 0..self.data.track_count {
                             let note_count = self.data.notes.iter().filter(|n| n.track == t_idx).count();
                             if note_count == 0 {
@@ -353,7 +341,7 @@ impl MidiViewerState {
                             );
 
                             let solo_btn = egui::Button::new(
-                                egui::RichText::new(if is_solo { "SOLO" } else { "Solo" })
+                                egui::RichText::new("Solo")
                                     .size(crate::ui_ext::BODY_FONT_SIZE)
                                     .strong()
                                     .color(solo_text_col),

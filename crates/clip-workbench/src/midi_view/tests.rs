@@ -1040,8 +1040,7 @@ fn test_midi_viewer_render_ui_tracks_and_legend() {
         let required_labels = [
             "Copy Solo Slice (Melody)",
             "Sel: 0.50s - 1.50s",
-            "Solo: Melody",
-            "Unsolo",
+            "All Tracks",
             "Tracks:",
         ];
         let visible_text = output
@@ -1052,6 +1051,12 @@ fn test_midi_viewer_render_ui_tracks_and_legend() {
                 _ => None,
             })
             .collect::<Vec<_>>();
+
+        assert!(
+            visible_text.iter().all(|shape| {
+                !matches!(shape.galley.job.text.as_str(), "Unsolo" | "Solo: Melody")
+            })
+        );
 
         for required in required_labels {
             assert!(
