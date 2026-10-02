@@ -781,8 +781,9 @@ impl AudioPreviewState {
         let avail_w = ui.available_width() - 28.0;
         let footer_galley = inspect_footer_galley(ui, palette, ui.available_width());
         let footer_height = footer_galley.size().y + 12.0;
+        // Embedded timelines compress their rows to fit the remaining viewport.
         let workspace_height = embedded_height
-            .map(|height| (height - controls_spent).max(INSPECT_MIN_CANVAS_HEIGHT + footer_height))
+            .map(|height| (height - controls_spent).max(footer_height))
             .unwrap_or_else(|| ui.available_height());
 
         ui.allocate_ui_with_layout(

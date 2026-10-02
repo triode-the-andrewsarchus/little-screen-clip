@@ -12,7 +12,6 @@ enum CanvasEffect {
     HighPass,
 }
 
-const INSPECT_MIN_CANVAS_HEIGHT: f32 = 226.0;
 const INSPECT_HELP_TEXT: &str = "Wheel / +/-: Zoom • Drag: Select • Ctrl+C: Copy • Ctrl+S: Save";
 
 fn inspect_footer_galley(

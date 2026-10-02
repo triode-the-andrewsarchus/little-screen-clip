@@ -905,7 +905,10 @@ impl AudioPreviewState {
                                 egui::RichText::new(format!("Editing {} stem", stem.name)).strong(),
                             );
                             let content_height = ui.cursor().min.y - content_start_y;
-                            let editor_height = (viewport_height - content_height).max(350.0);
+                            // The embedded editor's allocation also consumes a row spacing.
+                            let editor_height =
+                                (viewport_height - content_height - ui.spacing().item_spacing.y)
+                                    .max(0.0);
                             let was_playing = stem.preview.is_playing;
                             let previous_time = stem.preview.current_time_sec;
                             stem.preview.render_standard_ui(
@@ -1138,6 +1141,65 @@ printf '{"vocals":"%s/vocals.wav","drums":"%s/drums.wav","bass":"%s/bass.wav","o
         );
         drop(state);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn completed_stems_do_not_scroll_when_the_editor_fits_the_viewport() {
+        let (_fixture, path) =
+            crate::audio_preview::tests::generate_fixture_wav("stem-layout", 0.25);
+        let analysis =
+            Arc::new(little_clip_core::audio::compute_full_audio_analysis(&path, 100).unwrap());
+        for height in [1000.0, 1050.0, 1100.0, 1200.0, 1600.0] {
+            let mut state = test_state(&path);
+            state.duration_sec = 0.25;
+            for name in ["vocals", "drums", "bass", "other"] {
+                let mut preview = test_state(&path);
+                preview.analysis = Some(Arc::clone(&analysis));
+                preview.is_loading_analysis = false;
+                preview.duration_sec = 0.25;
+                state.stem_separation.stems.push(SeparatedStem {
+                    name: name.to_owned(),
+                    preview,
+                    group_player: None,
+                    muted: false,
+                });
+            }
+            let ctx = egui::Context::default();
+            crate::ui_ext::configure_workbench_style(&ctx);
+            let palette =
+                crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+            let mut scroll_id = egui::Id::NULL;
+            for events in [
+                Vec::new(),
+                Vec::new(),
+                vec![
+                    egui::Event::PointerMoved(Pos2::new(30.0, 30.0)),
+                    egui::Event::Scroll(Vec2::new(0.0, -100.0)),
+                ],
+            ] {
+                let _ = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            Pos2::ZERO,
+                            Vec2::new(1180.0, height),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            scroll_id = ui.make_persistent_id(egui::Id::new("stem_tool_scroll"));
+                            state.render_stem_separation_ui(ui, ctx, &palette, &mut false);
+                        });
+                    },
+                );
+            }
+            let scroll = egui::scroll_area::State::load(&ctx, scroll_id).unwrap();
+            assert_eq!(
+                scroll.offset.y, 0.0,
+                "completed stems overflow a {height}-point viewport"
+            );
+        }
     }
 
     #[test]
