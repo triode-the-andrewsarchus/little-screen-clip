@@ -11,7 +11,7 @@ impl ImageToolMode {
             | Self::CreativeFx
             | Self::Markup => Some(base.with_left().with_right()),
             Self::FilmSim => Some(crate::shell::StudioPanelLayout {
-                bottom_height: 160.0,
+                bottom_height: 80.0,
                 ..base.with_left().with_right().with_bottom()
             }),
             Self::View

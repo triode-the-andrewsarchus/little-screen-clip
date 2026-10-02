@@ -630,296 +630,304 @@ impl ImagePreviewState {
                         .id_source("film_sim_bottom_controls")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            ui.vertical(|ui| {
-                                // Row 1: Exposure & Color Sliders with contextual start/center/end/default tracks
-                                ui.horizontal(|ui| {
-                                    let slider_w =
-                                        ((bottom.width() - 48.0) / 6.0 - 12.0).clamp(70.0, 115.0);
+                            ui.horizontal_centered(|ui| {
+                                let button_width: f32 = ["Auto Levels", "Auto Enhance", "Reset", "Apply to Image"]
+                                    .iter()
+                                    .map(|label| crate::ui_ext::equal_button_width(ui, &[*label], true))
+                                    .sum::<f32>()
+                                    + ["Auto", "Gray", "White", "Off"]
+                                        .iter()
+                                        .map(|label| crate::ui_ext::equal_button_width(ui, &[*label], false).max(36.0))
+                                        .sum::<f32>()
+                                    + if self.undo_stack.is_empty() { 0.0 } else {
+                                        crate::ui_ext::equal_button_width(ui, &["⟲ Undo (Ctrl+Z)"], false)
+                                    };
+                                // Reserve buttons, value fields, the WB label, and inter-control spacing.
+                                let slider_w = ((ui.available_width() - button_width - 300.0) / 6.0 - 50.0)
+                                    .clamp(40.0, 115.0);
 
-                                    // Brightness
-                                    if render_context_slider(
-                                        ui,
-                                        "Brightness",
-                                        &mut self.film_sim_state.brightness,
-                                        0.1..=4.0,
-                                        1.0,
-                                        "×",
-                                        slider_w,
-                                        palette,
-                                    ) {
-                                        self.film_sim_state.mark_dirty();
-                                    }
-                                    ui.add_space(3.0);
+                                // Auto Levels
+                                let al_btn = crate::ui_ext::secondary_button_icon(
+                                    Some(Icon::Wand),
+                                    "Auto Levels",
+                                    diff_mod,
+                                    palette,
+                                );
+                                if ui
+                        .add(al_btn)
+                        .on_hover_text(
+                            "Reset brightness to neutral, warmth to 0, and tint to 0",
+                        )
+                        .clicked()
+                    {
+                        self.film_sim_state.brightness = 1.0;
+                        self.film_sim_state.warmth = 0.0;
+                        self.film_sim_state.tint = 0.0;
+                        self.film_sim_state.mark_dirty();
+                        self.show_toast("Auto levels applied");
+                    }
 
-                                    // Contrast
-                                    if render_context_slider(
-                                        ui,
-                                        "Contrast",
-                                        &mut self.film_sim_state.contrast,
-                                        -1.0..=1.0,
-                                        0.0,
-                                        "",
-                                        slider_w,
-                                        palette,
-                                    ) {
-                                        self.film_sim_state.mark_dirty();
-                                    }
-                                    ui.add_space(3.0);
+                                ui.add_space(crate::ui_ext::SPACE_XS);
 
-                                    // Warmth
-                                    if render_context_slider(
-                                        ui,
-                                        "Warmth",
-                                        &mut self.film_sim_state.warmth,
-                                        -1.0..=1.0,
-                                        0.0,
-                                        "",
-                                        slider_w,
-                                        palette,
-                                    ) {
-                                        self.film_sim_state.mark_dirty();
-                                    }
-                                    ui.add_space(3.0);
+                                // Auto Enhance
+                                let ae_btn = crate::ui_ext::secondary_button_icon(
+                                    Some(Icon::Sparkles),
+                                    "Auto Enhance",
+                                    base_c,
+                                    palette,
+                                );
+                                if ui
+                        .add(ae_btn)
+                        .on_hover_text(
+                            "Boost intensity, warmth, and contrast for a cinematic look",
+                        )
+                        .clicked()
+                    {
+                        self.film_sim_state.brightness =
+                            (self.film_sim_state.brightness * 1.05).min(4.0);
+                        self.film_sim_state.intensity =
+                            (self.film_sim_state.intensity + 0.15).min(2.0);
+                        self.film_sim_state.warmth =
+                            (self.film_sim_state.warmth + 0.05).min(1.0);
+                        self.film_sim_state.contrast =
+                            (self.film_sim_state.contrast + 0.08).min(1.0);
+                        self.film_sim_state.mark_dirty();
+                        self.show_toast("Auto enhance applied");
+                    }
 
-                                    // Tint (Green ↔ Magenta)
-                                    if render_context_slider(
-                                        ui,
-                                        "Tint",
-                                        &mut self.film_sim_state.tint,
-                                        -1.0..=1.0,
-                                        0.0,
-                                        "",
-                                        slider_w,
-                                        palette,
-                                    ) {
-                                        self.film_sim_state.mark_dirty();
-                                    }
-                                    ui.add_space(3.0);
+                                ui.add_space(crate::ui_ext::SPACE_XS);
+                                ui.separator();
+                                ui.add_space(crate::ui_ext::SPACE_XS);
 
-                                    // Saturation
-                                    if render_context_slider(
-                                        ui,
-                                        "Saturation",
-                                        &mut self.film_sim_state.intensity,
-                                        0.0..=2.0,
-                                        1.0,
-                                        "",
-                                        slider_w,
-                                        palette,
-                                    ) {
-                                        self.film_sim_state.mark_dirty();
-                                    }
-                                    ui.add_space(3.0);
-
-                                    // WB Strength
-                                    if render_context_slider(
-                                        ui,
-                                        "WB Str",
-                                        &mut self.film_sim_state.wb_strength,
-                                        0.0..=1.0,
-                                        DEFAULT_WB_STRENGTH,
-                                        "%",
-                                        slider_w,
-                                        palette,
-                                    ) {
-                                        self.film_sim_state.mark_dirty();
-                                    }
-                                });
-
+                                // Brightness
+                                if render_context_slider(
+                                    ui,
+                                    "Brightness",
+                                    &mut self.film_sim_state.brightness,
+                                    0.1..=4.0,
+                                    1.0,
+                                    "×",
+                                    slider_w,
+                                    palette,
+                                ) {
+                                    self.film_sim_state.mark_dirty();
+                                }
                                 ui.add_space(3.0);
 
-                                // Row 2: WB Mode Selector + Auto Presets + Actions
-                                ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("WB:")
+                                // Contrast
+                                if render_context_slider(
+                                    ui,
+                                    "Contrast",
+                                    &mut self.film_sim_state.contrast,
+                                    -1.0..=1.0,
+                                    0.0,
+                                    "",
+                                    slider_w,
+                                    palette,
+                                ) {
+                                    self.film_sim_state.mark_dirty();
+                                }
+                                ui.add_space(3.0);
+
+                                // Warmth
+                                if render_context_slider(
+                                    ui,
+                                    "Warmth",
+                                    &mut self.film_sim_state.warmth,
+                                    -1.0..=1.0,
+                                    0.0,
+                                    "",
+                                    slider_w,
+                                    palette,
+                                ) {
+                                    self.film_sim_state.mark_dirty();
+                                }
+                                ui.add_space(3.0);
+
+                                // Tint (Green ↔ Magenta)
+                                if render_context_slider(
+                                    ui,
+                                    "Tint",
+                                    &mut self.film_sim_state.tint,
+                                    -1.0..=1.0,
+                                    0.0,
+                                    "",
+                                    slider_w,
+                                    palette,
+                                ) {
+                                    self.film_sim_state.mark_dirty();
+                                }
+                                ui.add_space(3.0);
+
+                                // Saturation
+                                if render_context_slider(
+                                    ui,
+                                    "Saturation",
+                                    &mut self.film_sim_state.intensity,
+                                    0.0..=2.0,
+                                    1.0,
+                                    "",
+                                    slider_w,
+                                    palette,
+                                ) {
+                                    self.film_sim_state.mark_dirty();
+                                }
+                                ui.add_space(3.0);
+
+                                // WB Strength
+                                if render_context_slider(
+                                    ui,
+                                    "WB Str",
+                                    &mut self.film_sim_state.wb_strength,
+                                    0.0..=1.0,
+                                    DEFAULT_WB_STRENGTH,
+                                    "%",
+                                    slider_w,
+                                    palette,
+                                ) {
+                                    self.film_sim_state.mark_dirty();
+                                }
+
+                                ui.add_space(crate::ui_ext::SPACE_XS);
+                                ui.separator();
+                                ui.add_space(crate::ui_ext::SPACE_XS);
+
+                                ui.label(
+                                    egui::RichText::new("WB:")
+                                        .size(crate::ui_ext::BODY_FONT_SIZE)
+                                        .strong()
+                                        .color(base_c),
+                                );
+                                let wb_modes = [
+                                    (WhiteBalanceMode::Auto, "Auto"),
+                                    (WhiteBalanceMode::Gray, "Gray"),
+                                    (WhiteBalanceMode::White, "White"),
+                                    (WhiteBalanceMode::Off, "Off"),
+                                ];
+                                for (mode, label) in wb_modes {
+                                    let sel = self.film_sim_state.wb_mode == mode;
+                                    let (btn_bg, btn_fg) = if sel {
+                                        (base_c, contrast_text_c32(base_c, None, palette))
+                                    } else {
+                                        (b_med, f_med)
+                                    };
+                                    let b = egui::Button::new(
+                                        egui::RichText::new(label)
                                             .size(crate::ui_ext::BODY_FONT_SIZE)
                                             .strong()
-                                            .color(base_c),
-                                    );
-                                    let wb_modes = [
-                                        (WhiteBalanceMode::Auto, "Auto"),
-                                        (WhiteBalanceMode::Gray, "Gray"),
-                                        (WhiteBalanceMode::White, "White"),
-                                        (WhiteBalanceMode::Off, "Off"),
-                                    ];
-                                    for (mode, label) in wb_modes {
-                                        let sel = self.film_sim_state.wb_mode == mode;
-                                        let (btn_bg, btn_fg) = if sel {
-                                            (base_c, contrast_text_c32(base_c, None, palette))
-                                        } else {
-                                            (b_med, f_med)
-                                        };
-                                        let b = egui::Button::new(
-                                            egui::RichText::new(label)
-                                                .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                .strong()
-                                                .color(btn_fg),
-                                        )
-                                        .fill(btn_bg)
-                                        .stroke(Stroke::new(
-                                            1.0_f32,
-                                            if sel { base_c } else { b_low },
-                                        ))
-                                        .rounding(Rounding::same(
-                                            crate::ui_ext::BADGE_CORNER_RADIUS,
-                                        ))
-                                        .min_size(Vec2::new(36.0, crate::ui_ext::CONTROL_HEIGHT));
-                                        let description = match mode {
-                                            WhiteBalanceMode::Auto => {
-                                                "Balance from plausible neutral highlights; skips images without reliable neutral samples"
-                                            }
-                                            WhiteBalanceMode::Gray => {
-                                                "Balance the scene-wide average toward neutral gray"
-                                            }
-                                            WhiteBalanceMode::White => {
-                                                "Balance each channel from its brightest 1% white-patch reference"
-                                            }
-                                            WhiteBalanceMode::Off => "Do not apply white-balance correction",
-                                        };
-                                        if ui.add(b).on_hover_text(description).clicked() && !sel {
-                                            self.film_sim_state.wb_mode = mode;
-                                            self.film_sim_state.mark_dirty();
+                                            .color(btn_fg),
+                                    )
+                                    .fill(btn_bg)
+                                    .stroke(Stroke::new(
+                                        1.0_f32,
+                                        if sel { base_c } else { b_low },
+                                    ))
+                                    .rounding(Rounding::same(
+                                        crate::ui_ext::BADGE_CORNER_RADIUS,
+                                    ))
+                                    .min_size(Vec2::new(36.0, crate::ui_ext::CONTROL_HEIGHT));
+                                    let description = match mode {
+                                        WhiteBalanceMode::Auto => {
+                                            "Balance from plausible neutral highlights; skips images without reliable neutral samples"
                                         }
+                                        WhiteBalanceMode::Gray => {
+                                            "Balance the scene-wide average toward neutral gray"
+                                        }
+                                        WhiteBalanceMode::White => {
+                                            "Balance each channel from its brightest 1% white-patch reference"
+                                        }
+                                        WhiteBalanceMode::Off => "Do not apply white-balance correction",
+                                    };
+                                    if ui.add(b).on_hover_text(description).clicked() && !sel {
+                                        self.film_sim_state.wb_mode = mode;
+                                        self.film_sim_state.mark_dirty();
                                     }
+                                }
 
-                                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-                                    ui.separator();
-                                    ui.add_space(crate::ui_ext::ITEM_SPACING_Y);
-
-                                    // Auto Levels
-                                    let al_btn = crate::ui_ext::secondary_button_icon(
-                                        Some(Icon::Wand),
-                                        "Auto Levels",
-                                        diff_mod,
-                                        palette,
-                                    );
-                                    if ui
-                            .add(al_btn)
+                                // Right aligned: Apply, Reset, Undo
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        let apply_btn = crate::ui_ext::action_button_icon(
+                                            Some(Icon::Check),
+                                            "Apply to Image",
+                                            diff_add,
+                                            palette,
+                                        );
+                                        let apply_enabled = self.film_sim_preview_is_current();
+                                        if ui
+                            .add_enabled(apply_enabled, apply_btn)
                             .on_hover_text(
-                                "Reset brightness to neutral, warmth to 0, and tint to 0",
+                                "Commit film simulation result to image (adds to undo stack)",
                             )
                             .clicked()
                         {
-                            self.film_sim_state.brightness = 1.0;
-                            self.film_sim_state.warmth = 0.0;
-                            self.film_sim_state.tint = 0.0;
-                            self.film_sim_state.mark_dirty();
-                            self.show_toast("Auto levels applied");
+                            self.apply_film_sim();
                         }
 
-                                    ui.add_space(crate::ui_ext::SPACE_XS);
+                                        ui.add_space(crate::ui_ext::SPACE_XS);
 
-                                    // Auto Enhance
-                                    let ae_btn = crate::ui_ext::secondary_button_icon(
-                                        Some(Icon::Sparkles),
-                                        "Auto Enhance",
-                                        base_c,
-                                        palette,
-                                    );
-                                    if ui
-                            .add(ae_btn)
-                            .on_hover_text(
-                                "Boost intensity, warmth, and contrast for a cinematic look",
-                            )
-                            .clicked()
-                        {
-                            self.film_sim_state.brightness =
-                                (self.film_sim_state.brightness * 1.05).min(4.0);
-                            self.film_sim_state.intensity =
-                                (self.film_sim_state.intensity + 0.15).min(2.0);
-                            self.film_sim_state.warmth =
-                                (self.film_sim_state.warmth + 0.05).min(1.0);
-                            self.film_sim_state.contrast =
-                                (self.film_sim_state.contrast + 0.08).min(1.0);
-                            self.film_sim_state.mark_dirty();
-                            self.show_toast("Auto enhance applied");
-                        }
-
-                                    // Right aligned: Apply, Reset, Undo
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            let apply_btn = crate::ui_ext::action_button_icon(
-                                                Some(Icon::Check),
-                                                "Apply to Image",
-                                                diff_add,
-                                                palette,
+                                        let reset_btn = crate::ui_ext::secondary_button_icon(
+                                            Some(Icon::RotateCcw),
+                                            "Reset",
+                                            b_med,
+                                            palette,
+                                        );
+                                        if ui
+                                            .add(reset_btn)
+                                            .on_hover_text(
+                                                "Reset all film sim parameters to defaults",
+                                            )
+                                            .clicked()
+                                        {
+                                            self.film_sim_state.brightness = 1.0;
+                                            self.film_sim_state.contrast = 0.0;
+                                            self.film_sim_state.warmth = 0.0;
+                                            self.film_sim_state.tint = 0.0;
+                                            self.film_sim_state.intensity = 1.0;
+                                            self.film_sim_state.wb_mode =
+                                                WhiteBalanceMode::Auto;
+                                            self.film_sim_state.wb_strength =
+                                                DEFAULT_WB_STRENGTH;
+                                            self.film_sim_state.halation = 0.25;
+                                            self.film_sim_state.vignette = 0.35;
+                                            self.film_sim_state.light_leak =
+                                                LightLeakPreset::None;
+                                            self.film_sim_state.enable_grain = true;
+                                            self.film_sim_state.style = FilmStyle::Accurate;
+                                            self.film_sim_state.mark_dirty();
+                                            self.show_toast(
+                                                "⟲ All parameters reset to defaults",
                                             );
-                                            let apply_enabled = self.film_sim_preview_is_current();
-                                            if ui
-                                .add_enabled(apply_enabled, apply_btn)
-                                .on_hover_text(
-                                    "Commit film simulation result to image (adds to undo stack)",
-                                )
-                                .clicked()
-                            {
-                                self.apply_film_sim();
-                            }
+                                        }
 
-                                            ui.add_space(crate::ui_ext::SPACE_XS);
+                                        ui.add_space(crate::ui_ext::SPACE_XS);
 
-                                            let reset_btn = crate::ui_ext::secondary_button_icon(
-                                                Some(Icon::RotateCcw),
-                                                "Reset",
+                                        if !self.undo_stack.is_empty() {
+                                            let undo_fg = contrast_text_c32(
                                                 b_med,
+                                                Some(diff_mod),
                                                 palette,
                                             );
-                                            if ui
-                                                .add(reset_btn)
-                                                .on_hover_text(
-                                                    "Reset all film sim parameters to defaults",
-                                                )
-                                                .clicked()
-                                            {
-                                                self.film_sim_state.brightness = 1.0;
-                                                self.film_sim_state.contrast = 0.0;
-                                                self.film_sim_state.warmth = 0.0;
-                                                self.film_sim_state.tint = 0.0;
-                                                self.film_sim_state.intensity = 1.0;
-                                                self.film_sim_state.wb_mode =
-                                                    WhiteBalanceMode::Auto;
-                                                self.film_sim_state.wb_strength =
-                                                    DEFAULT_WB_STRENGTH;
-                                                self.film_sim_state.halation = 0.25;
-                                                self.film_sim_state.vignette = 0.35;
-                                                self.film_sim_state.light_leak =
-                                                    LightLeakPreset::None;
-                                                self.film_sim_state.enable_grain = true;
-                                                self.film_sim_state.style = FilmStyle::Accurate;
+                                            let undo_btn = egui::Button::new(
+                                                egui::RichText::new("⟲ Undo (Ctrl+Z)")
+                                                    .size(crate::ui_ext::BODY_FONT_SIZE)
+                                                    .strong()
+                                                    .color(undo_fg),
+                                            )
+                                            .fill(b_med)
+                                            .rounding(Rounding::same(
+                                                crate::ui_ext::CONTROL_CORNER_RADIUS,
+                                            ));
+                                            if ui.add(undo_btn).clicked() {
+                                                self.undo();
+                                                self.film_sim_state.preview_rgba = None;
+                                                self.film_sim_state.preview_texture = None;
                                                 self.film_sim_state.mark_dirty();
-                                                self.show_toast(
-                                                    "⟲ All parameters reset to defaults",
-                                                );
                                             }
-
-                                            ui.add_space(crate::ui_ext::SPACE_XS);
-
-                                            if !self.undo_stack.is_empty() {
-                                                let undo_fg = contrast_text_c32(
-                                                    b_med,
-                                                    Some(diff_mod),
-                                                    palette,
-                                                );
-                                                let undo_btn = egui::Button::new(
-                                                    egui::RichText::new("⟲ Undo (Ctrl+Z)")
-                                                        .size(crate::ui_ext::BODY_FONT_SIZE)
-                                                        .strong()
-                                                        .color(undo_fg),
-                                                )
-                                                .fill(b_med)
-                                                .rounding(Rounding::same(
-                                                    crate::ui_ext::CONTROL_CORNER_RADIUS,
-                                                ));
-                                                if ui.add(undo_btn).clicked() {
-                                                    self.undo();
-                                                    self.film_sim_state.preview_rgba = None;
-                                                    self.film_sim_state.preview_texture = None;
-                                                    self.film_sim_state.mark_dirty();
-                                                }
-                                            }
-                                        },
-                                    );
-                                });
+                                        }
+                                    },
+                                );
                             });
                         });
                 });

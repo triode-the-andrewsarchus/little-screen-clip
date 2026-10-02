@@ -564,7 +564,7 @@ impl ImagePreviewState {
             auto_fitted: false,
             active_mode: ImageToolMode::View,
             panel_state: crate::shell::PanelState {
-                bottom_height: 160.0,
+                bottom_height: 80.0,
                 ..Default::default()
             },
             external_editor: config.image.external_editor.clone(),
