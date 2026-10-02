@@ -1,6 +1,7 @@
 use super::*;
 
 impl AudioPreviewState {
+    #[cfg(test)]
     pub(super) fn handle_studio_shortcuts(
         &mut self,
         ctx: &egui::Context,
@@ -65,11 +66,29 @@ impl AudioPreviewState {
         palette: &AppPalette,
         close_requested: &mut bool,
     ) {
+        self.render_ui_with_start(
+            ui,
+            ctx,
+            palette,
+            close_requested,
+            Self::start_stem_separation,
+        );
+    }
+
+    pub(super) fn render_ui_with_start(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: &AppPalette,
+        close_requested: &mut bool,
+        mut start_stem_separation: impl FnMut(&mut Self),
+    ) {
         let mode_before_frame = self.active_mode;
         self.poll_slice_copy_job(ctx, ctx.input(|input| input.time));
         self.poll_save_job(ctx, ctx.input(|input| input.time));
         self.poll_digital_decode(ctx);
-        if self.handle_studio_shortcuts(ctx, close_requested) {
+        if self.handle_studio_shortcuts_with_start(ctx, close_requested, &mut start_stem_separation)
+        {
             return;
         }
         layout::AudioWorkspace::show(ui, palette, |ui| {
@@ -80,6 +99,12 @@ impl AudioPreviewState {
                 && self.active_mode != AudioToolMode::StemSeparation
             {
                 self.cancel_stem_separation();
+            } else if mode_before_frame != AudioToolMode::StemSeparation
+                && self.active_mode == AudioToolMode::StemSeparation
+                && self.stem_separation.stems.is_empty()
+                && !self.stem_separation.in_progress
+            {
+                start_stem_separation(self);
             }
             ui.add_space(crate::ui_ext::SPACE_SM);
             match self.active_mode {

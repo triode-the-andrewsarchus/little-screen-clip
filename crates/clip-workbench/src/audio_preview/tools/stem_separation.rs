@@ -181,6 +181,7 @@ pub(crate) struct StemSeparationState {
     pub(crate) group_sink: Option<MixerDeviceSink>,
     pub(crate) group_is_playing: bool,
     pub(crate) group_current_time_sec: f32,
+    pub(crate) editor_playhead_active: bool,
     pub(crate) group_playback_start: Option<Instant>,
     pub(crate) group_playback_offset_sec: f32,
 }
@@ -329,6 +330,7 @@ impl AudioPreviewState {
                     self.stem_separation.group_current_time_sec = 0.0;
                     self.stem_separation.group_is_playing = false;
                     self.stem_separation.selected_stem = 0;
+                    self.stem_separation.editor_playhead_active = false;
                     self.stem_separation.status =
                         Some("HTDemucs created four temporary stereo stems.".to_string());
                 }
@@ -376,6 +378,7 @@ impl AudioPreviewState {
     }
 
     pub(crate) fn start_group_playback(&mut self) {
+        self.stem_separation.editor_playhead_active = false;
         let duration = self.group_duration();
         if self.stem_separation.group_current_time_sec >= duration - 0.05 {
             self.stem_separation.group_current_time_sec = 0.0;
@@ -433,6 +436,7 @@ impl AudioPreviewState {
     }
 
     pub(crate) fn stop_group_playback(&mut self) {
+        self.stem_separation.editor_playhead_active = false;
         for stem in &self.stem_separation.stems {
             if let Some(player) = &stem.group_player {
                 player.stop();
@@ -445,6 +449,7 @@ impl AudioPreviewState {
     }
 
     pub(crate) fn seek_group_playback(&mut self, time_sec: f32) {
+        self.stem_separation.editor_playhead_active = false;
         let target = time_sec.clamp(0.0, self.group_duration());
         self.stem_separation.group_current_time_sec = target;
         self.stem_separation.group_playback_offset_sec = target;
@@ -690,27 +695,7 @@ impl AudioPreviewState {
                 ui.set_width(ui.available_width());
                 let content_start_y = ui.cursor().min.y;
                 layout::AudioWorkspace::control_row(ui, palette, "Separation", |ui| {
-                    if self.stem_separation.stems.is_empty() {
-                        let (label, icon) = if self.stem_separation.in_progress {
-                            ("Separating locally…", None)
-                        } else {
-                            ("Separate Stems", Some(Icon::Waves))
-                        };
-                        if ui
-                            .add_enabled(
-                                !self.stem_separation.in_progress,
-                                layout::AudioWorkspace::primary_button_icon(
-                                    icon,
-                                    label,
-                                    hex_to_c32(&palette.harmonies.base),
-                                    palette,
-                                ),
-                            )
-                            .clicked()
-                        {
-                            self.start_stem_separation();
-                        }
-                    } else {
+                    if !self.stem_separation.stems.is_empty() {
                         if ui
                             .add(layout::AudioWorkspace::secondary_button_icon(
                                 Some(Icon::RotateCw),
@@ -814,18 +799,6 @@ impl AudioPreviewState {
                         {
                             self.stop_group_playback();
                         }
-                        let current = self.stem_separation.group_current_time_sec;
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{:02}:{:04.1} / {:02}:{:04.1}",
-                                (current / 60.0) as u32,
-                                current % 60.0,
-                                (duration / 60.0) as u32,
-                                duration % 60.0,
-                            ))
-                            .monospace()
-                            .strong(),
-                        );
                         ui.label(
                     egui::RichText::new(
                         "Click or drag any waveform to select its stem and scrub all tracks",
@@ -931,6 +904,7 @@ impl AudioPreviewState {
                             let content_height = ui.cursor().min.y - content_start_y;
                             let editor_height = (viewport_height - content_height).max(350.0);
                             let was_playing = stem.preview.is_playing;
+                            let previous_time = stem.preview.current_time_sec;
                             stem.preview.render_standard_ui(
                                 ui,
                                 ctx,
@@ -938,6 +912,11 @@ impl AudioPreviewState {
                                 close_requested,
                                 Some(editor_height),
                             );
+                            if was_playing != stem.preview.is_playing
+                                || previous_time != stem.preview.current_time_sec
+                            {
+                                self.stem_separation.editor_playhead_active = true;
+                            }
                             !was_playing && stem.preview.is_playing
                         } else {
                             false
@@ -1159,13 +1138,142 @@ printf '{"vocals":"%s/vocals.wav","drums":"%s/drums.wav","bass":"%s/bass.wav","o
     }
 
     #[test]
-    fn explicit_cancellation_kills_fake_worker_process_group() {
+    fn studio_readout_follows_source_group_and_selected_stem_playheads() {
+        let directory = test_dir("header-playhead");
+        let mut state = test_state(&directory.join("input.wav"));
+        state.duration_sec = 100.0;
+        state.current_time_sec = 12.0;
+        for &mode in AudioToolMode::ALL {
+            state.active_mode = mode;
+            assert_eq!(state.studio_playhead(), (12.0, 100.0));
+        }
+        let mut preview = test_state(&directory.join("vocals.wav"));
+        preview.duration_sec = 90.0;
+        preview.current_time_sec = 42.0;
+        state.stem_separation.stems.push(SeparatedStem {
+            name: "vocals".to_owned(),
+            preview,
+            group_player: None,
+            muted: false,
+        });
+        state.active_mode = AudioToolMode::StemSeparation;
+        state.stem_separation.group_current_time_sec = 24.0;
+        assert_eq!(state.studio_playhead(), (24.0, 100.0));
+        state.stem_separation.editor_playhead_active = true;
+        assert_eq!(state.studio_playhead(), (42.0, 90.0));
+        state.seek_group_playback(30.0);
+        assert_eq!(state.studio_playhead(), (30.0, 100.0));
+        state.active_mode = AudioToolMode::Inspect;
+        assert_eq!(state.studio_playhead(), (12.0, 100.0));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn entering_stem_tab_starts_once_and_restarts_after_cancellation() {
+        let directory = test_dir("auto-start");
+        let mut state = test_state(&directory.join("input.wav"));
+        let ctx = egui::Context::default();
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let starts = std::cell::Cell::new(0);
+        let render = |state: &mut AudioPreviewState, events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui_with_start(ui, ctx, &palette, &mut false, |state| {
+                            starts.set(starts.get() + 1);
+                            state.stem_separation.in_progress = true;
+                        });
+                    });
+                },
+            )
+        };
+        let output = render(&mut state, Vec::new());
+        let tab_position = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text)
+                    if text.galley.text() == AudioToolMode::StemSeparation.label() =>
+                {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("Stem Separation tab is visible");
+        for pressed in [true, false] {
+            let _ = render(
+                &mut state,
+                vec![
+                    egui::Event::PointerMoved(tab_position),
+                    egui::Event::PointerButton {
+                        pos: tab_position,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        assert_eq!(state.active_mode, AudioToolMode::StemSeparation);
+        assert!(state.stem_separation.in_progress);
+        let _ = render(&mut state, Vec::new());
+        assert_eq!(starts.get(), 1, "ordinary frames do not restart separation");
+        // Keyboard tab switches use the same lifecycle as mouse clicks.
+        for key in [egui::Key::I, egui::Key::S] {
+            let _ = render(
+                &mut state,
+                vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        assert_eq!(
+            starts.get(),
+            2,
+            "returning after cancellation restarts separation"
+        );
+        state.cancel_stem_separation();
+        state.stem_separation.stems.push(SeparatedStem {
+            name: "vocals".to_owned(),
+            preview: test_state(&directory.join("vocals.wav")),
+            group_player: None,
+            muted: false,
+        });
+        for key in [egui::Key::I, egui::Key::S] {
+            let _ = render(
+                &mut state,
+                vec![egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+        }
+        assert_eq!(starts.get(), 2, "completed stems are retained on re-entry");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn leaving_stem_tab_cancels_worker_process_group() {
         let directory = test_dir("cancel");
         let jobs = BackgroundJobs::new(1, 1);
         let script = format!(
             "(sleep 1; touch \"$2/descendant-finished\") &\necho $! > \"$2/descendant.pid\"\nwait"
         );
         let mut state = test_state(&directory.join("input.wav"));
+        state.active_mode = AudioToolMode::StemSeparation;
         state.start_stem_separation_on(&jobs, fake_worker(&directory, &script));
         let control = state
             .stem_separation
@@ -1188,7 +1296,55 @@ printf '{"vocals":"%s/vocals.wav","drums":"%s/drums.wav","bass":"%s/bass.wav","o
         assert!(descendant_pid_path.exists());
         let direct_pid = control.child_pid.load(Ordering::Acquire);
         assert_ne!(direct_pid, 0);
-        state.cancel_stem_separation();
+        let ctx = egui::Context::default();
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        let mut close = false;
+        let mut render = |events| {
+            ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1180.0, 760.0))),
+                    events,
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        state.render_ui(ui, ctx, &palette, &mut close);
+                    });
+                },
+            )
+        };
+        let output = render(Vec::new());
+        let tab_position = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text)
+                    if text.galley.text() == AudioToolMode::Inspect.label() =>
+                {
+                    Some(text.pos + text.galley.size() * 0.5)
+                }
+                _ => None,
+            })
+            .expect("Inspect tab is visible");
+        let _ = render(vec![
+            egui::Event::PointerMoved(tab_position),
+            egui::Event::PointerButton {
+                pos: tab_position,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            },
+        ]);
+        let _ = render(vec![egui::Event::PointerButton {
+            pos: tab_position,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }]);
+        assert_eq!(state.active_mode, AudioToolMode::Inspect);
+        assert!(!state.stem_separation.in_progress);
+        assert!(state.stem_separation.retry_at.is_none());
         assert!(control.cancel.load(Ordering::Acquire));
         wait_for_process_exit(direct_pid);
         std::thread::sleep(Duration::from_millis(1100));

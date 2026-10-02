@@ -354,18 +354,6 @@ impl AudioPreviewState {
                 }
             }
 
-            if ui
-                .add(layout::AudioWorkspace::secondary_button_icon(
-                    Some(Icon::Stop),
-                    "Stop",
-                    hex_to_c32(&palette.colors.surface_recessed),
-                    palette,
-                ))
-                .clicked()
-            {
-                self.stop();
-            }
-
             ui.separator();
 
             // Playback Mode selection

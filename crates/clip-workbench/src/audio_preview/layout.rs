@@ -55,25 +55,6 @@ impl AudioWorkspace {
         )
     }
 
-    pub(super) fn time_readout(
-        ui: &mut egui::Ui,
-        current: f32,
-        duration: f32,
-        palette: &AppPalette,
-    ) {
-        let text = format!(
-            "{} / {}",
-            Self::clock_time(current),
-            Self::clock_time(duration)
-        );
-        Self::fixed_readout(
-            ui,
-            &text,
-            Self::TIME_READOUT_WIDTH,
-            hex_to_c32(&palette.harmonies.base),
-        );
-    }
-
     pub(super) fn primary_button(
         label: impl Into<String>,
         fill: Color32,
@@ -164,16 +145,6 @@ impl AudioWorkspace {
         ui.add_space(crate::ui_ext::SPACE_XS);
     }
 
-    pub(super) fn control_group(
-        ui: &mut egui::Ui,
-        palette: &AppPalette,
-        label: &str,
-        controls: impl FnOnce(&mut egui::Ui),
-    ) {
-        Self::section_title(ui, palette, label);
-        controls(ui);
-    }
-
     pub(super) fn section_divider(ui: &mut egui::Ui, palette: &AppPalette) {
         ui.add_space(crate::ui_ext::SPACE_SM);
         let (rect, _) =
@@ -247,55 +218,6 @@ impl AudioWorkspace {
         .min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
     }
 
-    pub(super) fn zoom_control_bar(
-        ui: &mut egui::Ui,
-        palette: &AppPalette,
-    ) -> Option<crate::ui_ext::ZoomAction> {
-        use crate::icons::Icon;
-        use crate::ui_ext::ZoomAction;
-        let fill = crate::ui_appearance::WorkbenchColors::from_palette(palette).recessed;
-        let mut action = None;
-        if ui
-            .add(crate::ui_ext::icon_button(
-                Icon::ZoomIn,
-                14.0,
-                fill,
-                None,
-                palette,
-            ))
-            .on_hover_text("Zoom In (+ / Ctrl+Wheel)")
-            .clicked()
-        {
-            action = Some(ZoomAction::ZoomIn);
-        }
-        if ui
-            .add(crate::ui_ext::icon_button(
-                Icon::ZoomOut,
-                14.0,
-                fill,
-                None,
-                palette,
-            ))
-            .on_hover_text("Zoom Out (- / Ctrl+Wheel)")
-            .clicked()
-        {
-            action = Some(ZoomAction::ZoomOut);
-        }
-        if ui
-            .add(crate::ui_ext::secondary_button_icon(
-                Some(Icon::ZoomFit),
-                "Fit",
-                fill,
-                palette,
-            ))
-            .on_hover_text("Fit Track / Window (Ctrl+0)")
-            .clicked()
-        {
-            action = Some(ZoomAction::Fit);
-        }
-        action
-    }
-
     pub(super) fn show(ui: &mut egui::Ui, palette: &AppPalette, body: impl FnOnce(&mut egui::Ui)) {
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
         let rect = ui.available_rect_before_wrap();
@@ -314,11 +236,12 @@ impl AudioPreviewState {
         ui.horizontal(|ui| {
             crate::icons::Icon::Volume.ui(ui, 16.0, colors.text_secondary);
             let mut volume_percent = self.volume * 100.0;
+            let slider_width = (ui.available_width() - 88.0).clamp(24.0, 124.0);
             let changed = crate::shell::render_track_slider(
                 ui,
                 &mut volume_percent,
                 0.0..=100.0,
-                124.0,
+                slider_width,
                 palette,
             )
             .on_hover_text(format!("Volume: {:.0}%", volume_percent))
@@ -335,6 +258,27 @@ impl AudioPreviewState {
         });
     }
 
+    pub(super) fn studio_playhead(&self) -> (f32, f32) {
+        if self.active_mode == AudioToolMode::StemSeparation
+            && !self.stem_separation.stems.is_empty()
+        {
+            if self.stem_separation.editor_playhead_active {
+                if let Some(stem) = self
+                    .stem_separation
+                    .stems
+                    .get(self.stem_separation.selected_stem)
+                {
+                    return (stem.preview.current_time_sec, stem.preview.duration_sec);
+                }
+            }
+            return (
+                self.stem_separation.group_current_time_sec,
+                self.group_duration(),
+            );
+        }
+        (self.current_time_sec, self.duration_sec)
+    }
+
     pub(crate) fn render_audio_header(
         &mut self,
         ui: &mut egui::Ui,
@@ -342,8 +286,7 @@ impl AudioPreviewState {
         palette: &AppPalette,
         close_requested: &mut bool,
     ) {
-        let mins = (self.duration_sec / 60.0) as u32;
-        let secs = self.duration_sec % 60.0;
+        let (current, duration) = self.studio_playhead();
         let editor = if self.audio_editor.is_empty() {
             "audacity"
         } else {
@@ -365,12 +308,19 @@ impl AudioPreviewState {
             .with_icon(crate::icons::Icon::Volume);
 
         let mut shell = StudioShell::new(
-            "Audio Studio",
+            format!("AUDIO STUDIO — {}", self.title),
             crate::icons::Icon::Audio,
             palette,
             close_requested,
         )
-        .with_badge(format!("{:02}:{:04.1}", mins, secs), None)
+        .with_header_readout(
+            format!(
+                "{} / {}",
+                AudioWorkspace::clock_time(current),
+                AudioWorkspace::clock_time(duration),
+            ),
+            AudioWorkspace::TIME_READOUT_WIDTH,
+        )
         .with_escape_hatch(hatch);
 
         if let Some(ref meta) = self.metadata {
@@ -520,7 +470,7 @@ mod tests {
             egui::CentralPanel::default().show(ctx, |ui| {
                 for button in [
                     AudioWorkspace::primary_button("Play", Color32::GREEN, &palette),
-                    AudioWorkspace::secondary_button("Stop", Color32::DARK_GRAY, &palette),
+                    AudioWorkspace::secondary_button("Start", Color32::DARK_GRAY, &palette),
                     AudioWorkspace::toggle_button("Loop", true, &palette),
                 ] {
                     heights.push(ui.add(button).rect.height());

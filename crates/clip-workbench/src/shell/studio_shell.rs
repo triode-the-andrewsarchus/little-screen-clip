@@ -455,6 +455,7 @@ impl StudioPanelLayout {
 pub struct StudioShell<'a> {
     pub title: String,
     compact_title: Option<String>,
+    header_readout: Option<(String, f32)>,
     pub icon: Option<Icon>,
     pub palette: &'a AppPalette,
     pub close: &'a mut bool,
@@ -474,6 +475,7 @@ impl<'a> StudioShell<'a> {
         Self {
             title: title.into(),
             compact_title: None,
+            header_readout: None,
             icon: icon.into(),
             palette,
             close,
@@ -492,6 +494,12 @@ impl<'a> StudioShell<'a> {
     /// Provide a shorter title to show when the full title cannot fit beside header actions.
     pub fn with_compact_title(mut self, title: impl Into<String>) -> Self {
         self.compact_title = Some(title.into());
+        self
+    }
+
+    /// Reserve a fixed-width readout at the horizontal center of the header.
+    pub fn with_header_readout(mut self, text: impl Into<String>, width: f32) -> Self {
+        self.header_readout = Some((text.into(), width));
         self
     }
 
@@ -552,6 +560,18 @@ impl<'a> StudioShell<'a> {
                     Vec2::new(ui.available_width(), CONTROL_HEIGHT),
                     egui::Sense::hover(),
                 );
+                let readout_rect = self.header_readout.as_ref().map(|(_, width)| {
+                    Rect::from_center_size(row_rect.center(), Vec2::new(*width, row_rect.height()))
+                });
+                if let (Some((text, _)), Some(rect)) = (&self.header_readout, readout_rect) {
+                    ui.painter().with_clip_rect(rect).text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        text,
+                        egui::FontId::monospace(14.0),
+                        colors.accent,
+                    );
+                }
                 // Allocate the functional controls first. Their width determines how much
                 // space the title can use; a long filename must never draw over them.
                 let mut action_ui =
@@ -608,8 +628,14 @@ impl<'a> StudioShell<'a> {
                 }
 
                 let title_right = (action_ui.min_rect().left() - SPACE_SM).max(row_rect.left());
-                let controls_rect =
-                    Rect::from_min_max(row_rect.min, egui::pos2(title_right, row_rect.bottom()));
+                let controls_left = readout_rect
+                    .map(|rect| rect.right() + SPACE_SM)
+                    .unwrap_or(row_rect.left())
+                    .min(title_right);
+                let controls_rect = Rect::from_min_max(
+                    egui::pos2(controls_left, row_rect.top()),
+                    egui::pos2(title_right, row_rect.bottom()),
+                );
                 let mut title_action_ui = ui.child_ui(
                     controls_rect,
                     egui::Layout::right_to_left(egui::Align::Center),
@@ -637,7 +663,10 @@ impl<'a> StudioShell<'a> {
                 let badges_width = badge_widths.iter().sum::<f32>()
                     + 4.0 * self.badges.len().saturating_sub(1) as f32;
                 let badges_left = badges_right - badges_width;
-                let show_badges = badges_left >= row_rect.left() + 80.0;
+                let badges_min_left = readout_rect
+                    .map(|rect| rect.right() + SPACE_SM)
+                    .unwrap_or(row_rect.left() + 80.0);
+                let show_badges = badges_left >= badges_min_left;
                 if show_badges {
                     let mut badge_x = badges_left;
                     for (badge, width) in self.badges.iter().zip(badge_widths) {
@@ -662,6 +691,10 @@ impl<'a> StudioShell<'a> {
                 } else {
                     badges_right
                 } - 8.0)
+                    .max(row_rect.left());
+                let name_right = readout_rect
+                    .map(|rect| name_right.min(rect.left() - SPACE_SM))
+                    .unwrap_or(name_right)
                     .max(row_rect.left());
                 let name_rect =
                     Rect::from_min_max(row_rect.min, egui::pos2(name_right, row_rect.bottom()));
@@ -807,6 +840,85 @@ impl<'a> StudioShell<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn centered_header_readout_keeps_its_position_and_truncates_titles() {
+        let palette =
+            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
+        for width in [900.0, 1180.0, 1600.0] {
+            for title in [
+                "AUDIO STUDIO — short.wav",
+                "AUDIO STUDIO — a very long filename that needs to be truncated before the centered timestamp.wav",
+            ] {
+                let ctx = egui::Context::default();
+                crate::ui_ext::configure_workbench_style(&ctx);
+                let readout = "01:01:01.25 / 02:02:02.50";
+                let mut header_center = 0.0;
+                let output = ctx.run(
+                    egui::RawInput {
+                        screen_rect: Some(Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            Vec2::new(width, 700.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ctx| {
+                        egui::CentralPanel::default().show(ctx, |ui| {
+                            header_center = ui.available_rect_before_wrap().center().x;
+                            StudioShell::new(title, Icon::Audio, &palette, &mut false)
+                                .with_header_readout(readout, 242.0)
+                                .with_badge("44.1 kHz", None)
+                                .with_badge("WAV", None)
+                                .with_escape_hatch(EscapeHatch::primary(
+                                    "Audacity", "audacity", "Edit",
+                                ))
+                                .render_header_with_title_actions(
+                                    ui,
+                                    |ui| {
+                                        ui.add_sized(
+                                            [100.0, CONTROL_HEIGHT],
+                                            egui::Label::new("Volume"),
+                                        );
+                                    },
+                                    |_| {},
+                                );
+                        });
+                    },
+                );
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| {
+                        if let egui::epaint::Shape::Text(text) = &shape.shape {
+                            Some((
+                                text.galley.text(),
+                                shape.clip_rect,
+                                Rect::from_min_size(text.pos, text.galley.size()),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let (_, timer_clip, timer_text) =
+                    texts.iter().find(|(text, _, _)| *text == readout).unwrap();
+                assert!((timer_text.center().x - header_center).abs() < 1.0);
+                assert_eq!(timer_clip.width(), 242.0);
+                for (text, clip, rect) in &texts {
+                    if *text == title {
+                        assert!(clip.right() < timer_clip.left(), "filename overlaps timer");
+                    } else if *text != readout {
+                        let visible = rect.intersect(*clip);
+                        assert!(
+                            visible.right() <= timer_clip.left()
+                                || visible.left() >= timer_clip.right(),
+                            "header control overlaps timer: {text}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn footer_toasts_do_not_increase_the_bar_height() {

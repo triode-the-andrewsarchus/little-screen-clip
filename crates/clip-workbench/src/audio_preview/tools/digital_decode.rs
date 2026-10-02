@@ -1053,18 +1053,6 @@ impl AudioPreviewState {
                 }
             }
 
-            ui.label(
-                egui::RichText::new(format!(
-                    "{:02}:{:05.2} / {:02}:{:05.2}",
-                    (self.current_time_sec / 60.0) as u32,
-                    self.current_time_sec % 60.0,
-                    (self.duration_sec / 60.0) as u32,
-                    self.duration_sec % 60.0
-                ))
-                .monospace()
-                .color(text_f_med),
-            );
-
             ui.separator();
 
             // Re-scan button

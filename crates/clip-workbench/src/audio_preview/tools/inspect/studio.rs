@@ -351,7 +351,7 @@ impl AudioPreviewState {
 
         // 2. Transport, Zoom & Slicing Control Bar
         layout::AudioWorkspace::control_bar(ui, palette, |ui| {
-            layout::AudioWorkspace::control_group(ui, palette, "Transport", |ui| {
+            {
                 // Play / Pause Button
                 let (play_icon, play_label) = if self.is_playing {
                     (crate::icons::Icon::Pause, "Pause [Space]")
@@ -382,16 +382,6 @@ impl AudioPreviewState {
                 }
 
                 ui.add_space(3.0);
-
-                let stop_btn = layout::AudioWorkspace::secondary_button_icon(
-                    Some(crate::icons::Icon::Stop),
-                    "Stop",
-                    hex_to_c32(&palette.colors.surface_recessed),
-                    palette,
-                );
-                if ui.add(stop_btn).clicked() {
-                    self.stop();
-                }
 
                 let replay_btn = layout::AudioWorkspace::secondary_button_icon(
                     Some(crate::icons::Icon::Undo),
@@ -429,30 +419,24 @@ impl AudioPreviewState {
                     ));
                 }
 
-                ui.add_space(10.0);
-
-                layout::AudioWorkspace::time_readout(
-                    ui,
-                    self.current_time_sec,
-                    self.duration_sec,
-                    palette,
-                );
-
                 ui.add_space(crate::ui_ext::SPACE_MD);
 
-                if let Some(action) = layout::AudioWorkspace::zoom_control_bar(ui, palette) {
-                    match action {
-                        crate::ui_ext::ZoomAction::ZoomIn => self.zoom(0.75, self.current_time_sec),
-                        crate::ui_ext::ZoomAction::ZoomOut => {
-                            self.zoom(1.33, self.current_time_sec)
-                        }
-                        crate::ui_ext::ZoomAction::Fit => self.fit_to_window(),
-                    }
+                if ui
+                    .add(layout::AudioWorkspace::secondary_button_icon(
+                        Some(crate::icons::Icon::ZoomFit),
+                        "Fit",
+                        hex_to_c32(&palette.colors.surface_recessed),
+                        palette,
+                    ))
+                    .on_hover_text("Fit Track / Window (Ctrl+0)")
+                    .clicked()
+                {
+                    self.fit_to_window();
                 }
-            });
+            }
 
             layout::AudioWorkspace::section_divider(ui, palette);
-            layout::AudioWorkspace::control_group(ui, palette, "Selection", |ui| {
+            {
                 // Mode Toggle: Single Region (default) vs Multi-Region Mode
                 let is_multi = self.selection_mode == SelectionMode::Multi;
                 let mode_btn = layout::AudioWorkspace::toggle_button_icon(
@@ -563,10 +547,10 @@ impl AudioPreviewState {
                 {
                     self.trim_silence(-45.0, now);
                 }
-            });
+            }
 
             layout::AudioWorkspace::section_divider(ui, palette);
-            layout::AudioWorkspace::control_group(ui, palette, "Export", |ui| {
+            {
                 let channels_count = self.analysis.as_ref().map(|a| a.channels).unwrap_or(2);
 
                 match self.selection_mode {
@@ -731,7 +715,7 @@ impl AudioPreviewState {
 
                 let copy_wave_btn = layout::AudioWorkspace::secondary_button_icon(
                     Some(crate::icons::Icon::Copy),
-                    "Copy Waveform Image",
+                    "Copy Wave .png",
                     hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 );
@@ -748,7 +732,7 @@ impl AudioPreviewState {
 
                 let copy_spec_btn = layout::AudioWorkspace::secondary_button_icon(
                     Some(crate::icons::Icon::Copy),
-                    "Copy Spectrum Image",
+                    "Copy FFT .png",
                     hex_to_c32(&palette.colors.surface_recessed),
                     palette,
                 );
@@ -760,7 +744,7 @@ impl AudioPreviewState {
                 if copy_spec_response.clicked() {
                     self.copy_spectrum_image(palette, now);
                 }
-            });
+            }
         });
 
         self.render_selection_info_bar(ui, palette, now);
