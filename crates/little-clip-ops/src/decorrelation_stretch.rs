@@ -11,6 +11,8 @@
 //! 5. Optionally apply percentile contrast clipping (`tol`) to map extremes to [0, 255].
 //! 6. Apply affine transform `out = T * in + offset` to each pixel, clamping to [0, 255] and preserving alpha.
 
+use fearless_simd::{Level, Simd, dispatch};
+use fearless_simd_macros::simd;
 use image::{Rgba, RgbaImage};
 
 /// Matrix to decompose: Correlation (equal band weight) or Covariance (weighted by variance).
@@ -477,6 +479,16 @@ pub fn apply_transform(src: &RgbaImage, transform: &DecorrelationTransform) -> R
 }
 
 fn apply_transform_cancellable(
+    src: &RgbaImage,
+    transform: &DecorrelationTransform,
+    is_cancelled: &dyn Fn() -> bool,
+) -> Option<RgbaImage> {
+    dispatch!(Level::new(), simd => apply_transform_cancellable_simd(simd, src, transform, is_cancelled))
+}
+
+#[simd]
+fn apply_transform_cancellable_simd<S: Simd>(
+    _: S,
     src: &RgbaImage,
     transform: &DecorrelationTransform,
     is_cancelled: &dyn Fn() -> bool,

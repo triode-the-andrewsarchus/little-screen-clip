@@ -34,3 +34,5 @@ yodel = { version = "0.2.0", default-features = false, features = ["alloc", "std
 cwdit-dsp = { git = "https://github.com/swilcox/cw-dit", package = "cwdit-dsp" }
 cwdit-morse = { git = "https://github.com/swilcox/cw-dit", package = "cwdit-morse" }
 realfft = "3.5.0"
+fearless_simd = "1.0"
+fearless_simd_macros = "0.1"
