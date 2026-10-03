@@ -342,7 +342,8 @@ impl AudioPreviewState {
             ))
             .stroke(Stroke::new(1.0_f32, colors.panel))
             .show(ui, |ui| {
-                render_audio_tool_tabs(ui, &mut self.active_mode, palette);
+                let stereo = self.is_stereo();
+                render_audio_tool_tabs(ui, &mut self.active_mode, palette, stereo);
             });
     }
 }
@@ -351,9 +352,11 @@ fn render_audio_tool_tabs(
     ui: &mut egui::Ui,
     active_mode: &mut AudioToolMode,
     palette: &AppPalette,
+    stereo: bool,
 ) {
     let tabs: Vec<_> = AudioToolMode::ALL
         .iter()
+        .filter(|&&mode| stereo || mode != AudioToolMode::ChannelTools)
         .map(|&mode| crate::ui_tabs::Tab::new(mode, mode.label()).icon(mode.icon()))
         .collect();
     if let Some(mode) = crate::ui_tabs::TabBar::new("audio_tools", *active_mode, &tabs, palette)
@@ -460,7 +463,12 @@ mod tests {
 
     #[test]
     fn audio_tool_tabs_wrap_and_keep_equal_sizing() {
-        for width in [440.0, 1280.0] {
+        for (width, stereo) in [
+            (440.0, false),
+            (1280.0, false),
+            (440.0, true),
+            (1280.0, true),
+        ] {
             let ctx = egui::Context::default();
             crate::ui_ext::configure_workbench_style(&ctx);
             let palette =
@@ -474,7 +482,7 @@ mod tests {
                 },
                 |ctx| {
                     egui::CentralPanel::default().show(ctx, |ui| {
-                        render_audio_tool_tabs(ui, &mut active_mode, &palette);
+                        render_audio_tool_tabs(ui, &mut active_mode, &palette, stereo);
                     });
                 },
             );
@@ -493,7 +501,17 @@ mod tests {
                 })
                 .collect::<Vec<_>>();
 
-            assert_eq!(button_rects.len(), AudioToolMode::ALL.len());
+            assert_eq!(
+                button_rects.len(),
+                AudioToolMode::ALL.len() - usize::from(!stereo)
+            );
+            let channel_label_visible = output.shapes.iter().any(|clipped| match &clipped.shape {
+                egui::epaint::Shape::Text(text) => {
+                    text.galley.text() == AudioToolMode::ChannelTools.label()
+                }
+                _ => false,
+            });
+            assert_eq!(channel_label_visible, stereo);
             assert!(button_rects.iter().all(|rect| {
                 (rect.width() - button_rects[0].width()).abs() < 0.1
                     && rect.min.x >= host.min.x

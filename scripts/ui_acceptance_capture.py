@@ -52,6 +52,8 @@ IMAGE_TOOL_KEYS = {
 }
 IMAGE_ACTION_KEYS = {"enter": "Return"}
 KEY_ACTIONS = {
+    **{str(number): ["-k", str(number)] for number in range(10)},
+    "c": ["-k", "c"],
     "ctrl-z": ["-M", "ctrl", "-k", "z", "-m", "ctrl"],
     "ctrl-s": ["-M", "ctrl", "-k", "s", "-m", "ctrl"],
     "ctrl-shift-z": ["-M", "ctrl", "-M", "shift", "-k", "z", "-m", "shift", "-m", "ctrl"],
@@ -1838,6 +1840,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
     if args.key_action and not args.image and any(action != "f3" for action in args.key_action):
         if not (
             (all(action in {"f3", "f6"} for action in args.key_action))
+            or (args.audio and all(action in {"c", "ctrl-z", "ctrl-y", "ctrl-s", *map(str, range(10))} for action in args.key_action))
             or (args.fake_text_preview and all(action in {"f3", "ctrl-f"} for action in args.key_action))
             or (args.fake_node_machine and all(action in {"ctrl-f", "ctrl-s", "ctrl-z", "ctrl-y", "ctrl-shift-z", "enter"} for action in args.key_action))
             or ((args.fake_pdf_preview or args.pdf) and all(action in {"r", "t", "ctrl-f", "enter", "escape", "down"} for action in args.key_action))

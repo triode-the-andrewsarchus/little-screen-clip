@@ -149,7 +149,12 @@ impl AudioPreviewState {
 
         // Global Keybindings for Audio Preview
         let accepts_tool_shortcuts = !ctx.wants_keyboard_input();
-        if accepts_tool_shortcuts && self.active_mode == AudioToolMode::Inspect {
+        if accepts_tool_shortcuts
+            && matches!(
+                self.active_mode,
+                AudioToolMode::Inspect | AudioToolMode::ChannelTools
+            )
+        {
             if ctx.input(|i| i.key_pressed(egui::Key::M)) {
                 self.selection_mode = match self.selection_mode {
                     SelectionMode::Single => SelectionMode::Multi,
@@ -239,7 +244,11 @@ impl AudioPreviewState {
             };
             self.seek_to(self.current_time_sec + step);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Home) || i.key_pressed(egui::Key::Num0)) {
+        if ctx.input(|i| {
+            i.key_pressed(egui::Key::Home)
+                || (self.active_mode != AudioToolMode::ChannelTools
+                    && i.key_pressed(egui::Key::Num0))
+        }) {
             self.seek_to(0.0);
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::Delete)) {
@@ -333,19 +342,11 @@ impl AudioPreviewState {
         }
 
         // Number keys 1..9: preview corresponding slice from start to stop
-        if self.selection_mode == SelectionMode::Multi && !self.multi_selections.is_empty() {
-            let num_keys = [
-                egui::Key::Num1,
-                egui::Key::Num2,
-                egui::Key::Num3,
-                egui::Key::Num4,
-                egui::Key::Num5,
-                egui::Key::Num6,
-                egui::Key::Num7,
-                egui::Key::Num8,
-                egui::Key::Num9,
-            ];
-            for (idx, &k) in num_keys.iter().enumerate() {
+        if self.active_mode != AudioToolMode::ChannelTools
+            && self.selection_mode == SelectionMode::Multi
+            && !self.multi_selections.is_empty()
+        {
+            for (idx, &k) in AUDIO_NUMBER_KEYS.iter().skip(1).enumerate() {
                 if ctx.input(|i| {
                     i.key_pressed(k)
                         && !i.modifiers.ctrl
@@ -374,6 +375,11 @@ impl AudioPreviewState {
                     }
                 }
             }
+        }
+
+        if self.active_mode == AudioToolMode::ChannelTools {
+            self.render_channel_workspace(ui, ctx, palette);
+            return;
         }
 
         // 2. Transport, Zoom & Slicing Control Bar

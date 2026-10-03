@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 pub enum AudioToolMode {
     #[default]
     Inspect,
+    ChannelTools,
     StemSeparation,
     DigitalDecode,
     HfAnalysis,
@@ -42,6 +43,7 @@ impl AudioToolMode {
     /// Order of tools in the shared Audio Studio tab bar.
     const ALL: &'static [Self] = &[
         Self::Inspect,
+        Self::ChannelTools,
         Self::StemSeparation,
         Self::DigitalDecode,
         Self::HfAnalysis,
@@ -50,6 +52,7 @@ impl AudioToolMode {
     fn label(self) -> &'static str {
         match self {
             Self::Inspect => "[I]nspect & Slice",
+            Self::ChannelTools => "[C]hannel Tools",
             Self::StemSeparation => "[S]tem Separation",
             Self::DigitalDecode => "[D]igital Decode",
             Self::HfAnalysis => "[H]F Analysis",
@@ -59,6 +62,7 @@ impl AudioToolMode {
     pub fn icon(self) -> crate::icons::Icon {
         match self {
             Self::Inspect => crate::icons::Icon::Scissors,
+            Self::ChannelTools => crate::icons::Icon::Waves,
             Self::StemSeparation => crate::icons::Icon::Layers,
             Self::DigitalDecode => crate::icons::Icon::BinaryDiff,
             Self::HfAnalysis => crate::icons::Icon::Bat,
@@ -325,6 +329,19 @@ pub struct RightClickHoldState {
 }
 
 pub const RIGHT_CLICK_HOLD_TIMEOUT: Duration = Duration::from_millis(300);
+
+const AUDIO_NUMBER_KEYS: [egui::Key; 10] = [
+    egui::Key::Num0,
+    egui::Key::Num1,
+    egui::Key::Num2,
+    egui::Key::Num3,
+    egui::Key::Num4,
+    egui::Key::Num5,
+    egui::Key::Num6,
+    egui::Key::Num7,
+    egui::Key::Num8,
+    egui::Key::Num9,
+];
 
 #[derive(Debug, Clone, Default, PartialEq)]
 struct SessionAudioEdits {
@@ -639,6 +656,7 @@ pub struct AudioPreviewState {
     spectrogram_texture: Option<egui::TextureHandle>,
     note_strip_texture: Option<egui::TextureHandle>,
     pub(crate) inspect_viewport_cache: ViewportSpectrogramCache,
+    channel_tools: ChannelToolsState,
 
     // Audio Playback Engine (rodio)
     player: Option<Player>,
@@ -937,6 +955,7 @@ impl AudioPreviewState {
             spectrogram_texture: None,
             note_strip_texture: None,
             inspect_viewport_cache: ViewportSpectrogramCache::default(),
+            channel_tools: ChannelToolsState::default(),
             player: None,
             player_factory: crate::ui_ext::new_shared_audio_player,
             _sink: None,

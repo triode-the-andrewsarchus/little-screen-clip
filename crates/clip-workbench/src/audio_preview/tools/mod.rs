@@ -20,3 +20,6 @@ pub(super) use stem_separation::{
     audacity_lof_contents, editor_stem_switch, parse_stem_manifest,
     prepare_isolated_audacity_command, stem_is_audible, waveform_scrub_time,
 };
+
+mod channel_tools;
+pub(super) use channel_tools::{ChannelMonitorSource, ChannelToolsState};

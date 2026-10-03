@@ -23,6 +23,7 @@ impl AudioPreviewState {
             // more than one pressed key; modified keys belong to other controls.
             let mode = ctx.input(|i| {
                 let keys = [
+                    (egui::Key::C, AudioToolMode::ChannelTools),
                     (egui::Key::H, AudioToolMode::HfAnalysis),
                     (egui::Key::D, AudioToolMode::DigitalDecode),
                     (egui::Key::S, AudioToolMode::StemSeparation),
@@ -30,14 +31,18 @@ impl AudioPreviewState {
                 ];
                 (!i.modifiers.command && !i.modifiers.ctrl && !i.modifiers.mac_cmd)
                     .then(|| {
-                        keys.into_iter()
-                            .find_map(|(key, mode)| i.key_pressed(key).then_some(mode))
+                        keys.into_iter().find_map(|(key, mode)| {
+                            (i.key_pressed(key)
+                                && (mode != AudioToolMode::ChannelTools || self.is_stereo()))
+                            .then_some(mode)
+                        })
                     })
                     .flatten()
             });
             if let Some(mode) = mode {
                 self.active_mode = mode;
             }
+            self.handle_channel_shortcuts(ctx);
         }
         // Nested save dialogs handle Escape themselves, leaving the studio open.
         if !dialog_open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -84,6 +89,7 @@ impl AudioPreviewState {
         mut start_stem_separation: impl FnMut(&mut Self),
     ) {
         let mode_before_frame = self.active_mode;
+        self.poll_channel_edit(ctx);
         self.poll_slice_copy_job(ctx, ctx.input(|input| input.time));
         self.poll_save_job(ctx, ctx.input(|input| input.time));
         self.poll_digital_decode(ctx);
@@ -106,9 +112,10 @@ impl AudioPreviewState {
             {
                 start_stem_separation(self);
             }
+            self.sync_channel_monitor();
             ui.add_space(crate::ui_ext::SPACE_SM);
             match self.active_mode {
-                AudioToolMode::Inspect => {
+                AudioToolMode::Inspect | AudioToolMode::ChannelTools => {
                     self.render_standard_ui(ui, ctx, palette, close_requested, None)
                 }
                 AudioToolMode::StemSeparation => {

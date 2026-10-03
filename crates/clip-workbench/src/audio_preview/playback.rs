@@ -61,9 +61,9 @@ impl AudioPreviewState {
             p.clear();
             if let Ok(file) = File::open(&self.path) {
                 if let Ok(decoder) = Decoder::new(BufReader::new(file)) {
-                    p.append(EditedPreviewSource::new(
-                        decoder,
-                        Arc::clone(&self.playback_edits),
+                    p.append(ChannelMonitorSource::new(
+                        EditedPreviewSource::new(decoder, Arc::clone(&self.playback_edits)),
+                        Arc::clone(&self.channel_tools.monitor),
                     ));
                     let target_pos = Duration::from_secs_f32(s);
                     let _ = p.try_seek(target_pos);
@@ -113,9 +113,9 @@ impl AudioPreviewState {
             p.clear();
             if let Ok(file) = File::open(&self.path) {
                 if let Ok(decoder) = Decoder::new(BufReader::new(file)) {
-                    p.append(EditedPreviewSource::new(
-                        decoder,
-                        Arc::clone(&self.playback_edits),
+                    p.append(ChannelMonitorSource::new(
+                        EditedPreviewSource::new(decoder, Arc::clone(&self.playback_edits)),
+                        Arc::clone(&self.channel_tools.monitor),
                     ));
                     let target_pos = Duration::from_secs_f32(self.current_time_sec);
                     let _ = p.try_seek(target_pos);
@@ -180,9 +180,12 @@ impl AudioPreviewState {
                         p.clear();
                         if let Ok(file) = File::open(&self.path) {
                             if let Ok(decoder) = Decoder::new(BufReader::new(file)) {
-                                p.append(EditedPreviewSource::new(
-                                    decoder,
-                                    Arc::clone(&self.playback_edits),
+                                p.append(ChannelMonitorSource::new(
+                                    EditedPreviewSource::new(
+                                        decoder,
+                                        Arc::clone(&self.playback_edits),
+                                    ),
+                                    Arc::clone(&self.channel_tools.monitor),
                                 ));
                                 let _ = p.try_seek(target_pos);
                                 p.play();

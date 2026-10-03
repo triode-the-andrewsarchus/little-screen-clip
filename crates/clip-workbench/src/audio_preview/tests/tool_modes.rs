@@ -3,6 +3,7 @@ use super::*;
 #[test]
 fn audio_tool_modes_have_stable_toolbar_labels() {
     assert_eq!(AudioToolMode::Inspect.label(), "[I]nspect & Slice");
+    assert_eq!(AudioToolMode::ChannelTools.label(), "[C]hannel Tools");
     assert_eq!(AudioToolMode::StemSeparation.label(), "[S]tem Separation");
     assert_eq!(AudioToolMode::DigitalDecode.label(), "[D]igital Decode");
     assert_eq!(AudioToolMode::HfAnalysis.label(), "[H]F Analysis");

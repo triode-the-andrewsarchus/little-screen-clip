@@ -20,15 +20,19 @@ impl AudioPreviewState {
     pub(super) fn restart_session_analysis_on(&mut self, jobs: &BackgroundJobs) {
         self.cancel_session_analysis();
         self.cancel_edit_analysis();
-        self.analysis = None;
-        self.completed_source_analysis = None;
-        self.edited_waveform = None;
-        self.session_transients = None;
-        self.spectrogram_texture = None;
-        self.note_strip_texture = None;
+        let retain_display =
+            self.active_mode == AudioToolMode::ChannelTools && self.analysis.is_some();
+        if !retain_display {
+            self.analysis = None;
+            self.completed_source_analysis = None;
+            self.edited_waveform = None;
+            self.session_transients = None;
+            self.spectrogram_texture = None;
+            self.note_strip_texture = None;
+        }
         self.hf_analysis.viewport_cache.clear();
         self.inspect_viewport_cache.clear();
-        self.is_loading_analysis = true;
+        self.is_loading_analysis = !retain_display;
         self.edit_analysis_rx = None;
         self.edit_analysis_retry_at = None;
         self.edit_analysis_observed = SessionAudioEdits::default();
@@ -99,6 +103,7 @@ impl AudioPreviewState {
                             self.view_duration_sec = self.duration_sec;
                         }
                         self.analysis = Some(Arc::new(analysis));
+                        self.edited_waveform = None;
                         self.is_loading_analysis = false;
                     }
                     AudioAnalysisProgress::TransientsReady(transients) => {
@@ -147,7 +152,7 @@ impl AudioPreviewState {
                     self.analysis_rx = None;
                     self.analysis_ticket = None;
                     self.analysis_cancel = None;
-                    self.is_loading_analysis = true;
+                    self.is_loading_analysis = self.analysis.is_none();
                     self.analysis_progress_disconnected = false;
                     self.analysis_retry_at = Some(Instant::now() + Duration::from_millis(500));
                     self.status_toast = Some((
@@ -218,20 +223,11 @@ impl AudioPreviewState {
             [spectrogram_width, spectrogram_height],
             &spectrogram_rgba,
         );
-        self.spectrogram_texture = Some(ctx.load_texture(
-            format!("spectrogram:{}", self.path.display()),
-            spec_img,
-            egui::TextureOptions::LINEAR,
-        ));
         let note_img = egui::ColorImage::from_rgba_unmultiplied(
             [note_strip_width, note_strip_height],
             &note_strip_rgba,
         );
-        self.note_strip_texture = Some(ctx.load_texture(
-            format!("note_strip:{}", self.path.display()),
-            note_img,
-            egui::TextureOptions::NEAREST,
-        ));
+        self.install_audio_textures(ctx, spec_img, note_img);
         let target = if edited {
             self.edited_waveform.as_mut()
         } else {
@@ -251,6 +247,24 @@ impl AudioPreviewState {
             analysis.ultrasonic_peak_times = ultrasonic_peak_times;
             analysis.is_spectrogram_ready = true;
         }
+    }
+
+    pub(super) fn install_audio_textures(
+        &mut self,
+        ctx: &egui::Context,
+        spectrum: egui::ColorImage,
+        notes: egui::ColorImage,
+    ) {
+        self.spectrogram_texture = Some(ctx.load_texture(
+            format!("spectrogram:{}", self.path.display()),
+            spectrum,
+            egui::TextureOptions::LINEAR,
+        ));
+        self.note_strip_texture = Some(ctx.load_texture(
+            format!("note_strip:{}", self.path.display()),
+            notes,
+            egui::TextureOptions::NEAREST,
+        ));
         self.inspect_viewport_cache.clear();
         self.hf_analysis.viewport_cache.clear();
     }

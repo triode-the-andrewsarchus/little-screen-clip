@@ -86,7 +86,7 @@ pub struct PeakBlock {
 
 /// Comprehensive audio analysis data containing raw PCM samples, peak pyramids,
 /// spectrogram image, ColorChord note ribbon, spectral colors, and transient onset points.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FullAudioAnalysis {
     pub channels: u16,
     pub sample_rate: u32,

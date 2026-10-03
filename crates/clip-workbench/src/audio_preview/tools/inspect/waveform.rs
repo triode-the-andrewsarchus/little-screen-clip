@@ -75,7 +75,7 @@ impl AudioPreviewState {
         }
     }
 
-    pub(super) fn render_waveform_canvas(
+    pub(in crate::audio_preview) fn render_waveform_canvas(
         &mut self,
         ui: &mut egui::Ui,
         ctx: &egui::Context,
@@ -131,6 +131,8 @@ impl AudioPreviewState {
         );
         let [ruler_rect, wave_rect, spec_rect, strip_rect, scroll_rect] =
             layout::AudioWorkspace::inspect_timeline_rects(track_rect);
+        let channel_header_hovered = self.active_mode == AudioToolMode::ChannelTools
+            && self.render_channel_headers(ui, palette, track_rect);
         let wave_h = wave_rect.height();
 
         // Transform helpers parameterized by (start, dur) to avoid closures holding &self
@@ -155,7 +157,7 @@ impl AudioPreviewState {
         );
 
         // --- INTERACTIVE MOUSE / INPUT HANDLING (MUTATES SELF BEFORE PAINTING) ---
-        if response.hovered() {
+        if response.hovered() && !channel_header_hovered {
             if let Some(mouse_pos) = response.hover_pos() {
                 let handle_grab_radius_px = 10.0;
                 let mut near_handle = false;
@@ -273,7 +275,7 @@ impl AudioPreviewState {
         let now = ui.input(|i| i.time);
 
         // Right-click press down on waveform canvas (when Shift is not held)
-        if is_secondary_pressed && !shift_down {
+        if is_secondary_pressed && !shift_down && !channel_header_hovered {
             let pointer_pos = ui
                 .input(|i| i.pointer.interact_pos())
                 .or_else(|| response.interact_pointer_pos())
@@ -405,7 +407,7 @@ impl AudioPreviewState {
             }
         }
 
-        if response.drag_started() {
+        if response.drag_started() && !channel_header_hovered {
             if let Some(mouse_pos) = response.interact_pointer_pos() {
                 if is_middle {
                     // Holding Middle Mouse Button pans the canvas!
@@ -728,7 +730,7 @@ impl AudioPreviewState {
                     }
                 }
             }
-        } else if response.clicked_by(egui::PointerButton::Primary) {
+        } else if response.clicked_by(egui::PointerButton::Primary) && !channel_header_hovered {
             if let Some(pos) = response.interact_pointer_pos() {
                 if scroll_rect.contains(pos) {
                     let ratio = (pos.x - scroll_rect.min.x) / scroll_rect.width();
@@ -761,7 +763,7 @@ impl AudioPreviewState {
                     self.seek_to(clicked_t);
                 }
             }
-        } else if response.double_clicked() {
+        } else if !channel_header_hovered && response.double_clicked() {
             match self.selection_mode {
                 SelectionMode::Single => {
                     if self.selection.is_some() {
@@ -785,6 +787,11 @@ impl AudioPreviewState {
                     }
                 }
             }
+        }
+
+        if self.active_mode == AudioToolMode::ChannelTools {
+            self.paint_channel_canvas(ctx, &painter, palette, track_rect);
+            return;
         }
 
         // --- PAINTING PHASE: ALL MUTATIONS COMPLETED ---
