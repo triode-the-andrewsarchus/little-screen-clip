@@ -9,3 +9,5 @@ These small fixtures are generated test data, not third-party scenes.
   and identity rotations. This tests the real exporter's packed representation.
 - `packed-v4.spz`: the same two-Gaussian input exported by SplatTransform 3.9.0
   with `--spz-version 4`; validates the five-stream degree-zero SPZ container.
+- `two-gaussians.sog`: the same synthetic input exported as bundled SOG v2;
+  exercises continuous workbench navigation on a tiny decoded scene.

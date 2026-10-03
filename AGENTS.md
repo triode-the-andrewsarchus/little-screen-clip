@@ -66,7 +66,7 @@ Image Studio committed pixels and original/undo/redo revisions use `Arc<RgbaImag
 
 PDF page rasters belong in a viewer-owned temporary directory. Keep only raster paths in page state and read one compressed page at a time in the bounded decode worker, preserving re-selection after texture eviction without document-sized RAM retention.
 
-Gaussian scene imports and workbench renders run on the bounded job executor. Little-screen scene playback uses a bounded cache of 30 CPU frames; release scene GPU allocations after baking and cancel previews superseded by source or appearance changes.
+Gaussian scene imports and workbench renders run on the bounded job executor. Coalesce navigation into one outstanding render and present ordered camera completions during dragging; reject completions for a replaced session or viewport. Little-screen scene playback uses a bounded cache of 30 CPU frames; release scene GPU allocations after baking and cancel previews superseded by source or appearance changes.
 
 `WorkbenchApp` owns one active `ViewerSession` at a time. CLI previews queued at startup open in their established order; asynchronous completions must wait for the active session to close rather than replace or appear behind it.
 

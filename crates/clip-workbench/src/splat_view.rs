@@ -150,7 +150,12 @@ impl SplatViewerState {
             Ok(Ok(RenderCompletion::Splat(completion))) => {
                 self.renderer = Some(completion.renderer);
                 self.points = completion.points;
-                if request == self.desired {
+                // One outstanding job makes completions ordered within this
+                // session. Present its finished camera view while newer input
+                // is coalesced into the next job; exact camera equality starves
+                // presentation during continuous dragging. A replaced viewport
+                // still invalidates the raster dimensions.
+                if request.size == self.desired.size {
                     let image = egui::ColorImage::from_rgba_unmultiplied(
                         [
                             completion.image.width() as usize,
@@ -337,6 +342,36 @@ mod tests {
 
     #[test]
     #[ignore = "requires a native compute-capable GPU adapter"]
+    fn continuous_sog_navigation_publishes_completed_frames_before_input_stops() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("two-gaussians.sog");
+        std::fs::write(
+            &path,
+            include_bytes!("../../little-clip-scene/tests/fixtures/two-gaussians.sog"),
+        )
+        .unwrap();
+        let ctx = egui::Context::default();
+        let mut viewer = SplatViewerState::from_file(path);
+        finish_job(&mut viewer, &ctx);
+        let texture_id = viewer.texture.as_ref().unwrap().id();
+        for _ in 0..12 {
+            viewer.desired.camera.yaw += 0.02;
+            viewer.queue_render();
+            let rendered = viewer.desired;
+            // A slow drag can deliver another input event before readback ends.
+            // That must not starve presentation until the pointer pauses.
+            viewer.desired.camera.yaw += 0.02;
+            finish_job(&mut viewer, &ctx);
+            assert_eq!(viewer.completed, Some(rendered));
+            assert_eq!(viewer.texture.as_ref().unwrap().id(), texture_id);
+        }
+        viewer.queue_render();
+        finish_job(&mut viewer, &ctx);
+        assert_eq!(viewer.completed, Some(viewer.desired));
+    }
+
+    #[test]
+    #[ignore = "requires a native compute-capable GPU adapter"]
     fn navigation_rejects_stale_frames_retains_texture_and_stops_when_idle() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("navigation.splat");
@@ -366,7 +401,8 @@ mod tests {
         viewer.queue_render();
         viewer.desired.camera.zoom *= 1.5;
         finish_job(&mut viewer, &ctx);
-        assert_eq!(viewer.completed, Some(accepted));
+        assert_ne!(viewer.completed, Some(accepted));
+        assert_ne!(viewer.completed, Some(viewer.desired));
         assert_eq!(viewer.texture.as_ref().unwrap().id(), texture_id);
         viewer.queue_render();
         finish_job(&mut viewer, &ctx);

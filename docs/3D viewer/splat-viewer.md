@@ -107,9 +107,14 @@ bakes 30 frames, drops the scene renderer, and retains CPU frames in an eight-en
 GPU cache test proves 100 playback requests share one baked loop with one bake.
 
 The workbench keeps one outstanding render, reuses its last accepted texture,
-and discards camera/viewport completions that no longer match the desired view.
-The GPU navigation test verifies stale-frame rejection, retained texture identity,
-and no new jobs over 100 unchanged-view requests. Routing and startup queue tests
+and presents completed camera views in order while coalescing newer navigation
+into the next render. Exact camera equality would discard frames throughout a
+continuous drag; only replaced viewport dimensions invalidate an in-session raster.
+Closing/replacing the session cancels its job and drops its completion channel.
+The GPU navigation test verifies replaced-viewport rejection, retained texture identity,
+and no new jobs over 100 unchanged-view requests. A two-Gaussian SOG regression
+test checks that every completed camera frame is presented even when more drag
+input arrives before completion, then verifies convergence when input stops. Routing and startup queue tests
 also pass. The production clipboard text-path card test verifies animation
 classification, background cache admission and visible splat pixels in the
 resulting display raster. Left drag orbits, right/middle drag pans, wheel zooms, and Reset view
@@ -192,7 +197,7 @@ cargo fmt --all --check
 git diff --check
 ```
 
-The affected suites contain 17 scene tests, 24 render tests and four targeted
+The affected suites contain 17 scene tests, 24 render tests and five targeted
 workbench tests, including native GPU checks. Physical USB hardware was not
 exercised; display acceptance used the production card renderer and private
 compositor captures.
