@@ -281,7 +281,7 @@ fn test_creative_fx_mode_switching_and_defaults() {
     // Defaults
     assert_eq!(
         state.creative_fx_state.selected_fx,
-        CreativeFxType::LensAberration
+        CreativeFxType::BasicControls
     );
     assert_eq!(state.creative_fx_state.lens_params.strength, 25.0);
     assert_eq!(state.creative_fx_state.lens_params.falloff, 50.0);

@@ -4,6 +4,7 @@ use super::*;
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CreativeFxParams {
+    BasicControls(BasicControlsParams),
     LensAberration(LensAberrationParams),
     Trichromatic(TrichromaticParams),
     PixelSort(PixelSortParams),
@@ -16,6 +17,7 @@ pub enum CreativeFxParams {
 impl CreativeFxParams {
     pub fn depth_mask(&self) -> &DepthMaskConfig {
         match self {
+            Self::BasicControls(p) => &p.depth_mask,
             Self::LensAberration(p) => &p.depth_mask,
             Self::Trichromatic(p) => &p.depth_mask,
             Self::PixelSort(p) => &p.depth_mask,
@@ -28,6 +30,7 @@ impl CreativeFxParams {
 
     pub fn depth_mask_mut(&mut self) -> &mut DepthMaskConfig {
         match self {
+            Self::BasicControls(p) => &mut p.depth_mask,
             Self::LensAberration(p) => &mut p.depth_mask,
             Self::Trichromatic(p) => &mut p.depth_mask,
             Self::PixelSort(p) => &mut p.depth_mask,
@@ -50,6 +53,11 @@ pub struct CreativeFxPreset {
 /// Return the signature preset used for preview thumbnails in the FX list.
 pub fn default_preset_for_fx(fx_type: CreativeFxType) -> CreativeFxPreset {
     match fx_type {
+        CreativeFxType::BasicControls => CreativeFxPreset {
+            name: "Neutral",
+            description: "Original tones with no adjustments",
+            params: CreativeFxParams::BasicControls(BasicControlsParams::default()),
+        },
         CreativeFxType::LensAberration => CreativeFxPreset {
             name: "Classic Lens",
             description: "Balanced optical dispersion, strong at borders",
@@ -174,6 +182,19 @@ pub fn default_preset_for_fx(fx_type: CreativeFxType) -> CreativeFxPreset {
 /// List all available presets for a given FX type.
 pub fn presets_for_fx(fx_type: CreativeFxType) -> Vec<CreativeFxPreset> {
     match fx_type {
+        CreativeFxType::BasicControls => vec![
+            default_preset_for_fx(CreativeFxType::BasicControls),
+            CreativeFxPreset {
+                name: "Soft contrast",
+                description: "Gentle contrast with recovered highlights and lifted shadows",
+                params: CreativeFxParams::BasicControls(BasicControlsParams {
+                    contrast: 15.0,
+                    highlights: -25.0,
+                    shadows: 20.0,
+                    ..BasicControlsParams::default()
+                }),
+            },
+        ],
         CreativeFxType::LensAberration => vec![
             CreativeFxPreset {
                 name: "Subtle Lens",

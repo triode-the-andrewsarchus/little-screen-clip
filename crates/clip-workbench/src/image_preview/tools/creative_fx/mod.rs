@@ -1,5 +1,6 @@
 use super::super::*;
 
+mod basic_controls;
 mod cmyk_halftone;
 mod dither_palette;
 mod lens_aberration;
@@ -110,6 +111,7 @@ fn creative_fx_choice_button(
 fn creative_fx_icon(effect: CreativeFxType) -> crate::icons::Icon {
     use crate::icons::Icon;
     match effect {
+        CreativeFxType::BasicControls => Icon::Settings,
         CreativeFxType::LensAberration => Icon::Search,
         CreativeFxType::Trichromatic => Icon::Camera,
         CreativeFxType::PixelSort => Icon::Zap,
@@ -174,6 +176,7 @@ fn render_creative_fx_mask_button(
 /// All state for the Creative FX tab.
 pub struct CreativeFxState {
     pub selected_fx: CreativeFxType,
+    pub basic_params: BasicControlsParams,
     pub lens_params: LensAberrationParams,
     pub trichromatic_params: TrichromaticParams,
     pub pixel_sort_params: PixelSortParams,
@@ -255,7 +258,8 @@ pub struct CreativeFxState {
 impl Default for CreativeFxState {
     fn default() -> Self {
         Self {
-            selected_fx: CreativeFxType::LensAberration,
+            selected_fx: CreativeFxType::BasicControls,
+            basic_params: BasicControlsParams::default(),
             lens_params: LensAberrationParams::default(),
             trichromatic_params: TrichromaticParams::default(),
             pixel_sort_params: PixelSortParams::default(),
@@ -350,7 +354,7 @@ impl CreativeFxState {
         }
     }
 
-    fn select_fx(&mut self, fx_type: CreativeFxType) {
+    pub(in crate::image_preview) fn select_fx(&mut self, fx_type: CreativeFxType) {
         if self.selected_fx != fx_type {
             self.selected_fx = fx_type;
             self.selection_revision = self.selection_revision.wrapping_add(1);
@@ -360,6 +364,7 @@ impl CreativeFxState {
 
     pub fn depth_mask_for_active_fx(&self) -> &DepthMaskConfig {
         match self.selected_fx {
+            CreativeFxType::BasicControls => &self.basic_params.depth_mask,
             CreativeFxType::LensAberration => &self.lens_params.depth_mask,
             CreativeFxType::Trichromatic => &self.trichromatic_params.depth_mask,
             CreativeFxType::PixelSort => &self.pixel_sort_params.depth_mask,
@@ -372,6 +377,7 @@ impl CreativeFxState {
 
     pub fn depth_mask_for_active_fx_mut(&mut self) -> &mut DepthMaskConfig {
         match self.selected_fx {
+            CreativeFxType::BasicControls => &mut self.basic_params.depth_mask,
             CreativeFxType::LensAberration => &mut self.lens_params.depth_mask,
             CreativeFxType::Trichromatic => &mut self.trichromatic_params.depth_mask,
             CreativeFxType::PixelSort => &mut self.pixel_sort_params.depth_mask,
@@ -384,6 +390,9 @@ impl CreativeFxState {
 
     pub fn current_params(&self) -> CreativeFxParams {
         match self.selected_fx {
+            CreativeFxType::BasicControls => {
+                CreativeFxParams::BasicControls(self.basic_params.clone())
+            }
             CreativeFxType::LensAberration => CreativeFxParams::LensAberration(self.lens_params),
             CreativeFxType::Trichromatic => {
                 CreativeFxParams::Trichromatic(self.trichromatic_params)
@@ -417,6 +426,7 @@ impl CreativeFxState {
 
     fn disable_mask_source(&mut self, source: CreativeFxMaskSource) -> bool {
         let configs = [
+            &mut self.basic_params.depth_mask,
             &mut self.lens_params.depth_mask,
             &mut self.trichromatic_params.depth_mask,
             &mut self.pixel_sort_params.depth_mask,

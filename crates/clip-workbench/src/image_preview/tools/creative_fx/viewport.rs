@@ -1,8 +1,7 @@
 use super::*;
 
 impl ImagePreviewState {
-    /// Full 3-panel Creative FX viewport (Left: FX list; Center: Split Canvas; Right: Controls).
-
+    /// Creative FX viewport with FX selection on the left, comparison in the center, and controls on the right.
     pub(crate) fn render_creative_fx_viewport(
         &mut self,
         ui: &mut egui::Ui,
@@ -49,12 +48,12 @@ impl ImagePreviewState {
             .expect("Creative FX has a panel layout")
             .with_panel_sizes(&self.panel_state);
         let panels = panel_layout.allocate(ui);
-        let left = panels.left.expect("Creative FX has a browser rail");
-        let right = panels.right.expect("Creative FX has an inspector rail");
-        let left_w = left.width();
-        let left_h = left.height();
-        let right_w = right.width();
-        let right_h = right.height();
+        let browser = panels.left.expect("Creative FX has a browser rail");
+        let controls = panels.right.expect("Creative FX has a controls rail");
+        let browser_w = browser.width();
+        let browser_h = browser.height();
+        let controls_w = controls.width();
+        let controls_h = controls.height();
         let center_w = panels.center.width();
         let main_h = panels.center.height();
 
@@ -65,15 +64,15 @@ impl ImagePreviewState {
         }
 
         // ── 1. LEFT PANEL: Creative FX List with 42x28 mini preview photos ──
-        crate::shell::StudioPanelLayout::show_region(ui, left, |ui| {
+        crate::shell::StudioPanelLayout::show_region(ui, browser, |ui| {
             egui::Frame::none()
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
                 .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                 .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
                 .show(ui, |ui| {
-                    ui.set_width(left_w - 16.0);
-                    ui.set_height((left_h - 16.0).max(1.0));
+                    ui.set_width(browser_w - 16.0);
+                    ui.set_height((browser_h - 16.0).max(1.0));
 
                     ui.horizontal(|ui| {
                         ui.add(
@@ -115,7 +114,7 @@ impl ImagePreviewState {
                         .id_source("creative_fx_list_scroll")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            ui.set_width(left_w - 24.0);
+                            ui.set_width(browser_w - 24.0);
                             for fx in CreativeFxType::all() {
                                 let selected = self.creative_fx_state.selected_fx == *fx;
                                 let (row_bg, name_col, meta_col) = if selected {
@@ -135,7 +134,7 @@ impl ImagePreviewState {
 
                                 let resp = row_frame
                                     .show(ui, |ui| {
-                                        ui.set_width(left_w - 32.0);
+                                        ui.set_width(browser_w - 32.0);
                                         ui.horizontal(|ui| {
                                             // 42x28 mini thumbnail preview
                                             if let Some(tex) =
@@ -347,21 +346,21 @@ impl ImagePreviewState {
         });
 
         // ── 3. RIGHT PANEL: Controls for Selected Effect ──
-        crate::shell::StudioPanelLayout::show_region(ui, right, |ui| {
+        crate::shell::StudioPanelLayout::show_region(ui, controls, |ui| {
             egui::Frame::none()
                 .fill(b_low)
                 .stroke(Stroke::new(1.0_f32, b_med))
                 .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
                 .inner_margin(egui::Margin::same(crate::ui_ext::SPACE_SM))
                 .show(ui, |ui| {
-                    ui.set_width(right_w - 16.0);
-                    ui.set_height((right_h - 16.0).max(1.0));
+                    ui.set_width(controls_w - 16.0);
+                    ui.set_height((controls_h - 16.0).max(1.0));
 
                     egui::ScrollArea::vertical()
-                        .id_source("creative_fx_right_scroll")
+                        .id_source("creative_fx_controls_scroll")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            let full_w = (right_w - 32.0).max(120.0);
+                            let full_w = (controls_w - 32.0).max(120.0);
                             let slider_w = (full_w - 68.0).max(80.0);
                             let cur_fx = self.creative_fx_state.selected_fx;
 
@@ -414,6 +413,9 @@ impl ImagePreviewState {
                                     self.creative_fx_state.selected_preset_name =
                                         preset.name.to_string();
                                     match &preset.params {
+                                        CreativeFxParams::BasicControls(p) => {
+                                            self.creative_fx_state.basic_params = p.clone();
+                                        }
                                         CreativeFxParams::LensAberration(p) => {
                                             self.creative_fx_state.lens_params = *p;
                                         }
@@ -457,6 +459,9 @@ impl ImagePreviewState {
                             ui.add_space(crate::ui_ext::SPACE_XS);
 
                             match cur_fx {
+                                CreativeFxType::BasicControls => {
+                                    self.render_basic_controls(ui, palette, slider_w)
+                                }
                                 CreativeFxType::LensAberration => {
                                     self.render_lens_aberration_controls(ui, palette, slider_w)
                                 }
@@ -543,6 +548,10 @@ impl ImagePreviewState {
                                 .clicked()
                             {
                                 match cur_fx {
+                                    CreativeFxType::BasicControls => {
+                                        self.creative_fx_state.basic_params =
+                                            BasicControlsParams::default()
+                                    }
                                     CreativeFxType::LensAberration => {
                                         self.creative_fx_state.lens_params =
                                             LensAberrationParams::default();

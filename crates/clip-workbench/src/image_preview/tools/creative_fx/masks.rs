@@ -857,9 +857,14 @@ impl ImagePreviewState {
             self.creative_fx_state.mark_dirty();
         }
 
+        if cur_fx == CreativeFxType::BasicControls {
+            self.render_basic_masked_zoom(ui, palette, slider_w);
+        }
+
         let supports_depth_cutoff = matches!(
             cur_fx,
-            CreativeFxType::PixelSort
+            CreativeFxType::BasicControls
+                | CreativeFxType::PixelSort
                 | CreativeFxType::CmykHalftone
                 | CreativeFxType::DitherPalette
                 | CreativeFxType::Ntsc

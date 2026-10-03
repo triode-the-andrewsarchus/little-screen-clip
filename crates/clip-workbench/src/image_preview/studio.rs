@@ -502,11 +502,12 @@ impl ImagePreviewState {
                 );
             }
             if let Some(dirty_at) = self.creative_fx_state.params_dirty_at {
-                if dirty_at.elapsed() >= std::time::Duration::from_millis(150)
-                    && !self.creative_fx_state.is_rendering
-                {
+                let debounce = std::time::Duration::from_millis(150);
+                if dirty_at.elapsed() >= debounce && !self.creative_fx_state.is_rendering {
                     self.creative_fx_state.params_dirty_at = None;
                     self.run_creative_fx_render();
+                } else {
+                    ctx.request_repaint_after(debounce.saturating_sub(dirty_at.elapsed()));
                 }
             }
             if self.creative_fx_state.is_rendering
@@ -790,6 +791,8 @@ impl ImagePreviewState {
                 }
             }
             ImageToolMode::CreativeFx => {
+                self.creative_fx_state
+                    .select_fx(CreativeFxType::BasicControls);
                 self.creative_fx_state.auto_fitted = false;
                 // Re-entering after an image edit must not retain a hidden stale preview.
                 if !self.creative_fx_preview_is_current() && !self.creative_fx_state.is_rendering {

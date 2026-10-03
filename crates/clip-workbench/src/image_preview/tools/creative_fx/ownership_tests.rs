@@ -17,6 +17,7 @@ fn state() -> ImagePreviewState {
     )
     .unwrap();
     state.active_mode = ImageToolMode::CreativeFx;
+    state.creative_fx_state.selected_fx = CreativeFxType::LensAberration;
     state
 }
 
@@ -1381,5 +1382,111 @@ fn apply_rejects_a_preview_from_an_old_source_stamp() {
     assert_eq!(
         state.current_rgba.get_pixel(0, 0),
         &image::Rgba([0, 0, 0, 0])
+    );
+}
+
+#[test]
+fn basic_controls_are_first_on_entry_and_reentry_preserves_adjustments() {
+    let mut state = state();
+    assert_eq!(CreativeFxType::all()[0], CreativeFxType::BasicControls);
+    state.creative_fx_state.basic_params.contrast = 30.0;
+    state.set_tool_mode(ImageToolMode::View);
+    state.set_tool_mode(ImageToolMode::CreativeFx);
+    assert_eq!(
+        state.creative_fx_state.selected_fx,
+        CreativeFxType::BasicControls
+    );
+    assert_eq!(state.creative_fx_state.basic_params.contrast, 30.0);
+    state.creative_fx_state.select_fx(CreativeFxType::Structure);
+    state.set_tool_mode(ImageToolMode::View);
+    state.set_tool_mode(ImageToolMode::CreativeFx);
+    assert_eq!(
+        state.creative_fx_state.selected_fx,
+        CreativeFxType::BasicControls
+    );
+    assert_eq!(state.creative_fx_state.basic_params.contrast, 30.0);
+    let revision = state.creative_fx_state.params_revision;
+    state.set_tool_mode(ImageToolMode::CreativeFx);
+    assert_eq!(state.creative_fx_state.params_revision, revision);
+    state.creative_fx_state.cancel_render();
+    state.cancel_creative_fx_thumbnail_batch();
+}
+
+#[test]
+fn basic_masked_zoom_preview_commits_and_undo_restores_original_pixels() {
+    let jobs = BackgroundJobs::new(1, 4);
+    let mut state = state();
+    state.current_rgba = Arc::new(RgbaImage::from_fn(8, 8, |x, y| {
+        image::Rgba([(x * 30) as u8, (y * 30) as u8, 90, 255])
+    }));
+    let original = state.current_rgba.clone();
+    state
+        .creative_fx_state
+        .select_fx(CreativeFxType::BasicControls);
+    state.creative_fx_state.basic_params.masked_zoom = 2.0;
+    state.creative_fx_state.basic_params.depth_mask.enabled = true;
+    state.creative_fx_state.cached_depth_map =
+        Some(RgbaImage::from_pixel(8, 8, image::Rgba([255; 4])));
+    state.creative_fx_state.depth_map_input_stamp = Some(state.input_stamp());
+    state.run_creative_fx_render_on(&jobs);
+    wait_render(&mut state, &jobs);
+    assert!(state.creative_fx_preview_is_current());
+    assert_ne!(
+        state.creative_fx_state.preview_rgba.as_ref().unwrap(),
+        original.as_ref()
+    );
+    state.apply_creative_fx();
+    assert_ne!(state.current_rgba, original);
+    state.undo();
+    assert_eq!(state.current_rgba, original);
+    state.creative_fx_state.cancel_render();
+    state.cancel_creative_fx_thumbnail_batch();
+}
+
+#[test]
+fn creative_fx_parameter_debounce_requests_a_repaint_without_pointer_input() {
+    let ctx = egui::Context::default();
+    let mut state = state();
+    let palette = AppPalette::default();
+    for fx in CreativeFxType::all() {
+        let thumbnail = ctx.load_texture(
+            format!("debounce-{fx:?}"),
+            egui::ColorImage::new([2, 2], Color32::BLACK),
+            egui::TextureOptions::LINEAR,
+        );
+        state.creative_fx_state.fx_thumbnails.insert(*fx, thumbnail);
+    }
+    let render_frame = |state: &mut ImagePreviewState| {
+        ctx.run(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(1000.0, 700.0))),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    state.render_ui(ui, ctx, &palette, &mut false);
+                });
+            },
+        )
+    };
+    for _ in 0..20 {
+        render_frame(&mut state);
+    }
+    let settled = render_frame(&mut state);
+    assert!(
+        settled.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+            > std::time::Duration::from_millis(150),
+        "test must begin with an idle viewport"
+    );
+    state.creative_fx_state.basic_params.shadows = 20.0;
+    state.creative_fx_state.mark_dirty();
+    let output = render_frame(&mut state);
+    assert!(
+        output.viewport_output[&egui::ViewportId::ROOT].repaint_delay
+            <= std::time::Duration::from_millis(150)
+    );
+    assert!(
+        !state.creative_fx_state.is_rendering,
+        "render remains debounced until the scheduled frame"
     );
 }

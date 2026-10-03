@@ -52,7 +52,7 @@ UI acceptance automation must use the private Weston/Niri runner. Its pointer in
 
 The little screen mirror and rolling audio strip belong only to Quick Palette. Auto Actions and Big Node Machine use their own canvas space. Script-node selection opens the built-in side editor; keep script undo history separate from graph undo, and save drafts before pipeline execution or recipe saving.
 
-Image Studio tool controls belong in the shared left panel, with result panels on the right where needed; shared zoom controls belong in the center of the footer. View shows all metadata fields directly in that panel, and reserves it only when it has fields to display; metadata-free images use the full canvas.
+Image Studio tool controls belong in the shared left panel, with result panels on the right where needed. Creative FX retains FX selection on the left and effect controls on the right. Shared zoom controls belong in the center of the footer. View shows all metadata fields directly in that panel, and reserves it only when it has fields to display; metadata-free images use the full canvas.
 
 Film Look enables vendored filmr's `compute-gpu` feature; `gpu` alone does not enable compute rendering. Preserve the full-spectrum exposure and dye output model; the upstream GPU development shader uses a different model. GPU grain uses filmr's native density-space shader; CPU fallback retains output-space grain. Apply only one grain model per render. Keep GPU pipelines bound to one shared device, cancellation checks between GPU stages, and CPU fallback when no adapter is available. Validate acceleration with optimized end-to-end timings as well as GPU dispatch tests.
 

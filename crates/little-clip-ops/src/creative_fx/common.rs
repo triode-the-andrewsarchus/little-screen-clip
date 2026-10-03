@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CreativeFxType {
+    BasicControls,
     LensAberration,
     Trichromatic,
     PixelSort,
@@ -15,6 +16,7 @@ pub enum CreativeFxType {
 impl CreativeFxType {
     pub fn all() -> &'static [CreativeFxType] {
         &[
+            CreativeFxType::BasicControls,
             CreativeFxType::LensAberration,
             CreativeFxType::Trichromatic,
             CreativeFxType::PixelSort,
@@ -27,6 +29,7 @@ impl CreativeFxType {
 
     pub fn name(&self) -> &'static str {
         match self {
+            Self::BasicControls => "Basic Controls",
             Self::LensAberration => "Lens Aberration",
             Self::Trichromatic => "Trichromatic Camera",
             Self::PixelSort => "Pixel Sorting",
@@ -39,6 +42,7 @@ impl CreativeFxType {
 
     pub fn subtitle(&self) -> &'static str {
         match self {
+            Self::BasicControls => "Tone, color & editable curves",
             Self::LensAberration => "Optical radial color fringing",
             Self::Trichromatic => "3-channel alignment & drift",
             Self::PixelSort => "Algorithmic scanline sorting",
@@ -51,6 +55,7 @@ impl CreativeFxType {
 
     pub fn category(&self) -> &'static str {
         match self {
+            Self::BasicControls => "TONE & COLOR",
             Self::LensAberration => "OPTICAL",
             Self::Trichromatic => "MULTI-CHANNEL",
             Self::PixelSort => "GLITCH ART",
@@ -63,6 +68,9 @@ impl CreativeFxType {
 
     pub fn description(&self) -> &'static str {
         match self {
+            Self::BasicControls => {
+                "Adjust tone and color with RGB curves. Mask and enlarge foreground or background."
+            }
             Self::LensAberration => {
                 "Emulates real-world optical glass dispersion. Aberration increases radially towards \
                  the image edges with customizable strength, falloff, and color balance (blue/yellow vs red/blue)."

@@ -1,10 +1,12 @@
 //! Creative FX image manipulation algorithms.
 
+mod basic_controls;
 mod cmyk_halftone;
 mod color;
 mod common;
 mod dither_palette;
 mod lens_aberration;
+mod masked_zoom;
 mod masking;
 mod ntsc;
 mod pixel_sort;
@@ -12,6 +14,7 @@ mod presets;
 mod structure;
 mod trichromatic;
 
+pub use basic_controls::*;
 pub use cmyk_halftone::*;
 pub use color::*;
 pub use common::*;
