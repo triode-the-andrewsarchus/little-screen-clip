@@ -6,10 +6,7 @@ use wgpu_3dgs_viewer::{
     core::glam::{UVec2, Vec2, Vec3},
 };
 
-use crate::{SceneError, SplatScene};
-
-/// Number of distinct views in a pre-rendered display orbit.
-pub const ORBIT_FRAME_COUNT: usize = 30;
+use crate::{ORBIT_FRAME_COUNT, OrbitLoop, SceneError, SplatScene};
 
 struct Gpu {
     device: wgpu::Device,
@@ -91,46 +88,6 @@ impl OrbitCamera {
         let target = scene.center + camera.get_right() * pan.x + Vec3::Y * pan.y;
         camera.pos = target - camera.get_forward() * distance;
         Ok(camera)
-    }
-}
-
-/// CPU-owned frames whose playback requires no renderer or GPU scene allocation.
-pub struct OrbitLoop {
-    frames: Vec<RgbaImage>,
-}
-
-impl OrbitLoop {
-    /// Validates and retains a finite orbit produced by another scene renderer.
-    ///
-    /// # Errors
-    /// Returns an error unless all 30 frames have identical nonzero dimensions
-    /// and fit the preview pixel budget.
-    pub fn from_frames(frames: Vec<RgbaImage>) -> Result<Self, SceneError> {
-        let Some(first) = frames.first() else {
-            return Err(SceneError::Invalid("Orbit has no frames".into()));
-        };
-        validate_orbit_size(first.width(), first.height())?;
-        if frames.len() != ORBIT_FRAME_COUNT
-            || frames
-                .iter()
-                .any(|frame| frame.dimensions() != first.dimensions())
-        {
-            return Err(SceneError::Invalid(
-                "Orbit requires 30 equally sized frames".into(),
-            ));
-        }
-        Ok(Self { frames })
-    }
-
-    /// Returns all 30 frames in orbit order, without a duplicate endpoint.
-    pub fn frames(&self) -> &[RgbaImage] {
-        &self.frames
-    }
-
-    /// Selects a cached frame from a 12-second repeating orbit.
-    pub fn frame_at(&self, elapsed: Duration) -> &RgbaImage {
-        let index = ((elapsed.as_millis() % 12_000) * ORBIT_FRAME_COUNT as u128 / 12_000) as usize;
-        &self.frames[index]
     }
 }
 
@@ -286,9 +243,9 @@ impl SplatRenderer {
             .ok_or_else(|| SceneError::Gpu("Invalid readback size".into()))
     }
 
-    /// Bakes 30 orbit views, checking cancellation before each GPU submission.
+    /// Bakes a finite orbit, checking cancellation before each GPU submission.
     ///
-    /// Drop the renderer after baking; [`OrbitLoop`] retains only CPU pixels.
+    /// Drop the renderer after baking; [`OrbitLoop`] owns temporary CPU frame files.
     ///
     /// # Errors
     /// Returns an error on cancellation or if any view cannot be rendered.
@@ -298,9 +255,7 @@ impl SplatRenderer {
         height: u32,
         cancelled: impl Fn() -> bool,
     ) -> Result<OrbitLoop, SceneError> {
-        validate_orbit_size(width, height)?;
-        let mut frames = Vec::with_capacity(ORBIT_FRAME_COUNT);
-        for index in 0..ORBIT_FRAME_COUNT {
+        OrbitLoop::bake_frames(width, height, |index| {
             if cancelled() {
                 return Err(SceneError::Cancelled);
             }
@@ -308,9 +263,8 @@ impl SplatRenderer {
                 yaw: index as f32 * std::f32::consts::TAU / ORBIT_FRAME_COUNT as f32,
                 ..Default::default()
             };
-            frames.push(self.render(camera, width, height)?);
-        }
-        OrbitLoop::from_frames(frames)
+            self.render(camera, width, height)
+        })
     }
 }
 
@@ -328,38 +282,13 @@ fn encode_linear_rgb_to_srgb(pixels: &mut [u8]) {
     }
 }
 
-fn validate_orbit_size(width: u32, height: u32) -> Result<(), SceneError> {
-    let bytes = u64::from(width)
-        .checked_mul(u64::from(height))
-        .and_then(|bytes| bytes.checked_mul(4));
-    if !bytes
-        .is_some_and(|bytes| bytes > 0 && bytes <= (128 * 1024 * 1024) / ORBIT_FRAME_COUNT as u64)
-    {
-        return Err(SceneError::Invalid(
-            "Orbit frames exceed the 128 MiB preview budget".into(),
-        ));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn orbit_playback_wraps_without_invoking_a_renderer() {
-        let frames = (0..ORBIT_FRAME_COUNT)
-            .map(|i| RgbaImage::from_pixel(1, 1, image::Rgba([i as u8, 0, 0, 255])))
-            .collect();
-        let orbit = OrbitLoop { frames };
-        assert_eq!(orbit.frame_at(Duration::ZERO)[(0, 0)][0], 0);
-        assert_eq!(orbit.frame_at(Duration::from_millis(11_999))[(0, 0)][0], 29);
-        assert_eq!(orbit.frame_at(Duration::from_secs(12))[(0, 0)][0], 0);
-    }
-
-    #[test]
     #[ignore = "requires a native compute-capable GPU adapter"]
-    fn gpu_renders_navigation_and_bakes_thirty_cpu_frames() {
+    fn gpu_renders_navigation_and_bakes_a_finite_orbit() {
         let mut renderer = SplatRenderer::new(Arc::new(crate::splat::tests::scene())).unwrap();
         let initial = renderer.render(OrbitCamera::default(), 97, 64).unwrap();
         assert!(initial.pixels().any(|p| p[0] > 20 || p[1] > 20));
@@ -381,9 +310,15 @@ mod tests {
         }
         let orbit = renderer.bake_orbit(97, 64, || false).unwrap();
         drop(renderer);
-        assert_eq!(orbit.frames().len(), 30);
-        assert_ne!(orbit.frames()[0], orbit.frames()[15]);
-        assert_eq!(orbit.frame_at(Duration::from_secs(12)), &orbit.frames()[0]);
+        assert_eq!(orbit.frames().len(), ORBIT_FRAME_COUNT);
+        assert_ne!(
+            orbit.read_frame(0).unwrap(),
+            orbit.read_frame(ORBIT_FRAME_COUNT / 2).unwrap()
+        );
+        assert_eq!(
+            orbit.frame_at(Duration::from_secs(12)).unwrap(),
+            orbit.read_frame(0).unwrap()
+        );
         let mut renderer = SplatRenderer::new(Arc::new(crate::splat::tests::scene())).unwrap();
         assert!(matches!(
             renderer.bake_orbit(97, 64, || true),

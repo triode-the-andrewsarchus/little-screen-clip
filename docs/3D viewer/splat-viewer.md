@@ -3,7 +3,7 @@
 Research and application integration, 2026-10-03. Native previews for
 `.ply`, `.splat`, `.sog`, `.glb`, and `.spz` are integrated into the big workbench
 and little display. Navigation only; no editing.
-Little-display playback uses a pre-rendered 30-frame orbit and releases scene
+Little-display playback uses a pre-rendered 240-frame orbit and releases scene
 GPU allocations after baking.
 
 ## Renderer candidates
@@ -73,14 +73,16 @@ use a finite cached orbit, reusing the existing card projection/shading code.
   limits.
 - One process-wide scene GPU device is reused. Orbit/pan/zoom views render to
   offscreen RGBA textures and read back on the calling worker.
-- `bake_orbit` produces exactly 30 views over a full revolution, with no
-  duplicated endpoint, checking cancellation between submissions. A loop has a
-  128 MiB pixel budget and retains only CPU frames. `frame_at` performs CPU
-  indexing over a 12-second cycle; the renderer can be dropped before playback.
+- `bake_orbit` produces 240 views over a full revolution, with no duplicated
+  endpoint: 1.5° steps at 20 frames per second over a 12-second cycle. It checks
+  cancellation between submissions and writes one PNG at a time to an owned
+  `/tmp/little-clip-orbit-*` directory. Dimensions have a 256 MiB equivalent
+  raster budget; playback retains only one decoded frame per loop. The GPU
+  renderer can be dropped before playback.
 - Tests exercise PLY/SPZ roundtrips, SPLAT record layout and malformed data,
   lower-degree binary PLY records and SH mapping, CPU playback wraparound, and
   native GPU rendering. The GPU test checks visible non-black pixels, changed
-  pixels for orbit/pan/zoom, 30 distinct view slots, playback after dropping the
+  pixels for orbit/pan/zoom, 240 distinct view slots, playback after dropping the
   renderer, and cancellation.
 
 Validated commands:
@@ -102,8 +104,12 @@ scene performance, or completed application behavior.
 
 The display/mirror cache uses file path, modification time, file size, viewport
 size and appearance as its identity. It admits work through `BackgroundJobs`,
-bakes 30 frames, drops the scene renderer, and retains CPU frames in an eight-entry,
-128 MiB LRU cache. Source and appearance changes cancel superseded jobs. A native
+bakes 240 frames, drops the scene renderer, and retains temporary PNGs in an
+eight-entry, 128 MiB compressed-storage LRU cache owned by each screen renderer.
+The actual visible slot layout retires offscreen previews and cancels their
+unfinished bakes. Source and appearance changes cancel superseded jobs. Owned
+temporary directories remove completed or partial frames on retirement, bake
+failure, cancellation and renderer shutdown. A native
 GPU cache test proves 100 playback requests share one baked loop with one bake.
 
 The workbench keeps one outstanding render, reuses its last accepted texture,
@@ -163,7 +169,7 @@ the loading state; a 15-second settled capture established the visible result.
 
 Optimized runs with `cargo run --release -p little-clip-scene --example
 scene_orbit -- <path> <output-directory>` produced these observed timings at
-480×320, including 30-frame readback:
+480×320, before the change to 240 frames, including 30-frame readback:
 
 | Container | Load | GPU initialization/upload | Bake 30 | Total |
 | --- | ---: | ---: | ---: | ---: |
@@ -180,10 +186,25 @@ These are individual measurements on the development machine, not portable
 performance promises. Each process initializes its GPU. 10,000 CPU frame-index
 lookups after dropping the renderer took 31–51 microseconds. Cache tests separately
 prove repeated display requests reuse the same loop. The diagnostic example saves
-frames 0 and 15 for visual inspection. SOG validation includes a full butterfly
+frames 0 and 120 for visual inspection with the current 240-frame loop. SOG validation includes a full butterfly
 scene with higher SH bands removed and a reduced 2,000-splat export preserving
 all three SH bands. Two expensive full-scene CPU SH-clustering conversions were
 cancelled after these independent exported variants passed.
+
+The 240-frame temporary-storage implementation was measured separately at
+480×320 in optimized builds:
+
+| Scene | Bake 240 with PNG writes | Total load/upload/bake | Decode all 240 | Temporary PNG bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Butterfly SPZ v4 (177,132 splats) | 889 ms | 1,145 ms | 60 ms | 10,719,938 |
+| Two Gaussians SOG | 869 ms | 1,081 ms | 70 ms | 4,685,155 |
+
+Decode averages were below 0.3 ms per frame on this machine, versus the 50 ms
+frame-selection interval; actual display refresh still follows the configured
+animation interval and USB pacing. Cleanup tests cover hidden history slots, removal of an actual
+rendered scene card, pending-job cancellation, partial bake failure and renderer
+drop. Normal cleanup is RAII-based; abrupt process termination can leave files
+in `/tmp` until the operating system's temporary-directory cleanup.
 
 Final validation passed:
 
@@ -197,10 +218,18 @@ cargo fmt --all --check
 git diff --check
 ```
 
-The affected suites contain 17 scene tests, 24 render tests and five targeted
+The affected suites contain 18 scene tests, 26 render tests and five targeted
 workbench tests, including native GPU checks. Physical USB hardware was not
 exercised; display acceptance used the production card renderer and private
 compositor captures.
+
+Architecture comparison against `pre-orbit-cache-smoothing` reduced average
+complexity from 4.03 to 4.02 and duplication from 8.62% to 8.60%; maximum
+complexity and dependency cycles were unchanged. The tool reported one extra
+clone group involving test setup. Other reported clones are existing renderer
+initialization/GPU code, and its changing Python chokepoint is in an unchanged
+file. The added cache-lifecycle fixture setup is necessary coverage; production
+rendering and frame storage reuse the existing bake and owned-tempdir patterns.
 
 ## Supported variants and limits
 
@@ -217,7 +246,7 @@ compositor captures.
 - Imports are bounded to two million Gaussians. Container byte budgets are
   512 MiB (SPLAT is limited by its 64 MB record budget); SOG atlases and expanded
   ZIP entries have additional limits. The display cache retains at most 128 MiB
-  of CPU orbit pixels across eight entries.
+  of temporary compressed orbit files across eight entries per renderer.
 
 Manual regression samples are in `/home/vega/Documents/type_testing/`: three files
 per requested extension, with provenance, coverage and launch instructions in

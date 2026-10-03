@@ -2,15 +2,14 @@
 
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use little_clip_scene::{OrbitLoop, SplatRenderer, SplatScene};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex, mpsc};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant, SystemTime};
 
 const MAX_ENTRIES: usize = 8;
 const MAX_BYTES: usize = 128 * 1024 * 1024;
-static CACHE: LazyLock<Mutex<PreviewCache>> = LazyLock::new(|| Mutex::new(PreviewCache::default()));
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct Key {
@@ -54,7 +53,7 @@ struct Entry {
 }
 
 #[derive(Default)]
-struct PreviewCache {
+pub(crate) struct PreviewCache {
     entries: HashMap<Key, Entry>,
     clock: u64,
 }
@@ -128,14 +127,14 @@ impl PreviewCache {
         self.entries
             .values()
             .map(|entry| match &entry.value {
-                Value::Ready(orbit) => orbit
-                    .frames()
-                    .iter()
-                    .map(|image| image.as_raw().len())
-                    .sum(),
+                Value::Ready(orbit) => orbit.disk_bytes(),
                 _ => 0,
             })
             .sum()
+    }
+
+    fn retain_visible(&mut self, paths: &HashSet<PathBuf>) {
+        self.entries.retain(|key, _| paths.contains(&key.path));
     }
 
     fn evict_oldest(&mut self) {
@@ -166,7 +165,8 @@ pub(crate) fn request(path: &Path, size: [u32; 2], renderer: &crate::ScreenRende
     let source = key.clone();
     let config = renderer.config.clone();
     let palette = renderer.palette.clone();
-    CACHE
+    renderer
+        .scene_previews
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .request(key, move |cancelled| {
@@ -211,18 +211,13 @@ fn bake_mesh(
     cancelled: impl Fn() -> bool,
 ) -> Result<OrbitLoop, String> {
     let [width, height] = size;
-    let bytes = u64::from(width)
-        .checked_mul(u64::from(height))
-        .and_then(|bytes| bytes.checked_mul(4 * little_clip_scene::ORBIT_FRAME_COUNT as u64));
-    if width == 0 || height == 0 || !bytes.is_some_and(|bytes| bytes <= MAX_BYTES as u64) {
-        return Err("Mesh orbit exceeds the preview pixel budget".into());
-    }
-    let mut frames = Vec::with_capacity(little_clip_scene::ORBIT_FRAME_COUNT);
-    for index in 0..little_clip_scene::ORBIT_FRAME_COUNT {
+    OrbitLoop::bake_frames(width, height, |index| {
         if cancelled() {
-            return Err("Scene preview cancelled".into());
+            return Err(little_clip_scene::SceneError::Cancelled);
         }
-        let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or("Invalid mesh viewport")?;
+        let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or_else(|| {
+            little_clip_scene::SceneError::Invalid("Invalid mesh viewport".into())
+        })?;
         pixmap.fill(renderer.color_from_hex(&renderer.palette.colors.surface_recessed));
         renderer.draw_model3d_viewport(
             &mut pixmap,
@@ -230,11 +225,28 @@ fn bake_mesh(
             [0.0, 0.0, width as f32, height as f32],
             index as f32 * std::f32::consts::TAU / little_clip_scene::ORBIT_FRAME_COUNT as f32,
         );
-        let image = image::RgbaImage::from_raw(width, height, pixmap.take())
-            .ok_or("Invalid mesh raster")?;
-        frames.push(image);
-    }
-    OrbitLoop::from_frames(frames).map_err(|error| error.to_string())
+        image::RgbaImage::from_raw(width, height, pixmap.take())
+            .ok_or_else(|| little_clip_scene::SceneError::Invalid("Invalid mesh raster".into()))
+    })
+    .map_err(|error| error.to_string())
+}
+
+pub(crate) fn retain_visible(
+    renderer: &crate::ScreenRenderer,
+    manager: &little_clip_core::SlotManager,
+    layout: &[crate::SlotLayoutRect],
+) {
+    let paths = layout
+        .iter()
+        .filter_map(|slot| manager.get(slot.slot_id))
+        .filter_map(little_clip_core::ClipItem::file_path)
+        .filter(|path| little_clip_scene::is_splat_file(path))
+        .collect();
+    renderer
+        .scene_previews
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .retain_visible(&paths);
 }
 
 #[cfg(test)]

@@ -172,6 +172,7 @@ pub enum FontStyle {
 
 /// Canvas rasterizer for rendering slot cards, thumbnails, waveforms, and code blocks onto a tiny-skia Pixmap.
 pub struct ScreenRenderer {
+    pub(crate) scene_previews: std::sync::Mutex<scene_preview::PreviewCache>,
     pub(crate) font_regular: Option<Font>,
     pub(crate) font_bold: Option<Font>,
     pub(crate) font_italic: Option<Font>,
@@ -194,6 +195,7 @@ impl ScreenRenderer {
             font_mono,
             config,
             palette,
+            scene_previews: Default::default(),
         })
     }
 
@@ -207,6 +209,7 @@ impl ScreenRenderer {
             font_mono: None,
             config,
             palette,
+            scene_previews: Default::default(),
         }
     }
 
@@ -400,8 +403,11 @@ impl ScreenRenderer {
         let (bg_r, bg_g, bg_b, bg_a) = parse_hex_color(&self.palette.colors.canvas);
         pixmap.fill(Color::from_rgba8(bg_r, bg_g, bg_b, bg_a));
 
+        // Retire scene jobs/files that no longer occur in the visible layout.
+        let layout = compute_slot_layout(self.config.slots.left_priors);
+        scene_preview::retain_visible(self, manager, &layout);
         // Render slots according to canonical layout
-        for slot in compute_slot_layout(self.config.slots.left_priors) {
+        for slot in layout {
             self.draw_slot_card(
                 &mut pixmap,
                 manager,

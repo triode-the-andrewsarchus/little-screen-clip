@@ -4,6 +4,7 @@
 //! `wgpu-3dgs-viewer`. Callers run loading and readback on background workers.
 
 mod glb;
+mod orbit;
 mod renderer;
 mod sh_rotation;
 mod sog;
@@ -11,7 +12,8 @@ mod spark;
 mod splat;
 mod spz;
 
-pub use renderer::{ORBIT_FRAME_COUNT, OrbitCamera, OrbitLoop, SplatRenderer};
+pub use orbit::{ORBIT_FRAME_COUNT, OrbitLoop};
+pub use renderer::{OrbitCamera, SplatRenderer};
 pub use splat::SplatScene;
 
 /// Reads a container without allowing a growing file to exceed its byte budget.

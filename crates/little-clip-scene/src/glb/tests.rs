@@ -227,8 +227,17 @@ fn glb_loads_from_file_and_bakes_visible_orbit_in_both_color_spaces() {
         assert_eq!(scene.linear_color, color_space == "lin_rec709_display");
         let mut renderer = crate::SplatRenderer::new(Arc::new(scene)).unwrap();
         let orbit = renderer.bake_orbit(97, 64, || false).unwrap();
-        assert_eq!(orbit.frames().len(), 30);
-        assert!(orbit.frames()[0].pixels().any(|pixel| pixel[0] > 20));
-        assert_ne!(orbit.frames()[0], orbit.frames()[15]);
+        assert_eq!(orbit.frames().len(), crate::ORBIT_FRAME_COUNT);
+        assert!(
+            orbit
+                .read_frame(0)
+                .unwrap()
+                .pixels()
+                .any(|pixel| pixel[0] > 20)
+        );
+        assert_ne!(
+            orbit.read_frame(0).unwrap(),
+            orbit.read_frame(crate::ORBIT_FRAME_COUNT / 2).unwrap()
+        );
     }
 }

@@ -69,13 +69,19 @@ impl ScreenRenderer {
         let width = (right - x).round().max(1.0) as u32;
         let height = (ry + rh - 30.0 - y).round().max(1.0) as u32;
         self.draw_card_viewport_frame(pixmap, x, y, width as f32, height as f32);
-        let preview = scene_preview::request(path, [width, height], self);
+        let elapsed = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or(Duration::ZERO);
+        let preview = match scene_preview::request(path, [width, height], self) {
+            Preview::Ready(orbit) => orbit
+                .frame_at(elapsed)
+                .map(Some)
+                .map_err(|error| error.to_string()),
+            Preview::Loading => Ok(None),
+            Preview::Error(error) => Err(error),
+        };
         match preview {
-            Preview::Ready(orbit) => {
-                let elapsed = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap_or(Duration::ZERO);
-                let frame = orbit.frame_at(elapsed);
+            Ok(Some(frame)) => {
                 if let Some(mut raster) = Pixmap::new(frame.width(), frame.height()) {
                     for (pixel, rgba) in raster.pixels_mut().iter_mut().zip(frame.pixels()) {
                         *pixel =
@@ -91,7 +97,7 @@ impl ScreenRenderer {
                     );
                 }
             }
-            Preview::Loading => {
+            Ok(None) => {
                 self.draw_text_clipped(
                     pixmap,
                     "Preparing orbit preview…",
@@ -103,7 +109,7 @@ impl ScreenRenderer {
                     right - 8.0,
                 );
             }
-            Preview::Error(error) => {
+            Err(error) => {
                 self.draw_text_clipped(
                     pixmap,
                     &format!("Preview unavailable: {error}"),

@@ -143,12 +143,16 @@ fn sog_bakes_visible_frames_with_the_native_renderer() {
     let mut renderer = crate::SplatRenderer::new(std::sync::Arc::new(scene)).unwrap();
     let orbit = renderer.bake_orbit(97, 64, || false).unwrap();
     drop(renderer);
-    assert_eq!(orbit.frames().len(), 30);
-    assert!(
+    assert_eq!(orbit.frames().len(), crate::ORBIT_FRAME_COUNT);
+    assert!(orbit.frames().iter().enumerate().all(|(index, _)| {
         orbit
-            .frames()
-            .iter()
-            .all(|image| image.pixels().any(|pixel| pixel[0] > 20))
+            .read_frame(index)
+            .unwrap()
+            .pixels()
+            .any(|pixel| pixel[0] > 20)
+    }));
+    assert_ne!(
+        orbit.read_frame(0).unwrap(),
+        orbit.read_frame(crate::ORBIT_FRAME_COUNT / 2).unwrap()
     );
-    assert_ne!(orbit.frames()[0], orbit.frames()[15]);
 }

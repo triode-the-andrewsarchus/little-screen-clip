@@ -21,5 +21,4 @@ zip = { version = "7.0", default-features = false, features = ["deflate"] }
 oxideav-gltf = { version = "=0.0.4", default-features = false }
 nalgebra = { version = "0.32", default-features = false, features = ["std"] }
 
-[dev-dependencies]
 tempfile = "3.10"
