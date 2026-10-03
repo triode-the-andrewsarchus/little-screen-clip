@@ -18,8 +18,10 @@ pub(super) fn test_workbench_app(
     let (state_tx, state_rx) = std::sync::mpsc::channel();
     drop(state_tx);
     WorkbenchApp {
-        state: SlotManager::default(),
+        state: Arc::new(SlotManager::default()),
         state_rx,
+        state_loaded: true,
+        startup_comparison: None,
         view: WorkbenchView::Palette,
         canvas_state: NodeCanvasState::new(),
         recipes: Vec::new(),
@@ -30,7 +32,12 @@ pub(super) fn test_workbench_app(
         inspector_text_preview_cache: None,
         status_msg: None,
         appearance_sync: AppearanceSync::default(),
-        renderer: ScreenRenderer::fallback(config.clone()),
+        renderer: Some(ScreenRenderer::fallback(config.clone())),
+        mirror_job: None,
+        mirror_error: None,
+        mirror_animated: false,
+        palette_ops: None,
+        palette_ops_job: None,
         ui_palette: palette,
         mirror_texture: None,
         dirty_mirror: false,
@@ -155,8 +162,9 @@ pub(super) fn click_text_smart_copy_action(source_text: &str, button_label: &str
     }
 
     let mut app = test_workbench_app(None, VecDeque::new());
-    *app.state.get_mut(SlotId::LeftHand).expect("left slot") =
-        Some(ClipItem::from_text(source_text));
+    *Arc::make_mut(&mut app.state)
+        .get_mut(SlotId::LeftHand)
+        .expect("left slot") = Some(ClipItem::from_text(source_text));
     let ctx = egui::Context::default();
     let rendered = frame(&ctx, &mut app, Vec::new());
     let button_rect = rendered
@@ -270,4 +278,36 @@ pub(super) fn test_image_preview_state() -> ImagePreviewState {
         &AppConfig::default(),
     )
     .unwrap()
+}
+
+pub(super) fn ready_palette_actions(app: &mut WorkbenchApp) -> Vec<PaletteAction> {
+    let ctx = egui::Context::default();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        app.poll_palette_ops(&ctx);
+        if app.palette_ops_job.is_none() {
+            return app.filtered_actions();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "operation classification did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+pub(super) fn wait_for_mirror(app: &mut WorkbenchApp) {
+    let ctx = egui::Context::default();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        app.update_mirror_texture(&ctx);
+        if app.mirror_job.is_none() && app.mirror_texture.is_some() {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "mirror did not finish"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
 }

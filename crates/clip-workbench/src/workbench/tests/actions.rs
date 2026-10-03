@@ -57,15 +57,16 @@ fn idle_pdf_escape_returns_to_source_route_and_preserves_slots() {
 #[test]
 fn palette_text_diff_opens_and_escape_returns_to_palette() {
     let mut app = test_workbench_app(None, VecDeque::new());
-    *app.state.get_mut(SlotId::LeftHand).expect("left slot") =
-        Some(ClipItem::from_text("left text\n"));
-    *app.state.get_mut(SlotId::RightHand).expect("right slot") =
-        Some(ClipItem::from_text("right text\n"));
+    *Arc::make_mut(&mut app.state)
+        .get_mut(SlotId::LeftHand)
+        .expect("left slot") = Some(ClipItem::from_text("left text\n"));
+    *Arc::make_mut(&mut app.state)
+        .get_mut(SlotId::RightHand)
+        .expect("right slot") = Some(ClipItem::from_text("right text\n"));
     app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
     let original_slots = app.selected_slots.clone();
     app.search_query = "diff".to_owned();
-    let diff_action = app
-        .filtered_actions()
+    let diff_action = ready_palette_actions(&mut app)
         .iter()
         .position(|action| matches!(action, PaletteAction::Op(op) if op.name == "diff"))
         .expect("built-in text Diff action");
@@ -127,15 +128,16 @@ fn palette_image_diff_opens_and_escape_returns_to_palette() {
     };
 
     let mut app = test_workbench_app(None, VecDeque::new());
-    *app.state.get_mut(SlotId::LeftHand).expect("left slot") =
-        Some(png_item([255, 0, 0, 255], "left.png"));
-    *app.state.get_mut(SlotId::RightHand).expect("right slot") =
-        Some(png_item([0, 0, 255, 255], "right.png"));
+    *Arc::make_mut(&mut app.state)
+        .get_mut(SlotId::LeftHand)
+        .expect("left slot") = Some(png_item([255, 0, 0, 255], "left.png"));
+    *Arc::make_mut(&mut app.state)
+        .get_mut(SlotId::RightHand)
+        .expect("right slot") = Some(png_item([0, 0, 255, 255], "right.png"));
     app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
     let original_slots = app.selected_slots.clone();
     app.search_query = "diff".to_owned();
-    let diff_action = app
-        .filtered_actions()
+    let diff_action = ready_palette_actions(&mut app)
         .iter()
         .position(|action| matches!(action, PaletteAction::Op(op) if op.name == "diff"))
         .expect("built-in image Diff action");
@@ -176,15 +178,16 @@ fn palette_image_diff_opens_and_escape_returns_to_palette() {
 #[test]
 fn palette_binary_diff_opens_and_escape_returns_to_palette() {
     let mut app = test_workbench_app(None, VecDeque::new());
-    *app.state.get_mut(SlotId::LeftHand).expect("left slot") =
-        Some(ClipItem::from_text("left binary fixture\n"));
-    *app.state.get_mut(SlotId::RightHand).expect("right slot") =
-        Some(ClipItem::from_text("right binary fixture\n"));
+    *Arc::make_mut(&mut app.state)
+        .get_mut(SlotId::LeftHand)
+        .expect("left slot") = Some(ClipItem::from_text("left binary fixture\n"));
+    *Arc::make_mut(&mut app.state)
+        .get_mut(SlotId::RightHand)
+        .expect("right slot") = Some(ClipItem::from_text("right binary fixture\n"));
     app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
     let original_slots = app.selected_slots.clone();
     app.search_query = "binary-diff".to_owned();
-    let binary_diff_action = app
-        .filtered_actions()
+    let binary_diff_action = ready_palette_actions(&mut app)
         .iter()
         .position(|action| matches!(action, PaletteAction::Op(op) if op.name == "binary-diff"))
         .expect("built-in Binary Diff action");
@@ -262,12 +265,12 @@ fn palette_binary_diff_opens_and_escape_returns_to_palette() {
 #[test]
 fn quick_palette_operation_uses_injected_request_sender() {
     let mut app = test_workbench_app(None, VecDeque::new());
-    *app.state.get_mut(SlotId::LeftHand).expect("left slot") =
-        Some(ClipItem::from_text(" input text "));
+    *Arc::make_mut(&mut app.state)
+        .get_mut(SlotId::LeftHand)
+        .expect("left slot") = Some(ClipItem::from_text(" input text "));
     app.selected_slots = vec![SlotId::LeftHand];
     app.search_query = "uppercase".to_owned();
-    app.selected_action_index = app
-        .filtered_actions()
+    app.selected_action_index = ready_palette_actions(&mut app)
         .iter()
         .position(|action| matches!(action, PaletteAction::Op(op) if op.name == "uppercase"))
         .expect("uppercase operation is available for text");
@@ -295,12 +298,12 @@ fn quick_palette_operation_uses_injected_request_sender() {
 #[test]
 fn quick_palette_operation_success_closes_popup_once() {
     let mut app = test_workbench_app(None, VecDeque::new());
-    *app.state.get_mut(SlotId::LeftHand).expect("left slot") =
-        Some(ClipItem::from_text("fixture text"));
+    *Arc::make_mut(&mut app.state)
+        .get_mut(SlotId::LeftHand)
+        .expect("left slot") = Some(ClipItem::from_text("fixture text"));
     app.selected_slots = vec![SlotId::LeftHand];
     app.search_query = "uppercase".to_owned();
-    app.selected_action_index = app
-        .filtered_actions()
+    app.selected_action_index = ready_palette_actions(&mut app)
         .iter()
         .position(|action| matches!(action, PaletteAction::Op(op) if op.name == "uppercase"))
         .expect("uppercase operation is available for text");
@@ -321,12 +324,12 @@ fn quick_palette_operation_success_closes_popup_once() {
 #[test]
 fn quick_palette_operation_error_keeps_popup_open_with_feedback() {
     let mut app = test_workbench_app(None, VecDeque::new());
-    *app.state.get_mut(SlotId::LeftHand).expect("left slot") =
-        Some(ClipItem::from_text("fixture text"));
+    *Arc::make_mut(&mut app.state)
+        .get_mut(SlotId::LeftHand)
+        .expect("left slot") = Some(ClipItem::from_text("fixture text"));
     app.selected_slots = vec![SlotId::LeftHand];
     app.search_query = "uppercase".to_owned();
-    app.selected_action_index = app
-        .filtered_actions()
+    app.selected_action_index = ready_palette_actions(&mut app)
         .iter()
         .position(|action| matches!(action, PaletteAction::Op(op) if op.name == "uppercase"))
         .expect("uppercase operation is available for text");
@@ -360,8 +363,7 @@ fn quick_palette_recipe_success_closes_popup_once() {
         graph: little_clip_ops::pipeline::types::NodeGraph::default(),
     });
     app.search_query = recipe_name.to_owned();
-    app.selected_action_index = app
-        .filtered_actions()
+    app.selected_action_index = ready_palette_actions(&mut app)
         .iter()
         .position(
             |action| matches!(action, PaletteAction::Recipe(recipe) if recipe.name == recipe_name),

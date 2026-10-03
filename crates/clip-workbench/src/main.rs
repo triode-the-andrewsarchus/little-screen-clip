@@ -50,6 +50,7 @@ fn bounded_item_file_path(item: &ClipItem) -> Option<PathBuf> {
 }
 
 mod workbench;
+use workbench::{ClipboardSelection, MirrorJob, PaletteOpsJob};
 
 mod ansi;
 mod appearance_sync;
@@ -567,8 +568,10 @@ impl Drop for TextPreviewLoadJob {
 }
 
 struct WorkbenchApp {
-    state: SlotManager,
-    state_rx: Receiver<SlotManager>,
+    state: Arc<SlotManager>,
+    state_rx: Receiver<Result<Arc<SlotManager>, String>>,
+    state_loaded: bool,
+    startup_comparison: Option<bool>,
     view: WorkbenchView,
     canvas_state: NodeCanvasState,
     recipes: Vec<Recipe>,
@@ -579,7 +582,12 @@ struct WorkbenchApp {
     inspector_text_preview_cache: Option<InspectorTextPreviewCache>,
     status_msg: Option<String>,
     appearance_sync: AppearanceSync,
-    renderer: ScreenRenderer,
+    renderer: Option<ScreenRenderer>,
+    mirror_job: Option<MirrorJob>,
+    mirror_error: Option<String>,
+    mirror_animated: bool,
+    palette_ops: Option<(ClipboardSelection, Vec<OpDescriptor>)>,
+    palette_ops_job: Option<PaletteOpsJob>,
     ui_palette: AppPalette,
     mirror_texture: Option<egui::TextureHandle>,
     dirty_mirror: bool,
@@ -1166,11 +1174,6 @@ fn main() -> Result<(), eframe::Error> {
         return Ok(());
     };
 
-    let state = match send_ipc_request(&IpcRequest::GetState) {
-        Ok(IpcResponse::State(s)) => s,
-        _ => SlotManager::default(),
-    };
-
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_resizable(false)
@@ -1191,7 +1194,7 @@ fn main() -> Result<(), eframe::Error> {
             ui_ext::configure_workbench_style(&cc.egui_ctx);
             egui_extras::install_image_loaders(&cc.egui_ctx);
             Box::new(WorkbenchApp::new(
-                state,
+                cc.egui_ctx.clone(),
                 is_diff,
                 is_binary_diff,
                 initial_audio,

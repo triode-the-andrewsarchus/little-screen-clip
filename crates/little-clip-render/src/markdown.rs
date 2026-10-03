@@ -177,6 +177,22 @@ pub fn parse_markdown(input: &str) -> Vec<MarkdownLine> {
     lines
 }
 
+/// Prepares only the bounded prefix visible in a screen card. Full line counting
+/// preserves its overflow badge without allocating/parsing the rest of the document.
+pub(crate) fn parse_markdown_preview(input: &str) -> (Vec<MarkdownLine>, usize) {
+    const MAX_PREVIEW_BYTES: usize = 4096;
+    const MAX_PREVIEW_LINES: usize = 64;
+    let mut end = input.len().min(MAX_PREVIEW_BYTES);
+    while !input.is_char_boundary(end) {
+        end -= 1;
+    }
+    let prefix = &input[..end];
+    if let Some((offset, _)) = prefix.match_indices('\n').nth(MAX_PREVIEW_LINES - 1) {
+        end = offset + 1;
+    }
+    (parse_markdown(&input[..end]), input.lines().count())
+}
+
 /// Parses inline formatting spans (bold, italic, code, links) within a line of text.
 pub fn parse_markdown_spans(text: &str) -> Vec<MarkdownSpan> {
     let mut spans = Vec::new();
@@ -281,6 +297,26 @@ pub fn parse_markdown_spans(text: &str) -> Vec<MarkdownSpan> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_preserves_prefix_fence_state_and_counts_unparsed_lines() {
+        let prefix = "# Title\n\n```rust\nlet n = 1;\n```\n";
+        let input = format!("{prefix}{}", "more **text**\n".repeat(100_000));
+        let (lines, total) = parse_markdown_preview(&input);
+        assert_eq!(&lines[..5], parse_markdown(prefix).as_slice());
+        assert!(lines.len() <= 64);
+        assert_eq!(total, 100_005);
+    }
+
+    #[test]
+    fn preview_bounds_utf8_single_line_parsing_without_changing_the_source() {
+        let input = "日本語😀".repeat(100_000);
+        let (lines, total) = parse_markdown_preview(&input);
+        assert_eq!(total, 1);
+        assert_eq!(lines.len(), 1);
+        assert!(format!("{lines:?}").len() < 5000);
+        assert_eq!(input.chars().count(), 400_000);
+    }
 
     #[test]
     fn test_parse_markdown_spans() {

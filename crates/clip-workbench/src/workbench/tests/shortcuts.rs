@@ -108,8 +108,10 @@ fn palette_swap_prefix_stays_available_without_exactly_two_selected_slots() {
     ] {
         let mut app = test_workbench_app(None, VecDeque::new());
         app.selected_slots = selected_slots.clone();
-        app.state.left_hand = Some(ClipItem::from_text("left fixture".to_owned()));
-        app.state.right_hand = Some(ClipItem::from_text("right fixture".to_owned()));
+        Arc::make_mut(&mut app.state).left_hand =
+            Some(ClipItem::from_text("left fixture".to_owned()));
+        Arc::make_mut(&mut app.state).right_hand =
+            Some(ClipItem::from_text("right fixture".to_owned()));
         let state_before = app.state.clone();
         app.search_query = "swap".to_owned();
         app.dirty_mirror = false;
@@ -146,8 +148,10 @@ fn modified_palette_swap_keys_do_not_swap_slots() {
     for (key, modifiers) in modified_keys {
         let mut app = test_workbench_app(None, VecDeque::new());
         app.selected_slots = vec![SlotId::LeftHand, SlotId::RightHand];
-        app.state.left_hand = Some(ClipItem::from_text("left fixture".to_owned()));
-        app.state.right_hand = Some(ClipItem::from_text("right fixture".to_owned()));
+        Arc::make_mut(&mut app.state).left_hand =
+            Some(ClipItem::from_text("left fixture".to_owned()));
+        Arc::make_mut(&mut app.state).right_hand =
+            Some(ClipItem::from_text("right fixture".to_owned()));
         let state_before = app.state.clone();
         app.dirty_mirror = false;
         app.search_query.clear();
@@ -217,7 +221,7 @@ fn palette_action_navigation_wraps_in_both_directions() {
         });
     }
     app.search_query = "Navigation Fixture".to_owned();
-    assert_eq!(app.filtered_actions().len(), 2);
+    assert_eq!(ready_palette_actions(&mut app).len(), 2);
 
     let _ = egui::Context::default().run(
         egui::RawInput {
@@ -526,8 +530,14 @@ fn palette_f4_and_f6_switch_workbench_and_display_palettes_together() {
 
         let expected_palette = ui_appearance::palette(expected);
         assert_eq!(app.config.workbench.appearance, expected);
-        assert_eq!(app.renderer.config.workbench.appearance, expected);
-        assert_eq!(app.renderer.palette.colors, expected_palette.colors);
+        assert_eq!(
+            app.renderer.as_ref().unwrap().config.workbench.appearance,
+            expected
+        );
+        assert_eq!(
+            app.renderer.as_ref().unwrap().palette.colors,
+            expected_palette.colors
+        );
         assert_eq!(app.ui_palette.colors, expected_palette.colors);
         assert!(
             app.dirty_mirror,

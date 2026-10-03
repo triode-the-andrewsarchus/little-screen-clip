@@ -642,6 +642,7 @@ pub struct AudioPreviewState {
 
     // Audio Playback Engine (rodio)
     player: Option<Player>,
+    player_factory: fn() -> Option<Player>,
     _sink: Option<MixerDeviceSink>,
     pub is_playing: bool,
     playback_start_instant: Option<Instant>,
@@ -898,12 +899,6 @@ impl AudioPreviewState {
             (Some(cancel), Some(ticket), Some(progress_rx), Some(job_rx))
         };
 
-        // Initialize rodio playback engine using shared application sink
-        let player = crate::ui_ext::new_shared_audio_player();
-        if let Some(ref p) = player {
-            p.set_volume(0.8);
-        }
-
         let initial_viewport = AudioViewport::new(duration_sec);
 
         Self {
@@ -942,7 +937,8 @@ impl AudioPreviewState {
             spectrogram_texture: None,
             note_strip_texture: None,
             inspect_viewport_cache: ViewportSpectrogramCache::default(),
-            player,
+            player: None,
+            player_factory: crate::ui_ext::new_shared_audio_player,
             _sink: None,
             is_playing: false,
             playback_start_instant: None,

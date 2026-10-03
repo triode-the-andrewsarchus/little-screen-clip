@@ -120,8 +120,7 @@ impl ScreenRenderer {
         let clip_right = rx + rw - 10.0;
 
         let clean_content = content.trim_start_matches(is_zero_width_or_bom);
-        let lines = crate::markdown::parse_markdown(clean_content);
-        let total_lines = lines.len();
+        let (lines, total_lines) = crate::markdown::parse_markdown_preview(clean_content);
         let max_y = ry + rh - 22.0;
         let mut y = ry + 124.0;
 

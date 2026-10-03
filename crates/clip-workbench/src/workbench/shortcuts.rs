@@ -81,7 +81,7 @@ impl WorkbenchApp {
                 let now = ctx.input(|i| i.time);
                 if strip.copy_selection(now) {
                     if let Ok(IpcResponse::State(s)) = send_ipc_request(&IpcRequest::GetState) {
-                        self.state = s;
+                        self.state = Arc::new(s);
                     }
                     self.dirty_mirror = true;
                 }
@@ -210,7 +210,7 @@ impl WorkbenchApp {
         let a = self.selected_slots[0];
         let b = self.selected_slots[1];
         let _ = send_ipc_request(&IpcRequest::SwapSlots(a, b));
-        self.state.swap_slots(a, b);
+        Arc::make_mut(&mut self.state).swap_slots(a, b);
         self.dirty_mirror = true;
         self.status_msg = Some(format!("Swapped {} and {}", a.label(), b.label()));
     }

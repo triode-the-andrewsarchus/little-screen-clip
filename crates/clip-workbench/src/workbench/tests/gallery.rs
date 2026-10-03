@@ -289,7 +289,9 @@ fn inspector_markdown_classification_tracks_clipboard_item_identity() {
     let slot = SlotId::LeftHand;
     let markdown = ClipItem::from_text("# A heading\n\n- One item");
     let markdown_id = markdown.id;
-    *app.state.get_mut(slot).expect("left hand slot") = Some(markdown);
+    *Arc::make_mut(&mut app.state)
+        .get_mut(slot)
+        .expect("left hand slot") = Some(markdown);
 
     assert_eq!(app.check_inspector_text_preview(), Some((slot, None, true)));
     assert_eq!(
@@ -301,7 +303,9 @@ fn inspector_markdown_classification_tracks_clipboard_item_identity() {
 
     let plain_text = ClipItem::from_text("ordinary clipboard text");
     let plain_text_id = plain_text.id;
-    *app.state.get_mut(slot).expect("left hand slot") = Some(plain_text);
+    *Arc::make_mut(&mut app.state)
+        .get_mut(slot)
+        .expect("left hand slot") = Some(plain_text);
 
     assert_eq!(
         app.check_inspector_text_preview(),
@@ -319,7 +323,8 @@ fn inspector_markdown_classification_tracks_clipboard_item_identity() {
 fn inspector_caches_clipboard_spreadsheet_detection_until_item_changes() {
     let mut app = test_workbench_app(None, VecDeque::new());
     let slot = SlotId::LeftHand;
-    *app.state.get_mut(slot).unwrap() = Some(ClipItem::from_text("name,count\nalpha,1"));
+    *Arc::make_mut(&mut app.state).get_mut(slot).unwrap() =
+        Some(ClipItem::from_text("name,count\nalpha,1"));
 
     assert_eq!(
         app.check_inspector_text_preview(),
@@ -336,7 +341,7 @@ fn inspector_caches_clipboard_spreadsheet_detection_until_item_changes() {
         Some((slot, None, false))
     );
 
-    *app.state.get_mut(slot).unwrap() = Some(ClipItem::from_text("plain text"));
+    *Arc::make_mut(&mut app.state).get_mut(slot).unwrap() = Some(ClipItem::from_text("plain text"));
     assert_eq!(
         app.check_inspector_text_preview(),
         Some((slot, None, false))
@@ -356,7 +361,9 @@ fn oversized_markdown_uses_bounded_inspector_hint_and_full_worker_classification
     let mut item = ClipItem::from_text("placeholder");
     item.payload = ClipPayload::Text(content);
     let mut app = test_workbench_app(None, VecDeque::new());
-    *app.state.get_mut(SlotId::LeftHand).unwrap() = Some(item.clone());
+    *Arc::make_mut(&mut app.state)
+        .get_mut(SlotId::LeftHand)
+        .unwrap() = Some(item.clone());
 
     let (_, path, quick_hint) = app.check_inspector_text_preview().unwrap();
     assert!(path.is_none());
@@ -536,7 +543,7 @@ fn closing_dirty_pdf_requests_workbench_mirror_redraw() {
         app.dirty_mirror,
         "closing an edited PDF must invalidate the mirror"
     );
-    app.update_mirror_texture(&ctx);
+    wait_for_mirror(&mut app);
     assert!(
         !app.dirty_mirror,
         "the next mirror render should consume invalidation"

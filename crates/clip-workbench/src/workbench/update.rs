@@ -10,18 +10,30 @@ impl eframe::App for WorkbenchApp {
 
         self.handle_appearance_shortcut(ctx);
 
-        // Live state update from background daemon poller
-        let mut state_changed = false;
-        while let Ok(new_state) = self.state_rx.try_recv() {
-            if new_state != self.state {
-                self.state = new_state;
-                state_changed = true;
+        while let Ok(result) = self.state_rx.try_recv() {
+            match result {
+                Ok(state) => {
+                    self.state = state;
+                    self.dirty_mirror = true;
+                    self.mirror_error = None;
+                    self.selected_action_index = 0;
+                }
+                Err(error) => self.set_status_message(format!("Could not load clipboard: {error}")),
             }
-        }
-        if state_changed {
-            self.dirty_mirror = true;
+            self.state_loaded = true;
+            if let Some(binary) = self.startup_comparison.take() {
+                if binary {
+                    self.open_binary_diff_viewer();
+                } else {
+                    self.open_diff_viewer();
+                }
+                if self.viewer.is_none() {
+                    self.advance_startup();
+                }
+            }
             ctx.request_repaint();
         }
+        self.poll_palette_ops(ctx);
 
         self.appearance_sync.poll(ctx);
         self.appearance_sync.render(ctx, &self.ui_palette);
@@ -53,7 +65,7 @@ impl eframe::App for WorkbenchApp {
             return;
         }
 
-        if self.state.has_active_animation() {
+        if self.mirror_animated {
             self.dirty_mirror = true;
             ctx.request_repaint_after(Duration::from_millis(80));
         } else {
@@ -109,6 +121,7 @@ impl eframe::App for WorkbenchApp {
             match self.view {
                 WorkbenchView::Palette => {
                     let filtered = self.filtered_actions();
+                    if self.palette_ops_job.is_some() { ui.horizontal(|ui| { ui.spinner(); ui.label("Preparing actions…"); }); }
                     let text_preview_action = self.check_inspector_text_preview();
 
                     // Selected slots banner & shortcuts
@@ -395,7 +408,7 @@ impl eframe::App for WorkbenchApp {
                         if filtered.is_empty() {
                             ui.add_space(10.0);
                             ui.label(
-                                egui::RichText::new("No matching actions or recipes found.")
+                                egui::RichText::new(if !self.state_loaded { "Loading clipboard…" } else if self.palette_ops_job.is_some() { "Preparing actions…" } else { "No matching actions or recipes found." })
                                     .color(hex_to_c32(&self.ui_palette.colors.text_muted))
                                     .italics(),
                             );

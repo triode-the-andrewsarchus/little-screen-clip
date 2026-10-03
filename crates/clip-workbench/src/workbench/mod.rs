@@ -3,6 +3,8 @@
 use super::*;
 
 mod actions;
+mod background;
+pub(super) use background::{ClipboardSelection, MirrorJob, PaletteOpsJob};
 mod appearance;
 mod header;
 mod image_sessions;

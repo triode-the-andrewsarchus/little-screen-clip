@@ -27,7 +27,7 @@ impl WorkbenchApp {
             }
             Some(MirrorAction::DropSwap { from, to }) => {
                 let _ = send_ipc_request(&IpcRequest::SwapSlots(from, to));
-                self.state.swap_slots(from, to);
+                Arc::make_mut(&mut self.state).swap_slots(from, to);
                 self.dirty_mirror = true;
                 self.status_msg = Some(format!("Swapped {} and {}", from.label(), to.label()));
             }
@@ -189,7 +189,15 @@ impl WorkbenchApp {
 
         // 1. Built-in ops
         let items = self.get_selected_items();
-        let ops = get_applicable_ops(&items);
+        if !self.state_loaded {
+            return actions;
+        }
+        let ops = self
+            .palette_ops
+            .as_ref()
+            .filter(|(key, _)| key.matches(self))
+            .map(|(_, ops)| ops.as_slice())
+            .unwrap_or_default();
         for op in ops {
             if q.is_empty()
                 || op.name.to_lowercase().contains(&q)
@@ -197,7 +205,7 @@ impl WorkbenchApp {
                 || op.description.to_lowercase().contains(&q)
                 || op.category.to_lowercase().contains(&q)
             {
-                actions.push(PaletteAction::Op(op));
+                actions.push(PaletteAction::Op(op.clone()));
             }
         }
 

@@ -2,27 +2,32 @@
 
 use crate::{FontStyle, ScreenRenderer};
 use fontdue::{Font, FontSettings};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 /// Bundled Noto Sans CJK JP regular face (SIL OFL 1.1).
 pub static CJK_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/NotoSansCJK-JP-Regular.ttf");
 /// Bundled Noto Emoji regular monochrome face (SIL OFL 1.1).
 pub static EMOJI_FONT_BYTES: &[u8] = include_bytes!("../assets/fonts/NotoEmoji-Regular.ttf");
 
-// Parse once per process, only when a character needs a bundled fallback.
-static FALLBACK_FONTS: LazyLock<Vec<Font>> = LazyLock::new(|| {
+// Coverage is cheap to inspect; parse glyph geometry only for a font actually
+// needed by a character. In particular, emoji does not initialize the CJK face.
+struct FallbackFont {
+    coverage: ttf_parser::Face<'static>,
+    bytes: &'static [u8],
+    parsed: OnceLock<Option<Font>>,
+}
+
+static FALLBACK_FONTS: LazyLock<Vec<FallbackFont>> = LazyLock::new(|| {
     [CJK_FONT_BYTES, EMOJI_FONT_BYTES]
         .into_iter()
         .filter_map(|bytes| {
-            Font::from_bytes(
-                bytes,
-                FontSettings {
-                    load_substitutions: false,
-                    ..FontSettings::default()
-                },
-            )
-            .map_err(|error| tracing::warn!(%error, "could not load bundled display font"))
-            .ok()
+            ttf_parser::Face::parse(bytes, 0)
+                .ok()
+                .map(|coverage| FallbackFont {
+                    coverage,
+                    bytes,
+                    parsed: OnceLock::new(),
+                })
         })
         .collect()
 });
@@ -55,7 +60,27 @@ impl ScreenRenderer {
         .into_iter()
         .flatten()
         .find(|font| font.has_glyph(ch))
-        .or_else(|| FALLBACK_FONTS.iter().find(|font| font.has_glyph(ch)))
+        .or_else(|| {
+            FALLBACK_FONTS.iter().find_map(|fallback| {
+                fallback.coverage.glyph_index(ch)?;
+                fallback
+                    .parsed
+                    .get_or_init(|| {
+                        Font::from_bytes(
+                            fallback.bytes,
+                            FontSettings {
+                                load_substitutions: false,
+                                ..FontSettings::default()
+                            },
+                        )
+                        .map_err(
+                            |error| tracing::warn!(%error, "could not load bundled display font"),
+                        )
+                        .ok()
+                    })
+                    .as_ref()
+            })
+        })
         .unwrap_or(primary)
     }
 }

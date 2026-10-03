@@ -167,6 +167,7 @@ impl AudioPreviewState {
     ///
     /// * `start_sec` - Audio start position in seconds.
     pub fn play_hf_audio_at(&mut self, start_sec: f32) {
+        self.ensure_player();
         if let Some(ref p) = self.player {
             p.clear();
             let sr = self

@@ -98,7 +98,7 @@ fn oversized_csv_remains_available_in_inspector_and_generic_preview() {
     let mut app = test_workbench_app(None, VecDeque::new());
     let slot = SlotId::LeftHand;
     let item = ClipItem::from_text(content);
-    *app.state.get_mut(slot).unwrap() = Some(item.clone());
+    *Arc::make_mut(&mut app.state).get_mut(slot).unwrap() = Some(item.clone());
 
     assert_eq!(
         app.check_inspector_text_preview(),
@@ -128,7 +128,8 @@ fn oversized_malformed_csv_falls_back_to_full_text_preview() {
     let content = format!("{}name,count\nalpha,1,extra", " ".repeat(100_000));
     let mut app = test_workbench_app(None, VecDeque::new());
     let slot = SlotId::LeftHand;
-    *app.state.get_mut(slot).unwrap() = Some(ClipItem::from_text(content.clone()));
+    *Arc::make_mut(&mut app.state).get_mut(slot).unwrap() =
+        Some(ClipItem::from_text(content.clone()));
 
     assert_eq!(
         app.check_inspector_text_preview(),

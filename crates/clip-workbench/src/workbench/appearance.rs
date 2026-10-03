@@ -35,7 +35,10 @@ impl WorkbenchApp {
         self.config.workbench.appearance = appearance;
         self.ui_palette = ui_appearance::palette(appearance);
         ui_appearance::apply_visuals(ctx, &self.ui_palette);
-        self.renderer.set_config(self.config.clone());
+        if let Some(renderer) = &mut self.renderer {
+            renderer.set_config(self.config.clone());
+        }
+        self.mirror_error = None;
         self.dirty_mirror = true;
         match save(appearance) {
             Ok(()) => {

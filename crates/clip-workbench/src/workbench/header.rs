@@ -73,6 +73,9 @@ impl WorkbenchApp {
     }
 
     pub(crate) fn render_workbench_header(&mut self, ctx: &egui::Context) {
+        if self.view == WorkbenchView::Palette && (self.dirty_mirror || self.mirror_job.is_some()) {
+            self.update_mirror_texture(ctx);
+        }
         // Top Header Panel: Mirror of Trofeo Screen + Tabs
         let header_bg = hex_to_c32(&self.ui_palette.colors.surface_panel);
         let brand_color = hex_to_c32(&self.ui_palette.left_hand_border);
@@ -131,6 +134,21 @@ impl WorkbenchApp {
                     {
                         self.toggle_appearance(ctx);
                     }
+                    if !self.state_loaded
+                        || (self.view == WorkbenchView::Palette
+                            && self.mirror_texture.is_none()
+                            && self.mirror_job.is_some())
+                    {
+                        ui.spinner();
+                        ui.label(if self.state_loaded {
+                            "Preparing preview…"
+                        } else {
+                            "Loading clipboard…"
+                        });
+                    }
+                    if let Some(error) = &self.mirror_error {
+                        ui.label(format!("Preview unavailable: {error}"));
+                    }
                     if self.spreadsheet_load_job.is_some() {
                         ui.spinner();
                         ui.label("Opening spreadsheet…");
@@ -159,9 +177,6 @@ impl WorkbenchApp {
 
                 if self.view == WorkbenchView::Palette {
                     ui.add_space(crate::ui_ext::SPACE_SM);
-                    if self.dirty_mirror || self.mirror_texture.is_none() {
-                        self.update_mirror_texture(ctx);
-                    }
                     let mirror_action = ScreenMirrorWidget::new(
                         self.mirror_texture.as_ref(),
                         self.config.slots.left_priors,
@@ -172,27 +187,5 @@ impl WorkbenchApp {
                     self.handle_mirror_action(mirror_action);
                 }
             });
-    }
-
-    pub(crate) fn update_mirror_texture(&mut self, ctx: &egui::Context) {
-        let mut render_state = self.state.clone();
-        render_state.selected = self.selected_slots.clone();
-
-        if let Ok(pixmap) = self.renderer.render_pixmap(&render_state) {
-            let pixels: Vec<egui::Color32> = pixmap
-                .data()
-                .chunks_exact(4)
-                .map(|p| egui::Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3]))
-                .collect();
-
-            let color_image = egui::ColorImage {
-                size: [SCREEN_WIDTH as usize, SCREEN_HEIGHT as usize],
-                pixels,
-            };
-
-            self.mirror_texture =
-                Some(ctx.load_texture("ambient-mirror", color_image, egui::TextureOptions::LINEAR));
-            self.dirty_mirror = false;
-        }
     }
 }

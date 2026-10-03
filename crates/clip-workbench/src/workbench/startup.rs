@@ -10,7 +10,7 @@ impl WorkbenchApp {
     }
 
     pub(crate) fn new(
-        state: SlotManager,
+        ctx: egui::Context,
         start_with_diff: bool,
         start_with_binary_diff: bool,
         initial_audio: Option<PathBuf>,
@@ -23,10 +23,8 @@ impl WorkbenchApp {
         // Desktop monitor mirror is always upright (no 180 flip)
         config.display.rotate_180 = false;
         let ui_palette = ui_appearance::palette(config.workbench.appearance);
-        let renderer = ScreenRenderer::new(config.clone())
-            .unwrap_or_else(|_| ScreenRenderer::fallback(config.clone()));
-
-        let state_rx = state_sync::spawn_state_poller(state.clone());
+        let state = Arc::new(SlotManager::default());
+        let state_rx = state_sync::spawn_state_poller(ctx);
 
         let canvas_state = NodeCanvasState::new();
         let recipes = load_all_recipes();
@@ -56,6 +54,10 @@ impl WorkbenchApp {
         let mut app = Self {
             state,
             state_rx,
+            state_loaded: false,
+            startup_comparison: (!open_component_gallery
+                && (start_with_diff || start_with_binary_diff))
+                .then_some(start_with_binary_diff),
             view: WorkbenchView::Palette,
             canvas_state,
             recipes,
@@ -66,7 +68,12 @@ impl WorkbenchApp {
             inspector_text_preview_cache: None,
             status_msg: None,
             appearance_sync: AppearanceSync::default(),
-            renderer,
+            renderer: None,
+            mirror_job: None,
+            mirror_error: None,
+            mirror_animated: false,
+            palette_ops: None,
+            palette_ops_job: None,
             ui_palette,
             mirror_texture: None,
             dirty_mirror: true,
@@ -92,13 +99,9 @@ impl WorkbenchApp {
             app.viewer = Some(ViewerSession::ComponentGallery(
                 component_gallery::ComponentGalleryState::default(),
             ));
-        } else if start_with_binary_diff {
-            app.open_binary_diff_viewer();
-        } else if start_with_diff {
-            app.open_diff_viewer();
         }
 
-        if app.viewer.is_none() {
+        if app.viewer.is_none() && app.startup_comparison.is_none() {
             app.advance_startup();
         }
 

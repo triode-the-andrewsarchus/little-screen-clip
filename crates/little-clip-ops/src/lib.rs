@@ -285,7 +285,13 @@ pub fn get_applicable_ops(items: &[&ClipItem]) -> Vec<OpDescriptor> {
         let item = items[0];
         let mut ops = Vec::new();
 
-        if let Ok(text) = get_item_text(item) {
+        let text = match &item.payload {
+            ClipPayload::Text(text) | ClipPayload::Markdown(text) => {
+                Ok(std::borrow::Cow::Borrowed(text.as_str()))
+            }
+            _ => get_item_text(item).map(std::borrow::Cow::Owned),
+        };
+        if let Ok(text) = text {
             let trimmed = text.trim();
 
             // 1. URL-specific

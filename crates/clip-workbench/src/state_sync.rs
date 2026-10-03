@@ -1,12 +1,19 @@
 //! Keeps the open workbench's slot state in sync with daemon updates.
 
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::{
+    Arc,
+    mpsc::{Receiver, channel},
+};
 use std::time::{Duration, Instant};
 
 use little_clip_core::ipc::{IpcRequest, IpcResponse, SlotStateSummary};
 use little_clip_core::{ClipItem, ClipPayload, SlotId, SlotManager};
 
-use crate::send_ipc_request;
+use crate::send_ipc_request_with_timeout;
+
+fn request(req: &IpcRequest) -> Result<IpcResponse, Box<dyn std::error::Error>> {
+    send_ipc_request_with_timeout(req, Some(Duration::from_secs(2)))
+}
 
 fn preview_may_progress(item: &ClipItem) -> bool {
     match &item.payload {
@@ -47,8 +54,7 @@ fn hydrate_changed_slots(
         if !needs_hydration(slot, summary, previous, state) {
             continue;
         }
-        let Ok(IpcResponse::SlotItem(item)) = send_ipc_request(&IpcRequest::GetSlotItem(slot))
-        else {
+        let Ok(IpcResponse::SlotItem(item)) = request(&IpcRequest::GetSlotItem(slot)) else {
             return Err(());
         };
         let current = state.get_mut(slot).expect("all SlotId values are valid");
@@ -60,17 +66,25 @@ fn hydrate_changed_slots(
     Ok(changed)
 }
 
-pub(crate) fn spawn_state_poller(initial_state: SlotManager) -> Receiver<SlotManager> {
+pub(crate) fn spawn_state_poller(ctx: egui::Context) -> Receiver<Result<Arc<SlotManager>, String>> {
     let (state_tx, state_rx) = channel();
     std::thread::spawn(move || {
-        let mut state = initial_state;
+        let initial = match request(&IpcRequest::GetState) {
+            Ok(IpcResponse::State(state)) => Ok(state),
+            Ok(_) => Err("Unexpected clipboard state response".to_owned()),
+            Err(error) => Err(error.to_string()),
+        };
+        let mut state = initial.as_ref().cloned().unwrap_or_default();
+        if state_tx.send(initial.map(Arc::new)).is_err() {
+            return;
+        }
+        ctx.request_repaint();
         let mut previous_summary = SlotStateSummary::from_manager(&state);
         let mut poll_interval_ms = 250u64;
         let mut next_legacy_preview_probe = Instant::now();
         loop {
             std::thread::sleep(Duration::from_millis(poll_interval_ms));
-            let Ok(IpcResponse::StateSummary(summary)) =
-                send_ipc_request(&IpcRequest::GetStateSummary)
+            let Ok(IpcResponse::StateSummary(summary)) = request(&IpcRequest::GetStateSummary)
             else {
                 poll_interval_ms = (poll_interval_ms + 100).min(1000);
                 continue;
@@ -96,11 +110,18 @@ pub(crate) fn spawn_state_poller(initial_state: SlotManager) -> Receiver<SlotMan
             else {
                 continue;
             };
+            let selection_changed =
+                state.cursor != summary.cursor || state.selected != summary.selected;
             state.cursor = summary.cursor;
             state.selected = summary.selected.clone();
             previous_summary = summary;
-            if (summary_changed || hydrated_changed) && state_tx.send(state.clone()).is_err() {
+            if (selection_changed || hydrated_changed)
+                && state_tx.send(Ok(Arc::new(state.clone()))).is_err()
+            {
                 break;
+            }
+            if selection_changed || hydrated_changed {
+                ctx.request_repaint();
             }
         }
     });

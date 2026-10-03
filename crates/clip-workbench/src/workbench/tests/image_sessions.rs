@@ -172,7 +172,7 @@ fn mirror_context_preview_routes_pdf_image_payload_to_pdf_editor() {
     );
 
     let mut app = test_workbench_app(None, VecDeque::new());
-    app.state.push_left(item);
+    Arc::make_mut(&mut app.state).push_left(item);
     app.handle_mirror_action(Some(MirrorAction::Context(SlotId::LeftHand)));
 
     assert!(matches!(app.viewer, Some(ViewerSession::Pdf(_))));
@@ -198,7 +198,7 @@ fn mirror_context_preview_never_sends_pathless_pdf_bytes_to_image_decoder() {
         handler_tag: "PDF (DOCUMENT)".to_owned(),
     };
     let mut app = test_workbench_app(None, VecDeque::new());
-    app.state.push_left(item);
+    Arc::make_mut(&mut app.state).push_left(item);
 
     app.handle_mirror_action(Some(MirrorAction::Context(SlotId::LeftHand)));
 
@@ -257,7 +257,7 @@ fn rendered_image_studio_escape_restores_only_the_matching_edited_session() {
     let mut app = test_workbench_app(None, VecDeque::new());
     app.view = WorkbenchView::NodeMachine;
     app.selected_slots = vec![SlotId::LeftHand];
-    app.state.left_hand = Some(item.clone());
+    Arc::make_mut(&mut app.state).left_hand = Some(item.clone());
     let state_before = app.state.clone();
 
     app.open_slot_preview_modal(&item);

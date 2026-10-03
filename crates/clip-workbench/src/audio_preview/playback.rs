@@ -26,7 +26,17 @@ impl AudioPreviewState {
         }
     }
 
+    pub(super) fn ensure_player(&mut self) {
+        if self.player.is_none() {
+            self.player = (self.player_factory)();
+            if let Some(player) = &self.player {
+                player.set_volume(self.volume);
+            }
+        }
+    }
+
     pub fn play_slice_preview_ex(&mut self, start_sec: f32, end_sec: f32, looping: bool) {
+        self.ensure_player();
         let (s, mut e) = if start_sec < end_sec {
             (start_sec, end_sec)
         } else {
@@ -73,6 +83,7 @@ impl AudioPreviewState {
     }
 
     pub fn play(&mut self) {
+        self.ensure_player();
         self.preview_stop_time = None;
         self.preview_slice_range = None;
         self.preview_is_looping = false;

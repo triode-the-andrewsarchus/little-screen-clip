@@ -137,11 +137,6 @@ impl RollingAudioStripState {
     }
     /// Creates a new rolling audio strip state and loads the latest daemon snapshot.
     pub fn new() -> Self {
-        let player = crate::ui_ext::new_shared_audio_player();
-        if let Some(ref p) = player {
-            p.set_volume(1.0);
-        }
-
         let mut state = Self {
             path: None,
             duration_sec: 0.0,
@@ -159,7 +154,7 @@ impl RollingAudioStripState {
             drag_start_time: None,
             is_dragging: false,
             _sink: None,
-            player,
+            player: None,
             is_playing: false,
             playhead_sec: 0.0,
             playback_start_instant: None,
