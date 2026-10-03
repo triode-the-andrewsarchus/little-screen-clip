@@ -680,7 +680,7 @@ fn contextual_palette_action_button<'a>(
     icon: Option<Icon>,
     label: impl Into<String>,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> crate::ui_ext::StyledButton<'a> {
     ui_ext::secondary_button_icon(
         icon,
         label,

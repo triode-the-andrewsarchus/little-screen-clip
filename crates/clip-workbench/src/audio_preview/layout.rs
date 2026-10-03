@@ -59,7 +59,7 @@ impl AudioWorkspace {
         label: impl Into<String>,
         fill: Color32,
         palette: &AppPalette,
-    ) -> egui::Button<'static> {
+    ) -> crate::ui_ext::StyledButton<'static> {
         Self::primary_button_icon(None, label, fill, palette)
     }
 
@@ -68,7 +68,7 @@ impl AudioWorkspace {
         label: impl Into<String>,
         fill: Color32,
         palette: &AppPalette,
-    ) -> egui::Button<'static> {
+    ) -> crate::ui_ext::StyledButton<'static> {
         crate::action_button_icon(icon, label, fill, palette)
             .min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
     }
@@ -77,7 +77,7 @@ impl AudioWorkspace {
         label: impl Into<String>,
         fill: Color32,
         palette: &AppPalette,
-    ) -> egui::Button<'static> {
+    ) -> crate::ui_ext::StyledButton<'static> {
         Self::secondary_button_icon(None, label, fill, palette)
     }
 
@@ -86,7 +86,7 @@ impl AudioWorkspace {
         label: impl Into<String>,
         fill: Color32,
         palette: &AppPalette,
-    ) -> egui::Button<'static> {
+    ) -> crate::ui_ext::StyledButton<'static> {
         crate::secondary_button_icon(icon, label, fill, palette)
             .min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
     }
@@ -96,7 +96,7 @@ impl AudioWorkspace {
         label: impl Into<String>,
         is_active: bool,
         palette: &AppPalette,
-    ) -> egui::Button<'static> {
+    ) -> crate::ui_ext::StyledButton<'static> {
         crate::mode_tab_button_icon(icon, label, is_active, palette)
             .min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
     }
@@ -195,27 +195,8 @@ impl AudioWorkspace {
         label: &str,
         active: bool,
         palette: &AppPalette,
-    ) -> egui::Button<'static> {
-        let colors = crate::ui_appearance::WorkbenchColors::from_palette(palette);
-        let background = if active {
-            hex_to_c32_alpha(&palette.harmonies.base, 40)
-        } else {
-            colors.recessed
-        };
-        let border = if active {
-            hex_to_c32(&palette.harmonies.base)
-        } else {
-            colors.panel
-        };
-        egui::Button::new(
-            egui::RichText::new(label.to_owned())
-                .strong()
-                .color(crate::contrast_text_c32(background, Some(border), palette)),
-        )
-        .fill(background)
-        .stroke(Stroke::new(1.0_f32, border))
-        .rounding(Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS))
-        .min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
+    ) -> crate::ui_ext::StyledButton<'static> {
+        crate::mode_tab_button(label, active, palette).min_size(Vec2::new(0.0, Self::BUTTON_HEIGHT))
     }
 
     pub(super) fn show(ui: &mut egui::Ui, palette: &AppPalette, body: impl FnOnce(&mut egui::Ui)) {

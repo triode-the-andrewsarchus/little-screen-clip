@@ -194,7 +194,7 @@ fn paint_slider_track(
     palette: &AppPalette,
 ) {
     let colors = WorkbenchColors::from_palette(palette);
-    let b_med = colors.panel;
+    let b_med = colors.recessed;
     let base_c = colors.accent;
     let f_low = colors.text_muted;
     let min_val = *range.start();
@@ -207,10 +207,18 @@ fn paint_slider_track(
     let x_mid = (x_start + x_end) * 0.5;
 
     // Baseline track
-    painter.line_segment(
-        [Pos2::new(x_start, y_bar), Pos2::new(x_end, y_bar)],
-        Stroke::new(1.0_f32, b_med),
+    let groove = Rect::from_min_max(
+        Pos2::new(x_start, y_bar - 3.0),
+        Pos2::new(x_end, y_bar + 3.0),
     );
+    painter.rect_filled(groove.translate(egui::vec2(0.0, 1.0)), 3.0, colors.raised);
+    painter.add(crate::ui_ext::gradient_surface(
+        groove,
+        3.0,
+        colors.canvas,
+        b_med,
+        false,
+    ));
 
     // Start tick (min)
     painter.line_segment(
@@ -250,14 +258,28 @@ fn paint_slider_track(
     let x_origin = x_start + origin_norm * (x_end - x_start);
     let (g_start, g_end) = (x_origin.min(x_cur), x_origin.max(x_cur));
     if (g_end - g_start).abs() > 0.5 {
-        painter.line_segment(
-            [Pos2::new(g_start, y_bar), Pos2::new(g_end, y_bar)],
-            Stroke::new(2.5_f32, base_c),
+        let fill = Rect::from_min_max(
+            Pos2::new(g_start, y_bar - 2.0),
+            Pos2::new(g_end, y_bar + 2.0),
         );
+        painter.add(crate::ui_ext::gradient_surface(
+            fill,
+            2.0,
+            base_c,
+            colors.focus,
+            true,
+        ));
     }
 
     // Value indicator dot
-    painter.circle_filled(Pos2::new(x_cur, y_bar), thumb_radius, base_c);
+    let thumb = Pos2::new(x_cur, y_bar);
+    painter.circle_filled(
+        thumb + egui::vec2(0.0, 1.0),
+        thumb_radius + 1.0,
+        egui::Color32::from_black_alpha(55),
+    );
+    painter.circle_filled(thumb, thumb_radius, colors.raised);
+    painter.circle_stroke(thumb, thumb_radius, Stroke::new(1.5_f32, base_c));
 }
 
 #[cfg(test)]

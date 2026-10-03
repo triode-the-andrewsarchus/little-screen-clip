@@ -26,17 +26,17 @@ impl BaseColors {
         let (canvas, primary, secondary, muted, inverse_text, raised, panel, recessed, inverse) =
             match appearance {
                 WorkbenchAppearance::Dark => (
-                    "#1c2021", "#f4f1e8", "#d2d6cf", "#b0b7ae", "#172321", "#353b3a", "#2b302f",
-                    "#232827", "#e7b58b",
+                    "#1f1f1f", "#f2f2f2", "#d5d5d5", "#b5b5b5", "#181818", "#383838", "#2c2c2c",
+                    "#242424", "#d8d8d8",
                 ),
                 WorkbenchAppearance::Light => (
-                    "#f3f0e7", "#242d29", "#46534b", "#596458", "#fffdf7", "#fffdf6", "#e8e7de",
-                    "#eeece2", "#8a4830",
+                    "#eeeeee", "#262626", "#484848", "#595959", "#ffffff", "#ffffff", "#e3e3e3",
+                    "#e9e9e9", "#484848",
                 ),
             };
         Self {
             canvas: canvas.into(),
-            console_surface: "#111923".into(),
+            console_surface: "#141414".into(),
             surface_raised: raised.into(),
             surface_panel: panel.into(),
             surface_recessed: recessed.into(),
@@ -365,7 +365,7 @@ impl AppPalette {
     pub fn for_appearance(appearance: WorkbenchAppearance) -> Self {
         let colors = BaseColors::for_appearance(appearance);
         let link = match appearance {
-            WorkbenchAppearance::Dark => "#79b8ec",
+            WorkbenchAppearance::Dark => "#42b9f3",
             WorkbenchAppearance::Light => "#215c84",
         };
         Self::from_fixed_colors(appearance, colors, link)
@@ -374,12 +374,12 @@ impl AppPalette {
     fn from_fixed_colors(appearance: WorkbenchAppearance, colors: BaseColors, link: &str) -> Self {
         let is_dark = appearance == WorkbenchAppearance::Dark;
 
-        // A fixed mint anchor gives both renderers the same perceptual accent
+        // A fixed sky-blue anchor gives both renderers the same perceptual accent
         // family. Dark uses luminous pastels; Light uses ink-like counterparts.
         let base_accent = Oklch {
             l: if is_dark { 0.80 } else { 0.43 },
-            c: 0.095,
-            h: 165.0,
+            c: 0.13,
+            h: 235.0,
         }
         .to_hex();
         let harmonies = DerivedHarmonies::from_base_hex(&base_accent, is_dark);
@@ -411,7 +411,7 @@ impl AppPalette {
             harmonies: harmonies.clone(),
 
             undo_border: harmonies.warm_attention.clone(),
-            chrome_border: if is_dark { "#858e88" } else { "#70796f" }.to_owned(),
+            chrome_border: if is_dark { "#8c8c8c" } else { "#707070" }.to_owned(),
             left_hand_border: harmonies.base.clone(),
             right_hand_border: harmonies.tetradic_1.clone(),
 
@@ -422,7 +422,7 @@ impl AppPalette {
             right_prior1_border: harmonies.triadic_2.clone(),
             right_prior2_border: harmonies.tetradic_1.clone(),
 
-            cursor_border: harmonies.tetradic_2.clone(),
+            cursor_border: harmonies.warm_attention.clone(),
             selected_border: harmonies.triadic_1.clone(),
 
             url_color: link.to_owned(),
@@ -574,6 +574,26 @@ mod tests {
         assert!((contrast_ratio((0, 0, 0), (255, 255, 255)) - 21.0).abs() < 0.1);
         for appearance in [WorkbenchAppearance::Dark, WorkbenchAppearance::Light] {
             let palette = AppPalette::for_appearance(appearance);
+            for neutral in [
+                &palette.colors.canvas,
+                &palette.colors.surface_panel,
+                &palette.colors.surface_raised,
+                &palette.colors.surface_recessed,
+                &palette.colors.surface_inverse,
+                &palette.colors.console_surface,
+                &palette.colors.text_primary,
+                &palette.colors.text_secondary,
+                &palette.colors.text_muted,
+                &palette.colors.text_inverse,
+                &palette.chrome_border,
+            ] {
+                let (r, g, b, _) = parse_hex_color_rgba(neutral);
+                assert_eq!(
+                    (r, r),
+                    (g, b),
+                    "{appearance:?}: {neutral} must be neutral gray"
+                );
+            }
             let fg = palette
                 .contrast_pair_fg(&palette.colors.canvas, Some(&palette.colors.text_primary));
             let (br, bg, bb, _) = parse_hex_color_rgba(&palette.colors.canvas);

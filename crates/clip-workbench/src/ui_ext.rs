@@ -338,6 +338,153 @@ fn composited_rgb(fill: Color32, surface: Color32) -> (u8, u8, u8) {
     (result.r(), result.g(), result.b())
 }
 
+/// A native egui button with a shared raised surface. Native layout, input,
+/// accessibility, and disabled-state fading stay with egui.
+pub struct StyledButton<'a> {
+    button: egui::Button<'a>,
+    fill: Color32,
+    shade: Color32,
+    stroke: Stroke,
+    rounding: Rounding,
+}
+
+impl<'a> StyledButton<'a> {
+    fn new(button: egui::Button<'a>, fill: Color32, foreground: Color32, border: Color32) -> Self {
+        let darkened = Color32::from(egui::lerp(
+            egui::Rgba::from(fill)..=egui::Rgba::from(Color32::from_black_alpha(fill.a())),
+            0.18,
+        ));
+        // Never spend the text contrast budget on decorative shading. Alpha
+        // surfaces retain a gentle shade away from their foreground.
+        let endpoint =
+            if little_clip_core::palette::relative_luminance(
+                foreground.r(),
+                foreground.g(),
+                foreground.b(),
+            ) > little_clip_core::palette::relative_luminance(fill.r(), fill.g(), fill.b())
+            {
+                Color32::from_black_alpha(fill.a())
+            } else {
+                Color32::from_white_alpha(fill.a())
+            };
+        let shade = if fill.a() == 255
+            && contrast_ratio(
+                (darkened.r(), darkened.g(), darkened.b()),
+                (foreground.r(), foreground.g(), foreground.b()),
+            ) >= 4.5
+        {
+            darkened
+        } else {
+            egui::lerp(egui::Rgba::from(fill)..=egui::Rgba::from(endpoint), 0.09).into()
+        };
+        Self {
+            button,
+            fill,
+            shade,
+            stroke: Stroke::new(1.0_f32, border),
+            rounding: Rounding::same(CONTROL_CORNER_RADIUS),
+        }
+    }
+
+    pub fn min_size(mut self, size: Vec2) -> Self {
+        self.button = self.button.min_size(size);
+        self
+    }
+
+    pub fn stroke(mut self, stroke: impl Into<Stroke>) -> Self {
+        self.stroke = stroke.into();
+        self
+    }
+
+    pub fn rounding(mut self, rounding: impl Into<Rounding>) -> Self {
+        self.rounding = rounding.into();
+        self
+    }
+}
+
+impl egui::Widget for StyledButton<'_> {
+    fn ui(self, ui: &mut egui::Ui) -> Response {
+        let background = ui.painter().add(egui::Shape::Noop);
+        let response = ui.add(
+            self.button
+                .frame(false)
+                .fill(Color32::TRANSPARENT)
+                .stroke(Stroke::NONE),
+        );
+        if ui.is_rect_visible(response.rect) {
+            let pressed = response.is_pointer_button_down_on();
+            let emphasized = response.hovered() || response.has_focus();
+            let stroke = Stroke::new(
+                if emphasized { 2.0 } else { self.stroke.width },
+                self.stroke.color,
+            );
+            let rect = response.rect;
+            let (top, bottom) = if pressed {
+                (self.shade, self.fill)
+            } else {
+                (self.fill, self.shade)
+            };
+            ui.painter().set(
+                background,
+                egui::Shape::Vec(vec![
+                    egui::Shape::rect_filled(
+                        rect.translate(egui::vec2(0.0, 2.0)),
+                        self.rounding,
+                        Color32::from_black_alpha(35),
+                    ),
+                    gradient_surface(rect, self.rounding.nw, top, bottom, false),
+                    egui::Shape::rect_stroke(rect, self.rounding, stroke),
+                ]),
+            );
+        }
+        response
+    }
+}
+
+/// Rounded linear gradient shared by raised buttons and recessed slider tracks.
+pub(crate) fn gradient_surface(
+    rect: Rect,
+    radius: f32,
+    start: Color32,
+    end: Color32,
+    horizontal: bool,
+) -> egui::Shape {
+    let radius = radius
+        .min(rect.width() * 0.5)
+        .min(rect.height() * 0.5)
+        .max(0.0);
+    let mut mesh = egui::epaint::Mesh::default();
+    let color_at = |pos: Pos2| {
+        let t = if horizontal {
+            (pos.x - rect.left()) / rect.width()
+        } else {
+            (pos.y - rect.top()) / rect.height()
+        };
+        Color32::from(egui::lerp(
+            egui::Rgba::from(start)..=egui::Rgba::from(end),
+            t.clamp(0.0, 1.0),
+        ))
+    };
+    mesh.colored_vertex(rect.center(), color_at(rect.center()));
+    for (center, angle) in [
+        (rect.right_top() + egui::vec2(-radius, radius), -90.0_f32),
+        (rect.right_bottom() + egui::vec2(-radius, -radius), 0.0),
+        (rect.left_bottom() + egui::vec2(radius, -radius), 90.0),
+        (rect.left_top() + egui::vec2(radius, radius), 180.0),
+    ] {
+        for step in 0..=6 {
+            let angle = (angle + step as f32 * 15.0).to_radians();
+            let pos = center + radius * egui::vec2(angle.cos(), angle.sin());
+            mesh.colored_vertex(pos, color_at(pos));
+        }
+    }
+    let count = mesh.vertices.len() as u32;
+    for index in 1..count {
+        mesh.add_triangle(0, index, if index + 1 == count { 1 } else { index + 1 });
+    }
+    egui::Shape::mesh(mesh)
+}
+
 /// Builds an `egui::Button` where the text color is GUARANTEED to meet WCAG 2.1 4.5:1
 /// contrast against the button's background `fill`.
 pub fn themed_button<'a>(
@@ -345,11 +492,14 @@ pub fn themed_button<'a>(
     fill: Color32,
     preferred_fg: Option<Color32>,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> StyledButton<'a> {
     let fg = contrast_text_c32(fill, preferred_fg, palette);
-    egui::Button::new(RichText::new(text.into()).color(fg))
-        .fill(fill)
-        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
+    StyledButton::new(
+        egui::Button::new(RichText::new(text.into()).color(fg)),
+        fill,
+        fg,
+        WorkbenchColors::from_palette(palette).accent,
+    )
 }
 
 /// Applies contrast-guaranteed text color to an existing `RichText` for a given `fill`.
@@ -358,11 +508,14 @@ pub fn themed_button_rich<'a>(
     fill: Color32,
     preferred_fg: Option<Color32>,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> StyledButton<'a> {
     let fg = contrast_text_c32(fill, preferred_fg, palette);
-    egui::Button::new(rich.color(fg))
-        .fill(fill)
-        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
+    StyledButton::new(
+        egui::Button::new(rich.color(fg)),
+        fill,
+        fg,
+        WorkbenchColors::from_palette(palette).accent,
+    )
 }
 
 /// Standard mode/tab toggle button with guaranteed WCAG contrast in both active and inactive states.
@@ -370,7 +523,7 @@ pub fn mode_tab_button<'a>(
     label: impl Into<String>,
     is_active: bool,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> StyledButton<'a> {
     mode_tab_button_icon(None, label, is_active, palette)
 }
 
@@ -380,15 +533,15 @@ pub fn mode_tab_button_icon<'a>(
     label: impl Into<String>,
     is_active: bool,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> StyledButton<'a> {
     let colors = WorkbenchColors::from_palette(palette);
-    let (bg, border, pref_fg) = if is_active {
-        (colors.accent, colors.text_primary, colors.text_primary)
+    let (bg, pref_fg) = if is_active {
+        (colors.accent, colors.text_primary)
     } else {
-        (colors.raised, colors.border, colors.text_secondary)
+        (colors.raised, colors.text_secondary)
     };
     let fg = contrast_text_c32(bg, Some(pref_fg), palette);
-    let border_fg = if is_active { fg } else { border };
+    let border_fg = if is_active { fg } else { colors.accent };
     let text = RichText::new(label.into()).strong().color(fg);
 
     let btn = if let Some(ic) = icon {
@@ -397,10 +550,7 @@ pub fn mode_tab_button_icon<'a>(
         egui::Button::new(text)
     };
 
-    btn.fill(bg)
-        .stroke(Stroke::new(1.0_f32, border_fg))
-        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
-        .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
+    StyledButton::new(btn, bg, fg, border_fg).min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
 
 /// Standard primary action button (e.g. Copy, Save, Apply) with guaranteed WCAG contrast.
@@ -408,7 +558,7 @@ pub fn action_button<'a>(
     label: impl Into<String>,
     fill: Color32,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> StyledButton<'a> {
     action_button_icon(None, label, fill, palette)
 }
 
@@ -418,7 +568,7 @@ pub fn action_button_icon<'a>(
     label: impl Into<String>,
     fill: Color32,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> StyledButton<'a> {
     let fg = contrast_text_c32(
         fill,
         Some(WorkbenchColors::from_palette(palette).text_primary),
@@ -430,12 +580,7 @@ pub fn action_button_icon<'a>(
     } else {
         egui::Button::new(text)
     };
-    btn.fill(fill)
-        .stroke(Stroke::new(
-            1.0_f32,
-            WorkbenchColors::from_palette(palette).border,
-        ))
-        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
+    StyledButton::new(btn, fill, fg, WorkbenchColors::from_palette(palette).accent)
         .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
 
@@ -444,7 +589,7 @@ pub fn secondary_button<'a>(
     label: impl Into<String>,
     fill: Color32,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> StyledButton<'a> {
     secondary_button_icon(None, label, fill, palette)
 }
 
@@ -454,7 +599,7 @@ pub fn secondary_button_icon<'a>(
     label: impl Into<String>,
     fill: Color32,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> StyledButton<'a> {
     let fg = contrast_text_c32(
         fill,
         Some(WorkbenchColors::from_palette(palette).text_secondary),
@@ -466,12 +611,7 @@ pub fn secondary_button_icon<'a>(
     } else {
         egui::Button::new(text)
     };
-    btn.fill(fill)
-        .stroke(Stroke::new(
-            1.0_f32,
-            WorkbenchColors::from_palette(palette).border,
-        ))
-        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
+    StyledButton::new(btn, fill, fg, hex_to_c32(&palette.right_hand_border))
         .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
 
@@ -481,7 +621,7 @@ pub fn compact_toolbar_button<'a>(
     label: impl Into<String>,
     fill: Color32,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> StyledButton<'a> {
     compact_toolbar_button_icon(None, label, fill, palette)
 }
 
@@ -491,7 +631,7 @@ pub fn compact_toolbar_button_icon<'a>(
     label: impl Into<String>,
     fill: Color32,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> StyledButton<'a> {
     secondary_button_icon(icon, label, fill, palette)
 }
 
@@ -500,7 +640,7 @@ pub fn danger_button<'a>(
     label: impl Into<String>,
     fill: Color32,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> StyledButton<'a> {
     danger_button_icon(None, label, fill, palette)
 }
 
@@ -510,7 +650,7 @@ pub fn danger_button_icon<'a>(
     label: impl Into<String>,
     fill: Color32,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> StyledButton<'a> {
     let fg = contrast_text_c32(
         fill,
         Some(WorkbenchColors::from_palette(palette).text_primary),
@@ -522,12 +662,7 @@ pub fn danger_button_icon<'a>(
     } else {
         egui::Button::new(text)
     };
-    btn.fill(fill)
-        .stroke(Stroke::new(
-            1.0_f32,
-            WorkbenchColors::from_palette(palette).border,
-        ))
-        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
+    StyledButton::new(btn, fill, fg, WorkbenchColors::from_palette(palette).danger)
         .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
 
@@ -538,13 +673,16 @@ pub fn icon_button<'a>(
     fill: Color32,
     preferred_fg: Option<Color32>,
     palette: &AppPalette,
-) -> egui::Button<'a> {
+) -> StyledButton<'a> {
     let colors = WorkbenchColors::from_palette(palette);
     let fg = contrast_text_c32(fill, preferred_fg.or(Some(colors.text_primary)), palette);
-    egui::Button::image(icon.image_tinted(size, fg))
-        .fill(fill)
-        .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
-        .min_size(Vec2::splat(CONTROL_HEIGHT))
+    StyledButton::new(
+        egui::Button::image(icon.image_tinted(size, fg)),
+        fill,
+        fg,
+        colors.accent,
+    )
+    .min_size(Vec2::splat(CONTROL_HEIGHT))
 }
 
 /// Trait providing high-level, contrast-safe button widgets directly on `egui::Ui`.
@@ -1443,12 +1581,16 @@ mod tests {
 
             for (name, bg, preferred) in test_cases {
                 let fg = contrast_text_c32(bg, preferred, &palette);
-                let effective_bg = composited_rgb(bg, hex_to_c32(&palette.colors.surface_recessed));
-                let ratio = contrast_ratio(effective_bg, (fg.r(), fg.g(), fg.b()));
-                assert!(
-                    ratio >= 4.5,
-                    "{appearance:?} failed WCAG AA on {name}: {ratio:.2} < 4.5"
-                );
+                let button = themed_button(name, bg, preferred, &palette);
+                for surface in [button.fill, button.shade] {
+                    let effective_bg =
+                        composited_rgb(surface, hex_to_c32(&palette.colors.surface_recessed));
+                    let ratio = contrast_ratio(effective_bg, (fg.r(), fg.g(), fg.b()));
+                    assert!(
+                        ratio >= 4.5,
+                        "{appearance:?} failed WCAG AA on {name} gradient: {ratio:.2} < 4.5"
+                    );
+                }
             }
         }
     }

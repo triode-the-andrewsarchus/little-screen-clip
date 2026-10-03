@@ -118,15 +118,17 @@ impl<'a, T> Tab<'a, T> {
                 Vec2::new(rect.width(), if selected { 3.0 } else { 1.0 }),
             )
         };
-        painter.rect_filled(
-            indicator,
-            Rounding::ZERO,
-            if selected {
-                colors.accent
-            } else {
-                colors.border
-            },
-        );
+        if selected {
+            painter.add(crate::ui_ext::gradient_surface(
+                indicator,
+                0.0,
+                colors.accent,
+                colors.focus,
+                !vertical,
+            ));
+        } else {
+            painter.rect_filled(indicator, Rounding::ZERO, colors.border);
+        }
         let content_x = if vertical {
             rect.left() + BUTTON_PADDING_X
         } else {

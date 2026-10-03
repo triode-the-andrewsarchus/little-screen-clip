@@ -475,7 +475,13 @@ impl ComponentGalleryState {
                         ui.label("Choice controls use a shared readable baseline.");
                     });
                     ui.add(egui::Slider::new(&mut self.level, 0.0..=1.0).text("Level"));
-                    ui.add(egui::Slider::new(&mut self.level, 0.0..=1.0).show_value(false));
+                    crate::shell::render_track_slider(
+                        ui,
+                        &mut self.level,
+                        0.0..=1.0,
+                        ui.spacing().slider_width,
+                        palette,
+                    );
                 });
 
                 render_section(&mut columns[0], "Bars and status", palette, |ui| {

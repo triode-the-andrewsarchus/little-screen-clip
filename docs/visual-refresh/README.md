@@ -1,5 +1,30 @@
 # Workbench visual refresh
 
+## Neutral gray and gradient follow-up
+
+The shared Light/Dark surfaces, text, and structural borders now use pure grayscale. Sky blue, violet, and amber highlights take color cues from [OpGuides](https://opguides.info/). Raised buttons use subtle gradients and lower-edge shadows; colored outlines become stronger on hover and keyboard focus, and pressed shading reverses without moving the control. Shared slider tracks use a recessed groove, blue-to-gold fill, and outlined thumbs. Active tab indicators use the same gradient.
+
+The button treatment delegates layout, interaction, accessibility, and disabled fading to egui. One rounded-gradient painter serves buttons, tab indicators, and slider tracks. Existing value editing and slider mapping remain intact; the gallery shows both native numeric sliders and the shared gradient track. Audio's older custom toggle now uses the shared mode button.
+
+| Current surface | Capture |
+| --- | --- |
+| Shared controls | [Dark](neutral-controls-dark.png), [Light](neutral-controls-light.png) |
+| Quick Palette | [Light](neutral-palette-light.png) |
+| Node Machine | [Dark](neutral-nodes-dark.png) |
+| Image Resize | [Light](neutral-image-light.png) |
+| Audio Inspect and volume slider | [Dark](neutral-audio-dark.png) |
+
+Validation for this follow-up:
+
+- `cargo build -p clip-workbench`, `cargo fmt --all --check`, and `git diff --check`: passed.
+- `cargo test --workspace -- --test-threads=1`: 1,116 passed, eight existing ignored tests. Gradient endpoints retain text contrast of at least 4.5:1; actual contextual-button meshes retain neutral colors and readable labels. Base colors are checked for equal RGB channels. Existing geometry and input tests pass.
+- All six current private Weston/Niri captures pass centering, fixed-popup, and singleton checks. Captures show layout, not exhaustive interaction or physical USB acceptance.
+- Strict workspace Clippy remains blocked by pre-existing core/vendor warnings. All 175 emitted diagnostics are covered by the detached-parent baseline by message and file; later crates are not thereby proven lint-clean.
+- Architecture baseline, reuse search, and comparison each timed out after 300 seconds. Direct source review found no existing rounded-gradient painter. [Local Lizard comparison](neutral-complexity.json) against `85c5129` records 292 → 298 functions, CCN 737 → 757, and unchanged maximum CCN 23 across changed Rust files. The six added functions implement the shared painter and native button adapter; the separate audio toggle implementation was removed. Duplication and dependency cycles remain unverified.
+
+## First pass (archived)
+
+
 Branch: `feat/workbench-visual-refresh`, based on `feat/workbench-ui-overhaul` at `02cc03c`.
 
 The visual brief is warm neutrals and charcoal, perceptually derived mint/sky/apricot/lilac accents, readable proportional type, monospace technical readouts, and an instrument-panel hierarchy without decorative machinery.

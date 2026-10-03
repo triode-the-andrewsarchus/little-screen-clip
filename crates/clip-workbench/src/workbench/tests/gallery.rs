@@ -17,26 +17,44 @@ fn contextual_palette_preview_actions_use_neutral_secondary_surface() {
 
         let mut saw_fill = false;
         let mut saw_label = false;
-        for shape in &output.shapes {
-            match &shape.shape {
-                egui::Shape::Rect(rect) if rect.fill == expected_fill => saw_fill = true,
+        let mut pending: Vec<_> = output.shapes.iter().map(|shape| &shape.shape).collect();
+        let mut surface_colors = Vec::new();
+        let mut label_colors = Vec::new();
+        while let Some(shape) = pending.pop() {
+            match shape {
+                egui::Shape::Vec(shapes) => pending.extend(shapes),
+                egui::Shape::Mesh(mesh)
+                    if mesh
+                        .vertices
+                        .iter()
+                        .any(|vertex| vertex.color == expected_fill) =>
+                {
+                    saw_fill = true;
+                    surface_colors.extend(mesh.vertices.iter().map(|vertex| vertex.color));
+                }
                 egui::Shape::Text(text) if text.galley.text() == "Edit PDF" => {
                     saw_label = true;
                     for section in &text.galley.job.sections {
-                        assert!(
-                            little_clip_core::palette::contrast_ratio(
-                                (expected_fill.r(), expected_fill.g(), expected_fill.b()),
-                                (
-                                    section.format.color.r(),
-                                    section.format.color.g(),
-                                    section.format.color.b(),
-                                ),
-                            ) >= 4.5,
-                            "{appearance:?} contextual action label lacks contrast"
-                        );
+                        label_colors.push(section.format.color);
                     }
                 }
                 _ => {}
+            }
+        }
+        for surface in surface_colors {
+            assert_eq!(
+                (surface.r(), surface.r()),
+                (surface.g(), surface.b()),
+                "contextual action should remain neutral"
+            );
+            for foreground in &label_colors {
+                assert!(
+                    little_clip_core::palette::contrast_ratio(
+                        (surface.r(), surface.g(), surface.b()),
+                        (foreground.r(), foreground.g(), foreground.b()),
+                    ) >= 4.5,
+                    "{appearance:?} contextual action label lacks gradient contrast"
+                );
             }
         }
         assert!(saw_fill, "{appearance:?} action should use panel fill");

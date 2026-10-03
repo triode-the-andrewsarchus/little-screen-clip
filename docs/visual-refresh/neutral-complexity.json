@@ -1,0 +1,27 @@
+{
+  "before": {
+    "functions": 292,
+    "ccn_sum": 737,
+    "max_ccn": 23,
+    "nloc": 6350
+  },
+  "after": {
+    "functions": 298,
+    "ccn_sum": 757,
+    "max_ccn": 23,
+    "nloc": 6518
+  },
+  "baseline_commit": "85c51294af248c6701a1bbe88db81d0c160489c0",
+  "files": [
+    "crates/clip-workbench/src/audio_preview/layout.rs",
+    "crates/clip-workbench/src/component_gallery.rs",
+    "crates/clip-workbench/src/main.rs",
+    "crates/clip-workbench/src/shell/studio_controls.rs",
+    "crates/clip-workbench/src/ui_ext.rs",
+    "crates/clip-workbench/src/ui_tabs.rs",
+    "crates/clip-workbench/src/workbench/tests/gallery.rs",
+    "crates/little-clip-core/src/config.rs",
+    "crates/little-clip-core/src/palette.rs",
+    "crates/little-clip-render/src/lib.rs"
+  ]
+}
