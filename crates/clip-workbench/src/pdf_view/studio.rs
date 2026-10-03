@@ -16,8 +16,10 @@ impl PdfEditorState {
         self.poll_preview_worker(ctx);
         self.poll_edit_worker(ctx, now);
 
+        let navigation_escape = self.navigation_shortcuts(ctx);
+
         // Hotkeys
-        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if !navigation_escape && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             if self.edit_in_progress {
                 self.status_toast
                     .set("PDF edit is still running; wait for it to finish", now);
@@ -27,10 +29,17 @@ impl PdfEditorState {
                 return;
             }
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)) {
+        if !self.navigation_open()
+            && !ctx.wants_keyboard_input()
+            && ctx
+                .input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace))
+        {
             self.delete_current_page(now);
         }
-        if ctx.input(|i| i.key_pressed(egui::Key::R)) {
+        if !self.navigation_open()
+            && !ctx.wants_keyboard_input()
+            && ctx.input(|i| i.key_pressed(egui::Key::R))
+        {
             self.rotate_current_page(90, now);
         }
 
@@ -71,13 +80,14 @@ impl PdfEditorState {
                         "okular",
                         "Open PDF in external viewer (Okular / Evince)",
                     ).with_icon(Icon::Pdf))
-                    .with_footer_hints("Scroll: Zoom | Drag: Pan | Double-click: Fit | [R] Rotate | [Del] Delete | Esc: Close");
+                    .with_footer_hints("Scroll: Zoom | Drag: Pan | Double-click: Fit | [T] Contents | Ctrl+F: Find/OCR | [R] Rotate | [Del] Delete | Esc: Close");
 
                 if let Some(cur) = self.selected_page.filter(|_| !metadata_loading) {
                     shell = shell.with_footer_readout(format!("Selected: Page {} of {}", cur, page_count));
                 }
 
                 let clicked_hatch = shell.render_header(ui, |ui| {
+                    self.navigation_buttons(ui);
                     // Delete Page Button
                     let del_btn = crate::ui_ext::danger_button_icon(
                         Some(Icon::Trash),
@@ -418,5 +428,6 @@ impl PdfEditorState {
             self.ensure_page_texture(page_num, ctx);
         }
         self.schedule_page_decode(ctx);
+        self.render_navigation(ctx);
     }
 }

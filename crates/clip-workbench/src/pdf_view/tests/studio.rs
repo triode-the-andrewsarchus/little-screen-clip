@@ -55,6 +55,7 @@ fn pdf_sibling_panes_stay_inside_compact_and_wide_hosts() {
             decode_job: None,
             decode_requests: Vec::new(),
             viewport: PdfPageViewport::default(),
+            navigation: navigation::PdfNavigation::default(),
         };
         let host = egui::Rect::from_min_size(egui::Pos2::ZERO, host_size);
         let mut panes = Vec::new();

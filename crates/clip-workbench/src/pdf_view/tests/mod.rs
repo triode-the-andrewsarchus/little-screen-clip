@@ -106,6 +106,7 @@ pub(super) fn raster_state_with_dimensions(
         decode_job: None,
         decode_requests: Vec::new(),
         viewport: PdfPageViewport::default(),
+        navigation: navigation::PdfNavigation::default(),
     }
 }
 

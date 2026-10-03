@@ -175,7 +175,9 @@ def main():
     orig_w, orig_h = image.size
 
     # 2. Select device
-    if args.device == "auto":
+    if args.engine == "tesseract":
+        device = "cpu"
+    elif args.device == "auto":
         import torch
         device = "cuda" if torch.cuda.is_available() else "cpu"
     else:

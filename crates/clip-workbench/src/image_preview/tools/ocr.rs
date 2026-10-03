@@ -115,25 +115,7 @@ impl Default for OcrState {
 
 impl ImagePreviewState {
     pub fn run_ocr(&mut self) {
-        let script_path = ["scripts/ocr.py", "./scripts/ocr.py"]
-            .iter()
-            .find(|path| std::path::Path::new(path).exists())
-            .copied()
-            .unwrap_or("scripts/ocr.py")
-            .to_string();
-        let venv_python = std::env::var("HOME")
-            .map(|home| {
-                format!(
-                    "{}/.local/share/little-screen-clip/nobg-venv/bin/python",
-                    home
-                )
-            })
-            .unwrap_or_default();
-        let python_bin = if std::path::Path::new(&venv_python).exists() {
-            venv_python
-        } else {
-            "python3".to_string()
-        };
+        let (python_bin, script_path) = ocr_command();
         self.run_ocr_with_command(python_bin, script_path);
     }
 
@@ -188,7 +170,6 @@ impl ImagePreviewState {
         self.ocr_process_control = Some(control.clone());
 
         let (ticket, job_rx) = jobs.submit(std::time::Duration::MAX, move || {
-            let start = std::time::Instant::now();
             let png_bytes = match request.snapshot.compose_png() {
                 Ok(bytes) => bytes,
                 Err(error) => {
@@ -198,150 +179,15 @@ impl ImagePreviewState {
                     return;
                 }
             };
-            let _ = tx.send(OcrMsg::Progress(format!(
-                "Launching OCR engine ({})...",
-                request.engine_arg
-            )));
-
-            let mut cmd = Command::new(&request.python_bin);
-            cmd.arg(&request.script_path);
-            cmd.arg("-").arg("-");
-            cmd.arg("--engine").arg(&request.engine_arg);
-            if let Some(ref p) = request.custom_prompt {
-                cmd.arg("--prompt").arg(p);
-            }
-
-            cmd.stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::piped());
-            let mut child = match super::background_removal::spawn_image_tool_child(cmd, &control) {
-                Ok(c) => OcrChildGuard::new(c, control.clone()),
-                Err(e) => {
-                    if !control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
-                        let _ = tx.send(OcrMsg::Error(format!(
-                            "Failed to spawn python3 {}: {}",
-                            request.script_path, e
-                        )));
-                    }
-                    return;
-                }
-            };
-
-            let pid = child.id();
-
-            // Start both drainers before writing image input: either output pipe can fill while
-            // the parent is still feeding a large PNG to stdin.
-            let stdout_handle = child.stdout.take();
-            let stderr_handle = child.stderr.take();
-            let (stdout_tx, stdout_rx) = std::sync::mpsc::channel::<Vec<u8>>();
-            if let Some(mut stdout) = stdout_handle {
-                std::thread::spawn(move || {
-                    use std::io::Read;
-                    let mut out = Vec::new();
-                    let _ = stdout.read_to_end(&mut out);
-                    let _ = stdout_tx.send(out);
-                });
-            }
-            let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<String>();
-            let tx_progress = tx.clone();
-            if let Some(stderr) = stderr_handle {
-                std::thread::spawn(move || {
-                    use std::io::{BufRead, BufReader};
-                    let reader = BufReader::new(stderr);
-                    let mut all_stderr = Vec::new();
-                    for line in reader.lines().flatten() {
-                        if line.starts_with("[ocr:progress]") {
-                            let msg = line.trim_start_matches("[ocr:progress]").trim().to_string();
-                            let _ = tx_progress.send(OcrMsg::Progress(msg));
-                        } else {
-                            all_stderr.push(line);
-                        }
-                    }
-                    let _ = stderr_tx.send(all_stderr.join("\n"));
-                });
-            }
-
-            if let Some(mut stdin) = child.stdin.take() {
-                use std::io::Write;
-                if let Err(e) = stdin.write_all(&png_bytes) {
-                    drop(stdin);
-                    super::background_removal::terminate_image_tool_process(pid);
-                    let _ = child.reap();
-                    let _ = stdout_rx.recv();
-                    let _ = stderr_rx.recv();
-                    super::background_removal::clear_image_tool_pid_if_owned(
-                        &control.child_pid,
-                        pid,
-                    );
-                    if !control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
-                        let _ = tx.send(OcrMsg::Error(format!(
-                            "Failed to pipe image to OCR worker: {}",
-                            e
-                        )));
-                    }
-                    return;
-                }
-            }
-
-            let status = match child.reap() {
-                Ok(status) => status,
-                Err(e) => {
-                    if super::background_removal::clear_image_tool_pid_if_owned(
-                        &control.child_pid,
-                        pid,
-                    ) {
-                        super::background_removal::terminate_image_tool_process(pid);
-                    }
-                    let _ = child.reap();
-                    let _ = stdout_rx.recv();
-                    let _ = stderr_rx.recv();
-                    if !control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
-                        let _ = tx.send(OcrMsg::Error(format!(
-                            "Error waiting for OCR worker: {}",
-                            e
-                        )));
-                    }
-                    return;
-                }
-            };
-            super::background_removal::clear_image_tool_pid_if_owned(&control.child_pid, pid);
-            let stdout_bytes = stdout_rx.recv().unwrap_or_default();
-            let stderr_text = stderr_rx.recv().unwrap_or_default();
-            if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
-                return;
-            }
-
-            let duration_ms = start.elapsed().as_millis();
-            if status.success() {
-                let text = String::from_utf8_lossy(&stdout_bytes).to_string();
-                if text.trim().is_empty() {
-                    let err_msg = if !stderr_text.trim().is_empty() {
-                        format!(
-                            "OCR finished with no recognized text. Diagnostics:\n{}",
-                            stderr_text
-                        )
-                    } else {
-                        "OCR engine returned empty output (no text recognized in image)."
-                            .to_string()
-                    };
-                    eprintln!("[OCR Warning] {}", err_msg);
-                    let _ = tx.send(OcrMsg::Error(err_msg));
-                } else {
-                    let _ = tx.send(OcrMsg::Success {
-                        text,
-                        engine: request.engine_arg,
-                        duration_ms,
-                    });
-                }
-            } else {
-                let err_detail = if !stderr_text.trim().is_empty() {
-                    stderr_text
-                } else {
-                    format!("Process exited with status code: {:?}", status.code())
-                };
-                eprintln!("[OCR Error] {}", err_detail);
-                let _ = tx.send(OcrMsg::Error(format!("OCR worker failed: {}", err_detail)));
-            }
+            run_png_ocr(
+                png_bytes,
+                (request.python_bin, request.script_path),
+                request.engine_arg,
+                request.custom_prompt,
+                false,
+                control,
+                tx,
+            );
         });
         self.ocr_ticket = Some(ticket);
         self.ocr_job_rx = Some(job_rx);
@@ -937,6 +783,179 @@ impl ImagePreviewState {
         {
             self.ocr_results_stamp = Some(source_stamp);
         }
+    }
+}
+
+pub(crate) fn ocr_command() -> (String, String) {
+    let script_path = ["scripts/ocr.py", "./scripts/ocr.py"]
+        .iter()
+        .find(|path| std::path::Path::new(path).exists())
+        .copied()
+        .unwrap_or("scripts/ocr.py")
+        .to_string();
+    let venv_python = std::env::var("HOME")
+        .map(|home| {
+            format!(
+                "{}/.local/share/little-screen-clip/nobg-venv/bin/python",
+                home
+            )
+        })
+        .unwrap_or_default();
+    let python_bin = if std::path::Path::new(&venv_python).exists() {
+        venv_python
+    } else {
+        "python3".to_string()
+    };
+    (python_bin, script_path)
+}
+
+pub(crate) fn run_png_ocr(
+    png_bytes: Vec<u8>,
+    command: (String, String),
+    engine_arg: String,
+    custom_prompt: Option<String>,
+    allow_empty: bool,
+    control: std::sync::Arc<ImageToolProcessControl>,
+    tx: std::sync::mpsc::Sender<OcrMsg>,
+) {
+    let start = std::time::Instant::now();
+    let (python_bin, script_path) = command;
+    let _ = tx.send(OcrMsg::Progress(format!(
+        "Launching OCR engine ({})...",
+        engine_arg
+    )));
+
+    let mut cmd = Command::new(&python_bin);
+    cmd.arg(&script_path);
+    cmd.arg("-").arg("-");
+    cmd.arg("--engine").arg(&engine_arg);
+    if let Some(ref p) = custom_prompt {
+        cmd.arg("--prompt").arg(p);
+    }
+
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let mut child = match super::background_removal::spawn_image_tool_child(cmd, &control) {
+        Ok(c) => OcrChildGuard::new(c, control.clone()),
+        Err(e) => {
+            if !control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = tx.send(OcrMsg::Error(format!(
+                    "Failed to spawn python3 {}: {}",
+                    script_path, e
+                )));
+            }
+            return;
+        }
+    };
+
+    let pid = child.id();
+
+    // Start both drainers before writing image input: either output pipe can fill while
+    // the parent is still feeding a large PNG to stdin.
+    let stdout_handle = child.stdout.take();
+    let stderr_handle = child.stderr.take();
+    let (stdout_tx, stdout_rx) = std::sync::mpsc::channel::<Vec<u8>>();
+    if let Some(mut stdout) = stdout_handle {
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut out = Vec::new();
+            let _ = stdout.read_to_end(&mut out);
+            let _ = stdout_tx.send(out);
+        });
+    }
+    let (stderr_tx, stderr_rx) = std::sync::mpsc::channel::<String>();
+    let tx_progress = tx.clone();
+    if let Some(stderr) = stderr_handle {
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(stderr);
+            let mut all_stderr = Vec::new();
+            for line in reader.lines().map_while(Result::ok) {
+                if line.starts_with("[ocr:progress]") {
+                    let msg = line.trim_start_matches("[ocr:progress]").trim().to_string();
+                    let _ = tx_progress.send(OcrMsg::Progress(msg));
+                } else {
+                    all_stderr.push(line);
+                }
+            }
+            let _ = stderr_tx.send(all_stderr.join("\n"));
+        });
+    }
+
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        if let Err(e) = stdin.write_all(&png_bytes) {
+            drop(stdin);
+            super::background_removal::terminate_image_tool_process(pid);
+            let _ = child.reap();
+            let _ = stdout_rx.recv();
+            let _ = stderr_rx.recv();
+            super::background_removal::clear_image_tool_pid_if_owned(&control.child_pid, pid);
+            if !control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = tx.send(OcrMsg::Error(format!(
+                    "Failed to pipe image to OCR worker: {}",
+                    e
+                )));
+            }
+            return;
+        }
+    }
+
+    let status = match child.reap() {
+        Ok(status) => status,
+        Err(e) => {
+            if super::background_removal::clear_image_tool_pid_if_owned(&control.child_pid, pid) {
+                super::background_removal::terminate_image_tool_process(pid);
+            }
+            let _ = child.reap();
+            let _ = stdout_rx.recv();
+            let _ = stderr_rx.recv();
+            if !control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                let _ = tx.send(OcrMsg::Error(format!(
+                    "Error waiting for OCR worker: {}",
+                    e
+                )));
+            }
+            return;
+        }
+    };
+    super::background_removal::clear_image_tool_pid_if_owned(&control.child_pid, pid);
+    let stdout_bytes = stdout_rx.recv().unwrap_or_default();
+    let stderr_text = stderr_rx.recv().unwrap_or_default();
+    if control.cancel.load(std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+
+    let duration_ms = start.elapsed().as_millis();
+    if status.success() {
+        let text = String::from_utf8_lossy(&stdout_bytes).to_string();
+        if text.trim().is_empty() && !allow_empty {
+            let err_msg = if !stderr_text.trim().is_empty() {
+                format!(
+                    "OCR finished with no recognized text. Diagnostics:\n{}",
+                    stderr_text
+                )
+            } else {
+                "OCR engine returned empty output (no text recognized in image).".to_string()
+            };
+            eprintln!("[OCR Warning] {}", err_msg);
+            let _ = tx.send(OcrMsg::Error(err_msg));
+        } else {
+            let _ = tx.send(OcrMsg::Success {
+                text,
+                engine: engine_arg,
+                duration_ms,
+            });
+        }
+    } else {
+        let err_detail = if !stderr_text.trim().is_empty() {
+            stderr_text
+        } else {
+            format!("Process exited with status code: {:?}", status.code())
+        };
+        eprintln!("[OCR Error] {}", err_detail);
+        let _ = tx.send(OcrMsg::Error(format!("OCR worker failed: {}", err_detail)));
     }
 }
 

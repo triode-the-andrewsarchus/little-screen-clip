@@ -17,8 +17,8 @@ mod save;
 mod tools;
 use tools::*;
 pub(crate) use tools::{
-    ImageToolProcessControl, clear_image_tool_pid_if_owned, spawn_image_tool_child,
-    terminate_image_tool_process,
+    ImageToolProcessControl, OcrEngine, OcrMsg, clear_image_tool_pid_if_owned, ocr_command,
+    run_png_ocr, spawn_image_tool_child, terminate_image_tool_process,
 };
 
 use crate::icons::Icon;

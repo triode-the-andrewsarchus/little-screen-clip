@@ -1,4 +1,4 @@
-//! PDF inspection, preview rendering via `pdftoppm`, page deletion, and rotation.
+//! PDF metadata, bookmarks, text extraction, page previews, and lossless editing.
 //!
 //! Wraps Poppler utilities (`pdfinfo`, `pdftoppm`) for inspection and previews,
 //! and uses `lopdf` for lossless page manipulation.
@@ -162,6 +162,97 @@ pub fn render_all_pdf_page_thumbnails(
         pages.push((page_num, bytes));
     }
     Ok(pages)
+}
+
+/// One bookmark in document order, with a one-based destination page.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PdfOutlineEntry {
+    /// Decoded bookmark title.
+    pub title: String,
+    /// One-based destination page number.
+    pub page: usize,
+    /// Nesting depth, starting at zero for top-level bookmarks.
+    pub depth: usize,
+}
+
+/// Reads embedded bookmarks, preserving nesting and repeated titles.
+///
+/// Returns an empty list for a document without bookmarks.
+///
+/// # Errors
+///
+/// Returns an error if the PDF cannot be read or its outline cannot be parsed.
+pub fn read_pdf_outline(path: &Path) -> Result<Vec<PdfOutlineEntry>, String> {
+    let document = Document::load(path).map_err(|error| error.to_string())?;
+    if document
+        .catalog()
+        .and_then(|catalog| catalog.get(b"Outlines"))
+        .is_err()
+    {
+        return Ok(Vec::new());
+    }
+    let outlines = document
+        .get_outlines(None, None, &mut Default::default())
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    let pages = document.get_pages();
+    let mut entries = Vec::new();
+    flatten_pdf_outline(&outlines, &pages, 0, &mut entries);
+    Ok(entries)
+}
+
+fn flatten_pdf_outline(
+    outlines: &[lopdf::Outline],
+    pages: &std::collections::BTreeMap<u32, lopdf::ObjectId>,
+    depth: usize,
+    entries: &mut Vec<PdfOutlineEntry>,
+) {
+    for outline in outlines {
+        match outline {
+            lopdf::Outline::SubOutlines(children) => {
+                flatten_pdf_outline(children, pages, depth + 1, entries);
+            }
+            lopdf::Outline::Destination(destination) => {
+                let title = destination.title().and_then(lopdf::decode_text_string);
+                let page = destination
+                    .page()
+                    .and_then(Object::as_reference)
+                    .ok()
+                    .and_then(|id| pages.iter().find(|(_, value)| **value == id))
+                    .map(|(page, _)| *page as usize);
+                if let (Ok(title), Some(page)) = (title, page) {
+                    entries.push(PdfOutlineEntry { title, page, depth });
+                }
+            }
+        }
+    }
+}
+
+/// Extracts one page's text through Poppler, keeping page boundaries explicit.
+///
+/// `page` is one-based. Pages without a text layer return empty text.
+///
+/// # Errors
+///
+/// Returns an error if `pdftotext` fails, times out, or exceeds the output limit.
+pub fn extract_pdf_page_text(path: &Path, page: usize) -> Result<String, String> {
+    let output = CommandRequest::new("pdftotext")
+        .args(["-layout", "-enc", "UTF-8", "-f"])
+        .arg(page.to_string())
+        .arg("-l")
+        .arg(page.to_string())
+        .arg(path)
+        .arg("-")
+        .max_output_bytes(4 * 1024 * 1024)
+        .run()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() || output.stdout_truncated {
+        return Err(format!(
+            "Could not extract page {page}: {}",
+            output.stderr_lossy()
+        ));
+    }
+    Ok(output.stdout_lossy().trim_matches('\u{c}').to_owned())
 }
 
 /// Deletes specified pages from a PDF and writes the remaining pages to `output`
@@ -380,6 +471,93 @@ fn rebuild_pages(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn navigation_fixture() -> (tempfile::TempDir, PathBuf) {
+        use lopdf::{Stream, dictionary};
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("navigation.pdf");
+        let mut document = Document::with_version("1.5");
+        let pages_id = document.new_object_id();
+        let font = document.add_object(
+            dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica" },
+        );
+        let resources = document.add_object(dictionary! { "Font" => dictionary! { "F1" => font } });
+        let mut pages = Vec::new();
+        for text in [
+            "Cobalt needle on page one",
+            "Amber lighthouse on page two",
+            "Cobalt needle again",
+        ] {
+            let stream = document.add_object(Stream::new(
+                dictionary! {},
+                format!("BT /F1 18 Tf 50 700 Td ({text}) Tj ET").into_bytes(),
+            ));
+            pages.push(document.add_object(dictionary! {
+                "Type" => "Page", "Parent" => pages_id, "Resources" => resources,
+                "MediaBox" => vec![0.into(), 0.into(), 595.into(), 842.into()], "Contents" => stream
+            }));
+        }
+        document.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => pages.iter().copied().map(Object::Reference).collect::<Vec<_>>(), "Count" => 3 }.into());
+        let outlines = document.new_object_id();
+        let first = document.new_object_id();
+        let second = document.new_object_id();
+        let child = document.new_object_id();
+        document.objects.insert(
+            outlines,
+            dictionary! { "Type" => "Outlines", "First" => first, "Last" => second, "Count" => 3 }
+                .into(),
+        );
+        document.objects.insert(first, dictionary! { "Title" => Object::string_literal("Repeated"), "Parent" => outlines, "Next" => second, "First" => child, "Last" => child, "Count" => 1, "Dest" => vec![pages[0].into(), Object::Name(b"Fit".to_vec())] }.into());
+        document.objects.insert(second, dictionary! { "Title" => Object::string_literal("Repeated"), "Parent" => outlines, "Prev" => first, "Dest" => vec![pages[2].into(), Object::Name(b"Fit".to_vec())] }.into());
+        document.objects.insert(child, dictionary! { "Title" => lopdf::text_string("日本語"), "Parent" => first, "Dest" => vec![pages[1].into(), Object::Name(b"Fit".to_vec())] }.into());
+        let catalog = document.add_object(
+            dictionary! { "Type" => "Catalog", "Pages" => pages_id, "Outlines" => outlines },
+        );
+        document.trailer.set("Root", catalog);
+        document.save(&path).unwrap();
+        (directory, path)
+    }
+
+    #[test]
+    fn outline_preserves_duplicate_titles_nested_destinations_and_unicode() {
+        let (_directory, path) = navigation_fixture();
+        let entries = read_pdf_outline(&path).unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| (entry.title.as_str(), entry.page, entry.depth))
+                .collect::<Vec<_>>(),
+            vec![("Repeated", 1, 0), ("日本語", 2, 1), ("Repeated", 3, 0)]
+        );
+    }
+
+    #[test]
+    fn poppler_extraction_keeps_text_on_its_own_page() {
+        let (_directory, path) = navigation_fixture();
+        let first = extract_pdf_page_text(&path, 1).unwrap();
+        let second = extract_pdf_page_text(&path, 2).unwrap();
+        assert!(first.contains("Cobalt needle"));
+        assert!(!first.contains("Amber lighthouse"));
+        assert!(second.contains("Amber lighthouse"));
+    }
+
+    #[test]
+    fn documents_without_bookmarks_have_an_empty_outline() {
+        let (_directory, path) = navigation_fixture();
+        let mut document = Document::load(&path).unwrap();
+        let root = document
+            .trailer
+            .get(b"Root")
+            .unwrap()
+            .as_reference()
+            .unwrap();
+        document
+            .get_dictionary_mut(root)
+            .unwrap()
+            .remove(b"Outlines");
+        document.save(&path).unwrap();
+        assert!(read_pdf_outline(&path).unwrap().is_empty());
+    }
 
     #[test]
     fn test_is_pdf_path() {

@@ -5,6 +5,7 @@
 //! page deletion, and dirty state tracking.
 
 mod editing;
+mod navigation;
 mod page_cache;
 mod preview_jobs;
 mod studio;
@@ -544,6 +545,7 @@ pub struct PdfEditorState {
     decode_job: Option<PdfPageDecodeSlot>,
     decode_requests: Vec<usize>,
     viewport: PdfPageViewport,
+    navigation: navigation::PdfNavigation,
 }
 
 impl PdfEditorState {
@@ -575,6 +577,7 @@ impl PdfEditorState {
             decode_job: None,
             decode_requests: Vec::new(),
             viewport: PdfPageViewport::default(),
+            navigation: navigation::PdfNavigation::default(),
         }
     }
 

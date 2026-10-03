@@ -60,6 +60,9 @@ KEY_ACTIONS = {
     "f3": ["-k", "F3"],
     "f6": ["-k", "F6"],
     "r": ["-k", "r"],
+    "t": ["-k", "t"],
+    "escape": ["-k", "Escape"],
+    "down": ["-k", "Down"],
     "ctrl-f": ["-M", "ctrl", "-k", "f", "-m", "ctrl"],
 }
 
@@ -1837,7 +1840,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
             (all(action in {"f3", "f6"} for action in args.key_action))
             or (args.fake_text_preview and all(action in {"f3", "ctrl-f"} for action in args.key_action))
             or (args.fake_node_machine and all(action in {"ctrl-f", "ctrl-s", "ctrl-z", "ctrl-y", "ctrl-shift-z", "enter"} for action in args.key_action))
-            or (args.fake_pdf_preview and all(action == "r" for action in args.key_action))
+            or ((args.fake_pdf_preview or args.pdf) and all(action in {"r", "t", "ctrl-f", "enter", "escape", "down"} for action in args.key_action))
             or ((args.fake_diff_preview or args.fake_image_diff_preview)
                 and all(action == "enter" for action in args.key_action))
         ):
@@ -1846,7 +1849,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
                 "except for supported fake fixture actions"
             )
     if args.type_text and not (
-        args.fake_text_preview or args.fake_pdf_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
+        args.fake_text_preview or args.fake_pdf_preview or args.pdf or args.fake_csv_preview or args.fake_multisheet_xlsx
         or args.fake_diff_preview or args.fake_image_diff_preview or args.fake_model3d or args.fake_node_machine
     ):
         raise SystemExit("--type-text requires a fake text preview route")

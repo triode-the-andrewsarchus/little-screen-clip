@@ -172,6 +172,7 @@ impl PdfEditorState {
             });
             match result {
                 Ok(()) => {
+                    self.reset_navigation();
                     self.path = message.output;
                     self.title = self
                         .path
