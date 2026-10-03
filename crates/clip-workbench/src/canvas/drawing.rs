@@ -7,7 +7,7 @@ pub(super) fn render_grid(
     zoom: f32,
     palette: &AppPalette,
 ) {
-    // Dark blueprint background from theme
+    // Editing canvas and a quiet alignment grid.
     painter.rect_filled(rect, Rounding::ZERO, hex_to_c32(&palette.colors.canvas));
 
     let grid_size = 32.0 * zoom;
@@ -15,7 +15,7 @@ pub(super) fn render_grid(
         let offset_x = (pan[0] % grid_size + grid_size) % grid_size;
         let offset_y = (pan[1] % grid_size + grid_size) % grid_size;
 
-        let dot_color = hex_to_c32_alpha(&palette.colors.surface_panel, 120);
+        let dot_color = hex_to_c32_alpha(&palette.colors.text_muted, 55);
 
         let mut x = rect.min.x + offset_x;
         while x < rect.max.x {
@@ -286,14 +286,14 @@ pub(super) fn render_node_card(
     let border_col = if is_selected {
         hex_to_c32(&palette.harmonies.base)
     } else {
-        hex_to_c32(&palette.colors.surface_panel)
+        hex_to_c32_alpha(&palette.chrome_border, 100)
     };
 
     // Card body background
     painter.rect_filled(
         rect,
         Rounding::same(8.0 * zoom),
-        hex_to_c32(&palette.colors.surface_recessed),
+        hex_to_c32(&palette.colors.surface_raised),
     );
     painter.rect_stroke(
         rect,
@@ -301,7 +301,7 @@ pub(super) fn render_node_card(
         Stroke::new(if is_selected { 2.0_f32 } else { 1.2_f32 }, border_col),
     );
 
-    // Category Header banner
+    // Category accent edge keeps node types recognizable without a saturated banner.
     let header_h = 26.0 * zoom;
     let header_rect = Rect::from_min_size(rect.min, Vec2::new(rect.width(), header_h));
     let cat_color = get_node_category_color(&node.kind, palette);
@@ -313,12 +313,20 @@ pub(super) fn render_node_card(
             sw: 0.0,
             se: 0.0,
         },
+        hex_to_c32(&palette.colors.surface_panel),
+    );
+    painter.rect_filled(
+        Rect::from_min_size(
+            header_rect.min + Vec2::new(0.0, 6.0 * zoom),
+            Vec2::new(3.0 * zoom, header_h - 6.0 * zoom),
+        ),
+        Rounding::ZERO,
         cat_color,
     );
     let category_text = crate::ui_ext::contrast_text_c32_on(
-        cat_color,
-        cat_color,
-        Some(hex_to_c32(&palette.colors.text_primary)),
+        hex_to_c32(&palette.colors.surface_panel),
+        hex_to_c32(&palette.colors.surface_panel),
+        Some(cat_color),
         palette,
     );
 
@@ -327,7 +335,7 @@ pub(super) fn render_node_card(
         header_rect.left_center() + Vec2::new(8.0 * zoom, 0.0),
         egui::Align2::LEFT_CENTER,
         &node.title,
-        egui::FontId::proportional(12.0 * zoom),
+        egui::FontId::proportional(14.0 * zoom),
         category_text,
     );
 
@@ -349,8 +357,12 @@ pub(super) fn render_node_card(
     } else {
         hex_to_c32(&palette.colors.text_primary)
     };
-    let close_col =
-        crate::ui_ext::contrast_text_c32_on(cat_color, cat_color, Some(close_color), palette);
+    let close_col = crate::ui_ext::contrast_text_c32_on(
+        hex_to_c32(&palette.colors.surface_panel),
+        hex_to_c32(&palette.colors.surface_panel),
+        Some(close_color),
+        palette,
+    );
     painter.text(
         close_rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -480,10 +492,10 @@ pub(super) fn render_node_card(
 
             child_ui.add_space(2.0);
 
-            let edit_btn = crate::ui_ext::action_button_icon(
+            let edit_btn = crate::ui_ext::secondary_button_icon(
                 Some(Icon::Pencil),
                 "Edit Script",
-                hex_to_c32(&palette.harmonies.base),
+                hex_to_c32(&palette.colors.surface_panel),
                 palette,
             )
             .min_size(Vec2::new(child_ui.available_width(), 20.0 * zoom));
@@ -692,7 +704,7 @@ pub(super) fn get_node_category_color(kind: &NodeKind, palette: &AppPalette) -> 
             hex_to_c32(&palette.diff_mod)
         }
 
-        NodeKind::PythonScript | NodeKind::BashCommand => hex_to_c32(&palette.diff_add),
+        NodeKind::PythonScript | NodeKind::BashCommand => hex_to_c32(&palette.harmonies.triadic_1),
 
         NodeKind::SetLeftHand
         | NodeKind::SetRightHand

@@ -347,7 +347,7 @@ impl ImageSessionKey {
 
 fn show_viewer_panel(ctx: &egui::Context, contents: impl FnOnce(&mut egui::Ui)) {
     egui::CentralPanel::default()
-        .frame(egui::Frame::none())
+        .frame(egui::Frame::none().fill(ctx.style().visuals.panel_fill))
         .show(ctx, contents);
 }
 
@@ -716,8 +716,8 @@ fn render_auto_actions(
     ui.add_space(crate::ui_ext::SPACE_SM);
 
     egui::ScrollArea::vertical().show(ui, |ui| {
-        let card_bg = hex_to_c32(&palette.colors.surface_recessed);
-        let card_stroke = hex_to_c32(&palette.colors.surface_panel);
+        let card_bg = hex_to_c32(&palette.colors.surface_raised);
+        let card_stroke = hex_to_c32(&palette.chrome_border);
         let card = egui::Frame::none()
             .fill(card_bg)
             .stroke(egui::Stroke::new(1.0_f32, card_stroke))

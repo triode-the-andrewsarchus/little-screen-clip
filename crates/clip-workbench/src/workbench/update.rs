@@ -355,13 +355,13 @@ impl eframe::App for WorkbenchApp {
                     // Focus on entry, then leave keyboard focus under the user's control.
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new("Action > ")
+                            egui::RichText::new("Find action")
                                 .color(hex_to_c32(&self.ui_palette.harmonies.base))
                                 .strong(),
                         );
                         let audio_region_active = self.is_audio_region_active();
                         let mut text_edit = egui::TextEdit::singleline(&mut self.search_query)
-                            .hint_text("Type action or /recipe to execute...");
+                            .hint_text("Search actions or type / for recipes…");
                         if audio_region_active {
                             text_edit = text_edit.interactive(false);
                         }
@@ -414,10 +414,17 @@ impl eframe::App for WorkbenchApp {
                                         crate::ui_ext::BUTTON_PADDING_X,
                                         crate::ui_ext::BUTTON_PADDING_Y,
                                     ))
-                                    .rounding(crate::ui_ext::CONTROL_CORNER_RADIUS);
+                                    .rounding(crate::ui_ext::CONTROL_CORNER_RADIUS)
+                                    .stroke(egui::Stroke::new(1.0_f32, if is_selected {
+                                        hex_to_c32(&self.ui_palette.harmonies.base)
+                                    } else { egui::Color32::TRANSPARENT }));
 
                                 frame.show(ui, |ui| {
                                     ui.horizontal(|ui| {
+                                        if is_selected {
+                                            Icon::Play.ui(ui, ui_ext::CONTROL_ICON_SIZE,
+                                                hex_to_c32(&self.ui_palette.harmonies.base));
+                                        }
                                         let preferred_fg = if is_selected {
                                             hex_to_c32(&self.ui_palette.colors.text_primary)
                                         } else {

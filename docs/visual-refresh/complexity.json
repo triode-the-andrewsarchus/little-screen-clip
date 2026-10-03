@@ -1,0 +1,56 @@
+{
+  "baseline_commit": "02cc03cbd7607614b09b2efd4fe82c4ed7e82614",
+  "scope": "Changed Rust files only; includes tests. Not a duplication or dependency-cycle measurement.",
+  "summary": {
+    "before": {
+      "functions": 299,
+      "nloc": 7272,
+      "ccn": 924,
+      "max_ccn": 74
+    },
+    "after": {
+      "functions": 300,
+      "nloc": 7436,
+      "ccn": 934,
+      "max_ccn": 76
+    }
+  },
+  "deltas": [
+    {
+      "file": "crates/clip-workbench/src/shell/studio_shell.rs",
+      "function": "render_header_with_title_actions",
+      "before": 12,
+      "after": 13
+    },
+    {
+      "file": "crates/clip-workbench/src/ui_appearance.rs",
+      "function": "apply_visuals",
+      "before": 2,
+      "after": 3
+    },
+    {
+      "file": "crates/clip-workbench/src/workbench/update.rs",
+      "function": "update",
+      "before": 74,
+      "after": 76
+    },
+    {
+      "file": "crates/little-clip-core/src/palette.rs",
+      "function": "from_fixed_colors",
+      "before": 5,
+      "after": 6
+    },
+    {
+      "file": "crates/little-clip-core/src/palette.rs",
+      "function": "midi_note_color",
+      "before": 11,
+      "after": 10
+    },
+    {
+      "file": "crates/little-clip-render/src/cards/text.rs",
+      "function": "draw_text_preview",
+      "before": 28,
+      "after": 30
+    }
+  ]
+}

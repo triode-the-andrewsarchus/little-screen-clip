@@ -74,7 +74,7 @@ impl WorkbenchApp {
 
     pub(crate) fn render_workbench_header(&mut self, ctx: &egui::Context) {
         // Top Header Panel: Mirror of Trofeo Screen + Tabs
-        let header_bg = hex_to_c32(&self.ui_palette.colors.canvas);
+        let header_bg = hex_to_c32(&self.ui_palette.colors.surface_panel);
         let brand_color = hex_to_c32(&self.ui_palette.left_hand_border);
         let sub_color = hex_to_c32(&self.ui_palette.colors.text_secondary);
 
@@ -86,14 +86,33 @@ impl WorkbenchApp {
             )
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
+                    let (brand_rect, _) = ui.allocate_exact_size(
+                        egui::Vec2::splat(ui_ext::CONTROL_HEIGHT),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect_filled(
+                        brand_rect,
+                        egui::Rounding::same(ui_ext::CARD_CORNER_RADIUS),
+                        brand_color,
+                    );
+                    Icon::Clipboard
+                        .image_tinted(
+                            ui_ext::CONTROL_ICON_SIZE,
+                            ui_ext::contrast_text_c32(brand_color, None, &self.ui_palette),
+                        )
+                        .paint_at(
+                            ui,
+                            egui::Rect::from_center_size(
+                                brand_rect.center(),
+                                egui::Vec2::splat(ui_ext::CONTROL_ICON_SIZE),
+                            ),
+                        );
                     ui.heading(
-                        egui::RichText::new("LITTLE SCREEN CLIP")
+                        egui::RichText::new("Little Screen Clip")
                             .color(brand_color)
                             .strong(),
                     );
-                    ui.label(
-                        egui::RichText::new("— Ambient Dual-Hand Live Mirror").color(sub_color),
-                    );
+                    ui.label(egui::RichText::new("Clipboard workbench").color(sub_color));
 
                     let appearance_label = match self.config.workbench.appearance {
                         WorkbenchAppearance::Dark => "Light mode [F4/F6]",

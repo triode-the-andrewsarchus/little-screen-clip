@@ -62,7 +62,19 @@ pub fn apply_visuals(ctx: &egui::Context, palette: &AppPalette) {
 
     visuals.panel_fill = colors.canvas;
     visuals.window_fill = colors.panel;
-    visuals.extreme_bg_color = colors.raised;
+    visuals.extreme_bg_color = colors.recessed;
+    visuals.faint_bg_color = colors.panel;
+    visuals.window_stroke = egui::Stroke::new(1.0_f32, colors.border);
+    visuals.window_rounding = egui::Rounding::same(crate::ui_ext::CARD_CORNER_RADIUS);
+    visuals.window_shadow = egui::epaint::Shadow::NONE;
+    visuals.popup_shadow = egui::epaint::Shadow {
+        offset: egui::vec2(0.0, 4.0),
+        blur: 12.0,
+        spread: 0.0,
+        color: Color32::from_black_alpha(32),
+    };
+    visuals.slider_trailing_fill = true;
+    visuals.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.6 };
 
     visuals.widgets.noninteractive.bg_fill = colors.panel;
     // egui fades disabled content toward this color. Keep that fade on the
@@ -72,22 +84,26 @@ pub fn apply_visuals(ctx: &egui::Context, palette: &AppPalette) {
         contrast_text_c32(colors.panel, Some(colors.text_primary), palette);
     visuals.widgets.noninteractive.bg_stroke.color = colors.border;
 
-    visuals.widgets.inactive.bg_fill = colors.recessed;
+    visuals.widgets.inactive.bg_fill = colors.raised;
+    visuals.widgets.inactive.weak_bg_fill = colors.raised;
     visuals.widgets.inactive.fg_stroke.color =
-        contrast_text_c32(colors.recessed, Some(colors.text_secondary), palette);
+        contrast_text_c32(colors.raised, Some(colors.text_secondary), palette);
     visuals.widgets.inactive.bg_stroke.color = colors.border;
 
     visuals.widgets.hovered.bg_fill = colors.panel;
+    visuals.widgets.hovered.weak_bg_fill = colors.panel;
     visuals.widgets.hovered.fg_stroke.color =
         contrast_text_c32(colors.panel, Some(colors.text_primary), palette);
     visuals.widgets.hovered.bg_stroke.color = colors.accent;
 
     visuals.widgets.active.bg_fill = colors.raised;
+    visuals.widgets.active.weak_bg_fill = colors.raised;
     visuals.widgets.active.fg_stroke.color =
         contrast_text_c32(colors.raised, Some(colors.text_primary), palette);
     visuals.widgets.active.bg_stroke.color = colors.focus;
 
     visuals.widgets.open.bg_fill = colors.raised;
+    visuals.widgets.open.weak_bg_fill = colors.raised;
     visuals.widgets.open.fg_stroke.color =
         contrast_text_c32(colors.raised, Some(colors.text_primary), palette);
     visuals.widgets.open.bg_stroke.color = colors.focus;
@@ -100,6 +116,17 @@ pub fn apply_visuals(ctx: &egui::Context, palette: &AppPalette) {
     visuals.error_fg_color = colors.danger;
     visuals.text_cursor.color = colors.focus;
 
+    for widget in [
+        &mut visuals.widgets.noninteractive,
+        &mut visuals.widgets.inactive,
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active,
+        &mut visuals.widgets.open,
+    ] {
+        widget.rounding = egui::Rounding::same(crate::ui_ext::CONTROL_CORNER_RADIUS);
+        widget.bg_stroke.width = 1.0;
+        widget.expansion = 0.0;
+    }
     ctx.set_visuals(visuals);
 }
 

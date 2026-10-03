@@ -650,14 +650,14 @@ appearance = "light"
         )
         .unwrap();
         let light = config.resolve_palette();
-        assert_eq!(light.colors.canvas, "#f4f2ea");
+        assert_eq!(light.colors.canvas, "#f3f0e7");
         assert_ne!(light.colors.canvas, "#010101");
         assert!(!light.is_dark);
 
         let mut dark_config = config;
         dark_config.workbench.appearance = WorkbenchAppearance::Dark;
         let dark = dark_config.resolve_palette();
-        assert_eq!(dark.colors.canvas, "#151c24");
+        assert_eq!(dark.colors.canvas, "#1c2021");
         assert!(dark.is_dark);
         assert_ne!(light.colors.canvas, dark.colors.canvas);
     }

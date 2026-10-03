@@ -420,11 +420,21 @@ impl ScreenRenderer {
 
         let theme = THEME_SET
             .themes
-            .get("base16-ocean.dark")
+            .get(if self.palette.is_dark {
+                "base16-ocean.dark"
+            } else {
+                "base16-ocean.light"
+            })
             .or_else(|| THEME_SET.themes.values().next())
             .expect("default theme");
 
         let mut highlighter = HighlightLines::new(syntax, theme);
+        // Resolve against the least favorable hero/prior card surface once.
+        let preview_background = self.color_from_hex(if self.palette.is_dark {
+            &self.palette.colors.surface_raised
+        } else {
+            &self.palette.colors.surface_panel
+        });
 
         for (idx, line) in lines.iter().enumerate() {
             let is_near_bottom = line_y + line_height > max_y;
@@ -467,6 +477,7 @@ impl ScreenRenderer {
                     style.foreground.b,
                     255,
                 );
+                let fg = self.contrast_color(preview_background, Some(fg));
                 let font_style = if style
                     .font_style
                     .contains(syntect::highlighting::FontStyle::BOLD)

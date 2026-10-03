@@ -40,7 +40,7 @@ pub fn on_hover_text_with_disabled_reason(
 pub const HEADING_FONT_SIZE: f32 = 22.0;
 pub const SUBHEADING_FONT_SIZE: f32 = 19.0;
 pub const MONO_FONT_SIZE: f32 = 15.0;
-pub const CONTROL_CORNER_RADIUS: f32 = 4.0;
+pub const CONTROL_CORNER_RADIUS: f32 = 6.0;
 
 /// A readable, content-sized annotation on an image or other preview canvas.
 pub struct CanvasBadge<'a> {
@@ -194,6 +194,15 @@ pub fn clamp_overlay_rect(ideal_min: Pos2, size: Vec2, bounds: Rect) -> Rect {
 pub fn configure_workbench_style(ctx: &egui::Context) {
     // Add portable CJK and broad monochrome emoji fallbacks after Latin fonts.
     let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "Fira Sans".to_owned(),
+        egui::FontData::from_static(include_bytes!("../assets/fonts/FiraSans-Regular.ttf")),
+    );
+    fonts
+        .families
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .insert(0, "Fira Sans".to_owned());
     let fallback = "Noto Sans CJK JP";
     fonts.font_data.insert(
         fallback.to_owned(),
@@ -251,7 +260,8 @@ pub fn equal_button_width(ui: &Ui, labels: &[&str], with_icon: bool) -> f32 {
             })
             .fold(0.0_f32, f32::max)
     });
-    text_width
+    text_width.ceil()
+        + 2.0 // Round up and allow for egui's strong-text expansion.
         + 2.0 * ui.spacing().button_padding.x
         + if with_icon {
             CONTROL_ICON_SIZE + ui.spacing().icon_spacing
@@ -375,7 +385,7 @@ pub fn mode_tab_button_icon<'a>(
     let (bg, border, pref_fg) = if is_active {
         (colors.accent, colors.text_primary, colors.text_primary)
     } else {
-        (colors.panel, colors.recessed, colors.text_secondary)
+        (colors.raised, colors.border, colors.text_secondary)
     };
     let fg = contrast_text_c32(bg, Some(pref_fg), palette);
     let border_fg = if is_active { fg } else { border };
@@ -421,6 +431,10 @@ pub fn action_button_icon<'a>(
         egui::Button::new(text)
     };
     btn.fill(fill)
+        .stroke(Stroke::new(
+            1.0_f32,
+            WorkbenchColors::from_palette(palette).border,
+        ))
         .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
         .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
@@ -453,6 +467,10 @@ pub fn secondary_button_icon<'a>(
         egui::Button::new(text)
     };
     btn.fill(fill)
+        .stroke(Stroke::new(
+            1.0_f32,
+            WorkbenchColors::from_palette(palette).border,
+        ))
         .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
         .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
@@ -505,6 +523,10 @@ pub fn danger_button_icon<'a>(
         egui::Button::new(text)
     };
     btn.fill(fill)
+        .stroke(Stroke::new(
+            1.0_f32,
+            WorkbenchColors::from_palette(palette).border,
+        ))
         .rounding(Rounding::same(CONTROL_CORNER_RADIUS))
         .min_size(Vec2::new(0.0, CONTROL_HEIGHT))
 }
@@ -900,11 +922,12 @@ pub fn stat_pill(
 /// Renders a standardized status pill for badges and counts.
 pub fn badge_pill(ui: &mut egui::Ui, label: &str, accent: Option<Color32>, palette: &AppPalette) {
     let colors = WorkbenchColors::from_palette(palette);
-    let bg = accent.unwrap_or(colors.recessed);
-    let fg = contrast_text_c32(bg, Some(colors.text_primary), palette);
+    let bg = colors.raised;
+    let fg = contrast_text_c32(bg, accent.or(Some(colors.text_secondary)), palette);
     egui::Frame::none()
         .fill(bg)
         .rounding(Rounding::same(BADGE_CORNER_RADIUS))
+        .stroke(Stroke::new(1.0_f32, accent.unwrap_or(colors.border)))
         .inner_margin(egui::Margin::symmetric(BADGE_PADDING_X, BADGE_PADDING_Y))
         .show(ui, |ui| {
             ui.label(egui::RichText::new(label).color(fg));
@@ -1018,6 +1041,18 @@ mod tests {
         for scale in [1.0, 1.5, 2.0] {
             let defaults = egui::Context::default();
             let configured = egui::Context::default();
+            // Compare the chosen Latin face with and without the Unicode fallbacks.
+            let mut latin_fonts = egui::FontDefinitions::default();
+            latin_fonts.font_data.insert(
+                "Fira Sans".to_owned(),
+                egui::FontData::from_static(include_bytes!("../assets/fonts/FiraSans-Regular.ttf")),
+            );
+            latin_fonts
+                .families
+                .entry(FontFamily::Proportional)
+                .or_default()
+                .insert(0, "Fira Sans".to_owned());
+            defaults.set_fonts(latin_fonts);
             configure_workbench_style(&configured);
             for ctx in [&defaults, &configured] {
                 ctx.set_pixels_per_point(scale);

@@ -26,12 +26,12 @@ impl BaseColors {
         let (canvas, primary, secondary, muted, inverse_text, raised, panel, recessed, inverse) =
             match appearance {
                 WorkbenchAppearance::Dark => (
-                    "#151c24", "#f5f2e9", "#d6dce0", "#aab6c1", "#111923", "#243440", "#273541",
-                    "#1e2a35", "#ffb385",
+                    "#1c2021", "#f4f1e8", "#d2d6cf", "#b0b7ae", "#172321", "#353b3a", "#2b302f",
+                    "#232827", "#e7b58b",
                 ),
                 WorkbenchAppearance::Light => (
-                    "#f4f2ea", "#17242f", "#45505b", "#586977", "#fffdf7", "#fffaf1", "#e3e7e7",
-                    "#e9edeb", "#a44a37",
+                    "#f3f0e7", "#242d29", "#46534b", "#596458", "#fffdf7", "#fffdf6", "#e8e7de",
+                    "#eeece2", "#8a4830",
                 ),
             };
         Self {
@@ -374,16 +374,15 @@ impl AppPalette {
     fn from_fixed_colors(appearance: WorkbenchAppearance, colors: BaseColors, link: &str) -> Self {
         let is_dark = appearance == WorkbenchAppearance::Dark;
 
-        // Base accent: prefer secondary text, fall back to inverse surface if grayscale.
-        let (f_r, f_g, f_b, _) = parse_hex_color_rgba(&colors.text_secondary);
-        let f_oklch = Oklab::from_rgb(f_r, f_g, f_b).to_oklch();
-        let base_accent_hex = if f_oklch.c > 0.03 {
-            &colors.text_secondary
-        } else {
-            &colors.surface_inverse
-        };
-
-        let harmonies = DerivedHarmonies::from_base_hex(base_accent_hex, is_dark);
+        // A fixed mint anchor gives both renderers the same perceptual accent
+        // family. Dark uses luminous pastels; Light uses ink-like counterparts.
+        let base_accent = Oklch {
+            l: if is_dark { 0.80 } else { 0.43 },
+            c: 0.095,
+            h: 165.0,
+        }
+        .to_hex();
+        let harmonies = DerivedHarmonies::from_base_hex(&base_accent, is_dark);
 
         // Diff colors derived in Oklch
         let diff_add = Oklch {
@@ -412,9 +411,9 @@ impl AppPalette {
             harmonies: harmonies.clone(),
 
             undo_border: harmonies.warm_attention.clone(),
-            chrome_border: "#6f8595".to_owned(),
+            chrome_border: if is_dark { "#858e88" } else { "#70796f" }.to_owned(),
             left_hand_border: harmonies.base.clone(),
-            right_hand_border: harmonies.complementary.clone(),
+            right_hand_border: harmonies.tetradic_1.clone(),
 
             left_prior1_border: harmonies.split_comp_1.clone(),
             left_prior2_border: harmonies.triadic_1.clone(),
@@ -446,7 +445,7 @@ impl AppPalette {
         self.colors.contrast_pair_fg(bg_hex, preferred_fg)
     }
 
-    /// Computes the theme-derived vibrant color for a MIDI track / channel.
+    /// Computes an appearance-aware data color for a MIDI track or channel.
     ///
     /// Used for track legend chips, channel headers, and track-level badges.
     pub fn midi_track_color(&self, track: usize, channel: u8, total_tracks: usize) -> (u8, u8, u8) {
@@ -459,12 +458,11 @@ impl AppPalette {
         format!("#{:02x}{:02x}{:02x}", r, g, b)
     }
 
-    /// Computes a vibrant, theme-harmonized color for an individual MIDI note.
+    /// Computes a vibrant, appearance-aware data color for an individual MIDI note.
     ///
     /// Ensures note colors:
-    /// 1. Genuinely derive from the theme's core accent hue.
-    /// 2. Maintain a healthy chroma floor ($C \ge 0.18$) so notes never look muted or washed out,
-    ///    even in desaturated themes like Zenburn or Paper.
+    /// 1. Keeps the data color wheel independent of workbench chrome accents.
+    /// 2. Starts from an Oklch chroma of 0.18 to preserve vibrant track colors.
     /// 3. Provide sufficient contrast against canvas backgrounds in both dark and light modes.
     /// 4. Distinguish GM percussion (channel 9) with a warm attention hue.
     /// 5. Provide chromatic pitch-class wheel separation $(key \% 12) \times 30^\circ$ for single-track files.
@@ -477,26 +475,10 @@ impl AppPalette {
         pitch_key: u8,
         velocity: u8,
     ) -> (u8, u8, u8) {
-        // 1. Determine base hue angle from the theme's base accent
-        let (f_r, f_g, f_b, _) = parse_hex_color_rgba(&self.harmonies.base);
-        let base_oklch = Oklab::from_rgb(f_r, f_g, f_b).to_oklch();
-
-        let h_0 = if base_oklch.c < 0.04 {
-            // Theme has an almost completely neutral/achromatic accent.
-            // Check if b_inv has color:
-            let (inv_r, inv_g, inv_b, _) = parse_hex_color_rgba(&self.colors.surface_inverse);
-            let inv_oklch = Oklab::from_rgb(inv_r, inv_g, inv_b).to_oklch();
-            if inv_oklch.c >= 0.04 {
-                inv_oklch.h
-            } else {
-                240.0 // Default to vibrant sapphire
-            }
-        } else {
-            base_oklch.h
-        };
-
-        // 2. Chroma floor: guarantee vibrant notes even for desaturated themes
-        let note_c = base_oklch.c.max(0.18).min(0.24);
+        // Keep the data color wheel independent of the restrained chrome accents.
+        // Starting from warm orange also preserves familiar MIDI track colors.
+        let h_0 = if self.is_dark { 55.0 } else { 34.0 };
+        let note_c = 0.18_f32;
 
         // 3. Base lightness depending on dark vs light mode
         let base_l = if self.is_dark { 0.74 } else { 0.38 };

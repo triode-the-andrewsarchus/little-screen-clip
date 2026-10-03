@@ -732,7 +732,7 @@ mod tests {
         renderer.set_config(config);
         let light = renderer.render_pixmap(&manager).unwrap();
         assert_ne!(dark.data(), light.data());
-        assert_eq!(renderer.palette.colors.canvas, "#f4f2ea");
+        assert_eq!(renderer.palette.colors.canvas, "#f3f0e7");
     }
 
     #[test]

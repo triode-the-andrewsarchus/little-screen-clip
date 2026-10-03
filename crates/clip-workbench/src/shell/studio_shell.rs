@@ -547,6 +547,16 @@ impl<'a> StudioShell<'a> {
     ) -> Option<usize> {
         let palette = self.palette;
         let colors = WorkbenchColors::from_palette(palette);
+        let header_accent = match self.icon {
+            Some(Icon::Image | Icon::Diff) => hex_to_c32(&palette.right_hand_border),
+            Some(Icon::Midi | Icon::Model3d | Icon::BinaryDiff) => {
+                hex_to_c32(&palette.harmonies.triadic_1)
+            }
+            Some(Icon::Text | Icon::Book | Icon::Code | Icon::Pdf) => {
+                hex_to_c32(&palette.harmonies.tetradic_2)
+            }
+            _ => colors.accent,
+        };
         let mut clicked_hatch = None;
         let hatch_width = equal_button_width(
             ui,
@@ -559,9 +569,9 @@ impl<'a> StudioShell<'a> {
         );
 
         egui::Frame::none()
-            .fill(colors.recessed)
+            .fill(colors.panel)
             .inner_margin(egui::Margin::symmetric(PANEL_INSET, SPACE_SM))
-            .stroke(Stroke::new(1.0_f32, colors.panel))
+            .stroke(Stroke::new(1.0_f32, colors.border))
             .show(ui, |ui| {
                 let (row_rect, _) = ui.allocate_exact_size(
                     Vec2::new(ui.available_width(), CONTROL_HEIGHT),
@@ -709,7 +719,21 @@ impl<'a> StudioShell<'a> {
                     ui.child_ui(name_rect, egui::Layout::left_to_right(egui::Align::Center));
                 name_ui.set_clip_rect(name_rect);
                 if let Some(icon) = self.icon {
-                    name_ui.add(icon.image_tinted(18.0, colors.accent));
+                    let (icon_rect, _) = name_ui
+                        .allocate_exact_size(Vec2::splat(CONTROL_HEIGHT), egui::Sense::hover());
+                    name_ui.painter().rect_filled(
+                        icon_rect,
+                        Rounding::same(CONTROL_CORNER_RADIUS),
+                        header_accent,
+                    );
+                    icon.image_tinted(
+                        CONTROL_ICON_SIZE,
+                        contrast_text_c32(header_accent, None, palette),
+                    )
+                    .paint_at(
+                        &name_ui,
+                        Rect::from_center_size(icon_rect.center(), Vec2::splat(CONTROL_ICON_SIZE)),
+                    );
                 }
                 let title_font = egui::FontId::proportional(22.0);
                 let visible_title = self

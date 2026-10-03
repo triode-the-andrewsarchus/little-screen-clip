@@ -61,10 +61,12 @@ impl<'a, T> Tab<'a, T> {
         response.widget_info(|| {
             egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, selected, self.label)
         });
-        let background = if selected || response.hovered() {
+        let background = if selected {
+            colors.raised
+        } else if response.hovered() {
             colors.panel
         } else {
-            colors.recessed
+            colors.canvas
         };
         let foreground = contrast_text_c32(
             background,
@@ -92,7 +94,16 @@ impl<'a, T> Tab<'a, T> {
             sw: 0.0,
             se: 0.0,
         };
-        painter.rect_filled(rect, rounding, background);
+        painter.rect(
+            rect,
+            rounding,
+            background,
+            if selected {
+                Stroke::new(1.0_f32, colors.border)
+            } else {
+                Stroke::NONE
+            },
+        );
         let indicator = if vertical {
             Rect::from_min_size(
                 rect.min,
@@ -113,7 +124,7 @@ impl<'a, T> Tab<'a, T> {
             if selected {
                 colors.accent
             } else {
-                colors.panel
+                colors.border
             },
         );
         let content_x = if vertical {

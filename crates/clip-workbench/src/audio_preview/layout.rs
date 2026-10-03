@@ -504,7 +504,7 @@ mod tests {
                 .filter_map(|shape| match &shape.shape {
                     egui::epaint::Shape::Rect(rect)
                         if (rect.rect.height() - crate::ui_ext::CONTROL_HEIGHT).abs() < 0.1
-                            && (rect.fill == colors.recessed || rect.fill == colors.panel) =>
+                            && (rect.fill == colors.raised || rect.fill == colors.canvas) =>
                     {
                         Some(rect.rect)
                     }
