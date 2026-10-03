@@ -1,6 +1,8 @@
 //! Pitch detection (YIN), transient detection, harmonic chord analysis, and colormaps.
 
 use super::types::SingleNoteInfo;
+use fearless_simd::{Level, Simd, dispatch, prelude::*};
+use fearless_simd_macros::simd;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 pub fn inferno_colormap(t: f32) -> [u8; 4] {
@@ -53,6 +55,15 @@ pub fn freq_to_note(freq: f32) -> (&'static str, i32, f32) {
 /// YIN fundamental frequency pitch detector (De Cheveigné and Kawahara).
 /// Accurately detects pitches from C1 (~32.7 Hz) up to C8 (>4186 Hz) with sub-cent accuracy.
 pub fn detect_pitch_yin(samples: &[f32], sample_rate: f32) -> Option<(f32, f32)> {
+    dispatch!(Level::new(), simd => detect_pitch_yin_simd(simd, samples, sample_rate))
+}
+
+#[simd]
+fn detect_pitch_yin_simd<S: Simd>(
+    simd: S,
+    samples: &[f32],
+    sample_rate: f32,
+) -> Option<(f32, f32)> {
     let min_freq = 25.0f32; // Allow detecting down to 25 Hz so true fundamental is identified before thresholding
     let max_freq = 4200.0f32; // Up to C8
 
@@ -76,13 +87,23 @@ pub fn detect_pitch_yin(samples: &[f32], sample_rate: f32) -> Option<(f32, f32)>
     let threshold = 0.20f32;
     let mut tau_found = 0;
 
-    // Incremental evaluation of d(tau) and d'(tau) with early minimum break
+    // The tau loop stays sequential because d'(tau) depends on the cumulative sum
+    // and its early-exit condition depends on preceding lags. Vectorize the inner
+    // sample-wise difference reduction instead.
     for tau in 1..=max_tau {
-        let mut sum = 0.0f32;
+        let mut sum_lanes = S::f32s::splat(simd, 0.0);
         let s1 = &samples[0..window_size];
         let s2 = &samples[tau..tau + window_size];
-        for i in 0..window_size {
-            let diff = s1[i] - s2[i];
+        let lane_count = S::f32s::LEN;
+        let mut chunks1 = s1.chunks_exact(lane_count);
+        let mut chunks2 = s2.chunks_exact(lane_count);
+        for (chunk1, chunk2) in chunks1.by_ref().zip(chunks2.by_ref()) {
+            let diff = S::f32s::from_slice(simd, chunk1) - S::f32s::from_slice(simd, chunk2);
+            sum_lanes += diff * diff;
+        }
+        let mut sum = sum_lanes.reduce_sum();
+        for (&a, &b) in chunks1.remainder().iter().zip(chunks2.remainder()) {
+            let diff = a - b;
             sum += diff * diff;
         }
         d[tau] = sum;
@@ -532,4 +553,53 @@ pub fn detect_chord_from_fft(
     });
     detected.truncate(6);
     detected
+}
+
+#[cfg(test)]
+mod yin_tests {
+    use super::detect_pitch_yin;
+
+    fn harmonic_tone(frequency: f32) -> Vec<f32> {
+        let sample_rate = 44_100.0;
+        (0..4096)
+            .map(|i| {
+                let t = i as f32 / sample_rate;
+                (std::f32::consts::TAU * frequency * t).sin() * 0.75
+                    + (std::f32::consts::TAU * frequency * 2.0 * t).sin() * 0.25
+            })
+            .collect()
+    }
+
+    #[test]
+    fn yin_detects_fundamentals_across_its_range() {
+        for expected in [55.0, 110.0, 220.0, 440.0, 1000.0, 4000.0] {
+            let samples = harmonic_tone(expected);
+            let (detected, clarity) = detect_pitch_yin(&samples, 44_100.0)
+                .unwrap_or_else(|| panic!("failed to detect {expected} Hz"));
+            assert!(
+                (detected - expected).abs() < (expected * 0.005).max(1.0),
+                "expected {expected} Hz, got {detected} Hz"
+            );
+            assert!(
+                clarity > 0.9,
+                "unexpected clarity {clarity} at {expected} Hz"
+            );
+        }
+    }
+
+    #[test]
+    fn yin_rejects_silence_noise_and_too_short_inputs() {
+        let silence = vec![0.0; 4096];
+        assert_eq!(detect_pitch_yin(&silence, 44_100.0), None);
+
+        let mut state = 0x1234_5678_u32;
+        let noise: Vec<f32> = (0..4096)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                ((state >> 8) as f32 / 16_777_216.0) * 2.0 - 1.0
+            })
+            .collect();
+        assert_eq!(detect_pitch_yin(&noise, 44_100.0), None);
+        assert_eq!(detect_pitch_yin(&[0.0; 128], 44_100.0), None);
+    }
 }
