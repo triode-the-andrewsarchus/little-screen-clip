@@ -70,6 +70,7 @@ mod popup;
 mod rolling_audio_strip;
 mod script_editor;
 pub mod shell;
+mod splat_view;
 mod spreadsheet_view;
 mod state_sync;
 mod text_preview;
@@ -275,8 +276,21 @@ enum ViewerSession {
     Pdf(PdfEditorState),
     Midi(MidiViewerState),
     Model3d(Model3dViewerState),
+    Splat(splat_view::SplatViewerState),
     Text(TextPreviewState),
     ComponentGallery(component_gallery::ComponentGalleryState),
+}
+
+fn scene_file_viewer(path: PathBuf, config: &AppConfig) -> ViewerSession {
+    if little_clip_scene::is_splat_file(&path) {
+        ViewerSession::Splat(
+            splat_view::SplatViewerState::from_file(path).with_config(config.model3d.clone()),
+        )
+    } else {
+        ViewerSession::Model3d(
+            Model3dViewerState::from_file(path).with_config(config.model3d.clone()),
+        )
+    }
 }
 
 fn gallery_request_to_viewer_session(
@@ -1101,6 +1115,7 @@ fn main() -> Result<(), eframe::Error> {
         println!("  -i, --image <PATH>   Open image preview & editor directly");
         println!("      --pdf <PATH>     Open PDF page editor directly");
         println!("      --midi <PATH>    Open MIDI piano roll directly");
+        println!("      --scene <PATH>   Open a read-only 3D scene viewer directly");
         println!("      --component-gallery  Open the UI component styling page directly");
         println!("  -l, --last           Re-execute last action (with modal prompt if needed)");
         println!("  -h, --help           Print help");
@@ -1133,6 +1148,11 @@ fn main() -> Result<(), eframe::Error> {
         .and_then(|idx| args.get(idx + 1))
         .map(PathBuf::from);
     let open_component_gallery = args.iter().any(|a| a == "--component-gallery");
+    let initial_scene = args
+        .iter()
+        .position(|argument| argument == "--scene")
+        .and_then(|index| args.get(index + 1))
+        .map(PathBuf::from);
 
     if is_last {
         let state = match send_ipc_request(&IpcRequest::GetState) {
@@ -1201,6 +1221,7 @@ fn main() -> Result<(), eframe::Error> {
                 initial_image,
                 initial_pdf,
                 initial_midi,
+                initial_scene,
                 open_component_gallery,
             ))
         }),

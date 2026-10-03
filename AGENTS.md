@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This is a Rust 2024 Cargo workspace. Shared clipboard models, configuration, IPC, colors, and media helpers live in `crates/little-clip-core`. Keep hardware and USB-display code in `little-clip-driver`, rendering in `little-clip-render`, and transformations and pipeline operations in `little-clip-ops`. The `little-clipd`, `clipctl`, and `clip-workbench` crates provide the daemon, CLI, and egui workbench binaries.
+This is a Rust 2024 Cargo workspace. Shared clipboard models, configuration, IPC, colors, and media helpers live in `crates/little-clip-core`. Keep hardware and USB-display code in `little-clip-driver`, card/text rendering in `little-clip-render`, native Gaussian scene import and GPU rendering in `little-clip-scene`, and transformations and pipeline operations in `little-clip-ops`. The `little-clipd`, `clipctl`, and `clip-workbench` crates provide the daemon, CLI, and egui workbench binaries.
 
 Root `scripts/` contains supporting Python tools, `config.toml` holds runtime defaults, and `launch.sh` manages local builds and services.
 
@@ -65,6 +65,8 @@ Audio Studio channel edits prepare replacement analysis on the bounded job execu
 Image Studio committed pixels and original/undo/redo revisions use `Arc<RgbaImage>`. Wrap replacement results in a new `Arc`, and use `Arc::make_mut` for in-place edits so background readers and history keep their original pixels.
 
 PDF page rasters belong in a viewer-owned temporary directory. Keep only raster paths in page state and read one compressed page at a time in the bounded decode worker, preserving re-selection after texture eviction without document-sized RAM retention.
+
+Gaussian scene imports and workbench renders run on the bounded job executor. Little-screen scene playback uses a bounded cache of 30 CPU frames; release scene GPU allocations after baking and cancel previews superseded by source or appearance changes.
 
 `WorkbenchApp` owns one active `ViewerSession` at a time. CLI previews queued at startup open in their established order; asynchronous completions must wait for the active session to close rather than replace or appear behind it.
 

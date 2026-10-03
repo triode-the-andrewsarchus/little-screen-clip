@@ -389,12 +389,8 @@ impl ScreenRenderer {
             }
         }
 
-        // 6. 3D Mesh Preview (rotates slowly in preview)
-        if p.is_file() && model3d::is_3d_model_file(p) {
-            if let Ok(model) = model3d::Model3d::load_cached(p) {
-                self.draw_model3d_card(pixmap, &model, rx, ry, rw, rh, is_hero);
-                return;
-            }
+        if self.draw_scene_file_card(pixmap, p, [rx, ry, rw, rh], is_hero) {
+            return;
         }
 
         let content_x = rx + 14.0;

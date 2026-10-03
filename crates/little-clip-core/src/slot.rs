@@ -528,7 +528,10 @@ impl SlotManager {
                 if let Some(fp) = item.file_path() {
                     if let Some(ext) = fp.extension().and_then(|e| e.to_str()) {
                         let e = ext.to_ascii_lowercase();
-                        if e == "stl" || e == "obj" || e == "gltf" || e == "glb" {
+                        if matches!(
+                            e.as_str(),
+                            "stl" | "obj" | "gltf" | "glb" | "ply" | "splat" | "sog" | "spz"
+                        ) {
                             return true;
                         }
                     }

@@ -5,6 +5,7 @@ mod gallery;
 mod image_sessions;
 mod model3d;
 mod shortcuts;
+mod splat;
 mod startup;
 mod text_loading;
 mod viewer_lifecycle;

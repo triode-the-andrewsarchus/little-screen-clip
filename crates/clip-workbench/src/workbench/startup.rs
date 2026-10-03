@@ -17,6 +17,7 @@ impl WorkbenchApp {
         initial_image: Option<PathBuf>,
         initial_pdf: Option<PathBuf>,
         initial_midi: Option<PathBuf>,
+        initial_scene: Option<PathBuf>,
         open_component_gallery: bool,
     ) -> Self {
         let mut config = AppConfig::load();
@@ -49,6 +50,9 @@ impl WorkbenchApp {
         }
         if let Some(path) = initial_pdf {
             startup_viewers.push_back(ViewerSession::Pdf(PdfEditorState::new(path)));
+        }
+        if let Some(path) = initial_scene {
+            startup_viewers.push_back(scene_file_viewer(path, &config));
         }
 
         let mut app = Self {

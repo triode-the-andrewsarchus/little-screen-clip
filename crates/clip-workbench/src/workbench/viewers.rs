@@ -108,6 +108,9 @@ impl WorkbenchApp {
                     state.render_ui(ui, &self.ui_palette, &mut close);
                 });
             }
+            ViewerSession::Splat(state) => {
+                show_viewer_panel(ctx, |ui| state.render_ui(ui, &self.ui_palette, &mut close));
+            }
             ViewerSession::Text(state) => {
                 show_viewer_panel(ctx, |ui| {
                     state.render_ui(ui, ctx, &self.ui_palette, &mut close);
@@ -322,11 +325,8 @@ impl WorkbenchApp {
             .unwrap_or(false)
         {
             self.start_midi_load(fp.to_path_buf());
-        } else if is_3d_model_file(fp) {
-            self.replace_viewer(Some(ViewerSession::Model3d(
-                Model3dViewerState::from_file(fp.to_path_buf())
-                    .with_config(self.config.model3d.clone()),
-            )));
+        } else if little_clip_scene::is_splat_file(fp) || is_3d_model_file(fp) {
+            self.replace_viewer(Some(scene_file_viewer(fp.to_path_buf(), &self.config)));
         } else if little_clip_core::pdf::is_pdf_path(fp) {
             self.replace_viewer(Some(ViewerSession::Pdf(PdfEditorState::new(
                 fp.to_path_buf(),

@@ -3,6 +3,7 @@
 mod audio;
 mod images;
 mod rich_media;
+mod splat;
 mod structured;
 mod text;
 
@@ -416,11 +417,8 @@ impl ScreenRenderer {
                             return;
                         }
                     }
-                    if p.is_file() && model3d::is_3d_model_file(p) {
-                        if let Ok(model) = model3d::Model3d::load_cached(p) {
-                            self.draw_model3d_card(pixmap, &model, rx, ry, rw, rh, is_hero);
-                            return;
-                        }
+                    if self.draw_scene_file_card(pixmap, p, [rx, ry, rw, rh], is_hero) {
+                        return;
                     }
                     if p.is_file() && little_clip_core::syntax::is_code_file(p) {
                         if let Ok(file_content) = std::fs::read_to_string(p) {

@@ -171,138 +171,7 @@ impl ScreenRenderer {
                 .unwrap_or(0);
             // Continuous, perfectly smooth 360-degree rotation every 12 seconds with sub-millisecond precision
             let angle_y = ((now_millis % 12_000) as f32 / 12_000.0) * std::f32::consts::TAU;
-            let tilt_x = 0.35f32;
-
-            let sin_y = angle_y.sin();
-            let cos_y = angle_y.cos();
-            let sin_x = tilt_x.sin();
-            let cos_x = tilt_x.cos();
-
-            let is_z_up = mesh.format == model3d::ModelFormat::Stl;
-            let center = mesh.center;
-            let max_dim = mesh.max_dimension.max(0.001);
-            let scale = (vp_w.min(vp_h) * 0.42) / (max_dim * 0.5);
-
-            let cx = vp_x + vp_w * 0.5;
-            let cy = vp_y + vp_h * 0.5;
-            let light_dir = model3d::Vec3::new(0.4, 0.6, 0.7).normalize();
-
-            let budget = self.config.model3d.preview_triangle_limit.max(100);
-            let source_triangles = if !mesh.thumbnail_triangles.is_empty() {
-                &mesh.thumbnail_triangles
-            } else {
-                &mesh.triangles
-            };
-            let step = source_triangles.len().div_ceil(budget).max(1);
-
-            let mut projected = Vec::with_capacity(source_triangles.len() / step + 1);
-            for tri in source_triangles.iter().step_by(step) {
-                let (nx, ny, nz) = if is_z_up {
-                    (tri.normal.x, tri.normal.z, -tri.normal.y)
-                } else {
-                    (tri.normal.x, tri.normal.y, tri.normal.z)
-                };
-
-                let rotated_normal = model3d::Vec3::new(
-                    nx * cos_y + nz * sin_y,
-                    ny * cos_x - (-nx * sin_y + nz * cos_y) * sin_x,
-                    ny * sin_x + (-nx * sin_y + nz * cos_y) * cos_x,
-                )
-                .normalize();
-
-                if rotated_normal.z <= 0.02 {
-                    continue;
-                }
-
-                let transform_v = |v: model3d::Vec3| -> (f32, f32, f32) {
-                    let (dx, dy, dz) = if is_z_up {
-                        (v.x - center.x, v.z - center.z, -(v.y - center.y))
-                    } else {
-                        (v.x - center.x, v.y - center.y, v.z - center.z)
-                    };
-
-                    let rx = dx * cos_y + dz * sin_y;
-                    let rz = -dx * sin_y + dz * cos_y;
-                    let ry = dy;
-
-                    let fy = ry * cos_x - rz * sin_x;
-                    let fz = ry * sin_x + rz * cos_x;
-
-                    (cx + rx * scale, cy - fy * scale, fz)
-                };
-
-                let (p1x, p1y, p1z) = transform_v(tri.v1);
-                let (p2x, p2y, p2z) = transform_v(tri.v2);
-                let (p3x, p3y, p3z) = transform_v(tri.v3);
-
-                let cross_2d = (p2x - p1x) * (p3y - p1y) - (p2y - p1y) * (p3x - p1x);
-                if cross_2d.abs() < 0.2 {
-                    continue;
-                }
-
-                let avg_z = (p1z + p2z + p3z) / 3.0;
-                let diff = rotated_normal.dot(light_dir).max(0.18).min(1.0);
-                projected.push((avg_z, diff, tri.color, (p1x, p1y), (p2x, p2y), (p3x, p3y)));
-            }
-
-            projected.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-
-            let base_c = self.color_from_hex(&self.palette.harmonies.base);
-            let bg_c = self.color_from_hex(&self.palette.colors.surface_recessed);
-
-            let mut line_stroke = Stroke::default();
-            line_stroke.width = 1.2;
-            let mut line_paint = Paint::default();
-            let wire_c = self.color_from_hex(&self.palette.harmonies.base);
-            line_paint.set_color(Color::from_rgba8(
-                (wire_c.red() * 255.0) as u8,
-                (wire_c.green() * 255.0) as u8,
-                (wire_c.blue() * 255.0) as u8,
-                220,
-            ));
-
-            for (_, diff, tri_color, (p1x, p1y), (p2x, p2y), (p3x, p3y)) in projected {
-                let mut pb = PathBuilder::new();
-                pb.move_to(p1x, p1y);
-                pb.line_to(p2x, p2y);
-                pb.line_to(p3x, p3y);
-                pb.close();
-
-                if let Some(t_path) = pb.finish() {
-                    let tri_base_c = if let Some(c) = tri_color {
-                        Color::from_rgba(c[0], c[1], c[2], c[3]).unwrap_or(base_c)
-                    } else {
-                        base_c
-                    };
-                    let r = ((bg_c.red() * (1.0 - diff * 0.7) + tri_base_c.red() * diff * 0.7)
-                        * 255.0)
-                        .clamp(0.0, 255.0) as u8;
-                    let g = ((bg_c.green() * (1.0 - diff * 0.7) + tri_base_c.green() * diff * 0.7)
-                        * 255.0)
-                        .clamp(0.0, 255.0) as u8;
-                    let b = ((bg_c.blue() * (1.0 - diff * 0.7) + tri_base_c.blue() * diff * 0.7)
-                        * 255.0)
-                        .clamp(0.0, 255.0) as u8;
-
-                    let mut fill_paint = Paint::default();
-                    fill_paint.set_color(Color::from_rgba8(r, g, b, 235));
-                    pixmap.fill_path(
-                        &t_path,
-                        &fill_paint,
-                        tiny_skia::FillRule::Winding,
-                        Transform::identity(),
-                        None,
-                    );
-
-                    pixmap.stroke_path(
-                        &t_path,
-                        &line_paint,
-                        &line_stroke,
-                        Transform::identity(),
-                        None,
-                    );
-                }
-            }
+            self.draw_model3d_viewport(pixmap, mesh, [vp_x, vp_y, vp_w, vp_h], angle_y);
         }
 
         let footer_y = ry + rh - 22.0;
@@ -316,5 +185,145 @@ impl ScreenRenderer {
             false,
             clip_right,
         );
+    }
+    pub(crate) fn draw_model3d_viewport(
+        &self,
+        pixmap: &mut Pixmap,
+        mesh: &model3d::Model3d,
+        bounds: [f32; 4],
+        angle_y: f32,
+    ) {
+        let [vp_x, vp_y, vp_w, vp_h] = bounds;
+        let tilt_x = 0.35f32;
+
+        let sin_y = angle_y.sin();
+        let cos_y = angle_y.cos();
+        let sin_x = tilt_x.sin();
+        let cos_x = tilt_x.cos();
+
+        let is_z_up = mesh.format == model3d::ModelFormat::Stl;
+        let center = mesh.center;
+        let max_dim = mesh.max_dimension.max(0.001);
+        let scale = (vp_w.min(vp_h) * 0.42) / (max_dim * 0.5);
+
+        let cx = vp_x + vp_w * 0.5;
+        let cy = vp_y + vp_h * 0.5;
+        let light_dir = model3d::Vec3::new(0.4, 0.6, 0.7).normalize();
+
+        let budget = self.config.model3d.preview_triangle_limit.max(100);
+        let source_triangles = if !mesh.thumbnail_triangles.is_empty() {
+            &mesh.thumbnail_triangles
+        } else {
+            &mesh.triangles
+        };
+        let step = source_triangles.len().div_ceil(budget).max(1);
+
+        let mut projected = Vec::with_capacity(source_triangles.len() / step + 1);
+        for tri in source_triangles.iter().step_by(step) {
+            let (nx, ny, nz) = if is_z_up {
+                (tri.normal.x, tri.normal.z, -tri.normal.y)
+            } else {
+                (tri.normal.x, tri.normal.y, tri.normal.z)
+            };
+
+            let rotated_normal = model3d::Vec3::new(
+                nx * cos_y + nz * sin_y,
+                ny * cos_x - (-nx * sin_y + nz * cos_y) * sin_x,
+                ny * sin_x + (-nx * sin_y + nz * cos_y) * cos_x,
+            )
+            .normalize();
+
+            if rotated_normal.z <= 0.02 {
+                continue;
+            }
+
+            let transform_v = |v: model3d::Vec3| -> (f32, f32, f32) {
+                let (dx, dy, dz) = if is_z_up {
+                    (v.x - center.x, v.z - center.z, -(v.y - center.y))
+                } else {
+                    (v.x - center.x, v.y - center.y, v.z - center.z)
+                };
+
+                let rx = dx * cos_y + dz * sin_y;
+                let rz = -dx * sin_y + dz * cos_y;
+                let ry = dy;
+
+                let fy = ry * cos_x - rz * sin_x;
+                let fz = ry * sin_x + rz * cos_x;
+
+                (cx + rx * scale, cy - fy * scale, fz)
+            };
+
+            let (p1x, p1y, p1z) = transform_v(tri.v1);
+            let (p2x, p2y, p2z) = transform_v(tri.v2);
+            let (p3x, p3y, p3z) = transform_v(tri.v3);
+
+            let cross_2d = (p2x - p1x) * (p3y - p1y) - (p2y - p1y) * (p3x - p1x);
+            if cross_2d.abs() < 0.2 {
+                continue;
+            }
+
+            let avg_z = (p1z + p2z + p3z) / 3.0;
+            let diff = rotated_normal.dot(light_dir).max(0.18).min(1.0);
+            projected.push((avg_z, diff, tri.color, (p1x, p1y), (p2x, p2y), (p3x, p3y)));
+        }
+
+        projected.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let base_c = self.color_from_hex(&self.palette.harmonies.base);
+        let bg_c = self.color_from_hex(&self.palette.colors.surface_recessed);
+
+        let mut line_stroke = Stroke::default();
+        line_stroke.width = 1.2;
+        let mut line_paint = Paint::default();
+        let wire_c = self.color_from_hex(&self.palette.harmonies.base);
+        line_paint.set_color(Color::from_rgba8(
+            (wire_c.red() * 255.0) as u8,
+            (wire_c.green() * 255.0) as u8,
+            (wire_c.blue() * 255.0) as u8,
+            220,
+        ));
+
+        for (_, diff, tri_color, (p1x, p1y), (p2x, p2y), (p3x, p3y)) in projected {
+            let mut pb = PathBuilder::new();
+            pb.move_to(p1x, p1y);
+            pb.line_to(p2x, p2y);
+            pb.line_to(p3x, p3y);
+            pb.close();
+
+            if let Some(t_path) = pb.finish() {
+                let tri_base_c = if let Some(c) = tri_color {
+                    Color::from_rgba(c[0], c[1], c[2], c[3]).unwrap_or(base_c)
+                } else {
+                    base_c
+                };
+                let r = ((bg_c.red() * (1.0 - diff * 0.7) + tri_base_c.red() * diff * 0.7) * 255.0)
+                    .clamp(0.0, 255.0) as u8;
+                let g = ((bg_c.green() * (1.0 - diff * 0.7) + tri_base_c.green() * diff * 0.7)
+                    * 255.0)
+                    .clamp(0.0, 255.0) as u8;
+                let b = ((bg_c.blue() * (1.0 - diff * 0.7) + tri_base_c.blue() * diff * 0.7)
+                    * 255.0)
+                    .clamp(0.0, 255.0) as u8;
+
+                let mut fill_paint = Paint::default();
+                fill_paint.set_color(Color::from_rgba8(r, g, b, 235));
+                pixmap.fill_path(
+                    &t_path,
+                    &fill_paint,
+                    tiny_skia::FillRule::Winding,
+                    Transform::identity(),
+                    None,
+                );
+
+                pixmap.stroke_path(
+                    &t_path,
+                    &line_paint,
+                    &line_stroke,
+                    Transform::identity(),
+                    None,
+                );
+            }
+        }
     }
 }

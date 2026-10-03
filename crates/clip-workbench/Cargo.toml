@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 little-clip-core = { path = "../little-clip-core" }
 little-clip-render = { path = "../little-clip-render" }
+little-clip-scene = { path = "../little-clip-scene" }
 little-clip-ops = { path = "../little-clip-ops" }
 eframe = { version = "0.27", default-features = false, features = ["default_fonts", "glow", "wayland"] }
 egui = "0.27"

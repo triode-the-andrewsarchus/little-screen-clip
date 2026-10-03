@@ -4,6 +4,7 @@ members = [
     "crates/little-clip-core",
     "crates/little-clip-driver",
     "crates/little-clip-render",
+    "crates/little-clip-scene",
     "crates/little-clip-ops",
     "crates/little-clipd",
     "crates/clip-workbench",

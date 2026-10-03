@@ -245,23 +245,9 @@ impl eframe::App for WorkbenchApp {
                                 None
                             }
                         });
-                        let first_3d_model_item = self.selected_slots.iter().find_map(|s| {
-                            let it = self.state.get(*s)?;
-                            if is_large_text_payload(it) {
-                                return None;
-                            }
-                            if let Some(p) = bounded_item_file_path(it).filter(|p| is_3d_model_file(p)) {
-                                Some(p)
-                            } else if let Some(txt) = it.to_clipboard_text() {
-                                let p = std::path::Path::new(txt.trim());
-                                if p.is_file() && is_3d_model_file(p) {
-                                    Some(p.to_path_buf())
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
+                        let first_3d_model_item = self.selected_slots.iter().find_map(|slot| {
+                            bounded_item_file_path(self.state.get(*slot)?)
+                                .filter(|path| is_3d_model_file(path) || little_clip_scene::is_splat_file(path))
                         });
 
                         if let Some(pdf_path) = first_pdf_item {
@@ -320,10 +306,7 @@ impl eframe::App for WorkbenchApp {
                                 &self.ui_palette,
                             );
                             if ui.add(model_btn).on_hover_text("Open interactive 3D orbit viewer (pan, zoom, rotate)").clicked() {
-                                self.replace_viewer(Some(ViewerSession::Model3d(
-                                    Model3dViewerState::from_file(model_path)
-                                        .with_config(self.config.model3d.clone()),
-                                )));
+                                self.open_slot_file_preview(&model_path, false);
                             }
                         }
 

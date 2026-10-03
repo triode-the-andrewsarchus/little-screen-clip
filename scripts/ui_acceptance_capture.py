@@ -1226,6 +1226,8 @@ def app_arguments(args: argparse.Namespace, binary: Path) -> list[str]:
         command.extend(["--pdf", str(args.pdf.resolve())])
     if args.midi:
         command.extend(["--midi", str(args.midi.resolve())])
+    if args.scene:
+        command.extend(["--scene", str(args.scene.resolve())])
     return command
 
 
@@ -1587,6 +1589,7 @@ def create_parser() -> argparse.ArgumentParser:
         help="type literal text into the focused control through private Wayland",
     )
     parser.add_argument("--image", type=Path, help="optional existing image fixture")
+    parser.add_argument("--scene", type=Path, help="optional existing 3D scene fixture")
     parser.add_argument(
         "--click", nargs=2, type=int, metavar=("X", "Y"), action="append",
         help="send a left click at logical screen coordinates through private Niri; repeat to perform ordered UI interactions",
@@ -1692,7 +1695,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         or args.post_key_delay_ms < 0
     ):
         raise SystemExit("width, height, and scale must be positive; delay values cannot be negative")
-    for fixture in (args.image, args.audio, args.pdf, args.midi):
+    for fixture in (args.image, args.audio, args.pdf, args.midi, args.scene):
         if fixture is not None and not fixture.is_file():
             raise SystemExit(f"fixture does not exist: {fixture}")
     if args.verify_midi_copy_pointer and (
@@ -1708,10 +1711,10 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         raise SystemExit(
             "--verify-midi-copy-pointer requires --midi and one --click, with no keyboard or return actions"
         )
-    if args.fake_audio_transition and any((args.image, args.audio, args.pdf, args.midi)):
+    if args.fake_audio_transition and any((args.image, args.audio, args.pdf, args.midi, args.scene)):
         raise SystemExit("--fake-audio-transition cannot be combined with file-entry fixtures")
     if args.fake_text_preview and (
-        args.fake_audio_transition or any((args.image, args.audio, args.pdf, args.midi))
+        args.fake_audio_transition or any((args.image, args.audio, args.pdf, args.midi, args.scene))
     ):
         raise SystemExit("--fake-text-preview cannot be combined with other fixture routes")
     if args.fake_pdf_preview and (
@@ -1719,41 +1722,41 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         or args.fake_model3d or args.fake_binary_diff or args.fake_diff_preview
         or args.fake_image_diff_preview or args.fake_audio_transition
         or args.fake_node_machine or args.fake_reload_error
-        or any((args.image, args.audio, args.pdf, args.midi))
+        or any((args.image, args.audio, args.pdf, args.midi, args.scene))
     ):
         raise SystemExit("--fake-pdf-preview cannot be combined with other fixture routes")
     if args.fake_csv_preview and (
         args.fake_text_preview or args.fake_audio_transition
-        or any((args.image, args.audio, args.pdf, args.midi))
+        or any((args.image, args.audio, args.pdf, args.midi, args.scene))
     ):
         raise SystemExit("--fake-csv-preview cannot be combined with other fixture routes")
     if args.fake_multisheet_xlsx and (
         args.fake_text_preview or args.fake_csv_preview or args.fake_audio_transition
-        or any((args.image, args.audio, args.pdf, args.midi))
+        or any((args.image, args.audio, args.pdf, args.midi, args.scene))
     ):
         raise SystemExit("--fake-multisheet-xlsx cannot be combined with other fixture routes")
     if args.fake_model3d and (
         args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
-        or args.fake_audio_transition or any((args.image, args.audio, args.pdf, args.midi))
+        or args.fake_audio_transition or any((args.image, args.audio, args.pdf, args.midi, args.scene))
     ):
         raise SystemExit("--fake-model3d cannot be combined with other fixture routes")
     if args.fake_binary_diff and (
         args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
         or args.fake_model3d or args.fake_audio_transition
-        or any((args.image, args.audio, args.pdf, args.midi))
+        or any((args.image, args.audio, args.pdf, args.midi, args.scene))
     ):
         raise SystemExit("--fake-binary-diff cannot be combined with other fixture routes")
     if args.fake_diff_preview and (
         args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
         or args.fake_model3d or args.fake_binary_diff or args.fake_audio_transition
-        or any((args.image, args.audio, args.pdf, args.midi))
+        or any((args.image, args.audio, args.pdf, args.midi, args.scene))
     ):
         raise SystemExit("--fake-diff-preview cannot be combined with other fixture routes")
     if args.fake_image_diff_preview and (
         args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
         or args.fake_model3d or args.fake_binary_diff or args.fake_diff_preview
         or args.fake_audio_transition or args.fake_node_machine
-        or any((args.image, args.audio, args.pdf, args.midi))
+        or any((args.image, args.audio, args.pdf, args.midi, args.scene))
     ):
         raise SystemExit("--fake-image-diff-preview cannot be combined with other fixture routes")
     fake_fixture_flags = (
@@ -1762,7 +1765,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         args.fake_diff_preview, args.fake_image_diff_preview, args.fake_node_machine,
     )
     if args.fake_reload_error and (
-        any(fake_fixture_flags) or any((args.image, args.audio, args.pdf, args.midi))
+        any(fake_fixture_flags) or any((args.image, args.audio, args.pdf, args.midi, args.scene))
         or not args.key_action or any(action != "f6" for action in args.key_action)
     ):
         raise SystemExit("--fake-reload-error requires only --key-action f6 and no other fixture route")
@@ -1770,13 +1773,13 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         args.fake_text_preview or args.fake_csv_preview or args.fake_multisheet_xlsx
         or args.fake_model3d or args.fake_audio_transition or args.fake_binary_diff
         or args.fake_diff_preview or args.fake_image_diff_preview
-        or any((args.image, args.audio, args.pdf, args.midi))
+        or any((args.image, args.audio, args.pdf, args.midi, args.scene))
     ):
         raise SystemExit("--fake-node-machine cannot be combined with other fixture routes")
     if args.binary_diff_view and not args.fake_binary_diff:
         raise SystemExit("--binary-diff-view requires --fake-binary-diff")
     direct_fixture_count = sum(
-        fixture is not None for fixture in (args.image, args.audio, args.pdf, args.midi)
+        fixture is not None for fixture in (args.image, args.audio, args.pdf, args.midi, args.scene)
     )
     direct_viewer_route = direct_fixture_count == 1 and not any(fake_fixture_flags)
     palette_diff_route = (
@@ -1906,6 +1909,7 @@ def main() -> int:
             "audio_fixture": str(args.audio.resolve()) if args.audio else None,
             "pdf_fixture": str(args.pdf.resolve()) if args.pdf else None,
             "midi_fixture": str(args.midi.resolve()) if args.midi else None,
+            "scene_fixture": str(args.scene.resolve()) if args.scene else None,
             "verify_midi_copy_pointer": args.verify_midi_copy_pointer,
             "fake_audio_transition": args.fake_audio_transition,
             "fake_text_preview": args.fake_text_preview,
