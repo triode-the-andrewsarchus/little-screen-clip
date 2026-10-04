@@ -209,3 +209,5 @@ pub(super) use resize::{
 pub(super) use resize::{optimize_to_target_size, optimize_to_target_size_with_progress};
 mod transform;
 mod view;
+
+pub(crate) use background_removal::run_image_tool_status_command;

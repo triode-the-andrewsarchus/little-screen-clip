@@ -8,3 +8,4 @@ Cargo.lock
 *.swo
 /scratch
 /.fitness
+__pycache__/

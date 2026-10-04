@@ -173,6 +173,7 @@ impl PdfEditorState {
             match result {
                 Ok(()) => {
                     self.reset_navigation();
+                    self.document_tools.invalidate_layout();
                     self.path = message.output;
                     self.title = self
                         .path

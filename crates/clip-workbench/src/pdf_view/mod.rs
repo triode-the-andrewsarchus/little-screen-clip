@@ -4,7 +4,9 @@
 //! and a right-side large preview canvas of the selected page with live 90° rotation,
 //! page deletion, and dirty state tracking.
 
+mod document_tools;
 mod editing;
+mod interaction;
 mod navigation;
 mod page_cache;
 mod preview_jobs;
@@ -307,6 +309,7 @@ struct PdfPageViewport {
     zoom: f32,
     pan: Vec2,
     render_width: u32,
+    pan_with_primary: bool,
 }
 
 impl Default for PdfPageViewport {
@@ -316,6 +319,7 @@ impl Default for PdfPageViewport {
             zoom: 1.0,
             pan: Vec2::ZERO,
             render_width: PAGE_RASTER_MAX_DIM,
+            pan_with_primary: true,
         }
     }
 }
@@ -377,10 +381,12 @@ impl PdfPageViewport {
                 }
             }
         }
-        if response.dragged() {
+        if response.dragged()
+            && (self.pan_with_primary || response.dragged_by(egui::PointerButton::Middle))
+        {
             self.pan += response.drag_delta();
         }
-        if response.double_clicked() {
+        if response.double_clicked() && self.pan_with_primary {
             self.zoom = 1.0;
             self.pan = Vec2::ZERO;
         }
@@ -403,7 +409,7 @@ impl PdfPageViewport {
             egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,
         );
-        response.on_hover_text("Scroll to zoom • Drag to pan • Double-click to fit")
+        response
     }
 }
 
@@ -546,6 +552,7 @@ pub struct PdfEditorState {
     decode_requests: Vec<usize>,
     viewport: PdfPageViewport,
     navigation: navigation::PdfNavigation,
+    document_tools: document_tools::PdfDocumentTools,
 }
 
 impl PdfEditorState {
@@ -578,6 +585,7 @@ impl PdfEditorState {
             decode_requests: Vec::new(),
             viewport: PdfPageViewport::default(),
             navigation: navigation::PdfNavigation::default(),
+            document_tools: document_tools::PdfDocumentTools::default(),
         }
     }
 

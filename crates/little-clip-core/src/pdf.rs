@@ -164,6 +164,29 @@ pub fn render_all_pdf_page_thumbnails(
     Ok(pages)
 }
 
+/// Positioned text and image elements for one visible PDF page.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct PdfPageLayout {
+    pub text: String,
+    pub glyphs: Vec<PdfGlyph>,
+    pub images: Vec<PdfImageElement>,
+}
+
+/// A glyph's UTF-8 source range and normalized, rotated page bounds.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PdfGlyph {
+    pub start: usize,
+    pub end: usize,
+    pub rect: [f32; 4],
+}
+
+/// An image occurrence's extraction index and normalized, rotated page bounds.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct PdfImageElement {
+    pub index: usize,
+    pub rect: [f32; 4],
+}
+
 /// One bookmark in document order, with a one-based destination page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PdfOutlineEntry {

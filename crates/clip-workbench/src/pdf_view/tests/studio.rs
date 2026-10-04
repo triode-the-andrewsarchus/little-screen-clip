@@ -33,69 +33,57 @@ fn pdf_sibling_panes_stay_inside_compact_and_wide_hosts() {
         let palette =
             crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
         let colors = crate::ui_appearance::WorkbenchColors::from_palette(&palette);
-        let mut state = PdfEditorState {
-            path: PathBuf::from("fixture.pdf"),
-            title: "fixture.pdf".to_owned(),
-            page_count: 0,
-            pages: Vec::new(),
-            selected_page: None,
-            status_toast: StatusToast::new(),
-            dirty: false,
-            info_job: None,
-            preview_rx: None,
-            preview_job: None,
-            preview_cancel: None,
-            previews_loading: false,
-            edit_rx: None,
-            edit_ticket: None,
-            edit_in_progress: false,
-            raster_cache: None,
-            source_directory: None,
-            texture_frame: 0,
-            decode_job: None,
-            decode_requests: Vec::new(),
-            viewport: PdfPageViewport::default(),
-            navigation: navigation::PdfNavigation::default(),
-        };
-        let host = egui::Rect::from_min_size(egui::Pos2::ZERO, host_size);
-        let mut panes = Vec::new();
-        let mut pane_width_budget = 0.0;
-        let output = ctx.run(
-            egui::RawInput {
-                screen_rect: Some(host),
-                ..Default::default()
-            },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    pane_width_budget =
-                        ui.available_width() - 24.0 - (ui.spacing().item_spacing.x * 2.0 + 1.0);
-                    state.render_ui(ui, ctx, &palette, &mut false);
-                });
-            },
-        );
-        for clipped in &output.shapes {
-            if let egui::epaint::Shape::Rect(rect) = &clipped.shape {
-                if rect.fill == colors.recessed && rect.rect.height() > 100.0 {
-                    panes.push(rect.rect);
+        let mut state = raster_state(0, 16);
+        for right in [
+            None,
+            Some(navigation::RightTab::Find),
+            Some(navigation::RightTab::Ocr),
+        ] {
+            state.navigation.right = right;
+            let host = egui::Rect::from_min_size(egui::Pos2::ZERO, host_size);
+            let mut panes = Vec::new();
+            let mut pane_width_budget = 0.0;
+            let output = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(host),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        pane_width_budget = ui.available_width()
+                            - 24.0
+                            - (ui.spacing().item_spacing.x * 2.0 + 1.0)
+                                * if right.is_some() { 2.0 } else { 1.0 };
+                        state.render_ui(ui, ctx, &palette, &mut false);
+                    });
+                },
+            );
+            for clipped in &output.shapes {
+                if let egui::epaint::Shape::Rect(rect) = &clipped.shape {
+                    if rect.fill == colors.recessed && rect.rect.height() > 100.0 {
+                        panes.push(rect.rect);
+                    }
                 }
             }
+            panes.sort_by(|a, b| a.min.x.total_cmp(&b.min.x));
+            assert_eq!(
+                panes.len(),
+                if right.is_some() { 3 } else { 2 },
+                "expected docked pane frames at {host_size:?}"
+            );
+            assert!(
+                panes
+                    .windows(2)
+                    .all(|pair| pair[0].right() < pair[1].left()),
+                "panes overlap: {panes:?}"
+            );
+            assert!(panes.iter().all(|pane| host.contains_rect(*pane)));
+            let pane_widths = panes.iter().map(|pane| pane.width()).sum::<f32>();
+            assert!(
+                (pane_widths - pane_width_budget).abs() < 1.0,
+                "panes do not fill their divider and gap-adjusted budget: {pane_widths} vs {pane_width_budget}"
+            );
         }
-        panes.sort_by(|a, b| a.min.x.total_cmp(&b.min.x));
-        assert_eq!(
-            panes.len(),
-            2,
-            "expected left/right pane frames at {host_size:?}"
-        );
-        assert!(
-            panes[0].right() < panes[1].left(),
-            "panes overlap: {panes:?}"
-        );
-        assert!(panes.iter().all(|pane| host.contains_rect(*pane)));
-        let pane_widths = panes.iter().map(|pane| pane.width()).sum::<f32>();
-        assert!(
-            (pane_widths - pane_width_budget).abs() < 1.0,
-            "panes do not fill their divider and gap-adjusted budget: {pane_widths} vs {pane_width_budget}"
-        );
     }
 }
 

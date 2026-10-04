@@ -30,51 +30,56 @@ def log_progress(msg: str):
     sys.stderr.write(f"[ocr:progress] {msg}\n")
     sys.stderr.flush()
 
-def ensure_tessdata():
-    tess_user_dir = os.path.expanduser("~/.local/share/tessdata")
-    eng_path = os.path.join(tess_user_dir, "eng.traineddata")
-    if os.path.exists(eng_path):
-        os.environ["TESSDATA_PREFIX"] = tess_user_dir
-    elif os.path.exists("/usr/share/tessdata"):
-        os.environ["TESSDATA_PREFIX"] = "/usr/share/tessdata"
+def ensure_tessdata(language="eng"):
+    candidates = [os.environ.get("TESSDATA_PREFIX", ""),
+                  os.path.expanduser("~/.local/share/tessdata"),
+                  "/usr/share/tessdata", "/usr/share/tesseract-ocr/5/tessdata"]
+    for directory in candidates:
+        if directory and all(os.path.isfile(os.path.join(directory, code + ".traineddata"))
+                             for code in language.split("+")):
+            os.environ["TESSDATA_PREFIX"] = directory
+            return
 
-def run_tesseract(image: Image.Image) -> str:
-    log_progress("Executing local Tesseract OCR engine...")
-    ensure_tessdata()
+
+def tesseract_output(image: Image.Image, output: str, arguments: list[str], language: str = "eng", temporary_directory=None):
+    """Shared local OCR boundary for text and positioned PDF output."""
     import tempfile
-
-    # Preprocess image: upscale if low resolution so Tesseract text recognition is clean
+    ensure_tessdata(language)
     w, h = image.size
     if h < 400 or w < 600:
         scale = max(2, min(4, int(800 / max(h, 1))))
-        proc_img = image.resize((w * scale, h * scale), Image.Resampling.LANCZOS)
-    else:
-        proc_img = image
-
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_in:
-        tmp_in_path = tmp_in.name
-        proc_img.save(tmp_in_path, format="PNG")
-
+        image = image.resize((w * scale, h * scale), Image.Resampling.LANCZOS)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False, dir=temporary_directory) as source:
+        image.save(source.name, format="PNG")
     try:
-        # Use English language pack only (do NOT use osd which corrupts characters)
-        cmd = ["tesseract", tmp_in_path, "stdout", "-l", "eng", "--psm", "6"]
-        res = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
-        if res.returncode == 0 and res.stdout.strip():
-            return res.stdout.strip()
-
-        # Fallback to automatic PSM
-        cmd2 = ["tesseract", tmp_in_path, "stdout", "-l", "eng"]
-        res2 = subprocess.run(cmd2, capture_output=True, text=True, env=os.environ)
-        if res2.returncode == 0:
-            return res2.stdout.strip()
-
-        raise RuntimeError(f"Tesseract failed: {res2.stderr or res.stderr}")
+        return subprocess.run(
+            ["tesseract", source.name, output, "-l", language, *arguments],
+            capture_output=True, text=True, env=os.environ, timeout=300,
+        )
     finally:
-        if os.path.exists(tmp_in_path):
-            try:
-                os.remove(tmp_in_path)
-            except Exception:
-                pass
+        os.unlink(source.name)
+
+
+def run_tesseract(image: Image.Image) -> str:
+    log_progress("Executing local Tesseract OCR engine...")
+    result = tesseract_output(image, "stdout", ["--psm", "6"])
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    fallback = tesseract_output(image, "stdout", [])
+    if fallback.returncode:
+        raise RuntimeError(f"Tesseract failed: {fallback.stderr or result.stderr}")
+    return fallback.stdout.strip()
+
+
+def run_tesseract_pdf(image: Image.Image, output_base: str, language: str = "eng"):
+    """Write only the invisible, positioned OCR layer, without duplicating pixels."""
+    result = tesseract_output(
+        image, output_base, ["--dpi", "300", "-c", "textonly_pdf=1", "-c", "tessedit_create_pdf=1"], language,
+        os.path.dirname(output_base),
+    )
+    if result.returncode:
+        raise RuntimeError(f"Tesseract PDF OCR failed: {result.stderr}")
+
 
 def is_cached_model(model_id: str) -> bool:
     cache_dir = os.path.expanduser(f"~/.cache/huggingface/hub/models--{model_id.replace('/', '--')}")

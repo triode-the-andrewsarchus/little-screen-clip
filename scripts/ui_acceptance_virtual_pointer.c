@@ -50,7 +50,7 @@ static const struct wl_registry_listener registry_listener = {
 static void usage(const char *program) {
     fprintf(stderr,
             "usage: %s probe | move <width> <height> <x> <y> | "
-            "click <width> <height> <x> <y> | "
+            "click|right-click <width> <height> <x> <y> | "
             "drag <width> <height> <start-x> <start-y> <end-x> <end-y> | "
             "scroll <width> <height> <x> <y> <logical-units>\n"
             "Connects only to WAYLAND_DISPLAY in XDG_RUNTIME_DIR.\n",
@@ -97,10 +97,21 @@ static uint32_t monotonic_msec(void) {
     return (uint32_t)((uint64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000);
 }
 
+static uint32_t click_button(const char *action) {
+    if (strcmp(action, "click") == 0) {
+        return BTN_LEFT;
+    }
+    if (strcmp(action, "right-click") == 0) {
+        return BTN_RIGHT;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
     uint32_t width = 0, height = 0, x = 0, y = 0, end_x = 0, end_y = 0;
     int probe = argc == 2 && strcmp(argv[1], "probe") == 0;
-    int click = argc == 6 && strcmp(argv[1], "click") == 0;
+    uint32_t button = argc == 6 ? click_button(argv[1]) : 0;
+    int click = button != 0;
     int move = argc == 6 && strcmp(argv[1], "move") == 0;
     int drag = argc == 8 && strcmp(argv[1], "drag") == 0;
     int scroll = argc == 7 && strcmp(argv[1], "scroll") == 0;
@@ -235,7 +246,7 @@ int main(int argc, char **argv) {
                 printf("dragged private Niri logical pointer from %u,%u to %u,%u of %u×%u\n",
                        x, y, end_x, end_y, width, height);
             } else {
-                zwlr_virtual_pointer_v1_button(pointer, time_ms + 1, BTN_LEFT, WL_POINTER_BUTTON_STATE_PRESSED);
+                zwlr_virtual_pointer_v1_button(pointer, time_ms + 1, button, WL_POINTER_BUTTON_STATE_PRESSED);
                 zwlr_virtual_pointer_v1_frame(pointer);
                 if (wl_display_roundtrip(display) < 0) {
                     fprintf(stderr, "private pointer press failed\n");
@@ -246,7 +257,7 @@ int main(int argc, char **argv) {
                     wl_display_disconnect(display);
                     return 5;
                 }
-                zwlr_virtual_pointer_v1_button(pointer, time_ms + 2, BTN_LEFT, WL_POINTER_BUTTON_STATE_RELEASED);
+                zwlr_virtual_pointer_v1_button(pointer, time_ms + 2, button, WL_POINTER_BUTTON_STATE_RELEASED);
                 zwlr_virtual_pointer_v1_frame(pointer);
                 if (wl_display_roundtrip(display) < 0) {
                     fprintf(stderr, "private pointer release failed\n");

@@ -163,9 +163,11 @@ If running on a fresh system, configure the dedicated environment:
 # Create isolated venv sharing system PyTorch & CUDA packages
 uv venv --python /usr/bin/python3 --system-site-packages ~/.local/share/little-screen-clip/nobg-venv
 
-# Install nobg package
-uv pip install --python ~/.local/share/little-screen-clip/nobg-venv/bin/python nobg
+# Install nobg and PDF interaction support
+uv pip install --python ~/.local/share/little-screen-clip/nobg-venv/bin/python nobg 'PyMuPDF>=1.26,<1.27'
 ```
+
+PDF text selection and embedded-image copying use PyMuPDF in this environment. The PDF viewer has Pages/ToC tabs on the left and Find/OCR tabs on the right. Drag page text and press Ctrl+C to copy it; right-click an image to outline it in red and copy the image itself. PDF OCR requires local Tesseract and installed language data (English uses `eng`); it saves and opens a searchable copy beside the original, with invisible text beneath the page content.
 
 *(Note: If `nobg` is not installed, the workbench UI detects it gracefully and offers a 1-click <img src="docs/assets/copy.svg" width="16" alt="Copy"> `Copy Install Cmd` button).*
 

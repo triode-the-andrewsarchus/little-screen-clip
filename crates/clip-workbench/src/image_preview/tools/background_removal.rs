@@ -160,7 +160,7 @@ pub struct ImageToolProcessControl {
     pub child_pid: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
-pub(super) fn run_image_tool_status_command(
+pub(crate) fn run_image_tool_status_command(
     cmd: Command,
     control: &ImageToolProcessControl,
 ) -> Result<std::process::ExitStatus, String> {

@@ -1,55 +1,58 @@
 use super::*;
-use crate::image_preview::{ImageToolProcessControl, OcrEngine, OcrMsg, ocr_command, run_png_ocr};
+use crate::ui_tabs::{Tab, TabBar};
 use little_clip_core::pdf::{PdfOutlineEntry, extract_pdf_page_text, read_pdf_outline};
-use std::sync::mpsc::{Sender, channel};
+use std::sync::mpsc::channel;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum NavigationMode {
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub(super) enum LeftTab {
+    #[default]
+    Pages,
     Contents,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum RightTab {
     Find,
+    Ocr,
 }
 
 enum IndexMessage {
     Outline(Result<Vec<PdfOutlineEntry>, String>),
     Page(usize, String),
-    Progress(String),
 }
-
 type IndexWorker = (JobTicket, Receiver<Result<Result<(), String>, JobError>>);
-type NavigationResults = (String, Option<NavigationMode>, Vec<(usize, String)>);
 
 #[derive(Default)]
 pub(super) struct PdfNavigation {
-    mode: Option<NavigationMode>,
-    query: String,
-    focus: bool,
-    cursor: usize,
+    pub left: LeftTab,
+    pub right: Option<RightTab>,
+    pub query: String,
+    contents_query: String,
+    focus_find: bool,
+    focus_contents: bool,
+    find_cursor: usize,
+    contents_cursor: usize,
     outline: Vec<PdfOutlineEntry>,
     text: Vec<String>,
-    indexed: bool,
     attempted: bool,
-    result_cache: Option<NavigationResults>,
     error: Option<String>,
-    progress: String,
-    engine: OcrEngine,
     worker: Option<IndexWorker>,
     messages: Option<Receiver<IndexMessage>>,
-    control: Option<Arc<ImageToolProcessControl>>,
+    cancel: Option<Arc<AtomicBool>>,
+    result_cache: Option<(String, Vec<(usize, String)>)>,
 }
 
 impl PdfNavigation {
     fn cancel(&mut self) {
-        if let Some(control) = self.control.take() {
-            control.cancel();
+        if let Some(cancel) = self.cancel.take() {
+            cancel.store(true, Ordering::SeqCst);
         }
         if let Some((ticket, _)) = self.worker.take() {
             ticket.cancel();
         }
         self.messages = None;
-        self.progress.clear();
     }
 
-    fn start(&mut self, path: PathBuf, count: usize, ocr: bool, ctx: &egui::Context) {
+    fn start(&mut self, path: PathBuf, count: usize, ctx: &egui::Context) {
         if self.worker.is_some() || count == 0 {
             return;
         }
@@ -57,31 +60,38 @@ impl PdfNavigation {
         self.text.resize(count, String::new());
         self.result_cache = None;
         self.error = None;
-        self.progress = "Reading PDF…".into();
-        let control = Arc::new(ImageToolProcessControl::new());
-        let worker_control = control.clone();
-        self.control = Some(control);
-        let engine = self.engine;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker_cancel = cancel.clone();
+        self.cancel = Some(cancel);
         let (tx, rx) = channel();
         self.messages = Some(rx);
         let repaint = ctx.clone();
         self.worker = Some(BackgroundJobs::global().submit(Duration::MAX, move || {
-            let result = index_document(&path, count, ocr, engine, &worker_control, &tx);
+            let result = (|| {
+                let _ = tx.send(IndexMessage::Outline(read_pdf_outline(&path)));
+                for page in 1..=count {
+                    if worker_cancel.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let text = extract_pdf_page_text(&path, page)?;
+                    if worker_cancel.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let _ = tx.send(IndexMessage::Page(page, text));
+                }
+                Ok(())
+            })();
             repaint.request_repaint();
             result
         }));
     }
 
     fn poll(&mut self, ctx: &egui::Context) {
-        // Observe completion before draining, so the final published page cannot be lost.
         let result = self.worker.as_ref().map(|(_, rx)| rx.try_recv());
         if let Some(rx) = &self.messages {
             while let Ok(message) = rx.try_recv() {
                 match message {
-                    IndexMessage::Outline(Ok(outline)) => {
-                        self.outline = outline;
-                        self.result_cache = None;
-                    }
+                    IndexMessage::Outline(Ok(outline)) => self.outline = outline,
                     IndexMessage::Outline(Err(error)) => {
                         self.error = Some(format!("Contents: {error}"))
                     }
@@ -89,16 +99,16 @@ impl PdfNavigation {
                         self.text[page - 1] = text;
                         self.result_cache = None;
                     }
-                    IndexMessage::Progress(progress) => self.progress = progress,
                 }
             }
         }
         match result {
             Some(Ok(result)) => {
-                match result {
-                    Ok(Ok(())) => self.indexed = true,
-                    Ok(Err(error)) => self.error = Some(error),
-                    Err(error) => self.error = Some(error.to_string()),
+                if let Err(error) = result
+                    .map_err(|error| error.to_string())
+                    .and_then(|result| result)
+                {
+                    self.error = Some(error);
                 }
                 self.cancel();
             }
@@ -113,40 +123,82 @@ impl PdfNavigation {
         }
     }
 
-    fn open(&mut self, mode: NavigationMode) {
-        self.mode = Some(mode);
-        self.query.clear();
-        self.cursor = 0;
-        self.focus = true;
+    pub fn left_tabs(
+        &mut self,
+        ui: &mut egui::Ui,
+        palette: &little_clip_core::palette::AppPalette,
+    ) {
+        let tabs = [
+            Tab::new(LeftTab::Pages, "Pages").icon(Icon::Pdf),
+            Tab::new(LeftTab::Contents, "ToC").icon(Icon::Book),
+        ];
+        if let Some(tab) = TabBar::new("pdf-left-tabs", self.left, &tabs, palette)
+            .equal_widths()
+            .show(ui)
+        {
+            self.left = tab;
+            self.focus_contents = tab == LeftTab::Contents;
+        }
     }
 
-    fn results(&self) -> Vec<(usize, String)> {
-        if self.mode == Some(NavigationMode::Contents) {
-            let mut entries: Vec<_> = self
-                .outline
-                .iter()
-                .filter_map(|entry| {
-                    fuzzy_score(&entry.title, &self.query).map(|score| (score, entry))
-                })
-                .collect();
-            if !self.query.is_empty() {
-                entries.sort_by_key(|(score, _)| *score);
-            }
-            return entries
-                .into_iter()
-                .map(|(_, entry)| {
-                    (
-                        entry.page,
-                        format!(
-                            "{}{} — p. {}",
-                            "  ".repeat(entry.depth.min(8)),
-                            entry.title,
-                            entry.page
-                        ),
-                    )
-                })
-                .collect();
+    fn contents(&self) -> Vec<(usize, String)> {
+        let mut entries = self
+            .outline
+            .iter()
+            .filter_map(|entry| {
+                fuzzy_score(&entry.title, &self.contents_query).map(|score| (score, entry))
+            })
+            .collect::<Vec<_>>();
+        if !self.contents_query.is_empty() {
+            entries.sort_by_key(|(score, _)| *score);
         }
+        entries
+            .into_iter()
+            .map(|(_, entry)| {
+                (
+                    entry.page,
+                    format!(
+                        "{}{} · {}",
+                        "  ".repeat(entry.depth.min(8)),
+                        entry.title,
+                        entry.page
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    pub fn render_contents(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> Option<usize> {
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut self.contents_query)
+                .hint_text("Fuzzy search ToC…")
+                .desired_width(f32::INFINITY),
+        );
+        if self.focus_contents {
+            response.request_focus();
+            self.focus_contents = false;
+        }
+        if response.changed() {
+            self.contents_cursor = 0;
+        }
+        let results = self.contents();
+        if results.is_empty() {
+            ui.label(if self.worker.is_some() {
+                "Reading contents…"
+            } else {
+                "No matching bookmarks"
+            });
+        }
+        render_result_list(
+            ui,
+            ctx,
+            &results,
+            &mut self.contents_cursor,
+            response.has_focus() || response.lost_focus(),
+        )
+    }
+
+    fn find_results(&self) -> Vec<(usize, String)> {
         let query = self.query.to_lowercase();
         if query.trim().is_empty() {
             return Vec::new();
@@ -155,8 +207,8 @@ impl PdfNavigation {
             .iter()
             .enumerate()
             .filter_map(|(index, text)| {
-                let lower = text.to_lowercase();
-                if !lower.contains(&query) {
+                let count = text.to_lowercase().matches(&query).count();
+                if count == 0 {
                     return None;
                 }
                 let snippet = text
@@ -164,136 +216,57 @@ impl PdfNavigation {
                     .find(|line| line.to_lowercase().contains(&query))
                     .unwrap_or(text)
                     .chars()
-                    .take(160)
+                    .take(120)
                     .collect::<String>();
                 Some((
                     index + 1,
                     format!(
-                        "Page {} · {} matches — {}",
+                        "Page {} · {} match{}\n{}",
                         index + 1,
-                        lower.matches(&query).count(),
+                        count,
+                        if count == 1 { "" } else { "es" },
                         snippet
                     ),
                 ))
             })
             .collect()
     }
-    fn render_controls(
-        &mut self,
-        ui: &mut egui::Ui,
-        ctx: &egui::Context,
-        path: &Path,
-        page_count: usize,
-        edit_in_progress: bool,
-    ) {
+
+    fn render_find(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> Option<usize> {
         let response = ui.add(
             egui::TextEdit::singleline(&mut self.query)
-                .hint_text(if self.mode == Some(NavigationMode::Contents) {
-                    "Fuzzy search bookmarks…"
-                } else {
-                    "Search document text…"
-                })
+                .hint_text("Find in PDF…")
                 .desired_width(f32::INFINITY),
         );
-        if self.focus {
+        if self.focus_find {
             response.request_focus();
-            self.focus = false;
+            self.focus_find = false;
         }
         if response.changed() {
-            self.cursor = 0;
+            self.find_cursor = 0;
         }
-        ui.horizontal(|ui| {
-            for engine in [OcrEngine::GlmOcr, OcrEngine::Tesseract] {
-                ui.selectable_value(&mut self.engine, engine, engine.label());
-            }
-        });
-        ui.horizontal(|ui| {
-            if ui
-                .add_enabled(
-                    self.worker.is_none() && !edit_in_progress,
-                    egui::Button::new("OCR entire PDF"),
-                )
-                .clicked()
-            {
-                self.start(path.to_owned(), page_count, true, ctx);
-            }
-            if self.worker.is_some() {
-                ui.spinner();
-                if ui.button("Cancel").clicked() {
-                    self.cancel();
-                }
-            } else if ui.button("Reload text").clicked() {
-                self.start(path.to_owned(), page_count, false, ctx);
-            }
-        });
-        self.render_index_status(ui);
-    }
-
-    fn render_index_status(&self, ui: &mut egui::Ui) {
-        if !self.progress.is_empty() {
-            ui.label(&self.progress);
-        }
-        if let Some(error) = &self.error {
-            ui.label(error);
-        }
-        if self.mode == Some(NavigationMode::Contents) && self.outline.is_empty() {
-            ui.label("This PDF has no embedded bookmarks. Use Find to search its text; OCR scanned pages first.");
-        } else if self.mode == Some(NavigationMode::Find)
-            && self.indexed
-            && self.text.iter().all(|text| text.trim().is_empty())
-        {
-            ui.label("No text layer found. Run OCR to make this document searchable.");
-        }
-    }
-
-    fn render_results(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) -> Option<usize> {
-        let mut destination = None;
         if self
             .result_cache
             .as_ref()
-            .is_none_or(|(query, mode, _)| *query != self.query || *mode != self.mode)
+            .is_none_or(|(query, _)| *query != self.query)
         {
-            self.result_cache = Some((self.query.clone(), self.mode, self.results()));
+            self.result_cache = Some((self.query.clone(), self.find_results()));
         }
         let results = &self
             .result_cache
             .as_ref()
-            .expect("results were populated")
-            .2;
+            .expect("find results populated")
+            .1;
         if results.is_empty() && !self.query.is_empty() {
             ui.label("No matches");
         }
-        if !results.is_empty() {
-            let down =
-                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown));
-            let up = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp));
-            if down {
-                self.cursor = (self.cursor + 1) % results.len();
-            }
-            if up {
-                self.cursor = (self.cursor + results.len() - 1) % results.len();
-            }
-            self.cursor = self.cursor.min(results.len() - 1);
-            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
-                destination = Some(results[self.cursor].0);
-            }
-            egui::ScrollArea::vertical()
-                .max_height(260.0)
-                .show(ui, |ui| {
-                    for (index, (page, label)) in results.iter().enumerate() {
-                        let response = ui.selectable_label(index == self.cursor, label);
-                        if (up || down) && index == self.cursor {
-                            response.scroll_to_me(None);
-                        }
-                        if response.clicked() {
-                            self.cursor = index;
-                            destination = Some(*page);
-                        }
-                    }
-                });
-        }
-
-        destination
+        render_result_list(
+            ui,
+            ctx,
+            results,
+            &mut self.find_cursor,
+            response.has_focus() || response.lost_focus(),
+        )
     }
 }
 
@@ -303,7 +276,48 @@ impl Drop for PdfNavigation {
     }
 }
 
-/// Case-insensitive subsequence matching, preferring contiguous and early matches.
+fn render_result_list(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    results: &[(usize, String)],
+    cursor: &mut usize,
+    focused: bool,
+) -> Option<usize> {
+    if results.is_empty() {
+        return None;
+    }
+    let down = focused
+        && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown));
+    let up = focused
+        && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp));
+    *cursor = (*cursor).min(results.len() - 1);
+    if down {
+        *cursor = (*cursor + 1) % results.len();
+    }
+    if up {
+        *cursor = (*cursor + results.len() - 1) % results.len();
+    }
+    let mut destination = (focused
+        && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter)))
+    .then_some(results[*cursor].0);
+    egui::ScrollArea::vertical()
+        .id_source("pdf-result-list")
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for (index, (page, label)) in results.iter().enumerate() {
+                let response = ui.selectable_label(index == *cursor, label);
+                if (up || down) && index == *cursor {
+                    response.scroll_to_me(None);
+                }
+                if response.clicked() {
+                    *cursor = index;
+                    destination = Some(*page);
+                }
+            }
+        });
+    destination
+}
+
 fn fuzzy_score(title: &str, query: &str) -> Option<usize> {
     let title = title.to_lowercase();
     let mut remaining = title.chars().enumerate();
@@ -315,294 +329,126 @@ fn fuzzy_score(title: &str, query: &str) -> Option<usize> {
     Some(score)
 }
 
-fn index_document(
-    path: &Path,
-    count: usize,
-    ocr: bool,
-    engine: OcrEngine,
-    control: &Arc<ImageToolProcessControl>,
-    tx: &Sender<IndexMessage>,
-) -> Result<(), String> {
-    let _ = tx.send(IndexMessage::Outline(read_pdf_outline(path)));
-    for page in 1..=count {
-        if control.cancel.load(Ordering::SeqCst) {
-            return Ok(());
-        }
-        let _ = tx.send(IndexMessage::Progress(format!(
-            "{} page {page} of {count}…",
-            if ocr { "OCR" } else { "Reading" }
-        )));
-        let text = if ocr {
-            ocr_page(path, page, engine, control, tx)?
-        } else {
-            extract_pdf_page_text(path, page)?
-        };
-        if control.cancel.load(Ordering::SeqCst) {
-            return Ok(());
-        }
-        let _ = tx.send(IndexMessage::Page(page, text));
-    }
-    Ok(())
-}
-
-fn ocr_page(
-    path: &Path,
-    page: usize,
-    engine: OcrEngine,
-    control: &Arc<ImageToolProcessControl>,
-    progress: &Sender<IndexMessage>,
-) -> Result<String, String> {
-    let (png, _, _) = render_pdf_page_preview(path, page, 2400)?;
-    if control.cancel.load(Ordering::SeqCst) {
-        return Ok(String::new());
-    }
-    let (python, script) = ocr_command();
-    let (tx, rx) = channel();
-    let progress = progress.clone();
-    let output = std::thread::spawn(move || {
-        let mut text = String::new();
-        for message in rx {
-            match message {
-                OcrMsg::Success { text: result, .. } => text = result,
-                OcrMsg::Progress(status) => {
-                    let _ = progress.send(IndexMessage::Progress(status));
-                }
-                OcrMsg::Error(error) => return Err(format!("Page {page}: {error}")),
-            }
-        }
-        Ok::<_, String>(text)
-    });
-    // Shared runner drains both pipes and kills its process group on cancellation.
-    run_png_ocr(
-        png,
-        (python, script),
-        engine.arg_name().into(),
-        None,
-        true,
-        control.clone(),
-        tx,
-    );
-    output
-        .join()
-        .map_err(|_| "OCR output reader stopped".to_owned())?
-}
-
 impl PdfEditorState {
-    pub(super) fn navigation_open(&self) -> bool {
-        self.navigation.mode.is_some()
-    }
-
     pub(super) fn reset_navigation(&mut self) {
-        self.navigation = PdfNavigation::default();
+        self.navigation.cancel();
+        self.navigation.text.clear();
+        self.navigation.outline.clear();
+        self.navigation.error = None;
+        self.navigation.attempted = false;
+        self.navigation.result_cache = None;
     }
 
-    /// Returns whether Escape was handled by the navigation panel.
     pub(super) fn navigation_shortcuts(&mut self, ctx: &egui::Context) -> bool {
         self.navigation.poll(ctx);
-        let find = ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::F));
-        let contents = !ctx.wants_keyboard_input()
-            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::T));
-        if find || contents {
-            self.navigation.open(if find {
-                NavigationMode::Find
-            } else {
-                NavigationMode::Contents
-            });
+        if !self.navigation.attempted && self.info_job.is_none() {
+            self.navigation
+                .start(self.path.clone(), self.page_count, ctx);
         }
-        if self.navigation.mode.is_some()
+        if ctx.input_mut(|input| input.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
+            self.navigation.right = Some(RightTab::Find);
+            self.navigation.focus_find = true;
+        }
+        if !ctx.wants_keyboard_input()
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::T))
+        {
+            self.navigation.left = LeftTab::Contents;
+            self.navigation.focus_contents = true;
+        }
+        if self.navigation.right.is_some()
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
         {
-            self.navigation.mode = None;
+            self.navigation.right = None;
             return true;
         }
         false
     }
 
     pub(super) fn navigation_buttons(&mut self, ui: &mut egui::Ui) {
-        if ui.button("Contents [T]").clicked() {
-            self.navigation.open(NavigationMode::Contents);
-        }
         if ui.button("Find [Ctrl+F]").clicked() {
-            self.navigation.open(NavigationMode::Find);
+            self.navigation.right = Some(RightTab::Find);
+            self.navigation.focus_find = true;
+        }
+        if ui.button("OCR").clicked() {
+            self.navigation.right = Some(RightTab::Ocr);
         }
     }
 
-    pub(super) fn render_navigation(&mut self, ctx: &egui::Context) {
-        let Some(mode) = self.navigation.mode else {
+    pub(super) fn render_right_bar(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        palette: &little_clip_core::palette::AppPalette,
+    ) {
+        let Some(tab) = self.navigation.right else {
             return;
         };
-        if !self.navigation.attempted
-            && self.navigation.worker.is_none()
-            && self.navigation.error.is_none()
+        let tabs = [
+            Tab::new(RightTab::Find, "Find").icon(Icon::Search),
+            Tab::new(RightTab::Ocr, "OCR").icon(Icon::Text),
+        ];
+        if let Some(tab) = TabBar::new("pdf-right-tabs", tab, &tabs, palette)
+            .equal_widths()
+            .show(ui)
         {
-            self.navigation
-                .start(self.path.clone(), self.page_count, false, ctx);
+            self.navigation.right = Some(tab);
+            self.navigation.focus_find = tab == RightTab::Find;
         }
-        let mut open = true;
-        let mut destination = None;
-        egui::Window::new(if mode == NavigationMode::Contents {
-            "PDF Contents"
-        } else {
-            "Find in PDF"
-        })
-        .id(egui::Id::new("pdf-navigation"))
-        .open(&mut open)
-        .collapsible(false)
-        .resizable(false)
-        .default_width(460.0)
-        .show(ctx, |ui| {
-            self.navigation.render_controls(
-                ui,
-                ctx,
-                &self.path,
-                self.page_count,
-                self.edit_in_progress,
-            );
-            destination = self.navigation.render_results(ui, ctx);
-            if let Some(page) = self.selected_page.filter(|_| mode == NavigationMode::Find)
-                && let Some(text) = self.navigation.text.get(page - 1)
-            {
-                ui.collapsing("Selected page text", |ui| {
-                    if ui.button("Copy page text").clicked() {
-                        ui.output_mut(|out| out.copied_text = text.clone());
-                    }
-                    egui::ScrollArea::vertical()
-                        .max_height(120.0)
-                        .show(ui, |ui| {
-                            ui.label(text);
-                        });
-                });
-            }
-        });
-        if let Some(page) = destination.filter(|page| *page > 0 && *page <= self.page_count) {
-            self.selected_page = Some(page);
-            if mode == NavigationMode::Contents {
-                self.navigation.mode = None;
-            }
-        } else if !open {
-            self.navigation.mode = None;
+        ui.add_space(crate::ui_ext::SPACE_SM);
+        if ui.small_button("Hide panel").clicked() {
+            self.navigation.right = None;
         }
+        match self.navigation.right {
+            Some(RightTab::Find) => {
+                if self.navigation.worker.is_some() {
+                    ui.spinner();
+                    ui.label("Reading document text…");
+                }
+                if let Some(error) = &self.navigation.error {
+                    ui.label(error);
+                }
+                if let Some(page) = self.navigation.render_find(ui, ctx) {
+                    self.selected_page = Some(page);
+                }
+            }
+            Some(RightTab::Ocr) => self.render_pdf_ocr_controls(ui),
+            None => {}
+        }
+    }
+
+    fn render_pdf_ocr_controls(&mut self, ui: &mut egui::Ui) {
+        ui.label("Tesseract · searchable PDF");
+        ui.label(
+            "Adds invisible text beneath the page content. Native text and images are preserved.",
+        );
+        ui.label("Language (installed Tesseract code)");
+        ui.add(
+            egui::TextEdit::singleline(&mut self.document_tools.ocr_language)
+                .hint_text("eng")
+                .desired_width(f32::INFINITY),
+        );
+        if self.document_tools.ocr_busy() {
+            ui.spinner();
+            if ui.button("Cancel OCR").clicked() {
+                self.document_tools.cancel_ocr();
+            }
+        } else if ui
+            .add_enabled(
+                !self.edit_in_progress && self.info_job.is_none() && self.page_count > 0,
+                egui::Button::new("Add text layer to PDF"),
+            )
+            .clicked()
+        {
+            self.start_pdf_ocr();
+        }
+        ui.label(&self.document_tools.ocr_status);
+        ui.label("The searchable copy is saved beside the source and opens here automatically.");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn contents_enter_navigates_and_escape_dismisses_find_before_viewer() {
-        let ctx = egui::Context::default();
-        let palette =
-            crate::ui_appearance::palette(little_clip_core::config::WorkbenchAppearance::Dark);
-        let mut state = PdfEditorState::without_jobs(PathBuf::from("fixture.pdf"));
-        state.page_count = 3;
-        state.navigation.indexed = true;
-        state.navigation.attempted = true;
-        state.navigation.outline = vec![
-            PdfOutlineEntry {
-                title: "Introduction".into(),
-                page: 1,
-                depth: 0,
-            },
-            PdfOutlineEntry {
-                title: "Rendering".into(),
-                page: 3,
-                depth: 0,
-            },
-        ];
-        let mut close = false;
-        {
-            let mut frame = |key, modifiers| {
-                let _ = ctx.run(
-                    egui::RawInput {
-                        modifiers,
-                        events: vec![egui::Event::Key {
-                            key,
-                            physical_key: None,
-                            pressed: true,
-                            repeat: false,
-                            modifiers,
-                        }],
-                        ..Default::default()
-                    },
-                    |ctx| {
-                        egui::CentralPanel::default()
-                            .show(ctx, |ui| state.render_ui(ui, ctx, &palette, &mut close));
-                    },
-                );
-            };
-            frame(egui::Key::T, egui::Modifiers::NONE);
-            frame(egui::Key::R, egui::Modifiers::NONE);
-            frame(egui::Key::Delete, egui::Modifiers::NONE);
-            frame(egui::Key::ArrowDown, egui::Modifiers::NONE);
-            frame(egui::Key::Enter, egui::Modifiers::NONE);
-            frame(egui::Key::F, egui::Modifiers::CTRL);
-            frame(egui::Key::Escape, egui::Modifiers::NONE);
-        }
-        assert_eq!(state.selected_page, Some(3));
-        assert!(!state.edit_in_progress);
-        assert!(!close);
-        assert!(state.navigation.mode.is_none());
-        let _ = ctx.run(
-            egui::RawInput {
-                events: vec![egui::Event::Key {
-                    key: egui::Key::Escape,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-                ..Default::default()
-            },
-            |ctx| {
-                egui::CentralPanel::default()
-                    .show(ctx, |ui| state.render_ui(ui, ctx, &palette, &mut close));
-            },
-        );
-        assert!(close);
-    }
-
-    #[test]
-    fn cancel_keeps_partial_text_without_automatically_restarting_index() {
-        let ctx = egui::Context::default();
-        let mut state = PdfEditorState::without_jobs(PathBuf::from("fixture.pdf"));
-        state.page_count = 1;
-        state.navigation.mode = Some(NavigationMode::Find);
-        state.navigation.attempted = true;
-        state.navigation.text = vec!["recognized so far".into()];
-        let control = Arc::new(ImageToolProcessControl::new());
-        state.navigation.control = Some(control.clone());
-        state.navigation.cancel();
-        let _ = ctx.run(egui::RawInput::default(), |ctx| {
-            state.render_navigation(ctx)
-        });
-        assert!(control.cancel.load(Ordering::SeqCst));
-        assert!(state.navigation.worker.is_none());
-        assert_eq!(state.navigation.text[0], "recognized so far");
-        state.reset_navigation();
-        assert!(state.navigation.text.is_empty());
-        assert!(!state.navigation.attempted);
-    }
-
-    #[test]
-    fn completion_drains_last_page_before_releasing_message_receiver() {
-        let jobs = BackgroundJobs::new(1, 1);
-        let mut navigation = PdfNavigation::default();
-        navigation.text = vec![String::new()];
-        let (tx, rx) = channel();
-        navigation.messages = Some(rx);
-        navigation.worker = Some(jobs.submit(Duration::MAX, move || {
-            tx.send(IndexMessage::Page(1, "last page".into())).unwrap();
-            Ok(())
-        }));
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
-        while navigation.worker.is_some() && std::time::Instant::now() < deadline {
-            navigation.poll(&egui::Context::default());
-            std::thread::yield_now();
-        }
-        assert!(navigation.indexed);
-        assert_eq!(navigation.text, vec!["last page"]);
-    }
-
     #[test]
     fn fuzzy_contents_accepts_subsequence_and_unicode() {
         assert!(fuzzy_score("Chapter Two: Rendering", "chtr rnd").is_some());
@@ -612,14 +458,27 @@ mod tests {
     #[test]
     fn search_keeps_page_boundaries_and_case_insensitive_matches() {
         let mut navigation = PdfNavigation::default();
-        navigation.mode = Some(NavigationMode::Find);
-        navigation.text = vec!["Hello HELLO".into(), "Other".into(), "hello again".into()];
         navigation.query = "hello".into();
-        let results = navigation.results();
+        navigation.text = vec!["Hello HELLO".into(), "Other".into(), "hello again".into()];
+        let results = navigation.find_results();
         assert_eq!(
             results.iter().map(|row| row.0).collect::<Vec<_>>(),
             vec![1, 3]
         );
         assert!(results[0].1.contains("2 matches"));
+    }
+    #[test]
+    fn document_invalidation_keeps_tabs_queries_and_discards_old_index() {
+        let mut state = PdfEditorState::without_jobs(PathBuf::from("fixture.pdf"));
+        state.navigation.left = LeftTab::Contents;
+        state.navigation.right = Some(RightTab::Ocr);
+        state.navigation.query = "keep query".into();
+        state.navigation.text = vec!["old text".into()];
+        state.reset_navigation();
+        assert!(state.navigation.left == LeftTab::Contents);
+        assert!(state.navigation.right == Some(RightTab::Ocr));
+        assert_eq!(state.navigation.query, "keep query");
+        assert!(state.navigation.text.is_empty());
+        assert!(!state.navigation.attempted);
     }
 }

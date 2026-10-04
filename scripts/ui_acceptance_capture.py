@@ -66,6 +66,7 @@ KEY_ACTIONS = {
     "escape": ["-k", "Escape"],
     "down": ["-k", "Down"],
     "ctrl-f": ["-M", "ctrl", "-k", "f", "-m", "ctrl"],
+    "ctrl-c": ["-M", "ctrl", "-k", "c", "-m", "ctrl"],
 }
 
 
@@ -1291,8 +1292,8 @@ def capture_workbench(
     report["actual_logical_size"] = list(logical_size)
     app_env = niri_env | {"WAYLAND_DEBUG": "client"}
     pointer_helper: Path | None = None
-    if (args.click is not None or args.click_after_key_action is not None
-            or args.move is not None or args.drag is not None or args.scroll is not None):
+    if any(action is not None for action in (args.click, args.click_after_key_action,
+                                            args.move, args.drag, args.scroll, args.right_click)):
         verify_private_wayland_target(niri_env, config["runtime"])
         pointer_helper = build_private_virtual_pointer(output)
         probe = run_checked([str(pointer_helper), "probe"], env=niri_env)
@@ -1366,6 +1367,11 @@ def capture_workbench(
             send_private_scroll()
     elif args.scroll is not None:
         send_private_scroll()
+    if args.right_click is not None and pointer_helper is not None:
+        x, y = args.right_click
+        run_checked([str(pointer_helper), "right-click", str(logical_size[0]), str(logical_size[1]), str(x), str(y)], env=niri_env)
+        report["pointer_input"]["right_click"] = {"x": x, "y": y, "button": "right"}
+        time.sleep(args.click_delay_ms / 1000)
     if args.drag is not None and pointer_helper is not None:
         report["pointer_input"]["drags"] = []
         for start_x, start_y, end_x, end_y in args.drag:
@@ -1435,6 +1441,9 @@ def capture_workbench(
             niri_bin, niri_env, output / "after-actions.png"
         )
     time.sleep(args.settle_ms / 1000)
+    # Niri's screenshot action replaces the clipboard with the screen PNG.
+    # Capture the application's payload before taking any post-action screenshots.
+    capture_pdf_clipboard(args, output, niri_env, report)
     final_windows = own_windows(niri_bin, niri_env, {app.pid})
     report["final_windows"] = final_windows
     capture_name = f"image-{args.image_tool}" if args.image_tool else "settled"
@@ -1550,6 +1559,24 @@ def capture_workbench(
                 )
 
 
+def capture_pdf_clipboard(args, output: Path, env: dict[str, str], report: dict[str, Any]) -> None:
+    if args.clipboard_mime is None:
+        return
+    verify_private_wayland_target(env, output / "runtime")
+    result = subprocess.run(["wl-paste", "--no-newline", "--type", args.clipboard_mime],
+                            env=env, capture_output=True, timeout=5)
+    if result.returncode:
+        raise RuntimeError(f"private clipboard read failed: {result.stderr.decode(errors='replace')}")
+    suffix = ".png" if args.clipboard_mime == "image/png" else ".txt"
+    artifact = output / ("clipboard" + suffix)
+    artifact.write_bytes(result.stdout)
+    if args.clipboard_mime == "image/png" and not result.stdout.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise RuntimeError("private clipboard did not contain a PNG")
+    if args.expect_clipboard_text is not None and result.stdout.decode() != args.expect_clipboard_text:
+        raise RuntimeError(f"private clipboard text mismatch: {result.stdout.decode()!r}")
+    report["clipboard"] = {"mime": args.clipboard_mime, "bytes": len(result.stdout), "artifact": str(artifact)}
+
+
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", required=True, type=Path, help="new directory for report, logs, and PNG captures")
@@ -1632,6 +1659,9 @@ def create_parser() -> argparse.ArgumentParser:
         help="place --scroll after this one-based --click number (default: after all clicks)",
     )
     parser.add_argument("--audio", type=Path, help="optional existing audio fixture")
+    parser.add_argument("--right-click", nargs=2, type=int, metavar=("X", "Y"), help="copy a PDF image through the private pointer")
+    parser.add_argument("--clipboard-mime", choices=("text/plain", "image/png"), help="capture the private PDF clipboard after actions")
+    parser.add_argument("--expect-clipboard-text", help="require an exact private clipboard text payload")
     parser.add_argument("--pdf", type=Path, help="optional existing PDF fixture")
     parser.add_argument("--midi", type=Path, help="optional existing MIDI fixture")
     parser.add_argument(
@@ -1683,6 +1713,17 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--binary", type=Path, help="workbench binary (default: target/debug/clip-workbench)")
     parser.add_argument("--settle-ms", type=int, default=500, help="settling delay before second capture (default: 500)")
     return parser
+
+
+def validate_pdf_clipboard(args: argparse.Namespace) -> None:
+    if (args.right_click is not None or args.clipboard_mime is not None) and args.pdf is None:
+        raise SystemExit("PDF clipboard acceptance requires --pdf")
+    if args.clipboard_mime and (args.capture_after_actions or args.capture_after_key_actions):
+        raise SystemExit("Clipboard checks must precede Niri's post-action screenshots; use the settled capture")
+    if args.right_click is not None and not (0 <= args.right_click[0] < args.width and 0 <= args.right_click[1] < args.height):
+        raise SystemExit("--right-click coordinates must be inside the requested output")
+    if args.expect_clipboard_text is not None and args.clipboard_mime != "text/plain":
+        raise SystemExit("--expect-clipboard-text requires --clipboard-mime text/plain")
 
 
 def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
@@ -1802,6 +1843,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
         )
     if args.image_tool and not args.image:
         raise SystemExit("--image-tool requires --image")
+    validate_pdf_clipboard(args)
     if args.click is not None and any(
         not (0 <= x < args.width) or not (0 <= y < args.height) for x, y in args.click
     ):
@@ -1846,7 +1888,7 @@ def validate_cli(args: argparse.Namespace, repo: Path) -> Path:
             or (args.audio and all(action in {"c", "ctrl-z", "ctrl-y", "ctrl-s", *map(str, range(10))} for action in args.key_action))
             or (args.fake_text_preview and all(action in {"f3", "ctrl-f"} for action in args.key_action))
             or (args.fake_node_machine and all(action in {"ctrl-f", "ctrl-s", "ctrl-z", "ctrl-y", "ctrl-shift-z", "enter"} for action in args.key_action))
-            or ((args.fake_pdf_preview or args.pdf) and all(action in {"r", "t", "ctrl-f", "enter", "escape", "down"} for action in args.key_action))
+            or ((args.fake_pdf_preview or args.pdf) and all(action in {"r", "t", "ctrl-f", "ctrl-c", "enter", "escape", "down"} for action in args.key_action))
             or ((args.fake_diff_preview or args.fake_image_diff_preview)
                 and all(action == "enter" for action in args.key_action))
         ):
