@@ -1,0 +1,402 @@
+# Supported Types — Viewable
+
+`[x]` means the app can currently open the format for viewing or playback. Some current formats rely on external tools such as FFmpeg, ExifTool, ImageMagick, or librsvg. Unchecked entries are candidates for future viewers. Extensions that are ambiguous are described by their intended format so they are not confused with unrelated uses.
+
+- [ ] Images
+  - [ ] Camera RAW
+    - [x] `.arw` — Sony
+    - [x] `.cr2`, `.cr3` — Canon
+    - [x] `.dng` — Adobe Digital Negative
+    - [x] `.nef` — Nikon
+    - [x] `.orf` — Olympus / OM System
+    - [x] `.pef` — Pentax
+    - [x] `.raf` — Fujifilm
+    - [x] `.raw`, `.srf` — generic / Sony RAW
+    - [x] `.rw2` — Panasonic
+    - [x] `.srw` — Samsung
+    - [ ] `.3fr`, `.fff` — Hasselblad
+    - [ ] `.ari` — ARRI
+    - [ ] `.bay` — Casio
+    - [ ] `.cap`, `.iiq` — Phase One
+    - [ ] `.dcs`, `.dcr`, `.drf`, `.k25`, `.kdc` — Kodak
+    - [ ] `.erf` — Epson
+    - [ ] `.gpr` — GoPro
+    - [ ] `.mef` — Mamiya
+    - [ ] `.mrw` — Minolta
+    - [ ] `.nrw` — Nikon
+    - [ ] `.rwl` — Leica
+    - [ ] `.x3f` — Sigma
+  - [ ] Raster and vector images
+    - [x] `.avif`
+    - [x] `.bmp`
+    - [x] `.dds`
+    - [x] `.exr`
+    - [x] `.ff` — Farbfeld
+    - [x] `.gif` — still and animated
+    - [x] `.hdr`
+    - [x] `.heic`, `.heif`
+    - [x] `.ico`
+    - [x] `.jpg`, `.jpeg`
+    - [x] `.png`, `.apng`
+    - [x] `.pnm`, `.pbm`, `.pgm`, `.ppm`
+    - [x] `.qoi`
+    - [x] `.svg` — requires `rsvg-convert`
+    - [x] `.tga`
+    - [x] `.tif`, `.tiff`
+    - [x] `.webp` — still and animated
+    - [ ] `.jxl` — JPEG XL
+    - [ ] `.jp2`, `.j2k`, `.jpf` — JPEG 2000
+    - [ ] `.psd` — Photoshop
+    - [ ] `.xcf` — GIMP
+    - [ ] `.ai` — Adobe Illustrator
+    - [ ] `.cdr` — CorelDRAW
+    - [ ] `.eps` — Encapsulated PostScript
+    - [ ] `.emf`, `.wmf` — Enhanced / Windows Metafile
+- [ ] Fonts
+  - [ ] `.ttf`, `.ttc` — TrueType font / collection
+  - [ ] `.otf`, `.otc` — OpenType font / collection
+  - [ ] `.woff`, `.woff2` — Web Open Font Format
+  - [ ] `.eot` — Embedded OpenType
+  - [ ] `.pfa`, `.pfb` — PostScript Type 1
+  - [ ] `.bdf`, `.pcf` — bitmap fonts
+  - [ ] `.fon`, `.fnt` — legacy bitmap / Windows font resources
+  - [ ] `.sfd` — FontForge source
+- [ ] Video
+  - [ ] Standard video
+    - [x] `.avi`
+    - [x] `.flv`
+    - [x] `.m4v`
+    - [x] `.mkv`
+    - [x] `.mov`
+    - [x] `.mp4`
+    - [x] `.ogv`
+    - [x] `.ts`
+    - [x] `.webm`
+    - [x] `.wmv`
+    - [ ] `.3gp`
+    - [ ] `.m2ts`, `.mts`
+    - [ ] `.mpeg`, `.mpg`
+    - [ ] `.vob`
+  - [ ] 360-degree camera video and metadata
+    - [ ] `.insv` — Insta360 video
+    - [ ] `.insp` — Insta360 photo
+  - [ ] Subtitle and caption files
+    - [ ] `.srt` — SubRip
+    - [ ] `.ass`, `.ssa` — Advanced SubStation Alpha / SubStation Alpha
+    - [ ] `.vtt` — WebVTT
+- [ ] Audio
+  - [x] `.aif`, `.aiff`
+  - [x] `.aac`, `.m4a`
+  - [x] `.flac`
+  - [x] `.mp3`
+  - [x] `.oga`, `.ogg`, `.opus`
+  - [x] `.wav`, `.wave`
+  - [ ] `.ac3`
+  - [ ] `.ape`
+  - [ ] `.mpc`
+  - [ ] `.tta`
+  - [ ] `.wv`
+  - [ ] `.wma`
+- [ ] Documents and text
+  - [x] `.pdf`
+  - [ ] `.ics` — iCalendar events and calendars
+  - [ ] Plain text
+    - [x] `.txt`, `.text`
+    - [x] `.log` — plain text logs
+  - [ ] Markup and structured data
+    - [x] `.html`, `.htm`, `.xhtml` — HTML syntax highlighting
+    - [x] `.md`, `.markdown` — Markdown syntax highlighting
+    - [x] `.json` — JSON syntax highlighting
+    - [x] `.toml` — TOML syntax highlighting
+    - [x] `.xml`, `.svg` — XML syntax highlighting
+    - [x] `.yaml`, `.yml` — YAML syntax highlighting
+    - [ ] `.kdl`
+    - [ ] `.xsd` — XML Schema
+  - [ ] Code (language families follow the [programming language guide](https://opguides.info/engineering/programming/languages/))
+    - [ ] Low-level and systems languages
+      - [x] `.c`, `.h` — C
+      - [x] `.cpp`, `.cc`, `.cxx`, `.hpp`, `.hxx`, `.c++` — C++
+      - [x] `.rs` — Rust
+      - [x] `.py`, `.pyw` — Python (also used by MicroPython and CircuitPython)
+      - [ ] `.asm`, `.s` — Assembly (processor/toolchain dialects)
+      - [ ] `.zig` — Zig
+      - [ ] `.nim` — Nim
+      - [ ] `.ll` — LLVM IR
+    - [ ] Mid-level languages
+      - [ ] `.red` — Red
+      - [ ] `.d` — D
+      - [ ] `.odin` — Odin
+    - [ ] High-level and general-purpose languages
+      - [x] `.java` — Java
+      - [ ] `.kt`, `.kts` — Kotlin
+      - [x] `.js`, `.mjs`, `.cjs`, `.jsx` — JavaScript
+      - [ ] `.coffee` — CoffeeScript
+      - [x] `.ts`, `.tsx` — TypeScript
+      - [x] `.php` — PHP (Hack also commonly uses `.php`)
+      - [x] `.rb` — Ruby
+      - [ ] `.raku`, `.rakumod` — Raku
+      - [x] `.go` — Go
+      - [ ] `.hx` — Haxe
+      - [ ] `.cr` — Crystal
+      - [ ] Noulith source (extension varies)
+      - [ ] `.wasm`, `.wat` — WebAssembly binary / text formats
+      - [ ] `.ex`, `.exs` — Elixir
+      - [ ] `.erl`, `.hrl` — Erlang
+      - [ ] `.elm` — Elm
+      - [ ] `.re`, `.rei` — ReScript
+      - [ ] `.purs` — PureScript
+      - [x] `.swift` — Swift
+      - [ ] `.cs` — C#
+      - [ ] `.dart` — Dart
+      - [ ] `.hack` — Hack (often shares `.php` with PHP)
+      - [ ] `.scala`, `.sc` — Scala
+    - [ ] Older and historical languages
+      - [ ] `.fth`, `.4th` — Forth
+      - [ ] `.cob`, `.cbl` — COBOL
+      - [ ] `.f`, `.for`, `.f90`, `.f95` — Fortran
+      - [ ] `.pas`, `.pp` — Pascal
+      - [ ] `.bas`, `.bi` — BASIC
+      - [ ] `.m`, `.mm` — Objective-C; `.m` is also used by MATLAB / Octave
+      - [ ] `.vb`, `.vbs` — Visual Basic
+      - [ ] `.apl` — APL
+    - [ ] Scripting languages
+      - [x] `.lua` — Lua
+      - [ ] `.moon` — MoonScript
+      - [ ] `.ahk`, `.ah2` — AutoHotkey
+      - [ ] Cyber source (extension varies)
+      - [ ] `.wren` — Wren
+      - [ ] `.tcl` — Tcl
+      - [ ] `.pl`, `.pm` — Perl; `.pl` is also used by Prolog
+      - [ ] `.r` — R
+      - [ ] `.jl` — Julia
+      - [ ] `.groovy`, `.gradle` — Groovy / Gradle scripts
+    - [ ] Shell languages
+      - [x] `.sh`, `.bash`, `.zsh`, `.ksh` — POSIX-style shell / Bash / Zsh / KornShell
+      - [ ] `.fish` — Fish
+      - [ ] `.nu` — Nushell
+      - [ ] `.xsh` — Xonsh
+      - [ ] `.elv` — Elvish
+      - [ ] `.tcsh`, `.csh` — C Shell / tcsh
+      - [ ] Murex scripts (no conventional extension)
+      - [ ] Hilbish scripts (Lua-based; `.lua`)
+      - [ ] `.cmd`, `.bat` — Windows command scripts
+      - [ ] `.ps1`, `.psm1` — PowerShell
+    - [ ] Functional and logic languages
+      - [ ] `.hs`, `.lhs` — Haskell
+      - [ ] `.clj`, `.cljs`, `.cljc`, `.edn` — Clojure
+      - [ ] `.rkt`, `.scm`, `.ss` — Racket / Scheme
+      - [ ] `.lisp`, `.lsp`, `.cl` — Common Lisp
+      - [ ] `.el` — Emacs Lisp
+      - [ ] `.janet` — Janet
+      - [ ] `.u` — Unison
+      - [ ] `.roc` — Roc
+      - [ ] `.kk` — Koka
+      - [ ] `.fut` — Futhark
+      - [ ] `.ml`, `.mli` — OCaml / Standard ML
+      - [ ] `.fs`, `.fsi`, `.fsx` — F#
+      - [ ] `.idr` — Idris
+      - [ ] `.agda` — Agda
+      - [ ] `.lean` — Lean
+    - [ ] Domain-specific languages and interfaces
+      - [x] `.sql` — SQL
+      - [x] `.css`, `.scss`, `.sass`, `.less` — CSS and stylesheet languages
+      - [ ] `.vult` — Vult
+      - [ ] `.vhd`, `.vhdl` — VHDL
+      - [ ] `.scallop` — Scallop
+      - [ ] `.v` — Verilog / V / Coq-Rocq proof source (extension is ambiguous)
+      - [ ] `.wl`, `.wls` — Wolfram Language
+      - [ ] `.sol` — Solidity
+      - [ ] `.move` — Move
+      - [ ] `.proto` — Protocol Buffers
+      - [ ] `.thrift` — Apache Thrift IDL
+      - [ ] `.graphql`, `.gql` — GraphQL
+      - [ ] `.tf`, `.hcl` — Terraform / HCL
+      - [ ] `.nix` — Nix
+      - [ ] `.bzl`, `.bazel` — Bazel
+      - [ ] `.cmake` — CMake
+      - [ ] `.vim` — Vim script
+      - [ ] `.awk` — AWK
+    - [ ] Graphics and shader languages
+      - [ ] `.glsl`, `.vert`, `.frag` — GLSL
+      - [ ] `.hlsl` — HLSL
+      - [ ] `.metal` — Metal Shading Language
+    - [ ] Visual and node-based programming
+      - [ ] `.pd` — Pure Data patch
+      - [ ] `.maxpat` — Max/MSP patch
+      - [ ] vvvv project / patch (format varies by generation)
+      - [ ] `.toe`, `.tox` — TouchDesigner project/component
+      - [ ] `.sb3` — Scratch project archive
+      - [ ] `.blocks` — Blockly source (tool-specific)
+      - [ ] Node-RED flow export (JSON; `.json` text preview is already supported)
+      - [ ] n8n workflow export (JSON; `.json` text preview is already supported)
+    - [ ] Other programming formats and environments
+      - [ ] `.tex` — TeX / LaTeX
+      - [ ] Tasker task/profile export (format varies)
+      - [ ] Tool-specific visual project formats for tooll.io (no stable extension)
+      - [ ] `.vi` — LabVIEW virtual instrument
+    - [ ] Esoteric programming languages
+      - [ ] `.bf` — Brainfuck
+  - [ ] `.doc`
+  - [ ] `.docx`
+  - [ ] `.odt`
+  - [ ] `.rtf`
+  - [ ] `.epub`
+  - [ ] `.azw3` — Kindle Format 8
+  - [ ] `.mobi` — Mobipocket
+  - [ ] `.fb2` — FictionBook
+  - [ ] `.djvu`, `.djv` — scanned-document format
+  - [ ] `.ppt`, `.pptx`, `.odp`
+- [ ] Spreadsheets
+  - [x] `.csv`
+  - [x] `.ods`
+  - [x] `.tsv`
+  - [x] `.xls`, `.xlsx`, `.xlsb`
+- [ ] 3D and CAD
+  - [ ] Mesh models
+    - [x] `.glb` — glTF binary; mesh or splat content is detected when opened
+    - [x] `.gltf`
+    - [x] `.obj`
+    - [x] `.stl`
+    - [ ] `.wrl` — VRML model (Low Priority)
+    - [ ] `.x3d` — X3D model (Low Priority)
+    - [ ] `.3ds`
+    - [ ] `.dae`
+    - [ ] `.fbx`
+    - [ ] `.iges`
+    - [ ] `.step`, `.stp` — CAD / DesignaKnit use of `.stp`
+    - [ ] `.dxf` — CAD drawing interchange
+    - [ ] `.dwg` — AutoCAD drawing
+    - [ ] `.usd`, `.usdz`
+    - [ ] `.blend`
+  - [ ] Gaussian splats
+    - [x] `.glb` — Gaussian splat extension
+    - [x] `.ply` — Gaussian PLY
+    - [x] `.sog`
+    - [x] `.splat`
+    - [x] `.spz`
+  - [ ] PCB design and manufacturing
+    - [ ] `.gbr` — Gerber
+    - [ ] `.drl` — Excellon drill
+    - [ ] `.plt` — plotter / HPGL
+- [ ] 3D printing and fabrication
+  - [ ] `.3mf` — 3D Manufacturing Format
+  - [ ] `.amf` — Additive Manufacturing Format
+  - [ ] `.gcode`
+- [ ] Music and sound design
+  - [ ] MIDI and notation
+    - [x] `.mid`, `.midi` — piano-roll viewer
+    - [ ] `.mscz` — MuseScore compressed score
+    - [ ] `.orca` — ORCA live-coding music sequencer
+  - [ ] Synthesizer presets and patches
+    - [ ] `.sysx` — MIDI System Exclusive preset dump
+    - [ ] `.pgm` — MIDI program-change / synth patch bank (extension conflicts with supported PGM grayscale images)
+    - [ ] `.pd` — Pure Data patch
+    - [ ] `.pj8` — synthesizer patch (device-specific)
+  - [ ] Samplers and multisample instruments
+    - [ ] `.dspreset`
+    - [ ] `.nki` — Kontakt instrument
+    - [ ] `.sf2` — SoundFont 2
+    - [ ] `.sfz`
+- [ ] Radio, RF, and embedded-device captures
+  - [ ] E-ink note devices
+    - [ ] `.note`
+    - [ ] `.mark`
+    - [ ] `.rm`
+    - [ ] `.lines`
+  - [ ] NanoVNA
+    - [ ] `.s1p`, `.s2p` — Touchstone network parameter data
+  - [ ] Sigrok and logic analyzers
+    - [ ] `.sr` — sigrok session
+    - [ ] `.sal` — Saleae Logic capture
+  - [ ] Signal analysis
+    - [ ] `.vcfd` — VCF dump
+    - [ ] `.sigmf-*` — SigMF data and metadata sidecars
+    - [ ] `.wfm` — oscilloscope waveform
+    - [ ] `.chirp` — CHIRP radio configuration
+    - [ ] `.icf` — Icom radio configuration
+  - [ ] Sub-GHz, NFC, infrared, and access tokens
+    - [ ] `.sub` — Flipper Zero Sub-GHz capture
+    - [ ] `.nfc`
+    - [ ] `.rfid`
+    - [ ] `.trace`, `.pm3` — Proxmark trace/capture
+    - [ ] `.ir` — Flipper Zero infrared capture
+    - [ ] `.ibtn` — Flipper Zero iButton data
+  - [ ] CAN bus logs (SavvyCAN-compatible families; CSV deliberately omitted because it is already listed under spreadsheets)
+    - [ ] `.asc` — Vector CANalyzer ASCII
+    - [ ] `.avc`, `.evc`, `.qcc` — CAN-DO logs
+    - [ ] `.blf` — Vector CANalyzer binary
+    - [ ] `.can` — Microchip / CAN-DO log
+    - [ ] `.crt`, `.crtd` — CRTD / OVMS
+    - [ ] `.trc` — IXXAT / PCAN trace
+    - [ ] `.trace` — Vector CANalyzer trace (same extension as Proxmark trace)
+- [ ] Networking and messages
+  - [ ] `.pcap`
+  - [ ] `.pcapng`
+  - [ ] `.eml` — email message
+- [ ] Sewing, embroidery, and cutting machines
+  - [ ] Machine embroidery stitch formats
+    - [ ] `.dst` — Tajima
+    - [ ] `.emb` — Wilcom
+    - [ ] `.exp` — Melco
+    - [ ] `.hus` — Husqvarna
+    - [ ] `.jef` — Janome
+    - [ ] `.pec` — Brother stitch data
+    - [ ] `.pes` — Brother / Babylock
+    - [ ] `.pcs` — Pfaff
+    - [ ] `.sew` — Janome
+    - [ ] `.shv` — Husqvarna Viking
+    - [ ] `.ud1`, `.u01` — Barudan
+    - [ ] `.vp3` — Husqvarna Viking / Pfaff
+    - [ ] `.xxx` — Singer
+  - [ ] Cross-stitch patterns
+    - [ ] `.oxs`
+    - [ ] `.pat` — cross-stitch pattern
+  - [ ] Cutting and plotter projects
+    - [ ] `.fcm` — Brother ScanNCut
+    - [ ] `.studio`, `.studio3` — Silhouette Studio
+- [ ] Geographic data and GPS tracks
+  - [ ] `.fit` — activity / GPS recording
+  - [ ] `.geojson`
+  - [ ] `.gpx`
+  - [ ] `.kml`, `.kmz`
+  - [ ] `.tcx`
+- [ ] Genealogy
+  - [ ] `.ged` — GEDCOM genealogy data
+  - [ ] `.gdz` — genealogy database/archive
+- [ ] Chess
+  - [ ] `.pgn` — Portable Game Notation
+  - [ ] `.cbh`, `.2cbh` — ChessBase database
+- [ ] Papercraft
+  - [ ] `.pdo` — Pepakura Designer
+- [ ] Screenwriting
+  - [ ] `.fdx` — Final Draft
+- [ ] Astronomy and scientific imaging
+  - [ ] `.xisf` — Extensible Image Serialization Format
+- [ ] Brewing recipes
+  - [ ] `.bsmx` — BeerSmith
+  - [ ] `.beerxml`, `.xml` — BeerXML recipe data (XML is also used by other types)
+- [ ] Comics and graphic novels
+  - [ ] `.cbr` — Comic Book RAR archive
+  - [ ] `.cb7` — Comic Book 7-Zip archive
+  - [ ] `.cbt` — Comic Book TAR archive
+  - [ ] `.cbz` — Comic Book ZIP archive
+  - [ ] `.cbx` — comic-book archive (format varies by application)
+- [ ] Executables and compiled binaries
+  - [ ] `.apk` — Android application package
+  - [ ] `.class` — Java bytecode class
+  - [ ] `.dll` — Windows dynamic-link library
+  - [ ] `.elf` — Executable and Linkable Format binary (extension is optional)
+  - [ ] `.exe` — Windows executable
+  - [ ] `.jar` — Java application/archive
+  - [ ] `.o` — Unix object file
+  - [ ] `.obj` — Windows/COFF object file (extension conflicts with supported Wavefront OBJ meshes)
+  - [ ] `.so` — ELF shared object library
+- [ ] Archives
+  - [ ] `.7z`
+  - [ ] `.bz2`
+  - [ ] `.gz`
+  - [ ] `.rar`
+  - [ ] `.tar`
+  - [ ] `.xz`
+  - [ ] `.zip`
+  - [ ] `.zst`
