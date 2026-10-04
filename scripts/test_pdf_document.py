@@ -1,12 +1,15 @@
 """Integration checks for native objects and independently searchable PDF OCR."""
+import hashlib
 import io
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import pymupdf as pdf
 from PIL import Image, ImageDraw, ImageFont
-from pdf_document import image_png, page_layout, searchable_pdf
+from pdf_document import image_png, page_layout, searchable_pdf, matching_ocr_copy, OCR_SOURCE_HASH_KEY
 
 
 class PdfDocumentTests(unittest.TestCase):
@@ -68,12 +71,20 @@ class PdfDocumentTests(unittest.TestCase):
                 document.new_page(width=300, height=400)  # Blank pages must not stop OCR.
                 document.set_toc([[1, "Chapter One", 1]])
                 document.set_metadata({"title": "Preserve this title"})
+                _, info = document.xref_get_key(-1, "Info")
+                document.xref_set_key(int(info.split()[0]), "ExistingCustomField", pdf.get_pdf_str("Keep this value"))
                 document.save(source)
             searchable_pdf(source, output, "eng")
+            self.assertTrue(matching_ocr_copy(source, output))
             with pdf.open(source) as original, pdf.open(output) as searchable:
+                self.assertFalse(page_layout(original[0])["ocr_complete"])
+                self.assertTrue(page_layout(searchable[0])["ocr_complete"])
+                self.assertEqual(searchable.xref_get_key(-1, "Info/" + OCR_SOURCE_HASH_KEY),
+                                 ("string", hashlib.sha256(source.read_bytes()).hexdigest()))
                 self.assertEqual(len(searchable), 2)
                 self.assertEqual(searchable.get_toc(), original.get_toc())
                 self.assertEqual(searchable.metadata["title"], original.metadata["title"])
+                self.assertEqual(searchable.xref_get_key(-1, "Info/ExistingCustomField"), ("string", "Keep this value"))
                 self.assertEqual(searchable[0].rotation, 90)
                 text = searchable[0].get_text()
                 self.assertIn("Amber lighthouse", text)
@@ -82,8 +93,51 @@ class PdfDocumentTests(unittest.TestCase):
                 self.assertEqual(original[0].get_pixmap().samples, searchable[0].get_pixmap().samples)
                 self.assertEqual(Image.open(io.BytesIO(image_png(searchable, searchable[0], 0))).convert("RGB").tobytes(), scan.tobytes())
             searchable_pdf(output, repeated, "eng")
+            self.assertTrue(matching_ocr_copy(output, repeated))
+            self.assertFalse(matching_ocr_copy(source, repeated))
             with pdf.open(repeated) as searchable:
                 self.assertEqual(searchable[0].get_text().count("Amber lighthouse"), 1)
+
+    def test_hash_reuse_handles_sources_without_metadata_and_checks_exact_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, candidate, legacy = [Path(temporary) / name for name in ("source.pdf", "ocr.pdf", "legacy.pdf")]
+            with pdf.open() as document:
+                document.new_page(width=300, height=400)
+                document.save(source)
+            shutil.copyfile(source, legacy)
+            self.assertFalse(matching_ocr_copy(source, legacy))
+            searchable_pdf(source, candidate, "eng")
+            with pdf.open(candidate) as document:
+                self.assertEqual(document.xref_get_key(-1, "Info/" + OCR_SOURCE_HASH_KEY),
+                                 ("string", hashlib.sha256(source.read_bytes()).hexdigest()))
+            with patch.object(pdf.Page, "get_pixmap", side_effect=AssertionError("reuse must not render pages")):
+                self.assertTrue(matching_ocr_copy(source, candidate))
+            renamed = Path(temporary) / "renamed.pdf"
+            shutil.copyfile(source, renamed)
+            self.assertTrue(matching_ocr_copy(renamed, candidate))
+            source.write_bytes(source.read_bytes() + b"\n% source bytes changed\n")
+            self.assertFalse(matching_ocr_copy(source, candidate))
+            self.assertFalse(matching_ocr_copy(source, Path(temporary) / "missing.pdf"))
+            legacy.write_bytes(b"not a PDF")
+            self.assertFalse(matching_ocr_copy(source, legacy))
+
+    def test_reuse_rejects_invalid_hash_metadata_and_missing_source(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, candidate = [Path(temporary) / name for name in ("source.pdf", "ocr.pdf")]
+            with pdf.open() as document:
+                document.new_page(width=300, height=400)
+                document.set_metadata({"title": "Preserve metadata"})
+                document.save(source)
+            for value in ("null", "123", pdf.get_pdf_str("invalid hash")):
+                with pdf.open(source) as document:
+                    _, info = document.xref_get_key(-1, "Info")
+                    document.xref_set_key(int(info.split()[0]), OCR_SOURCE_HASH_KEY, value)
+                    document.save(candidate)
+                self.assertFalse(matching_ocr_copy(source, candidate))
+                with pdf.open(candidate) as document:
+                    self.assertFalse(page_layout(document[0])["ocr_complete"])
+            source.unlink()
+            self.assertFalse(matching_ocr_copy(source, candidate))
 
 
 if __name__ == "__main__":

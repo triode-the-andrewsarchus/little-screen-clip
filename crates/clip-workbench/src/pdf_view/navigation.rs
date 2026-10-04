@@ -434,8 +434,15 @@ impl PdfEditorState {
             }
         } else if ui
             .add_enabled(
-                !self.edit_in_progress && self.info_job.is_none() && self.page_count > 0,
-                egui::Button::new("Add text layer to PDF"),
+                !self.edit_in_progress
+                    && self.info_job.is_none()
+                    && self.document_tools.layout.is_some()
+                    && !self.document_tools.ocr_complete,
+                egui::Button::new(if self.document_tools.ocr_complete {
+                    "Text layer already complete"
+                } else {
+                    "Add text layer to PDF"
+                }),
             )
             .clicked()
         {

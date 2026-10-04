@@ -170,6 +170,9 @@ pub struct PdfPageLayout {
     pub text: String,
     pub glyphs: Vec<PdfGlyph>,
     pub images: Vec<PdfImageElement>,
+    /// The document carries a valid source hash from a completed OCR operation.
+    #[serde(default)]
+    pub ocr_complete: bool,
 }
 
 /// A glyph's UTF-8 source range and normalized, rotated page bounds.

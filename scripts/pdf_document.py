@@ -5,8 +5,10 @@ Run with the application's nobg-venv interpreter. Requires PyMuPDF and Pillow;
 OCR also requires Tesseract and the chosen language's traineddata.
 """
 import argparse
+import hashlib
 import io
 import json
+import re
 from pathlib import Path
 import tempfile
 
@@ -19,6 +21,13 @@ except ImportError as error:
     ) from error
 from PIL import Image, ImageDraw
 from ocr import run_tesseract_pdf
+
+OCR_SOURCE_HASH_KEY = "LittleClipOCRSourceSHA256"
+
+
+def ocr_source_hash(document):
+    kind, value = document.xref_get_key(-1, "Info/" + OCR_SOURCE_HASH_KEY)
+    return value if kind == "string" and re.fullmatch(r"[0-9a-f]{64}", value) else None
 
 
 def normalized_rect(page, bounds):
@@ -45,7 +54,8 @@ def page_layout(page):
             offset += 1
     images = [{"index": index, "rect": normalized_rect(page, image["bbox"])}
               for index, image in enumerate(page.get_image_info())]
-    return {"text": "".join(pieces), "glyphs": glyphs, "images": images}
+    return {"text": "".join(pieces), "glyphs": glyphs, "images": images,
+            "ocr_complete": ocr_source_hash(page.parent) is not None}
 
 
 def image_png(document, page, index):
@@ -93,25 +103,54 @@ def add_ocr_layer(page, workspace, language):
         page.set_rotation(rotation)
 
 
+def source_sha256(source):
+    with open(source, "rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
 def searchable_pdf(source, output, language):
     import sys
+    original_hash = source_sha256(source)
     with pdf.open(source) as document, tempfile.TemporaryDirectory(prefix="pdf-ocr-", dir=Path(output).parent) as directory:
         for index, page in enumerate(document):
             print(f"[ocr:progress] Adding text layer: page {index + 1} of {len(document)}", file=sys.stderr, flush=True)
             add_ocr_layer(page, Path(directory), language)
+        kind, info = document.xref_get_key(-1, "Info")
+        if kind == "xref":
+            info_xref = int(info.split()[0])
+        else:
+            info_xref = document.get_new_xref()
+            document.update_object(info_xref, info if kind == "dict" else "<< >>")
+            document.xref_set_key(-1, "Info", f"{info_xref} 0 R")
+        document.xref_set_key(info_xref, OCR_SOURCE_HASH_KEY, pdf.get_pdf_str(original_hash))
         document.save(output, garbage=3, deflate=True)
+
+
+def matching_ocr_copy(source, candidate):
+    """Reuse only OCR copies stamped with the SHA-256 of the current source bytes."""
+    try:
+        with pdf.open(candidate) as searchable:
+            stored_hash = ocr_source_hash(searchable)
+            return stored_hash is not None and stored_hash == source_sha256(source)
+    except (RuntimeError, ValueError, OSError):
+        return False
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["layout", "image", "ocr"])
+    parser.add_argument("operation", choices=["layout", "image", "ocr", "compare"])
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--page", type=int, default=1)
     parser.add_argument("--image", type=int, default=0)
     parser.add_argument("--language", default="eng")
+    parser.add_argument("--candidate", type=Path)
     args = parser.parse_args()
-    if args.operation == "ocr":
+    if args.operation == "compare":
+        if args.candidate is None:
+            parser.error("compare requires --candidate")
+        args.output.write_text(json.dumps(matching_ocr_copy(args.source, args.candidate)))
+    elif args.operation == "ocr":
         searchable_pdf(args.source, args.output, args.language)
     else:
         with pdf.open(args.source) as document:

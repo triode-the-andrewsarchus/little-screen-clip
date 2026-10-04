@@ -60,8 +60,10 @@ pub(super) struct PdfDocumentTools {
     layout_job: Option<ToolJob<PdfPageLayout>>,
     ocr_job: Option<ToolJob<OcrOutput>>,
     copy_job: Option<ToolJob<()>>,
+    reuse_job: Option<ToolJob<Option<PathBuf>>>,
     pub ocr_language: String,
     pub ocr_status: String,
+    pub ocr_complete: bool,
     pub interaction: super::interaction::PdfInteraction,
 }
 
@@ -163,7 +165,10 @@ impl PdfDocumentTools {
         if let Some(result) = self.layout_job.as_ref().and_then(|job| job.poll(ctx)) {
             self.layout_job = None;
             match result {
-                Ok(layout) => self.layout = Some(Arc::new(layout)),
+                Ok(layout) => {
+                    self.ocr_complete |= layout.ocr_complete;
+                    self.layout = Some(Arc::new(layout));
+                }
                 Err(error) => self.layout_error = Some(error),
             }
         }
@@ -176,7 +181,7 @@ impl PdfDocumentTools {
         count: usize,
         lease: Option<Arc<tempfile::TempDir>>,
     ) {
-        if self.ocr_busy() {
+        if self.ocr_busy() || self.ocr_complete {
             return;
         }
         let language = if self.ocr_language.trim().is_empty() {
@@ -242,6 +247,63 @@ impl PdfDocumentTools {
 }
 
 impl PdfEditorState {
+    pub(super) fn start_existing_ocr_check(&mut self) -> bool {
+        let candidate = self.sibling_output_path("ocr");
+        if !candidate.is_file() {
+            return false;
+        }
+        let source = self.path.clone();
+        let lease = self.source_directory.clone();
+        self.document_tools.reuse_job = Some(ToolJob::start(move |control| {
+            let _lease = lease;
+            let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
+            let output = directory.path().join("matches.json");
+            run_pdf_tool(
+                "compare",
+                &source,
+                &output,
+                &[
+                    "--candidate".into(),
+                    candidate.to_string_lossy().into_owned(),
+                ],
+                &control,
+            )?;
+            let matches: bool = serde_json::from_reader(
+                std::fs::File::open(output).map_err(|error| error.to_string())?,
+            )
+            .map_err(|error| error.to_string())?;
+            Ok(matches.then_some(candidate))
+        }));
+        true
+    }
+
+    pub(super) fn poll_existing_ocr(&mut self, ctx: &egui::Context, now: f64) {
+        let Some(result) = self
+            .document_tools
+            .reuse_job
+            .as_ref()
+            .and_then(|job| job.poll(ctx))
+        else {
+            return;
+        };
+        self.document_tools.reuse_job = None;
+        if let Ok(Some(path)) = result {
+            self.document_tools.ocr_complete = true;
+            self.path = path;
+            self.title = self
+                .path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            self.document_tools.ocr_status =
+                format!("Using existing searchable PDF: {}", self.title);
+            self.status_toast
+                .set(self.document_tools.ocr_status.as_str(), now);
+        }
+        self.start_info_worker();
+    }
+
     pub(super) fn poll_document_tools(&mut self, ctx: &egui::Context, now: f64) {
         let page = self.selected_page.filter(|_| self.info_job.is_none());
         self.document_tools
@@ -262,6 +324,7 @@ impl PdfEditorState {
                 Ok(output.output)
             }) {
                 Ok(path) => {
+                    self.document_tools.ocr_complete = true;
                     self.path = path;
                     self.title = self
                         .path
@@ -299,7 +362,11 @@ impl PdfEditorState {
     }
 
     pub(super) fn start_pdf_ocr(&mut self) {
-        if !self.edit_in_progress && self.info_job.is_none() && self.page_count > 0 {
+        if !self.edit_in_progress
+            && self.info_job.is_none()
+            && self.page_count > 0
+            && self.document_tools.layout.is_some()
+        {
             self.document_tools.start_ocr(
                 self.path.clone(),
                 self.sibling_output_path("ocr"),
@@ -318,5 +385,86 @@ impl PdfEditorState {
                 self.source_directory.clone(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opening_adopts_only_a_verified_ocr_copy_before_loading_pages() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.pdf");
+        let candidate = directory.path().join("source.ocr.edited.pdf");
+        super::super::tests::write_two_page_pdf(&source);
+        std::fs::copy(&source, &candidate).unwrap();
+        let source_bytes = std::fs::read(&source).unwrap();
+        for result in [
+            Ok(Some(candidate.clone())),
+            Ok(None),
+            Err("unreadable candidate".into()),
+        ] {
+            let expected = result
+                .as_ref()
+                .ok()
+                .and_then(|path| path.clone())
+                .unwrap_or(source.clone());
+            let mut state = PdfEditorState::without_jobs(source.clone());
+            state.document_tools.reuse_job = Some(ToolJob::start(move |_| result));
+            assert!(state.info_job.is_none());
+            let ctx = egui::Context::default();
+            let deadline = std::time::Instant::now() + Duration::from_secs(3);
+            while state.document_tools.reuse_job.is_some() && std::time::Instant::now() < deadline {
+                state.poll_existing_ocr(&ctx, 0.0);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(state.document_tools.reuse_job.is_none());
+            assert_eq!(state.path, expected);
+            assert!(state.info_job.is_some());
+            assert!(!state.dirty);
+            assert_eq!(state.document_tools.ocr_complete, expected == candidate);
+            if state.document_tools.ocr_complete {
+                state.info_job.take().unwrap().0.cancel();
+                state.page_count = 2;
+                state.document_tools.layout = Some(Arc::new(PdfPageLayout::default()));
+                state.start_pdf_ocr();
+                assert!(state.document_tools.ocr_job.is_none());
+            }
+            assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+        }
+    }
+
+    #[test]
+    fn newly_completed_ocr_cannot_start_a_second_job() {
+        let directory = tempfile::tempdir().unwrap();
+        let source = directory.path().join("source.pdf");
+        super::super::tests::write_two_page_pdf(&source);
+        let mut state = PdfEditorState::without_jobs(source.clone());
+        let output = state.sibling_output_path("ocr");
+        let staging = tempfile::tempdir_in(directory.path()).unwrap();
+        std::fs::copy(&source, staging.path().join(STAGED_PDF_FILENAME)).unwrap();
+        let expected = output.clone();
+        state.document_tools.ocr_job = Some(ToolJob::start(move |_| {
+            Ok(OcrOutput {
+                directory: staging,
+                output,
+            })
+        }));
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while state.document_tools.ocr_busy() && std::time::Instant::now() < deadline {
+            state.poll_document_tools(&ctx, 0.0);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!state.document_tools.ocr_busy());
+        assert!(state.document_tools.ocr_complete);
+        assert_eq!(state.path, expected);
+        state.info_job.take().unwrap().0.cancel();
+        state.page_count = 2;
+        state.document_tools.layout = Some(Arc::new(PdfPageLayout::default()));
+        state.start_pdf_ocr();
+        assert!(!state.document_tools.ocr_busy());
+        assert!(!state.sibling_output_path("ocr").exists());
     }
 }

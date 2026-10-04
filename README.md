@@ -167,7 +167,7 @@ uv venv --python /usr/bin/python3 --system-site-packages ~/.local/share/little-s
 uv pip install --python ~/.local/share/little-screen-clip/nobg-venv/bin/python nobg 'PyMuPDF>=1.26,<1.27'
 ```
 
-PDF text selection and embedded-image copying use PyMuPDF in this environment. The PDF viewer has Pages/ToC tabs on the left and Find/OCR tabs on the right. Drag page text and press Ctrl+C to copy it; right-click an image to outline it in red and copy the image itself. PDF OCR requires local Tesseract and installed language data (English uses `eng`); it saves and opens a searchable copy beside the original, with invisible text beneath the page content.
+PDF text selection and embedded-image copying use PyMuPDF in this environment. The PDF viewer has Pages/ToC tabs on the left and Find/OCR tabs on the right. Drag page text and press Ctrl+C to copy it; right-click an image to outline it in red and copy the image itself. PDF OCR requires local Tesseract and installed language data (English uses `eng`); it saves and opens a searchable copy beside the original, with invisible text beneath the page content. Opening `foo.pdf` automatically checks and reuses `foo.ocr.edited.pdf` when the original’s SHA-256 matches the source hash embedded in the OCR copy’s metadata. Changed sources and copies without valid hash metadata use the original; older OCR copies need OCR run again to add the hash.
 
 *(Note: If `nobg` is not installed, the workbench UI detects it gracefully and offers a 1-click <img src="docs/assets/copy.svg" width="16" alt="Copy"> `Copy Install Cmd` button).*
 

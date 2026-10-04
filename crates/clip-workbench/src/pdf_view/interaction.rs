@@ -263,6 +263,7 @@ mod tests {
         let page = egui::Rect::from_min_size(egui::pos2(100.0, 200.0), egui::vec2(400.0, 600.0));
         let layout = PdfPageLayout {
             text: "A".into(),
+            ocr_complete: false,
             glyphs: vec![PdfGlyph {
                 start: 0,
                 end: 1,

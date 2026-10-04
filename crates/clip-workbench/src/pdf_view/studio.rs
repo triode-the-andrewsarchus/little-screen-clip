@@ -13,6 +13,7 @@ impl PdfEditorState {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs_f64())
             .unwrap_or(0.0);
+        self.poll_existing_ocr(ctx, now);
         self.poll_info_worker(ctx, now);
         self.poll_preview_worker(ctx);
         self.poll_edit_worker(ctx, now);
@@ -51,7 +52,7 @@ impl PdfEditorState {
                 let mut rotate = false;
                 let mut delete = false;
                 let mut shell = StudioShell::new(&self.title, Icon::Pdf, palette, close)
-                    .with_badge(if self.info_job.is_some() { "Loading PDF…".into() }
+                    .with_badge(if self.page_count == 0 { "Loading PDF…".into() }
                         else { format!("{} pages", self.page_count) }, None)
                     .with_escape_hatch(EscapeHatch::primary("Okular", "okular", "Open PDF in Okular").with_icon(Icon::Pdf))
                     .with_footer_hints("Drag text: Select | Ctrl+C: Copy | Right-click image: Copy | Space-drag: Pan | Scroll: Zoom | T: ToC")

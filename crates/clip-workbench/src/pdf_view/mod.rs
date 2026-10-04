@@ -592,7 +592,9 @@ impl PdfEditorState {
     /// Starts loading page metadata and thumbnail previews for the given PDF file.
     pub fn new(path: PathBuf) -> Self {
         let mut state = Self::without_jobs(path);
-        state.start_info_worker();
+        if !state.start_existing_ocr_check() {
+            state.start_info_worker();
+        }
         state
     }
 
@@ -602,10 +604,13 @@ impl PdfEditorState {
         raster: Arc<PdfPageRasterResource>,
     ) -> Self {
         let mut state = Self::without_jobs(path);
+        state.source_directory = Some(Arc::clone(&raster._raster_directory));
+        if state.start_existing_ocr_check() {
+            return state;
+        }
         state.page_count = 1;
         state.selected_page = Some(1);
         state.raster_cache = Some(Arc::clone(&raster._raster_directory));
-        state.source_directory = Some(Arc::clone(&raster._raster_directory));
         state.pages.push(PdfPageItem {
             page_num: 1,
             raster: Some(raster),
