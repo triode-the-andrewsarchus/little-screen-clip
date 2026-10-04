@@ -197,6 +197,18 @@ function run_workbench() {
     "$WORKBENCH_BIN" "$@"
 }
 
+function run_file_manager() {
+    local file_manager_bin="$SCRIPT_DIR/target/release/clip-file-manager"
+    if [ ! -x "$file_manager_bin" ]; then
+        file_manager_bin="$SCRIPT_DIR/target/debug/clip-file-manager"
+    fi
+    if [ ! -x "$file_manager_bin" ]; then
+        cargo build --release --bin clip-file-manager
+        file_manager_bin="$SCRIPT_DIR/target/release/clip-file-manager"
+    fi
+    "$file_manager_bin" "$@"
+}
+
 function run_test() {
     if is_running; then
         echo -e "${YELLOW}Stopping daemon temporarily to release USB device for test...${NC}"
@@ -323,6 +335,10 @@ case "${1:-}" in
         shift
         run_workbench "$@"
         ;;
+    files)
+        shift
+        run_file_manager "$@"
+        ;;
     copy-right|copy_right)
         shift
         copy_right "$@"
@@ -383,6 +399,7 @@ case "${1:-}" in
         echo "  reload          - Hot reload configuration file and refresh screen"
         echo "  status          - Show daemon status and current clipboard slots"
         echo "  ui              - Open the main monitor Crafting Workbench modal (supports --last)"
+        echo "  files [folder]  - Open the standalone file manager (defaults to home)"
         echo "  copy-right      - Capture active window selection to the Right-Hand buffer"
         echo "  paste-right     - Paste content from the Right-Hand buffer into active window"
         echo "  install-service - Install and enable systemd user service ($SYSTEMD_SERVICE_NAME)"
@@ -397,4 +414,3 @@ case "${1:-}" in
         echo "  sweep [N]       - Run cargo sweep --installed and prune incremental cache (keeps N past sessions, default: 2)"
         ;;
 esac
-

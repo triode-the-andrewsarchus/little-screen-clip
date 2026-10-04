@@ -3,8 +3,8 @@
 //! An egui-based control center providing multi-slot visual inspection, operation command palette,
 //! visual node graph builder, audio/image/video/3D/PDF/MIDI inspection windows, and live screen mirror.
 
+pub(crate) use clip_workbench::{hex_to_c32, hex_to_c32_alpha};
 use eframe::egui;
-use little_clip_core::color::parse_hex_color_rgba_or_white as parse_hex_color_rgba;
 use little_clip_core::config::WorkbenchAppearance;
 use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::palette::AppPalette;
@@ -61,7 +61,7 @@ mod canvas;
 mod component_gallery;
 mod conversion_decode_worker;
 mod diff_view;
-pub mod icons;
+pub use clip_workbench::icons;
 mod image_preview;
 mod midi_view;
 mod model3d_view;
@@ -74,9 +74,8 @@ mod splat_view;
 mod spreadsheet_view;
 mod state_sync;
 mod text_preview;
-mod ui_appearance;
-pub mod ui_ext;
-pub mod ui_tabs;
+use clip_workbench::ui_appearance;
+pub use clip_workbench::{ui_ext, ui_tabs};
 
 use appearance_sync::AppearanceSync;
 use icons::Icon;
@@ -108,16 +107,6 @@ enum WorkbenchView {
     NodeMachine,
     /// Automated action trigger rules configuration.
     AutoActions,
-}
-
-pub(crate) fn hex_to_c32(hex: &str) -> egui::Color32 {
-    let (r, g, b, a) = parse_hex_color_rgba(hex);
-    egui::Color32::from_rgba_unmultiplied(r, g, b, a)
-}
-
-pub(crate) fn hex_to_c32_alpha(hex: &str, alpha: u8) -> egui::Color32 {
-    let (r, g, b, _) = parse_hex_color_rgba(hex);
-    egui::Color32::from_rgba_unmultiplied(r, g, b, alpha)
 }
 
 fn update_palette_search_focus(

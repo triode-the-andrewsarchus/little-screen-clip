@@ -44,6 +44,15 @@ Standard clipboard managers flatten everything into a single chronological list.
 | `clipctl` | Command-line IPC client | `little-clip-core` and operation-facing libraries |
 | `clip-workbench` | egui state and interaction | The library crates through their public APIs |
 
+The `clip-workbench` package also builds `clip-file-manager`, a separate, resizable
+file manager application. Both executables use its shared desktop UI library for
+controls, SVG icons, fonts, and appearance. The file manager runs without the daemon
+or a USB display. Open it with `./launch.sh files [DIRECTORY]` or
+`cargo run -p clip-workbench --bin clip-file-manager -- [DIRECTORY]`.
+Phase 1 provides folder browsing, Back/Forward/Up, an editable address bar, a lazy
+folder tree, refresh, and hidden-file visibility. File operations and previews are
+scheduled in [the phased plan](docs/File%20Manager/plan.md).
+
 Dependencies point toward the lower rows of responsibility: UI, daemon, driver, and renderer must
 not pull operation-domain behavior back into their own crates. Presentation-ready models belong in
 `little-clip-core`; transformations and external command policy belong in `little-clip-ops`.

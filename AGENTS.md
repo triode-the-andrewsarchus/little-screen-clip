@@ -44,6 +44,8 @@ Do not commit personal display, compositor, or desktop settings. Keep `config.to
 
 The workbench must remain a non-resizable, centered, single-instance popup for Niri's fixed-size floating behavior. Screen-adaptive sizing must be resolved before the window opens, with fixed-size hints in place at mapping; do not enable window resizing/maximizing or resize a visible window to fit. Internal panels may resize independently. Repeated `launch.sh ui` calls should focus the existing popup without requiring a Niri keybinding change.
 
+The file manager is a separate application (`clip-file-manager`, launched with `launch.sh files`), tightly coupled to the workbench through shared library code and core services. Do not embed it as a workbench tab. Share UI chrome, fonts, viewers, and operation mechanisms as they become needed; keep application lifecycle and navigation independent. The workbench's fixed popup constraints do not apply to the file manager's ordinary resizable window.
+
 Shared display/workbench SVG assets live in `little-clip-render/assets/icons`. Use embedded SVG icons for application chrome, controls, and notifications; do not use emoji glyphs as icons. Keep notification icons separate from their text. Copied summaries and terminal output use plain text; preserve emoji in user content and Unicode rendering fixtures.
 
 Use the shared `ui_tabs::TabBar` for workspace, tool, viewer-mode, and sheet navigation. Keep parameter choices and on/off controls as buttons. Re-selecting an active tab is a no-op; selection changes must preserve existing entry/exit hooks.

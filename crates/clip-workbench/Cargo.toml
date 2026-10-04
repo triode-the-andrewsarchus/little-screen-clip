@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+default-run = "clip-workbench"
+
+[[bin]]
+name = "clip-file-manager"
+path = "src/bin/clip-file-manager.rs"
 
 [dependencies]
 little-clip-core = { path = "../little-clip-core" }
@@ -31,6 +36,7 @@ webp = "0.3.1"
 libwebp-sys = "0.9.6"
 tempfile = "3.10"
 libc = "0.2"
+chrono = "0.4"
 filmr = { path = "../../vendor/filmr", default-features = false, features = ["compute-gpu"] }
 
 [dev-dependencies]

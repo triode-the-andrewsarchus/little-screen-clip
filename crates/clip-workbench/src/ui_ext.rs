@@ -442,7 +442,7 @@ impl egui::Widget for StyledButton<'_> {
 }
 
 /// Rounded linear gradient shared by raised buttons and recessed slider tracks.
-pub(crate) fn gradient_surface(
+pub fn gradient_surface(
     rect: Rect,
     radius: f32,
     start: Color32,
