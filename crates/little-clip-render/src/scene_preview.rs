@@ -1,25 +1,20 @@
 //! Bounded finite orbit cache shared by the display and workbench mirror.
 
+use little_clip_core::ipc::{ScenePreview, ScenePreviewKey as Key};
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use little_clip_scene::{OrbitLoop, SplatRenderer, SplatScene};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
-use std::time::{Duration, Instant, SystemTime};
+use std::sync::{Arc, LazyLock, mpsc};
+use std::time::{Duration, Instant};
 
 const MAX_ENTRIES: usize = 8;
 const MAX_BYTES: usize = 128 * 1024 * 1024;
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct Key {
-    path: PathBuf,
-    modified: Option<SystemTime>,
-    file_bytes: u64,
-    size: [u32; 2],
-    appearance: String,
-    triangle_budget: usize,
-}
+// Long GPU/import jobs must not occupy the general preview and mirror workers.
+static BAKE_JOBS: LazyLock<BackgroundJobs> = LazyLock::new(|| BackgroundJobs::new(1, MAX_ENTRIES));
+pub(crate) type SharedSource = Arc<dyn Fn() -> Vec<ScenePreview> + Send + Sync>;
 
 #[derive(Clone)]
 pub(crate) enum Preview {
@@ -78,8 +73,8 @@ impl PreviewCache {
             }
             let cancelled = Arc::new(AtomicBool::new(false));
             let worker_cancelled = Arc::clone(&cancelled);
-            let (ticket, rx) = BackgroundJobs::global()
-                .submit(Duration::from_secs(120), move || bake(worker_cancelled));
+            let (ticket, rx) =
+                BAKE_JOBS.submit(Duration::from_secs(120), move || bake(worker_cancelled));
             self.entries.insert(
                 key.clone(),
                 Entry {
@@ -165,37 +160,45 @@ pub(crate) fn request(path: &Path, size: [u32; 2], renderer: &crate::ScreenRende
     let source = key.clone();
     let config = renderer.config.clone();
     let palette = renderer.palette.clone();
+    let shared_source = renderer.scene_preview_source.clone();
     renderer
         .scene_previews
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .request(key, move |cancelled| {
             let started = Instant::now();
-            let orbit = match SplatScene::load(&source.path) {
-                Ok(scene) => {
-                    if cancelled.load(Ordering::Acquire) {
-                        return Err("Scene preview cancelled".into());
+            let shared = shared_source
+                .and_then(|fetch| fetch().into_iter().find(|shared| shared.key == source))
+                .and_then(|shared| {
+                    OrbitLoop::from_shared_directory(&shared.directory, source.size).ok()
+                });
+            let orbit = shared
+                .map(Ok)
+                .unwrap_or_else(|| match SplatScene::load(&source.path) {
+                    Ok(scene) => {
+                        if cancelled.load(Ordering::Acquire) {
+                            return Err("Scene preview cancelled".into());
+                        }
+                        let mut renderer = SplatRenderer::new(Arc::new(scene))
+                            .map_err(|error| error.to_string())?;
+                        renderer
+                            .bake_orbit(source.size[0], source.size[1], || {
+                                cancelled.load(Ordering::Acquire)
+                                    || started.elapsed() > Duration::from_secs(120)
+                            })
+                            .map_err(|error| error.to_string())
                     }
-                    let mut renderer =
-                        SplatRenderer::new(Arc::new(scene)).map_err(|error| error.to_string())?;
-                    renderer
-                        .bake_orbit(source.size[0], source.size[1], || {
+                    Err(little_clip_scene::SceneError::MeshGlb) => {
+                        let model = little_clip_core::model3d::Model3d::load_file(&source.path)?;
+                        let mut renderer = crate::ScreenRenderer::fallback(config);
+                        renderer.palette = palette;
+                        bake_mesh(&renderer, &model, source.size, || {
                             cancelled.load(Ordering::Acquire)
                                 || started.elapsed() > Duration::from_secs(120)
                         })
-                        .map_err(|error| error.to_string())?
-                }
-                Err(little_clip_scene::SceneError::MeshGlb) => {
-                    let model = little_clip_core::model3d::Model3d::load_file(&source.path)?;
-                    let mut renderer = crate::ScreenRenderer::fallback(config);
-                    renderer.palette = palette;
-                    bake_mesh(&renderer, &model, source.size, || {
-                        cancelled.load(Ordering::Acquire)
-                            || started.elapsed() > Duration::from_secs(120)
-                    })?
-                }
-                Err(error) => return Err(error.to_string()),
-            };
+                    }
+                    Err(error) => Err(error.to_string()),
+                })?;
             let current = std::fs::metadata(&source.path).map_err(|error| error.to_string())?;
             if current.modified().ok() != source.modified || current.len() != source.file_bytes {
                 return Err("Scene file changed while preparing its preview".into());
@@ -251,3 +254,33 @@ pub(crate) fn retain_visible(
 
 #[cfg(test)]
 mod tests;
+
+impl crate::ScreenRenderer {
+    /// Configures a nonblocking-render source queried only by scene preparation workers.
+    pub fn set_scene_preview_source(
+        &mut self,
+        source: impl Fn() -> Vec<ScenePreview> + Send + Sync + 'static,
+    ) {
+        self.scene_preview_source = Some(Arc::new(source));
+    }
+
+    /// Returns completed orbits without waiting for queued or running bakes.
+    pub fn scene_previews(&self) -> Vec<ScenePreview> {
+        self.scene_previews
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .entries
+            .iter()
+            .filter_map(|(key, entry)| match &entry.value {
+                Value::Ready(orbit) => Some(ScenePreview {
+                    key: key.clone(),
+                    directory: orbit.frames()[0]
+                        .parent()
+                        .expect("owned orbit directory")
+                        .to_owned(),
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+}

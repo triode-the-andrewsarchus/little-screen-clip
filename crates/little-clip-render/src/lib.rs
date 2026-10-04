@@ -173,6 +173,7 @@ pub enum FontStyle {
 /// Canvas rasterizer for rendering slot cards, thumbnails, waveforms, and code blocks onto a tiny-skia Pixmap.
 pub struct ScreenRenderer {
     pub(crate) scene_previews: std::sync::Mutex<scene_preview::PreviewCache>,
+    pub(crate) scene_preview_source: Option<scene_preview::SharedSource>,
     pub(crate) font_regular: Option<Font>,
     pub(crate) font_bold: Option<Font>,
     pub(crate) font_italic: Option<Font>,
@@ -196,6 +197,7 @@ impl ScreenRenderer {
             config,
             palette,
             scene_previews: Default::default(),
+            scene_preview_source: None,
         })
     }
 
@@ -210,6 +212,7 @@ impl ScreenRenderer {
             config,
             palette,
             scene_previews: Default::default(),
+            scene_preview_source: None,
         }
     }
 

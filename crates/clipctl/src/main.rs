@@ -454,6 +454,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("  {} : {}", k.bold(), st);
                 }
             }
+            IpcResponse::ScenePreviews(previews) => {
+                println!("{} completed scene previews", previews.len());
+            }
             IpcResponse::Error { error } => {
                 eprintln!("{}: {}", "Error".red().bold(), error);
                 std::process::exit(1);

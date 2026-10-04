@@ -14,6 +14,8 @@ pub enum IpcRequest {
     GetState,
     /// Queries lightweight slot cards for polling; use `GetSlotItem` for changed item details.
     GetStateSummary,
+    /// Queries completed temporary scene orbits for reuse by the mirror.
+    GetScenePreviews,
     /// Pushes plain text into the specified hand.
     PushText {
         text: String,
@@ -123,6 +125,8 @@ pub enum IpcResponse {
     State(SlotManager),
     /// Lightweight slot cards and selection state suitable for frequent polling.
     StateSummary(SlotStateSummary),
+    /// Completed orbits; clients must acquire their own temporary file links.
+    ScenePreviews(Vec<ScenePreview>),
     /// Item from a single queried slot.
     SlotItem(Option<ClipItem>),
     /// Map of auto-action keys to enabled status.
@@ -157,6 +161,24 @@ pub enum IpcResponse {
     },
     /// Failure response with error description.
     Error { error: String },
+}
+
+/// Exact rendering identity for a temporary scene orbit.
+#[derive(Debug, Clone, Serialize, Deserialize, Hash, PartialEq, Eq)]
+pub struct ScenePreviewKey {
+    pub path: std::path::PathBuf,
+    pub modified: Option<std::time::SystemTime>,
+    pub file_bytes: u64,
+    pub size: [u32; 2],
+    pub appearance: String,
+    pub triangle_budget: usize,
+}
+
+/// A completed orbit owned by the daemon until its visible card is retired.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScenePreview {
+    pub key: ScenePreviewKey,
+    pub directory: std::path::PathBuf,
 }
 
 /// Change-detection metadata for one occupied slot, excluding clipboard content and labels.
@@ -255,6 +277,28 @@ impl SlotCard {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scene_preview_ipc_preserves_exact_render_identity() {
+        let key = ScenePreviewKey {
+            path: "/tmp/source with spaces.sog".into(),
+            modified: Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::new(5, 42)),
+            file_bytes: 128,
+            size: [480, 320],
+            appearance: "#181818".into(),
+            triangle_budget: 100,
+        };
+        let response = IpcResponse::ScenePreviews(vec![ScenePreview {
+            key: key.clone(),
+            directory: "/tmp/little-clip-orbit-fixture".into(),
+        }]);
+        let decoded: IpcResponse =
+            serde_json::from_str(&serde_json::to_string(&response).unwrap()).unwrap();
+        let IpcResponse::ScenePreviews(previews) = decoded else {
+            panic!("Expected scene preview descriptors")
+        };
+        assert_eq!(previews[0].key, key);
+    }
 
     #[test]
     fn test_lock_ipc_serde() {

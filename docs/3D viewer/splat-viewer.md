@@ -103,7 +103,7 @@ synthetic fixtures, **not** evidence of real-scene quality, large
 scene performance, or completed application behavior.
 
 The display/mirror cache uses file path, modification time, file size, viewport
-size and appearance as its identity. It admits work through `BackgroundJobs`,
+size and appearance as its identity. It admits bakes through a separate single-worker bounded `BackgroundJobs` queue,
 bakes 240 frames, drops the scene renderer, and retains temporary PNGs in an
 eight-entry, 128 MiB compressed-storage LRU cache owned by each screen renderer.
 The actual visible slot layout retires offscreen previews and cancels their
@@ -111,6 +111,22 @@ unfinished bakes. Source and appearance changes cancel superseded jobs. Owned
 temporary directories remove completed or partial frames on retirement, bake
 failure, cancellation and renderer shutdown. A native
 GPU cache test proves 100 playback requests share one baked loop with one bake.
+
+The workbench mirror queries `GetScenePreviews` from its scene preparation worker
+with a 100 ms socket timeout. The daemon returns completed orbit directories and
+their full cache keys without waiting for bakes. Matching frames are hard-linked
+into a new owned `/tmp/little-clip-orbit-*` directory, sharing PNG bytes without
+another scene import, GPU upload or orbit bake. Source metadata is rechecked
+before publishing. Missing, retired or incompatible frames fall back to a bake
+on the scene queue; the normal mirror render immediately shows available cards
+and a loading placeholder. Other preview and operation workers remain available.
+Links keep playback valid if the daemon retires its card first, and each renderer
+removes its own links when its card leaves the visible layout or it shuts down.
+An optimized production-card integration test measured a fresh mirror's initial
+frame at 2.1 ms and its shared orbit ready at 4.0 ms (renderer/worker timings,
+excluding IPC transport and GUI texture presentation). A regression test queues
+four stalled scene bakes and verifies a normal text-card render still completes
+on the general executor.
 
 The workbench keeps one outstanding render, reuses its last accepted texture,
 and presents completed camera views in order while coalescing newer navigation
@@ -218,18 +234,17 @@ cargo fmt --all --check
 git diff --check
 ```
 
-The affected suites contain 18 scene tests, 26 render tests and five targeted
+The affected suites contain 19 scene tests, 28 render tests and five targeted
 workbench tests, including native GPU checks. Physical USB hardware was not
 exercised; display acceptance used the production card renderer and private
 compositor captures.
 
-Architecture comparison against `pre-orbit-cache-smoothing` reduced average
-complexity from 4.03 to 4.02 and duplication from 8.62% to 8.60%; maximum
-complexity and dependency cycles were unchanged. The tool reported one extra
-clone group involving test setup. Other reported clones are existing renderer
-initialization/GPU code, and its changing Python chokepoint is in an unchanged
-file. The added cache-lifecycle fixture setup is necessary coverage; production
-rendering and frame storage reuse the existing bake and owned-tempdir patterns.
+Architecture comparison against `pre-shared-scene-preview` kept average and
+maximum complexity and dependency cycles unchanged while slightly reducing the
+duplication percentage. It flags one additional clone group among test/protocol
+setup and reports existing match-arm/IPC struct patterns in modified files.
+The source rendering key is reused directly as the IPC identity; no second key
+or separate bake implementation was introduced.
 
 ## Supported variants and limits
 

@@ -20,6 +20,57 @@ pub struct OrbitLoop {
 }
 
 impl OrbitLoop {
+    /// Acquires an independently owned loop by linking completed daemon PNGs.
+    ///
+    /// Links share the existing bytes without decoding or baking the scene again.
+    /// Removing either renderer's directory leaves the other renderer's links valid.
+    ///
+    /// # Errors
+    /// Returns an error for incomplete or invalid frames, or temporary-file errors.
+    /// Partial acquisitions are removed on failure.
+    pub fn from_shared_directory(
+        source: &std::path::Path,
+        size: [u32; 2],
+    ) -> Result<Self, SceneError> {
+        if source.parent() != Some(std::path::Path::new("/tmp"))
+            || !source
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("little-clip-orbit-"))
+        {
+            return Err(SceneError::Invalid("Invalid shared orbit directory".into()));
+        }
+        let directory = tempfile::Builder::new()
+            .prefix("little-clip-orbit-")
+            .tempdir_in("/tmp")?;
+        let mut frames = Vec::with_capacity(ORBIT_FRAME_COUNT);
+        let mut disk_bytes = 0;
+        for index in 0..ORBIT_FRAME_COUNT {
+            let name = format!("{index:03}.png");
+            let path = directory.path().join(&name);
+            std::fs::hard_link(source.join(name), &path)?;
+            let metadata = path.symlink_metadata()?;
+            disk_bytes += metadata.len() as usize;
+            if !metadata.is_file() || disk_bytes > 256 * 1024 * 1024 {
+                return Err(SceneError::Invalid("Invalid shared orbit frames".into()));
+            }
+            frames.push(path);
+        }
+        if image::image_dimensions(&frames[0])
+            .map_err(|error| SceneError::Invalid(error.to_string()))?
+            != (size[0], size[1])
+        {
+            return Err(SceneError::Invalid(
+                "Shared orbit dimensions changed".into(),
+            ));
+        }
+        Ok(Self {
+            directory,
+            frames,
+            disk_bytes,
+            decoded: Mutex::new(None),
+        })
+    }
+
     /// Bakes one frame at a time into an owned directory explicitly under `/tmp`.
     ///
     /// # Errors
@@ -179,6 +230,33 @@ mod tests {
         drop(orbit);
         assert!(!directory.exists());
         assert_eq!(first[(0, 0)][0], 0);
+    }
+
+    #[test]
+    fn shared_links_survive_owner_retirement_and_cleanup_independently() {
+        use std::os::unix::fs::MetadataExt;
+        let owner = OrbitLoop::bake_frames(1, 1, |i| {
+            Ok(RgbaImage::from_pixel(
+                1,
+                1,
+                image::Rgba([i as u8, 0, 0, 255]),
+            ))
+        })
+        .unwrap();
+        let source = owner.directory.path().to_owned();
+        let reader = OrbitLoop::from_shared_directory(&source, [1, 1]).unwrap();
+        let acquired = reader.directory.path().to_owned();
+        assert_ne!(source, acquired);
+        assert_eq!(
+            owner.frames()[0].metadata().unwrap().ino(),
+            reader.frames()[0].metadata().unwrap().ino()
+        );
+        assert!(OrbitLoop::from_shared_directory(&source, [2, 2]).is_err());
+        drop(owner);
+        assert!(!source.exists());
+        assert_eq!(reader.read_frame(239).unwrap()[(0, 0)][0], 239);
+        drop(reader);
+        assert!(!acquired.exists());
     }
 
     #[test]

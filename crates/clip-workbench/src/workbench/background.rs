@@ -1,5 +1,15 @@
 use super::*;
 
+fn daemon_scene_previews() -> Vec<little_clip_core::ipc::ScenePreview> {
+    match crate::send_ipc_request_with_timeout(
+        &IpcRequest::GetScenePreviews,
+        Some(Duration::from_millis(100)),
+    ) {
+        Ok(IpcResponse::ScenePreviews(previews)) => previews,
+        _ => Vec::new(),
+    }
+}
+
 /// Shared snapshot identity for background results. Keeping the Arc also makes
 /// local swaps copy-on-write, so in-flight readers retain their original state.
 #[derive(Clone)]
@@ -155,6 +165,7 @@ impl WorkbenchApp {
                             .unwrap_or_else(|_| ScreenRenderer::fallback(config.clone()))
                     });
                     renderer.set_config(config);
+                    renderer.set_scene_preview_source(daemon_scene_previews);
                     let animated = state.has_active_animation();
                     let mut render_state = (*state).clone();
                     render_state.selected = selected;

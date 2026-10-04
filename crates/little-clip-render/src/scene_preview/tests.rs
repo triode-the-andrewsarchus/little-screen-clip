@@ -1,5 +1,6 @@
 use super::*;
 use std::sync::atomic::AtomicUsize;
+use std::time::SystemTime;
 
 fn key(name: &str) -> Key {
     Key {
@@ -26,6 +27,115 @@ fn wait_for(
         assert!(started.elapsed() < Duration::from_secs(10));
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+#[test]
+fn mirror_reuses_exported_orbit_without_loading_scene_or_owning_daemon_files() {
+    let sources = tempfile::tempdir().unwrap();
+    let path = sources.path().join("unloadable.sog");
+    std::fs::write(&path, b"not a scene").unwrap();
+    let config = little_clip_core::AppConfig::default();
+    let daemon = crate::ScreenRenderer::fallback(config.clone());
+    let metadata = path.metadata().unwrap();
+    let identity = Key {
+        path: path.clone(),
+        modified: metadata.modified().ok(),
+        file_bytes: metadata.len(),
+        size: [97, 64],
+        appearance: daemon.palette.colors.surface_recessed.clone(),
+        triangle_budget: config.model3d.preview_triangle_limit,
+    };
+    let orbit = OrbitLoop::bake_frames(97, 64, |_| {
+        Ok(image::RgbaImage::from_pixel(
+            97,
+            64,
+            image::Rgba([32, 48, 64, 255]),
+        ))
+    })
+    .unwrap();
+    let directory = orbit.frames()[0].parent().unwrap().to_owned();
+    daemon.scene_previews.lock().unwrap().entries.insert(
+        identity,
+        Entry {
+            value: Value::Ready(Arc::new(orbit)),
+            access: 0,
+        },
+    );
+    let exported = daemon.scene_previews();
+    let mut mirror = crate::ScreenRenderer::fallback(config);
+    mirror.set_scene_preview_source(move || exported.clone());
+    let started = Instant::now();
+    let acquired = loop {
+        match request(&path, [97, 64], &mirror) {
+            Preview::Ready(orbit) => break orbit,
+            Preview::Error(error) => {
+                panic!("Sharing must avoid loading invalid source bytes: {error}")
+            }
+            Preview::Loading => {}
+        }
+        assert!(started.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    let reader_directory = acquired.frames()[0].parent().unwrap().to_owned();
+    drop(daemon);
+    assert!(!directory.exists());
+    assert_eq!(
+        acquired.read_frame(0).unwrap()[(0, 0)],
+        image::Rgba([32, 48, 64, 255])
+    );
+    drop(acquired);
+    mirror
+        .render_pixmap(&little_clip_core::SlotManager::default())
+        .unwrap();
+    assert!(!reader_directory.exists());
+    // The retired descriptor cannot resurrect deleted files; fallback reports the bad source.
+    let started = Instant::now();
+    loop {
+        match request(&path, [97, 64], &mirror) {
+            Preview::Error(_) => break,
+            Preview::Ready(_) => panic!("Retired frame files must not be reused"),
+            Preview::Loading => {}
+        }
+        assert!(started.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn slow_scene_bake_does_not_block_general_preview_workers() {
+    let mut cache = PreviewCache::default();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    cache.request(key("slow.sog"), move |_| {
+        started_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+        Err("finished fixture".into())
+    });
+    started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    // Four bakes would exhaust the ordinary four-worker executor.
+    let mut extra_releases = Vec::new();
+    for index in 0..3 {
+        let (release, wait) = mpsc::channel();
+        extra_releases.push(release);
+        cache.request(key(&format!("queued-{index}.sog")), move |_| {
+            wait.recv().unwrap();
+            Err("finished queued fixture".into())
+        });
+    }
+    let (_, result) = BackgroundJobs::global().submit(Duration::from_secs(5), || {
+        let renderer = crate::ScreenRenderer::fallback(little_clip_core::AppConfig::default());
+        let manager = little_clip_core::SlotManager {
+            left_hand: Some(little_clip_core::ClipItem::from_text("fast text preview")),
+            ..Default::default()
+        };
+        renderer.render_pixmap(&manager).unwrap().width()
+    });
+    let rendered = result.recv_timeout(Duration::from_secs(2));
+    release_tx.send(()).unwrap();
+    for release in extra_releases {
+        release.send(()).unwrap();
+    }
+    assert_eq!(rendered.unwrap().unwrap(), crate::SCREEN_WIDTH);
 }
 
 #[test]
@@ -236,6 +346,26 @@ fn successful_orbit_is_baked_once_and_repeated_playback_reuses_cpu_frames() {
         std::thread::sleep(Duration::from_millis(10));
     };
     assert_ne!(initial.data(), rendered.data());
+    // The actual display-sized orbit must transfer to a fresh mirror renderer.
+    let shared = renderer.scene_previews();
+    let mut mirror = crate::ScreenRenderer::fallback(little_clip_core::AppConfig::default());
+    mirror.set_scene_preview_source(move || shared.clone());
+    let warm_start = Instant::now();
+    let first_start = Instant::now();
+    mirror.render_pixmap(&manager).unwrap();
+    let first_frame = first_start.elapsed();
+    loop {
+        mirror.render_pixmap(&manager).unwrap();
+        if !mirror.scene_previews().is_empty() {
+            break;
+        }
+        assert!(warm_start.elapsed() < Duration::from_secs(2));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    eprintln!(
+        "fresh mirror first frame={first_frame:?}; shared orbit ready={:?}",
+        warm_start.elapsed()
+    );
     assert!(
         rendered
             .pixels()

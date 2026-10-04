@@ -704,6 +704,9 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     &mgr,
                 ))
             }
+            Ok(IpcRequest::GetScenePreviews) => {
+                IpcResponse::ScenePreviews(ctx.renderer.read().await.scene_previews())
+            }
             Ok(IpcRequest::PushText { text, hand }) => {
                 let trim_tracking = ctx.config.read().await.auto_actions.trim_link_tracking;
                 let (item, original) = prepare_push_text(text, trim_tracking);
