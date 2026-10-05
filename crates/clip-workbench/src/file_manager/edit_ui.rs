@@ -79,6 +79,10 @@ impl FileManager {
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
                 ui.label(format!("In {}", display_path(&dialog.parent)));
+                if let NamingAction::Content(content) = &dialog.action {
+                    ui.label(format!("Captured {} · {} bytes", content.mime, content.bytes.len()));
+                    ui.label("Creates a new file. Existing files are kept; choose another name on conflict.");
+                }
                 ui.label("Name:");
                 let mut output = egui::TextEdit::singleline(&mut dialog.name)
                     .id(Id::new("file_manager_name"))

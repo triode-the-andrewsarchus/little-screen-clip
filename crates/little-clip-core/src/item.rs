@@ -63,7 +63,27 @@ impl ImageThumbnail {
         max_w: u32,
         max_h: u32,
     ) -> Option<Self> {
-        if let Ok(dyn_img) = image_reader(bytes, mime).and_then(|reader| reader.decode()) {
+        Self::generate_with_limits(bytes, mime, max_w, max_h, image::Limits::default())
+    }
+
+    /// Generates a thumbnail while enforcing the caller's raster decode limits.
+    ///
+    /// Uses the shared decoder hooks and optional MIME hint, preserving aspect
+    /// ratio within `max_w` and `max_h`. Output pixels use premultiplied RGBA.
+    /// If raster decoding fails, SVG input uses the existing SVG renderer;
+    /// `limits` applies only to raster decoding. Returns `None` when neither
+    /// decoder can produce a thumbnail.
+    pub fn generate_with_limits(
+        bytes: &[u8],
+        mime: Option<&str>,
+        max_w: u32,
+        max_h: u32,
+        limits: image::Limits,
+    ) -> Option<Self> {
+        if let Ok(dyn_img) = image_reader(bytes, mime).and_then(|mut reader| {
+            reader.limits(limits);
+            reader.decode()
+        }) {
             let thumb = dyn_img.thumbnail(max_w, max_h);
             let (tw, th) = thumb.dimensions();
             let rgba = thumb.to_rgba8();

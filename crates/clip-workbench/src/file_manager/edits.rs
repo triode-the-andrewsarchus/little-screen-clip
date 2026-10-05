@@ -1,6 +1,7 @@
 //! Atomic naming operations. Never fall back to an overwriting rename.
 
 use std::ffi::{CString, OsString};
+use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::OpenOptionsExt;
@@ -16,6 +17,7 @@ pub(super) enum NamingAction {
     Folder,
     File,
     Rename(PathBuf),
+    Content(super::content::Content),
 }
 
 impl NamingAction {
@@ -24,6 +26,7 @@ impl NamingAction {
             Self::Folder => "New folder",
             Self::File => "New empty file",
             Self::Rename(_) => "Rename",
+            Self::Content(_) => "Create from clipboard",
         }
     }
 }
@@ -84,6 +87,7 @@ impl FileManager {
             NamingAction::Rename(source) => {
                 display_path(Path::new(source.file_name().unwrap_or_default()))
             }
+            NamingAction::Content(content) => content.default_name(),
         };
         self.edits.dialog = Some(NameDialog {
             action,
@@ -103,6 +107,23 @@ impl FileManager {
         {
             self.begin_naming(NamingAction::Rename(source));
         }
+    }
+
+    pub(super) fn name_content(&mut self, content: super::content::Content, parent: PathBuf) {
+        if self.edits.dialog.is_some() || self.edit_busy() {
+            self.edits.report = Some(EditReport {
+                text: "Finish the current naming operation before pasting content.".into(),
+                failed: true,
+            });
+            return;
+        }
+        self.edits.dialog = Some(NameDialog {
+            name: content.default_name(),
+            action: NamingAction::Content(content),
+            parent,
+            error: None,
+            focus: true,
+        });
     }
 
     pub(super) fn submit_naming(&mut self) {
@@ -137,6 +158,9 @@ impl FileManager {
     }
 
     pub(super) fn tick_edits(&mut self, jobs: &BackgroundJobs) {
+        if self.transfers.mutation_running() {
+            return;
+        }
         if let Some(pending) = &mut self.edits.pending {
             if pending.receiver.is_none() {
                 let operation = pending.operation.clone();
@@ -284,6 +308,24 @@ pub(super) fn parse_name(text: &str) -> Result<OsString, String> {
 
 impl NamingOperation {
     fn execute(&self) -> Result<PathBuf, String> {
+        if let NamingAction::Content(content) = &self.action {
+            let staging = tempfile::Builder::new()
+                .prefix(".little-clip-copy-")
+                .tempdir_in(&self.parent)
+                .map_err(|e| e.to_string())?;
+            let staged = staging.path().join("content");
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&staged)
+                .map_err(|e| e.to_string())?;
+            file.write_all(&content.bytes)
+                .and_then(|_| file.sync_all())
+                .map_err(|e| e.to_string())?;
+            let target = self.parent.join(&self.name);
+            super::filesystem::rename_noreplace(&staged, &target).map_err(|e| e.to_string())?;
+            return Ok(target);
+        }
         let directory = std::fs::OpenOptions::new()
             .read(true)
             .custom_flags(libc::O_DIRECTORY | libc::O_CLOEXEC)
@@ -325,6 +367,7 @@ impl NamingOperation {
                     .map_err(|e| e.to_string())?;
                 0
             }
+            NamingAction::Content(_) => unreachable!("content is staged above"),
         };
         if result < 0 {
             return Err(std::io::Error::last_os_error().to_string());

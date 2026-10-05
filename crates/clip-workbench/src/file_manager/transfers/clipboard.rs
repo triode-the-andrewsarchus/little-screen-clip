@@ -23,21 +23,56 @@ pub(super) fn write(paths: &[PathBuf], cut: bool) -> Result<(), String> {
 
 pub(super) fn read() -> Result<FileReferences, ReadError> {
     let types = paste(&["--list-types"])?;
-    let gnome = types
-        .lines()
-        .any(|line| line == "x-special/gnome-copied-files");
-    if !gnome && !types.lines().any(|line| line == "text/uri-list") {
-        return Err(ReadError::Invalid(
-            "Clipboard contains no file references".into(),
-        ));
-    }
-    let mime = if gnome {
-        "x-special/gnome-copied-files"
-    } else {
-        "text/uri-list"
-    };
+    let (mime, gnome) = reference_mime(&types)
+        .ok_or_else(|| ReadError::Invalid("Clipboard contains no file references".into()))?;
     let payload = paste(&["--no-newline", "--type", mime])?;
     parse(&payload, gnome)
+}
+
+pub(in crate::file_manager) fn read_payload() -> Result<super::super::content::Payload, ReadError> {
+    use super::super::content::{CONTENT_MIMES, Content, MAX_CONTENT_BYTES, Payload};
+    let types = paste(&["--list-types"])?;
+    let content_mime = CONTENT_MIMES
+        .iter()
+        .copied()
+        .find(|mime| types.lines().any(|line| line == *mime));
+    if let Some((mime, gnome)) = reference_mime(&types) {
+        let payload = paste(&["--no-newline", "--type", mime])?;
+        match parse(&payload, gnome) {
+            Ok(references) => {
+                return Ok(Payload::Files {
+                    paths: references.paths,
+                    cut: references.cut,
+                });
+            }
+            // Browsers may offer a web URI alongside encoded image or PDF bytes.
+            Err(error) => {
+                let encoded = content_mime
+                    .is_some_and(|mime| mime.starts_with("image/") || mime == "application/pdf");
+                if gnome || !encoded {
+                    return Err(error);
+                }
+            }
+        }
+    }
+    let mime = content_mime.ok_or_else(|| {
+        ReadError::Invalid(
+            "Clipboard offers no supported file, text, image, or document format".into(),
+        )
+    })?;
+    let bytes = paste_bytes(&["--no-newline", "--type", mime], MAX_CONTENT_BYTES)?;
+    Content::capture(bytes, mime)
+        .map(Payload::Content)
+        .map_err(ReadError::Invalid)
+}
+
+fn reference_mime(types: &str) -> Option<(&'static str, bool)> {
+    [
+        ("x-special/gnome-copied-files", true),
+        ("text/uri-list", false),
+    ]
+    .into_iter()
+    .find(|(mime, _)| types.lines().any(|line| line == *mime))
 }
 
 pub(crate) fn parse(payload: &str, gnome: bool) -> Result<FileReferences, ReadError> {
@@ -75,10 +110,15 @@ pub(crate) fn parse(payload: &str, gnome: bool) -> Result<FileReferences, ReadEr
 }
 
 fn paste(args: &[&str]) -> Result<String, ReadError> {
+    String::from_utf8(paste_bytes(args, 1024 * 1024)?)
+        .map_err(|e| ReadError::Invalid(e.to_string()))
+}
+
+fn paste_bytes(args: &[&str], limit: usize) -> Result<Vec<u8>, ReadError> {
     let output = CommandRequest::new("wl-paste")
         .args(args.iter().copied())
         .timeout(Duration::from_secs(5))
-        .max_output_bytes(1024 * 1024)
+        .max_output_bytes(limit)
         .run()
         .map_err(|e| ReadError::Unavailable(e.to_string()))?;
     if !output.status.success() {
@@ -87,11 +127,12 @@ fn paste(args: &[&str]) -> Result<String, ReadError> {
         ));
     }
     if output.stdout_truncated {
-        return Err(ReadError::Invalid(
-            "Clipboard file references exceed the 1 MiB input limit".into(),
-        ));
+        return Err(ReadError::Invalid(format!(
+            "Clipboard payload exceeds the {} MiB input limit",
+            limit / (1024 * 1024)
+        )));
     }
-    String::from_utf8(output.stdout).map_err(|e| ReadError::Invalid(e.to_string()))
+    Ok(output.stdout)
 }
 
 #[derive(Debug, thiserror::Error)]

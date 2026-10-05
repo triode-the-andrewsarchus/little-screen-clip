@@ -1,11 +1,13 @@
 //! Folder browsing and file management on the shared bounded executor.
 
 mod app;
+mod content;
 mod edit_ui;
 mod edits;
 mod filesystem;
 mod native_drag;
 mod selection;
+mod shelf;
 mod transfers;
 pub use app::run;
 #[cfg(test)]
@@ -116,6 +118,7 @@ pub(crate) struct FileManager {
     watch_started: std::time::Instant,
     drop_targets: Vec<(egui::Rect, PathBuf)>,
     was_modal: bool,
+    shelf: shelf::Shelf,
 }
 
 impl Default for FileManager {
@@ -154,6 +157,7 @@ impl FileManager {
             watch_started: std::time::Instant::now(),
             drop_targets: Vec::new(),
             was_modal: false,
+            shelf: shelf::Shelf::default(),
         }
     }
 
@@ -238,6 +242,7 @@ impl FileManager {
     }
 
     fn tick(&mut self, jobs: &BackgroundJobs) {
+        self.shelf.tick();
         if self.directory.is_none() && self.pending.is_none() && self.error.is_none() {
             self.navigate(self.home.clone(), Navigation::New);
         }

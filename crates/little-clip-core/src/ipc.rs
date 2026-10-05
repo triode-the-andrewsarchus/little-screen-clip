@@ -7,6 +7,14 @@ use crate::item::{ClipItem, ClipPayload, PayloadKind};
 use crate::slot::{HandSide, SlotId, SlotManager};
 use serde::{Deserialize, Serialize};
 
+/// Returns the desktop IPC socket in the user's runtime directory, with a `/tmp` fallback.
+pub fn socket_path() -> std::path::PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR").map_or_else(
+        || std::path::PathBuf::from("/tmp/little-screen-clip.sock"),
+        |directory| std::path::PathBuf::from(directory).join("little-screen-clip.sock"),
+    )
+}
+
 /// Request command messages sent from clients (`clipctl`, `clip-workbench`) to `little-clipd`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum IpcRequest {
@@ -37,6 +45,12 @@ pub enum IpcRequest {
     },
     /// Pushes a batch of file paths into the specified hand.
     PushFiles {
+        paths: Vec<std::path::PathBuf>,
+        #[serde(default = "default_left_hand")]
+        hand: HandSide,
+    },
+    /// Pushes file references without converting a single image or media file to content.
+    PushFileReferences {
         paths: Vec<std::path::PathBuf>,
         #[serde(default = "default_left_hand")]
         hand: HandSide,

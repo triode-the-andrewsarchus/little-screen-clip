@@ -149,7 +149,7 @@ pub(super) struct DeleteConfirmation {
 }
 
 type ImportResult =
-    mpsc::Receiver<Result<Result<clipboard::FileReferences, clipboard::ReadError>, JobError>>;
+    mpsc::Receiver<Result<Result<super::content::Payload, clipboard::ReadError>, JobError>>;
 
 #[derive(Default)]
 pub(super) struct Transfers {
@@ -168,6 +168,9 @@ pub(super) struct Transfers {
 }
 
 impl Transfers {
+    pub(super) fn mutation_running(&self) -> bool {
+        self.running.is_some()
+    }
     pub(super) fn has_status(&self) -> bool {
         self.busy() || self.clipboard.is_some() || !self.reports.is_empty() || self.notice.is_some()
     }
@@ -333,6 +336,9 @@ impl FileManager {
             self.refresh_after_transfer = true;
         }
         self.consume_moved_references(&report);
+        if report.title == "Move" {
+            self.shelf.consume_moves(&report.completed);
+        }
         self.transfers.trash.invalidate();
         self.transfers.reports.push_front(report);
         self.transfers.reports.truncate(10);
@@ -431,7 +437,7 @@ impl FileManager {
             return;
         }
         let (_, receiver) =
-            BackgroundJobs::global().submit(Duration::from_secs(15), clipboard::read);
+            BackgroundJobs::global().submit(Duration::from_secs(15), clipboard::read_payload);
         self.transfers.import = Some((self.path().into(), receiver));
     }
 
@@ -449,13 +455,16 @@ impl FileManager {
         };
         let (destination, _) = self.transfers.import.take().expect("clipboard completion");
         match result {
-            Ok(references) => {
+            Ok(super::content::Payload::Files { paths, cut }) => {
                 self.transfers.clipboard = Some(FileClipboard {
-                    paths: references.paths.clone(),
-                    cut: references.cut,
+                    paths: paths.clone(),
+                    cut,
                     pending_export: false,
                 });
-                self.queue_transfer(references.paths, destination, references.cut);
+                self.queue_transfer(paths, destination, cut);
+            }
+            Ok(super::content::Payload::Content(content)) => {
+                self.name_content(content, destination);
             }
             Err(error) => {
                 self.transfers.notice = Some(format!("Desktop clipboard: {error}"));

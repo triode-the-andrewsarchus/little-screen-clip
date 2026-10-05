@@ -23,6 +23,9 @@ impl FileManager {
                 if ui.button("Clear held files").clicked() {
                     self.transfers.clipboard = None;
                 }
+                if ui.button(format!("Shelf ({})", self.shelf.len())).clicked() {
+                    self.shelf.open = !self.shelf.open;
+                }
                 action
             })
             .inner;
@@ -59,7 +62,7 @@ impl FileManager {
                 ui.colored_label(colors.warning, format!("{artifacts} transfer artifacts remain. Enable hidden files to inspect staged copies or preserved originals."));
             }
         }
-        self.transfers.status(ui, colors);
+        self.transfers.status(ui, colors, !self.shelf.open);
     }
 
     pub(crate) fn transfer_windows(&mut self, ctx: &egui::Context, colors: WorkbenchColors) {
@@ -82,7 +85,7 @@ impl Transfers {
         })
     }
 
-    fn status(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+    fn status(&mut self, ui: &mut Ui, colors: WorkbenchColors, show_held: bool) {
         if let Some(running) = &self.running {
             let progress = running
                 .control
@@ -117,9 +120,11 @@ impl Transfers {
             });
         }
         if self.import.is_some() {
-            ui.label("Reading desktop file references…");
+            ui.label("Reading desktop clipboard…");
         }
-        if let Some(clipboard) = &self.clipboard {
+        if let Some(clipboard) = &self.clipboard
+            && show_held
+        {
             ui.label(format!(
                 "{} files held for {}",
                 clipboard.paths.len(),

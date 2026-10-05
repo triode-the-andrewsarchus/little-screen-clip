@@ -27,8 +27,6 @@ use little_clip_ops::pipeline::types::{NodeKind, Recipe};
 use little_clip_ops::{OpDescriptor, get_applicable_ops};
 use little_clip_render::{SCREEN_HEIGHT, SCREEN_WIDTH, ScreenRenderer};
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -876,31 +874,7 @@ fn send_ipc_request_with_timeout(
     req: &IpcRequest,
     timeout: Option<Duration>,
 ) -> Result<IpcResponse, Box<dyn std::error::Error>> {
-    let sock_path = get_socket_path();
-    let mut stream = UnixStream::connect(&sock_path)?;
-    if let Some(timeout) = timeout {
-        stream.set_read_timeout(Some(timeout))?;
-        stream.set_write_timeout(Some(timeout))?;
-    }
-
-    let json = serde_json::to_string(req)?;
-    stream.write_all(json.as_bytes())?;
-    stream.write_all(b"\n")?;
-
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    reader.read_line(&mut line)?;
-
-    let resp: IpcResponse = serde_json::from_str(&line)?;
-    Ok(resp)
-}
-
-fn get_socket_path() -> PathBuf {
-    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(runtime_dir).join("little-screen-clip.sock")
-    } else {
-        PathBuf::from("/tmp/little-screen-clip.sock")
-    }
+    clip_workbench::desktop_ipc::request(req, timeout, u64::MAX, usize::MAX)
 }
 
 struct PromptApp {

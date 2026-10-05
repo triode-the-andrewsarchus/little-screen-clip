@@ -147,6 +147,7 @@ impl eframe::App for FileManagerApp {
             || ctx.input(|input| input.viewport().close_requested());
         if close {
             if self.browser.filesystem_busy()
+                || self.browser.shelf.sending()
                 || self.native.as_ref().is_some_and(|native| native.busy())
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);

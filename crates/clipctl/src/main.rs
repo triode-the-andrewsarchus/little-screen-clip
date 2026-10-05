@@ -9,7 +9,6 @@ use little_clip_core::ipc::{IpcRequest, IpcResponse};
 use little_clip_core::{
     HandSide, SlotId, copy_bytes_to_system_clipboard, copy_text_to_system_clipboard,
 };
-use std::path::PathBuf;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
@@ -504,10 +503,4 @@ fn parse_slot_str(s: &str) -> Result<SlotId, String> {
 }
 
 /// Returns the active daemon Unix socket path (`$XDG_RUNTIME_DIR/little-screen-clip.sock`).
-fn get_socket_path() -> PathBuf {
-    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(runtime_dir).join("little-screen-clip.sock")
-    } else {
-        PathBuf::from("/tmp/little-screen-clip.sock")
-    }
-}
+use little_clip_core::ipc::socket_path as get_socket_path;

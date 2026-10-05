@@ -1,0 +1,414 @@
+//! Small, bounded previews for visible Shelf cards; file reads stay on workers.
+
+use super::super::content::Payload;
+use super::super::display_path;
+use crate::icons::Icon;
+use little_clip_core::ipc::{IpcRequest, IpcResponse};
+use little_clip_core::{
+    BackgroundJobs, ClipItem, ClipPayload, ImageThumbnail, JobError, JobTicket, SlotId,
+};
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::time::Duration;
+
+#[derive(Clone)]
+pub(super) enum Source {
+    Payload(Payload),
+    Slot(SlotId, uuid::Uuid),
+}
+
+pub(super) struct Data {
+    pub title: String,
+    pub detail: String,
+    pub text: String,
+    pub image: Option<ImageThumbnail>,
+    pub waveform: Vec<f32>,
+    pub icon: Icon,
+}
+
+impl Data {
+    fn new(title: String, detail: String, icon: Icon) -> Self {
+        Self {
+            title,
+            detail,
+            icon,
+            text: String::new(),
+            image: None,
+            waveform: Vec::new(),
+        }
+    }
+}
+
+pub(super) struct Ready {
+    pub data: Data,
+    pub texture: Option<egui::TextureHandle>,
+}
+struct Pending {
+    id: uuid::Uuid,
+    ticket: JobTicket,
+    receiver: mpsc::Receiver<Result<Data, JobError>>,
+}
+
+#[derive(Default)]
+pub(super) struct Previews {
+    ready: BTreeMap<uuid::Uuid, Ready>,
+    pending: Option<Pending>,
+}
+
+impl Previews {
+    pub fn needs(&self, id: uuid::Uuid) -> bool {
+        self.pending.is_none() && !self.ready.contains_key(&id)
+    }
+    pub fn clear(&mut self) {
+        self.ready.clear();
+        if let Some(pending) = self.pending.take() {
+            pending.ticket.cancel();
+        }
+    }
+    pub fn invalidate(&mut self, id: uuid::Uuid) {
+        self.ready.remove(&id);
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.id == id)
+        {
+            self.pending.take().unwrap().ticket.cancel();
+        }
+    }
+
+    pub fn retain(&mut self, ids: &BTreeSet<uuid::Uuid>) {
+        self.ready.retain(|id, _| ids.contains(id));
+        if let Some(pending) = &self.pending
+            && !ids.contains(&pending.id)
+        {
+            self.invalidate(pending.id);
+        }
+    }
+
+    pub fn get(&self, id: uuid::Uuid) -> Option<&Ready> {
+        self.ready.get(&id)
+    }
+
+    pub fn request(&mut self, id: uuid::Uuid, source: Source) {
+        if self.ready.contains_key(&id) || self.pending.is_some() {
+            return;
+        }
+        let (ticket, receiver) =
+            BackgroundJobs::global().submit(Duration::from_secs(15), move || match source {
+                Source::Payload(payload) => payload_preview(&payload),
+                Source::Slot(slot, expected) => slot_preview(slot, expected),
+            });
+        self.pending = Some(Pending {
+            id,
+            ticket,
+            receiver,
+        });
+    }
+
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        let Some(pending) = &self.pending else {
+            return;
+        };
+        let result = match pending.receiver.try_recv() {
+            Ok(Err(JobError::QueueFull)) => {
+                self.pending = None;
+                ctx.request_repaint();
+                return;
+            }
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(50));
+                return;
+            }
+            Err(_) => Err(JobError::Cancelled),
+        };
+        let id = self.pending.take().unwrap().id;
+        let data = result.unwrap_or_else(|error| {
+            let mut data = Data::new(
+                "Preview unavailable".into(),
+                "Retry with Refresh previews".into(),
+                Icon::Alert,
+            );
+            data.text = error.to_string();
+            data
+        });
+        let texture = data.image.as_ref().map(|image| {
+            ctx.load_texture(
+                format!("shelf_preview_{id}"),
+                egui::ColorImage::from_rgba_premultiplied(
+                    [image.width as usize, image.height as usize],
+                    &image.premultiplied_rgba,
+                ),
+                egui::TextureOptions::LINEAR,
+            )
+        });
+        self.ready.insert(id, Ready { data, texture });
+        ctx.request_repaint();
+    }
+}
+
+fn slot_preview(slot: SlotId, expected: uuid::Uuid) -> Data {
+    let result = crate::desktop_ipc::request(
+        &IpcRequest::GetSlotItem(slot),
+        Some(Duration::from_secs(2)),
+        16 * 1024 * 1024,
+        1024 * 1024,
+    );
+    match result {
+        Ok(IpcResponse::SlotItem(Some(item))) if item.id == expected => item_preview(&item),
+        _ => Data::new(
+            "Shared preview unavailable".into(),
+            "Refresh hands to retry".into(),
+            Icon::Alert,
+        ),
+    }
+}
+
+fn item_preview(item: &ClipItem) -> Data {
+    let mut data = match &item.payload {
+        ClipPayload::Text(text) | ClipPayload::Markdown(text) => {
+            text_preview(text.as_bytes(), "Text")
+        }
+        ClipPayload::Image {
+            bytes,
+            path,
+            mime,
+            thumbnail: existing_thumbnail,
+            ..
+        } => {
+            let mut data = Data::new(item.title.clone(), mime.clone(), Icon::Image);
+            data.image = existing_thumbnail
+                .as_ref()
+                .filter(|image| valid_thumbnail(image))
+                .cloned();
+            if data.image.is_none() {
+                data.image = if !bytes.is_empty() {
+                    thumbnail(bytes, Some(mime))
+                } else {
+                    path.as_ref()
+                        .and_then(|path| read_prefix(path, 8 * 1024 * 1024, true).ok())
+                        .and_then(|bytes| thumbnail(&bytes, Some(mime)))
+                };
+            }
+            data
+        }
+        ClipPayload::AudioRef { waveform, .. } => {
+            let mut data = Data::new(item.title.clone(), item.subtitle.clone(), Icon::Audio);
+            if let Some(waveform) = waveform {
+                let stride = waveform.ch1_peaks.len().div_ceil(96).max(1);
+                data.waveform = waveform
+                    .ch1_peaks
+                    .chunks(stride)
+                    .map(|chunk| {
+                        chunk
+                            .iter()
+                            .copied()
+                            .filter(|value| value.is_finite())
+                            .fold(0.0f32, f32::max)
+                            .clamp(0.0, 1.0)
+                    })
+                    .take(96)
+                    .collect();
+            }
+            data
+        }
+        ClipPayload::Animation {
+            path,
+            thumbnail: image,
+            ..
+        } => {
+            let mut data = file_preview(&[path.clone()]);
+            data.icon = Icon::Film;
+            data.image = image
+                .as_ref()
+                .filter(|image| image.width <= 256 && image.height <= 128)
+                .and_then(|image| image.frames_jpeg.first())
+                .and_then(|bytes| thumbnail(bytes, Some("image/jpeg")))
+                .or(data.image);
+            data
+        }
+        ClipPayload::FileBatch(paths) | ClipPayload::MultiImage { paths, .. } => {
+            file_preview(paths)
+        }
+        ClipPayload::Directory(path) => file_preview(&[path.clone()]),
+        ClipPayload::Url(url) => text_preview(url.as_str().as_bytes(), "URL"),
+        ClipPayload::Color { hex, .. } => text_preview(hex.as_bytes(), "Color"),
+    };
+    data.title = item.title.chars().take(120).collect();
+    data
+}
+
+fn valid_thumbnail(image: &ImageThumbnail) -> bool {
+    image.width > 0
+        && image.height > 0
+        && image.width <= 256
+        && image.height <= 128
+        && image.premultiplied_rgba.len() == image.width as usize * image.height as usize * 4
+}
+
+fn payload_preview(payload: &Payload) -> Data {
+    match payload {
+        Payload::Files { paths, .. } => file_preview(paths),
+        Payload::Content(content) if content.mime.starts_with("image/") => {
+            let mut data = Data::new(content.default_name(), content.mime.clone(), Icon::Image);
+            data.image = thumbnail(&content.bytes, Some(&content.mime));
+            data
+        }
+        Payload::Content(content) if content.mime == "application/pdf" => {
+            Data::new(content.default_name(), "PDF document".into(), Icon::Pdf)
+        }
+        Payload::Content(content) => text_preview(&content.bytes, &content.extension),
+    }
+}
+
+fn text_preview(bytes: &[u8], kind: &str) -> Data {
+    let prefix = &bytes[..bytes.len().min(2048)];
+    let text: String = String::from_utf8_lossy(prefix)
+        .chars()
+        .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'))
+        .take(240)
+        .collect();
+    let title = text
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("Empty text")
+        .chars()
+        .take(80)
+        .collect();
+    let mut data = Data::new(title, format!("{kind} · {} bytes", bytes.len()), Icon::Text);
+    data.text = text;
+    data
+}
+
+fn file_preview(paths: &[PathBuf]) -> Data {
+    let Some(path) = paths.first() else {
+        return Data::new("Empty group".into(), String::new(), Icon::Folder);
+    };
+    let title = display_path(Path::new(path.file_name().unwrap_or_default()));
+    let mut data = Data::new(
+        title,
+        format!(
+            "{} file{}",
+            paths.len(),
+            if paths.len() == 1 { "" } else { "s" }
+        ),
+        Icon::Folder,
+    );
+    data.text = paths
+        .iter()
+        .take(4)
+        .map(|path| display_path(Path::new(path.file_name().unwrap_or_default())))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(_) => {
+            data.detail = "Reference unavailable".into();
+            data.icon = Icon::Alert;
+            return data;
+        }
+    };
+    if metadata.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(path) {
+            data.text = entries
+                .take(4)
+                .filter_map(Result::ok)
+                .map(|entry| display_path(Path::new(&entry.file_name())))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+    } else if metadata.is_file() {
+        preview_regular_file(path, &mut data);
+    }
+    data
+}
+
+fn preview_regular_file(path: &Path, data: &mut Data) {
+    if little_clip_core::item::is_image_path(path) {
+        data.icon = Icon::Image;
+        data.image = read_prefix(path, 8 * 1024 * 1024, true)
+            .ok()
+            .and_then(|bytes| {
+                thumbnail(
+                    &bytes,
+                    Some(&little_clip_core::item::guess_image_mime(path)),
+                )
+            });
+    } else if little_clip_core::audio::is_audio_path(path) {
+        data.icon = Icon::Audio;
+        data.waveform = audio_excerpt(path);
+    } else if path
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+    {
+        data.icon = Icon::Pdf;
+    } else if let Ok(bytes) = read_prefix(path, 2048, false)
+        && !bytes.contains(&0)
+        && std::str::from_utf8(&bytes).is_ok()
+    {
+        data.text = text_preview(&bytes, "Text").text;
+        data.icon = Icon::Text;
+    }
+}
+
+fn read_prefix(path: &Path, limit: usize, complete: bool) -> Result<Vec<u8>, std::io::Error> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err(std::io::Error::other(
+            "Preview source is not a regular file",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + u64::from(complete))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        return Err(std::io::Error::other(
+            "Preview source exceeds its read limit",
+        ));
+    }
+    Ok(bytes)
+}
+
+fn thumbnail(bytes: &[u8], mime: Option<&str>) -> Option<ImageThumbnail> {
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    ImageThumbnail::generate_with_limits(bytes, mime, 128, 80, limits)
+}
+
+fn audio_excerpt(path: &Path) -> Vec<f32> {
+    if !little_clip_core::audio::read_audio_metadata(path)
+        .is_some_and(|metadata| metadata.duration_ms > 0)
+    {
+        return Vec::new();
+    }
+    let config = little_clip_core::config::AudioConfig {
+        max_full_waveform_sec: 0,
+        snippet_duration_sec: 2,
+        sample_position: little_clip_core::config::AudioSamplePosition::Start,
+        ..Default::default()
+    };
+    little_clip_core::audio::compute_plain_waveform(path, 64, &config)
+        .map(|waveform| {
+            waveform
+                .ch1_peaks
+                .into_iter()
+                .take(64)
+                .map(|peak| {
+                    if peak.is_finite() {
+                        peak.clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}

@@ -1,5 +1,6 @@
 //! Shared desktop UI used by the workbench and the standalone file manager.
 
+pub mod desktop_ipc;
 pub mod file_manager;
 pub mod icons;
 pub mod ui_appearance;

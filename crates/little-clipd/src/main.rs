@@ -656,6 +656,15 @@ fn apply_prepared_push_text(
     manager.push_to_hand(item, hand);
 }
 
+// Reference collections must stay references, even for one image or media file.
+fn build_file_item(paths: Vec<PathBuf>, references_only: bool) -> ClipItem {
+    if !references_only && paths.len() == 1 {
+        ClipItem::from_single_file(&paths[0])
+    } else {
+        ClipItem::from_files(paths)
+    }
+}
+
 async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
     info!("Client connected to IPC socket");
     let (reader, mut writer) = stream.into_split();
@@ -691,6 +700,7 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
         };
         info!("IPC request received ({} bytes)", request_bytes.len());
         let req: Result<IpcRequest, _> = serde_json::from_str(&line);
+        let references_only = matches!(&req, Ok(IpcRequest::PushFileReferences { .. }));
         let resp = match req {
             Ok(IpcRequest::GetState) => {
                 info!("Processing GetState...");
@@ -762,7 +772,8 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                     message: format!("Pushed file {:?} to {:?}", path, hand),
                 }
             }
-            Ok(IpcRequest::PushFiles { paths, hand }) => {
+            Ok(IpcRequest::PushFiles { paths, hand })
+            | Ok(IpcRequest::PushFileReferences { paths, hand }) => {
                 if paths.is_empty() {
                     IpcResponse::Error {
                         error: "No files provided".to_string(),
@@ -770,20 +781,10 @@ async fn handle_client(stream: UnixStream, ctx: Arc<DaemonContext>) {
                 } else {
                     let paths_clone = paths.clone();
                     let item = tokio::task::spawn_blocking(move || {
-                        if paths_clone.len() == 1 {
-                            ClipItem::from_single_file(&paths_clone[0])
-                        } else {
-                            ClipItem::from_files(paths_clone)
-                        }
+                        build_file_item(paths_clone, references_only)
                     })
                     .await
-                    .unwrap_or_else(|_| {
-                        if paths.len() == 1 {
-                            ClipItem::from_single_file(&paths[0])
-                        } else {
-                            ClipItem::from_files(paths.clone())
-                        }
-                    });
+                    .unwrap_or_else(|_| build_file_item(paths.clone(), references_only));
 
                     schedule_async_previews(&item, Arc::clone(&ctx));
                     {
@@ -1726,13 +1727,7 @@ async fn copy_audio_path(path: &std::path::Path, ctx: &DaemonContext) {
 }
 
 /// Returns the Unix domain socket path used for IPC communication (`$XDG_RUNTIME_DIR/little-screen-clip.sock`).
-pub fn get_socket_path() -> PathBuf {
-    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(runtime_dir).join("little-screen-clip.sock")
-    } else {
-        PathBuf::from("/tmp/little-screen-clip.sock")
-    }
-}
+pub use little_clip_core::ipc::socket_path as get_socket_path;
 
 /// Returns the filesystem directory for saving rolling audio buffer snapshots.
 pub fn get_rolling_snapshot_dir() -> PathBuf {

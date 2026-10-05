@@ -47,28 +47,7 @@ impl FileManager {
         self.edit_toolbar(ui);
         self.transfer_toolbar(ui);
         ui.separator();
-        egui::TopBottomPanel::bottom("file_manager_status")
-            .exact_height(if self.transfers.has_status() {
-                150.0
-            } else if self.edits.report.is_some() || self.error.is_some() {
-                85.0
-            } else {
-                40.0
-            })
-            .frame(egui::Frame::none().inner_margin(6.0))
-            .show_inside(ui, |ui| {
-                egui::ScrollArea::vertical()
-                    .max_height(150.0)
-                    .show(ui, |ui| self.status(ui, colors));
-            });
-        egui::SidePanel::left("file_manager_folders")
-            .default_width(240.0)
-            .width_range(150.0..=400.0)
-            .resizable(true)
-            .show_inside(ui, |ui| self.tree_ui(ui, colors));
-        egui::CentralPanel::default()
-            .frame(egui::Frame::none().inner_margin(8.0))
-            .show_inside(ui, |ui| self.list_ui(ui, colors));
+        self.docked_panels(ui, palette);
         ui.memory_mut(|memory| {
             for id in [tree_id(), list_id()] {
                 memory.set_focus_lock_filter(
@@ -93,11 +72,15 @@ impl FileManager {
                 file_clipboard,
             );
         });
-        ui.ctx()
-            .request_repaint_after(std::time::Duration::from_secs(3));
+        ui.ctx().request_repaint_after(if self.shelf.open {
+            std::time::Duration::from_millis(500)
+        } else {
+            std::time::Duration::from_secs(3)
+        });
         if self.pending.is_some()
             || self.edit_busy()
             || self.transfers.needs_repaint()
+            || self.shelf.busy()
             || self.watch.is_some()
             || self.tree.branches.values().any(|branch| {
                 branch.expanded && branch.directory.is_none() && branch.error.is_none()
@@ -106,6 +89,53 @@ impl FileManager {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(50));
         }
+    }
+
+    fn docked_panels(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        let colors = WorkbenchColors::from_palette(palette);
+        if self.shelf.open {
+            let height = (ui.available_height() * 0.38).clamp(144.0, 224.0);
+            egui::TopBottomPanel::bottom("file_manager_shelf")
+                .exact_height(height)
+                .frame(egui::Frame::none().fill(colors.recessed).inner_margin(8.0))
+                .show_inside(ui, |ui| {
+                    ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                    self.shelf_ui(ui, palette);
+                });
+        }
+        egui::TopBottomPanel::bottom("file_manager_status")
+            .exact_height(if self.shelf.open {
+                if self.filesystem_busy()
+                    || self.error.is_some()
+                    || self.transfers.has_status()
+                    || self.edits.report.is_some()
+                {
+                    56.0
+                } else {
+                    32.0
+                }
+            } else if self.transfers.has_status() {
+                150.0
+            } else if self.edits.report.is_some() || self.error.is_some() {
+                85.0
+            } else {
+                40.0
+            })
+            .frame(egui::Frame::none().inner_margin(6.0))
+            .show_inside(ui, |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
+                egui::ScrollArea::vertical()
+                    .max_height(ui.available_height())
+                    .show(ui, |ui| self.status(ui, colors));
+            });
+        egui::SidePanel::left("file_manager_folders")
+            .default_width(240.0)
+            .width_range(150.0..=400.0)
+            .resizable(true)
+            .show_inside(ui, |ui| self.tree_ui(ui, colors));
+        egui::CentralPanel::default()
+            .frame(egui::Frame::none().inner_margin(8.0))
+            .show_inside(ui, |ui| self.list_ui(ui, colors));
     }
 
     fn sync_modal_focus(&mut self, ctx: &egui::Context) {
