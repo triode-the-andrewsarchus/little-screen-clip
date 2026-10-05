@@ -1,6 +1,6 @@
 # File Manager Implementation Plan
 
-Status: Phase 1 is complete as a standalone application. See [phase1.md](phase1.md) for delivered behavior and validation.
+Status: Phase 1 is complete as a standalone application. See [phase1.md](phase1.md) for delivered behavior and validation. Phase 2 is complete and verified; [phase2.md](phase2.md) records delivered behavior, operation contracts, and acceptance results.
 
 The product goals are recorded in [core.md](core.md). This plan turns those goals into a sequence of usable milestones. The later phases describe intended capabilities, not settled specifications: each needs a short design pass before implementation. Phase 1 establishes the browser foundation; subsequent phases build on it.
 
@@ -443,7 +443,7 @@ Before significant implementation, inspect reuse candidates and establish the re
 
 ## Validation strategy for implementation phases
 
-This planning task does not run implementation tests. When implementation begins:
+Acceptance checks for implementation phases:
 
 - Test navigation transitions and asynchronous result rejection independently from rendering.
 - Exercise real temporary directory fixtures for file operations, conflicts, partial failures, symlinks, and names requiring careful path handling.
@@ -511,4 +511,4 @@ Unresolved later-phase decisions should not block the basic browser.
 
 ## Next implementation milestone
 
-Begin Phase 2 in reviewable slices: selection and create/rename actions first, then copy/move and conflict handling, trash and restoration, refresh convergence, and drag-and-drop. Keep filesystem operations in background jobs and make their results explicit.
+Review the completed Phase 2 implementation and verification recorded in [phase2.md](phase2.md). Next, prepare a concrete Phase 3 proposal for Shelf behavior and creating files from clipboard content; interoperable file-reference copy/cut/paste already ships in Phase 2.

@@ -1,5 +1,7 @@
-use std::ffi::{OsStr, OsString};
+use std::ffi::{CString, OsStr, OsString};
+use std::hash::{Hash, Hasher};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -15,6 +17,8 @@ pub(super) struct Entry {
     pub size: String,
     pub modified: String,
     pub warning: Option<String>,
+    revision: u64,
+    pub identity: Option<Identity>,
 }
 
 #[derive(Debug)]
@@ -22,6 +26,7 @@ pub(super) struct Directory {
     pub path: PathBuf,
     pub entries: Vec<Entry>,
     pub skipped: usize,
+    pub signature: u64,
 }
 
 // Called exclusively by the bounded executor. Canonical locations make symlink
@@ -45,7 +50,14 @@ pub(super) fn read_directory(path: &Path, cancelled: &AtomicBool) -> Result<Dire
             .cmp(&a.directory)
             .then_with(|| a.path.file_name().cmp(&b.path.file_name()))
     });
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for entry in &entries {
+        entry.path.hash(&mut hasher);
+        entry.revision.hash(&mut hasher);
+    }
+    skipped.hash(&mut hasher);
     Ok(Directory {
+        signature: hasher.finish(),
         path,
         entries,
         skipped,
@@ -59,7 +71,16 @@ fn read_entry(child: std::fs::DirEntry) -> Entry {
     let directory = metadata.as_ref().is_ok_and(|data| data.is_dir());
     let modified = metadata.as_ref().ok().and_then(|data| data.modified().ok());
     let warning = metadata.as_ref().err().map(|error| error.to_string());
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    if let Ok(data) = &metadata {
+        identity(data).hash(&mut hasher);
+    }
+    let link_metadata = std::fs::symlink_metadata(&path);
+    let entry_identity = link_metadata.as_ref().ok().map(identity);
+    entry_identity.hash(&mut hasher);
     Entry {
+        revision: hasher.finish(),
+        identity: entry_identity,
         hidden: child.file_name().as_bytes().starts_with(b"."),
         name: display_path(Path::new(&child.file_name())),
         path,
@@ -135,10 +156,7 @@ pub(super) fn display_path(path: &Path) -> String {
     result
 }
 
-pub(super) fn parse_address(text: &str, current: &Path, home: &Path) -> Result<PathBuf, String> {
-    if text.is_empty() {
-        return Err("Enter a directory path".into());
-    }
+pub(super) fn decode_path(text: &str) -> Result<PathBuf, String> {
     let mut decoded = Vec::new();
     let mut bytes = text.as_bytes().iter().copied();
     while let Some(byte) = bytes.next() {
@@ -162,7 +180,14 @@ pub(super) fn parse_address(text: &str, current: &Path, home: &Path) -> Result<P
     if decoded.contains(&0) {
         return Err("A path cannot contain a NUL byte".into());
     }
-    let path = PathBuf::from(OsString::from_vec(decoded));
+    Ok(PathBuf::from(OsString::from_vec(decoded)))
+}
+
+pub(super) fn parse_address(text: &str, current: &Path, home: &Path) -> Result<PathBuf, String> {
+    if text.is_empty() {
+        return Err("Enter a directory path".into());
+    }
+    let path = decode_path(text)?;
     if path == Path::new("~") {
         return Ok(home.into());
     }
@@ -174,4 +199,66 @@ pub(super) fn parse_address(text: &str, current: &Path, home: &Path) -> Result<P
     } else {
         current.join(path)
     })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct Identity(u64, u64, u64, i64, i64, i64, i64, u32);
+
+pub(super) fn identity(data: &std::fs::Metadata) -> Identity {
+    Identity(
+        data.dev(),
+        data.ino(),
+        data.len(),
+        data.mtime(),
+        data.mtime_nsec(),
+        data.ctime(),
+        data.ctime_nsec(),
+        data.mode(),
+    )
+}
+
+pub(super) fn rename_noreplace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    rename_at_noreplace(
+        libc::AT_FDCWD,
+        source.as_os_str(),
+        libc::AT_FDCWD,
+        destination.as_os_str(),
+    )
+}
+
+pub(super) fn rename_at_noreplace(
+    source_fd: i32,
+    source: &OsStr,
+    destination_fd: i32,
+    destination: &OsStr,
+) -> std::io::Result<()> {
+    let source = CString::new(source.as_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    let destination = CString::new(destination.as_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    // SAFETY: both names are NUL-terminated and each descriptor is borrowed from
+    // a live directory or is AT_FDCWD. Linux refuses any existing destination.
+    let result = unsafe {
+        libc::renameat2(
+            source_fd,
+            source.as_ptr(),
+            destination_fd,
+            destination.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+impl Identity {
+    // Moving the directory entry changes ctime; object identity, contents, mode
+    // and mtime must still match before removing a quarantined move source.
+    pub(super) fn after_rename_matches(self, actual: Self) -> bool {
+        (self.0, self.1, self.2, self.3, self.4, self.7)
+            == (actual.0, actual.1, actual.2, actual.3, actual.4, actual.7)
+    }
 }

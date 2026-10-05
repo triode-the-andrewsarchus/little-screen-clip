@@ -50,8 +50,9 @@ controls, SVG icons, fonts, and appearance. The file manager runs without the da
 or a USB display. Open it with `./launch.sh files [DIRECTORY]` or
 `cargo run -p clip-workbench --bin clip-file-manager -- [DIRECTORY]`.
 Phase 1 provides folder browsing, Back/Forward/Up, an editable address bar, a lazy
-folder tree, refresh, and hidden-file visibility. File operations and previews are
-scheduled in [the phased plan](docs/File%20Manager/plan.md).
+folder tree, refresh, and hidden-file visibility. Phase 2 adds multi-selection, create/rename, queued copy/move, conflict decisions,
+Trash/restore, permanent deletion, clipboard file references, external-change refresh, and native Wayland drag-and-drop. See [Phase 2 delivery](docs/File%20Manager/phase2.md)
+and [the phased plan](docs/File%20Manager/plan.md) for the remaining operations and previews.
 
 Dependencies point toward the lower rows of responsibility: UI, daemon, driver, and renderer must
 not pull operation-domain behavior back into their own crates. Presentation-ready models belong in

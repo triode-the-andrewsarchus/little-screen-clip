@@ -1,13 +1,19 @@
-//! Read-only folder browsing. Filesystem work stays on the shared bounded executor.
+//! Folder browsing and file management on the shared bounded executor.
 
 mod app;
+mod edit_ui;
+mod edits;
 mod filesystem;
+mod native_drag;
+mod selection;
+mod transfers;
 pub use app::run;
 #[cfg(test)]
 mod tests;
 mod tree;
 mod ui;
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -21,6 +27,8 @@ use tree::FolderTree;
 struct Location {
     path: PathBuf,
     selected: Option<PathBuf>,
+    selection: BTreeSet<PathBuf>,
+    anchor: Option<PathBuf>,
     scroll: f32,
 }
 
@@ -100,6 +108,14 @@ pub(crate) struct FileManager {
     reveal_selection: bool,
     focus_address: bool,
     address_editing: bool,
+    edits: edits::EditState,
+    selection_revision: u64,
+    transfers: transfers::Transfers,
+    refresh_after_transfer: bool,
+    watch: Option<DirectoryJob>,
+    watch_started: std::time::Instant,
+    drop_targets: Vec<(egui::Rect, PathBuf)>,
+    was_modal: bool,
 }
 
 impl Default for FileManager {
@@ -130,6 +146,14 @@ impl FileManager {
             reveal_selection: false,
             focus_address: false,
             address_editing: false,
+            edits: edits::EditState::default(),
+            selection_revision: 0,
+            transfers: transfers::Transfers::default(),
+            refresh_after_transfer: false,
+            watch: None,
+            watch_started: std::time::Instant::now(),
+            drop_targets: Vec::new(),
+            was_modal: false,
         }
     }
 
@@ -147,6 +171,8 @@ impl FileManager {
     }
 
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
+        self.watch = None;
+        self.watch_started = std::time::Instant::now();
         if matches!(navigation, Navigation::New) && self.directory.is_some() && path == self.path()
         {
             self.pending = None;
@@ -242,15 +268,27 @@ impl FileManager {
                 self.address = display_path(self.path());
             }
         }
+        self.tick_edits(jobs);
+        self.tick_transfers(jobs);
+        if self.refresh_after_transfer && self.pending.is_none() {
+            self.refresh_after_transfer = false;
+            self.refresh();
+        }
+        self.tick_watch(jobs);
         self.tree.tick(jobs);
     }
 
     fn commit(&mut self, directory: Directory, navigation: Navigation) {
+        if !matches!(navigation, Navigation::Refresh) {
+            self.selection_revision = self.selection_revision.wrapping_add(1);
+        }
         match navigation {
             _ if self.index.is_none() => {
                 self.history.push(Location {
                     path: directory.path.clone(),
                     selected: None,
+                    selection: BTreeSet::new(),
+                    anchor: None,
                     scroll: 0.0,
                 });
                 self.index = Some(0);
@@ -260,6 +298,8 @@ impl FileManager {
                 self.history.push(Location {
                     path: directory.path.clone(),
                     selected: None,
+                    selection: BTreeSet::new(),
+                    anchor: None,
                     scroll: 0.0,
                 });
                 self.index = Some(self.history.len() - 1);
@@ -287,19 +327,7 @@ impl FileManager {
                     .collect()
             })
             .unwrap_or_default();
-        let exists = self
-            .location()
-            .and_then(|location| location.selected.as_ref())
-            .is_some_and(|selected| {
-                self.directory.as_ref().is_some_and(|directory| {
-                    self.visible
-                        .iter()
-                        .any(|i| directory.entries[*i].path == *selected)
-                })
-            });
-        if !exists && let Some(location) = self.location_mut() {
-            location.selected = None;
-        }
+        self.reconcile_selection();
     }
 
     fn toggle_hidden(&mut self) {
@@ -307,13 +335,7 @@ impl FileManager {
         self.rebuild_visible();
     }
 
-    fn select(&mut self, path: PathBuf) {
-        if let Some(location) = self.location_mut() {
-            location.selected = Some(path);
-        }
-    }
-
-    fn move_selection(&mut self, down: bool) {
+    fn move_selection(&mut self, down: bool, extend: bool) {
         if self.visible.is_empty() {
             return;
         }
@@ -334,14 +356,21 @@ impl FileManager {
             (None, true) => 0,
             (None, false) => self.visible.len() - 1,
         };
-        self.select(directory.entries[self.visible[index]].path.clone());
+        self.select_with(
+            directory.entries[self.visible[index]].path.clone(),
+            false,
+            extend,
+        );
         self.reveal_selection = true;
     }
 
     fn open_selected(&mut self) {
+        if self.selection_count() != 1 {
+            return;
+        }
         let selected = self
             .location()
-            .and_then(|location| location.selected.as_ref());
+            .and_then(|location| location.selection.first());
         let path = self
             .directory
             .as_ref()
@@ -354,6 +383,38 @@ impl FileManager {
             .map(|entry| entry.path.clone());
         if let Some(path) = path {
             self.navigate(path, Navigation::New);
+        }
+    }
+}
+
+impl FileManager {
+    fn tick_watch(&mut self, jobs: &BackgroundJobs) {
+        if self.pending.is_some() || self.directory.is_none() {
+            return;
+        }
+        if self.watch.is_none() && self.watch_started.elapsed() >= Duration::from_secs(3) {
+            self.watch = Some(DirectoryJob::new(self.path().into(), jobs));
+            self.watch_started = std::time::Instant::now();
+        }
+        let Some(completion) = self.watch.as_ref().and_then(DirectoryJob::poll) else {
+            return;
+        };
+        self.watch = None;
+        match completion {
+            Completion::Ready(Ok(directory)) if directory.path == self.path() => {
+                if self
+                    .directory
+                    .as_ref()
+                    .is_none_or(|current| current.signature != directory.signature)
+                {
+                    self.tree.refresh(directory.path.clone());
+                    self.commit(directory, Navigation::Refresh);
+                }
+            }
+            Completion::Ready(Err(_)) => {
+                self.refresh();
+            }
+            _ => {}
         }
     }
 }

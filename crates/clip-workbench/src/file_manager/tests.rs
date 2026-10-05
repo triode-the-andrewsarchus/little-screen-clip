@@ -183,9 +183,7 @@ fn failed_and_repeated_navigation_do_not_change_history_or_listing() {
 
 #[test]
 fn unavailable_history_destination_remains_retryable() {
-    let temp = tempfile::tempdir().unwrap();
-    let child = temp.path().join("child");
-    std::fs::create_dir(&child).unwrap();
+    let (temp, child) = folder_fixture();
     let (mut manager, jobs) = loaded(temp.path());
     manager.navigate(child.clone(), Navigation::New);
     finish(&mut manager, &jobs);
@@ -292,9 +290,7 @@ fn address_focus_selection_submission_and_escape_work_in_rendered_ui() {
 
 #[test]
 fn keyboard_arrows_select_without_navigating_and_enter_opens_a_folder() {
-    let temp = tempfile::tempdir().unwrap();
-    let child = temp.path().join("child");
-    std::fs::create_dir(&child).unwrap();
+    let (temp, child) = folder_fixture();
     let (mut manager, jobs, ctx) = rendered(temp.path());
     ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("file_manager_list_focus")));
     press(
@@ -472,9 +468,7 @@ fn initial_refresh_creates_a_location_and_root_has_no_parent_navigation() {
 
 #[test]
 fn large_directory_virtualizes_rows_and_restores_history_viewport() {
-    let temp = tempfile::tempdir().unwrap();
-    let child = temp.path().join("child");
-    std::fs::create_dir(&child).unwrap();
+    let (temp, child) = folder_fixture();
     for index in 0..10_000 {
         std::fs::write(temp.path().join(format!("file-{index:05}.txt")), "data").unwrap();
     }
@@ -550,9 +544,7 @@ fn stalled_directory_worker_leaves_address_navigation_responsive() {
 
 #[test]
 fn tree_keyboard_expansion_selection_and_navigation_are_separate() {
-    let temp = tempfile::tempdir().unwrap();
-    let child = temp.path().join("child");
-    std::fs::create_dir(&child).unwrap();
+    let (temp, child) = folder_fixture();
     let (mut manager, jobs, ctx) = rendered(temp.path());
     ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("file_manager_tree_focus")));
     frame(&mut manager, &ctx, vec![]);
@@ -653,4 +645,118 @@ fn known_ancestry_is_visible_before_loading_and_through_unreadable_parents() {
             ancestor.display()
         );
     }
+}
+
+#[test]
+fn multiselection_ranges_toggles_select_all_and_refresh_preserve_valid_members() {
+    let root = populated_folder(&["a", "b", "c", "d"]);
+    let (mut browser, jobs) = loaded(root.path());
+    browser.select_with(root.path().join("a"), false, false);
+    browser.select_with(root.path().join("c"), false, true);
+    assert_eq!(browser.selection_count(), 3);
+    browser.select_with(root.path().join("b"), true, false);
+    assert_eq!(
+        browser.selected_paths(),
+        [root.path().join("a"), root.path().join("c")]
+    );
+    browser.select_all();
+    assert_eq!(browser.selection_count(), 4);
+    std::fs::remove_file(root.path().join("b")).unwrap();
+    browser.refresh();
+    finish(&mut browser, &jobs);
+    assert_eq!(browser.selection_count(), 3);
+    browser.clear_selection();
+    assert_eq!(browser.selection_count(), 0);
+}
+
+#[test]
+fn quiet_external_refresh_preserves_unrelated_selection_and_address_draft() {
+    let root = populated_folder(&["selected"]);
+    let (mut browser, jobs) = loaded(root.path());
+    browser.select(root.path().join("selected"));
+    browser.address_editing = true;
+    browser.address = "unfinished address".into();
+    std::fs::write(root.path().join("new"), "new").unwrap();
+    browser.watch_started = Instant::now() - Duration::from_secs(4);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while browser.directory.as_ref().unwrap().entries.len() != 2 {
+        browser.tick(&jobs);
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(browser.selected_paths(), [root.path().join("selected")]);
+    assert_eq!(browser.address, "unfinished address");
+}
+
+fn populated_folder(names: &[&str]) -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    for name in names {
+        std::fs::write(root.path().join(name), name).unwrap();
+    }
+    root
+}
+
+#[test]
+fn native_clipboard_key_event_copies_selected_references() {
+    let root = populated_folder(&["alpha", "beta"]);
+    let (mut browser, _jobs, ctx) = rendered(root.path());
+    browser.select_all();
+    ctx.memory_mut(|m| m.request_focus(super::ui::list_id()));
+    frame(
+        &mut browser,
+        &ctx,
+        vec![egui::Event::Key {
+            key: egui::Key::C,
+            physical_key: Some(egui::Key::Escape),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers {
+                ctrl: true,
+                command: true,
+                ..Default::default()
+            },
+        }],
+    );
+    assert_eq!(browser.transfers.clipboard.as_ref().unwrap().paths.len(), 2);
+}
+
+fn folder_fixture() -> (tempfile::TempDir, PathBuf) {
+    let temp = tempfile::tempdir().unwrap();
+    let child = temp.path().join("child");
+    std::fs::create_dir(&child).unwrap();
+    (temp, child)
+}
+
+#[test]
+fn cancelling_a_confirmation_returns_keyboard_focus_to_file_list() {
+    let root = populated_folder(&["file"]);
+    let (mut browser, _jobs, ctx) = rendered(root.path());
+    browser.select_all();
+    browser.confirm_delete(false);
+    frame(&mut browser, &ctx, vec![]);
+    assert!(browser.transfers_modal());
+    press(&mut browser, &ctx, egui::Key::Escape, egui::Modifiers::NONE);
+    frame(&mut browser, &ctx, vec![]);
+    assert!(!browser.transfers_modal());
+    assert!(ctx.memory(|memory| memory.has_focus(super::ui::list_id())));
+    press(
+        &mut browser,
+        &ctx,
+        egui::Key::Delete,
+        egui::Modifiers::SHIFT,
+    );
+    assert!(browser.transfers_modal());
+    assert!(root.path().join("file").exists());
+}
+
+#[test]
+fn escape_clears_rendered_selection_without_losing_list_focus() {
+    let root = populated_folder(&["one", "two"]);
+    let (mut browser, _jobs, ctx) = rendered(root.path());
+    browser.select_all();
+    ctx.memory_mut(|memory| memory.request_focus(super::ui::list_id()));
+    frame(&mut browser, &ctx, vec![]);
+    press(&mut browser, &ctx, egui::Key::Escape, egui::Modifiers::NONE);
+    assert_eq!(browser.selection_count(), 0);
+    assert!(ctx.memory(|memory| memory.has_focus(super::ui::list_id())));
 }

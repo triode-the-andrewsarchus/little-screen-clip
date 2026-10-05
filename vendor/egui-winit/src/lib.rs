@@ -102,6 +102,12 @@ pub struct State {
     ime_rect_px: Option<egui::Rect>,
 }
 
+/// Context data key for applications that handle non-text clipboard payloads.
+/// Set its temporary boolean value only while a custom clipboard surface has focus.
+/// When true, clipboard shortcuts arrive as ordinary key events, without a text
+/// clipboard read. Text editors should leave this false.
+pub const CLIPBOARD_SHORTCUTS_AS_KEYS: &str = "egui_winit_clipboard_shortcuts_as_keys";
+
 impl State {
     /// Construct a new instance
     pub fn new(
@@ -682,6 +688,32 @@ impl State {
         }
     }
 
+    // Clipboard commands are translated independently of ordinary key mapping.
+    fn handle_clipboard_shortcut(&mut self, key: egui::Key, pressed: bool) -> bool {
+        let forward = self.egui_ctx.data(|data| {
+            data.get_temp::<bool>(egui::Id::new(CLIPBOARD_SHORTCUTS_AS_KEYS))
+                .unwrap_or(false)
+        });
+        if !pressed || forward {
+            return false;
+        }
+        if is_cut_command(self.egui_input.modifiers, key) {
+            self.egui_input.events.push(egui::Event::Cut);
+        } else if is_copy_command(self.egui_input.modifiers, key) {
+            self.egui_input.events.push(egui::Event::Copy);
+        } else if is_paste_command(self.egui_input.modifiers, key) {
+            if let Some(contents) = self.clipboard.get() {
+                let contents = contents.replace("\r\n", "\n");
+                if !contents.is_empty() {
+                    self.egui_input.events.push(egui::Event::Paste(contents));
+                }
+            }
+        } else {
+            return false;
+        }
+        true
+    }
+
     fn on_keyboard_input(&mut self, event: &winit::event::KeyEvent) {
         let winit::event::KeyEvent {
             // Represents the position of a key independent of the currently active layout.
@@ -728,22 +760,8 @@ impl State {
         );
 
         if let Some(logical_key) = logical_key {
-            if pressed {
-                if is_cut_command(self.egui_input.modifiers, logical_key) {
-                    self.egui_input.events.push(egui::Event::Cut);
-                    return;
-                } else if is_copy_command(self.egui_input.modifiers, logical_key) {
-                    self.egui_input.events.push(egui::Event::Copy);
-                    return;
-                } else if is_paste_command(self.egui_input.modifiers, logical_key) {
-                    if let Some(contents) = self.clipboard.get() {
-                        let contents = contents.replace("\r\n", "\n");
-                        if !contents.is_empty() {
-                            self.egui_input.events.push(egui::Event::Paste(contents));
-                        }
-                    }
-                    return;
-                }
+            if self.handle_clipboard_shortcut(logical_key, pressed) {
+                return;
             }
 
             self.egui_input.events.push(egui::Event::Key {

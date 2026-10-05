@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use egui::{Color32, FontId, Id, Key, Modifiers, Rect, Sense, Ui, pos2, vec2};
 use little_clip_core::palette::AppPalette;
 
@@ -11,34 +13,54 @@ const ROW_HEIGHT: f32 = 28.0;
 fn address_id() -> Id {
     Id::new("file_manager_address")
 }
-fn list_id() -> Id {
+pub(super) fn list_id() -> Id {
     Id::new("file_manager_list_focus")
 }
 fn tree_id() -> Id {
     Id::new("file_manager_tree_focus")
 }
 
-fn key(ctx: &egui::Context, modifiers: Modifiers, key: Key) -> bool {
+pub(super) fn key(ctx: &egui::Context, modifiers: Modifiers, key: Key) -> bool {
     ctx.input_mut(|input| input.consume_key(modifiers, key))
 }
 
 impl FileManager {
     pub(crate) fn handle_address_escape(&mut self, ctx: &egui::Context) {
-        if self.address_editing && key(ctx, Modifiers::NONE, Key::Escape) {
+        if self.edits.dialog.is_none()
+            && !self.transfers_modal()
+            && self.address_editing
+            && key(ctx, Modifiers::NONE, Key::Escape)
+        {
             self.address = display_path(self.path());
             ctx.memory_mut(|memory| memory.request_focus(list_id()));
         }
     }
 
     pub(crate) fn ui(&mut self, ui: &mut Ui, palette: &AppPalette) {
+        self.drop_targets.clear();
         self.tick(super::BackgroundJobs::global());
         let colors = WorkbenchColors::from_palette(palette);
+        self.sync_modal_focus(ui.ctx());
         self.shortcuts(ui.ctx());
+        ui.set_enabled(self.edits.dialog.is_none() && !self.transfers_modal());
         self.toolbar(ui, palette);
+        self.edit_toolbar(ui);
+        self.transfer_toolbar(ui);
         ui.separator();
         egui::TopBottomPanel::bottom("file_manager_status")
+            .exact_height(if self.transfers.has_status() {
+                150.0
+            } else if self.edits.report.is_some() || self.error.is_some() {
+                85.0
+            } else {
+                40.0
+            })
             .frame(egui::Frame::none().inner_margin(6.0))
-            .show_inside(ui, |ui| self.status(ui, colors));
+            .show_inside(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(150.0)
+                    .show(ui, |ui| self.status(ui, colors));
+            });
         egui::SidePanel::left("file_manager_folders")
             .default_width(240.0)
             .width_range(150.0..=400.0)
@@ -52,6 +74,7 @@ impl FileManager {
                 memory.set_focus_lock_filter(
                     id,
                     egui::EventFilter {
+                        escape: true,
                         horizontal_arrows: true,
                         vertical_arrows: true,
                         ..Default::default()
@@ -59,7 +82,23 @@ impl FileManager {
                 );
             }
         });
+        self.naming_ui(ui.ctx(), colors);
+        self.transfer_windows(ui.ctx(), colors);
+        let file_clipboard = ui.memory(|memory| memory.has_focus(list_id()))
+            && self.edits.dialog.is_none()
+            && !self.transfers_modal();
+        ui.ctx().data_mut(|data| {
+            data.insert_temp(
+                egui::Id::new(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS),
+                file_clipboard,
+            );
+        });
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs(3));
         if self.pending.is_some()
+            || self.edit_busy()
+            || self.transfers.needs_repaint()
+            || self.watch.is_some()
             || self.tree.branches.values().any(|branch| {
                 branch.expanded && branch.directory.is_none() && branch.error.is_none()
             })
@@ -69,7 +108,53 @@ impl FileManager {
         }
     }
 
+    fn sync_modal_focus(&mut self, ctx: &egui::Context) {
+        let modal = self.edits.dialog.is_some() || self.transfers_modal();
+        if self.was_modal && !modal {
+            ctx.memory_mut(|memory| memory.request_focus(list_id()));
+        }
+        self.was_modal = modal;
+    }
+
     fn shortcuts(&mut self, ctx: &egui::Context) {
+        if self.edits.dialog.is_some() || self.transfers_modal() {
+            return;
+        }
+        self.navigation_shortcuts(ctx);
+        if ctx.memory(|memory| memory.has_focus(address_id())) {
+            return;
+        }
+        if key(
+            ctx,
+            Modifiers {
+                ctrl: true,
+                shift: true,
+                ..Default::default()
+            },
+            Key::N,
+        ) {
+            self.begin_naming(super::edits::NamingAction::Folder);
+        }
+        if ctx.memory(|memory| memory.has_focus(tree_id())) {
+            self.tree_shortcuts(ctx);
+        } else if ctx.memory(|memory| memory.has_focus(list_id())) {
+            self.list_shortcuts(ctx);
+            if self.edits.dialog.is_some() {
+                return;
+            }
+            if key(ctx, Modifiers::NONE, Key::ArrowDown) {
+                self.move_selection(true, false);
+            }
+            if key(ctx, Modifiers::NONE, Key::ArrowUp) {
+                self.move_selection(false, false);
+            }
+            if key(ctx, Modifiers::NONE, Key::Enter) {
+                self.open_selected();
+            }
+        }
+    }
+
+    fn navigation_shortcuts(&mut self, ctx: &egui::Context) {
         if key(ctx, Modifiers::CTRL, Key::L) {
             self.focus_address = true;
         }
@@ -88,21 +173,42 @@ impl FileManager {
         if key(ctx, Modifiers::CTRL, Key::H) {
             self.toggle_hidden();
         }
-        if ctx.memory(|memory| memory.has_focus(address_id())) {
-            return;
+    }
+
+    fn list_shortcuts(&mut self, ctx: &egui::Context) {
+        self.transfer_shortcuts(ctx);
+        if key(ctx, Modifiers::CTRL, Key::A) {
+            self.select_all();
         }
-        if ctx.memory(|memory| memory.has_focus(tree_id())) {
-            self.tree_shortcuts(ctx);
-        } else if ctx.memory(|memory| memory.has_focus(list_id())) {
-            if key(ctx, Modifiers::NONE, Key::ArrowDown) {
-                self.move_selection(true);
-            }
-            if key(ctx, Modifiers::NONE, Key::ArrowUp) {
-                self.move_selection(false);
-            }
-            if key(ctx, Modifiers::NONE, Key::Enter) {
-                self.open_selected();
-            }
+        if key(ctx, Modifiers::NONE, Key::Escape) {
+            self.clear_selection();
+        }
+        if key(ctx, Modifiers::NONE, Key::F2) {
+            self.begin_rename();
+        }
+        if key(ctx, Modifiers::SHIFT, Key::ArrowDown) {
+            self.move_selection(true, true);
+        }
+        if key(ctx, Modifiers::SHIFT, Key::ArrowUp) {
+            self.move_selection(false, true);
+        }
+    }
+
+    fn transfer_shortcuts(&mut self, ctx: &egui::Context) {
+        if key(ctx, Modifiers::CTRL, Key::C) {
+            self.copy_selection(false);
+        }
+        if key(ctx, Modifiers::CTRL, Key::X) {
+            self.copy_selection(true);
+        }
+        if key(ctx, Modifiers::CTRL, Key::V) {
+            self.paste_files();
+        }
+        if key(ctx, Modifiers::SHIFT, Key::Delete) {
+            self.confirm_delete(true);
+        }
+        if key(ctx, Modifiers::NONE, Key::Delete) {
+            self.confirm_delete(false);
         }
     }
 
@@ -153,18 +259,13 @@ impl FileManager {
             if nav_button(ui, Icon::ArrowRight, "Forward [Alt+Right]", self.index.is_some_and(|i| i + 1 < self.history.len()), palette) { self.history_step(true); }
             if nav_button(ui, Icon::ArrowUp, "Parent folder [Alt+Up]", self.path().parent().is_some(), palette) { self.parent(); }
             let address_width = (ui.available_width() - 180.0).max(80.0);
-            let output = egui::TextEdit::singleline(&mut self.address)
+            let mut output = egui::TextEdit::singleline(&mut self.address)
                 .id(address_id()).hint_text("Directory path [Ctrl+L]")
                 .desired_width(address_width).show(ui);
             output.response.clone().on_hover_text("Enter a directory path. Relative paths and ~/ are supported. Backslashes: \\\\; unusual bytes: \\xHH.");
             if self.focus_address {
                 self.focus_address = false;
-                output.response.request_focus();
-                let mut state = output.state;
-                state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
-                    egui::text::CCursor::new(0), egui::text::CCursor::new(self.address.chars().count()),
-                )));
-                state.store(ui.ctx(), address_id());
+                focus_text(ui.ctx(), &mut output, self.address.chars().count());
             }
             if output.response.lost_focus() && ui.input(|input| input.key_pressed(Key::Enter)) {
                 self.submit_address();
@@ -218,6 +319,8 @@ impl FileManager {
                 self.retry();
             }
         }
+        self.edit_status(ui, colors);
+        self.transfer_status(ui, colors);
         if let Some(directory) = &self.directory
             && directory.skipped > 0
         {
@@ -269,38 +372,58 @@ impl FileManager {
                 "No visible items. Enable hidden files to see this folder's contents."
             });
         }
-        let selected = self
-            .location()
-            .and_then(|location| location.selected.as_ref());
-        let mut select = None;
-        let mut open = None;
-        let focus = ui.interact(ui.available_rect_before_wrap(), list_id(), Sense::click());
-        if focus.clicked() {
-            focus.request_focus();
-            ui.ctx().request_repaint();
+        let selected = self.location().map(|location| &location.selection);
+        let mut actions = ListActions::default();
+        let can_edit = self.can_edit();
+        let selection_count = self.selection_count();
+        let background = actions.background(ui, can_edit, selection_count > 0);
+        let mut targets = Vec::new();
+        if ui.is_enabled() {
+            targets.push((
+                background.rect.intersect(ui.clip_rect()),
+                directory.path.clone(),
+            ));
         }
         let output = scroll.show_rows(ui, ROW_HEIGHT, self.visible.len(), |ui, range| {
             for index in range {
                 let entry = &directory.entries[self.visible[index]];
-                let response =
-                    file_row(ui, entry, Some(&entry.path) == selected, name_width, colors);
-                if response.clicked() || response.double_clicked() {
-                    select = Some(entry.path.clone());
-                    ui.memory_mut(|memory| memory.request_focus(list_id()));
-                    ui.ctx().request_repaint();
+                let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
+                let response = file_row(ui, entry, marked, name_width, colors);
+                if entry.directory && ui.is_enabled() {
+                    targets.push((response.rect.intersect(ui.clip_rect()), entry.path.clone()));
                 }
-                if response.double_clicked() && entry.directory {
-                    open = Some(entry.path.clone());
-                }
+                actions.row(ui, &response, entry, selected, can_edit, selection_count);
             }
         });
+        self.drop_targets.extend(targets);
         if let Some(location) = self.location_mut() {
             location.scroll = output.state.offset.y;
         }
-        if let Some(path) = select {
-            self.select(path);
+        if actions.transfer.is_none() {
+            actions.transfer = drop_files(ui, &background, self.path());
         }
-        if let Some(path) = open {
+        self.apply_list_actions(actions);
+    }
+
+    fn apply_list_actions(&mut self, actions: ListActions) {
+        if let Some((paths, destination, moving)) = actions.transfer {
+            self.queue_transfer(paths, destination, moving);
+        }
+        if let Some((path, additive, range)) = actions.selection {
+            self.select_with(path, additive, range);
+        } else if actions.clear {
+            self.clear_selection();
+        }
+        if actions.select_all {
+            self.select_all();
+        }
+        if let Some(action) = actions.files {
+            self.selection_action(action);
+        }
+        if let Some(action) = actions.naming {
+            self.begin_naming(action);
+        }
+        if let Some(path) = actions.open {
             self.navigate(path, Navigation::New);
         }
     }
@@ -367,16 +490,26 @@ impl FileManager {
                 self.tree.selected = Some(path.clone());
                 self.navigate(path, Navigation::New);
             }
+            Some(TreeAction::Transfer(paths, destination, moving)) => {
+                self.queue_transfer(paths, destination, moving)
+            }
             None => {}
         }
     }
     fn tree_row(
-        &self,
+        &mut self,
         ui: &mut Ui,
         row: &super::tree::TreeRow,
         index: usize,
         colors: WorkbenchColors,
     ) -> Option<TreeAction> {
+        if ui.is_enabled() {
+            self.drop_targets.push((
+                Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), ROW_HEIGHT))
+                    .intersect(ui.clip_rect()),
+                row.path.clone(),
+            ));
+        }
         let branch = self.tree.branches.get(&row.path);
         let expanded = branch.is_some_and(|branch| branch.expanded);
         let indent = row.depth as f32 * 16.0;
@@ -461,6 +594,9 @@ impl FileManager {
                 );
             }
         }
+        if let Some((paths, destination, moving)) = drop_files(ui, &response, &row.path) {
+            return Some(TreeAction::Transfer(paths, destination, moving));
+        }
         if arrow.clicked() {
             return Some(TreeAction::Toggle(row.path.clone()));
         }
@@ -525,8 +661,10 @@ fn file_row(
     name_width: f32,
     colors: WorkbenchColors,
 ) -> egui::Response {
-    let (rect, response) =
-        ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(
+        vec2(ui.available_width(), ROW_HEIGHT),
+        Sense::click_and_drag(),
+    );
     let response = response.on_hover_text(format!(
         "{}{}",
         display_path(&entry.path),
@@ -579,4 +717,137 @@ fn file_row(
 enum TreeAction {
     Toggle(std::path::PathBuf),
     Open(std::path::PathBuf),
+    Transfer(Vec<PathBuf>, PathBuf, bool),
+}
+
+// Collect row events before mutating browser state, so virtual rendering borrows
+// the directory only once and all selection decisions use the same snapshot.
+#[derive(Default)]
+struct ListActions {
+    selection: Option<(PathBuf, bool, bool)>,
+    open: Option<PathBuf>,
+    naming: Option<super::edits::NamingAction>,
+    files: Option<super::transfers::ui::SelectionAction>,
+    select_all: bool,
+    clear: bool,
+    transfer: Option<(Vec<PathBuf>, PathBuf, bool)>,
+}
+
+impl ListActions {
+    fn background(&mut self, ui: &mut Ui, can_edit: bool, selected: bool) -> egui::Response {
+        let focus = ui.interact(ui.available_rect_before_wrap(), list_id(), Sense::click());
+        if focus.clicked() {
+            focus.request_focus();
+            ui.ctx().request_repaint();
+            self.clear = true;
+        }
+        focus.context_menu(|ui| {
+            self.naming = super::edit_ui::naming_buttons(ui, can_edit, None);
+            self.files = super::transfers::ui::selection_buttons(ui, selected, true);
+            self.select_all = ui.button("Select all").clicked();
+            if self.naming.is_some() || self.files.is_some() || self.select_all {
+                ui.close_menu();
+            }
+        });
+        focus
+    }
+
+    fn drag(
+        &mut self,
+        response: &egui::Response,
+        path: &PathBuf,
+        selected: Option<&std::collections::BTreeSet<PathBuf>>,
+    ) {
+        if !response.drag_started() {
+            return;
+        }
+        let marked = selected.is_some_and(|paths| paths.contains(path));
+        let paths = if marked {
+            selected
+                .map(|paths| paths.iter().cloned().collect())
+                .unwrap_or_default()
+        } else {
+            vec![path.clone()]
+        };
+        response.dnd_set_drag_payload(super::transfers::FileDrag { paths });
+        if !marked {
+            self.selection = Some((path.clone(), false, false));
+        }
+    }
+
+    fn row(
+        &mut self,
+        ui: &mut Ui,
+        response: &egui::Response,
+        entry: &super::filesystem::Entry,
+        selected: Option<&std::collections::BTreeSet<PathBuf>>,
+        can_edit: bool,
+        selection_count: usize,
+    ) {
+        let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
+        self.drag(response, &entry.path, selected);
+        if entry.directory {
+            self.transfer = drop_files(ui, response, &entry.path);
+        }
+        if response.clicked() || response.double_clicked() {
+            let modifiers = ui.input(|input| input.modifiers);
+            self.selection = Some((
+                entry.path.clone(),
+                modifiers.ctrl || modifiers.command,
+                modifiers.shift,
+            ));
+            ui.memory_mut(|memory| memory.request_focus(list_id()));
+            ui.ctx().request_repaint();
+        }
+        if response.secondary_clicked() && !marked {
+            self.selection = Some((entry.path.clone(), false, false));
+            ui.memory_mut(|memory| memory.request_focus(list_id()));
+        }
+        response.context_menu(|ui| {
+            let rename = (!marked || selection_count == 1).then_some(entry.path.as_path());
+            self.naming = super::edit_ui::naming_buttons(ui, can_edit, rename);
+            self.files = super::transfers::ui::selection_buttons(ui, true, true);
+            if self.naming.is_some() || self.files.is_some() {
+                ui.close_menu();
+            }
+        });
+        if response.double_clicked() && entry.directory {
+            self.open = Some(entry.path.clone());
+        }
+    }
+}
+
+pub(super) fn focus_text(
+    ctx: &egui::Context,
+    output: &mut egui::text_edit::TextEditOutput,
+    chars: usize,
+) {
+    output.response.request_focus();
+    output
+        .state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(0),
+            egui::text::CCursor::new(chars),
+        )));
+    output.state.clone().store(ctx, output.response.id);
+}
+
+fn drop_files(
+    ui: &Ui,
+    response: &egui::Response,
+    destination: &std::path::Path,
+) -> Option<(Vec<PathBuf>, PathBuf, bool)> {
+    if !ui.is_enabled() {
+        return None;
+    }
+    response
+        .dnd_release_payload::<super::transfers::FileDrag>()
+        .map(|drag| {
+            (
+                drag.paths.clone(),
+                destination.into(),
+                !ui.input(|i| i.modifiers.ctrl),
+            )
+        })
 }
