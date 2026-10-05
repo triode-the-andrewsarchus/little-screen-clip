@@ -1,5 +1,6 @@
 use super::{FilmSimMsg, ImagePreviewState, film_rgb_from_rgba};
-use crate::{AppConfig, image_preview::ImageToolMode};
+use crate::image_preview::ImageToolMode;
+use little_clip_core::AppConfig;
 
 #[test]
 fn film_rgb_snapshot_preserves_channels_and_cancels_between_rows() {

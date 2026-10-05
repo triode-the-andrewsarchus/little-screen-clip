@@ -108,7 +108,8 @@ class Session:
         ], env=self.env)
         matches = []
         for word in csv.DictReader(io.StringIO(data), delimiter="\t", quoting=csv.QUOTE_NONE):
-            if (word["text"].lower().strip("()[]{}|") != text.lower() and not (suffix and word["text"].lower().endswith("/" + text.lower()))):
+            rendered = word["text"].strip().lower().strip("()[]{}|")
+            if (rendered != text.lower() and not (suffix and rendered.endswith("/" + text.lower()))):
                 continue
             x, y = int(word["left"]) // 3, int(word["top"]) // 3
             if (x < 330) == tree and y >= minimum_y:

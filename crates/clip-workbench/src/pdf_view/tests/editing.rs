@@ -527,3 +527,21 @@ fn validated_edit_publishes_sibling_output_from_open_viewer() {
     assert_eq!(state.path, output);
     assert!(state.dirty);
 }
+
+#[test]
+fn protected_pdf_publication_preserves_an_existing_sibling() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.pdf");
+    let staged = dir.path().join("staged.pdf");
+    let output = dir.path().join("source.rotate.edited.pdf");
+    std::fs::write(&source, b"original").unwrap();
+    std::fs::write(&staged, b"completed").unwrap();
+    let state = PdfEditorState::new(source.clone()).with_protected_outputs();
+    state.publish_output(&staged, &output).unwrap();
+    assert_eq!(std::fs::read(&output).unwrap(), b"completed");
+    std::fs::remove_file(&staged).unwrap();
+    std::fs::write(&staged, b"another result").unwrap();
+    assert!(state.publish_output(&staged, &output).is_err());
+    assert_eq!(std::fs::read(output).unwrap(), b"completed");
+    assert_eq!(std::fs::read(source).unwrap(), b"original");
+}

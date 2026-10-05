@@ -457,7 +457,7 @@ pub(super) fn append_highlighted_token(
 }
 
 /// Builds syntax highlighting with exact, precomputed search ranges.
-pub(crate) fn build_highlighted_layout_job(
+pub fn build_highlighted_layout_job(
     text: &str,
     syntax: &SyntaxReference,
     palette: &AppPalette,

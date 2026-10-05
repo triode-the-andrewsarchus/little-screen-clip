@@ -89,7 +89,7 @@ fn write_input(image: &RgbaImage, path: &Path, cancelled: &AtomicBool) -> Result
 }
 
 /// Runs only in the hidden helper process. Errors never enter the scan result protocol.
-pub(crate) fn run_helper(input: &Path, output: &Path) -> Result<(), String> {
+pub fn run_helper(input: &Path, output: &Path) -> Result<(), String> {
     let metadata = std::fs::metadata(input).map_err(|error| error.to_string())?;
     if metadata.len() < 8 {
         return Err("invalid barcode scan input size".into());

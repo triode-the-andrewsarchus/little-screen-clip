@@ -694,6 +694,7 @@ impl AudioPreviewState {
             });
         }
         let plan = AudioSavePlan {
+            file_source: self.file_source.clone(),
             destination: dest_dir,
             source: self.path.clone(),
             regions,
@@ -960,7 +961,7 @@ pub(super) fn handoff_audio_files(
     }
 }
 
-pub(crate) fn run_audio_command_cancellable(
+pub fn run_audio_command_cancellable(
     command: &mut std::process::Command,
     cancelled: &AtomicBool,
 ) -> Result<std::process::ExitStatus, String> {
@@ -1172,47 +1173,17 @@ pub(super) fn audio_slice_copy_plan(
 }
 
 pub(super) fn run_audio_save(plan: AudioSavePlan) -> Result<AudioSaveOutcome, String> {
+    if let Some(source) = &plan.file_source {
+        source.check()?;
+    }
     std::fs::create_dir_all(&plan.destination)
         .map_err(|error| format!("Cannot create destination directory: {error}"))?;
     let mut saved_paths = Vec::new();
     let mut failures = Vec::new();
     for region in &plan.regions {
-        let out_path = plan.destination.join(&region.filename);
-        let mut cmd = std::process::Command::new("ffmpeg");
-        cmd.arg("-y")
-            .arg("-ss")
-            .arg(format!("{:.4}", region.start))
-            .arg("-to")
-            .arg(format!("{:.4}", region.end))
-            .arg("-i")
-            .arg(&plan.source);
-        if let Some(filter) = &region.filter {
-            cmd.arg("-af").arg(filter);
-        }
-        match out_path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Some("wav") => {
-                cmd.arg("-c:a").arg("pcm_s16le");
-            }
-            Some("flac") => {
-                cmd.arg("-c:a").arg("flac");
-            }
-            _ => {}
-        }
-        match cmd
-            .arg(&out_path)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-        {
-            Ok(status) if status.success() && out_path.exists() => saved_paths.push(out_path),
-            Ok(status) => failures.push(format!("{} (ffmpeg exit {})", region.filename, status)),
-            Err(error) => failures.push(format!("{} ({error})", region.filename)),
+        match save_audio_region(&plan, region) {
+            Ok(path) => saved_paths.push(path),
+            Err(error) => failures.push(format!("{}: {error}", region.filename)),
         }
     }
     if saved_paths.is_empty() {
@@ -1231,6 +1202,72 @@ pub(super) fn run_audio_save(plan: AudioSavePlan) -> Result<AudioSaveOutcome, St
         saved_count: saved_paths.len(),
         failures,
     })
+}
+
+fn save_audio_region(plan: &AudioSavePlan, region: &AudioSaveRegion) -> Result<PathBuf, String> {
+    let out_path = plan.destination.join(&region.filename);
+    let staging = if plan.file_source.is_some() {
+        Some(
+            tempfile::Builder::new()
+                .prefix(".audio-export-")
+                .suffix(&format!(
+                    ".{}",
+                    out_path
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .unwrap_or("wav")
+                ))
+                .tempfile_in(&plan.destination)
+                .map_err(|e| e.to_string())?,
+        )
+    } else {
+        None
+    };
+    let output_path = staging
+        .as_ref()
+        .map_or(out_path.as_path(), |file| file.path());
+    let mut cmd = std::process::Command::new("ffmpeg");
+    cmd.arg("-y")
+        .arg("-ss")
+        .arg(format!("{:.4}", region.start))
+        .arg("-to")
+        .arg(format!("{:.4}", region.end))
+        .arg("-i")
+        .arg(&plan.source);
+    if let Some(filter) = &region.filter {
+        cmd.arg("-af").arg(filter);
+    }
+    match out_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
+        Some("wav") => {
+            cmd.arg("-c:a").arg("pcm_s16le");
+        }
+        Some("flac") => {
+            cmd.arg("-c:a").arg("flac");
+        }
+        _ => {}
+    }
+    let status = cmd
+        .arg(output_path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|e| e.to_string())?;
+    if !status.success() || !output_path.exists() {
+        return Err(format!("ffmpeg exit {status}"));
+    }
+    if let Some(staging) = staging {
+        plan.file_source.as_ref().unwrap().check()?;
+        staging
+            .persist_noclobber(&out_path)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(out_path)
 }
 
 pub(super) fn plan_destination_name(path: &str) -> String {

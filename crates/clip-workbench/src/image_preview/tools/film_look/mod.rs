@@ -375,7 +375,7 @@ pub enum FilmSimMsg {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct FilmSimRenderStamp {
+pub struct FilmSimRenderStamp {
     image: ImageInputStamp,
     parameter_revision: u64,
 }

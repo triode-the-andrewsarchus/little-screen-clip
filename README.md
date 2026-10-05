@@ -51,9 +51,9 @@ or a USB display. Open it with `./launch.sh files [DIRECTORY]` or
 `cargo run -p clip-workbench --bin clip-file-manager -- [DIRECTORY]`.
 Phase 1 provides folder browsing, Back/Forward/Up, an editable address bar, a lazy
 folder tree, refresh, and hidden-file visibility. Phase 2 adds multi-selection, create/rename, queued copy/move, conflict decisions,
-Trash/restore, permanent deletion, clipboard file references, external-change refresh, and native Wayland drag-and-drop. See [Phase 2 delivery](docs/File%20Manager/phase2.md)
-Phase 3 adds a session Shelf, shared hand/inventory access, and named files from clipboard text/images. See [Phase 3 implementation](docs/File%20Manager/phase3.md) for behavior and pending acceptance,
-and [the phased plan](docs/File%20Manager/plan.md) for the remaining operations and previews.
+Trash/restore, permanent deletion, clipboard file references, external-change refresh, and native Wayland drag-and-drop. See [Phase 2 delivery](docs/File%20Manager/phase2.md).
+Phase 3 adds a session Shelf, shared hand/inventory access, and named files from clipboard text/images. See [Phase 3 implementation](docs/File%20Manager/phase3.md) for behavior and follow-up work.
+Phase 4 is in progress. Its current implementation opens files in the shared studios, adds visible-entry thumbnail/hover previews, and provides guarded text/image saves plus protected audio/PDF outputs. See [Phase 4](docs/File%20Manager/phase4.md) for current capabilities and verification, and [the phased plan](docs/File%20Manager/plan.md) for the remaining operations and previews.
 
 Dependencies point toward the lower rows of responsibility: UI, daemon, driver, and renderer must
 not pull operation-domain behavior back into their own crates. Presentation-ready models belong in

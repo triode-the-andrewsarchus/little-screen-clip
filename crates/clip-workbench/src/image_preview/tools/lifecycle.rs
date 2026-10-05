@@ -1,7 +1,7 @@
 use super::super::*;
 
 impl ImagePreviewState {
-    pub(crate) fn suspend_pending_work(&mut self) {
+    pub fn suspend_pending_work(&mut self) {
         self.cancel_pixel_resize();
         if let Some(ticket) = self.palette_ticket.take() {
             ticket.cancel();

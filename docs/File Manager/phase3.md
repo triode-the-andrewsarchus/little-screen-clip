@@ -1,6 +1,6 @@
 # Phase 3: Shelf and clipboard integration
 
-Status: implemented after Phase 2 commit `9c0e028`. Compilation and source review are complete; runtime acceptance is pending. Phase 3 changes remain uncommitted.
+Status: accepted by the user as the initial Phase 3 on 2026-10-05 and committed as `278091e`. Automated runtime acceptance and further Shelf polish remain follow-up work.
 
 ## Behavior
 

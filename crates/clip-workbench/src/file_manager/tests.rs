@@ -293,6 +293,8 @@ fn keyboard_arrows_select_without_navigating_and_enter_opens_a_folder() {
     let (temp, child) = folder_fixture();
     let (mut manager, jobs, ctx) = rendered(temp.path());
     ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("file_manager_list_focus")));
+    // Publish the requested focus and its lock filter before sending a key.
+    frame(&mut manager, &ctx, vec![]);
     press(
         &mut manager,
         &ctx,
@@ -303,7 +305,14 @@ fn keyboard_arrows_select_without_navigating_and_enter_opens_a_folder() {
     assert_eq!(manager.path(), temp.path());
     press(&mut manager, &ctx, egui::Key::Enter, egui::Modifiers::NONE);
     finish(&mut manager, &jobs);
-    assert_eq!(manager.path(), child);
+    assert_eq!(
+        manager.path(),
+        child,
+        "open_file={:?}, focus={:?}, pending={}",
+        manager.open_file,
+        ctx.memory(|memory| memory.focused()),
+        manager.pending.is_some()
+    );
     press(
         &mut manager,
         &ctx,

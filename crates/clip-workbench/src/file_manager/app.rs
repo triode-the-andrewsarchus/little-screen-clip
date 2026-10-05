@@ -8,6 +8,7 @@ use crate::{icons::Icon, ui_appearance, ui_ext};
 
 struct FileManagerApp {
     browser: FileManager,
+    viewers: super::viewers::Viewers,
     palette: AppPalette,
     native: Option<super::native_drag::NativeDrag>,
     drop_destinations: std::collections::BTreeMap<u64, PathBuf>,
@@ -27,6 +28,7 @@ impl FileManagerApp {
         }
         Self {
             browser,
+            viewers: super::viewers::Viewers::new(config),
             palette,
             native: super::native_drag::NativeDrag::new(cc),
             drop_destinations: Default::default(),
@@ -129,7 +131,14 @@ impl eframe::App for FileManagerApp {
         }
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.viewers.active() {
+            self.browser.drop_targets.clear();
+        }
         self.native_tick(ctx);
+        if self.viewers.active() {
+            self.browser
+                .tick(little_clip_core::BackgroundJobs::global());
+        }
         self.browser.handle_address_escape(ctx);
         egui::TopBottomPanel::top("file_manager_title").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -137,15 +146,38 @@ impl eframe::App for FileManagerApp {
                     Icon::Folder.label(egui::RichText::new("Little Screen Clip — Files").strong()),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label("Ctrl+L: address  ·  F5: refresh  ·  Ctrl+Q: close");
+                    ui.add(
+                        egui::Label::new(if self.viewers.active() {
+                            "Back to folder: browse  ·  Ctrl+Q: close"
+                        } else {
+                            "Ctrl+L: address  ·  F5: refresh  ·  Ctrl+Q: close"
+                        })
+                        .truncate(true),
+                    );
                 });
             });
         });
-        egui::CentralPanel::default().show(ctx, |ui| self.browser.ui(ui, &self.palette));
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if self.viewers.active() {
+                if self.viewers.ui(ui, &self.palette) {
+                    self.browser.refresh_after_transfer = true;
+                    self.browser.restore_scroll = true;
+                }
+            } else {
+                self.browser.ui(ui, &self.palette);
+                if let Some(path) = self.browser.open_file.take() {
+                    self.viewers.open(path);
+                }
+            }
+        });
         self.native_start(ctx);
         let close = ctx.input_mut(|input| input.consume_key(Modifiers::CTRL, Key::Q))
             || ctx.input(|input| input.viewport().close_requested());
         if close {
+            if self.viewers.active() && !self.viewers.request_close() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                return;
+            }
             if self.browser.filesystem_busy()
                 || self.browser.shelf.sending()
                 || self.native.as_ref().is_some_and(|native| native.busy())

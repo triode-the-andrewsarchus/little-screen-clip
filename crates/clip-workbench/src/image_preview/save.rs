@@ -56,11 +56,13 @@ impl Drop for ImageSaveJob {
 }
 
 struct SaveResult {
+    source: Option<crate::file_source::FileSource>,
     path: PathBuf,
     file_size: usize,
 }
 
 struct SaveOptions {
+    source: Option<crate::file_source::FileSource>,
     path: PathBuf,
     stamp: ImageInputStamp,
     converted: bool,
@@ -470,11 +472,25 @@ fn write_save(
     // permissions and the process umask. Cancellation is checked before the write;
     // an already-started filesystem write finishes normally.
     begin_write(phase, started)?;
-    std::fs::write(&options.path, &bytes).map_err(|e| e.to_string())?;
+    let source = write_bytes(&options, &bytes)?;
+
     Ok(SaveResult {
+        source,
         path: options.path,
         file_size: bytes.len(),
     })
+}
+
+fn write_bytes(
+    options: &SaveOptions,
+    bytes: &[u8],
+) -> Result<Option<crate::file_source::FileSource>, String> {
+    if let Some(source) = &options.source {
+        source.write(&options.path, bytes).map(Some)
+    } else {
+        std::fs::write(&options.path, bytes).map_err(|e| e.to_string())?;
+        Ok(None)
+    }
 }
 
 impl ImagePreviewState {
@@ -681,6 +697,7 @@ impl ImagePreviewState {
             (canvas, encoded_bytes),
             SaveOptions {
                 path,
+                source: self.file_source.clone(),
                 stamp,
                 converted,
                 quality: self.convert_state.quality,
@@ -722,6 +739,11 @@ impl ImagePreviewState {
             self.save_job = None;
             match completion {
                 Ok(result) => {
+                    if let Some(source) = result.source {
+                        self.file_source = Some(source);
+                        self.saved_stamp = Some(stamp.clone());
+                        self.path = Some(result.path.clone());
+                    }
                     let name = result
                         .path
                         .file_name()
@@ -854,6 +876,40 @@ fn wait_for_copy(state: &mut ImagePreviewState) {
 mod tests {
     use super::*;
     use image::GenericImageView;
+
+    #[test]
+    fn file_backed_save_tracks_revision_and_refuses_external_changes_and_collisions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("source.png");
+        let mut state = state();
+        state.current_rgba.save(&path).unwrap();
+        state.path = Some(path.clone());
+        state = state.with_file_source(crate::file_source::FileSource::capture(&path).unwrap());
+        state.mark_pixels_changed();
+        assert!(state.has_unsaved_changes());
+        state.save_image_to_path(&path);
+        wait_for_save(&mut state);
+        assert!(!state.has_unsaved_changes());
+        assert_eq!(state.path.as_ref(), Some(&path));
+        std::fs::write(&path, b"external contents").unwrap();
+        state.mark_pixels_changed();
+        state.save_image_to_path(&path);
+        wait_for_save(&mut state);
+        assert_eq!(std::fs::read(&path).unwrap(), b"external contents");
+        assert!(state.has_unsaved_changes());
+        let sibling = dir.path().join("new.png");
+        state.save_image_to_path(&sibling);
+        wait_for_save(&mut state);
+        assert!(!state.has_unsaved_changes());
+        assert_eq!(state.path.as_ref(), Some(&sibling));
+        let collision = dir.path().join("existing.png");
+        std::fs::write(&collision, b"existing contents").unwrap();
+        state.mark_pixels_changed();
+        state.save_image_to_path(&collision);
+        wait_for_save(&mut state);
+        assert_eq!(std::fs::read(collision).unwrap(), b"existing contents");
+        assert!(state.has_unsaved_changes());
+    }
 
     #[test]
     fn clipboard_delivery_preserves_png_mime_bytes_and_right_slot() {
@@ -1445,6 +1501,7 @@ mod tests {
         Arc::make_mut(&mut state.current_rgba).put_pixel(0, 0, image::Rgba([1, 2, 3, 255]));
         state.mark_pixels_changed();
         tx.send(Ok(Ok(SaveResult {
+            source: None,
             path: PathBuf::from("old_snapshot.png"),
             file_size: 10,
         })))
@@ -1573,6 +1630,7 @@ mod tests {
             started_tx.send(()).unwrap();
             release_rx.recv().unwrap();
             Ok(SaveResult {
+                source: None,
                 path: PathBuf::from("written.png"),
                 file_size: 42,
             })

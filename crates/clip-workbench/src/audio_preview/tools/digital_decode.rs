@@ -216,6 +216,9 @@ impl AudioPreviewState {
                 ctx.request_repaint_after(retry_at.saturating_duration_since(Instant::now()));
             }
         }
+        // Observe job completion before draining events: a completed job has
+        // already published Done, while a running job may publish it mid-poll.
+        let job_result = self.digital_decode.job_rx.as_ref().map(|rx| rx.try_recv());
         let mut new_batches = Vec::new();
         let mut done_time = None;
         let mut started = false;
@@ -270,8 +273,8 @@ impl AudioPreviewState {
             ));
         }
 
-        if let Some(rx) = self.digital_decode.job_rx.take() {
-            match rx.try_recv() {
+        if let Some(result) = job_result {
+            match result {
                 Ok(Ok(())) => {
                     self.digital_decode.job_rx = None;
                     if self.digital_decode.in_progress {
@@ -305,7 +308,7 @@ impl AudioPreviewState {
                     self.digital_decode.cancel_flag = None;
                     self.digital_decode.status_msg = Some(format!("Decoding error: {error}"));
                 }
-                Err(TryRecvError::Empty) => self.digital_decode.job_rx = Some(rx),
+                Err(TryRecvError::Empty) => {}
                 Err(TryRecvError::Disconnected) => {
                     self.digital_decode.in_progress = false;
                     self.digital_decode.rx = None;

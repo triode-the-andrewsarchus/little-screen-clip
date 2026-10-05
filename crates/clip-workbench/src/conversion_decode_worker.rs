@@ -14,7 +14,7 @@ use std::time::Duration;
 const COPY_CHUNK_BYTES: usize = 64 * 1024;
 
 /// Runs only in the hidden helper process. Status 0 is the existing decode-failure fallback.
-pub(crate) fn run_helper(input: &Path, output: &Path) -> Result<(), String> {
+pub fn run_helper(input: &Path, output: &Path) -> Result<(), String> {
     let encoded = std::fs::read(input).map_err(|error| error.to_string())?;
     let decoded = image::load_from_memory(&encoded).map(|image| image.to_rgba8());
     let partial = output.with_extension("partial");

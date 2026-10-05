@@ -30,7 +30,7 @@ pub enum CreativeFxMsg {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct CreativeFxRenderStamp {
+pub struct CreativeFxRenderStamp {
     pixel_revision: u64,
     fx_type: CreativeFxType,
     params: CreativeFxParams,
@@ -47,7 +47,7 @@ struct CreativeFxMaskStamp {
 }
 
 #[derive(Debug)]
-pub(crate) struct CreativeFxMaskMsg {
+pub struct CreativeFxMaskMsg {
     stamp: CreativeFxMaskStamp,
     result: Result<RgbaImage, String>,
 }

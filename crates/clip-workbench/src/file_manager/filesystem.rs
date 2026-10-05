@@ -17,7 +17,7 @@ pub(super) struct Entry {
     pub size: String,
     pub modified: String,
     pub warning: Option<String>,
-    revision: u64,
+    pub revision: u64,
     pub identity: Option<Identity>,
 }
 

@@ -294,7 +294,7 @@ fn clamp_label_center(center: f32, height: f32, clip_top: f32, clip_bottom: f32)
 
 impl MidiViewerState {
     /// Builds the viewer after a background file parse has completed.
-    pub(crate) fn from_parsed_file(path: PathBuf, data: MidiData) -> Self {
+    pub fn from_parsed_file(path: PathBuf, data: MidiData) -> Self {
         let title = path
             .file_name()
             .and_then(|name| name.to_str())

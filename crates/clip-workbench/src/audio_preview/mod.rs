@@ -77,7 +77,7 @@ mod playback;
 mod selection;
 mod studio;
 
-pub(crate) use export::run_audio_command_cancellable;
+pub use export::run_audio_command_cancellable;
 
 mod layout;
 mod tools;
@@ -655,7 +655,7 @@ pub struct AudioPreviewState {
     // GPU Textures for Spectrogram & ColorChord Ribbon
     spectrogram_texture: Option<egui::TextureHandle>,
     note_strip_texture: Option<egui::TextureHandle>,
-    pub(crate) inspect_viewport_cache: ViewportSpectrogramCache,
+    pub inspect_viewport_cache: ViewportSpectrogramCache,
     channel_tools: ChannelToolsState,
 
     // Audio Playback Engine (rodio)
@@ -709,6 +709,7 @@ pub struct AudioPreviewState {
     pub open_folder_after_save: bool,
     browse_rx: Option<Receiver<Option<String>>>,
     save_job: Option<AudioSaveJob>,
+    file_source: Option<crate::file_source::FileSource>,
     slice_copy_job: Option<AudioSliceCopyJob>,
 
     // Slice preview limit and looping state (for right-click slice preview and hold-to-loop)
@@ -742,6 +743,7 @@ struct AudioSaveRegion {
 }
 
 struct AudioSavePlan {
+    file_source: Option<crate::file_source::FileSource>,
     destination: PathBuf,
     source: PathBuf,
     regions: Vec<AudioSaveRegion>,
@@ -835,7 +837,7 @@ impl AudioPreviewState {
         Self::new_with_metadata(path, title, metadata)
     }
 
-    pub(crate) fn new_with_metadata(
+    pub fn new_with_metadata(
         path: PathBuf,
         title: String,
         metadata: Option<AudioMetadata>,
@@ -994,6 +996,7 @@ impl AudioPreviewState {
             open_folder_after_save: true,
             browse_rx: None,
             save_job: None,
+            file_source: None,
             slice_copy_job: None,
             preview_stop_time: None,
             preview_slice_range: None,
@@ -1005,6 +1008,19 @@ impl AudioPreviewState {
         }
     }
 
+    /// Enables source checks and non-overwriting staged exports in Files.
+    pub fn with_file_source(mut self, source: crate::file_source::FileSource) -> Self {
+        self.file_source = Some(source);
+        self
+    }
+    /// Reports an accepted export that must finish before the studio closes.
+    pub fn file_write_pending(&self) -> bool {
+        self.save_job.is_some()
+    }
+    /// Reports temporary channel/region edits, which persist only through export.
+    pub fn has_session_edits(&self) -> bool {
+        self.session_audio_edits() != SessionAudioEdits::default()
+    }
     pub fn with_editor(mut self, editor: String) -> Self {
         if !editor.is_empty() {
             self.audio_editor = editor;

@@ -10,7 +10,7 @@ mod search;
 mod studio;
 
 use minimap::*;
-pub(crate) use raw_code::build_highlighted_layout_job;
+pub use raw_code::build_highlighted_layout_job;
 use search::*;
 
 use crate::icons::Icon;
@@ -650,7 +650,7 @@ impl TextPreviewState {
 }
 
 /// Helper to find syntax definition for language string.
-pub(crate) fn find_syntax(lang: &str) -> &'static SyntaxReference {
+pub fn find_syntax(lang: &str) -> &'static SyntaxReference {
     let ps = &*SYNTAX_SET;
     ps.find_syntax_by_token(lang)
         .or_else(|| ps.find_syntax_by_extension(lang))

@@ -66,49 +66,30 @@ pub(super) fn raster_state_with_dimensions(
     let mut png = std::io::Cursor::new(Vec::new());
     image.write_to(&mut png, image::ImageFormat::Png).unwrap();
     let raster_cache = std::sync::Arc::new(tempfile::tempdir().unwrap());
-    PdfEditorState {
-        path: PathBuf::from("fixture.pdf"),
-        title: "fixture.pdf".to_owned(),
-        page_count,
-        pages: (1..=page_count)
-            .map(|page_num| PdfPageItem {
-                page_num,
-                raster: {
-                    let path = raster_cache.path().join(format!("page-{page_num}.png"));
-                    std::fs::write(&path, png.get_ref()).unwrap();
-                    Some(test_page_raster(
-                        page_num,
-                        path,
-                        width,
-                        height,
-                        Arc::clone(&raster_cache),
-                    ))
-                },
-                texture: None,
-                texture_last_used: 0,
-                error: None,
-            })
-            .collect(),
-        selected_page: (page_count > 0).then_some(1),
-        status_toast: StatusToast::new(),
-        dirty: false,
-        info_job: None,
-        preview_rx: None,
-        preview_job: None,
-        preview_cancel: None,
-        previews_loading: false,
-        edit_rx: None,
-        edit_ticket: None,
-        edit_in_progress: false,
-        raster_cache: Some(raster_cache),
-        source_directory: None,
-        texture_frame: 0,
-        decode_job: None,
-        decode_requests: Vec::new(),
-        viewport: PdfPageViewport::default(),
-        navigation: navigation::PdfNavigation::default(),
-        document_tools: document_tools::PdfDocumentTools::default(),
-    }
+    let mut state = PdfEditorState::without_jobs(PathBuf::from("fixture.pdf"));
+    state.page_count = page_count;
+    state.pages = (1..=page_count)
+        .map(|page_num| PdfPageItem {
+            page_num,
+            raster: {
+                let path = raster_cache.path().join(format!("page-{page_num}.png"));
+                std::fs::write(&path, png.get_ref()).unwrap();
+                Some(test_page_raster(
+                    page_num,
+                    path,
+                    width,
+                    height,
+                    Arc::clone(&raster_cache),
+                ))
+            },
+            texture: None,
+            texture_last_used: 0,
+            error: None,
+        })
+        .collect();
+    state.selected_page = (page_count > 0).then_some(1);
+    state.raster_cache = Some(raster_cache);
+    state
 }
 
 pub(super) fn wait_for_decode(state: &mut PdfEditorState, page_num: usize, ctx: &egui::Context) {

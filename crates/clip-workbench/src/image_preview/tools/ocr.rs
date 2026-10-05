@@ -787,12 +787,14 @@ impl ImagePreviewState {
 }
 
 pub(crate) fn ocr_command() -> (String, String) {
-    let script_path = ["scripts/ocr.py", "./scripts/ocr.py"]
-        .iter()
-        .find(|path| std::path::Path::new(path).exists())
-        .copied()
-        .unwrap_or("scripts/ocr.py")
-        .to_string();
+    let bundled = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/ocr.py");
+    let script_path = if bundled.is_file() {
+        bundled
+    } else {
+        std::path::PathBuf::from("scripts/ocr.py")
+    }
+    .to_string_lossy()
+    .into_owned();
     let venv_python = std::env::var("HOME")
         .map(|home| {
             format!(
@@ -961,6 +963,14 @@ pub(crate) fn run_png_ocr(
 
 #[cfg(test)]
 mod input_stamp_tests {
+    #[test]
+    fn bundled_ocr_script_path_does_not_depend_on_launch_directory() {
+        let (_, script) = super::ocr_command();
+        let script = std::path::Path::new(&script);
+        assert!(script.is_absolute());
+        assert!(script.is_file());
+        assert!(script.with_file_name("pdf_document.py").is_file());
+    }
     use super::*;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};

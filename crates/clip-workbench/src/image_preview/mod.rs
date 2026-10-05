@@ -164,6 +164,8 @@ pub struct ImagePreviewState {
 
     // File Dialog & Save-As
     save_job: Option<save::ImageSaveJob>,
+    file_source: Option<crate::file_source::FileSource>,
+    saved_stamp: Option<ImageInputStamp>,
     copy_job: Option<save::ImageCopyJob>,
     copy_requested: Option<HandSide>,
     rendering_frame: bool,
@@ -245,7 +247,7 @@ pub struct ImagePreviewState {
 /// Immutable encoded and decoded image content shared by one or more image views.
 /// Viewer identity, editing, navigation, and texture state stay outside this value.
 #[derive(Clone)]
-pub(crate) struct DecodedImageData {
+pub struct DecodedImageData {
     mime: String,
     encoded_bytes: Arc<Vec<u8>>,
     original_rgba: Arc<RgbaImage>,
@@ -254,18 +256,29 @@ pub(crate) struct DecodedImageData {
 }
 
 impl DecodedImageData {
-    pub(crate) fn from_path(path: &Path) -> Result<Self, String> {
+    pub fn from_path(path: &Path) -> Result<Self, String> {
         let bytes = std::fs::read(&path)
             .map_err(|error| format!("Failed to read file {}: {error}", path.display()))?;
         let mime = little_clip_core::item::guess_image_mime(&path);
         Self::from_bytes(bytes, mime, Some(path.to_path_buf()))
     }
 
-    pub(crate) fn from_bytes(
-        bytes: Vec<u8>,
-        mime: String,
-        path: Option<PathBuf>,
-    ) -> Result<Self, String> {
+    /// Reads a regular image file with a bounded encoded-byte allocation.
+    ///
+    /// Uses the shared MIME detection and decoder hooks. Files larger than
+    /// `max_bytes` are rejected before decoding; raster decoding retains the
+    /// image library's default allocation limits.
+    pub fn from_path_bounded(path: &Path, max_bytes: usize) -> Result<Self, String> {
+        let bytes = crate::file_source::read_file_bytes(path, max_bytes, true, true)
+            .map_err(|e| e.to_string())?;
+        Self::from_bytes(
+            bytes,
+            little_clip_core::item::guess_image_mime(path),
+            Some(path.to_path_buf()),
+        )
+    }
+
+    pub fn from_bytes(bytes: Vec<u8>, mime: String, path: Option<PathBuf>) -> Result<Self, String> {
         let is_svg = mime.contains("svg")
             || little_clip_core::item::is_svg_bytes(&bytes)
             || path
@@ -300,7 +313,7 @@ impl DecodedImageData {
 
 /// Lightweight image renderer for hosts that need a preview without the
 /// editor's mutation, history, or background-job state.
-pub(crate) struct InlineImagePreview {
+pub struct InlineImagePreview {
     source: Arc<DecodedImageData>,
     texture: Option<egui::TextureHandle>,
     zoom: f32,
@@ -309,7 +322,7 @@ pub(crate) struct InlineImagePreview {
 }
 
 impl InlineImagePreview {
-    pub(crate) fn new(source: Arc<DecodedImageData>) -> Self {
+    pub fn new(source: Arc<DecodedImageData>) -> Self {
         Self {
             source,
             texture: None,
@@ -321,7 +334,7 @@ impl InlineImagePreview {
 
     /// Render inside the space assigned by the host. Scroll zooms and dragging
     /// pans this view only; the decoded source remains immutable and shared.
-    pub(crate) fn show(&mut self, ui: &mut egui::Ui, size: Vec2) -> egui::Response {
+    pub fn show(&mut self, ui: &mut egui::Ui, size: Vec2) -> egui::Response {
         let size = size.max(Vec2::splat(1.0));
         let (viewport, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
         if !ui.is_rect_visible(viewport) {
@@ -428,7 +441,7 @@ fn compose_display_image(mut img: RgbaImage, stamp: &ImageInputStamp) -> RgbaIma
 /// Identity of the image pixels and overlays consumed by `current_display_image`.
 /// This intentionally snapshots only small edit state, never the full pixel buffer.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ImageInputStamp {
+pub struct ImageInputStamp {
     pixel_revision: u64,
     redactions: Vec<RedactionBox>,
     markup: Vec<MarkupShape>,
@@ -438,18 +451,18 @@ pub(crate) struct ImageInputStamp {
 /// Cheap immutable display-image request captured before submitting worker work.
 /// Cloning this request shares the source pixels; composition is deferred to the worker.
 #[derive(Clone)]
-pub(crate) struct DisplayImageSnapshotRequest {
+pub struct DisplayImageSnapshotRequest {
     pub(crate) pixels: Arc<RgbaImage>,
     pub(crate) input_stamp: ImageInputStamp,
 }
 
 impl DisplayImageSnapshotRequest {
     /// Compose redactions, markup, and the captured crop selection on the calling worker.
-    pub(crate) fn compose(&self) -> RgbaImage {
+    pub fn compose(&self) -> RgbaImage {
         compose_display_image(self.pixels.as_ref().clone(), &self.input_stamp)
     }
 
-    pub(crate) fn compose_png(&self) -> image::ImageResult<Vec<u8>> {
+    pub fn compose_png(&self) -> image::ImageResult<Vec<u8>> {
         let mut png_bytes = Vec::new();
         self.compose().write_to(
             &mut std::io::Cursor::new(&mut png_bytes),
@@ -462,14 +475,14 @@ impl DisplayImageSnapshotRequest {
 impl ImagePreviewState {
     /// Polls snapshot workers while this editor is hidden in the session cache.
     /// Returns true while a save or copy still needs a later poll.
-    pub(crate) fn poll_cached_jobs(&mut self) -> bool {
+    pub fn poll_cached_jobs(&mut self) -> bool {
         self.poll_save_job();
         self.poll_copy_job();
         self.save_job.is_some() || self.copy_job.is_some()
     }
 
     /// Restore worker-owned pixel snapshots before moving the editor out of the UI.
-    pub(crate) fn poll_session_snapshots(&mut self) -> bool {
+    pub fn poll_session_snapshots(&mut self) -> bool {
         self.poll_cached_jobs();
         !self.save_snapshot_pending() && !self.copy_snapshot_pending()
     }
@@ -515,7 +528,7 @@ impl ImagePreviewState {
         Ok(Self::from_decoded(source, path, title, config))
     }
 
-    pub(crate) fn from_decoded(
+    pub fn from_decoded(
         source: DecodedImageData,
         path: Option<PathBuf>,
         title: String,
@@ -573,6 +586,8 @@ impl ImagePreviewState {
             viewer: config.image.viewer.clone(),
             status_toast: None,
             save_job: None,
+            file_source: None,
+            saved_stamp: None,
             copy_job: None,
             copy_requested: None,
             rendering_frame: false,
@@ -639,7 +654,7 @@ impl ImagePreviewState {
         self.status_toast = Some((msg.into(), now));
     }
 
-    pub(crate) fn input_stamp(&self) -> ImageInputStamp {
+    pub fn input_stamp(&self) -> ImageInputStamp {
         ImageInputStamp {
             pixel_revision: self.pixel_revision,
             redactions: self.redaction_state.boxes.clone(),
@@ -649,14 +664,14 @@ impl ImagePreviewState {
         }
     }
 
-    pub(crate) fn display_image_snapshot_request(&self) -> DisplayImageSnapshotRequest {
+    pub fn display_image_snapshot_request(&self) -> DisplayImageSnapshotRequest {
         DisplayImageSnapshotRequest {
             pixels: self.current_rgba.clone(),
             input_stamp: self.input_stamp(),
         }
     }
 
-    pub(crate) fn mark_pixels_changed(&mut self) {
+    pub fn mark_pixels_changed(&mut self) {
         self.cancel_pixel_resize();
         self.cancel_barcode_scan();
         self.invalidate_decorrelation_stretch();
@@ -674,7 +689,7 @@ impl ImagePreviewState {
         self.pixel_revision = self.pixel_revision.wrapping_add(1);
     }
 
-    pub(crate) fn ocr_output_is_current(&self) -> bool {
+    pub fn ocr_output_is_current(&self) -> bool {
         self.ocr_results_stamp.as_ref() == Some(&self.input_stamp())
             && !self.ocr_state.extracted_text.is_empty()
     }
@@ -725,6 +740,20 @@ impl ImagePreviewState {
     }
 
     /// Runs AI background removal asynchronously using feyninc/nobg (FeyNoBg).
+    /// Enables guarded, atomic saves for a file-manager source loaded on a worker.
+    pub fn with_file_source(mut self, source: crate::file_source::FileSource) -> Self {
+        self.file_source = Some(source);
+        self.saved_stamp = Some(self.input_stamp());
+        self
+    }
+
+    /// Reports edits made since this file-backed session's last successful save.
+    pub fn has_unsaved_changes(&self) -> bool {
+        self.saved_stamp
+            .as_ref()
+            .is_some_and(|saved| *saved != self.input_stamp())
+    }
+
     pub fn open_save_dialog(&mut self) {
         let default_target = if let Some(p) = &self.path {
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("image");

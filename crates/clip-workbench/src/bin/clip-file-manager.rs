@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
 fn main() -> Result<(), eframe::Error> {
+    if clip_workbench::worker_cli::run() {
+        return Ok(());
+    }
     let mut args = std::env::args_os().skip(1);
     let first = args.next();
     if first

@@ -47,30 +47,70 @@ fn bounded_item_file_path(item: &ClipItem) -> Option<PathBuf> {
         .flatten()
 }
 
+#[cfg(not(test))]
+pub use clip_workbench::file_source;
+#[cfg(test)]
+mod file_source;
 mod workbench;
 use workbench::{ClipboardSelection, MirrorJob, PaletteOpsJob};
 
+#[cfg(not(test))]
+pub use clip_workbench::ansi;
+#[cfg(test)]
 mod ansi;
 mod appearance_sync;
+#[cfg(not(test))]
+pub use clip_workbench::audio_preview;
+#[cfg(test)]
 mod audio_preview;
+#[cfg(not(test))]
+pub use clip_workbench::barcode_worker;
+#[cfg(test)]
 mod barcode_worker;
 mod binary_diff_view;
 mod canvas;
 mod component_gallery;
+#[cfg(not(test))]
+pub use clip_workbench::conversion_decode_worker;
+#[cfg(test)]
 mod conversion_decode_worker;
 mod diff_view;
 pub use clip_workbench::icons;
+#[cfg(not(test))]
+pub use clip_workbench::image_preview;
+#[cfg(test)]
 mod image_preview;
+#[cfg(not(test))]
+pub use clip_workbench::midi_view;
+#[cfg(test)]
 mod midi_view;
+#[cfg(not(test))]
+pub use clip_workbench::model3d_view;
+#[cfg(test)]
 mod model3d_view;
+#[cfg(not(test))]
+pub use clip_workbench::pdf_view;
+#[cfg(test)]
 mod pdf_view;
 mod popup;
 mod rolling_audio_strip;
 mod script_editor;
-pub mod shell;
+#[cfg(not(test))]
+pub use clip_workbench::shell;
+#[cfg(test)]
+mod shell;
+#[cfg(not(test))]
+pub use clip_workbench::splat_view;
+#[cfg(test)]
 mod splat_view;
+#[cfg(not(test))]
+pub use clip_workbench::spreadsheet_view;
+#[cfg(test)]
 mod spreadsheet_view;
 mod state_sync;
+#[cfg(not(test))]
+pub use clip_workbench::text_preview;
+#[cfg(test)]
 mod text_preview;
 use clip_workbench::ui_appearance;
 pub use clip_workbench::{ui_ext, ui_tabs};
@@ -1029,45 +1069,10 @@ fn run_prompt_modal(
 }
 
 fn main() -> Result<(), eframe::Error> {
+    if clip_workbench::worker_cli::run() {
+        return Ok(());
+    }
     let args: Vec<String> = std::env::args().collect();
-    if args
-        .get(1)
-        .is_some_and(|arg| arg == "--internal-barcode-worker")
-    {
-        let result = match (args.get(2), args.get(3), args.len()) {
-            (Some(input), Some(output), 4) => barcode_worker::run_helper(
-                std::path::Path::new(input),
-                std::path::Path::new(output),
-            ),
-            _ => Err("invalid barcode worker arguments".into()),
-        };
-        if let Err(error) = result {
-            if let Some(output) = args.get(3) {
-                let _ =
-                    std::fs::write(std::path::Path::new(output).with_extension("error"), &error);
-            }
-            eprintln!("barcode worker: {error}");
-            std::process::exit(2);
-        }
-        return Ok(());
-    }
-    if args
-        .get(1)
-        .is_some_and(|arg| arg == "--internal-conversion-decode-worker")
-    {
-        let result = match (args.get(2), args.get(3), args.len()) {
-            (Some(input), Some(output), 4) => conversion_decode_worker::run_helper(
-                std::path::Path::new(input),
-                std::path::Path::new(output),
-            ),
-            _ => Err("invalid conversion decode worker arguments".into()),
-        };
-        if let Err(error) = result {
-            eprintln!("conversion decode worker: {error}");
-            std::process::exit(2);
-        }
-        return Ok(());
-    }
     if args.iter().any(|a| a == "--help" || a == "-h") {
         println!("Little Screen Clip — Crafting Workbench");
         println!("\nUsage: clip-workbench [OPTIONS]");

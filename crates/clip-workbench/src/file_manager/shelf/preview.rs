@@ -8,19 +8,17 @@ use little_clip_core::{
     BackgroundJobs, ClipItem, ClipPayload, ImageThumbnail, JobError, JobTicket, SlotId,
 };
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
 #[derive(Clone)]
-pub(super) enum Source {
+pub(in crate::file_manager) enum Source {
     Payload(Payload),
     Slot(SlotId, uuid::Uuid),
 }
 
-pub(super) struct Data {
+pub(in crate::file_manager) struct Data {
     pub title: String,
     pub detail: String,
     pub text: String,
@@ -42,7 +40,7 @@ impl Data {
     }
 }
 
-pub(super) struct Ready {
+pub(in crate::file_manager) struct Ready {
     pub data: Data,
     pub texture: Option<egui::TextureHandle>,
 }
@@ -53,7 +51,7 @@ struct Pending {
 }
 
 #[derive(Default)]
-pub(super) struct Previews {
+pub(in crate::file_manager) struct Previews {
     ready: BTreeMap<uuid::Uuid, Ready>,
     pending: Option<Pending>,
 }
@@ -189,7 +187,10 @@ fn item_preview(item: &ClipItem) -> Data {
                     thumbnail(bytes, Some(mime))
                 } else {
                     path.as_ref()
-                        .and_then(|path| read_prefix(path, 8 * 1024 * 1024, true).ok())
+                        .and_then(|path| {
+                            crate::file_source::read_file_bytes(path, 8 * 1024 * 1024, true, false)
+                                .ok()
+                        })
                         .and_then(|bytes| thumbnail(&bytes, Some(mime)))
                 };
             }
@@ -327,9 +328,10 @@ fn file_preview(paths: &[PathBuf]) -> Data {
 }
 
 fn preview_regular_file(path: &Path, data: &mut Data) {
+    data.icon = Icon::Text;
     if little_clip_core::item::is_image_path(path) {
         data.icon = Icon::Image;
-        data.image = read_prefix(path, 8 * 1024 * 1024, true)
+        data.image = crate::file_source::read_file_bytes(path, 8 * 1024 * 1024, true, false)
             .ok()
             .and_then(|bytes| {
                 thumbnail(
@@ -345,34 +347,17 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
     {
         data.icon = Icon::Pdf;
-    } else if let Ok(bytes) = read_prefix(path, 2048, false)
+        if let Ok(info) = little_clip_core::pdf::get_pdf_info(path) {
+            data.detail = format!("{} pages", info.page_count);
+            data.text = info.title.unwrap_or_default();
+        }
+    } else if let Ok(bytes) = crate::file_source::read_file_bytes(path, 2048, false, false)
         && !bytes.contains(&0)
         && std::str::from_utf8(&bytes).is_ok()
     {
         data.text = text_preview(&bytes, "Text").text;
         data.icon = Icon::Text;
     }
-}
-
-fn read_prefix(path: &Path, limit: usize, complete: bool) -> Result<Vec<u8>, std::io::Error> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)?;
-    if !file.metadata()?.is_file() {
-        return Err(std::io::Error::other(
-            "Preview source is not a regular file",
-        ));
-    }
-    let mut bytes = Vec::new();
-    file.take(limit as u64 + u64::from(complete))
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > limit {
-        return Err(std::io::Error::other(
-            "Preview source exceeds its read limit",
-        ));
-    }
-    Ok(bytes)
 }
 
 fn thumbnail(bytes: &[u8], mime: Option<&str>) -> Option<ImageThumbnail> {
@@ -411,4 +396,63 @@ fn audio_excerpt(path: &Path) -> Vec<f32> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retired_preview_cannot_publish_a_stale_completion() {
+        let ctx = egui::Context::default();
+        let mut previews = Previews::default();
+        let old = uuid::Uuid::new_v4();
+        previews.request(
+            old,
+            Source::Payload(Payload::Content(
+                super::super::super::content::Content::capture(b"old".to_vec(), "text/plain")
+                    .unwrap(),
+            )),
+        );
+        previews.retain(&BTreeSet::new());
+        assert!(previews.pending.is_none());
+        previews.poll(&ctx);
+        assert!(previews.get(old).is_none());
+        let current = uuid::Uuid::new_v4();
+        previews.request(
+            current,
+            Source::Payload(Payload::Content(
+                super::super::super::content::Content::capture(b"current".to_vec(), "text/plain")
+                    .unwrap(),
+            )),
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while previews.pending.is_some() {
+            previews.poll(&ctx);
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(previews.get(current).unwrap().data.text, "current");
+        previews.invalidate(current);
+        assert!(previews.get(current).is_none());
+        assert!(previews.needs(current));
+    }
+
+    #[test]
+    fn listing_previews_bound_rasters_and_text_excerpts() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = dir.path().join("thumbnail.png");
+        image::RgbaImage::from_pixel(640, 480, image::Rgba([20, 40, 80, 255]))
+            .save(&image)
+            .unwrap();
+        let data = file_preview(&[image]);
+        let thumbnail = data.image.unwrap();
+        assert!(thumbnail.width <= 128 && thumbnail.height <= 80);
+        assert!(thumbnail.premultiplied_rgba.len() <= 128 * 80 * 4);
+        let text = dir.path().join("long.txt");
+        std::fs::write(&text, "visible excerpt\n".repeat(100_000)).unwrap();
+        let data = file_preview(&[text]);
+        assert!(data.text.starts_with("visible excerpt"));
+        assert!(data.text.len() <= 2048);
+    }
 }

@@ -386,6 +386,7 @@ impl FileManager {
             colors.text_secondary,
         );
         ui.separator();
+        self.previews.poll(ui.ctx());
         let scroll = self.list_scroll(ui);
         let Some(directory) = &self.directory else {
             ui.label(if self.pending.is_some() {
@@ -402,7 +403,10 @@ impl FileManager {
                 "No visible items. Enable hidden files to see this folder's contents."
             });
         }
-        let selected = self.location().map(|location| &location.selection);
+        let selected = self
+            .index
+            .and_then(|index| self.history.get(index))
+            .map(|location| &location.selection);
         let mut actions = ListActions::default();
         let can_edit = self.can_edit();
         let selection_count = self.selection_count();
@@ -414,17 +418,33 @@ impl FileManager {
                 directory.path.clone(),
             ));
         }
+        let mut preview_paths = std::collections::BTreeSet::new();
         let output = scroll.show_rows(ui, ROW_HEIGHT, self.visible.len(), |ui, range| {
             for index in range {
                 let entry = &directory.entries[self.visible[index]];
                 let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
                 let response = file_row(ui, entry, marked, name_width, colors);
+                if !entry.directory && preview_paths.len() < 128 {
+                    preview_paths.insert(entry.path.clone());
+                    self.previews.show(
+                        ui,
+                        Rect::from_min_size(response.rect.min + vec2(6.0, 4.0), vec2(20.0, 20.0)),
+                        entry,
+                    );
+                } else if !entry.directory {
+                    Icon::Text.paint(
+                        ui.painter(),
+                        Rect::from_min_size(response.rect.min + vec2(6.0, 4.0), vec2(20.0, 20.0)),
+                        colors.text_secondary,
+                    );
+                }
                 if entry.directory && ui.is_enabled() {
                     targets.push((response.rect.intersect(ui.clip_rect()), entry.path.clone()));
                 }
                 actions.row(ui, &response, entry, selected, can_edit, selection_count);
             }
         });
+        self.previews.retain(&preview_paths);
         self.drop_targets.extend(targets);
         if let Some(location) = self.location_mut() {
             location.scroll = output.state.offset.y;
@@ -454,7 +474,7 @@ impl FileManager {
             self.begin_naming(action);
         }
         if let Some(path) = actions.open {
-            self.navigate(path, Navigation::New);
+            self.open_path(path);
         }
     }
 
@@ -712,11 +732,13 @@ fn file_row(
     } else {
         Icon::Text
     };
-    icon.paint(
-        ui.painter(),
-        Rect::from_min_size(rect.min + vec2(6.0, 5.0), vec2(18.0, 18.0)),
-        colors.text_secondary,
-    );
+    if entry.directory {
+        icon.paint(
+            ui.painter(),
+            Rect::from_min_size(rect.min + vec2(6.0, 5.0), vec2(18.0, 18.0)),
+            colors.text_secondary,
+        );
+    }
     paint_text(
         ui,
         rect,
@@ -834,6 +856,22 @@ impl ListActions {
             ui.memory_mut(|memory| memory.request_focus(list_id()));
         }
         response.context_menu(|ui| {
+            if ui
+                .button(if entry.directory {
+                    "Open folder"
+                } else {
+                    "Open in Files"
+                })
+                .clicked()
+            {
+                self.open = Some(entry.path.clone());
+                ui.close_menu();
+            }
+            if !entry.directory && ui.button("Open externally").clicked() {
+                let _ = super::viewers::external(entry.path.clone());
+                ui.close_menu();
+            }
+            ui.separator();
             let rename = (!marked || selection_count == 1).then_some(entry.path.as_path());
             self.naming = super::edit_ui::naming_buttons(ui, can_edit, rename);
             self.files = super::transfers::ui::selection_buttons(ui, true, true);
@@ -841,7 +879,7 @@ impl ListActions {
                 ui.close_menu();
             }
         });
-        if response.double_clicked() && entry.directory {
+        if response.double_clicked() {
             self.open = Some(entry.path.clone());
         }
     }

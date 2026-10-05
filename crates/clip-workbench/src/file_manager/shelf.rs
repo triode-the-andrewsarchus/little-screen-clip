@@ -1,6 +1,6 @@
 //! A session collection of references and captured content, with optional shared slots.
 
-mod preview;
+pub(in crate::file_manager) mod preview;
 mod view;
 
 use super::content::{Payload, from_item};
@@ -143,7 +143,7 @@ impl Shelf {
         let Some(pending) = &self.pending else {
             return;
         };
-        let Some(result) = poll(&pending.receiver) else {
+        let Some(result) = super::poll_job(&pending.receiver) else {
             return;
         };
         self.pending = None;
@@ -185,7 +185,9 @@ impl Shelf {
         let Some(receiver) = &self.inventory_pending else {
             return;
         };
-        let Some(result) = poll(receiver) else { return };
+        let Some(result) = super::poll_job(receiver) else {
+            return;
+        };
         self.inventory_pending = None;
         match result {
             Ok(ResultValue::Summary(summary)) => {
@@ -282,17 +284,6 @@ impl Shelf {
             Selected::Collected(id) => self.entries.iter_mut().find(|entry| entry.id == id),
             Selected::Slot(_) => None,
         }
-    }
-}
-
-fn poll(receiver: &Receiver) -> Option<Result<ResultValue, String>> {
-    match receiver.try_recv() {
-        Ok(Ok(result)) => Some(result),
-        Ok(Err(error)) => Some(Err(error.to_string())),
-        Err(mpsc::TryRecvError::Empty) => None,
-        Err(_) => Some(Err(
-            "Shelf worker disconnected; inspect shared hands before retrying a send.".into(),
-        )),
     }
 }
 

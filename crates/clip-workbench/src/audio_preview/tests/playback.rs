@@ -424,6 +424,7 @@ fn audio_save_reports_destination_directory_creation_failure() {
         std::env::temp_dir().join(format!("little_clip_save_blocker_{}", uuid::Uuid::new_v4()));
     std::fs::write(&blocker, b"file blocks directory creation").unwrap();
     let plan = AudioSavePlan {
+        file_source: None,
         destination: blocker.join("child"),
         source,
         regions: vec![AudioSaveRegion {
@@ -440,9 +441,65 @@ fn audio_save_reports_destination_directory_creation_failure() {
 }
 
 #[test]
+fn file_backed_audio_export_preserves_collisions_and_reports_partial_success() {
+    let (_dir, source) = generate_fixture_wav("protected", 1.0);
+    let destination = tempfile::tempdir().unwrap();
+    let existing = destination.path().join("existing.wav");
+    std::fs::write(&existing, b"preserved").unwrap();
+    let source_bytes = std::fs::read(&source).unwrap();
+    let outcome = run_audio_save(AudioSavePlan {
+        file_source: Some(crate::file_source::FileSource::capture(&source).unwrap()),
+        source: source.clone(),
+        destination: destination.path().to_owned(),
+        regions: ["existing.wav", "new.wav"]
+            .into_iter()
+            .map(|filename| AudioSaveRegion {
+                start: 0.0,
+                end: 0.5,
+                filename: filename.into(),
+                filter: None,
+            })
+            .collect(),
+        open_folder: false,
+    })
+    .unwrap();
+    assert_eq!(outcome.saved_count, 1);
+    assert_eq!(outcome.failures.len(), 1);
+    assert!(outcome.failures[0].contains("existing.wav"));
+    assert_eq!(std::fs::read(existing).unwrap(), b"preserved");
+    assert_eq!(std::fs::read(&source).unwrap(), source_bytes);
+    assert!(
+        std::fs::metadata(destination.path().join("new.wav"))
+            .unwrap()
+            .len()
+            > 44
+    );
+    assert_eq!(std::fs::read_dir(destination.path()).unwrap().count(), 2);
+}
+
+#[test]
+fn file_backed_audio_export_rejects_a_changed_source_before_creating_outputs() {
+    let (_dir, source) = generate_fixture_wav("changed", 0.1);
+    let file_source = crate::file_source::FileSource::capture(&source).unwrap();
+    std::fs::write(&source, b"externally changed").unwrap();
+    let destination = tempfile::tempdir().unwrap();
+    let error = run_audio_save(AudioSavePlan {
+        file_source: Some(file_source),
+        source,
+        destination: destination.path().to_owned(),
+        regions: vec![],
+        open_folder: false,
+    })
+    .unwrap_err();
+    assert!(error.contains("Source changed outside Files"));
+    assert_eq!(std::fs::read_dir(destination.path()).unwrap().count(), 0);
+}
+
+#[test]
 fn audio_save_reports_ffmpeg_process_failure_with_filename() {
     let destination = tempfile::tempdir().unwrap();
     let result = run_audio_save(AudioSavePlan {
+        file_source: None,
         destination: destination.path().to_owned(),
         source: destination.path().join("missing-source.wav"),
         regions: vec![AudioSaveRegion {

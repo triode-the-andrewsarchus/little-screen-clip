@@ -1,8 +1,6 @@
 //! Captured clipboard bytes have explicit encoders and never masquerade as paths.
 
 use little_clip_core::{ClipItem, ClipPayload};
-use std::io::Read;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -106,19 +104,8 @@ pub(super) fn from_item(item: &ClipItem) -> Result<Payload, String> {
             let bytes = if !bytes.is_empty() {
                 bytes.clone()
             } else if let Some(path) = path {
-                let file = std::fs::OpenOptions::new()
-                    .read(true)
-                    .custom_flags(libc::O_NONBLOCK)
-                    .open(path)
-                    .map_err(|e| e.to_string())?;
-                if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-                    return Err("Image content source is not a regular file".into());
-                }
-                let mut bytes = Vec::new();
-                file.take(MAX_CONTENT_BYTES as u64 + 1)
-                    .read_to_end(&mut bytes)
-                    .map_err(|e| e.to_string())?;
-                bytes
+                crate::file_source::read_file_bytes(path, MAX_CONTENT_BYTES, true, true)
+                    .map_err(|e| e.to_string())?
             } else {
                 return Err("Image bytes are no longer available".into());
             };

@@ -1,6 +1,6 @@
 # File Manager Implementation Plan
 
-Status: Phase 1 is complete as a standalone application. See [phase1.md](phase1.md) for delivered behavior and validation. Phase 2 is complete and verified; [phase2.md](phase2.md) records delivered behavior, operation contracts, and acceptance results. Phase 3 is accepted by the user as an initial implementation; [phase3.md](phase3.md) records its behavior and remaining follow-up work. Phase 4 is next.
+Status: Phase 1 is complete as a standalone application. See [phase1.md](phase1.md) for delivered behavior and validation. Phase 2 is complete and verified; [phase2.md](phase2.md) records delivered behavior, operation contracts, and acceptance results. Phase 3 is accepted by the user as an initial implementation; [phase3.md](phase3.md) records its behavior and remaining follow-up work. Phase 4 is in progress; [phase4.md](phase4.md) records current capabilities, save contracts and verification evidence.
 
 The product goals are recorded in [core.md](core.md). This plan turns those goals into a sequence of usable milestones. The later phases describe intended capabilities, not settled specifications: each needs a short design pass before implementation. Phase 1 establishes the browser foundation; subsequent phases build on it.
 
@@ -511,4 +511,4 @@ Unresolved later-phase decisions should not block the basic browser.
 
 ## Next implementation milestone
 
-Phase 3 has been accepted as an initial pass. Continue with Phase 4: rich previews, shared viewers and built-in editors, source-aware saves, and external opening. Shelf polish and the remaining automated runtime acceptance cases in [phase3.md](phase3.md) remain follow-up work.
+Phase 3 is accepted and committed as `278091e`. The current Phase 4 checkpoint implements shared studios, visible listing previews, guarded text/image saves and protected audio/PDF outputs; current behavior and verification are recorded in [phase4.md](phase4.md). Continue Phase 4 before moving to Phase 5 media browsing and playback. Shelf polish remains follow-up work.

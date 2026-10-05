@@ -171,7 +171,7 @@ impl InlinePdfPagePreview {
     }
 
     #[cfg(test)]
-    pub(crate) fn decode_start_count_for_test(&self) -> usize {
+    pub fn decode_start_count_for_test(&self) -> usize {
         self.decode_start_count
     }
 
@@ -456,7 +456,7 @@ impl PdfPageRasterResource {
 
 /// Builds the gallery's tiny valid document and its already-rendered page raster.
 /// Both files stay alive for as long as either preview or editor retains the raster.
-pub(crate) fn gallery_pdf_page_source() -> Result<(PathBuf, Arc<PdfPageRasterResource>), String> {
+pub fn gallery_pdf_page_source() -> Result<(PathBuf, Arc<PdfPageRasterResource>), String> {
     let directory = Arc::new(tempfile::tempdir().map_err(|error| error.to_string())?);
     let pdf_path = directory.path().join("gallery.pdf");
     let raster_path = directory.path().join("gallery-page.png");
@@ -532,6 +532,7 @@ pub struct PdfEditorState {
     pub selected_page: Option<usize>,
     pub status_toast: StatusToast,
     pub dirty: bool,
+    protect_outputs: bool,
     info_job: Option<(
         JobTicket,
         Receiver<Result<Result<PdfInfo, String>, JobError>>,
@@ -570,6 +571,7 @@ impl PdfEditorState {
             selected_page: None,
             status_toast: StatusToast::new(),
             dirty: false,
+            protect_outputs: false,
             info_job: None,
             preview_rx: None,
             preview_job: None,
@@ -589,6 +591,26 @@ impl PdfEditorState {
         }
     }
 
+    /// Prevents Files page edits and OCR from replacing an existing sibling file.
+    pub fn with_protected_outputs(mut self) -> Self {
+        self.protect_outputs = true;
+        self
+    }
+    fn publish_output(&self, source: &Path, destination: &Path) -> Result<(), String> {
+        if self.protect_outputs {
+            std::fs::hard_link(source, destination).map_err(|e| {
+                format!(
+                    "Could not create PDF output; choose/remove the existing sibling first: {e}"
+                )
+            })
+        } else {
+            std::fs::rename(source, destination).map_err(|e| e.to_string())
+        }
+    }
+    /// Reports an accepted page edit or OCR write that must finish before closing.
+    pub fn file_write_pending(&self) -> bool {
+        self.edit_in_progress || self.document_tools.ocr_busy()
+    }
     /// Starts loading page metadata and thumbnail previews for the given PDF file.
     pub fn new(path: PathBuf) -> Self {
         let mut state = Self::without_jobs(path);
@@ -599,10 +621,7 @@ impl PdfEditorState {
     }
 
     /// Opens a one-page document using a page raster already owned by another view.
-    pub(crate) fn from_shared_page_raster(
-        path: PathBuf,
-        raster: Arc<PdfPageRasterResource>,
-    ) -> Self {
+    pub fn from_shared_page_raster(path: PathBuf, raster: Arc<PdfPageRasterResource>) -> Self {
         let mut state = Self::without_jobs(path);
         state.source_directory = Some(Arc::clone(&raster._raster_directory));
         if state.start_existing_ocr_check() {

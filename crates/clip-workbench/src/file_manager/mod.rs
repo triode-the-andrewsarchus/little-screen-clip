@@ -6,9 +6,12 @@ mod edit_ui;
 mod edits;
 mod filesystem;
 mod native_drag;
+mod previews;
 mod selection;
 mod shelf;
+mod text_editor;
 mod transfers;
+mod viewers;
 pub use app::run;
 #[cfg(test)]
 mod tests;
@@ -119,6 +122,8 @@ pub(crate) struct FileManager {
     drop_targets: Vec<(egui::Rect, PathBuf)>,
     was_modal: bool,
     shelf: shelf::Shelf,
+    open_file: Option<PathBuf>,
+    previews: previews::EntryPreviews,
 }
 
 impl Default for FileManager {
@@ -158,6 +163,8 @@ impl FileManager {
             drop_targets: Vec::new(),
             was_modal: false,
             shelf: shelf::Shelf::default(),
+            open_file: None,
+            previews: previews::EntryPreviews::default(),
         }
     }
 
@@ -383,11 +390,23 @@ impl FileManager {
                 directory
                     .entries
                     .iter()
-                    .find(|entry| entry.directory && Some(&entry.path) == selected)
+                    .find(|entry| Some(&entry.path) == selected)
             })
             .map(|entry| entry.path.clone());
         if let Some(path) = path {
+            self.open_path(path);
+        }
+    }
+
+    fn open_path(&mut self, path: PathBuf) {
+        if self.directory.as_ref().is_some_and(|dir| {
+            dir.entries
+                .iter()
+                .any(|entry| entry.path == path && entry.directory)
+        }) {
             self.navigate(path, Navigation::New);
+        } else {
+            self.open_file = Some(path);
         }
     }
 }
@@ -421,5 +440,17 @@ impl FileManager {
             }
             _ => {}
         }
+    }
+}
+
+// Flatten executor errors consistently for file-manager background requests.
+fn poll_job<T>(
+    receiver: &mpsc::Receiver<Result<Result<T, String>, JobError>>,
+) -> Option<Result<T, String>> {
+    match receiver.try_recv() {
+        Ok(Ok(result)) => Some(result),
+        Ok(Err(error)) => Some(Err(error.to_string())),
+        Err(mpsc::TryRecvError::Empty) => None,
+        Err(_) => Some(Err("Background worker disconnected".into())),
     }
 }

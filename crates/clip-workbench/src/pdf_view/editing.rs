@@ -91,21 +91,35 @@ impl PdfEditorState {
         let expected_page_count = self
             .page_count
             .saturating_sub(usize::from(operation == "delete"));
+        let protect_outputs = self.protect_outputs;
         let (ticket, rx) = jobs.submit(Duration::MAX, move || {
             let staged_output = staging_dir.path().join(STAGED_PDF_FILENAME);
-            let result = perform_edit(&input, &staged_output).and_then(|()| {
-                if !staged_output.is_file() {
-                    return Err("PDF operation produced no output file".to_string());
-                }
-                let info = get_pdf_info(&staged_output)?;
-                if info.page_count != expected_page_count {
-                    return Err(format!(
-                        "Edited PDF has {} pages; expected {}",
-                        info.page_count, expected_page_count
-                    ));
-                }
-                render_pdf_page_preview(&staged_output, 1, 64).map(|_| ())
-            });
+            let source = if protect_outputs {
+                crate::file_source::FileSource::capture(&input).map(Some)
+            } else {
+                Ok(None)
+            };
+            let result = source
+                .and_then(|source| {
+                    perform_edit(&input, &staged_output)?;
+                    if let Some(source) = source {
+                        source.check()?;
+                    }
+                    Ok(())
+                })
+                .and_then(|()| {
+                    if !staged_output.is_file() {
+                        return Err("PDF operation produced no output file".to_string());
+                    }
+                    let info = get_pdf_info(&staged_output)?;
+                    if info.page_count != expected_page_count {
+                        return Err(format!(
+                            "Edited PDF has {} pages; expected {}",
+                            info.page_count, expected_page_count
+                        ));
+                    }
+                    render_pdf_page_preview(&staged_output, 1, 64).map(|_| ())
+                });
             PdfEditMsg {
                 operation,
                 page_num,
@@ -164,11 +178,10 @@ impl PdfEditorState {
             self.edit_ticket = None;
             self.edit_in_progress = false;
             let result = message.result.and_then(|()| {
-                std::fs::rename(
-                    message.staging_dir.path().join(STAGED_PDF_FILENAME),
+                self.publish_output(
+                    &message.staging_dir.path().join(STAGED_PDF_FILENAME),
                     &message.output,
                 )
-                .map_err(|error| format!("Could not publish edited PDF: {error}"))
             });
             match result {
                 Ok(()) => {

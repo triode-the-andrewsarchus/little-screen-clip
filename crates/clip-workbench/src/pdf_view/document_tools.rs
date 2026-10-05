@@ -316,11 +316,10 @@ impl PdfEditorState {
         {
             self.document_tools.ocr_job = None;
             match result.and_then(|output| {
-                std::fs::rename(
-                    output.directory.path().join(STAGED_PDF_FILENAME),
+                self.publish_output(
+                    &output.directory.path().join(STAGED_PDF_FILENAME),
                     &output.output,
-                )
-                .map_err(|error| error.to_string())?;
+                )?;
                 Ok(output.output)
             }) {
                 Ok(path) => {
