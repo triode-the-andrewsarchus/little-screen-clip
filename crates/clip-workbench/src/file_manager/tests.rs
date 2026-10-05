@@ -85,6 +85,82 @@ fn listing_orders_folders_first_and_preserves_unreadable_metadata() {
 }
 
 #[test]
+fn photo_collection_excludes_hidden_and_nonimages_without_filtering_browser_entries() {
+    let temp = tempfile::tempdir().unwrap();
+    for name in ["a.png", "b.JPG", ".hidden.png", "notes.txt", "music.wav"] {
+        std::fs::write(temp.path().join(name), b"fixture").unwrap();
+    }
+    std::fs::create_dir(temp.path().join("folder.png")).unwrap();
+    let (mut manager, _jobs) = loaded(temp.path());
+    let image = temp.path().join("a.png");
+    assert!(manager.photo_collection(&image).is_empty());
+    manager.set_view(BrowserView::Photos);
+    assert_eq!(
+        manager.photo_collection(&image),
+        vec![image.clone(), temp.path().join("b.JPG")]
+    );
+    assert_eq!(manager.visible.len(), 5);
+    assert!(
+        manager
+            .photo_collection(&temp.path().join("notes.txt"))
+            .is_empty()
+    );
+    manager.toggle_hidden();
+    assert_eq!(manager.photo_collection(&image).len(), 3);
+    manager.toggle_hidden();
+    manager.gallery_columns = 2;
+    manager.select(image);
+    manager.move_selection(true, false);
+    assert_eq!(
+        manager.location().unwrap().selected,
+        Some(temp.path().join("music.wav"))
+    );
+    manager.move_selection_by(-1, true);
+    assert_eq!(
+        manager.location().unwrap().selected,
+        Some(temp.path().join("b.JPG"))
+    );
+    assert_eq!(manager.selection_count(), 2);
+}
+
+#[test]
+fn music_threshold_uses_visible_regular_files_and_manual_history_choices_survive_refresh() {
+    let temp = tempfile::tempdir().unwrap();
+    let child = temp.path().join("subfolder");
+    std::fs::create_dir(&child).unwrap();
+    for name in ["a.wav", "b.mp3", "c.flac", "notes.txt", ".extra.wav"] {
+        std::fs::write(temp.path().join(name), "fixture").unwrap();
+    }
+    let (mut manager, jobs) = loaded(temp.path());
+    assert_eq!(manager.view, BrowserView::Music);
+    assert_eq!(manager.visible.len(), 5);
+    manager
+        .music
+        .queue
+        .replace(manager.audio_entries.clone(), &temp.path().join("b.mp3"));
+    manager.set_view(BrowserView::List);
+    manager.refresh();
+    finish(&mut manager, &jobs);
+    assert_eq!(manager.view, BrowserView::List);
+    manager.navigate(child, Navigation::New);
+    finish(&mut manager, &jobs);
+    assert_eq!(manager.view, BrowserView::List);
+    assert_eq!(
+        manager.music.queue.current(),
+        Some(&temp.path().join("b.mp3"))
+    );
+    manager.history_step(false);
+    finish(&mut manager, &jobs);
+    assert_eq!(manager.view, BrowserView::List);
+    manager.location_mut().unwrap().manual_view = None;
+    manager.music_threshold = 76;
+    manager.activate_media_view();
+    assert_eq!(manager.view, BrowserView::List);
+    manager.toggle_hidden();
+    assert_eq!(manager.view, BrowserView::Music);
+}
+
+#[test]
 fn address_round_trips_unicode_control_backslash_and_invalid_bytes() {
     for bytes in [
         b"/tmp/a\\b\n\xff".to_vec(),
@@ -485,42 +561,51 @@ fn large_directory_virtualizes_rows_and_restores_history_viewport() {
     let (mut manager, jobs) = loaded(temp.path());
     let loaded_ms = started.elapsed().as_millis();
     assert_eq!(manager.visible.len(), 10_001);
-    let ctx = egui::Context::default();
-    egui_extras::install_image_loaders(&ctx);
-    let started = Instant::now();
-    let output = frame(&mut manager, &ctx, vec![]);
-    let text_shapes = output
-        .shapes
-        .iter()
-        .filter(|shape| matches!(shape.shape, egui::Shape::Text(_)))
-        .count();
-    assert!(
-        text_shapes < 200,
-        "visible-row rendering must not lay out all 10,000 entries"
-    );
-    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "file-09999.txt")));
-    println!(
-        "10,000 files: load {loaded_ms} ms, first UI frame {} ms, {text_shapes} text shapes",
-        started.elapsed().as_millis()
-    );
-    manager.select(temp.path().join("file-00150.txt"));
-    manager.location_mut().unwrap().scroll = 5000.0;
-    manager.restore_scroll = true;
-    frame(&mut manager, &ctx, vec![]);
-    let previous = manager.location().unwrap().clone();
-    assert!(previous.scroll > 4000.0);
-    manager.navigate(child, Navigation::New);
-    finish(&mut manager, &jobs);
-    frame(&mut manager, &ctx, vec![]);
-    manager.history_step(false);
-    finish(&mut manager, &jobs);
-    frame(&mut manager, &ctx, vec![]);
-    let restored = manager.location().unwrap();
-    assert_eq!(restored.selected, previous.selected);
-    assert!(
-        (restored.scroll - previous.scroll).abs() < 1.0,
-        "rendered viewport should restore its prior offset"
-    );
+    for photos in [false, true] {
+        manager.set_view(if photos {
+            BrowserView::Photos
+        } else {
+            BrowserView::List
+        });
+        manager.location_mut().unwrap().scroll = 0.0;
+        manager.restore_scroll = true;
+        let ctx = egui::Context::default();
+        egui_extras::install_image_loaders(&ctx);
+        let started = Instant::now();
+        let output = frame(&mut manager, &ctx, vec![]);
+        let text_shapes = output
+            .shapes
+            .iter()
+            .filter(|shape| matches!(shape.shape, egui::Shape::Text(_)))
+            .count();
+        assert!(
+            text_shapes < 200,
+            "visible-row rendering must not lay out all 10,000 entries"
+        );
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "file-09999.txt")));
+        println!(
+            "10,000 files: load {loaded_ms} ms, first UI frame {} ms, {text_shapes} text shapes",
+            started.elapsed().as_millis()
+        );
+        manager.select(temp.path().join("file-00150.txt"));
+        manager.location_mut().unwrap().scroll = 5000.0;
+        manager.restore_scroll = true;
+        frame(&mut manager, &ctx, vec![]);
+        let previous = manager.location().unwrap().clone();
+        assert!(previous.scroll > 4000.0);
+        manager.navigate(child.clone(), Navigation::New);
+        finish(&mut manager, &jobs);
+        frame(&mut manager, &ctx, vec![]);
+        manager.history_step(false);
+        finish(&mut manager, &jobs);
+        frame(&mut manager, &ctx, vec![]);
+        let restored = manager.location().unwrap();
+        assert_eq!(restored.selected, previous.selected);
+        assert!(
+            (restored.scroll - previous.scroll).abs() < 1.0,
+            "rendered viewport should restore its prior offset"
+        );
+    }
 }
 
 #[test]

@@ -77,7 +77,7 @@ mod playback;
 mod selection;
 mod studio;
 
-pub use export::run_audio_command_cancellable;
+pub use export::{copy_file_audio_segment, run_audio_command_cancellable};
 
 mod layout;
 mod tools;
@@ -1053,4 +1053,4 @@ fn should_start_stem_separation_on_space(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

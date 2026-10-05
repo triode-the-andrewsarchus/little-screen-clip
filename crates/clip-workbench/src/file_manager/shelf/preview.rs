@@ -10,12 +10,18 @@ use little_clip_core::{
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 #[derive(Clone)]
 pub(in crate::file_manager) enum Source {
     Payload(Payload),
     Slot(SlotId, uuid::Uuid),
+    Gallery(PathBuf),
+    Music(PathBuf),
 }
 
 pub(in crate::file_manager) struct Data {
@@ -25,10 +31,11 @@ pub(in crate::file_manager) struct Data {
     pub image: Option<ImageThumbnail>,
     pub waveform: Vec<f32>,
     pub icon: Icon,
+    pub music: Option<super::super::music::preview::Metadata>,
 }
 
 impl Data {
-    fn new(title: String, detail: String, icon: Icon) -> Self {
+    pub(in crate::file_manager) fn new(title: String, detail: String, icon: Icon) -> Self {
         Self {
             title,
             detail,
@@ -36,6 +43,7 @@ impl Data {
             text: String::new(),
             image: None,
             waveform: Vec::new(),
+            music: None,
         }
     }
 }
@@ -48,6 +56,13 @@ struct Pending {
     id: uuid::Uuid,
     ticket: JobTicket,
     receiver: mpsc::Receiver<Result<Data, JobError>>,
+    cancelled: Arc<AtomicBool>,
+}
+impl Drop for Pending {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+        self.ticket.cancel();
+    }
 }
 
 #[derive(Default)]
@@ -94,15 +109,25 @@ impl Previews {
         if self.ready.contains_key(&id) || self.pending.is_some() {
             return;
         }
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let token = cancelled.clone();
+        let deadline = if matches!(&source, Source::Music(_)) {
+            30
+        } else {
+            15
+        };
         let (ticket, receiver) =
-            BackgroundJobs::global().submit(Duration::from_secs(15), move || match source {
+            BackgroundJobs::global().submit(Duration::from_secs(deadline), move || match source {
                 Source::Payload(payload) => payload_preview(&payload),
                 Source::Slot(slot, expected) => slot_preview(slot, expected),
+                Source::Gallery(path) => gallery_preview(&path),
+                Source::Music(path) => super::super::music::preview::load(&path, &token),
             });
         self.pending = Some(Pending {
             id,
             ticket,
             receiver,
+            cancelled,
         });
     }
 
@@ -361,11 +386,38 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
 }
 
 fn thumbnail(bytes: &[u8], mime: Option<&str>) -> Option<ImageThumbnail> {
+    sized_thumbnail(bytes, mime, 128, 80)
+}
+
+fn gallery_preview(path: &Path) -> Data {
+    let mut data = Data::new(display_path(path), "Photo".into(), Icon::Image);
+    data.image = crate::file_source::read_file_bytes(path, 64 * 1024 * 1024, true, false)
+        .ok()
+        .and_then(|bytes| {
+            sized_thumbnail(
+                &bytes,
+                Some(&little_clip_core::item::guess_image_mime(path)),
+                320,
+                320,
+            )
+        });
+    if data.image.is_none() {
+        data.detail = "Preview unavailable; open in Image Studio or externally".into();
+    }
+    data
+}
+
+fn sized_thumbnail(
+    bytes: &[u8],
+    mime: Option<&str>,
+    width: u32,
+    height: u32,
+) -> Option<ImageThumbnail> {
     let mut limits = image::Limits::default();
     limits.max_alloc = Some(128 * 1024 * 1024);
     limits.max_image_width = Some(16_384);
     limits.max_image_height = Some(16_384);
-    ImageThumbnail::generate_with_limits(bytes, mime, 128, 80, limits)
+    ImageThumbnail::generate_with_limits(bytes, mime, width, height, limits)
 }
 
 fn audio_excerpt(path: &Path) -> Vec<f32> {

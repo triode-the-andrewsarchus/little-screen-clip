@@ -337,15 +337,7 @@ impl AudioPreviewState {
                 mode,
                 &worker_cancelled,
                 extract_audio_slice_file,
-                |request| match crate::send_ipc_request_with_timeout(
-                    request,
-                    Some(Duration::from_secs(2)),
-                ) {
-                    Ok(little_clip_core::ipc::IpcResponse::Success { .. }) => Ok(()),
-                    Ok(little_clip_core::ipc::IpcResponse::Error { error }) => Err(error),
-                    Ok(response) => Err(format!("unexpected daemon response: {response:?}")),
-                    Err(error) => Err(error.to_string()),
-                },
+                send_audio_handoff,
                 |paths| {
                     little_clip_core::copy_file_uris_to_system_clipboard(paths)
                         .map_err(|error| error.to_string())
@@ -1023,27 +1015,54 @@ pub(super) fn extract_audio_slice_file(
     Ok(plan.output.clone())
 }
 
+fn send_audio_handoff(request: &IpcRequest) -> Result<(), String> {
+    match crate::send_ipc_request_with_timeout(request, Some(Duration::from_secs(2))) {
+        Ok(little_clip_core::ipc::IpcResponse::Success { .. }) => Ok(()),
+        Ok(little_clip_core::ipc::IpcResponse::Error { error }) => Err(error),
+        Ok(response) => Err(format!("unexpected daemon response: {response:?}")),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
 pub(super) fn extract_and_handoff_audio_slice(
     plan: AudioSliceCopyPlan,
     cancelled: &AtomicBool,
 ) -> Result<AudioSliceDelivery, String> {
     let output = extract_audio_slice_file(&plan, cancelled)?;
-    handoff_audio_slice(
-        &output,
-        cancelled,
-        |request| match crate::send_ipc_request_with_timeout(request, Some(Duration::from_secs(2)))
-        {
-            Ok(little_clip_core::ipc::IpcResponse::Success { .. }) => Ok(()),
-            Ok(little_clip_core::ipc::IpcResponse::Error { error }) => Err(error),
-            Ok(response) => Err(format!("unexpected daemon response: {response:?}")),
-            Err(error) => Err(error.to_string()),
-        },
-        |path| {
-            let path = path.to_path_buf();
-            little_clip_core::copy_file_uris_to_system_clipboard(std::slice::from_ref(&path))
-                .map_err(|error| error.to_string())
-        },
-    )
+    handoff_audio_slice(&output, cancelled, send_audio_handoff, |path| {
+        let path = path.to_path_buf();
+        little_clip_core::copy_file_uris_to_system_clipboard(std::slice::from_ref(&path))
+            .map_err(|error| error.to_string())
+    })
+}
+
+/// Copies a file-backed selection through the shared slice exporter and desktop clipboard.
+pub fn copy_file_audio_segment(
+    path: &Path,
+    source: &crate::file_source::FileSource,
+    start: f32,
+    end: f32,
+    cancelled: &AtomicBool,
+) -> Result<String, String> {
+    let (start, end) = (start.min(end), start.max(end));
+    if !start.is_finite() || !end.is_finite() || start < 0.0 || end - start < 0.001 {
+        return Err("Select a non-empty audio range first.".into());
+    }
+    if crate::file_source::FileSource::capture(path)? != *source {
+        return Err("Audio source changed; reload it before copying.".into());
+    }
+    let plan = audio_slice_copy_plan(path, start, end, ChannelCopyMode::Native, None);
+    let output = extract_audio_slice_file(&plan, cancelled)?;
+    if crate::file_source::FileSource::capture(path)? != *source {
+        return Err("Audio source changed while copying; copy it again.".into());
+    }
+    little_clip_core::copy_file_uris_to_system_clipboard(std::slice::from_ref(&output))
+        .map_err(|e| e.to_string())?;
+    let delivery = handoff_audio_slice(&output, cancelled, send_audio_handoff, |_| Ok(()))?;
+    Ok(format!(
+        "{}; desktop clipboard contains the audio file.",
+        audio_slice_copy_status(ChannelCopyMode::Native, start, end, delivery)
+    ))
 }
 
 pub(super) fn run_audio_slice_batch(

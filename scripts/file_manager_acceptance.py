@@ -329,6 +329,55 @@ def finish_run(output, children, report):
     return 0 if report["status"] == "passed" else 1
 
 
+def application_arguments(description, binary, configure=None):
+    parser = argparse.ArgumentParser(description=description)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--appearance", choices=["light", "dark"], required=True)
+    parser.add_argument("--binary", type=Path, default=binary)
+    if configure:
+        configure(parser)
+    return parser.parse_args()
+
+
+def media_fixture_directory(args):
+    output = args.output_dir.resolve()
+    output.mkdir(mode=0o700, parents=True)
+    root = output / "fixture"
+    root.mkdir()
+    return output, root
+
+
+def run_application_acceptance(args, output, root, exercise, scope, prepare_environment=None):
+    """Run a Files scenario with private compositor ownership and evidence capture."""
+    children = private.ChildProcesses()
+    report = {"status": "running", "appearance": args.appearance, "scope": scope}
+    try:
+        config, env = isolated_runner(output, args.appearance, children)
+        if prepare_environment:
+            prepare_environment(env, children)
+        process = children.start("files", [str(args.binary.resolve()), str(root)], env=env,
+                                 cwd=config["scratch"], log_path=output / "files.log")
+        _, mapped_ms = private.wait_for_app_window(config["niri_bin"], env, process, output)
+        session = Session(output, env, config["niri_bin"], process)
+        exercise(session, root)
+        session.key("q", "ctrl")
+        process.wait(timeout=5)
+        assert process.returncode == 0
+        report.update(status="passed", mapped_ms=mapped_ms, observations=session.observations,
+                      private_runtime=str(config["runtime"]))
+    except Exception as error:
+        report.update(status="failed", error=str(error))
+        if "session" in locals():
+            try:
+                session.observe("failure-state", [])
+            except Exception as capture_error:
+                report["capture_error"] = str(capture_error)
+            report["observations"] = session.observations
+    finally:
+        result = finish_run(output, children, report)
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)

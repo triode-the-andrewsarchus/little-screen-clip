@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Phase 4 file studios, guarded saves and previews on private Weston/Niri."""
-import argparse
 import csv
 import io
 import json
@@ -11,12 +10,12 @@ from pathlib import Path
 from PIL import Image
 import ui_acceptance_capture as private
 import ui_acceptance_fixtures as fixture
-from file_manager_acceptance import Session, isolated_runner, finish_run, wait_for
+from file_manager_acceptance import application_arguments, media_fixture_directory, run_application_acceptance, wait_for
 
 
-def click_word(session, shot, word, last=False):
+def click_word(session, shot, word, last=False, minimum_y=85, maximum_y=None):
     data = private.run_checked(["tesseract", str(session.output / f"{shot}-ocr.png"), "stdout", "--psm", "11", "-c", "tessedit_create_tsv=1", "-c", "tessedit_create_txt=0"], env=session.env)
-    words = [item for item in csv.DictReader(io.StringIO(data), delimiter="\t", quoting=csv.QUOTE_NONE) if item["text"].lower().strip("[]()|:.,") == word.lower() and int(item["top"]) // 3 > 85]
+    words = [item for item in csv.DictReader(io.StringIO(data), delimiter="\t", quoting=csv.QUOTE_NONE) if item["text"].lower().strip("[]()|:.,\"'“”‘’") == word.lower() and minimum_y < int(item["top"]) // 3 < (maximum_y if maximum_y is not None else float("inf"))]
     if not words:
         raise RuntimeError(f"{shot}: no {word}")
     item = words[-1] if last else words[0]
@@ -149,15 +148,8 @@ def exercise(session, root):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--appearance", choices=["light", "dark"], required=True)
-    parser.add_argument("--binary", type=Path, default=Path(__file__).resolve().parent.parent / "target/release/clip-file-manager")
-    args = parser.parse_args()
-    output = args.output_dir.resolve()
-    output.mkdir(mode=0o700, parents=True)
-    root = output / "fixture"
-    root.mkdir()
+    args = application_arguments(__doc__, Path(__file__).resolve().parent.parent / "target/release/clip-file-manager")
+    output, root = media_fixture_directory(args)
     (root / "notes.txt").write_text("ORIGINALNOTE\n")
     image = Image.new("RGB", (120, 80), "red")
     for x in range(60, 120):
@@ -170,10 +162,7 @@ def main():
     fixture.stl_fixture(root)
     (root / "scene.splat").write_bytes(struct.pack("<6f8B", 0, 0, 0, .1, .1, .1, 220, 80, 40, 255, 255, 128, 128, 128))
     (root / "external.unknown").write_bytes(bytes([0, 255, 0]))
-    children = private.ChildProcesses()
-    report = {"status": "running", "appearance": args.appearance}
-    try:
-        config, env = isolated_runner(output, args.appearance, children)
+    def prepare_environment(env, children):
         # A synthetic desktop opener keeps this check inside the private run.
         bin_dir = output / "bin"
         bin_dir.mkdir()
@@ -181,22 +170,7 @@ def main():
         opener.write_text("#!/usr/bin/env python3\nimport json, sys\nfrom pathlib import Path\nPath(" + repr(str(output / "external-open.json")) + ").write_text(json.dumps(sys.argv[1:]))\n")
         opener.chmod(0o700)
         env["PATH"] = str(bin_dir) + ":" + env["PATH"]
-        process = children.start("files", [str(args.binary.resolve()), str(root)], env=env, cwd=config["scratch"], log_path=output / "files.log")
-        _, mapped_ms = private.wait_for_app_window(config["niri_bin"], env, process, output)
-        session = Session(output, env, config["niri_bin"], process)
-        exercise(session, root)
-        session.key("q", "ctrl")
-        process.wait(timeout=5)
-        assert process.returncode == 0
-        report.update(status="passed", mapped_ms=mapped_ms, observations=session.observations, private_runtime=str(config["runtime"]))
-    except Exception as error:
-        report.update(status="failed", error=str(error))
-        if "session" in locals():
-            session.observe("failure-state", [])
-            report["observations"] = session.observations
-    finally:
-        result = finish_run(output, children, report)
-    return result
+    return run_application_acceptance(args, output, root, exercise, "studios", prepare_environment)
 
 
 if __name__ == "__main__":

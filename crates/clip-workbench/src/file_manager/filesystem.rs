@@ -12,6 +12,7 @@ pub(super) struct Entry {
     pub path: PathBuf,
     pub name: String,
     pub directory: bool,
+    pub regular_file: bool,
     pub symlink: bool,
     pub hidden: bool,
     pub size: String,
@@ -69,6 +70,7 @@ fn read_entry(child: std::fs::DirEntry) -> Entry {
     let symlink = child.file_type().is_ok_and(|kind| kind.is_symlink());
     let metadata = std::fs::metadata(&path);
     let directory = metadata.as_ref().is_ok_and(|data| data.is_dir());
+    let regular_file = metadata.as_ref().is_ok_and(|data| data.is_file());
     let modified = metadata.as_ref().ok().and_then(|data| data.modified().ok());
     let warning = metadata.as_ref().err().map(|error| error.to_string());
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -85,6 +87,7 @@ fn read_entry(child: std::fs::DirEntry) -> Entry {
         name: display_path(Path::new(&child.file_name())),
         path,
         directory,
+        regular_file,
         symlink,
         size: if directory {
             "—".into()

@@ -226,14 +226,19 @@ Supported files can be inspected and edited from the browser without losing cont
 
 ## Phase 5 — Media browsing and playback
 
+Status: in progress. [phase5.md](phase5.md) records current implementation, evidence, and remaining scope.
+
 ### Goal
 
 Turn previews into complete everyday gallery and playback workflows.
 
 ### Scope
 
-- Photo grid with adjustable thumbnail size, selection, next/previous viewing, and slideshow controls.
+- Photo grid with adjustable thumbnail size, selection, next/previous viewing, and slideshow controls. Inspired by iPhone's gallery.
 - Music view with metadata columns, cover art, queue, play/pause, seek, next/previous, repeat, and shuffle.
+  - Activates when in a folder that's 75% (threshold configurable) audio files
+  - Each preview is the album art (or missing stand in) and waveform, where the waveform has a navigable playhead and can be selceted in and copy-pasted from directly.
+  - This will take careful considering for rendering, to handle huge folders without slow down
 - Explicitly define playback lifetime when navigating or closing the file manager. Decide process ownership before building persistent playback.
 - Video browsing and playback through an assessed reusable backend; establish codec and resource expectations.
 - Keep subfolders and non-media files accessible in media views.
@@ -511,4 +516,4 @@ Unresolved later-phase decisions should not block the basic browser.
 
 ## Next implementation milestone
 
-Phase 3 is accepted and committed as `278091e`. The current Phase 4 checkpoint implements shared studios, visible listing previews, guarded text/image saves and protected audio/PDF outputs; current behavior and verification are recorded in [phase4.md](phase4.md). Continue Phase 4 before moving to Phase 5 media browsing and playback. Shelf polish remains follow-up work.
+Phase 3 is accepted and committed as `278091e`. The current Phase 4 checkpoint implements shared studios, visible listing previews, guarded text/image saves and protected audio/PDF outputs; current behavior and verification are recorded in [phase4.md](phase4.md). Phase 4 remains in progress. Phase 5 media browsing and playback is now underway at the user's request; [phase5.md](phase5.md) tracks its remaining scope. Shelf polish remains follow-up work.

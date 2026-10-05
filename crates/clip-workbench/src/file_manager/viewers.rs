@@ -17,6 +17,8 @@ use std::{
     time::Duration,
 };
 
+mod gallery;
+
 enum Loaded {
     Image(DecodedImageData, FileSource),
     Text(super::text_editor::TextSession),
@@ -53,6 +55,7 @@ pub(super) struct Viewers {
     error: Option<String>,
     confirm_close: bool,
     config: AppConfig,
+    gallery: Option<gallery::Collection>,
 }
 impl Viewers {
     pub fn new(config: AppConfig) -> Self {
@@ -63,6 +66,15 @@ impl Viewers {
     }
     pub fn active(&self) -> bool {
         self.loading.is_some() || self.session.is_some() || self.error.is_some()
+    }
+    pub fn uses_audio(&self) -> bool {
+        matches!(
+            self.session,
+            Some(ViewerSession::Audio(_) | ViewerSession::Midi(_))
+        ) || self
+            .loading
+            .as_ref()
+            .is_some_and(|l| matches!(kind(&l.path), Kind::Audio | Kind::Midi))
     }
     pub fn open(&mut self, path: PathBuf) {
         if self.active() {
@@ -99,6 +111,7 @@ impl Viewers {
     }
     pub fn ui(&mut self, ui: &mut Ui, palette: &AppPalette) -> bool {
         self.poll(ui.ctx());
+        self.gallery_controls(ui);
         ui.set_enabled(!self.confirm_close);
         let mut close = false;
         ui.horizontal(|ui| {
@@ -151,6 +164,7 @@ impl Viewers {
                         }
                         if ui.button("Discard edits").clicked() {
                             self.clear();
+                            self.gallery = None;
                         }
                     });
                 });
@@ -158,6 +172,7 @@ impl Viewers {
         !self.active()
     }
     pub fn request_close(&mut self) -> bool {
+        self.pause_slideshow();
         if let Some(ViewerSession::Pdf(state)) = &self.session
             && state.file_write_pending()
         {
@@ -195,6 +210,7 @@ impl Viewers {
             }
         }
         self.clear();
+        self.gallery = None;
         true
     }
     fn clear(&mut self) {

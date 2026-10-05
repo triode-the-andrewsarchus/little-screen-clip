@@ -11,6 +11,29 @@ pub(super) struct EntryPreviews {
     identities: BTreeMap<std::path::PathBuf, (u64, uuid::Uuid)>,
 }
 impl EntryPreviews {
+    pub fn music(
+        &mut self,
+        ctx: &egui::Context,
+        entry: &Entry,
+    ) -> Option<&super::shelf::preview::Ready> {
+        self.cache.poll(ctx);
+        let id = self.identity(entry);
+        if self.cache.needs(id) {
+            self.cache.request(id, Source::Music(entry.path.clone()));
+        }
+        self.cache.get(id)
+    }
+    fn identity(&mut self, entry: &Entry) -> uuid::Uuid {
+        let (version, id) = self
+            .identities
+            .entry(entry.path.clone())
+            .or_insert_with(|| (entry.revision, uuid::Uuid::new_v4()));
+        if *version != entry.revision {
+            self.cache.invalidate(*id);
+            *version = entry.revision;
+        }
+        *id
+    }
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.cache.poll(ctx);
     }
@@ -20,29 +43,40 @@ impl EntryPreviews {
             .retain(&self.identities.values().map(|(_, id)| *id).collect());
     }
     pub fn show(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry) {
-        let (version, id) = self
-            .identities
-            .entry(entry.path.clone())
-            .or_insert_with(|| (entry.revision, uuid::Uuid::new_v4()));
-        if *version != entry.revision {
-            self.cache.invalidate(*id);
-            *version = entry.revision;
-        }
-        let id = *id;
+        self.show_inner(ui, rect, entry, false);
+    }
+    pub fn show_gallery(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry) {
+        self.show_inner(ui, rect, entry, true);
+    }
+    fn show_inner(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry, gallery: bool) {
+        let id = self.identity(entry);
         if self.cache.needs(id) {
             self.cache.request(
                 id,
-                Source::Payload(Payload::Files {
-                    paths: vec![entry.path.clone()],
-                    cut: false,
-                }),
+                if gallery {
+                    Source::Gallery(entry.path.clone())
+                } else {
+                    Source::Payload(Payload::Files {
+                        paths: vec![entry.path.clone()],
+                        cut: false,
+                    })
+                },
             );
         }
         if let Some(ready) = self.cache.get(id) {
             if let Some(texture) = &ready.texture {
                 ui.painter().image(
                     texture.id(),
-                    rect,
+                    if gallery {
+                        egui::Rect::from_center_size(
+                            rect.center(),
+                            texture.size_vec2()
+                                * (rect.width() / texture.size_vec2().x)
+                                    .min(rect.height() / texture.size_vec2().y),
+                        )
+                    } else {
+                        rect
+                    },
                     egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );

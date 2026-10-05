@@ -5,6 +5,7 @@ mod content;
 mod edit_ui;
 mod edits;
 mod filesystem;
+mod music;
 mod native_drag;
 mod previews;
 mod selection;
@@ -28,6 +29,14 @@ use filesystem::{Directory, display_path, parse_address, read_directory};
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use tree::FolderTree;
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+enum BrowserView {
+    #[default]
+    List,
+    Photos,
+    Music,
+}
+
 #[derive(Clone, Debug)]
 struct Location {
     path: PathBuf,
@@ -35,6 +44,7 @@ struct Location {
     selection: BTreeSet<PathBuf>,
     anchor: Option<PathBuf>,
     scroll: f32,
+    manual_view: Option<BrowserView>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -124,6 +134,16 @@ pub(crate) struct FileManager {
     shelf: shelf::Shelf,
     open_file: Option<PathBuf>,
     previews: previews::EntryPreviews,
+    gallery_previews: previews::EntryPreviews,
+    view: BrowserView,
+    music_threshold: u8,
+    music_previews: previews::EntryPreviews,
+    thumbnail_edge: f32,
+    gallery_columns: usize,
+    music: music::Music,
+    audio_entries: Vec<PathBuf>,
+    music_offsets: Vec<f32>,
+    music_selection: Option<ui::music::MusicRange>,
 }
 
 impl Default for FileManager {
@@ -165,6 +185,16 @@ impl FileManager {
             shelf: shelf::Shelf::default(),
             open_file: None,
             previews: previews::EntryPreviews::default(),
+            gallery_previews: previews::EntryPreviews::default(),
+            view: BrowserView::List,
+            music_threshold: 75,
+            music_previews: previews::EntryPreviews::default(),
+            thumbnail_edge: 160.0,
+            gallery_columns: 1,
+            music: music::Music::default(),
+            audio_entries: Vec::new(),
+            music_offsets: vec![0.0],
+            music_selection: None,
         }
     }
 
@@ -290,31 +320,29 @@ impl FileManager {
         self.tree.tick(jobs);
     }
 
+    fn append_location(&mut self, path: PathBuf) {
+        self.history.push(Location {
+            path,
+            selected: None,
+            selection: BTreeSet::new(),
+            anchor: None,
+            scroll: 0.0,
+            manual_view: None,
+        });
+        self.index = Some(self.history.len() - 1);
+    }
+
     fn commit(&mut self, directory: Directory, navigation: Navigation) {
         if !matches!(navigation, Navigation::Refresh) {
             self.selection_revision = self.selection_revision.wrapping_add(1);
         }
         match navigation {
             _ if self.index.is_none() => {
-                self.history.push(Location {
-                    path: directory.path.clone(),
-                    selected: None,
-                    selection: BTreeSet::new(),
-                    anchor: None,
-                    scroll: 0.0,
-                });
-                self.index = Some(0);
+                self.append_location(directory.path.clone());
             }
             Navigation::New if directory.path != self.path() => {
                 self.history.truncate(self.index.map_or(0, |i| i + 1));
-                self.history.push(Location {
-                    path: directory.path.clone(),
-                    selected: None,
-                    selection: BTreeSet::new(),
-                    anchor: None,
-                    scroll: 0.0,
-                });
-                self.index = Some(self.history.len() - 1);
+                self.append_location(directory.path.clone());
             }
             Navigation::History(index) => self.index = Some(index),
             _ => {}
@@ -340,6 +368,24 @@ impl FileManager {
             })
             .unwrap_or_default();
         self.reconcile_selection();
+        self.audio_entries.clear();
+        self.music_offsets.clear();
+        self.music_offsets.push(0.0);
+        if let Some(directory) = &self.directory {
+            for index in &self.visible {
+                let entry = &directory.entries[*index];
+                let audio =
+                    entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
+                if audio {
+                    self.audio_entries.push(entry.path.clone());
+                }
+                self.music_offsets.push(
+                    self.music_offsets.last().copied().unwrap_or(0.0)
+                        + if audio { 108.0 } else { 28.0 },
+                );
+            }
+        }
+        self.activate_media_view();
     }
 
     fn toggle_hidden(&mut self) {
@@ -348,6 +394,15 @@ impl FileManager {
     }
 
     fn move_selection(&mut self, down: bool, extend: bool) {
+        let stride = if self.view == BrowserView::Photos {
+            self.gallery_columns
+        } else {
+            1
+        } as isize;
+        self.move_selection_by(if down { stride } else { -stride }, extend);
+    }
+
+    fn move_selection_by(&mut self, delta: isize, extend: bool) {
         if self.visible.is_empty() {
             return;
         }
@@ -362,11 +417,10 @@ impl FileManager {
             .visible
             .iter()
             .position(|i| Some(&directory.entries[*i].path) == selected);
-        let index = match (index, down) {
-            (Some(i), true) => (i + 1).min(self.visible.len() - 1),
-            (Some(i), false) => i.saturating_sub(1),
-            (None, true) => 0,
-            (None, false) => self.visible.len() - 1,
+        let index = match index {
+            Some(i) => i.saturating_add_signed(delta).min(self.visible.len() - 1),
+            None if delta >= 0 => 0,
+            None => self.visible.len() - 1,
         };
         self.select_with(
             directory.entries[self.visible[index]].path.clone(),

@@ -34,6 +34,23 @@ pub struct AppConfig {
     /// 3D model preview and inspection configuration.
     #[serde(default, alias = "model_3d", alias = "model")]
     pub model3d: Model3dConfig,
+    /// Standalone Files media browsing preferences.
+    #[serde(default)]
+    pub file_manager: FileManagerConfig,
+}
+
+/// Music view activation preferences. Missing settings retain the 75% default.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FileManagerConfig {
+    pub music_threshold_percent: u8,
+}
+impl Default for FileManagerConfig {
+    fn default() -> Self {
+        Self {
+            music_threshold_percent: 75,
+        }
+    }
 }
 
 /// Slot depth configuration for the dual-stack model.
@@ -428,6 +445,7 @@ impl Default for AppConfig {
             slots: SlotsConfig::default(),
             auto_actions: AutoActionsConfig::default(),
             model3d: Model3dConfig::default(),
+            file_manager: FileManagerConfig::default(),
         }
     }
 }

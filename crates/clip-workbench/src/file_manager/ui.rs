@@ -8,6 +8,9 @@ use crate::icons::Icon;
 use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext;
 
+mod gallery;
+pub(super) mod music;
+
 const ROW_HEIGHT: f32 = 28.0;
 
 fn address_id() -> Id {
@@ -46,6 +49,7 @@ impl FileManager {
         self.toolbar(ui, palette);
         self.edit_toolbar(ui);
         self.transfer_toolbar(ui);
+        self.media_view_toolbar(ui, palette);
         ui.separator();
         self.docked_panels(ui, palette);
         ui.memory_mut(|memory| {
@@ -63,7 +67,8 @@ impl FileManager {
         });
         self.naming_ui(ui.ctx(), colors);
         self.transfer_windows(ui.ctx(), colors);
-        let file_clipboard = ui.memory(|memory| memory.has_focus(list_id()))
+        let file_clipboard = ui
+            .memory(|memory| memory.has_focus(list_id()) || memory.has_focus(music::waveform_id()))
             && self.edits.dialog.is_none()
             && !self.transfers_modal();
         ui.ctx().data_mut(|data| {
@@ -135,7 +140,21 @@ impl FileManager {
             .show_inside(ui, |ui| self.tree_ui(ui, colors));
         egui::CentralPanel::default()
             .frame(egui::Frame::none().inner_margin(8.0))
-            .show_inside(ui, |ui| self.list_ui(ui, colors));
+            .show_inside(ui, |ui| {
+                if ui.is_enabled() {
+                    self.drop_targets.push((
+                        ui.available_rect_before_wrap().intersect(ui.clip_rect()),
+                        self.path().to_path_buf(),
+                    ));
+                }
+                if self.view == super::BrowserView::Photos {
+                    self.gallery_ui(ui, colors);
+                } else if self.view == super::BrowserView::Music {
+                    self.music_ui(ui, colors);
+                } else {
+                    self.list_ui(ui, colors);
+                }
+            });
     }
 
     fn sync_modal_focus(&mut self, ctx: &egui::Context) {
@@ -167,6 +186,13 @@ impl FileManager {
         }
         if ctx.memory(|memory| memory.has_focus(tree_id())) {
             self.tree_shortcuts(ctx);
+        } else if ctx.memory(|memory| memory.has_focus(music::waveform_id())) {
+            if key(ctx, Modifiers::CTRL, Key::C) {
+                self.copy_music_range();
+            }
+            if key(ctx, Modifiers::CTRL, Key::V) {
+                self.paste_files();
+            }
         } else if ctx.memory(|memory| memory.has_focus(list_id())) {
             self.list_shortcuts(ctx);
             if self.edits.dialog.is_some() {
@@ -206,6 +232,15 @@ impl FileManager {
     }
 
     fn list_shortcuts(&mut self, ctx: &egui::Context) {
+        if self.view == super::BrowserView::Photos {
+            for (key_code, delta) in [(Key::ArrowLeft, -1), (Key::ArrowRight, 1)] {
+                if key(ctx, Modifiers::NONE, key_code) {
+                    self.move_selection_by(delta, false);
+                } else if key(ctx, Modifiers::SHIFT, key_code) {
+                    self.move_selection_by(delta, true);
+                }
+            }
+        }
         self.transfer_shortcuts(ctx);
         if key(ctx, Modifiers::CTRL, Key::A) {
             self.select_all();
@@ -387,7 +422,7 @@ impl FileManager {
         );
         ui.separator();
         self.previews.poll(ui.ctx());
-        let scroll = self.list_scroll(ui);
+        let scroll = self.list_scroll(ui, ROW_HEIGHT);
         let Some(directory) = &self.directory else {
             ui.label(if self.pending.is_some() {
                 "Loading folder…"
@@ -412,12 +447,6 @@ impl FileManager {
         let selection_count = self.selection_count();
         let background = actions.background(ui, can_edit, selection_count > 0);
         let mut targets = Vec::new();
-        if ui.is_enabled() {
-            targets.push((
-                background.rect.intersect(ui.clip_rect()),
-                directory.path.clone(),
-            ));
-        }
         let mut preview_paths = std::collections::BTreeSet::new();
         let output = scroll.show_rows(ui, ROW_HEIGHT, self.visible.len(), |ui, range| {
             for index in range {
@@ -446,11 +475,21 @@ impl FileManager {
         });
         self.previews.retain(&preview_paths);
         self.drop_targets.extend(targets);
+        self.finish_listing(ui, actions, output.state.offset.y, &background);
+    }
+
+    fn finish_listing(
+        &mut self,
+        ui: &Ui,
+        mut actions: ListActions,
+        scroll: f32,
+        background: &egui::Response,
+    ) {
         if let Some(location) = self.location_mut() {
-            location.scroll = output.state.offset.y;
+            location.scroll = scroll;
         }
         if actions.transfer.is_none() {
-            actions.transfer = drop_files(ui, &background, self.path());
+            actions.transfer = drop_files(ui, background, self.path());
         }
         self.apply_list_actions(actions);
     }
@@ -478,7 +517,7 @@ impl FileManager {
         }
     }
 
-    fn list_scroll(&mut self, ui: &Ui) -> egui::ScrollArea {
+    fn list_scroll(&mut self, ui: &Ui, row_height: f32) -> egui::ScrollArea {
         let mut scroll = egui::ScrollArea::vertical()
             .id_source("file_manager_listing")
             .auto_shrink([false, false]);
@@ -496,9 +535,11 @@ impl FileManager {
                         .as_ref()
                         .map(|directory| &directory.entries[*i].path)
             }) {
-                scroll = scroll.vertical_scroll_offset(
-                    index as f32 * (ROW_HEIGHT + ui.spacing().item_spacing.y),
-                );
+                scroll = scroll.vertical_scroll_offset(if self.view == super::BrowserView::Music {
+                    self.music_offsets[index]
+                } else {
+                    index as f32 * (row_height + ui.spacing().item_spacing.y)
+                });
             }
             self.reveal_selection = false;
         }
@@ -672,6 +713,16 @@ fn nav_button(ui: &mut Ui, icon: Icon, tooltip: &str, enabled: bool, palette: &A
     )
     .on_hover_text(tooltip)
     .clicked()
+}
+
+fn entry_icon(entry: &super::filesystem::Entry) -> Icon {
+    if entry.directory {
+        Icon::Folder
+    } else if little_clip_core::audio::is_audio_path(&entry.path) {
+        Icon::Audio
+    } else {
+        Icon::Text
+    }
 }
 
 fn row_background(ui: &Ui, rect: Rect, selected: bool, hovered: bool, colors: WorkbenchColors) {

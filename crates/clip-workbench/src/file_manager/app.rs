@@ -23,6 +23,7 @@ impl FileManagerApp {
         ui_appearance::apply_visuals(ctx, &palette);
         egui_extras::install_image_loaders(ctx);
         let mut browser = FileManager::default();
+        browser.music_threshold = config.file_manager.music_threshold_percent.clamp(1, 100);
         if let Some(path) = initial {
             browser.navigate(path, Navigation::New);
         }
@@ -124,6 +125,53 @@ impl FileManagerApp {
     }
 }
 
+impl FileManagerApp {
+    fn main_content(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            if self.viewers.active() {
+                if self.viewers.ui(ui, &self.palette) {
+                    self.browser.refresh_after_transfer = true;
+                    self.browser.restore_scroll = true;
+                }
+            } else {
+                self.browser.ui(ui, &self.palette);
+                if let Some(path) = self.browser.open_file.take() {
+                    if little_clip_core::audio::is_audio_path(&path)
+                        || little_clip_core::animation::is_video_path(&path)
+                        || path.extension().is_some_and(|e| {
+                            e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")
+                        })
+                    {
+                        self.browser.music.pause();
+                    }
+                    let collection = self.browser.photo_collection(&path);
+                    self.viewers.open_collection(path, collection);
+                }
+            }
+        });
+    }
+    fn request_app_close(&mut self, ctx: &egui::Context) {
+        if self.viewers.active() && !self.viewers.request_close() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            return;
+        }
+        if self.browser.filesystem_busy()
+            || self.browser.music.copying()
+            || self.browser.shelf.sending()
+            || self.native.as_ref().is_some_and(|native| native.busy())
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.browser.edits.report = Some(super::edits::EditReport {
+                text: "Wait for the file operation to finish before closing.".into(),
+                failed: false,
+            });
+        } else {
+            self.browser.music.clear();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+}
+
 impl eframe::App for FileManagerApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, input: &mut egui::RawInput) {
         if let Some(native) = &mut self.native {
@@ -131,6 +179,10 @@ impl eframe::App for FileManagerApp {
         }
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.viewers.uses_audio() {
+            self.browser.music.pause();
+        }
+        self.browser.music.tick(ctx);
         if self.viewers.active() {
             self.browser.drop_targets.clear();
         }
@@ -157,39 +209,24 @@ impl eframe::App for FileManagerApp {
                 });
             });
         });
-        egui::CentralPanel::default().show(ctx, |ui| {
-            if self.viewers.active() {
-                if self.viewers.ui(ui, &self.palette) {
-                    self.browser.refresh_after_transfer = true;
-                    self.browser.restore_scroll = true;
-                }
-            } else {
-                self.browser.ui(ui, &self.palette);
-                if let Some(path) = self.browser.open_file.take() {
-                    self.viewers.open(path);
-                }
-            }
-        });
+        if self.browser.music.active() {
+            egui::TopBottomPanel::bottom("files_music_player")
+                .resizable(true)
+                .default_height(128.0)
+                .height_range(96.0..=260.0)
+                .show(ctx, |ui| {
+                    ui.set_enabled(!self.viewers.uses_audio());
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| self.browser.music.ui(ui));
+                });
+        }
+        self.main_content(ctx);
         self.native_start(ctx);
         let close = ctx.input_mut(|input| input.consume_key(Modifiers::CTRL, Key::Q))
             || ctx.input(|input| input.viewport().close_requested());
         if close {
-            if self.viewers.active() && !self.viewers.request_close() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                return;
-            }
-            if self.browser.filesystem_busy()
-                || self.browser.shelf.sending()
-                || self.native.as_ref().is_some_and(|native| native.busy())
-            {
-                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-                self.browser.edits.report = Some(super::edits::EditReport {
-                    text: "Wait for the file operation to finish before closing.".into(),
-                    failed: false,
-                });
-            } else {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
+            self.request_app_close(ctx);
         }
     }
 }

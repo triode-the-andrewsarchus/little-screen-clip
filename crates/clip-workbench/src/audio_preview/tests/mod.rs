@@ -203,7 +203,7 @@ pub(super) fn preview_source_with_region(
     (shared, preview)
 }
 
-pub(super) fn generate_fixture_wav(name: &str, duration_secs: f32) -> (tempfile::TempDir, PathBuf) {
+pub(crate) fn generate_fixture_wav(name: &str, duration_secs: f32) -> (tempfile::TempDir, PathBuf) {
     use std::io::Write;
     let temp_dir = tempfile::tempdir().unwrap();
     let path = temp_dir.path().join(format!("{name}.wav"));
