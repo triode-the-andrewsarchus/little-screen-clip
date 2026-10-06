@@ -176,6 +176,7 @@ impl FileManager {
         if ctx.memory(|memory| memory.has_focus(address_id())) {
             return;
         }
+        self.selection_shortcuts(ctx);
         if key(
             ctx,
             Modifiers {

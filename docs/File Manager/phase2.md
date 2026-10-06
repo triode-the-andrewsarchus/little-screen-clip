@@ -27,6 +27,7 @@ Directory rename and move update history and pending reads beneath the old path.
 Existing Phase 1 navigation shortcuts remain available. With list focus:
 
 - Ctrl+A selects visible entries; Escape clears selection.
+- Ctrl+Z restores the last multi-selection collapsed by an ordinary single-file selection, in List, Photos and Music. The saved primary item and range anchor are restored too; missing/hidden entries are excluded. This is one selection snapshot per folder, not filesystem-operation undo, and text fields retain their own undo.
 - Ctrl+C / Ctrl+X / Ctrl+V copy, cut, and paste file references.
 - F2 renames one selected item.
 - Delete opens Move to Trash confirmation; Shift+Delete opens permanent deletion confirmation.

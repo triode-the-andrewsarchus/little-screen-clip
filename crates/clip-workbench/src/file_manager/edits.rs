@@ -250,15 +250,28 @@ impl FileManager {
     pub(super) fn follow_rename(&mut self, source: &Path, destination: &Path) {
         for location in &mut self.history {
             relocate(&mut location.path, source, destination);
-            location.selection = std::mem::take(&mut location.selection)
-                .into_iter()
-                .map(|mut path| {
-                    relocate(&mut path, source, destination);
-                    path
-                })
-                .collect();
+            for selection in std::iter::once(&mut location.selection).chain(
+                location
+                    .selection_undo
+                    .iter_mut()
+                    .map(|snapshot| &mut snapshot.paths),
+            ) {
+                *selection = std::mem::take(selection)
+                    .into_iter()
+                    .map(|mut path| {
+                        relocate(&mut path, source, destination);
+                        path
+                    })
+                    .collect();
+            }
             for path in [&mut location.selected, &mut location.anchor]
                 .into_iter()
+                .chain(
+                    location
+                        .selection_undo
+                        .iter_mut()
+                        .flat_map(|snapshot| [&mut snapshot.selected, &mut snapshot.anchor]),
+                )
                 .flatten()
             {
                 relocate(path, source, destination);

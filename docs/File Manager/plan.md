@@ -235,11 +235,11 @@ Turn previews into complete everyday gallery and playback workflows.
 ### Scope
 
 - Photo grid with adjustable thumbnail size, selection, next/previous viewing, and slideshow controls. Inspired by iPhone's gallery.
-- Music view with metadata columns, cover art, queue, play/pause, seek, next/previous, repeat, and shuffle.
+- Music view with metadata columns, cover art, selectable waveforms and explicitly started single-track playback. No bottom player dock, queue, automatic next track, repeat or shuffle.
   - Activates when in a folder that's 75% (threshold configurable) audio files
   - Each preview is the album art (or missing stand in) and waveform, where the waveform has a navigable playhead and can be selceted in and copy-pasted from directly.
   - This will take careful considering for rendering, to handle huge folders without slow down
-- Explicitly define playback lifetime when navigating or closing the file manager. Decide process ownership before building persistent playback.
+- Stop music on folder navigation through any entry point, Space, Escape, switching to List, and closing Files. Completed tracks stop rather than advancing or repeating.
 - Video browsing and playback through an assessed reusable backend; establish codec and resource expectations.
 - Keep subfolders and non-media files accessible in media views.
 - Provide manual view choice before automatic type-based selection is introduced in Phase 7.
@@ -247,7 +247,7 @@ Turn previews into complete everyday gallery and playback workflows.
 
 ### Completion gate
 
-The user can browse a photo collection and listen through a folder of music with ordinary controls. Media state survives navigation according to an explicit lifecycle contract.
+The user can browse a photo collection and preview individual songs through their waveforms. Playback follows the explicit stop policy; waveform selection and copy/paste remain available.
 
 ## Phase 6 — Search
 

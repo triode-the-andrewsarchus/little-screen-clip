@@ -3,6 +3,14 @@ use std::path::PathBuf;
 
 use super::FileManager;
 
+/// One prior multi-selection per folder, including its keyboard/range anchors.
+#[derive(Clone, Debug)]
+pub(super) struct SelectionSnapshot {
+    pub(super) paths: BTreeSet<PathBuf>,
+    pub(super) selected: Option<PathBuf>,
+    pub(super) anchor: Option<PathBuf>,
+}
+
 impl FileManager {
     pub(super) fn selection_count(&self) -> usize {
         self.location()
@@ -21,6 +29,15 @@ impl FileManager {
             vec![path.clone()]
         };
         if let Some(location) = self.location_mut() {
+            if additive || range {
+                location.selection_undo = None;
+            } else if location.selection.len() > 1 {
+                location.selection_undo = Some(SelectionSnapshot {
+                    paths: std::mem::take(&mut location.selection),
+                    selected: location.selected.clone(),
+                    anchor: location.anchor.clone(),
+                });
+            }
             if !additive {
                 location.selection.clear();
             }
@@ -35,6 +52,34 @@ impl FileManager {
             location.selected = Some(path);
         }
         self.selection_revision = self.selection_revision.wrapping_add(1);
+    }
+
+    pub(super) fn selection_shortcuts(&mut self, ctx: &egui::Context) {
+        let text_focused = ctx
+            .memory(|memory| memory.focused())
+            .is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some());
+        if !text_focused && super::ui::key(ctx, egui::Modifiers::CTRL, egui::Key::Z) {
+            self.undo_selection();
+            ctx.request_repaint();
+        }
+    }
+
+    pub(super) fn undo_selection(&mut self) {
+        let Some(snapshot) = self
+            .location_mut()
+            .and_then(|location| location.selection_undo.take())
+        else {
+            return;
+        };
+        if let Some(location) = self.location_mut() {
+            location.selection = snapshot.paths;
+            location.selected = snapshot.selected;
+            location.anchor = snapshot.anchor;
+        }
+        // Refreshes and hidden-file changes must not resurrect unavailable rows.
+        self.reconcile_selection();
+        self.selection_revision = self.selection_revision.wrapping_add(1);
+        self.reveal_selection = true;
     }
 
     fn selection_range(&self, anchor: &PathBuf, end: &PathBuf) -> Vec<PathBuf> {
@@ -74,6 +119,7 @@ impl FileManager {
             }
             location.anchor = location.selected.clone();
             location.selection = paths;
+            location.selection_undo = None;
         }
         self.selection_revision = self.selection_revision.wrapping_add(1);
     }
@@ -81,6 +127,7 @@ impl FileManager {
     pub(super) fn clear_selection(&mut self) {
         if let Some(location) = self.location_mut() {
             location.selection.clear();
+            location.selection_undo = None;
             location.selected = None;
             location.anchor = None;
         }

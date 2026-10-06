@@ -159,7 +159,7 @@ impl FileManagerApp {
                             e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi")
                         })
                     {
-                        self.browser.music.pause();
+                        self.browser.music.stop();
                     }
                     let collection = self.browser.photo_collection(&path);
                     self.viewers.open_collection(path, collection);
@@ -183,7 +183,7 @@ impl FileManagerApp {
                 failed: false,
             });
         } else {
-            self.browser.music.clear();
+            self.browser.music.stop();
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
@@ -196,8 +196,13 @@ impl eframe::App for FileManagerApp {
         }
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Observe stop keys before address/dialog handlers consume them, while
+        // preserving their normal editing and dismissal behavior.
+        if ctx.input(|input| input.key_pressed(Key::Space) || input.key_pressed(Key::Escape)) {
+            self.browser.music.stop();
+        }
         if self.viewers.uses_audio() {
-            self.browser.music.pause();
+            self.browser.music.stop();
         }
         self.browser.music.tick(ctx);
         if self.viewers.active() {
@@ -226,17 +231,6 @@ impl eframe::App for FileManagerApp {
                 });
             });
         });
-        if self.browser.music.active() {
-            egui::TopBottomPanel::bottom("files_music_player")
-                .resizable(true)
-                .default_height(160.0)
-                .height_range(128.0..=260.0)
-                .show(ctx, |ui| {
-                    ui.set_enabled(!self.viewers.uses_audio());
-                    ui.add_space(6.0);
-                    self.browser.music.ui(ui);
-                });
-        }
         self.main_content(ctx);
         self.native_start(ctx);
         let close = ctx.input_mut(|input| input.consume_key(Modifiers::CTRL, Key::Q))

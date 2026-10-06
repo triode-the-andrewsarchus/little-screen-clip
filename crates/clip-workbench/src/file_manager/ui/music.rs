@@ -33,6 +33,9 @@ impl FileManager {
             .and_then(|l| l.manual_view)
             .unwrap_or(automatic);
         if self.view != view {
+            if view == BrowserView::List {
+                self.music.stop();
+            }
             self.previews.retain(&Default::default());
             self.gallery_previews.retain(&Default::default());
             self.music_previews.retain(&Default::default());
@@ -94,7 +97,13 @@ impl FileManager {
                 .truncate(true),
             );
         });
-        ui.label("Click a waveform to seek. Drag to select audio; Ctrl+C copies the selection, Ctrl+V pastes into this folder.");
+        if self.music.busy() {
+            ui.spinner();
+        }
+        if let Some(status) = self.music.status() {
+            ui.add(egui::Label::new(status).truncate(true));
+        }
+        ui.label("Click a waveform to play or seek. Space or Escape stops playback. Ctrl/Shift+click selects files. Drag to select audio; Ctrl+C copies the selection, Ctrl+V pastes into this folder.");
     }
     pub(super) fn music_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
         // Register the shared waveform focus target every frame so egui retains it
@@ -143,7 +152,7 @@ impl FileManager {
                         self.music_offsets[index + 1] - self.music_offsets[index],
                     ),
                 );
-                let response = ui.allocate_rect(rect, Sense::click_and_drag());
+                let mut response = ui.allocate_rect(rect, Sense::click_and_drag());
                 row_background(
                     ui,
                     rect,
@@ -172,6 +181,7 @@ impl FileManager {
                         ui,
                         entry,
                         wave,
+                        &mut response,
                         &mut self.music_selection,
                         &self.music,
                         colors,
@@ -179,7 +189,7 @@ impl FileManager {
                 });
                 if !engaged {
                     actions.row(ui, &response, entry, selected, can_edit, count);
-                } else if !selected.is_some_and(|s| s.contains(&entry.path)) {
+                } else {
                     actions.selection = Some((entry.path.clone(), false, false));
                 }
                 if entry.directory {
@@ -197,8 +207,8 @@ impl FileManager {
         }
         self.finish_listing(ui, actions, output.state.offset.y, &background);
         if let Some(path) = play {
-            if self.music.queue.current() != Some(&path) {
-                self.music.play_folder(self.audio_entries.clone(), &path);
+            if self.music.current() != Some(&path) {
+                self.music.play(&path);
             }
             if let Some(time) = seek {
                 self.music.seek(time);
@@ -211,6 +221,7 @@ fn interact_waveform(
     ui: &mut Ui,
     entry: &super::super::filesystem::Entry,
     wave: (Rect, f32, &crate::file_source::FileSource),
+    row_response: &mut egui::Response,
     selection: &mut Option<MusicRange>,
     music: &super::super::music::Music,
     colors: WorkbenchColors,
@@ -233,12 +244,18 @@ fn interact_waveform(
             .filter(|s| s.path == entry.path && s.revision == entry.revision),
         colors,
     );
-    if music.queue.current() == Some(&entry.path) {
+    if music.current() == Some(&entry.path) {
         let x = rect.left() + music.position().clamp(0.0, duration) / duration * rect.width();
         ui.painter().line_segment(
             [pos2(x, rect.top()), pos2(x, rect.bottom())],
             egui::Stroke::new(2.0_f32, colors.accent),
         );
+    }
+    if ui.input(|input| input.modifiers.ctrl || input.modifiers.command || input.modifiers.shift) {
+        // Keep the waveform hit target stable and forward its response to the
+        // row, even when modifiers changed in the same frame as the click.
+        *row_response = row_response.union(interaction);
+        return (false, None);
     }
     let time_at =
         |point: egui::Pos2| ((point.x - rect.left()) / rect.width()).clamp(0.0, 1.0) * duration;

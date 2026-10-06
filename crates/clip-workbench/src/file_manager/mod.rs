@@ -44,6 +44,7 @@ struct Location {
     selected: Option<PathBuf>,
     selection: BTreeSet<PathBuf>,
     anchor: Option<PathBuf>,
+    selection_undo: Option<selection::SelectionSnapshot>,
     scroll: f32,
     manual_view: Option<BrowserView>,
 }
@@ -215,6 +216,9 @@ impl FileManager {
     }
 
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
+        if path != self.path() {
+            self.music.stop();
+        }
         self.watch = None;
         self.watch_started = std::time::Instant::now();
         if matches!(navigation, Navigation::New) && self.directory.is_some() && path == self.path()
@@ -329,6 +333,7 @@ impl FileManager {
             selected: None,
             selection: BTreeSet::new(),
             anchor: None,
+            selection_undo: None,
             scroll: 0.0,
             manual_view: None,
         });

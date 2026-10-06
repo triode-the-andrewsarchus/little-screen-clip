@@ -3,6 +3,9 @@ use super::*;
 
 impl FileManager {
     pub(in crate::file_manager) fn set_view(&mut self, view: super::super::BrowserView) {
+        if view != self.view && view == super::super::BrowserView::List {
+            self.music.stop();
+        }
         if view == super::super::BrowserView::Music && self.view != view {
             self.shelf.open = false;
         }
@@ -19,16 +22,6 @@ impl FileManager {
     pub(super) fn media_view_toolbar(&mut self, ui: &mut Ui, palette: &AppPalette) {
         use crate::ui_tabs::{Tab, TabBar};
         ui.horizontal_wrapped(|ui| {
-            if !self.audio_entries.is_empty() && ui.button("Play folder music").clicked() {
-                let audio = self.audio_entries.clone();
-                let path = self
-                    .location()
-                    .and_then(|l| l.selected.as_ref())
-                    .filter(|p| audio.contains(p))
-                    .cloned()
-                    .unwrap_or_else(|| audio[0].clone());
-                self.music.play_folder(audio, &path);
-            }
             if let Some(view) = TabBar::new(
                 "files_media_views",
                 self.view,
