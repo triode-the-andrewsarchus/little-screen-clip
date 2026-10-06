@@ -5,6 +5,7 @@ mod content;
 mod edit_ui;
 mod edits;
 mod filesystem;
+mod media;
 mod music;
 mod native_drag;
 mod previews;
@@ -140,6 +141,7 @@ pub(crate) struct FileManager {
     music_previews: previews::EntryPreviews,
     thumbnail_edge: f32,
     gallery_columns: usize,
+    gallery_selecting: bool,
     music: music::Music,
     audio_entries: Vec<PathBuf>,
     music_offsets: Vec<f32>,
@@ -191,6 +193,7 @@ impl FileManager {
             music_previews: previews::EntryPreviews::default(),
             thumbnail_edge: 160.0,
             gallery_columns: 1,
+            gallery_selecting: false,
             music: music::Music::default(),
             audio_entries: Vec::new(),
             music_offsets: vec![0.0],

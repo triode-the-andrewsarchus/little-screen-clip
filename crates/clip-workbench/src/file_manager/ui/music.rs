@@ -159,7 +159,11 @@ impl FileManager {
                 } else {
                     None
                 };
-                let wave = music_card(ui, rect, entry, ready, colors);
+                let range = self
+                    .music_selection
+                    .as_ref()
+                    .filter(|range| range.path == entry.path && range.revision == entry.revision);
+                let wave = music_card(ui, rect, entry, ready, colors, range);
                 if let Some(ready) = ready {
                     response.clone().on_hover_text(&ready.data.detail);
                 }
@@ -274,6 +278,7 @@ fn music_card<'a>(
     entry: &super::super::filesystem::Entry,
     ready: Option<&'a super::super::shelf::preview::Ready>,
     colors: WorkbenchColors,
+    selection: Option<&MusicRange>,
 ) -> Option<(Rect, f32, &'a crate::file_source::FileSource)> {
     let audio = entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
     let art = Rect::from_min_size(
@@ -366,7 +371,23 @@ fn music_card<'a>(
                         pos2(x, wave.center().y - height),
                         pos2(x, wave.center().y + height),
                     ],
-                    egui::Stroke::new(1.0_f32, colors.text_secondary),
+                    egui::Stroke::new(
+                        1.0_f32,
+                        if selection.is_some_and(|range| {
+                            let time = (index as f32 + 0.5) / count as f32 * metadata.duration;
+                            time >= range.start.min(range.end) && time <= range.start.max(range.end)
+                        }) {
+                            colors.accent
+                        } else {
+                            ready
+                                .data
+                                .waveform_colors
+                                .get(index)
+                                .map_or(colors.text_secondary, |rgb| {
+                                    Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+                                })
+                        },
+                    ),
                 );
             }
         }

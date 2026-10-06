@@ -1,6 +1,6 @@
 # File Manager Implementation Plan
 
-Status: Phase 1 is complete as a standalone application. See [phase1.md](phase1.md) for delivered behavior and validation. Phase 2 is complete and verified; [phase2.md](phase2.md) records delivered behavior, operation contracts, and acceptance results. Phase 3 is accepted by the user as an initial implementation; [phase3.md](phase3.md) records its behavior and remaining follow-up work. Phase 4 is in progress; [phase4.md](phase4.md) records current capabilities, save contracts and verification evidence.
+Status: Phase 1 is complete as a standalone application. See [phase1.md](phase1.md) for delivered behavior and validation. Phase 2 is complete and verified; [phase2.md](phase2.md) records delivered behavior, operation contracts, and acceptance results. Phase 3 is accepted by the user as an initial implementation; [phase3.md](phase3.md) records its behavior and remaining follow-up work. Phase 4 is in progress; [phase4.md](phase4.md) records current capabilities, save contracts and verification evidence. Phase 5 is complete; [phase5.md](phase5.md) records the media workflow audit and verification.
 
 The product goals are recorded in [core.md](core.md). This plan turns those goals into a sequence of usable milestones. The later phases describe intended capabilities, not settled specifications: each needs a short design pass before implementation. Phase 1 establishes the browser foundation; subsequent phases build on it.
 
@@ -226,7 +226,7 @@ Supported files can be inspected and edited from the browser without losing cont
 
 ## Phase 5 — Media browsing and playback
 
-Status: in progress. [phase5.md](phase5.md) records current implementation, evidence, and remaining scope.
+Status: complete. [phase5.md](phase5.md) records the implementation, requirement audit, verification, and backend/resource limits.
 
 ### Goal
 
@@ -516,4 +516,4 @@ Unresolved later-phase decisions should not block the basic browser.
 
 ## Next implementation milestone
 
-Phase 3 is accepted and committed as `278091e`. The current Phase 4 checkpoint implements shared studios, visible listing previews, guarded text/image saves and protected audio/PDF outputs; current behavior and verification are recorded in [phase4.md](phase4.md). Phase 4 remains in progress. Phase 5 media browsing and playback is now underway at the user's request; [phase5.md](phase5.md) tracks its remaining scope. Shelf polish remains follow-up work.
+Phase 3 is accepted and committed as `278091e`. The current Phase 4 checkpoint implements shared studios, visible listing previews, guarded text/image saves and protected audio/PDF outputs; current behavior and verification are recorded in [phase4.md](phase4.md). Phase 4 remains in progress. Phase 5 media browsing and playback is complete against its planned scope and gate; [phase5.md](phase5.md) records the requirement audit and verification. Phase 6 search is the next planned phase. Shelf polish remains follow-up work.

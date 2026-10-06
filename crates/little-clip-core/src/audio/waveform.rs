@@ -674,6 +674,294 @@ pub fn compute_full_waveform(path: &Path, num_bars: usize) -> Option<AudioWavefo
     })
 }
 
+/// Computes bounded full-track peaks and workbench colors without retaining PCM.
+///
+/// Decodes planar packets, checking cancellation and a ten-second budget between
+/// packets. `fallback_duration` and `max_duration` are in seconds. The latter
+/// limits excerpts; `None` summarizes the whole track.
+pub fn compute_preview_waveform(
+    file: std::fs::File,
+    path: &Path,
+    fallback_duration: f32,
+    bars: usize,
+    max_duration: Option<f32>,
+    cancelled: &AtomicBool,
+) -> Result<(Vec<f32>, Vec<[u8; 3]>), String> {
+    use symphonia::core::errors::Error;
+    let mut format = preview_audio_format(file, path)?;
+    let track = format.default_track().ok_or("No audio track")?;
+    let id = track.id;
+    let n_frames = track.codec_params.n_frames;
+    let mut decoder = symphonia::default::get_codecs()
+        .make(&track.codec_params, &DecoderOptions::default())
+        .map_err(|e| e.to_string())?;
+    let mut summary: Option<PreviewWaveform> = None;
+    let mut converted: Option<SampleBuffer<f32>> = None;
+    let started = std::time::Instant::now();
+    loop {
+        check_preview_budget(cancelled, started)?;
+        let packet = match format.next_packet() {
+            Ok(packet) => packet,
+            Err(Error::IoError(error)) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
+                break;
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        if packet.track_id() != id {
+            continue;
+        }
+        let decoded = decoder.decode(&packet).map_err(|e| e.to_string())?;
+        let summary = match &mut summary {
+            Some(summary) => summary,
+            None => summary.insert(PreviewWaveform::from_stream(
+                n_frames,
+                *decoded.spec(),
+                fallback_duration,
+                max_duration,
+                bars,
+            )?),
+        };
+        summary.push_decoded(decoded, &mut converted)?;
+        if summary.complete() {
+            break;
+        }
+    }
+
+    let mut summary = summary.ok_or("No decoded audio samples")?;
+    summary.finish_bucket();
+    Ok((summary.peaks, summary.colors))
+}
+
+// Probing and regular-file validation precede the bounded decode loop.
+fn preview_audio_format(
+    file: std::fs::File,
+    path: &Path,
+) -> Result<Box<dyn symphonia::core::formats::FormatReader>, String> {
+    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
+        return Err("Audio source is not a regular file".into());
+    }
+    let mut hint = Hint::new();
+    if let Some(extension) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(extension);
+    }
+    let format = symphonia::default::get_probe()
+        .format(
+            &hint,
+            MediaSourceStream::new(Box::new(file), Default::default()),
+            &FormatOptions {
+                enable_gapless: true,
+                ..Default::default()
+            },
+            &MetadataOptions::default(),
+        )
+        .map_err(|e| e.to_string())?
+        .format;
+    Ok(format)
+}
+
+fn check_preview_budget(cancelled: &AtomicBool, started: std::time::Instant) -> Result<(), String> {
+    if cancelled.load(Ordering::Relaxed) {
+        return Err("Music preview cancelled".into());
+    }
+    if started.elapsed() > std::time::Duration::from_secs(10) {
+        return Err("Waveform exceeded the ten-second decoding budget".into());
+    }
+    Ok(())
+}
+
+// Packet-sized borrowed channel slices keep crossover state hot in the CPU cache.
+struct PreviewWaveform {
+    peaks: Vec<f32>,
+    colors: Vec<[u8; 3]>,
+    filters: Vec<WaveformColor>,
+    rate: u32,
+    frames: usize,
+    frame: usize,
+    bucket: usize,
+}
+impl PreviewWaveform {
+    fn from_stream(
+        n_frames: Option<u64>,
+        spec: symphonia::core::audio::SignalSpec,
+        fallback_duration: f32,
+        max_duration: Option<f32>,
+        bars: usize,
+    ) -> Result<Self, String> {
+        let rate = spec.rate;
+        let channels = spec.channels.count();
+        let duration = n_frames.map_or(fallback_duration as f64, |frames| {
+            frames as f64 / rate as f64
+        });
+        let duration = max_duration.map_or(duration, |maximum| duration.min(maximum as f64));
+        if !duration.is_finite() || duration <= 0.0 || rate == 0 || channels == 0 {
+            return Err("Unknown track duration or channel layout".into());
+        }
+        Ok(Self::new(
+            (duration * rate as f64).ceil() as usize,
+            channels,
+            rate,
+            bars,
+        ))
+    }
+    fn new(frames: usize, channels: usize, rate: u32, bars: usize) -> Self {
+        Self {
+            peaks: vec![0.0; bars.max(1)],
+            colors: vec![[56, 189, 248]; bars.max(1)],
+            filters: (0..channels)
+                .map(|_| WaveformColor::new(rate as f32))
+                .collect(),
+            rate,
+            frames: frames.max(1),
+            frame: 0,
+            bucket: 0,
+        }
+    }
+    // Conversion belongs at the packet boundary, never in the sample loop.
+    fn push_decoded(
+        &mut self,
+        decoded: symphonia::core::audio::AudioBufferRef<'_>,
+        converted: &mut Option<SampleBuffer<f32>>,
+    ) -> Result<(), String> {
+        use symphonia::core::audio::{AudioBufferRef, Signal};
+        if decoded.spec().channels.count() != self.filters.len() || decoded.spec().rate != self.rate
+        {
+            return Err("Audio format changed during preview".into());
+        }
+        let frames = decoded.frames();
+        if frames == 0 {
+            return Ok(());
+        }
+        if let AudioBufferRef::F32(buffer) = decoded {
+            self.push_block(frames, |channel| buffer.chan(channel));
+        } else {
+            let buffer = converted.get_or_insert_with(|| {
+                SampleBuffer::new(decoded.capacity() as u64, *decoded.spec())
+            });
+            // Formats can vary packet capacity while retaining their channel layout.
+            if buffer.capacity() < decoded.capacity() * self.filters.len() {
+                *buffer = SampleBuffer::new(decoded.capacity() as u64, *decoded.spec());
+            }
+            buffer.copy_planar_ref(decoded);
+            self.push_block(frames, |channel| {
+                &buffer.samples()[channel * frames..(channel + 1) * frames]
+            });
+        }
+        Ok(())
+    }
+    fn complete(&self) -> bool {
+        self.frame >= self.frames
+    }
+    fn push_block<'a>(&mut self, frames: usize, channel: impl Fn(usize) -> &'a [f32]) {
+        let mut offset = 0;
+        while offset < frames && !self.complete() {
+            let end = ((self.bucket + 1) as u128 * self.frames as u128)
+                .div_ceil(self.peaks.len() as u128) as usize;
+            let count = (end - self.frame).min(frames - offset);
+            for (index, filter) in self.filters.iter_mut().enumerate() {
+                let samples = &channel(index)[offset..offset + count];
+                let peak = filter.push_samples(samples);
+                self.peaks[self.bucket] = self.peaks[self.bucket].max(peak);
+            }
+            self.frame += count;
+            offset += count;
+            if self.frame == end {
+                self.finish_bucket();
+                self.bucket += 1;
+            }
+        }
+    }
+    fn finish_bucket(&mut self) {
+        if self.bucket >= self.colors.len() {
+            return;
+        }
+        let mut sum = [0_u32; 3];
+        for filter in &mut self.filters {
+            let color = filter.take_color();
+            for i in 0..3 {
+                sum[i] += color[i] as u32;
+            }
+        }
+        self.colors[self.bucket] = sum.map(|value| (value / self.filters.len() as u32) as u8);
+    }
+}
+
+/// Streaming three-band waveform color shared by studio peaks and file previews.
+///
+/// Retains crossover filter history between blocks, without retaining audio samples.
+pub struct WaveformColor {
+    alpha_bass: f32,
+    alpha_mid: f32,
+    lp_bass: f32,
+    lp_mid: f32,
+    energy: [f32; 3],
+    count: usize,
+}
+
+impl WaveformColor {
+    /// Creates a bass/mid/treble crossover for the sample rate in Hz.
+    pub fn new(sample_rate: f32) -> Self {
+        let alpha = |cutoff: f32| {
+            (1.0 - (-2.0 * std::f32::consts::PI * cutoff / sample_rate.max(1.0)).exp())
+                .clamp(0.001, 0.999)
+        };
+        Self {
+            alpha_bass: alpha(250.0),
+            alpha_mid: alpha(2500.0),
+            lp_bass: 0.0,
+            lp_mid: 0.0,
+            energy: [0.0; 3],
+            count: 0,
+        }
+    }
+    /// Accumulates one sample; non-finite input is treated as silence.
+    #[inline]
+    pub fn push(&mut self, sample: f32) {
+        let s = if sample.is_finite() { sample } else { 0.0 };
+        self.lp_bass += self.alpha_bass * (s - self.lp_bass);
+        self.lp_mid += self.alpha_mid * (s - self.lp_mid);
+        let bands = [self.lp_bass, self.lp_mid - self.lp_bass, s - self.lp_mid];
+        for (energy, band) in self.energy.iter_mut().zip(bands) {
+            *energy += band * band;
+        }
+        self.count += 1;
+    }
+    /// Accumulates a contiguous channel block and returns its bounded absolute peak.
+    pub fn push_samples(&mut self, samples: &[f32]) -> f32 {
+        let mut peak = 0.0_f32;
+        for &sample in samples {
+            self.push(sample);
+            if sample.is_finite() {
+                peak = peak.max(sample.abs().min(1.0));
+            }
+        }
+        peak
+    }
+    /// Returns this block's color and clears its energies, preserving filter history.
+    pub fn take_color(&mut self) -> [u8; 3] {
+        let chunk_len = self.count.max(1) as f32;
+        let w_bass = (self.energy[0] / chunk_len).sqrt() * 1.2;
+        let w_mid = (self.energy[1] / chunk_len).sqrt() * 1.8;
+        let w_treble = (self.energy[2] / chunk_len).sqrt() * 2.6;
+        let total_w = w_bass + w_mid + w_treble;
+
+        let rgb = if total_w > 1e-5 {
+            let rb = (w_bass / total_w).clamp(0.0, 1.0);
+            let rm = (w_mid / total_w).clamp(0.0, 1.0);
+            let rt = (w_treble / total_w).clamp(0.0, 1.0);
+            let r = ((rb * 1.45 + rm * 0.20) * 255.0).clamp(25.0, 255.0) as u8;
+            let g = ((rm * 1.45 + rb * 0.15) * 255.0).clamp(25.0, 255.0) as u8;
+            let b = (rt * 1.65 * 255.0).clamp(30.0, 255.0) as u8;
+            [r, g, b]
+        } else {
+            [56, 189, 248]
+        };
+
+        self.energy = [0.0; 3];
+        self.count = 0;
+        rgb
+    }
+}
+
 pub fn build_peak_pyramid(
     samples: &[f32],
     sample_rate: f32,
@@ -699,16 +987,7 @@ fn build_peak_pyramid_inner(
         return Some((Vec::new(), Vec::new(), Vec::new()));
     }
 
-    // 3-Band Serato DJ Crossover Filter:
-    // Lowpass cutoff: 250 Hz (Red/Orange bass)
-    // Highpass cutoff: 2500 Hz (Cyan/Blue highs)
-    // Bandpass 250-2500 Hz (Green/Yellow mids)
-    let alpha_bass = (1.0 - (-2.0 * std::f32::consts::PI * 250.0 / sample_rate.max(1.0)).exp())
-        .clamp(0.001, 0.999);
-    let alpha_mid = (1.0 - (-2.0 * std::f32::consts::PI * 2500.0 / sample_rate.max(1.0)).exp())
-        .clamp(0.001, 0.999);
-    let mut lp_bass = 0.0f32;
-    let mut lp_mid = 0.0f32;
+    let mut color = WaveformColor::new(sample_rate);
 
     // Level 0: 64 samples per block (~1.4ms resolution at 44.1kHz)
     let lvl0_len = (samples.len() + 63) / 64;
@@ -719,9 +998,6 @@ fn build_peak_pyramid_inner(
         }
         let mut mn = 0.0f32;
         let mut mx = 0.0f32;
-        let mut e_bass = 0.0f32;
-        let mut e_mid = 0.0f32;
-        let mut e_treble = 0.0f32;
 
         for &s in chunk {
             if s < mn {
@@ -730,33 +1006,9 @@ fn build_peak_pyramid_inner(
             if s > mx {
                 mx = s;
             }
-            lp_bass += alpha_bass * (s - lp_bass);
-            lp_mid += alpha_mid * (s - lp_mid);
-            let bass = lp_bass;
-            let mid = lp_mid - lp_bass;
-            let treble = s - lp_mid;
-            e_bass += bass * bass;
-            e_mid += mid * mid;
-            e_treble += treble * treble;
+            color.push(s);
         }
-
-        let chunk_len = chunk.len() as f32;
-        let w_bass = (e_bass / chunk_len).sqrt() * 1.2;
-        let w_mid = (e_mid / chunk_len).sqrt() * 1.8;
-        let w_treble = (e_treble / chunk_len).sqrt() * 2.6;
-        let total_w = w_bass + w_mid + w_treble;
-
-        let rgb = if total_w > 1e-5 {
-            let rb = (w_bass / total_w).clamp(0.0, 1.0);
-            let rm = (w_mid / total_w).clamp(0.0, 1.0);
-            let rt = (w_treble / total_w).clamp(0.0, 1.0);
-            let r = ((rb * 1.45 + rm * 0.20) * 255.0).clamp(25.0, 255.0) as u8;
-            let g = ((rm * 1.45 + rb * 0.15) * 255.0).clamp(25.0, 255.0) as u8;
-            let b = (rt * 1.65 * 255.0).clamp(30.0, 255.0) as u8;
-            [r, g, b]
-        } else {
-            [56, 189, 248]
-        };
+        let rgb = color.take_color();
 
         lvl0.push(PeakBlock {
             min: mn,
@@ -886,6 +1138,73 @@ fn resample_peaks(source: &[f32], target_len: usize) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_waveform_synthetic_stereo_matches_scalar_across_packet_boundaries() {
+        let rate = 48_000;
+        let frames = 384_017;
+        let bars = 512;
+        let mut left: Vec<f32> = (0..frames)
+            .map(|frame| {
+                let frequency = [100.0, 1000.0, 10_000.0][(frame / 48_000) % 3];
+                (std::f32::consts::TAU * frequency * frame as f32 / rate as f32).sin() * 0.4
+            })
+            .collect();
+        left[frames - 10] = 1.4; // An isolated late peak must not disappear.
+        left[123] = f32::NAN;
+        left[321] = f32::INFINITY;
+        let right: Vec<_> = left.iter().map(|sample| -*sample).collect(); // Opposite phase.
+        let mut expected_peaks = Vec::new();
+        let mut expected_colors = Vec::new();
+        let mut filters = [
+            WaveformColor::new(rate as f32),
+            WaveformColor::new(rate as f32),
+        ];
+        let mut start = 0;
+        for bucket in 0..bars {
+            let end = ((bucket + 1) * frames).div_ceil(bars);
+            let mut peak = 0.0_f32;
+            for frame in start..end {
+                for (index, sample) in [left[frame], right[frame]].into_iter().enumerate() {
+                    filters[index].push(sample);
+                    if sample.is_finite() {
+                        peak = peak.max(sample.abs().min(1.0));
+                    }
+                }
+            }
+            let colors = [filters[0].take_color(), filters[1].take_color()];
+            expected_colors.push(std::array::from_fn(|i| {
+                ((colors[0][i] as u16 + colors[1][i] as u16) / 2) as u8
+            }));
+            expected_peaks.push(peak);
+            start = end;
+        }
+        for packet_size in [37, 1152, 4096] {
+            let started = std::time::Instant::now();
+            let mut summary = PreviewWaveform::new(frames, 2, rate, bars);
+            for offset in (0..frames).step_by(packet_size) {
+                let end = (offset + packet_size).min(frames);
+                summary.push_block(end - offset, |channel| {
+                    if channel == 0 {
+                        &left[offset..end]
+                    } else {
+                        &right[offset..end]
+                    }
+                });
+            }
+            summary.finish_bucket();
+            assert!(summary.complete());
+            assert_eq!(summary.peaks, expected_peaks, "packet size {packet_size}");
+            assert_eq!(summary.colors, expected_colors, "packet size {packet_size}");
+            assert_eq!(summary.peaks[bars - 1], 1.0);
+            println!(
+                "Synthetic stereo preview, {} samples, packet {}: {:?}",
+                frames * 2,
+                packet_size,
+                started.elapsed()
+            );
+        }
+    }
 
     fn analysis_with_impulse() -> FullAudioAnalysis {
         let mut samples = vec![0.0; 44_100];

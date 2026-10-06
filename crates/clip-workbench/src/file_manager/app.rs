@@ -6,6 +6,23 @@ use little_clip_core::{AppConfig, palette::AppPalette};
 use super::{FileManager, Navigation};
 use crate::{icons::Icon, ui_appearance, ui_ext};
 
+// egui 0.27 lets a CentralPanel frame grow with overflowing children. Bound
+// both its background and child painting to the space left by the outer docks.
+pub(super) fn central_panel<R>(
+    ctx: &egui::Context,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    let bounds = ctx.available_rect();
+    let fill = ctx.style().visuals.panel_fill;
+    egui::CentralPanel::default()
+        .frame(egui::Frame::none().inner_margin(8.0))
+        .show(ctx, |ui| {
+            ui.set_clip_rect(ui.clip_rect().intersect(bounds));
+            ui.painter().rect_filled(bounds, 0.0, fill);
+            add_contents(ui)
+        })
+}
+
 struct FileManagerApp {
     browser: FileManager,
     viewers: super::viewers::Viewers,
@@ -127,7 +144,7 @@ impl FileManagerApp {
 
 impl FileManagerApp {
     fn main_content(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default().show(ctx, |ui| {
+        central_panel(ctx, |ui| {
             if self.viewers.active() {
                 if self.viewers.ui(ui, &self.palette) {
                     self.browser.refresh_after_transfer = true;
@@ -216,12 +233,8 @@ impl eframe::App for FileManagerApp {
                 .height_range(128.0..=260.0)
                 .show(ctx, |ui| {
                     ui.set_enabled(!self.viewers.uses_audio());
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            ui.add_space(6.0);
-                            self.browser.music.ui(ui);
-                        });
+                    ui.add_space(6.0);
+                    self.browser.music.ui(ui);
                 });
         }
         self.main_content(ctx);

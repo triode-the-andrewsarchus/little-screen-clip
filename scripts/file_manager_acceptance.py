@@ -96,11 +96,22 @@ class Session:
         visible = "".join(text.lower().split())
         if all("".join(fragment.lower().split()) in visible for fragment in expected):
             return text
-        # A tightly cropped listing avoids OCR omissions caused by sparse full-window layouts.
-        with Image.open(path) as screen:
-            crop = screen.crop((340, 280, 1180, 710))
-            crop.resize((crop.width * 3, crop.height * 3)).save(self.output / "listing-ocr.png")
-        return text + private.run_checked(["tesseract", str(self.output / "listing-ocr.png"), "stdout", "--psm", "6"], env=self.env)
+        # Sparse studios can omit the toolbar in full-window OCR. Inspect the
+        # listing and toolbar regions separately while retaining the raw PNG.
+        for filename, bounds in [
+            ("listing-ocr.png", (340, 280, 1180, 710)),
+            ("toolbar-ocr.png", (90, 90, 1180, 280)),
+            ("player-ocr.png", (90, 610, 1180, 775)),
+        ]:
+            region = self.output / filename
+            with Image.open(path) as screen:
+                crop = screen.crop(bounds)
+                crop.resize((crop.width * 3, crop.height * 3)).save(region)
+            text += private.run_checked(["tesseract", str(region), "stdout", "--psm", "6"], env=self.env)
+            visible = "".join(text.lower().split())
+            if all("".join(fragment.lower().split()) in visible for fragment in expected):
+                break
+        return text
 
     def word(self, name, text, tree=False, required=True, minimum_y=0, last=False, suffix=False):
         data = private.run_checked([

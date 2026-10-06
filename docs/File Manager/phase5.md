@@ -1,14 +1,14 @@
 # Phase 5: Gallery, music, and video
 
-Status: in progress. Phase 4 remains in progress independently. Phase 5 is not complete until all scope in [plan.md](plan.md) is implemented and verified.
+Status: complete against the Phase 5 scope and completion gate in [plan.md](plan.md). Phase 4 remains in progress independently. The backend and resource limits below are part of this delivery.
 
 ## Photo gallery
 
-The manual **Photos** view presents a virtualized grid with adjustable thumbnail size. Selection, multi-selection, context menus, native file dragging, and ordinary file operations use the same behavior as the list. Subfolders and non-image files remain visible and accessible. Hidden-file settings apply to both views.
+The manual **Photos** view presents a virtualized grid of square, center-cropped images with adjustable thumbnail size and tight, uniform gutters. Selected images are inset and carry a contrasting checkmark. **Select** mode toggles individual tiles without modifier keys; Ctrl+click toggles files and Shift+click selects a range. Photo filenames appear on hover rather than below each tile. Selection, multi-selection, context menus, native file dragging, and ordinary file operations use the same behavior as the list. Subfolders and non-image files remain visible and accessible. Hidden-file settings apply to both views.
 
-Only visible photo tiles request decoding. The gallery retains at most 128 visible preview identities, runs one bounded decoding job at a time, and retires obsolete work and textures on scrolling or view changes. Preview output is at most 320×320 pixels. Encoded input is capped at 64 MiB, raster allocation at 128 MiB, and dimensions at 16,384 pixels. Images that exceed these preview bounds retain an icon and can be opened through the existing studio or externally. Preview fitting preserves aspect ratio.
+Only visible photo tiles request decoding. The gallery retains at most 128 visible preview identities, runs one bounded decoding job at a time, and retires obsolete work and textures on scrolling or view changes. Preview output is at most 320×320 pixels. Encoded input is capped at 64 MiB, raster allocation at 128 MiB, and dimensions at 16,384 pixels. Images that exceed these preview bounds retain an icon and can be opened through the existing studio or externally. Photo tiles center-crop the aspect-fitted preview without modifying source pixels; ordinary list previews retain aspect fitting.
 
-Opening a photo from Photos captures the current visible image order. The shared Image Studio provides previous/next photo controls and a slideshow with a configurable interval of 1–30 seconds. The slideshow wraps at the end of the collection and waits for each image to finish opening before starting its timer. Closing the studio ends the slideshow. Pending saves and unsaved edits block photo changes and pause the slideshow without discarding edits. Ordinary Image Studio saves retain Phase 4's source guards.
+Opening a photo from any folder view captures the current visible image order. Unmodified Left/Right keys navigate that collection, except while typing or adjusting the slideshow interval. The shared Image Studio provides previous/next photo controls and a slideshow with a configurable interval of 1–30 seconds. The slideshow wraps at the end of the collection and waits for each image to finish opening before starting its timer. Closing the studio ends the slideshow. Pending saves and unsaved edits block photo changes and pause the slideshow without discarding edits. Ordinary Image Studio saves retain Phase 4's source guards.
 
 ## Music
 
@@ -28,7 +28,7 @@ Video paths open an owned FFplay window from a Files viewer session. This reuses
 
 One session owns at most one child. Stop, returning to the folder, replacing playback and closing Files kill and reap it. On Linux the child also receives SIGKILL if Files dies abruptly. Music remains paused until explicitly resumed after leaving the video session. Video is read-only; image/audio edits and exports use the existing protected studios and source guards.
 
-Preflight uses core's bounded process runner for FFprobe off the UI thread, selecting the first non-cover video stream and checks FFplay availability with a three-second timeout and 4 KiB retained output. Source identity is checked after preparation and before every launch. Missing tools, invalid streams and failed player exits produce visible errors with the external-opening option.
+Preflight uses core's bounded process runner for FFprobe off the UI thread, selects the first non-cover video stream, and checks FFplay availability with a three-second timeout and 4 KiB retained output. Source identity is checked after preparation and before every launch. Missing tools, invalid streams and failed player exits produce visible errors with the external-opening option.
 
 Listing previews reuse the bounded music-cover extractor for one aspect-fitted video poster, with the same stream selection and pixel check as playback. They do not require FFplay.
 
@@ -36,29 +36,43 @@ The local stream pixel budget is 4096×2160 pixels, with either dimension at mos
 
 ## Music resource and format expectations
 
-Metadata and cover extraction use bounded FFprobe/FFmpeg requests (three seconds each, 64 KiB metadata and 256 KiB encoded cover output). Cover rasters are at most 160×160 with a 4 MiB allocation cap. Full-length waveforms keep 512 peaks per visible track and stream samples through the existing rodio decoder rather than retaining PCM. Decoding has a ten-second budget and cancellation checks. One preview request runs at a time, at most 128 visible identities are retained, and retired work is cancelled. Unavailable waveforms retain the file, metadata and a visible fallback with error details on hover.
+Metadata and cover extraction use bounded FFprobe/FFmpeg requests (three seconds each, 64 KiB metadata and 256 KiB encoded cover output). Cover rasters are at most 160×160 with a 4 MiB allocation cap. Waveforms share core's streaming `WaveformColor` crossover with the workbench: warm bass, green mids and blue highs, with the shared accent for selected ranges. Each channel retains independent filter history and previews average channel colors without phase-cancelling downmixes. Listing and Shelf excerpts use the same calculation. Full-length waveforms keep 512 peaks and colors per visible track and decode Symphonia planar packets rather than retaining PCM or dispatching individual interleaved samples. Decoding has a ten-second budget and cancellation checks. At most eight music previews run concurrently (bounded by available CPUs) on a dedicated executor, leaving the shared job executor available for other work. Each music job overlaps its bounded metadata/cover helper with decoding; at most eight such helpers exist. Ordinary listing, gallery and Shelf previews retain their single-job admission. At most 128 visible identities are retained, and retired work is cancelled. Unavailable waveforms retain the file, metadata and a visible fallback with error details on hover.
 
 Native music playback uses the existing rodio/Symphonia feature set. WAV, FLAC and the workspace's enabled compressed formats are supported according to that decoder; classifying a file as audio does not guarantee decoding. Decoder failures are displayed and ordinary next-track/external-opening controls remain available. Clipboard slice extraction uses FFmpeg and the existing guarded export model. The automatic threshold can be configured in `[file_manager]` as `music_threshold_percent`; the view's slider changes it for the current application session.
 
-## Remaining verification
+## Completion audit
 
-- Repeat the complete music workflow in both appearances after the latest panel sizing and preview changes, including Audio Studio conflict handling.
-- Finish the combined regression/resource review and record final acceptance reports.
+| Phase 5 requirement | Implementation and evidence |
+| --- | --- |
+| Adjustable photo grid and selection | Virtualized `ui/gallery.rs`, shared selection/actions, 80–280 px size control. Private gallery runs verify both decoded thumbnails and mixed-folder access. |
+| Next/previous and slideshow | `viewers/gallery.rs`; rendered navigation, timed advancement and pause. Unit tests cover ordering, wrapping and unsaved edits blocking advancement. |
+| Music metadata, covers and waveforms | Visible cards contain title, artist, album, duration, cover/stand-in and 512 peaks. Rendered runs verify tagged FLAC; unit tests cover missing covers and cancellation. |
+| Configurable automatic Music and manual views | Visible regular-file ratio, default 75%, TOML configuration and session slider; unit tests cover configuration and ratios, rendered runs verify manual override through refresh/history. |
+| Queue, playback, seek, previous/next, repeat/shuffle | Explicit queue snapshot and owned rodio player. Rendered runs exercise every control and capture non-silent PCM from a private null sink. Queue tests cover ordering and end-of-queue behavior. |
+| Direct waveform selection/copy/paste | Rendered playhead seek and range selection; Ctrl+C exports a guarded slice and Ctrl+V imports it. The pasted duration matches the selected interval and the original SHA-256 is unchanged. |
+| Large folders and bounded previews | Two 10,000-entry fixtures exercise List, Photos and Music. Visible text shape counts stay below 200, the last entry is not laid out, and history restores selection/scroll. Preview caches retain at most 128 visible identities; gallery/list/Shelf admit one job and Music admits at most eight on a dedicated executor. |
+| Navigation and close ownership | Rendered music navigation retains playback; Audio Studio pauses it, verified by silent captured PCM. Video return/app-close tests verify child reaping. Source checks reject changed video replay. |
+| Assessed video backend and expectations | Owned FFplay child, bounded FFprobe inspection and bounded posters in shared `media.rs`. H.264/AAC moving frames and pause are verified in both appearances; codec dependencies and allocation/dimension limits are documented above. Missing-player errors retain external opening. |
+| Subfolders/non-media remain accessible | Both views use the ordinary browser entries/actions. Gallery acceptance opens a text file and returns; Music retains folders and text entries. |
+| Shared media edits and protected exports | Existing Image/Audio Studios remain file-backed. Photo edits block slideshow changes; waveform export validates source identity and writes a separate slice. Existing source replacement, save conflict and undo tests run in the workspace suite. Video remains read-only. |
 
-## Verification so far
+## Verification
 
-- `cargo check -p clip-workbench --lib --bin clip-file-manager --offline` passes.
-- `cargo test -p clip-workbench --lib --offline file_manager::`: 70 passed before the latest preview-source check; a final run remains pending. Coverage includes photo ordering, non-media access, slideshow wrapping, unsaved-edit retention, music activation/manual overrides, queue repeat/shuffle and bounded cancellable waveform previews.
-- Two 10,000-entry tests cover ordinary files and hard-linked WAV files across List, Photos and Music, including virtualization and history viewport restoration.
-- Private gallery acceptance: `/tmp/files-phase5-gallery-dark-e/report.json` passes all 12 rendered observations. It covers List/Photos switching, opening and navigating photos, timed slideshow advancement, pause, returning to the grid, and opening a non-media file from Photos.
-- The latest release build also passes all 12 private Light observations in `/tmp/files-phase5-gallery-light-b/report.json`; screenshots of both appearances were inspected.
-- `./launch.sh build --bin clip-file-manager`, `cargo fmt --all --check`, and `git diff --check` pass.
-- The gallery-only architecture comparison was neutral. During music implementation, excessive-complexity functions and repeated callbacks were simplified; the subsequent comparison retained maximum complexity and cycle count but still flagged existing audio-export clone fragments. Final combined review remains pending.
-- The private music runner exercised playback controls, repeat/shuffle, navigation and manual-view retention through 11 observations. Its final tab-selection assertion failed because the OCR selector chose the “Play folder music” button; the selector is corrected but the complete run has not yet been repeated.
-- Latest music layout changes pass the 66 targeted tests; the prior release build and rendered observations precede those changes. The script supports gallery and music scenarios, but does not establish full Phase 5 acceptance.
+Before the subsequent waveform-color, square-grid and keyboard-navigation refinements, the Phase 5 release passed the following checks:
 
-- Current gallery release acceptance passes all 12 observations in both `/tmp/files-phase5-gallery-current-dark/report.json` and `/tmp/files-phase5-gallery-current-light/report.json`.
-- Video acceptance passes advancing-frame and pause-frame comparisons, replay, and return-to-folder child reaping in Dark and Light. `/tmp/files-phase5-video-close-light/report.json` also verifies application-close cleanup.
-- Music acceptance captures non-silent PCM from an isolated PipeWire null sink. Waveform seeking, range export and paste succeeded in `/tmp/files-phase5-music-wave-fixed-dark`; a final OCR filename assertion failed after the filesystem/duration/source-integrity checks had passed. The assertion now checks the rendered item count; complete reruns remain pending.
-- `cargo test --workspace --offline -- --test-threads=1` passes across the workspace (initial default parallel execution failed 33 background-job tests; serial execution passed those tests). Further source changes require a final rerun.
-- Combined architecture measurement: clone groups 1297→1296, duplication 7.98%→7.88%, maximum complexity 196 and cycle count 2 unchanged. Comparing whitespace-normalized clone fragments with the baseline finds zero new fragments; the service's regression label is caused by existing fragments in touched files. Increased callers of shared acceptance helpers are expected reuse.
+- 73 file-manager unit tests pass, including 10,000-entry virtualization, common compressed formats, source guards and playback lifecycle. The final local debug run loads those directory fixtures in 58–59 ms and renders the first frame of each view in 2 ms, with 53–81 text shapes; these are local measurements, not cross-machine timing guarantees.
+- `cargo test --workspace --offline -- --test-threads=1` passes; the workbench library reports 716 passed and 8 ignored. Across the workspace, 1,893 tests pass and 22 are ignored. Shared background-executor timing tests failed under concurrent test/UI load, so the final recorded workspace run is serial with acceptance jobs finished.
+- Private gallery: `/tmp/files-phase5-bounded-gallery-dark/report.json` and `/tmp/files-phase5-bounded-gallery-light/report.json` each pass 12 observations.
+- Private Music: `/tmp/files-phase5-bounded-music-dark-final/report.json` and `/tmp/files-phase5-bounded-music-light/report.json` each pass 21 observations, including actual PCM, selected-slice duration, source integrity and studio playback conflicts.
+- Private video: `/tmp/files-phase5-bounded-video-dark/report.json` and `/tmp/files-phase5-bounded-video-light/report.json` prove advancing frames, stable paused frames, replay, return cleanup and application-close cleanup.
+- `/tmp/files-phase5-final-fallback-b/report.json` passes all three missing-player observations: visible dependency error, external-opening option, no owned player window, and return to browsing.
+- The playback-panel regression test checks three frames and rejects opaque panels painting over the controls. Central content is clipped to the space left by outer docks; compact scroll areas fit their assigned height. Rendered Light/Dark screenshots confirm full button borders.
+- Native decoder tests cover MP3, Ogg Vorbis and M4A/AAC decoding to fixed-size waveforms and seeking; rendered music proves WAV/FLAC playback. Other formats remain subject to the enabled decoder/backend support.
+- Architecture: clone groups 1297→1296, duplication 7.98%→7.86%, maximum complexity 196 and measured cycle count 2 unchanged. Whitespace-normalized fragment comparison finds zero new clones and no new/increased functions above CCN 15. The service still labels pre-existing audio-export fragments in touched files as regressions. Shared media data/inspection now avoid the Shelf→video→listing-preview dependency cycle.
+- Release build through `./launch.sh build --bin clip-file-manager`, formatting, Python script compilation and diff whitespace checks pass.
+
+All rendered acceptance uses a private Weston/Niri compositor. Audio capture uses private PipeWire services and a null sink. No interactive-compositor input or host audio routing is used.
+
+## Media feedback refinements
+
+The square gallery, inset/checkmark selection, shared waveform colors and folder Left/Right navigation are subsequent changes. `cargo check -p clip-workbench --all-targets --offline`, `./launch.sh build --bin clip-file-manager`, formatting and diff whitespace checks pass. Architecture comparison against `pre-media-gallery-feedback` keeps the maximum complexity and cycle count unchanged, with no new or increased functions above CCN 15. The flagged waveform clones all match pre-existing fragments; clone count stays at 1296 and duplication decreases from 7.86% to 7.85%. At that checkpoint, no additional tests or UI acceptance runs were performed for those refinements. The subsequent waveform performance work reruns the workspace suite; measurements and current validation are recorded in [waveform-performance.md](waveform-performance.md).

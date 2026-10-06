@@ -8,7 +8,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::{fs::File, io::BufReader, path::PathBuf, sync::mpsc, time::Duration};
 
 type AudioDecoder = Decoder<BufReader<File>>;
-fn decode_file(path: &std::path::Path) -> Result<AudioDecoder, String> {
+fn audio_file(path: &std::path::Path) -> Result<File, String> {
     let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK)
@@ -17,7 +17,10 @@ fn decode_file(path: &std::path::Path) -> Result<AudioDecoder, String> {
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("Audio source is not a regular file".into());
     }
-    Decoder::try_from(file).map_err(|e| e.to_string())
+    Ok(file)
+}
+fn decode_file(path: &std::path::Path) -> Result<AudioDecoder, String> {
+    Decoder::try_from(audio_file(path)?).map_err(|e| e.to_string())
 }
 struct Loading {
     ticket: JobTicket,
@@ -247,45 +250,48 @@ impl Music {
         self.notice = Some("Preparing selected audio for the clipboard…".into());
     }
     fn playback_controls(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal_wrapped(|ui| {
-            if ui.button("Previous track").clicked() {
-                self.step(false);
-            }
-            if ui
-                .button(if self.playing() {
-                    "Pause music"
-                } else {
-                    "Play music"
-                })
-                .clicked()
-            {
-                self.toggle();
-            }
-            if ui.button("Next track").clicked() {
-                self.step(true);
-            }
-            if ui
-                .button(format!("Repeat: {}", self.queue.repeat.label()))
-                .clicked()
-            {
-                self.queue.repeat = self.queue.repeat.next();
-            }
-            if ui
-                .button(format!(
-                    "Shuffle: {}",
-                    if self.queue.shuffled { "on" } else { "off" }
-                ))
-                .clicked()
-            {
-                self.queue.toggle_shuffle();
-            }
-            if ui
-                .add_enabled(!self.copying(), egui::Button::new("Clear queue"))
-                .clicked()
-            {
-                self.clear();
-            }
-        });
+        ui.with_layout(
+            egui::Layout::left_to_right(egui::Align::Min).with_main_wrap(true),
+            |ui| {
+                if ui.button("Previous track").clicked() {
+                    self.step(false);
+                }
+                if ui
+                    .button(if self.playing() {
+                        "Pause music"
+                    } else {
+                        "Play music"
+                    })
+                    .clicked()
+                {
+                    self.toggle();
+                }
+                if ui.button("Next track").clicked() {
+                    self.step(true);
+                }
+                if ui
+                    .button(format!("Repeat: {}", self.queue.repeat.label()))
+                    .clicked()
+                {
+                    self.queue.repeat = self.queue.repeat.next();
+                }
+                if ui
+                    .button(format!(
+                        "Shuffle: {}",
+                        if self.queue.shuffled { "on" } else { "off" }
+                    ))
+                    .clicked()
+                {
+                    self.queue.toggle_shuffle();
+                }
+                if ui
+                    .add_enabled(!self.copying(), egui::Button::new("Clear queue"))
+                    .clicked()
+                {
+                    self.clear();
+                }
+            },
+        );
     }
     fn queue_ui(&mut self, ui: &mut egui::Ui) {
         egui::CollapsingHeader::new(format!("Queue ({} tracks)", self.queue.paths.len())).show(
@@ -319,6 +325,14 @@ impl Music {
     }
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         self.playback_controls(ui);
+        egui::ScrollArea::vertical()
+            .min_scrolled_height(0.0)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                self.player_details(ui);
+            });
+    }
+    fn player_details(&mut self, ui: &mut egui::Ui) {
         if let Some(path) = self.queue.current() {
             let path = super::display_path(path);
             ui.add(egui::Label::new(&path).truncate(true))

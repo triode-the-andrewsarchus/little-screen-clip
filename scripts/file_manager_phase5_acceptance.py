@@ -32,10 +32,10 @@ def unavailable_video(session, root):
     x, y = session.word("01-video-tools", "movie.mp4", minimum_y=300)
     session.click(x, y)
     session.key("Return")
-    session.observe("02-unavailable-player", ["FFplay is unavailable", "Open externally", "Back to folder"])
+    session.observe("02-unavailable-player", ["install the FFmpeg player package", "Open externally", "Back to folder"])
     windows = json.loads(private.run_checked([str(session.niri), "msg", "--json", "windows"], env=session.env))
     assert not any(window["title"] == "Files video" for window in windows)
-    click_word(session, "02-unavailable-player", "Back")
+    back(session, "02-unavailable-player")
     session.observe("03-tools-return", ["movie.mp4", "notes.txt"])
 
 

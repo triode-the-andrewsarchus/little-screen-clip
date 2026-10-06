@@ -54,7 +54,7 @@ folder tree, refresh, and hidden-file visibility. Phase 2 adds multi-selection, 
 Trash/restore, permanent deletion, clipboard file references, external-change refresh, and native Wayland drag-and-drop. See [Phase 2 delivery](docs/File%20Manager/phase2.md).
 Phase 3 adds a session Shelf, shared hand/inventory access, and named files from clipboard text/images. See [Phase 3 implementation](docs/File%20Manager/phase3.md) for behavior and follow-up work.
 Phase 4 is in progress. Its current implementation opens files in the shared studios, adds visible-entry thumbnail/hover previews, and provides guarded text/image saves plus protected audio/PDF outputs. See [Phase 4](docs/File%20Manager/phase4.md) for current capabilities and verification, and [the phased plan](docs/File%20Manager/plan.md) for the remaining operations and previews.
-Phase 5 adds Photos with slideshow navigation, Music with a folder queue and selectable waveforms, and owned video playback. Video opens in a separate FFplay window and requires FFmpeg/FFprobe/FFplay. See [Phase 5](docs/File%20Manager/phase5.md) for controls, playback lifetime, format support, limits and acceptance status.
+Phase 5 is complete against its planned media scope: Photos with slideshow navigation, Music with a folder queue and selectable waveforms, and owned video playback. Video opens in a separate FFplay window and requires FFmpeg/FFprobe/FFplay. See [Phase 5](docs/File%20Manager/phase5.md) for controls, playback lifetime, format support, limits and acceptance status.
 
 Dependencies point toward the lower rows of responsibility: UI, daemon, driver, and renderer must
 not pull operation-domain behavior back into their own crates. Presentation-ready models belong in

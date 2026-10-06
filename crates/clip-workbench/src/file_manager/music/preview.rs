@@ -1,22 +1,11 @@
 //! Visible music cards retain small summaries, never a per-row Audio Studio or PCM buffer.
-use super::super::shelf::preview::Data;
+use super::super::media::PreviewData as Data;
 use crate::icons::Icon;
 use little_clip_core::process::CommandRequest;
-use rodio::Source;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{
-    path::Path,
-    time::{Duration, Instant},
-};
+use std::{path::Path, time::Duration};
 
-#[derive(Default)]
-pub(in crate::file_manager) struct Metadata {
-    pub title: String,
-    pub artist: String,
-    pub album: String,
-    pub duration: f32,
-    pub source: Option<crate::file_source::FileSource>,
-}
+pub(in crate::file_manager) use super::super::media::MusicMetadata as Metadata;
 
 pub(in crate::file_manager) fn load(path: &Path, cancelled: &AtomicBool) -> Data {
     let mut data = Data::new(
@@ -29,16 +18,26 @@ pub(in crate::file_manager) fn load(path: &Path, cancelled: &AtomicBool) -> Data
         if cancelled.load(Ordering::Relaxed) {
             return Err("Music preview cancelled".into());
         }
-        let mut metadata = metadata(path);
+        // Header probing is inexpensive; expensive tags/cover processes run
+        // alongside audio decoding instead of delaying the waveform's start.
+        let duration = little_clip_core::audio::read_audio_metadata(path)
+            .map_or(0.0, |metadata| metadata.duration_ms as f32 / 1000.0);
+        let ((mut metadata, image), result) = std::thread::scope(|scope| {
+            let details =
+                scope.spawn(|| (metadata(path), super::super::media::media_frame(path, 0)));
+            let result = waveform(path, duration, 512, None, cancelled);
+            details
+                .join()
+                .map(|details| (details, result))
+                .map_err(|_| "Music details worker failed".to_owned())
+        })?;
         metadata.source = Some(source.clone());
         data.title = metadata.title.clone();
-        if cancelled.load(Ordering::Relaxed) {
-            return Err("Music preview cancelled".into());
-        }
-        data.image = super::super::previews::media_frame(path, 0);
-        let duration = metadata.duration;
+        data.image = image;
         data.music = Some(metadata);
-        data.waveform = peaks(path, duration, cancelled)?;
+        let (waveform, colors) = result?;
+        data.waveform = waveform;
+        data.waveform_colors = colors;
         source.check()?;
         if crate::file_source::FileSource::capture(path)? != source {
             return Err("Music path changed while preparing its preview".into());
@@ -107,6 +106,74 @@ fn metadata(path: &Path) -> Metadata {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rodio::Source;
+    use std::time::Instant;
+    /// Manual release benchmark; the fixture folder is supplied outside the repository.
+    #[test]
+    #[ignore]
+    fn benchmark_music_preview_album() {
+        let directory = std::env::var_os("FILES_WAVEFORM_BENCH_DIR")
+            .expect("set FILES_WAVEFORM_BENCH_DIR to an album folder");
+        let mut paths: Vec<_> = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| little_clip_core::audio::is_audio_path(path))
+            .collect();
+        paths.sort();
+        for round in 0..3 {
+            let ctx = egui::Context::default();
+            let mut cache = super::super::super::shelf::preview::Previews::default();
+            let entries: Vec<_> = paths
+                .iter()
+                .map(|path| (uuid::Uuid::new_v4(), path))
+                .collect();
+            let started = Instant::now();
+            loop {
+                cache.poll(&ctx);
+                for (id, path) in &entries {
+                    if cache.needs(*id) {
+                        cache.request(
+                            *id,
+                            super::super::super::shelf::preview::Source::Music((*path).clone()),
+                        );
+                    }
+                }
+                if entries.iter().all(|(id, _)| cache.get(*id).is_some()) {
+                    break;
+                }
+                assert!(started.elapsed() < Duration::from_secs(120));
+                std::thread::sleep(Duration::from_millis(16));
+            }
+            for (id, _) in &entries {
+                assert!(!cache.get(*id).unwrap().data.waveform.is_empty());
+            }
+            println!(
+                "CACHE round={round} album_ms={:.3}",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+        for round in 0..3 {
+            for path in &paths {
+                let started = Instant::now();
+                let info = metadata(path);
+                let metadata_ms = started.elapsed().as_secs_f64() * 1000.0;
+                let started = Instant::now();
+                let _cover = super::super::super::media::media_frame(path, 0);
+                let cover_ms = started.elapsed().as_secs_f64() * 1000.0;
+                let started = Instant::now();
+                let result = waveform(path, info.duration, 512, None, &AtomicBool::new(false));
+                let wave_ms = started.elapsed().as_secs_f64() * 1000.0;
+                assert!(result.is_ok(), "{}: {:?}", path.display(), result.err());
+                println!(
+                    "BENCH round={round} track={} duration_s={:.3} metadata_ms={metadata_ms:.3} cover_ms={cover_ms:.3} waveform_ms={wave_ms:.3} total_ms={:.3}",
+                    path.file_name().unwrap().to_string_lossy(),
+                    info.duration,
+                    metadata_ms + cover_ms + wave_ms
+                );
+            }
+        }
+    }
+
     #[test]
     fn common_compressed_music_formats_decode_to_bounded_waveforms() {
         let (directory, source) = crate::audio_preview::tests::generate_fixture_wav("formats", 0.3);
@@ -126,8 +193,9 @@ mod tests {
             decoder
                 .try_seek(Duration::from_secs_f32(duration * 0.5))
                 .unwrap();
-            let wave = peaks(&path, duration, &AtomicBool::new(false))
-                .unwrap_or_else(|error| panic!("{extension}: {error}"));
+            let wave = waveform(&path, duration, 512, None, &AtomicBool::new(false))
+                .unwrap_or_else(|error| panic!("{extension}: {error}"))
+                .0;
             assert_eq!(wave.len(), 512);
             assert!(
                 wave.iter().any(|peak| *peak > 0.01),
@@ -138,7 +206,9 @@ mod tests {
     #[test]
     fn music_waveforms_are_full_length_fixed_size_and_cancellable() {
         let (_dir, path) = crate::audio_preview::tests::generate_fixture_wav("preview", 2.0);
-        let peaks = peaks(&path, 2.0, &AtomicBool::new(false)).unwrap();
+        let peaks = waveform(&path, 2.0, 512, None, &AtomicBool::new(false))
+            .unwrap()
+            .0;
         assert_eq!(peaks.len(), 512);
         assert!(
             peaks
@@ -147,7 +217,7 @@ mod tests {
         );
         assert!(peaks[..256].iter().any(|p| *p > 0.0));
         assert!(peaks[256..].iter().any(|p| *p > 0.0));
-        assert!(super::peaks(&path, 2.0, &AtomicBool::new(true)).is_err());
+        assert!(super::waveform(&path, 2.0, 512, None, &AtomicBool::new(true)).is_err());
     }
     #[test]
     fn music_metadata_and_missing_cover_keep_playable_waveform_data() {
@@ -162,33 +232,19 @@ mod tests {
     }
 }
 
-fn peaks(path: &Path, duration: f32, cancelled: &AtomicBool) -> Result<Vec<f32>, String> {
-    let decoder = super::decode_file(path)?;
-    let duration = decoder
-        .total_duration()
-        .map_or(duration, |d| d.as_secs_f32());
-    if !duration.is_finite() || duration <= 0.0 {
-        return Err("Unknown track duration".into());
-    }
-    let sample_count =
-        (duration as f64 * decoder.sample_rate().get() as f64 * decoder.channels().get() as f64)
-            .max(1.0);
-    let mut peaks = vec![0.0_f32; 512];
-    let started = Instant::now();
-    for (index, sample) in decoder.enumerate() {
-        if index % 65536 == 0 {
-            if cancelled.load(Ordering::Relaxed) {
-                return Err("Music preview cancelled".into());
-            }
-            if started.elapsed() > Duration::from_secs(10) {
-                return Err("Waveform exceeded the ten-second decoding budget".into());
-            }
-        }
-        let bucket = ((index as f64 / sample_count) * peaks.len() as f64) as usize;
-        let bucket = bucket.min(peaks.len() - 1);
-        if sample.is_finite() {
-            peaks[bucket] = peaks[bucket].max(sample.abs().min(1.0));
-        }
-    }
-    Ok(peaks)
+pub(in crate::file_manager) fn waveform(
+    path: &Path,
+    duration: f32,
+    bars: usize,
+    max_duration: Option<f32>,
+    cancelled: &AtomicBool,
+) -> Result<(Vec<f32>, Vec<[u8; 3]>), String> {
+    little_clip_core::audio::compute_preview_waveform(
+        super::audio_file(path)?,
+        path,
+        duration,
+        bars,
+        max_duration,
+        cancelled,
+    )
 }

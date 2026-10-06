@@ -43,6 +43,19 @@ impl FileManager {
             {
                 self.set_view(view);
             }
+            if self.view == super::super::BrowserView::Photos {
+                if ui
+                    .button(if self.gallery_selecting {
+                        "Done"
+                    } else {
+                        "Select"
+                    })
+                    .clicked()
+                {
+                    self.gallery_selecting = !self.gallery_selecting;
+                }
+                ui.label("Select multiple: Select mode, Ctrl+click, or Shift+click.");
+            }
             if self.view == super::super::BrowserView::Photos
                 && ui
                     .add(
@@ -59,14 +72,21 @@ impl FileManager {
         });
     }
 
-    pub(super) fn gallery_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+    pub(super) fn gallery_ui(
+        &mut self,
+        ui: &mut Ui,
+        colors: WorkbenchColors,
+        palette: &AppPalette,
+    ) {
         self.gallery_previews.poll(ui.ctx());
-        let columns = ((ui.available_width() + 8.0) / (self.thumbnail_edge + 8.0))
+        ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+        let width = (ui.available_width() - ui.spacing().scroll.allocated_width()).max(1.0);
+        let columns = ((width + 2.0) / (self.thumbnail_edge + 2.0))
             .floor()
             .max(1.0) as usize;
         self.gallery_columns = columns;
-        let edge = ((ui.available_width() - 8.0 * (columns - 1) as f32) / columns as f32).max(1.0);
-        let row_height = edge + 32.0;
+        let edge = ((width - 2.0 * (columns - 1) as f32) / columns as f32).max(1.0);
+        let row_height = edge;
         let scroll = self.gallery_scroll(ui, columns, row_height);
         let Some(directory) = &self.directory else {
             ui.label("Loading folder…");
@@ -81,7 +101,11 @@ impl FileManager {
             .map(|location| &location.selection);
         let can_edit = self.can_edit();
         let count = self.selection_count();
-        let mut actions = ListActions::default();
+        let mut actions = ListActions {
+            additive: self.gallery_selecting,
+            ..Default::default()
+        };
+        let check_color = crate::ui_ext::contrast_text_c32(colors.accent, None, palette);
         let background = actions.background(ui, can_edit, count > 0);
         let mut targets = Vec::new();
         let mut paths = std::collections::BTreeSet::new();
@@ -98,41 +122,23 @@ impl FileManager {
                                 vec2(edge, row_height),
                                 Sense::click_and_drag(),
                             );
-                            row_background(
-                                ui,
-                                rect,
-                                selected.is_some_and(|s| s.contains(&entry.path)),
-                                response.hovered(),
-                                colors,
-                            );
-                            let image_rect = Rect::from_min_size(
-                                rect.min + vec2(4.0, 4.0),
-                                vec2((edge - 8.0).max(1.0), (edge - 8.0).max(1.0)),
-                            );
-                            if !entry.directory
-                                && little_clip_core::item::is_image_path(&entry.path)
-                                && paths.len() < 128
-                            {
+                            let marked = selected.is_some_and(|s| s.contains(&entry.path));
+                            let photo = !entry.directory
+                                && little_clip_core::item::is_image_path(&entry.path);
+                            let preview = if photo && paths.len() < 128 {
                                 paths.insert(entry.path.clone());
-                                self.gallery_previews.show_gallery(ui, image_rect, entry);
+                                Some(&mut self.gallery_previews)
                             } else {
-                                let icon = entry_icon(entry);
-                                icon.paint(
-                                    ui.painter(),
-                                    Rect::from_center_size(image_rect.center(), vec2(32.0, 32.0)),
-                                    colors.text_secondary,
-                                );
-                            }
-                            paint_text(
+                                None
+                            };
+                            paint_gallery_tile(
                                 ui,
-                                Rect::from_min_size(
-                                    pos2(rect.left(), rect.top() + edge),
-                                    vec2(edge, 28.0),
-                                ),
-                                4.0,
-                                edge - 8.0,
-                                &entry.name,
-                                colors.text_primary,
+                                &response,
+                                entry,
+                                marked,
+                                colors,
+                                check_color,
+                                preview,
                             );
                             response.clone().on_hover_text(&entry.name);
                             if entry.directory {
@@ -154,6 +160,7 @@ impl FileManager {
     fn gallery_scroll(&mut self, ui: &Ui, columns: usize, row_height: f32) -> egui::ScrollArea {
         let mut scroll = egui::ScrollArea::vertical()
             .id_source("files_photo_grid")
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
             .auto_shrink([false, false]);
         if self.restore_scroll {
             scroll = scroll.vertical_scroll_offset(self.location().map_or(0.0, |l| l.scroll));
@@ -176,9 +183,7 @@ impl FileManager {
     }
 
     pub(in crate::file_manager) fn photo_collection(&self, path: &std::path::Path) -> Vec<PathBuf> {
-        if self.view != super::super::BrowserView::Photos
-            || !little_clip_core::item::is_image_path(path)
-        {
+        if !little_clip_core::item::is_image_path(path) {
             return Vec::new();
         }
         self.directory
@@ -192,5 +197,63 @@ impl FileManager {
                     .collect()
             })
             .unwrap_or_default()
+    }
+}
+
+/// Paints a square crop and its selection feedback within the tile boundary.
+fn paint_gallery_tile(
+    ui: &mut Ui,
+    response: &egui::Response,
+    entry: &super::super::filesystem::Entry,
+    marked: bool,
+    colors: WorkbenchColors,
+    check_color: Color32,
+    preview: Option<&mut super::super::previews::EntryPreviews>,
+) {
+    let rect = response.rect;
+    ui.painter().rect_filled(
+        rect,
+        0.0,
+        if marked {
+            colors.accent
+        } else {
+            colors.recessed
+        },
+    );
+    let image_rect = rect.shrink(if marked { 7.0 } else { 0.0 });
+    if let Some(preview) = preview {
+        preview.show_gallery(ui, image_rect, entry);
+    } else {
+        entry_icon(entry).paint(
+            ui.painter(),
+            Rect::from_center_size(image_rect.center(), vec2(32.0, 32.0)),
+            colors.text_secondary,
+        );
+        paint_text(
+            ui,
+            Rect::from_min_size(
+                pos2(image_rect.left(), image_rect.bottom() - 28.0),
+                vec2(image_rect.width(), 28.0),
+            ),
+            4.0,
+            image_rect.width() - 8.0,
+            &entry.name,
+            colors.text_primary,
+        );
+    }
+    if marked {
+        let badge = pos2(rect.right() - 18.0, rect.bottom() - 18.0);
+        ui.painter().circle_filled(badge, 12.0, colors.accent);
+        Icon::Check.paint(
+            ui.painter(),
+            Rect::from_center_size(badge, vec2(16.0, 16.0)),
+            check_color,
+        );
+    } else if response.hovered() {
+        ui.painter().rect_stroke(
+            rect.shrink(1.0),
+            0.0,
+            egui::Stroke::new(2.0_f32, colors.focus),
+        );
     }
 }

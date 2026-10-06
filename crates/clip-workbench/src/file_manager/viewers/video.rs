@@ -7,50 +7,10 @@ use std::{
     time::Duration,
 };
 
-pub(super) struct Prepared {
-    source: FileSource,
-    dimensions: (u32, u32),
-    duration_ms: u64,
-    stream: usize,
-}
-
-fn inspect(path: &std::path::Path) -> Result<Prepared, String> {
-    let source = FileSource::capture(path)?;
-    let probe = little_clip_core::process::CommandRequest::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v",
-            "-show_entries",
-            "stream=width,height:stream_disposition=attached_pic:format=duration",
-            "-of",
-            "json",
-        ])
-        .arg(path.as_os_str())
-        .timeout(Duration::from_secs(3))
-        .max_output_bytes(64 * 1024)
-        .run()
-        .map_err(|e| format!("Cannot inspect video; FFprobe is required: {e}"))?;
-    if !probe.status.success() || probe.stdout_truncated {
-        return Err("Cannot inspect video. Check the file or open externally.".into());
-    }
-    let value: serde_json::Value =
-        serde_json::from_slice(&probe.stdout).map_err(|e| e.to_string())?;
-    let (stream, width, height, duration_ms) = stream_metadata(&value)?;
-    if FileSource::capture(path)? != source {
-        return Err("Video changed while opening; open it again.".into());
-    }
-    Ok(Prepared {
-        source,
-        dimensions: (width, height),
-        duration_ms,
-        stream,
-    })
-}
+use super::super::media::{VideoMetadata as Prepared, inspect_video};
 
 pub(super) fn prepare(path: &std::path::Path) -> Result<Prepared, String> {
-    let prepared = inspect(path)?;
+    let prepared = inspect_video(path)?;
     let version = little_clip_core::process::CommandRequest::new("ffplay")
         .arg("-version")
         .timeout(Duration::from_secs(3))
@@ -64,38 +24,6 @@ pub(super) fn prepare(path: &std::path::Path) -> Result<Prepared, String> {
         return Err("Video changed while opening; open it again.".into());
     }
     Ok(prepared)
-}
-
-pub(in crate::file_manager) fn preview(
-    path: &std::path::Path,
-) -> Option<little_clip_core::ImageThumbnail> {
-    let prepared = inspect(path).ok()?;
-    let image = super::super::previews::media_frame(path, prepared.stream)?;
-    (FileSource::capture(path).ok()? == prepared.source).then_some(image)
-}
-
-// Core's preview metadata reader does not distinguish an attached cover from the
-// stream played here. Inspect one selected stream and pass its index to FFplay.
-fn stream_metadata(value: &serde_json::Value) -> Result<(usize, u32, u32, u64), String> {
-    let (index, stream) = value["streams"]
-        .as_array()
-        .and_then(|streams| {
-            streams.iter().enumerate().find(|(_, stream)| {
-                stream["disposition"]["attached_pic"].as_u64().unwrap_or(0) == 0
-            })
-        })
-        .ok_or("No ordinary video stream is available")?;
-    let width = stream["width"].as_u64().unwrap_or(0);
-    let height = stream["height"].as_u64().unwrap_or(0);
-    if width == 0 || height == 0 || width > 4096 || height > 4096 || width * height > 4096 * 2160 {
-        return Err("Video dimensions are invalid or exceed the 4096×2160 pixel budget; use Open externally.".into());
-    }
-    let duration_ms = value["format"]["duration"]
-        .as_str()
-        .and_then(|text| text.parse::<f64>().ok())
-        .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
-        .map_or(0, |seconds| (seconds * 1000.0) as u64);
-    Ok((index, width as u32, height as u32, duration_ms))
 }
 
 pub(super) struct Video {
@@ -241,20 +169,6 @@ impl Drop for Video {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn selected_stream_skips_cover_art_and_enforces_the_played_pixel_budget() {
-        let mut metadata = serde_json::json!({
-            "streams": [
-                {"width":160, "height":160, "disposition":{"attached_pic":1}},
-                {"width":1920, "height":1080, "disposition":{"attached_pic":0}}
-            ], "format":{"duration":"3.5"}
-        });
-        assert_eq!(stream_metadata(&metadata).unwrap(), (1, 1920, 1080, 3500));
-        metadata["streams"][1]["width"] = serde_json::json!(8192);
-        assert!(stream_metadata(&metadata).is_err());
-        assert!(stream_metadata(&serde_json::json!({"streams":[]})).is_err());
-    }
 
     #[test]
     fn returning_to_folder_terminates_and_reaps_owned_video() {

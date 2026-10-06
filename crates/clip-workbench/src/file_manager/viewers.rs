@@ -18,7 +18,7 @@ use std::{
 };
 
 mod gallery;
-pub(super) mod video;
+mod video;
 
 enum Loaded {
     Image(DecodedImageData, FileSource),
@@ -26,7 +26,7 @@ enum Loaded {
     Sheet(little_clip_core::presentation::spreadsheet::SpreadsheetData),
     Midi(little_clip_core::presentation::midi::MidiData),
     Path(FileSource),
-    Video(video::Prepared),
+    Video(super::media::VideoMetadata),
     External,
 }
 enum ViewerSession {

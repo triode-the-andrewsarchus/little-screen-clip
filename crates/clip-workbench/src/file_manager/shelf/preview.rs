@@ -24,36 +24,13 @@ pub(in crate::file_manager) enum Source {
     Music(PathBuf),
 }
 
-pub(in crate::file_manager) struct Data {
-    pub title: String,
-    pub detail: String,
-    pub text: String,
-    pub image: Option<ImageThumbnail>,
-    pub waveform: Vec<f32>,
-    pub icon: Icon,
-    pub music: Option<super::super::music::preview::Metadata>,
-}
-
-impl Data {
-    pub(in crate::file_manager) fn new(title: String, detail: String, icon: Icon) -> Self {
-        Self {
-            title,
-            detail,
-            icon,
-            text: String::new(),
-            image: None,
-            waveform: Vec::new(),
-            music: None,
-        }
-    }
-}
+pub(in crate::file_manager) use super::super::media::PreviewData as Data;
 
 pub(in crate::file_manager) struct Ready {
     pub data: Data,
     pub texture: Option<egui::TextureHandle>,
 }
 struct Pending {
-    id: uuid::Uuid,
     ticket: JobTicket,
     receiver: mpsc::Receiver<Result<Data, JobError>>,
     cancelled: Arc<AtomicBool>,
@@ -68,37 +45,25 @@ impl Drop for Pending {
 #[derive(Default)]
 pub(in crate::file_manager) struct Previews {
     ready: BTreeMap<uuid::Uuid, Ready>,
-    pending: Option<Pending>,
+    pending: BTreeMap<uuid::Uuid, Pending>,
 }
 
 impl Previews {
     pub fn needs(&self, id: uuid::Uuid) -> bool {
-        self.pending.is_none() && !self.ready.contains_key(&id)
+        !self.pending.contains_key(&id) && !self.ready.contains_key(&id)
     }
     pub fn clear(&mut self) {
         self.ready.clear();
-        if let Some(pending) = self.pending.take() {
-            pending.ticket.cancel();
-        }
+        self.pending.clear();
     }
     pub fn invalidate(&mut self, id: uuid::Uuid) {
         self.ready.remove(&id);
-        if self
-            .pending
-            .as_ref()
-            .is_some_and(|pending| pending.id == id)
-        {
-            self.pending.take().unwrap().ticket.cancel();
-        }
+        self.pending.remove(&id);
     }
 
     pub fn retain(&mut self, ids: &BTreeSet<uuid::Uuid>) {
         self.ready.retain(|id, _| ids.contains(id));
-        if let Some(pending) = &self.pending
-            && !ids.contains(&pending.id)
-        {
-            self.invalidate(pending.id);
-        }
+        self.pending.retain(|id, _| ids.contains(id));
     }
 
     pub fn get(&self, id: uuid::Uuid) -> Option<&Ready> {
@@ -106,7 +71,14 @@ impl Previews {
     }
 
     pub fn request(&mut self, id: uuid::Uuid, source: Source) {
-        if self.ready.contains_key(&id) || self.pending.is_some() {
+        let music = matches!(&source, Source::Music(_));
+        let executor = if music {
+            music_preview_jobs()
+        } else {
+            BackgroundJobs::global()
+        };
+        let limit = if music { music_preview_workers() } else { 1 };
+        if !self.needs(id) || self.pending.len() >= limit {
             return;
         }
         let cancelled = Arc::new(AtomicBool::new(false));
@@ -117,38 +89,46 @@ impl Previews {
             15
         };
         let (ticket, receiver) =
-            BackgroundJobs::global().submit(Duration::from_secs(deadline), move || match source {
+            executor.submit(Duration::from_secs(deadline), move || match source {
                 Source::Payload(payload) => payload_preview(&payload),
                 Source::Slot(slot, expected) => slot_preview(slot, expected),
                 Source::Gallery(path) => gallery_preview(&path),
                 Source::Music(path) => super::super::music::preview::load(&path, &token),
             });
-        self.pending = Some(Pending {
+        self.pending.insert(
             id,
-            ticket,
-            receiver,
-            cancelled,
-        });
+            Pending {
+                ticket,
+                receiver,
+                cancelled,
+            },
+        );
     }
 
     pub fn poll(&mut self, ctx: &egui::Context) {
-        let Some(pending) = &self.pending else {
-            return;
-        };
-        let result = match pending.receiver.try_recv() {
-            Ok(Err(JobError::QueueFull)) => {
-                self.pending = None;
-                ctx.request_repaint();
-                return;
-            }
-            Ok(result) => result,
-            Err(mpsc::TryRecvError::Empty) => {
-                ctx.request_repaint_after(Duration::from_millis(50));
-                return;
-            }
-            Err(_) => Err(JobError::Cancelled),
-        };
-        let id = self.pending.take().unwrap().id;
+        let mut completed = Vec::new();
+        self.pending.retain(|id, pending| {
+            let result = match pending.receiver.try_recv() {
+                Ok(Err(JobError::QueueFull)) => {
+                    ctx.request_repaint();
+                    return false;
+                }
+                Ok(result) => result,
+                Err(mpsc::TryRecvError::Empty) => return true,
+                Err(_) => Err(JobError::Cancelled),
+            };
+            completed.push((*id, result));
+            false
+        });
+        if !self.pending.is_empty() {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
+        for (id, result) in completed {
+            self.complete(ctx, id, result);
+        }
+    }
+
+    fn complete(&mut self, ctx: &egui::Context, id: uuid::Uuid, result: Result<Data, JobError>) {
         let data = result.unwrap_or_else(|error| {
             let mut data = Data::new(
                 "Preview unavailable".into(),
@@ -171,6 +151,21 @@ impl Previews {
         self.ready.insert(id, Ready { data, texture });
         ctx.request_repaint();
     }
+}
+
+// Music analysis has its own bounded executor so a folder cannot occupy the
+// workers needed for clipboard hydration, viewers, and ordinary file operations.
+fn music_preview_workers() -> usize {
+    static WORKERS: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+        std::thread::available_parallelism().map_or(1, |n| n.get().min(8))
+    });
+    *WORKERS
+}
+
+fn music_preview_jobs() -> &'static BackgroundJobs {
+    static JOBS: std::sync::LazyLock<BackgroundJobs> =
+        std::sync::LazyLock::new(|| BackgroundJobs::new(music_preview_workers(), 8));
+    &JOBS
 }
 
 fn slot_preview(slot: SlotId, expected: uuid::Uuid) -> Data {
@@ -238,6 +233,21 @@ fn item_preview(item: &ClipItem) -> Data {
                     })
                     .take(96)
                     .collect();
+                if let Some(colors) = &waveform.spectral_colors {
+                    data.waveform_colors = colors
+                        .chunks(stride)
+                        .take(96)
+                        .map(|chunk| {
+                            let mut sum = [0_u32; 3];
+                            for rgb in chunk {
+                                for i in 0..3 {
+                                    sum[i] += rgb[i] as u32;
+                                }
+                            }
+                            sum.map(|value| (value / chunk.len() as u32) as u8)
+                        })
+                        .collect();
+                }
             }
             data
         }
@@ -366,11 +376,11 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
             });
     } else if little_clip_core::audio::is_audio_path(path) {
         data.icon = Icon::Audio;
-        data.waveform = audio_excerpt(path);
+        (data.waveform, data.waveform_colors) = audio_excerpt(path);
     } else if little_clip_core::is_video_path(path) {
         data.icon = Icon::Film;
         data.detail = "Video".into();
-        data.image = super::super::viewers::video::preview(path);
+        data.image = super::super::media::video_preview(path);
     } else if path
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
@@ -424,39 +434,43 @@ fn sized_thumbnail(
     ImageThumbnail::generate_with_limits(bytes, mime, width, height, limits)
 }
 
-fn audio_excerpt(path: &Path) -> Vec<f32> {
-    if !little_clip_core::audio::read_audio_metadata(path)
-        .is_some_and(|metadata| metadata.duration_ms > 0)
-    {
-        return Vec::new();
-    }
-    let config = little_clip_core::config::AudioConfig {
-        max_full_waveform_sec: 0,
-        snippet_duration_sec: 2,
-        sample_position: little_clip_core::config::AudioSamplePosition::Start,
-        ..Default::default()
-    };
-    little_clip_core::audio::compute_plain_waveform(path, 64, &config)
-        .map(|waveform| {
-            waveform
-                .ch1_peaks
-                .into_iter()
-                .take(64)
-                .map(|peak| {
-                    if peak.is_finite() {
-                        peak.clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    }
-                })
-                .collect()
-        })
+fn audio_excerpt(path: &Path) -> (Vec<f32>, Vec<[u8; 3]>) {
+    let duration = little_clip_core::audio::read_audio_metadata(path)
+        .map_or(0.0, |metadata| metadata.duration_ms as f32 / 1000.0);
+    super::super::music::preview::waveform(path, duration, 64, Some(2.0), &AtomicBool::new(false))
         .unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parallel_music_admission_is_bounded_and_retirement_cancels_every_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut previews = Previews::default();
+        for _ in 0..16 {
+            previews.request(
+                uuid::Uuid::new_v4(),
+                Source::Music(dir.path().join("missing.wav")),
+            );
+        }
+        assert_eq!(previews.pending.len(), music_preview_workers());
+        let cancellation: Vec<_> = previews
+            .pending
+            .values()
+            .map(|pending| pending.cancelled.clone())
+            .collect();
+        previews.retain(&BTreeSet::new());
+        assert!(previews.pending.is_empty());
+        assert!(
+            cancellation
+                .iter()
+                .all(|token| token.load(Ordering::Relaxed))
+        );
+        previews.poll(&egui::Context::default());
+        assert!(previews.ready.is_empty());
+    }
 
     #[test]
     fn retired_preview_cannot_publish_a_stale_completion() {
@@ -471,7 +485,7 @@ mod tests {
             )),
         );
         previews.retain(&BTreeSet::new());
-        assert!(previews.pending.is_none());
+        assert!(previews.pending.is_empty());
         previews.poll(&ctx);
         assert!(previews.get(old).is_none());
         let current = uuid::Uuid::new_v4();
@@ -483,7 +497,7 @@ mod tests {
             )),
         );
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while previews.pending.is_some() {
+        while !previews.pending.is_empty() {
             previews.poll(&ctx);
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));

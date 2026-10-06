@@ -132,6 +132,7 @@ impl FileManager {
             .show_inside(ui, |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
                 egui::ScrollArea::vertical()
+                    .min_scrolled_height(0.0)
                     .max_height(ui.available_height())
                     .show(ui, |ui| self.status(ui, colors));
             });
@@ -150,7 +151,7 @@ impl FileManager {
                     ));
                 }
                 if self.view == super::BrowserView::Photos {
-                    self.gallery_ui(ui, colors);
+                    self.gallery_ui(ui, colors, palette);
                 } else if self.view == super::BrowserView::Music {
                     self.music_ui(ui, colors);
                 } else {
@@ -831,6 +832,7 @@ enum TreeAction {
 // the directory only once and all selection decisions use the same snapshot.
 #[derive(Default)]
 struct ListActions {
+    additive: bool,
     selection: Option<(PathBuf, bool, bool)>,
     open: Option<PathBuf>,
     naming: Option<super::edits::NamingAction>,
@@ -882,6 +884,33 @@ impl ListActions {
         }
     }
 
+    // Selection and focus share the same input policy across lists and photo tiles.
+    fn row_selection(
+        &mut self,
+        ui: &mut Ui,
+        response: &egui::Response,
+        entry: &super::filesystem::Entry,
+        selected: Option<&std::collections::BTreeSet<PathBuf>>,
+    ) -> bool {
+        let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
+        self.drag(response, &entry.path, selected);
+        if response.clicked() || response.double_clicked() {
+            let modifiers = ui.input(|input| input.modifiers);
+            self.selection = Some((
+                entry.path.clone(),
+                self.additive || modifiers.ctrl || modifiers.command,
+                modifiers.shift,
+            ));
+            ui.memory_mut(|memory| memory.request_focus(list_id()));
+            ui.ctx().request_repaint();
+        }
+        if response.secondary_clicked() && !marked {
+            self.selection = Some((entry.path.clone(), false, false));
+            ui.memory_mut(|memory| memory.request_focus(list_id()));
+        }
+        marked
+    }
+
     fn row(
         &mut self,
         ui: &mut Ui,
@@ -891,24 +920,9 @@ impl ListActions {
         can_edit: bool,
         selection_count: usize,
     ) {
-        let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
-        self.drag(response, &entry.path, selected);
+        let marked = self.row_selection(ui, response, entry, selected);
         if entry.directory {
             self.transfer = drop_files(ui, response, &entry.path);
-        }
-        if response.clicked() || response.double_clicked() {
-            let modifiers = ui.input(|input| input.modifiers);
-            self.selection = Some((
-                entry.path.clone(),
-                modifiers.ctrl || modifiers.command,
-                modifiers.shift,
-            ));
-            ui.memory_mut(|memory| memory.request_focus(list_id()));
-            ui.ctx().request_repaint();
-        }
-        if response.secondary_clicked() && !marked {
-            self.selection = Some((entry.path.clone(), false, false));
-            ui.memory_mut(|memory| memory.request_focus(list_id()));
         }
         response.context_menu(|ui| {
             if ui
@@ -934,7 +948,7 @@ impl ListActions {
                 ui.close_menu();
             }
         });
-        if response.double_clicked() {
+        if response.double_clicked() && !self.additive {
             self.open = Some(entry.path.clone());
         }
     }

@@ -567,7 +567,13 @@ fn paint_media(ui: &Ui, rect: Rect, ready: Option<&Ready>, colors: WorkbenchColo
         );
     } else if let Some(ready) = ready {
         if !ready.data.waveform.is_empty() {
-            paint_waveform(&painter, rect, &ready.data.waveform, colors.accent);
+            paint_waveform(
+                &painter,
+                rect,
+                &ready.data.waveform,
+                &ready.data.waveform_colors,
+                colors.accent,
+            );
         } else if !ready.data.text.is_empty() {
             let galley = painter.layout(
                 ready.data.text.clone(),
@@ -592,7 +598,13 @@ fn paint_media(ui: &Ui, rect: Rect, ready: Option<&Ready>, colors: WorkbenchColo
     }
 }
 
-fn paint_waveform(painter: &egui::Painter, rect: Rect, peaks: &[f32], color: egui::Color32) {
+fn paint_waveform(
+    painter: &egui::Painter,
+    rect: Rect,
+    peaks: &[f32],
+    rgb: &[[u8; 3]],
+    color: egui::Color32,
+) {
     for (index, peak) in peaks.iter().enumerate() {
         let x = rect.min.x + (index as f32 + 0.5) * rect.width() / peaks.len() as f32;
         let extent = peak * rect.height() * 0.45;
@@ -601,7 +613,12 @@ fn paint_waveform(painter: &egui::Painter, rect: Rect, peaks: &[f32], color: egu
                 pos2(x, rect.center().y - extent),
                 pos2(x, rect.center().y + extent),
             ],
-            Stroke::new(1.0_f32, color),
+            Stroke::new(
+                1.0_f32,
+                rgb.get(index).map_or(color, |value| {
+                    egui::Color32::from_rgb(value[0], value[1], value[2])
+                }),
+            ),
         );
     }
 }

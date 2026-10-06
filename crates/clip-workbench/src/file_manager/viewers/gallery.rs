@@ -37,64 +37,10 @@ impl Viewers {
         let Some(collection) = &mut self.gallery else {
             return;
         };
-        let ready = self.loading.is_none() && matches!(self.session, Some(ViewerSession::Image(_)));
-        if !ready {
-            collection.ready_since = None;
-        }
-        let mut step = None;
-        ui.horizontal_wrapped(|ui| {
-            if ui
-                .add_enabled(
-                    ready && collection.index > 0,
-                    egui::Button::new("Previous photo"),
-                )
-                .clicked()
-            {
-                step = Some(false);
-            }
-            ui.label(format!(
-                "{} / {}",
-                collection.index + 1,
-                collection.paths.len()
-            ));
-            if ui
-                .add_enabled(
-                    ready && collection.index + 1 < collection.paths.len(),
-                    egui::Button::new("Next photo"),
-                )
-                .clicked()
-            {
-                step = Some(true);
-            }
-            if ui
-                .add_enabled(
-                    ready,
-                    egui::Button::new(if collection.slideshow {
-                        "Pause slideshow"
-                    } else {
-                        "Start slideshow"
-                    }),
-                )
-                .clicked()
-            {
-                collection.slideshow = !collection.slideshow;
-                collection.ready_since = None;
-            }
-            if ui
-                .add(egui::Slider::new(&mut collection.interval, 1.0..=30.0).suffix(" s"))
-                .changed()
-            {
-                collection.ready_since = None;
-            }
-        });
-        if collection.slideshow && ready {
-            let since = collection.ready_since.get_or_insert_with(Instant::now);
-            if since.elapsed().as_secs_f32() >= collection.interval {
-                step = Some(true);
-            }
-            ui.ctx().request_repaint_after(Duration::from_millis(100));
-        }
-        if let Some(forward) = step {
+        let ready = self.loading.is_none()
+            && !self.confirm_close
+            && matches!(&self.session, Some(ViewerSession::Image(state)) if !state.show_fallback_save_modal);
+        if let Some(forward) = collection.controls(ui, ready) {
             self.step_photo(forward);
         }
     }
@@ -119,6 +65,83 @@ impl Viewers {
             self.open(collection.paths[target].clone());
         }
         self.gallery = Some(collection);
+    }
+}
+
+impl Collection {
+    fn controls(&mut self, ui: &mut Ui, ready: bool) -> Option<bool> {
+        if !ready {
+            self.ready_since = None;
+        }
+        let mut step = None;
+        let mut interval_focused = false;
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_enabled(ready && self.index > 0, egui::Button::new("Previous photo"))
+                .clicked()
+            {
+                step = Some(false);
+            }
+            ui.label(format!("{} / {}", self.index + 1, self.paths.len()));
+            if ui
+                .add_enabled(
+                    ready && self.index + 1 < self.paths.len(),
+                    egui::Button::new("Next photo"),
+                )
+                .clicked()
+            {
+                step = Some(true);
+            }
+            if ui
+                .add_enabled(
+                    ready,
+                    egui::Button::new(if self.slideshow {
+                        "Pause slideshow"
+                    } else {
+                        "Start slideshow"
+                    }),
+                )
+                .clicked()
+            {
+                self.slideshow = !self.slideshow;
+                self.ready_since = None;
+            }
+            let interval = ui.add(egui::Slider::new(&mut self.interval, 1.0..=30.0).suffix(" s"));
+            interval_focused = interval.has_focus();
+            if interval.changed() {
+                self.ready_since = None;
+            }
+        });
+        self.advance_requested(ui, ready, interval_focused).or(step)
+    }
+
+    /// Handles navigation keys and the slideshow clock after drawing the controls.
+    fn advance_requested(&mut self, ui: &Ui, ready: bool, interval_focused: bool) -> Option<bool> {
+        let mut step = None;
+        let text_focused = ui
+            .ctx()
+            .memory(|memory| memory.focused())
+            .is_some_and(|id| egui::TextEdit::load_state(ui.ctx(), id).is_some());
+        if ready && !interval_focused && !text_focused {
+            if self.index > 0
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft))
+            {
+                step = Some(false);
+            }
+            if self.index + 1 < self.paths.len()
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight))
+            {
+                step = Some(true);
+            }
+        }
+        if self.slideshow && ready {
+            let since = self.ready_since.get_or_insert_with(Instant::now);
+            if since.elapsed().as_secs_f32() >= self.interval {
+                step = Some(true);
+            }
+            ui.ctx().request_repaint_after(Duration::from_millis(100));
+        }
+        step
     }
 }
 

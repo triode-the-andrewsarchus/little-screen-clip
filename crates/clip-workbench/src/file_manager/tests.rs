@@ -93,7 +93,7 @@ fn photo_collection_excludes_hidden_and_nonimages_without_filtering_browser_entr
     std::fs::create_dir(temp.path().join("folder.png")).unwrap();
     let (mut manager, _jobs) = loaded(temp.path());
     let image = temp.path().join("a.png");
-    assert!(manager.photo_collection(&image).is_empty());
+    assert_eq!(manager.photo_collection(&image).len(), 2);
     manager.set_view(BrowserView::Photos);
     assert_eq!(
         manager.photo_collection(&image),
@@ -883,4 +883,82 @@ fn escape_clears_rendered_selection_without_losing_list_focus() {
     press(&mut browser, &ctx, egui::Key::Escape, egui::Modifiers::NONE);
     assert_eq!(browser.selection_count(), 0);
     assert!(ctx.memory(|memory| memory.has_focus(super::ui::list_id())));
+}
+
+#[test]
+fn music_playback_controls_remain_inside_the_player_panel() {
+    let (directory, _) = folder_fixture();
+    let (mut manager, _jobs) = loaded(directory.path());
+    let ctx = egui::Context::default();
+    crate::ui_ext::configure_workbench_style(&ctx);
+    manager.set_view(BrowserView::Music);
+    for _ in 0..3 {
+        let output = ctx.run(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1120.0, 720.0),
+                )),
+                ..Default::default()
+            },
+            |ctx| {
+                egui::TopBottomPanel::bottom("files_music_player")
+                    .resizable(true)
+                    .default_height(160.0)
+                    .height_range(128.0..=260.0)
+                    .show(ctx, |ui| {
+                        ui.add_space(6.0);
+                        manager.music.ui(ui);
+                    });
+                super::app::central_panel(ctx, |ui| {
+                    manager.ui(
+                        ui,
+                        &crate::ui_appearance::palette(
+                            little_clip_core::config::WorkbenchAppearance::Dark,
+                        ),
+                    );
+                });
+            },
+        );
+        let text = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.job.text == "Previous track" => {
+                    Some(text.visual_bounding_rect())
+                }
+                _ => None,
+            })
+            .unwrap();
+        let (index, button) = output
+            .shapes
+            .iter()
+            .enumerate()
+            .find(|(_, shape)| match &shape.shape {
+                egui::Shape::Rect(rect) => {
+                    rect.rect.contains_rect(text)
+                        && rect.rect.height() == crate::ui_ext::CONTROL_HEIGHT
+                }
+                _ => false,
+            })
+            .unwrap();
+        let rect = button.shape.visual_bounding_rect();
+        assert!(button.clip_rect.contains_rect(rect.shrink(1.0)));
+        for shape in &output.shapes[index + 1..] {
+            if let egui::Shape::Rect(painted) = &shape.shape {
+                if painted.fill.a() == 255 {
+                    let overlap = painted
+                        .rect
+                        .intersect(shape.clip_rect)
+                        .intersect(rect.shrink(1.0));
+                    assert!(
+                        overlap.width() <= 0.0 || overlap.height() <= 0.0,
+                        "later panel paints over playback controls: {overlap:?}; panel {:?}; clip {:?}",
+                        painted.rect,
+                        shape.clip_rect
+                    );
+                }
+            }
+        }
+    }
 }
