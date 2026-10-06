@@ -9,7 +9,7 @@ pub(in crate::file_manager) struct MusicRange {
     pub revision: u64,
     pub source: crate::file_source::FileSource,
 }
-pub(super) fn waveform_id() -> Id {
+pub(in crate::file_manager) fn waveform_id() -> Id {
     Id::new("files_music_waveform_focus")
 }
 
@@ -97,6 +97,13 @@ impl FileManager {
         ui.label("Click a waveform to seek. Drag to select audio; Ctrl+C copies the selection, Ctrl+V pastes into this folder.");
     }
     pub(super) fn music_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
+        // Register the shared waveform focus target every frame so egui retains it
+        // after the pointer leaves the per-file waveform widget.
+        ui.interact(
+            ui.available_rect_before_wrap(),
+            waveform_id(),
+            Sense::focusable_noninteractive(),
+        );
         self.music_toolbar(ui);
         self.music_previews.poll(ui.ctx());
         let scroll = self.list_scroll(ui, 108.0);
@@ -153,6 +160,9 @@ impl FileManager {
                     None
                 };
                 let wave = music_card(ui, rect, entry, ready, colors);
+                if let Some(ready) = ready {
+                    response.clone().on_hover_text(&ready.data.detail);
+                }
                 let (engaged, time) = wave.map_or((false, None), |wave| {
                     interact_waveform(
                         ui,
@@ -337,6 +347,16 @@ fn music_card<'a>(
         );
         let wave = Rect::from_min_max(rect.min + vec2(80.0, 35.0), rect.max - vec2(8.0, 20.0));
         if let Some(ready) = ready {
+            if ready.data.waveform.is_empty() {
+                paint_text(
+                    ui,
+                    wave,
+                    0.0,
+                    wave.width(),
+                    "Waveform unavailable",
+                    colors.text_secondary,
+                );
+            }
             let count = ready.data.waveform.len().max(1);
             for (index, amplitude) in ready.data.waveform.iter().enumerate() {
                 let x = wave.left() + index as f32 / count as f32 * wave.width();

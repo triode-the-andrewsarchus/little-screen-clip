@@ -212,13 +212,16 @@ impl eframe::App for FileManagerApp {
         if self.browser.music.active() {
             egui::TopBottomPanel::bottom("files_music_player")
                 .resizable(true)
-                .default_height(128.0)
-                .height_range(96.0..=260.0)
+                .default_height(160.0)
+                .height_range(128.0..=260.0)
                 .show(ctx, |ui| {
                     ui.set_enabled(!self.viewers.uses_audio());
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
-                        .show(ui, |ui| self.browser.music.ui(ui));
+                        .show(ui, |ui| {
+                            ui.add_space(6.0);
+                            self.browser.music.ui(ui);
+                        });
                 });
         }
         self.main_content(ctx);

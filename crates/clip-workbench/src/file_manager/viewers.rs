@@ -18,6 +18,7 @@ use std::{
 };
 
 mod gallery;
+pub(super) mod video;
 
 enum Loaded {
     Image(DecodedImageData, FileSource),
@@ -25,6 +26,7 @@ enum Loaded {
     Sheet(little_clip_core::presentation::spreadsheet::SpreadsheetData),
     Midi(little_clip_core::presentation::midi::MidiData),
     Path(FileSource),
+    Video(video::Prepared),
     External,
 }
 enum ViewerSession {
@@ -36,6 +38,7 @@ enum ViewerSession {
     Midi(MidiViewerState),
     Model(Model3dViewerState),
     Scene(SplatViewerState),
+    Video(video::Video),
 }
 struct Loading {
     ticket: JobTicket,
@@ -70,11 +73,11 @@ impl Viewers {
     pub fn uses_audio(&self) -> bool {
         matches!(
             self.session,
-            Some(ViewerSession::Audio(_) | ViewerSession::Midi(_))
+            Some(ViewerSession::Audio(_) | ViewerSession::Midi(_) | ViewerSession::Video(_))
         ) || self
             .loading
             .as_ref()
-            .is_some_and(|l| matches!(kind(&l.path), Kind::Audio | Kind::Midi))
+            .is_some_and(|l| matches!(kind(&l.path), Kind::Audio | Kind::Midi | Kind::Video))
     }
     pub fn open(&mut self, path: PathBuf) {
         if self.active() {
@@ -227,6 +230,9 @@ impl Viewers {
         self.confirm_close = false;
     }
     fn open_external(&mut self) {
+        if let Some(ViewerSession::Video(state)) = &mut self.session {
+            state.stop();
+        }
         if let Some(path) = &self.path {
             if let Err(error) = external(path.clone()) {
                 self.error = Some(error);
@@ -244,6 +250,7 @@ enum Kind {
     Scene,
     Model,
     Text,
+    Video,
     External,
 }
 fn kind(path: &Path) -> Kind {
@@ -251,6 +258,8 @@ fn kind(path: &Path) -> Kind {
         Kind::Image
     } else if little_clip_core::audio::is_audio_path(path) {
         Kind::Audio
+    } else if little_clip_core::is_video_path(path) {
+        Kind::Video
     } else if little_clip_core::pdf::is_pdf_path(path) {
         Kind::Pdf
     } else if little_clip_core::presentation::spreadsheet::is_spreadsheet_file(path) {
@@ -303,6 +312,7 @@ fn load(path: &Path, config: &AppConfig) -> Result<Loaded, String> {
             little_clip_core::presentation::midi::MidiData::parse_file(path).map(Loaded::Midi)
         }
         Kind::Text => super::text_editor::TextSession::load(path, config).map(Loaded::Text),
+        Kind::Video => video::prepare(path).map(Loaded::Video),
         Kind::External => Ok(Loaded::External),
         _ => FileSource::capture(path).map(Loaded::Path),
     }
@@ -318,6 +328,7 @@ fn session(loaded: Loaded, path: PathBuf, config: &AppConfig) -> ViewerSession {
             )
             .with_file_source(source),
         ),
+        Loaded::Video(prepared) => ViewerSession::Video(video::Video::new(path, prepared)),
         Loaded::Text(state) => ViewerSession::Text(state),
         Loaded::Sheet(data) => ViewerSession::Sheet(SpreadsheetViewerState::new(data, Some(path))),
         Loaded::Midi(data) => ViewerSession::Midi(MidiViewerState::from_parsed_file(path, data)),
@@ -350,6 +361,7 @@ fn render(viewer: &mut ViewerSession, ui: &mut Ui, palette: &AppPalette, close: 
         ViewerSession::Midi(state) => state.render_ui(ui, palette, close),
         ViewerSession::Model(state) => state.render_ui(ui, palette, close),
         ViewerSession::Scene(state) => state.render_ui(ui, palette, close),
+        ViewerSession::Video(state) => state.ui(ui, close),
     }
 }
 pub(super) fn external(path: PathBuf) -> Result<(), String> {

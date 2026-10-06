@@ -1,7 +1,7 @@
 //! Visible music cards retain small summaries, never a per-row Audio Studio or PCM buffer.
 use super::super::shelf::preview::Data;
 use crate::icons::Icon;
-use little_clip_core::{ImageThumbnail, process::CommandRequest};
+use little_clip_core::process::CommandRequest;
 use rodio::Source;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{
@@ -24,7 +24,7 @@ pub(in crate::file_manager) fn load(path: &Path, cancelled: &AtomicBool) -> Data
         "Music".into(),
         Icon::Audio,
     );
-    let result = (|| {
+    let result: Result<(), String> = (|| {
         let source = crate::file_source::FileSource::capture(path)?;
         if cancelled.load(Ordering::Relaxed) {
             return Err("Music preview cancelled".into());
@@ -35,11 +35,15 @@ pub(in crate::file_manager) fn load(path: &Path, cancelled: &AtomicBool) -> Data
         if cancelled.load(Ordering::Relaxed) {
             return Err("Music preview cancelled".into());
         }
-        data.image = cover(path);
+        data.image = super::super::previews::media_frame(path, 0);
         let duration = metadata.duration;
         data.music = Some(metadata);
         data.waveform = peaks(path, duration, cancelled)?;
-        source.check()
+        source.check()?;
+        if crate::file_source::FileSource::capture(path)? != source {
+            return Err("Music path changed while preparing its preview".into());
+        }
+        Ok(())
     })();
     if let Err(error) = result {
         data.detail = format!("Music preview unavailable: {error}");
@@ -104,6 +108,34 @@ fn metadata(path: &Path) -> Metadata {
 mod tests {
     use super::*;
     #[test]
+    fn common_compressed_music_formats_decode_to_bounded_waveforms() {
+        let (directory, source) = crate::audio_preview::tests::generate_fixture_wav("formats", 0.3);
+        for (extension, codec) in [("mp3", "libmp3lame"), ("ogg", "libvorbis"), ("m4a", "aac")] {
+            let path = directory.path().join(format!("track.{extension}"));
+            let output = CommandRequest::new("ffmpeg")
+                .args(["-v", "error", "-i"])
+                .arg(source.as_os_str())
+                .args(["-ar", "44100", "-ac", "2", "-c:a", codec])
+                .arg(path.as_os_str())
+                .timeout(Duration::from_secs(5))
+                .run()
+                .unwrap();
+            assert!(output.status.success(), "{}", output.stderr_lossy());
+            let duration = metadata(&path).duration;
+            let mut decoder = super::super::decode_file(&path).unwrap();
+            decoder
+                .try_seek(Duration::from_secs_f32(duration * 0.5))
+                .unwrap();
+            let wave = peaks(&path, duration, &AtomicBool::new(false))
+                .unwrap_or_else(|error| panic!("{extension}: {error}"));
+            assert_eq!(wave.len(), 512);
+            assert!(
+                wave.iter().any(|peak| *peak > 0.01),
+                "{extension} must decode real samples"
+            );
+        }
+    }
+    #[test]
     fn music_waveforms_are_full_length_fixed_size_and_cancellable() {
         let (_dir, path) = crate::audio_preview::tests::generate_fixture_wav("preview", 2.0);
         let peaks = peaks(&path, 2.0, &AtomicBool::new(false)).unwrap();
@@ -128,37 +160,6 @@ mod tests {
         assert!(metadata.source.unwrap().check().is_ok());
         assert!(data.image.is_none());
     }
-}
-
-fn cover(path: &Path) -> Option<ImageThumbnail> {
-    let result = CommandRequest::new("ffmpeg")
-        .args(["-v", "error", "-i"])
-        .arg(path.as_os_str())
-        .args([
-            "-map",
-            "0:v:0",
-            "-vf",
-            "scale=160:160:force_original_aspect_ratio=decrease",
-            "-frames:v",
-            "1",
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "png",
-            "pipe:1",
-        ])
-        .timeout(Duration::from_secs(3))
-        .max_output_bytes(256 * 1024)
-        .run()
-        .ok()?;
-    if !result.status.success() || result.stdout_truncated {
-        return None;
-    }
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(4 * 1024 * 1024);
-    limits.max_image_width = Some(160);
-    limits.max_image_height = Some(160);
-    ImageThumbnail::generate_with_limits(&result.stdout, Some("image/png"), 160, 160, limits)
 }
 
 fn peaks(path: &Path, duration: f32, cancelled: &AtomicBool) -> Result<Vec<f32>, String> {

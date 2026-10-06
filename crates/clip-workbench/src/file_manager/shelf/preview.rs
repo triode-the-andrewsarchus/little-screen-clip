@@ -367,6 +367,10 @@ fn preview_regular_file(path: &Path, data: &mut Data) {
     } else if little_clip_core::audio::is_audio_path(path) {
         data.icon = Icon::Audio;
         data.waveform = audio_excerpt(path);
+    } else if little_clip_core::is_video_path(path) {
+        data.icon = Icon::Film;
+        data.detail = "Video".into();
+        data.image = super::super::viewers::video::preview(path);
     } else if path
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))

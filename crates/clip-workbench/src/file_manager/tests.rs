@@ -553,20 +553,50 @@ fn initial_refresh_creates_a_location_and_root_has_no_parent_navigation() {
 
 #[test]
 fn large_directory_virtualizes_rows_and_restores_history_viewport() {
+    exercise_large_directory("txt");
+}
+
+#[test]
+fn large_audio_directory_virtualizes_music_and_restores_history_viewport() {
+    exercise_large_directory("wav");
+}
+
+#[test]
+fn waveform_keyboard_focus_survives_frames_and_routes_clipboard_keys() {
+    let (directory, _) = folder_fixture();
+    let (mut manager, _jobs, ctx) = rendered(directory.path());
+    manager.set_view(BrowserView::Music);
+    frame(&mut manager, &ctx, vec![]);
+    let id = super::ui::music::waveform_id();
+    ctx.memory_mut(|memory| memory.request_focus(id));
+    for _ in 0..3 {
+        frame(&mut manager, &ctx, vec![]);
+        assert!(ctx.memory(|memory| memory.has_focus(id)));
+        assert_eq!(
+            ctx.data(|data| data
+                .get_temp::<bool>(egui::Id::new(egui_winit::CLIPBOARD_SHORTCUTS_AS_KEYS))),
+            Some(true)
+        );
+    }
+}
+
+fn exercise_large_directory(extension: &str) {
     let (temp, child) = folder_fixture();
+    let (_audio_dir, audio) = crate::audio_preview::tests::generate_fixture_wav("large", 0.1);
     for index in 0..10_000 {
-        std::fs::write(temp.path().join(format!("file-{index:05}.txt")), "data").unwrap();
+        let path = temp.path().join(format!("file-{index:05}.{extension}"));
+        if extension == "wav" {
+            std::fs::hard_link(&audio, path).unwrap();
+        } else {
+            std::fs::write(path, "data").unwrap();
+        }
     }
     let started = Instant::now();
     let (mut manager, jobs) = loaded(temp.path());
     let loaded_ms = started.elapsed().as_millis();
     assert_eq!(manager.visible.len(), 10_001);
-    for photos in [false, true] {
-        manager.set_view(if photos {
-            BrowserView::Photos
-        } else {
-            BrowserView::List
-        });
+    for view in [BrowserView::List, BrowserView::Photos, BrowserView::Music] {
+        manager.set_view(view);
         manager.location_mut().unwrap().scroll = 0.0;
         manager.restore_scroll = true;
         let ctx = egui::Context::default();
@@ -582,12 +612,12 @@ fn large_directory_virtualizes_rows_and_restores_history_viewport() {
             text_shapes < 200,
             "visible-row rendering must not lay out all 10,000 entries"
         );
-        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "file-09999.txt")));
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == format!("file-09999.{extension}"))));
         println!(
             "10,000 files: load {loaded_ms} ms, first UI frame {} ms, {text_shapes} text shapes",
             started.elapsed().as_millis()
         );
-        manager.select(temp.path().join("file-00150.txt"));
+        manager.select(temp.path().join(format!("file-00150.{extension}")));
         manager.location_mut().unwrap().scroll = 5000.0;
         manager.restore_scroll = true;
         frame(&mut manager, &ctx, vec![]);

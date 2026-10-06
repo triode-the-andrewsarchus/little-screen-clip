@@ -93,7 +93,10 @@ pub(super) fn assert_configured_app_receives_source_image(
     ));
     assert!(!close, "external handoff leaves Image Studio open");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    while (!argument_capture.exists() || !bytes_capture.exists())
+    // Redirection creates the files before printf/cat finish writing them.
+    while (std::fs::read_to_string(&argument_capture).ok().as_deref()
+        != Some(source_path.to_string_lossy().as_ref())
+        || std::fs::read(&bytes_capture).ok().as_deref() != Some(expected_bytes.as_slice()))
         && std::time::Instant::now() < deadline
     {
         std::thread::sleep(std::time::Duration::from_millis(5));

@@ -53,7 +53,7 @@ impl FileManager {
         ui.separator();
         self.docked_panels(ui, palette);
         ui.memory_mut(|memory| {
-            for id in [tree_id(), list_id()] {
+            for id in [tree_id(), list_id(), music::waveform_id()] {
                 memory.set_focus_lock_filter(
                     id,
                     egui::EventFilter {
@@ -109,23 +109,25 @@ impl FileManager {
                 });
         }
         egui::TopBottomPanel::bottom("file_manager_status")
-            .exact_height(if self.shelf.open {
-                if self.filesystem_busy()
-                    || self.error.is_some()
-                    || self.transfers.has_status()
-                    || self.edits.report.is_some()
-                {
-                    56.0
+            .exact_height(
+                if self.shelf.open || self.view != super::BrowserView::List {
+                    if self.filesystem_busy()
+                        || self.error.is_some()
+                        || self.transfers.has_status()
+                        || self.edits.report.is_some()
+                    {
+                        56.0
+                    } else {
+                        32.0
+                    }
+                } else if self.transfers.has_status() {
+                    150.0
+                } else if self.edits.report.is_some() || self.error.is_some() {
+                    85.0
                 } else {
-                    32.0
-                }
-            } else if self.transfers.has_status() {
-                150.0
-            } else if self.edits.report.is_some() || self.error.is_some() {
-                85.0
-            } else {
-                40.0
-            })
+                    40.0
+                },
+            )
             .frame(egui::Frame::none().inner_margin(6.0))
             .show_inside(ui, |ui| {
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.max_rect()));
@@ -720,6 +722,8 @@ fn entry_icon(entry: &super::filesystem::Entry) -> Icon {
         Icon::Folder
     } else if little_clip_core::audio::is_audio_path(&entry.path) {
         Icon::Audio
+    } else if little_clip_core::is_video_path(&entry.path) {
+        Icon::Film
     } else {
         Icon::Text
     }

@@ -1037,6 +1037,15 @@ pub(super) fn extract_and_handoff_audio_slice(
 }
 
 /// Copies a file-backed selection through the shared slice exporter and desktop clipboard.
+///
+/// Times are seconds in the original source. The retained source snapshot must still match
+/// the path before and after extraction. The exported file is retained for clipboard consumers.
+///
+/// # Errors
+///
+/// Returns an error for an empty or invalid range, a replaced source, cancellation, export
+/// failure, or inability to publish the file URI. An unavailable daemon falls back to the
+/// desktop clipboard.
 pub fn copy_file_audio_segment(
     path: &Path,
     source: &crate::file_source::FileSource,

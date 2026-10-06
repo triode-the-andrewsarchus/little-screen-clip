@@ -23,4 +23,7 @@ def start_private_audio(output, env, children):
     sinks = private.run_checked(["pactl", "list", "short", "sinks"], env=env)
     assert "FilesAcceptance" in sinks
     assert len(sinks.strip().splitlines()) == 1, "acceptance must not open a hardware sink"
+    children.start("media-capture", ["parec", "--device=FilesAcceptance.monitor", "--raw",
+                   "--format=s16le", "--rate=8000", "--channels=1", str(output / "audio-output.pcm")],
+                   env=env, cwd=output, log_path=output / "audio-capture.log")
     return env

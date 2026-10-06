@@ -67,16 +67,12 @@ impl EntryPreviews {
             if let Some(texture) = &ready.texture {
                 ui.painter().image(
                     texture.id(),
-                    if gallery {
-                        egui::Rect::from_center_size(
-                            rect.center(),
-                            texture.size_vec2()
-                                * (rect.width() / texture.size_vec2().x)
-                                    .min(rect.height() / texture.size_vec2().y),
-                        )
-                    } else {
-                        rect
-                    },
+                    egui::Rect::from_center_size(
+                        rect.center(),
+                        texture.size_vec2()
+                            * (rect.width() / texture.size_vec2().x)
+                                .min(rect.height() / texture.size_vec2().y),
+                    ),
                     egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                     egui::Color32::WHITE,
                 );
@@ -122,6 +118,56 @@ impl EntryPreviews {
                 .request_repaint_after(std::time::Duration::from_millis(50));
         }
     }
+}
+
+pub(super) fn media_frame(
+    path: &std::path::Path,
+    stream: usize,
+) -> Option<little_clip_core::ImageThumbnail> {
+    let result = little_clip_core::process::CommandRequest::new("ffmpeg")
+        .args([
+            "-v",
+            "error",
+            "-threads",
+            "2",
+            "-filter_threads",
+            "1",
+            "-max_alloc",
+            "268435456",
+            "-i",
+        ])
+        .arg(path.as_os_str())
+        .arg("-map")
+        .arg(format!("0:v:{stream}"))
+        .args([
+            "-vf",
+            "scale=160:160:force_original_aspect_ratio=decrease",
+            "-frames:v",
+            "1",
+            "-f",
+            "image2pipe",
+            "-vcodec",
+            "png",
+            "pipe:1",
+        ])
+        .timeout(std::time::Duration::from_secs(3))
+        .max_output_bytes(256 * 1024)
+        .run()
+        .ok()?;
+    if !result.status.success() || result.stdout_truncated {
+        return None;
+    }
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(4 * 1024 * 1024);
+    limits.max_image_width = Some(160);
+    limits.max_image_height = Some(160);
+    little_clip_core::ImageThumbnail::generate_with_limits(
+        &result.stdout,
+        Some("image/png"),
+        160,
+        160,
+        limits,
+    )
 }
 
 #[cfg(test)]

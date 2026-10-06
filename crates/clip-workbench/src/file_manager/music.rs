@@ -17,7 +17,7 @@ fn decode_file(path: &std::path::Path) -> Result<AudioDecoder, String> {
     if !file.metadata().map_err(|e| e.to_string())?.is_file() {
         return Err("Audio source is not a regular file".into());
     }
-    Decoder::new(BufReader::new(file)).map_err(|e| e.to_string())
+    Decoder::try_from(file).map_err(|e| e.to_string())
 }
 struct Loading {
     ticket: JobTicket,
@@ -137,6 +137,8 @@ impl Music {
             self.player = None;
             if self.queue.advance(true, false) {
                 self.load_current();
+            } else {
+                self.seek_pending = Some(self.duration);
             }
         }
         if self.loading.is_some() || self.copy_job.is_some() || self.playing() {
@@ -188,8 +190,13 @@ impl Music {
             {
                 self.error = Some(format!("Cannot seek: {error}"));
             }
-        } else if self.loading.is_some() {
-            self.seek_pending = Some(time.max(0.0));
+        } else {
+            if self.loading.is_none() {
+                self.load_current();
+            }
+            if self.loading.is_some() {
+                self.seek_pending = Some(time.max(0.0));
+            }
         }
     }
     pub fn step(&mut self, forward: bool) {
@@ -202,6 +209,8 @@ impl Music {
         self.loading = None;
         self.queue = Queue::default();
         self.duration = 0.0;
+        self.seek_pending = None;
+        self.paused = false;
         self.error = None;
         self.notice = None;
     }

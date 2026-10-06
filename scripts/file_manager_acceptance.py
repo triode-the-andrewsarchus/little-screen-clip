@@ -363,6 +363,8 @@ def run_application_acceptance(args, output, root, exercise, scope, prepare_envi
         session.key("q", "ctrl")
         process.wait(timeout=5)
         assert process.returncode == 0
+        for pid in getattr(session, "required_closed_processes", []):
+            assert not Path(f"/proc/{pid}").exists(), f"Files left playback process {pid} alive after closing"
         report.update(status="passed", mapped_ms=mapped_ms, observations=session.observations,
                       private_runtime=str(config["runtime"]))
     except Exception as error:

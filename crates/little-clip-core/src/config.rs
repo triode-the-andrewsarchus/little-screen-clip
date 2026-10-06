@@ -636,6 +636,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn files_music_threshold_defaults_and_accepts_configuration() {
+        let defaults: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(defaults.file_manager.music_threshold_percent, 75);
+        let configured: AppConfig =
+            toml::from_str("[file_manager]\nmusic_threshold_percent = 60\n").unwrap();
+        assert_eq!(configured.file_manager.music_threshold_percent, 60);
+    }
+
+    #[test]
     fn workbench_appearance_save_preserves_unrelated_config() {
         let original = "[colors]\ntheme = \"zenburn\"\n\n[workbench]\n# editor preference\neditor = \"code\"\n";
         let updated = update_setting_in_text(original, "workbench", "appearance", "light");
