@@ -239,7 +239,7 @@ Turn previews into complete everyday gallery and playback workflows.
   - Activates when in a folder that's 75% (threshold configurable) audio files
   - Each preview is the album art (or missing stand in) and waveform, where the waveform has a navigable playhead and can be selceted in and copy-pasted from directly.
   - This will take careful considering for rendering, to handle huge folders without slow down
-- Stop music on folder navigation through any entry point, Space, Escape, switching to List, and closing Files. Completed tracks stop rather than advancing or repeating.
+- Stop music on folder navigation through any entry point, Escape, switching to List, and closing Files. Space plays an active Music range once between zero-crossing-snapped endpoints; otherwise it stops playback. Completed tracks stop rather than advancing or repeating.
 - Video browsing and playback through an assessed reusable backend; establish codec and resource expectations.
 - Keep subfolders and non-media files accessible in media views.
 - Provide manual view choice before automatic type-based selection is introduced in Phase 7.

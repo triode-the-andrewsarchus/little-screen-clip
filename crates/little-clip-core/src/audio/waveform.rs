@@ -296,73 +296,82 @@ impl FullAudioAnalysis {
     /// If stereo, finds where the audio wave passes closest to zero baseline
     /// with preference for positive-going zero crossings to avoid clicks/pops.
     pub fn snap_to_zero_crossing(&self, time_sec: f32, search_radius_frames: usize) -> f32 {
-        if self.total_frames == 0 || self.sample_rate == 0 || self.ch1_samples.is_empty() {
-            return time_sec;
-        }
+        snap_samples_to_zero_crossing(
+            &self.ch1_samples,
+            self.ch2_samples.as_deref(),
+            self.sample_rate,
+            time_sec,
+            search_radius_frames,
+        )
+    }
+}
 
-        let target_frame = (time_sec * self.sample_rate as f32).round().max(0.0) as usize;
-        let target_frame = target_frame.min(self.total_frames.saturating_sub(1));
+/// Snaps a time within planar audio samples to the nearest zero crossing.
+/// Prefers positive crossings and falls back to the quietest sample if none exists.
+pub fn snap_samples_to_zero_crossing(
+    ch1: &[f32],
+    ch2: Option<&[f32]>,
+    sample_rate: u32,
+    time_sec: f32,
+    search_radius_frames: usize,
+) -> f32 {
+    let frames = ch2.map_or(ch1.len(), |right| ch1.len().min(right.len()));
+    if frames == 0 || sample_rate == 0 {
+        return time_sec;
+    }
 
-        let start_frame = target_frame.saturating_sub(search_radius_frames);
-        let end_frame =
-            (target_frame + search_radius_frames).min(self.total_frames.saturating_sub(1));
+    let target_frame = (time_sec * sample_rate as f32).round().max(0.0) as usize;
+    let target_frame = target_frame.min(frames.saturating_sub(1));
 
-        if start_frame >= end_frame {
-            return target_frame as f32 / self.sample_rate as f32;
-        }
+    let start_frame = target_frame.saturating_sub(search_radius_frames);
+    let end_frame = target_frame
+        .saturating_add(search_radius_frames)
+        .min(frames.saturating_sub(1));
 
-        let ch2 = self.ch2_samples.as_deref();
+    if start_frame >= end_frame {
+        return target_frame as f32 / sample_rate as f32;
+    }
 
-        let mut best_crossing: Option<(usize, f32)> = None;
-        let mut best_min_amp = (target_frame, f32::MAX);
+    let mut best_crossing: Option<(usize, f32)> = None;
+    let mut best_min_amp = (target_frame, f32::MAX);
 
-        for i in start_frame..end_frame {
-            let s1_cur = self.ch1_samples[i];
-            let s1_next = self.ch1_samples[i + 1];
+    for i in start_frame..end_frame {
+        let s1_cur = ch1[i];
+        let s1_next = ch1[i + 1];
 
-            let (s2_cur, _s2_next) = if let Some(c2) = ch2 {
-                (c2[i], c2[i + 1])
-            } else {
-                (0.0, 0.0)
-            };
-
-            let amp_cur = s1_cur.abs() + s2_cur.abs();
-            let dist = (i as isize - target_frame as isize).abs() as f32;
-
-            if amp_cur < best_min_amp.1 {
-                best_min_amp = (i, amp_cur);
-            }
-
-            // Zero-crossing check on ch1
-            let is_crossing =
-                (s1_cur <= 0.0 && s1_next >= 0.0) || (s1_cur >= 0.0 && s1_next <= 0.0);
-            if is_crossing {
-                let frame_cand = if s1_cur.abs() <= s1_next.abs() {
-                    i
-                } else {
-                    i + 1
-                };
-                let is_pos_going = s1_cur <= 0.0 && s1_next >= 0.0;
-                let pos_bonus = if is_pos_going { 0.0 } else { 5.0 };
-                let cost = dist + pos_bonus;
-                if let Some((_, best_cost)) = best_crossing {
-                    if cost < best_cost {
-                        best_crossing = Some((frame_cand, cost));
-                    }
-                } else {
-                    best_crossing = Some((frame_cand, cost));
-                }
-            }
-        }
-
-        let chosen_frame = if let Some((frame, _)) = best_crossing {
-            frame
+        let (s2_cur, _s2_next) = if let Some(c2) = ch2 {
+            (c2[i], c2[i + 1])
         } else {
-            best_min_amp.0
+            (0.0, 0.0)
         };
 
-        chosen_frame as f32 / self.sample_rate as f32
+        let amp_cur = s1_cur.abs() + s2_cur.abs();
+        let dist = (i as isize - target_frame as isize).abs() as f32;
+
+        if amp_cur < best_min_amp.1 {
+            best_min_amp = (i, amp_cur);
+        }
+
+        // Zero-crossing check on ch1
+        let is_crossing = (s1_cur <= 0.0 && s1_next >= 0.0) || (s1_cur >= 0.0 && s1_next <= 0.0);
+        if is_crossing {
+            let frame_cand = if s1_cur.abs() <= s1_next.abs() {
+                i
+            } else {
+                i + 1
+            };
+            let is_pos_going = s1_cur <= 0.0 && s1_next >= 0.0;
+            let pos_bonus = if is_pos_going { 0.0 } else { 5.0 };
+            let cost = dist + pos_bonus;
+            if best_crossing.is_none_or(|(_, best_cost)| cost < best_cost) {
+                best_crossing = Some((frame_cand, cost));
+            }
+        }
     }
+
+    let chosen_frame = best_crossing.map_or(best_min_amp.0, |(frame, _)| frame);
+
+    chosen_frame as f32 / sample_rate as f32
 }
 
 pub fn compute_plain_waveform(

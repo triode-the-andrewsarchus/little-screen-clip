@@ -217,6 +217,7 @@ impl FileManager {
 
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
         if path != self.path() {
+            self.music_selection = None;
             self.music.stop();
         }
         self.watch = None;

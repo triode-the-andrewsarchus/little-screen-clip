@@ -1,13 +1,14 @@
 use super::super::BrowserView;
 use super::*;
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub(in crate::file_manager) struct MusicRange {
     pub path: PathBuf,
     pub start: f32,
     pub end: f32,
     pub revision: u64,
     pub source: crate::file_source::FileSource,
+    pub snapped: bool,
 }
 pub(in crate::file_manager) fn waveform_id() -> Id {
     Id::new("files_music_waveform_focus")
@@ -103,7 +104,7 @@ impl FileManager {
         if let Some(status) = self.music.status() {
             ui.add(egui::Label::new(status).truncate(true));
         }
-        ui.label("Click a waveform to play or seek. Space or Escape stops playback. Ctrl/Shift+click selects files. Drag to select audio; Ctrl+C copies the selection, Ctrl+V pastes into this folder.");
+        ui.label("Click a waveform to play or seek. Space plays the selected range; Escape stops playback. Selection edges snap to zero crossings. Ctrl/Shift+click selects files. Drag to select audio; Ctrl+C copies the selection, Ctrl+V pastes into this folder.");
     }
     pub(super) fn music_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors) {
         // Register the shared waveform focus target every frame so egui retains it
@@ -273,12 +274,14 @@ fn interact_waveform(
                 end: time,
                 revision: entry.revision,
                 source: source.clone(),
+                snapped: false,
             });
         }
         if interaction.dragged()
             && let Some(range) = selection
         {
             range.end = time;
+            range.snapped = false;
         }
     }
     let engaged =

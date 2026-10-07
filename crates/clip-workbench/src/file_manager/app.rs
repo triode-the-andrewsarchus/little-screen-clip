@@ -196,15 +196,33 @@ impl eframe::App for FileManagerApp {
         }
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Observe stop keys before address/dialog handlers consume them, while
-        // preserving their normal editing and dismissal behavior.
-        if ctx.input(|input| input.key_pressed(Key::Space) || input.key_pressed(Key::Escape)) {
+        // Handle preview keys before address/dialog handlers consume them;
+        // typing keeps its normal behavior and stops the preview.
+        if ctx.input(|input| input.key_pressed(Key::Escape)) {
             self.browser.music.stop();
+        } else if ctx.input(|input| input.key_pressed(Key::Space)) {
+            let range = self.browser.music_selection.clone().filter(|_| {
+                self.browser.view == super::BrowserView::Music
+                    && !self.viewers.active()
+                    && !ctx
+                        .memory(|memory| memory.focused())
+                        .is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some())
+            });
+            if let Some(range) = range {
+                ctx.input_mut(|input| {
+                    input.consume_key(egui::Modifiers::NONE, Key::Space);
+                });
+                self.browser.music.play_range(range);
+            } else {
+                self.browser.music.stop();
+            }
         }
         if self.viewers.uses_audio() {
             self.browser.music.stop();
         }
-        self.browser.music.tick(ctx);
+        self.browser
+            .music
+            .tick(ctx, &mut self.browser.music_selection);
         if self.viewers.active() {
             self.browser.drop_targets.clear();
         }
