@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) struct EntryPreviews {
     cache: Previews,
     identities: BTreeMap<std::path::PathBuf, (u64, uuid::Uuid)>,
+    gallery_sizes: BTreeMap<std::path::PathBuf, u32>,
 }
 impl EntryPreviews {
     pub fn music(
@@ -39,28 +40,44 @@ impl EntryPreviews {
     }
     pub fn retain(&mut self, visible: &BTreeSet<std::path::PathBuf>) {
         self.identities.retain(|path, _| visible.contains(path));
+        self.gallery_sizes.retain(|path, _| visible.contains(path));
         self.cache
             .retain(&self.identities.values().map(|(_, id)| *id).collect());
     }
     pub fn show(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry) {
         self.show_inner(ui, rect, entry, false);
     }
+    pub fn request_gallery(&mut self, entry: &Entry, edge: u32, orientation: u8) {
+        let id = self.identity(entry);
+        let edge = edge.clamp(128, 4096).div_ceil(128) * 128;
+        let previous = self.gallery_sizes.entry(entry.path.clone()).or_default();
+        if edge > *previous {
+            *previous = edge;
+            self.cache.invalidate(id);
+        }
+        if self.cache.needs(id) {
+            self.cache.request(
+                id,
+                Source::Gallery {
+                    path: entry.path.clone(),
+                    edge,
+                    orientation,
+                },
+            );
+        }
+    }
     pub fn show_gallery(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry) {
         self.show_inner(ui, rect, entry, true);
     }
     fn show_inner(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry, gallery: bool) {
         let id = self.identity(entry);
-        if self.cache.needs(id) {
+        if !gallery && self.cache.needs(id) {
             self.cache.request(
                 id,
-                if gallery {
-                    Source::Gallery(entry.path.clone())
-                } else {
-                    Source::Payload(Payload::Files {
-                        paths: vec![entry.path.clone()],
-                        cut: false,
-                    })
-                },
+                Source::Payload(Payload::Files {
+                    paths: vec![entry.path.clone()],
+                    cut: false,
+                }),
             );
         }
         if let Some(ready) = self.cache.get(id) {
@@ -131,7 +148,12 @@ impl EntryPreviews {
                 }
             });
         } else {
-            crate::icons::Icon::Text.paint(ui.painter(), rect, ui.visuals().text_color());
+            let icon = if gallery {
+                crate::icons::Icon::Image
+            } else {
+                crate::icons::Icon::Text
+            };
+            icon.paint(ui.painter(), rect, ui.visuals().text_color());
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(50));
         }

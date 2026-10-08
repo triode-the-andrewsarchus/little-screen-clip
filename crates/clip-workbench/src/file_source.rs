@@ -1,4 +1,5 @@
 //! Source identity and guarded atomic saves for file-backed desktop editors.
+use std::fs::File;
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -82,12 +83,8 @@ impl FileSource {
     }
 }
 
-pub(crate) fn read_file_bytes(
-    path: &Path,
-    limit: usize,
-    complete: bool,
-    follow_symlinks: bool,
-) -> Result<Vec<u8>, std::io::Error> {
+/// Opens regular sources without blocking on a FIFO substituted after enumeration.
+pub(crate) fn open_regular_file(path: &Path, follow_symlinks: bool) -> std::io::Result<File> {
     let file = std::fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NONBLOCK | if follow_symlinks { 0 } else { libc::O_NOFOLLOW })
@@ -97,6 +94,16 @@ pub(crate) fn read_file_bytes(
             "Preview source is not a regular file",
         ));
     }
+    Ok(file)
+}
+
+pub(crate) fn read_file_bytes(
+    path: &Path,
+    limit: usize,
+    complete: bool,
+    follow_symlinks: bool,
+) -> Result<Vec<u8>, std::io::Error> {
+    let file = open_regular_file(path, follow_symlinks)?;
     let mut bytes = Vec::new();
     file.take(limit as u64 + u64::from(complete))
         .read_to_end(&mut bytes)?;

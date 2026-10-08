@@ -20,7 +20,11 @@ use std::time::Duration;
 pub(in crate::file_manager) enum Source {
     Payload(Payload),
     Slot(SlotId, uuid::Uuid),
-    Gallery(PathBuf),
+    Gallery {
+        path: PathBuf,
+        edge: u32,
+        orientation: u8,
+    },
     Music(PathBuf),
 }
 
@@ -72,12 +76,21 @@ impl Previews {
 
     pub fn request(&mut self, id: uuid::Uuid, source: Source) {
         let music = matches!(&source, Source::Music(_));
-        let executor = if music {
+        let gallery = matches!(&source, Source::Gallery { .. });
+        let executor = if gallery {
+            gallery_preview_jobs()
+        } else if music {
             music_preview_jobs()
         } else {
             BackgroundJobs::global()
         };
-        let limit = if music { music_preview_workers() } else { 1 };
+        let limit = if gallery {
+            4
+        } else if music {
+            music_preview_workers()
+        } else {
+            1
+        };
         if !self.needs(id) || self.pending.len() >= limit {
             return;
         }
@@ -92,7 +105,11 @@ impl Previews {
             executor.submit(Duration::from_secs(deadline), move || match source {
                 Source::Payload(payload) => payload_preview(&payload),
                 Source::Slot(slot, expected) => slot_preview(slot, expected),
-                Source::Gallery(path) => gallery_preview(&path),
+                Source::Gallery {
+                    path,
+                    edge,
+                    orientation,
+                } => gallery_preview(&path, edge, orientation, &token),
                 Source::Music(path) => super::super::music::preview::load(&path, &token),
             });
         self.pending.insert(
@@ -151,6 +168,12 @@ impl Previews {
         self.ready.insert(id, Ready { data, texture });
         ctx.request_repaint();
     }
+}
+
+fn gallery_preview_jobs() -> &'static BackgroundJobs {
+    static JOBS: std::sync::LazyLock<BackgroundJobs> =
+        std::sync::LazyLock::new(|| BackgroundJobs::new(4, 8));
+    &JOBS
 }
 
 // Music analysis has its own bounded executor so a folder cannot occupy the
@@ -403,18 +426,12 @@ fn thumbnail(bytes: &[u8], mime: Option<&str>) -> Option<ImageThumbnail> {
     sized_thumbnail(bytes, mime, 128, 80)
 }
 
-fn gallery_preview(path: &Path) -> Data {
+fn gallery_preview(path: &Path, edge: u32, orientation: u8, cancelled: &AtomicBool) -> Data {
     let mut data = Data::new(display_path(path), "Photo".into(), Icon::Image);
-    data.image = crate::file_source::read_file_bytes(path, 64 * 1024 * 1024, true, false)
-        .ok()
-        .and_then(|bytes| {
-            sized_thumbnail(
-                &bytes,
-                Some(&little_clip_core::item::guess_image_mime(path)),
-                320,
-                320,
-            )
-        });
+    if cancelled.load(Ordering::Relaxed) {
+        return data;
+    }
+    data.image = super::super::gallery::thumbnail::load(path, edge, orientation, cancelled);
     if data.image.is_none() {
         data.detail = "Preview unavailable; open in Image Studio or externally".into();
     }
@@ -427,11 +444,13 @@ fn sized_thumbnail(
     width: u32,
     height: u32,
 ) -> Option<ImageThumbnail> {
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(128 * 1024 * 1024);
-    limits.max_image_width = Some(16_384);
-    limits.max_image_height = Some(16_384);
-    ImageThumbnail::generate_with_limits(bytes, mime, width, height, limits)
+    ImageThumbnail::generate_with_limits(
+        bytes,
+        mime,
+        width,
+        height,
+        super::super::media::raster_preview_limits(),
+    )
 }
 
 fn audio_excerpt(path: &Path) -> (Vec<f32>, Vec<[u8; 3]>) {
@@ -524,5 +543,55 @@ mod tests {
         let data = file_preview(&[text]);
         assert!(data.text.starts_with("visible excerpt"));
         assert!(data.text.len() <= 2048);
+    }
+}
+
+#[cfg(test)]
+mod gallery_completion_tests {
+    use super::*;
+    #[test]
+    fn parallel_thumbnail_completions_keep_identity_and_retirement_changes_priority() {
+        let ctx = egui::Context::default();
+        let executor = BackgroundJobs::new(1, 8);
+        let mut previews = Previews::default();
+        let ids = [
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+            uuid::Uuid::new_v4(),
+        ];
+        let mut senders = Vec::new();
+        for id in ids {
+            let (ticket, _) = executor.submit(Duration::from_secs(1), || ());
+            let (sender, receiver) = mpsc::channel();
+            previews.pending.insert(
+                id,
+                Pending {
+                    ticket,
+                    receiver,
+                    cancelled: Arc::new(AtomicBool::new(false)),
+                },
+            );
+            senders.push(sender);
+        }
+        senders[2]
+            .send(Ok(Data::new("third".into(), "".into(), Icon::Image)))
+            .unwrap();
+        previews.poll(&ctx);
+        assert_eq!(previews.get(ids[2]).unwrap().data.title, "third");
+        assert!(previews.get(ids[0]).is_none());
+        let obsolete = previews.pending[&ids[0]].cancelled.clone();
+        previews.retain(&BTreeSet::from([ids[1], ids[2]]));
+        assert!(obsolete.load(Ordering::Relaxed));
+        assert!(
+            senders[0]
+                .send(Ok(Data::new("stale".into(), "".into(), Icon::Image)))
+                .is_err()
+        );
+        senders[1]
+            .send(Ok(Data::new("second".into(), "".into(), Icon::Image)))
+            .unwrap();
+        previews.poll(&ctx);
+        assert_eq!(previews.get(ids[1]).unwrap().data.title, "second");
+        assert!(previews.get(ids[0]).is_none());
     }
 }

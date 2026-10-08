@@ -53,7 +53,7 @@ def unavailable_environment(output, env, children):
 def gallery(session, root):
     session.observe("01-list", ["Photos", "notes.txt", "4 items"])
     click_word(session, "01-list", "Photos")
-    session.observe("02-gallery", ["Thumbnail size", "notes.txt", "subfolder"])
+    session.observe("02-gallery", ["Thumbnail size"])
     with Image.open(session.output / "02-gallery.png") as image:
         pixels = list(image.convert("RGB").get_flattened_data())
         red = [index for index, (r, g, b) in enumerate(pixels) if r > 200 and g < 60 and b < 60]
@@ -61,6 +61,21 @@ def gallery(session, root):
         assert len(red) > 500 and len(blue) > 500, "both photo thumbnails must display their source pixels"
         x = round(sum(index % image.width for index in red) / len(red))
         y = round(sum(index // image.width for index in red) / len(red))
+        # Full-screen sparse OCR misses captions beside large solid-color tiles.
+        # Infer the adjacent square cells from the actual rendered photo bounds.
+        top = min(index // image.width for index in red)
+        bottom = max(index // image.width for index in red) + 1
+        square = bottom - top
+        left = min(index % image.width for index in red)
+        right = max(index % image.width for index in blue) + 1
+        for label, cell in [("subfolder", (left - square - 2, left - 2)),
+                            ("notes.txt", (right + 2, right + square + 2))]:
+            caption = image.crop((cell[0], bottom - 30, cell[1], bottom))
+            path = session.output / f"02-gallery-{label}-caption.png"
+            caption.resize((caption.width * 3, caption.height * 3)).save(path)
+            text = private.run_checked(["tesseract", str(path), "stdout", "--psm", "7"], env=session.env)
+            assert label in text, f"gallery caption missing: {label}: {text}"
+        note_position = (round(right + 2 + square / 2), round((top + bottom) / 2))
     session.click(x, y)
     session.key("Return")
     session.observe("03-first-photo", ["a.png", "Next photo", "Start slideshow"])
@@ -74,14 +89,13 @@ def gallery(session, root):
     click_word(session, "07-slideshow-advanced", "Pause")
     session.observe("08-paused", ["Start slideshow"])
     click_word(session, "08-paused", "Back")
-    session.observe("09-return-gallery", ["Thumbnail size", "notes.txt", "subfolder"])
-    x, y = session.word("09-return-gallery", "notes.txt")
-    session.click(x, y)
+    session.observe("09-return-gallery", ["Thumbnail size"])
+    session.click(*note_position)
     session.key("Return")
     session.observe("10-nonmedia", ["GALLERYNOTE", "Edit text"])
     # Text studio has the existing Files back button at this fixture coordinate.
     session.click(150, 118)
-    session.observe("11-return", ["Thumbnail size", "subfolder"])
+    session.observe("11-return", ["Thumbnail size"])
     click_word(session, "11-return", "List")
     session.observe("12-list", ["Name", "Size", "Modified", "notes.txt"])
 

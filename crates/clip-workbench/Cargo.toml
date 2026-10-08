@@ -28,6 +28,8 @@ thiserror.workspace = true
 tracing.workspace = true
 rodio = "0.22.2"
 image = { workspace = true }
+imagesize = "0.12"
+kamadak-exif = "0.6.1"
 png = "0.18.1"
 tiny-skia = { workspace = true }
 fontdue = { workspace = true }

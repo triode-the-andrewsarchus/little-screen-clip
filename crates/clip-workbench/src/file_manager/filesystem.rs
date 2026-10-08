@@ -22,6 +22,14 @@ pub(super) struct Entry {
     pub identity: Option<Identity>,
 }
 
+impl Entry {
+    pub(super) fn is_photo(&self) -> bool {
+        self.regular_file
+            && (little_clip_core::item::is_image_path(&self.path)
+                || little_clip_core::raw_image::is_raw_image_path(&self.path))
+    }
+}
+
 #[derive(Debug)]
 pub(super) struct Directory {
     pub path: PathBuf,

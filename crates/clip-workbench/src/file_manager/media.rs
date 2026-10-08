@@ -180,3 +180,12 @@ mod tests {
         assert!(stream_metadata(&serde_json::json!({"streams":[]})).is_err());
     }
 }
+
+/// Shared allocation and dimension limits for gallery and ordinary previews.
+pub(super) fn raster_preview_limits() -> image::Limits {
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(128 * 1024 * 1024);
+    limits.max_image_width = Some(16_384);
+    limits.max_image_height = Some(16_384);
+    limits
+}

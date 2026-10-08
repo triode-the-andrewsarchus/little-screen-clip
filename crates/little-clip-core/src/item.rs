@@ -4,7 +4,6 @@
 //! across text, markdown, URLs, raster/vector images, camera RAW, PDFs, audio clips,
 //! animations/video, directories, and file batches.
 
-use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -85,23 +84,7 @@ impl ImageThumbnail {
             reader.decode()
         }) {
             let thumb = dyn_img.thumbnail(max_w, max_h);
-            let (tw, th) = thumb.dimensions();
-            let rgba = thumb.to_rgba8();
-
-            let mut premultiplied = Vec::with_capacity(rgba.len());
-            for pixel in rgba.chunks_exact(4) {
-                let a = pixel[3] as u32;
-                let r = ((pixel[0] as u32 * a) / 255) as u8;
-                let g = ((pixel[1] as u32 * a) / 255) as u8;
-                let b = ((pixel[2] as u32 * a) / 255) as u8;
-                premultiplied.extend_from_slice(&[r, g, b, pixel[3]]);
-            }
-
-            return Some(Self {
-                width: tw,
-                height: th,
-                premultiplied_rgba: premultiplied,
-            });
+            return Some(Self::from_rgba(thumb.to_rgba8()));
         }
 
         // If raster loading fails, try rendering as SVG
@@ -110,6 +93,22 @@ impl ImageThumbnail {
         }
 
         None
+    }
+
+    /// Converts straight-alpha pixels into the shared premultiplied preview format.
+    pub fn from_rgba(image: image::RgbaImage) -> Self {
+        let (width, height) = image.dimensions();
+        let mut pixels = image.into_raw();
+        for pixel in pixels.chunks_exact_mut(4) {
+            for channel in 0..3 {
+                pixel[channel] = (u16::from(pixel[channel]) * u16::from(pixel[3]) / 255) as u8;
+            }
+        }
+        Self {
+            width,
+            height,
+            premultiplied_rgba: pixels,
+        }
     }
 
     /// Renders vector SVG bytes to raster pixels using the `rsvg-convert` command-line tool.

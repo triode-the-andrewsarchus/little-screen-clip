@@ -4,20 +4,11 @@ mod selection;
 use super::ui::music::MusicRange;
 use little_clip_core::{BackgroundJobs, JobError, JobTicket};
 use rodio::{Decoder, Player, Source};
-use std::os::unix::fs::OpenOptionsExt;
 use std::{fs::File, io::BufReader, path::PathBuf, sync::mpsc, time::Duration};
 
 type AudioDecoder = Decoder<BufReader<File>>;
 fn audio_file(path: &std::path::Path) -> Result<File, String> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK)
-        .open(path)
-        .map_err(|e| e.to_string())?;
-    if !file.metadata().map_err(|e| e.to_string())?.is_file() {
-        return Err("Audio source is not a regular file".into());
-    }
-    Ok(file)
+    crate::file_source::open_regular_file(path, true).map_err(|e| e.to_string())
 }
 fn decode_file(path: &std::path::Path) -> Result<AudioDecoder, String> {
     Decoder::try_from(audio_file(path)?).map_err(|e| e.to_string())

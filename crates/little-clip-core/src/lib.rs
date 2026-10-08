@@ -9,6 +9,7 @@ pub mod audio;
 pub mod clipboard;
 pub mod color;
 pub mod config;
+pub mod gallery_image;
 pub mod ipc;
 pub mod item;
 pub mod jobs;

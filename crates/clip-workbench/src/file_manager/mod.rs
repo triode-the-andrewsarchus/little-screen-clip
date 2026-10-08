@@ -5,6 +5,7 @@ mod content;
 mod edit_ui;
 mod edits;
 mod filesystem;
+mod gallery;
 mod media;
 mod music;
 mod native_drag;
@@ -142,6 +143,7 @@ pub(crate) struct FileManager {
     music_previews: previews::EntryPreviews,
     thumbnail_edge: f32,
     gallery_columns: usize,
+    gallery_layout: gallery::Gallery,
     gallery_selecting: bool,
     music: music::Music,
     audio_entries: Vec<PathBuf>,
@@ -194,6 +196,7 @@ impl FileManager {
             music_previews: previews::EntryPreviews::default(),
             thumbnail_edge: 160.0,
             gallery_columns: 1,
+            gallery_layout: Default::default(),
             gallery_selecting: false,
             music: music::Music::default(),
             audio_entries: Vec::new(),
@@ -217,6 +220,7 @@ impl FileManager {
 
     fn navigate(&mut self, path: PathBuf, navigation: Navigation) {
         if path != self.path() {
+            self.gallery_layout.retire();
             self.music_selection = None;
             self.music.stop();
         }

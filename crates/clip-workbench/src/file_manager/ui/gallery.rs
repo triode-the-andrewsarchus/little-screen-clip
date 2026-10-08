@@ -3,6 +3,9 @@ use super::*;
 
 impl FileManager {
     pub(in crate::file_manager) fn set_view(&mut self, view: super::super::BrowserView) {
+        if view != self.view {
+            self.gallery_layout.retire();
+        }
         if view != self.view && view == super::super::BrowserView::List {
             self.music.stop();
         }
@@ -76,11 +79,21 @@ impl FileManager {
         let width = (ui.available_width() - ui.spacing().scroll.allocated_width()).max(1.0);
         let columns = ((width + 2.0) / (self.thumbnail_edge + 2.0))
             .floor()
-            .max(1.0) as usize;
+            .clamp(1.0, 62.0) as usize;
         self.gallery_columns = columns;
-        let edge = ((width - 2.0 * (columns - 1) as f32) / columns as f32).max(1.0);
-        let row_height = edge;
-        let scroll = self.gallery_scroll(ui, columns, row_height);
+        let unit = ((width + 2.0) / (columns * 2) as f32).max(1.0);
+        if let Some(directory) = &self.directory {
+            self.gallery_layout
+                .sync(directory, &self.visible, self.show_hidden, columns * 2);
+        }
+        let offset = self.location().map_or(0.0, |location| location.scroll) / unit;
+        let correction =
+            self.gallery_layout
+                .prepare(ui.ctx(), offset, ui.available_height() / unit);
+        let mut scroll = self.gallery_scroll(ui, unit);
+        if let Some(offset) = correction {
+            scroll = scroll.vertical_scroll_offset(offset * unit);
+        }
         let Some(directory) = &self.directory else {
             ui.label("Loading folder…");
             return;
@@ -102,47 +115,64 @@ impl FileManager {
         let background = actions.background(ui, can_edit, count > 0);
         let mut targets = Vec::new();
         let mut paths = std::collections::BTreeSet::new();
-        let output = scroll.show_rows(
-            ui,
-            row_height,
-            self.visible.len().div_ceil(columns),
-            |ui, rows| {
-                for row in rows {
-                    ui.horizontal(|ui| {
-                        for index in row * columns..((row + 1) * columns).min(self.visible.len()) {
-                            let entry = &directory.entries[self.visible[index]];
-                            let (rect, response) = ui.allocate_exact_size(
-                                vec2(edge, row_height),
-                                Sense::click_and_drag(),
-                            );
-                            let marked = selected.is_some_and(|s| s.contains(&entry.path));
-                            let photo = !entry.directory
-                                && little_clip_core::item::is_image_path(&entry.path);
-                            let preview = if photo && paths.len() < 128 {
-                                paths.insert(entry.path.clone());
-                                Some(&mut self.gallery_previews)
-                            } else {
-                                None
-                            };
-                            paint_gallery_tile(
-                                ui,
-                                &response,
-                                entry,
-                                marked,
-                                colors,
-                                check_color,
-                                preview,
-                            );
-                            response.clone().on_hover_text(&entry.name);
-                            if entry.directory {
-                                targets.push((rect.intersect(ui.clip_rect()), entry.path.clone()));
-                            }
-                            actions.row(ui, &response, entry, selected, can_edit, count);
-                        }
-                    });
+        let output = scroll.show_viewport(ui, |ui, viewport| {
+            ui.set_min_height((self.gallery_layout.height() * unit - 2.0).max(0.0));
+            let origin = ui.min_rect().min;
+            let min = (viewport.min.y / unit - 2.0).max(0.0);
+            let max = viewport.max.y / unit + 2.0;
+            self.gallery_layout
+                .set_viewport(viewport.min.y / unit, viewport.max.y / unit);
+            let tiles = self.gallery_layout.placements(min, max);
+            let mut priority: Vec<_> = tiles.iter().collect();
+            priority.sort_by(|a, b| {
+                let distance = |tile: &&super::super::gallery::Placement| {
+                    (tile.y * unit - viewport.center().y).abs()
+                };
+                distance(a).total_cmp(&distance(b))
+            });
+            paths = priority
+                .iter()
+                .map(|tile| directory.entries[self.visible[tile.index]].path.clone())
+                .collect();
+            self.gallery_previews.retain(&paths);
+            for tile in priority.iter() {
+                let entry = &directory.entries[self.visible[tile.index]];
+                if tile.ready && entry.is_photo() {
+                    let edge = tile.thumbnail_edge(unit, ui.ctx().pixels_per_point());
+                    self.gallery_previews
+                        .request_gallery(entry, edge, tile.orientation);
                 }
-            },
-        );
+            }
+            for tile in tiles {
+                let index = tile.index;
+                let entry = &directory.entries[self.visible[index]];
+                let rect = Rect::from_min_size(
+                    origin + vec2(tile.x as f32 * unit, tile.y * unit),
+                    vec2(
+                        (tile.width as f32 * unit - 2.0).max(1.0),
+                        (tile.height as f32 * unit - 2.0).max(1.0),
+                    ),
+                );
+                let response = ui.interact(
+                    rect,
+                    Id::new(("gallery_tile", &entry.path)),
+                    Sense::click_and_drag(),
+                );
+                let marked = selected.is_some_and(|s| s.contains(&entry.path));
+                let photo = entry.is_photo();
+                let preview = if photo && paths.contains(&entry.path) {
+                    Some(&mut self.gallery_previews)
+                } else {
+                    None
+                };
+                paint_gallery_tile(ui, &response, entry, marked, colors, check_color, preview);
+                response.clone().on_hover_text(&entry.name);
+                if entry.directory {
+                    targets.push((rect.intersect(ui.clip_rect()), entry.path.clone()));
+                }
+                actions.row(ui, &response, entry, selected, can_edit, count);
+            }
+        });
         self.gallery_previews.retain(&paths);
         if ui.is_enabled() {
             self.drop_targets.extend(targets);
@@ -150,7 +180,7 @@ impl FileManager {
         self.finish_listing(ui, actions, output.state.offset.y, &background);
     }
 
-    fn gallery_scroll(&mut self, ui: &Ui, columns: usize, row_height: f32) -> egui::ScrollArea {
+    fn gallery_scroll(&mut self, _ui: &Ui, unit: f32) -> egui::ScrollArea {
         let mut scroll = egui::ScrollArea::vertical()
             .id_source("files_photo_grid")
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
@@ -166,9 +196,8 @@ impl FileManager {
                         == Some(&d.entries[*index].path)
                 })
             }) {
-                scroll = scroll.vertical_scroll_offset(
-                    (index / columns) as f32 * (row_height + ui.spacing().item_spacing.y),
-                );
+                scroll =
+                    scroll.vertical_scroll_offset(self.gallery_layout.item_offset(index) * unit);
             }
             self.reveal_selection = false;
         }
@@ -193,7 +222,7 @@ impl FileManager {
     }
 }
 
-/// Paints a square crop and its selection feedback within the tile boundary.
+/// Paints a center crop and its selection feedback within the tile boundary.
 fn paint_gallery_tile(
     ui: &mut Ui,
     response: &egui::Response,
