@@ -47,6 +47,26 @@ impl EntryPreviews {
     pub fn show(&mut self, ui: &mut egui::Ui, rect: egui::Rect, entry: &Entry) {
         self.show_inner(ui, rect, entry, false);
     }
+    pub fn show_video(
+        &mut self,
+        ui: &mut egui::Ui,
+        top_left: egui::Pos2,
+        height: f32,
+        entry: &Entry,
+    ) -> egui::Rect {
+        let id = self.identity(entry);
+        let aspect = self
+            .cache
+            .get(id)
+            .and_then(|ready| ready.texture.as_ref())
+            .map_or(16.0 / 9.0, |texture| {
+                let size = texture.size_vec2();
+                size.x / size.y.max(1.0)
+            });
+        let rect = egui::Rect::from_min_size(top_left, egui::vec2(height * aspect, height));
+        self.show(ui, rect, entry);
+        rect
+    }
     pub fn request_gallery(&mut self, entry: &Entry, edge: u32, orientation: u8) {
         let id = self.identity(entry);
         let edge = edge.clamp(128, 4096).div_ceil(128) * 128;

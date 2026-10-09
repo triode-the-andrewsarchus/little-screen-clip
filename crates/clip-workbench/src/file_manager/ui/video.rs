@@ -51,24 +51,29 @@ impl FileManager {
                 selected.is_some_and(|s| s.contains(&entry.path)),
                 colors,
             );
-            if entry.is_video() {
+            let thumbnail = if entry.is_video() {
                 visible.push(entry);
-                self.previews.show(
+                let thumbnail = self.previews.show_video(
                     ui,
-                    Rect::from_min_size(rect.min + vec2(6.0, 6.0), vec2(64.0, 64.0)),
+                    rect.min + vec2(6.0, 32.0),
+                    (rect.height() - 42.0).max(1.0),
                     entry,
                 );
                 if ui.is_enabled() && self.pending.is_none() {
                     self.video_previews.request(
                         entry,
-                        (((rect.width() - 86.0).max(1.0) * ui.ctx().pixels_per_point()).ceil()
-                            as u32)
+                        (((rect.right() - thumbnail.right() - 14.0).max(1.0)
+                            * ui.ctx().pixels_per_point())
+                        .ceil() as u32)
                             .div_ceil(u32::from(self.video_timeline_decimation)),
                     );
                 }
-            }
+                Some(thumbnail)
+            } else {
+                None
+            };
             let ready = self.video_previews.get(entry);
-            let timeline = video_card(ui, rect, entry, ready, colors);
+            let timeline = video_card(ui, rect, thumbnail, entry, ready, colors);
             let metadata = ready
                 .and_then(|ready| ready.as_ref().ok())
                 .map(|ready| ready.metadata.clone());
@@ -144,6 +149,7 @@ fn video_hover(
 fn video_card(
     ui: &Ui,
     rect: Rect,
+    thumbnail: Option<Rect>,
     entry: &Entry,
     ready: Option<&Result<Ready, String>>,
     colors: WorkbenchColors,
@@ -156,7 +162,7 @@ fn video_card(
             colors.text_secondary,
         );
     }
-    let left = if video { 80.0 } else { 32.0 };
+    let left = if video { 6.0 } else { 32.0 };
     let header = Rect::from_min_size(
         rect.min + vec2(left, 0.0),
         vec2((rect.width() - left - 6.0).max(1.0), 24.0),
@@ -166,7 +172,7 @@ fn video_card(
         return None;
     }
     let timeline = Rect::from_min_max(
-        pos2(header.left(), rect.top() + 32.0),
+        pos2(thumbnail?.right() + 8.0, rect.top() + 32.0),
         pos2(rect.right() - 6.0, rect.bottom() - 10.0),
     );
     ui.painter().rect_filled(timeline, 0.0, colors.recessed);
