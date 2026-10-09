@@ -51,50 +51,22 @@ impl FileManager {
                 selected.is_some_and(|s| s.contains(&entry.path)),
                 colors,
             );
-            let thumbnail = if entry.is_video() {
+            if entry.is_video() {
                 visible.push(entry);
-                let thumbnail = self.previews.show_video(
-                    ui,
-                    rect.min + vec2(6.0, 32.0),
-                    (rect.height() - 42.0).max(1.0),
-                    entry,
-                );
-                if ui.is_enabled() && self.pending.is_none() {
-                    self.video_previews.request(
-                        entry,
-                        (((rect.right() - thumbnail.right() - 14.0).max(1.0)
-                            * ui.ctx().pixels_per_point())
-                        .ceil() as u32)
-                            .div_ceil(u32::from(self.video_timeline_decimation)),
-                    );
-                }
-                Some(thumbnail)
-            } else {
-                None
-            };
-            let ready = self.video_previews.get(entry);
-            let timeline = video_card(ui, rect, thumbnail, entry, ready, colors);
-            let metadata = ready
-                .and_then(|ready| ready.as_ref().ok())
-                .map(|ready| ready.metadata.clone());
-            let time = video_hover(
+            }
+            let time = preview_row(
                 ui,
+                rect,
                 entry,
-                timeline,
-                metadata,
+                &mut self.previews,
                 &mut self.video_previews,
+                self.video_timeline_decimation,
+                self.pending.is_none(),
                 colors,
             );
             hovered |= time.is_some();
             actions.row(ui, &response, entry, selected, can_edit, count);
-            if response.clicked()
-                && !ui.input(|i| i.modifiers.ctrl || i.modifiers.command || i.modifiers.shift)
-            {
-                if let Some(time) = time {
-                    actions.open = Some(entry.path.clone());
-                    self.video_start = Some((entry.path.clone(), time as f64 / 1000.0));
-                }
-            }
+            actions.video_click(ui, &response, entry, time, &mut self.video_start);
             if entry.directory {
                 targets.push((rect.intersect(ui.clip_rect()), entry.path.clone()));
             }
@@ -110,6 +82,62 @@ impl FileManager {
         }
         self.finish_listing(ui, actions, output.state.offset.y, &background);
     }
+}
+
+impl ListActions {
+    pub(super) fn video_click(
+        &mut self,
+        ui: &Ui,
+        response: &egui::Response,
+        entry: &Entry,
+        time: Option<u64>,
+        start: &mut Option<(PathBuf, f64)>,
+    ) {
+        if response.clicked()
+            && !ui.input(|i| i.modifiers.ctrl || i.modifiers.command || i.modifiers.shift)
+            && let Some(time) = time
+        {
+            self.open = Some(entry.path.clone());
+            *start = Some((entry.path.clone(), time as f64 / 1000.0));
+        }
+    }
+}
+
+pub(super) fn preview_row(
+    ui: &mut Ui,
+    rect: Rect,
+    entry: &Entry,
+    previews: &mut super::super::previews::EntryPreviews,
+    video_previews: &mut super::super::video_timeline::Previews,
+    decimation: u8,
+    can_request: bool,
+    colors: WorkbenchColors,
+) -> Option<u64> {
+    let thumbnail = if entry.is_video() {
+        let thumbnail = previews.show_video(
+            ui,
+            rect.min + vec2(6.0, 32.0),
+            (rect.height() - 42.0).max(1.0),
+            entry,
+        );
+        if ui.is_enabled() && can_request {
+            video_previews.request(
+                entry,
+                (((rect.right() - thumbnail.right() - 14.0).max(1.0) * ui.ctx().pixels_per_point())
+                    .ceil() as u32)
+                    .div_ceil(u32::from(decimation)),
+            );
+        }
+        Some(thumbnail)
+    } else {
+        None
+    };
+    let ready = video_previews.get(entry);
+    let timeline = video_card(ui, rect, thumbnail, entry, ready, colors);
+    let metadata = ready
+        .and_then(|ready| ready.as_ref().ok())
+        .map(|ready| ready.metadata.clone());
+    video_hover(ui, entry, timeline, metadata, video_previews, colors)
 }
 
 fn video_hover(
@@ -167,7 +195,13 @@ fn video_card(
         rect.min + vec2(left, 0.0),
         vec2((rect.width() - left - 6.0).max(1.0), 24.0),
     );
-    video_header(ui, header, entry, ready, colors);
+    let details = ready.and_then(|ready| ready.as_ref().ok()).map(|ready| {
+        format!(
+            "{} · {}",
+            ready.metadata.description, ready.metadata.audio_description
+        )
+    });
+    media_header(ui, header, entry, details, colors);
     if !video {
         return None;
     }
@@ -235,55 +269,4 @@ fn video_card(
         }
     }
     Some(timeline)
-}
-
-fn video_header(
-    ui: &Ui,
-    header: Rect,
-    entry: &Entry,
-    ready: Option<&Result<Ready, String>>,
-    colors: WorkbenchColors,
-) {
-    let details = ready.and_then(|ready| ready.as_ref().ok()).map(|ready| {
-        format!(
-            "{} · {}",
-            ready.metadata.description, ready.metadata.audio_description
-        )
-    });
-    let details_width = details.as_ref().map_or(0.0, |details| {
-        ui.painter()
-            .layout_no_wrap(
-                details.clone(),
-                FontId::proportional(14.0),
-                colors.text_secondary,
-            )
-            .size()
-            .x
-            .min(header.width() * 0.7)
-    });
-    let name_width = (header.width() - details_width - 12.0).max(0.0);
-    paint_text(
-        ui,
-        header,
-        0.0,
-        name_width,
-        &entry.name,
-        colors.text_primary,
-    );
-    if let Some(details) = details {
-        paint_text(
-            ui,
-            header,
-            header.width() - details_width,
-            details_width,
-            &details,
-            colors.text_secondary,
-        );
-        ui.interact(
-            header,
-            Id::new(("video_metadata", &entry.path)),
-            Sense::hover(),
-        )
-        .on_hover_text(format!("{}\n{}", entry.name, details));
-    }
 }

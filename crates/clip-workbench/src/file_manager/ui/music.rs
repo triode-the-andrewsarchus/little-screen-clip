@@ -146,25 +146,16 @@ impl FileManager {
             } else {
                 None
             };
-            let range = self
-                .music_selection
-                .as_ref()
-                .filter(|range| range.path == entry.path && range.revision == entry.revision);
-            let wave = music_card(ui, rect, entry, ready, colors, range);
-            if let Some(ready) = ready {
-                response.clone().on_hover_text(&ready.data.detail);
-            }
-            let (engaged, time) = wave.map_or((false, None), |wave| {
-                interact_waveform(
-                    ui,
-                    entry,
-                    wave,
-                    &mut response,
-                    &mut self.music_selection,
-                    &self.music,
-                    colors,
-                )
-            });
+            let (engaged, time) = preview_row(
+                ui,
+                rect,
+                entry,
+                ready,
+                &mut response,
+                &mut self.music_selection,
+                &self.music,
+                colors,
+            );
             if !engaged {
                 actions.row(ui, &response, entry, selected, can_edit, count);
             } else {
@@ -192,6 +183,28 @@ impl FileManager {
             }
         }
     }
+}
+
+pub(super) fn preview_row(
+    ui: &mut Ui,
+    rect: Rect,
+    entry: &super::super::filesystem::Entry,
+    ready: Option<&super::super::shelf::preview::Ready>,
+    response: &mut egui::Response,
+    selection: &mut Option<MusicRange>,
+    music: &super::super::music::Music,
+    colors: WorkbenchColors,
+) -> (bool, Option<f32>) {
+    let range = selection
+        .as_ref()
+        .filter(|range| range.path == entry.path && range.revision == entry.revision);
+    let wave = music_card(ui, rect, entry, ready, colors, range);
+    if let Some(ready) = ready {
+        response.clone().on_hover_text(&ready.data.detail);
+    }
+    wave.map_or((false, None), |wave| {
+        interact_waveform(ui, entry, wave, response, selection, music, colors)
+    })
 }
 
 fn interact_waveform(
@@ -278,9 +291,12 @@ fn music_card<'a>(
 ) -> Option<(Rect, f32, &'a crate::file_source::FileSource)> {
     let audio = entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path);
     let art = Rect::from_min_size(
-        rect.min + vec2(6.0, if audio { 8.0 } else { 4.0 }),
+        rect.min + vec2(6.0, if audio { 32.0 } else { 4.0 }),
         if audio {
-            vec2(64.0, 64.0)
+            vec2(
+                (rect.height() - 42.0).max(1.0),
+                (rect.height() - 42.0).max(1.0),
+            )
         } else {
             vec2(20.0, 20.0)
         },
@@ -301,52 +317,28 @@ fn music_card<'a>(
         );
     }
     let metadata = ready.and_then(|r| r.data.music.as_ref());
+    let left = if audio { 6.0 } else { 32.0 };
     let text = Rect::from_min_size(
-        rect.min
-            + vec2(
-                if audio { 80.0 } else { 32.0 },
-                if audio { 4.0 } else { 0.0 },
-            ),
-        vec2(
-            (rect.width() - if audio { 80.0 } else { 32.0 }).max(1.0),
-            28.0,
-        ),
+        rect.min + vec2(left, 0.0),
+        vec2((rect.width() - left - 6.0).max(1.0), 24.0),
     );
-    let width = text.width();
-    paint_text(
-        ui,
-        text,
-        0.0,
-        width * 0.35,
-        metadata.map_or(&entry.name, |m| &m.title),
-        colors.text_primary,
-    );
-    paint_text(
-        ui,
-        text,
-        width * 0.35,
-        width * 0.23,
-        metadata.map_or("", |m| &m.artist),
-        colors.text_secondary,
-    );
-    paint_text(
-        ui,
-        text,
-        width * 0.58,
-        width * 0.25,
-        metadata.map_or("", |m| &m.album),
-        colors.text_secondary,
-    );
+    let details = metadata.map(|m| {
+        let mut fields: Vec<&str> = [&m.title, &m.artist, &m.album]
+            .into_iter()
+            .map(String::as_str)
+            .filter(|text| !text.is_empty())
+            .collect();
+        let duration = format!("{:.0} s", m.duration);
+        fields.push(&duration);
+        fields.join(" · ")
+    });
+    media_header(ui, text, entry, details, colors);
     if let Some(metadata) = metadata {
-        paint_text(
-            ui,
-            text,
-            width * 0.83,
-            width * 0.17,
-            &format!("{:.0} s", metadata.duration),
-            colors.text_secondary,
+        let wave = Rect::from_min_max(
+            pos2(art.right() + 8.0, art.top()),
+            pos2(rect.right() - 6.0, art.bottom()),
         );
-        let wave = Rect::from_min_max(rect.min + vec2(80.0, 35.0), rect.max - vec2(8.0, 20.0));
+        ui.painter().rect_filled(wave, 0.0, colors.recessed);
         if let Some(ready) = ready {
             if ready.data.waveform.is_empty() {
                 paint_text(
@@ -387,14 +379,6 @@ fn music_card<'a>(
                 );
             }
         }
-        paint_text(
-            ui,
-            Rect::from_min_size(pos2(text.left(), rect.bottom() - 20.0), vec2(width, 20.0)),
-            0.0,
-            width,
-            &entry.name,
-            colors.text_secondary,
-        );
         return metadata
             .source
             .as_ref()

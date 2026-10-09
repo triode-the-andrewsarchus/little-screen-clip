@@ -444,7 +444,11 @@ impl FileManager {
         self.list_offsets.push(0.0);
         if let Some(directory) = &self.directory {
             for index in &self.visible {
-                let height = if self.previews.is_text(&directory.entries[*index]) {
+                let entry = &directory.entries[*index];
+                let height = if self.previews.is_text(entry)
+                    || entry.is_video()
+                    || (entry.regular_file && little_clip_core::audio::is_audio_path(&entry.path))
+                {
                     VIDEO_ROW_HEIGHT
                 } else {
                     28.0

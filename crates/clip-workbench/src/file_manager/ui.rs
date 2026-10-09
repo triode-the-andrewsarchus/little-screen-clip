@@ -9,6 +9,7 @@ use crate::ui_appearance::WorkbenchColors;
 use crate::ui_ext;
 
 mod gallery;
+mod list;
 pub(super) mod music;
 mod video;
 
@@ -406,92 +407,6 @@ impl FileManager {
         }
     }
 
-    fn list_ui(&mut self, ui: &mut Ui, colors: WorkbenchColors, palette: &AppPalette) {
-        let width = ui.available_width();
-        let name_width = (width - 245.0).max(width * 0.4);
-        let (header, _) = ui.allocate_exact_size(vec2(width, ROW_HEIGHT), Sense::hover());
-        paint_text(
-            ui,
-            header,
-            8.0,
-            name_width - 10.0,
-            "Name",
-            colors.text_secondary,
-        );
-        paint_text(ui, header, name_width, 88.0, "Size", colors.text_secondary);
-        paint_text(
-            ui,
-            header,
-            name_width + 90.0,
-            width - name_width - 90.0,
-            "Modified",
-            colors.text_secondary,
-        );
-        ui.separator();
-        if self.previews.poll(ui.ctx()) {
-            self.rebuild_list_offsets();
-        }
-        let scroll = self.list_scroll(ROW_HEIGHT);
-        let Some(directory) = &self.directory else {
-            ui.label(if self.pending.is_some() {
-                "Loading folder…"
-            } else {
-                "Choose a folder or enter a path."
-            });
-            return;
-        };
-        if self.visible.is_empty() {
-            ui.label(if directory.entries.is_empty() {
-                "This folder is empty."
-            } else {
-                "No visible items. Enable hidden files to see this folder's contents."
-            });
-        }
-        let selected = self
-            .index
-            .and_then(|index| self.history.get(index))
-            .map(|location| &location.selection);
-        let mut actions = ListActions::default();
-        let can_edit = self.can_edit();
-        let selection_count = self.selection_count();
-        let background = actions.background(ui, can_edit, selection_count > 0);
-        let mut targets = Vec::new();
-        let mut preview_paths = std::collections::BTreeSet::new();
-        let output = media_rows(ui, scroll, &self.list_offsets, |ui, index, rect| {
-            let entry = &directory.entries[self.visible[index]];
-            let marked = selected.is_some_and(|paths| paths.contains(&entry.path));
-            let lines = if !entry.directory {
-                self.previews
-                    .listing(entry)
-                    .and_then(|ready| ready.data.document.as_ref())
-                    .map(|document| document.lines)
-            } else {
-                None
-            };
-            let response = file_row(ui, rect, entry, marked, name_width, lines, colors);
-            if !entry.directory && preview_paths.len() < 128 {
-                preview_paths.insert(entry.path.clone());
-                let line = self.previews.show_listing(ui, rect, entry, colors, palette);
-                if response.double_clicked() {
-                    self.text_start = line.map(|line| (entry.path.clone(), line));
-                }
-            } else if !entry.directory {
-                Icon::Text.paint(
-                    ui.painter(),
-                    Rect::from_min_size(response.rect.min + vec2(6.0, 4.0), vec2(20.0, 20.0)),
-                    colors.text_secondary,
-                );
-            }
-            if entry.directory && ui.is_enabled() {
-                targets.push((response.rect.intersect(ui.clip_rect()), entry.path.clone()));
-            }
-            actions.row(ui, &response, entry, selected, can_edit, selection_count);
-        });
-        self.previews.retain(&preview_paths);
-        self.drop_targets.extend(targets);
-        self.finish_listing(ui, actions, output.state.offset.y, &background);
-    }
-
     fn finish_listing(
         &mut self,
         ui: &Ui,
@@ -772,6 +687,51 @@ fn row_background(ui: &Ui, rect: Rect, selected: bool, hovered: bool, colors: Wo
                 colors.raised
             },
         );
+    }
+}
+
+fn media_header(
+    ui: &Ui,
+    header: Rect,
+    entry: &super::filesystem::Entry,
+    details: Option<String>,
+    colors: WorkbenchColors,
+) {
+    let details_width = details.as_ref().map_or(0.0, |details| {
+        ui.painter()
+            .layout_no_wrap(
+                details.clone(),
+                FontId::proportional(14.0),
+                colors.text_secondary,
+            )
+            .size()
+            .x
+            .min(header.width() * 0.7)
+    });
+    let name_width = (header.width() - details_width - 12.0).max(0.0);
+    paint_text(
+        ui,
+        header,
+        0.0,
+        name_width,
+        &entry.name,
+        colors.text_primary,
+    );
+    if let Some(details) = details {
+        paint_text(
+            ui,
+            header,
+            header.width() - details_width,
+            details_width,
+            &details,
+            colors.text_secondary,
+        );
+        ui.interact(
+            header,
+            Id::new(("media_metadata", &entry.path)),
+            Sense::hover(),
+        )
+        .on_hover_text(format!("{}\n{}", entry.name, details));
     }
 }
 

@@ -152,6 +152,7 @@ impl FileManagerApp {
             if self.viewers.active() {
                 self.browser.video_previews.clear();
                 self.browser.previews.retire();
+                self.browser.music_previews.retire();
                 if self.viewers.ui(ui, &self.palette) {
                     self.browser.refresh_after_transfer = true;
                     self.browser.restore_scroll = true;
